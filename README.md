@@ -1,68 +1,68 @@
 # BStream Music
 
-BStream Music es un reproductor y gestor musical multiplataforma construido con Flutter. Permite buscar música, reproducirla, descargarla, organizar una biblioteca local y administrar playlists desde Android, Windows, Linux y macOS.
+BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, Windows, Linux, and macOS.
 
-Versión actual: **1.1.9+119**.
+Current version: **1.1.9+119**.
 
-> El repositorio no almacena contenido multimedia ni binarios de terceros. Los instaladores generados por CI descargan e incorporan sus propias copias de `yt-dlp` y FFmpeg. El usuario es responsable de cumplir los derechos de autor, los términos de cada proveedor y las licencias de esas herramientas.
+> The repository does not store media content or third-party binaries. CI-generated installers download and bundle their own copies of `yt-dlp` and FFmpeg. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
 
-## Funciones principales
+## Main features
 
-### Búsqueda, descargas y biblioteca
+### Search, downloads, and library
 
-- Búsqueda de canciones con miniatura, título, artista/canal y duración.
-- Reproducción remota y descarga de audio con progreso en tiempo real.
-- Biblioteca local respaldada por SQLite.
-- Reutilización de canciones ya descargadas para evitar descargas duplicadas.
-- Filtrado, renombrado y eliminación de canciones guardadas.
-- Creación, renombrado y eliminación de playlists.
-- Playlist especial de **Favoritos**, con estrella visible en las canciones agregadas.
-- Respaldo y restauración en ZIP de la base de datos, audios y miniaturas.
+- Search results with thumbnail, title, artist/channel, and duration.
+- Remote playback and audio downloads with real-time progress.
+- SQLite-backed local library.
+- Reuse of downloaded tracks to avoid duplicate downloads.
+- Filtering, renaming, and deletion of saved tracks.
+- Playlist creation, renaming, and deletion.
+- Dedicated **Favorites** playlist with a visible star on favorited tracks.
+- ZIP backup and restore for the database, audio files, and thumbnails.
 
-### Reproductor
+### Player
 
-- Play, pausa, anterior, siguiente, repetición y reproducción aleatoria.
-- Cola de reproducción sincronizada con las playlists y la biblioteca.
-- Panel lateral de cola en Windows y vista de cola dedicada en Android.
-- Cambio de canción directamente desde la cola.
-- La canción activa se destaca con un ecualizador segmentado de 13 barras.
-- Fondo dinámico oscuro basado en la portada de la canción.
-- Barra de progreso animada con ondas y color derivado de la portada.
-- Control de volumen en Windows.
-- Temporizador de apagado con duraciones rápidas y duración personalizada.
-- Integración multimedia del sistema en Android.
-- Manejo de canciones fallidas: un elemento que no puede descargarse o reproducirse no deja la cola bloqueada en la canción anterior.
+- Play, pause, previous, next, repeat, and shuffle controls.
+- Playback queue synchronized with playlists and the library.
+- Queue side panel on Windows and a dedicated queue view on Android.
+- Change tracks directly from the queue.
+- The active track is highlighted with a segmented 13-bar equalizer.
+- Dark dynamic background derived from the track artwork.
+- Animated progress bar with waves and artwork-derived color.
+- Volume control on Windows.
+- Sleep timer with quick durations and a custom duration.
+- Android system media integration.
+- Failed-track handling: a track that cannot be downloaded or played does not leave the queue stuck on the previous track.
 
-### Interfaz
+### Interface
 
-- Diseño adaptable para Android y Windows.
-- Navegación que conserva únicamente las dos vistas recientes.
-- Regreso desde el reproductor a la playlist o sección abierta previamente.
-- Inicio con hasta 10 elementos recientes y 10 playlists.
-- Gradientes sutiles, tarjetas translúcidas y controles visuales compartidos.
-- Español e inglés desde Ajustes.
-- Ventana de Windows con mínimo de `960 × 600` y reproductor que ajusta progresivamente portada, texto, espacios y controles según la altura disponible.
-- Iconos generados desde una única fuente para Android, Windows, macOS y los recursos internos de Flutter.
+- Responsive layouts for Android and Windows.
+- Navigation remembers only the two most recent views.
+- Returning from the player restores the previously opened playlist or section.
+- Home displays up to 10 recently played items and 10 playlists.
+- Subtle gradients, translucent cards, and shared visual controls.
+- Spanish and English selectable from Settings.
+- Windows window minimum size of `960 × 600`; the player progressively adapts artwork, text, spacing, and controls to the available height.
+- Icons generated from one source asset for Android, Windows, macOS, and Flutter resources.
 
-## TikTok LIVE en Windows
+## TikTok LIVE on Windows
 
-La versión de Windows puede conectarse a un LIVE mediante un puente basado en `TikTokLive` y convertir comandos del chat en una cola musical temporal.
+The Windows version can connect to a LIVE through a bridge based on `TikTokLive` and turn chat commands into a temporary music queue.
 
-Funciones disponibles:
+Available features:
 
-- Conexión mediante `@usuario` o `https://www.tiktok.com/@usuario/live`.
-- Detección del usuario que solicitó cada canción.
-- Identificación de moderadores.
-- Permisos configurables para que los comandos funcionen para **Todos** o únicamente para **Moderadores**.
-- Cola Live con estados de búsqueda, descarga, lista o fallida.
-- Reutilización de canciones existentes en la biblioteca.
-- Sincronización dinámica: los nuevos pedidos se agregan sin reemplazar la reproducción actual.
-- Salto automático de solicitudes que fallen durante la descarga.
+- Connect using `@username` or `https://www.tiktok.com/@username/live`.
+- Detect the user who requested each track.
+- Identify moderators.
+- Configure command permissions for **Everyone** or **Moderators only**.
+- LIVE queue states for searching, downloading, ready, and failed requests.
+- Reuse tracks that already exist in the library.
+- Dynamic synchronization: new requests are added without replacing the current playback.
+- Automatically skip requests that fail during download.
 
-Comandos reconocidos:
+Recognized commands:
 
 ```text
-!play nombre de la canción
+!play song name
 !skip
 !next
 !revoke
@@ -70,22 +70,22 @@ Comandos reconocidos:
 revoke!
 ```
 
-`!play` busca el primer resultado, lo prepara y lo agrega a la cola. `!skip`/`!next` avanzan y `!revoke`/`!stop` limpian la cola Live.
+`!play` searches for the first result, prepares it, and adds it to the queue. `!skip`/`!next` advance playback, while `!revoke`/`!stop` clear the LIVE queue.
 
-La integración usa una librería no oficial. Si TikTok cambia su protocolo, el puente puede requerir una actualización.
+This integration uses an unofficial library. If TikTok changes its protocol, the bridge may need to be updated.
 
-## Plataformas y motores
+## Platforms and engines
 
-| Plataforma | Reproductor | Descargas | Notas |
+| Platform | Player | Downloads | Notes |
 | --- | --- | --- | --- |
-| Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; FFmpeg llega como dependencia Gradle |
-| Windows | `media_kit` | `yt-dlp` + FFmpeg | TikTok LIVE, cola lateral y herramientas externas |
-| Linux | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Instaladores x64 basados en Ubuntu 22.04; requieren GTK 3, libmpv y SQLite |
-| macOS | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Instaladores PKG separados para Apple Silicon e Intel; ventana mínima `960×600` |
+| Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; FFmpeg is provided through the Gradle dependency |
+| Windows | `media_kit` | `yt-dlp` + FFmpeg | TikTok LIVE, queue side panel, and external tools |
+| Linux | `media_kit` | Bundled `yt-dlp` + FFmpeg | Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
+| macOS | `media_kit` | Bundled `yt-dlp` + FFmpeg | Separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
 
-## Arquitectura
+## Architecture
 
-La interfaz no depende directamente de SQLite, `yt-dlp`, `youtubedl-android` ni los motores de audio. La comunicación pasa por entidades, casos de uso, repositorios, providers y servicios intercambiables.
+The interface does not depend directly on SQLite, `yt-dlp`, `youtubedl-android`, or the audio engines. Communication flows through entities, use cases, repositories, providers, and interchangeable services.
 
 ```text
 lib/
@@ -115,26 +115,26 @@ lib/
     storage/
 ```
 
-Los contratos principales son `DownloaderService`, `PlayerService` y `LibraryRepository`. Android usa canales de plataforma para las tareas nativas; Windows y macOS ejecutan herramientas locales mediante listas de argumentos y procesan sus salidas de forma asíncrona.
+The main contracts are `DownloaderService`, `PlayerService`, and `LibraryRepository`. Android uses platform channels for native tasks; Windows and macOS execute local tools through argument lists and process their output asynchronously.
 
-## Requisitos de desarrollo
+## Development requirements
 
-- Flutter estable compatible con Dart `^3.12.0`.
-- Android Studio y Android SDK para Android.
-- Visual Studio/Build Tools con **Desktop development with C++** para Windows.
-- Clang, CMake, Ninja, GTK 3 y libmpv para Linux.
-- Una Mac con Xcode para compilar, firmar y probar macOS.
-- Python 3.11–3.13 únicamente si se desarrolla o recompila el puente de TikTok.
-- `yt-dlp` y FFmpeg para búsquedas y descargas en escritorio.
+- Stable Flutter compatible with Dart `^3.12.0`.
+- Android Studio and Android SDK for Android development.
+- Visual Studio/Build Tools with **Desktop development with C++** for Windows.
+- Clang, CMake, Ninja, GTK 3, and libmpv for Linux.
+- A Mac with Xcode to build, sign, and test macOS.
+- Python 3.11–3.13 only when developing or rebuilding the TikTok bridge.
+- `yt-dlp` and FFmpeg for desktop searches and downloads.
 
-Comprueba el entorno con:
+Check the environment with:
 
 ```powershell
 flutter doctor -v
 flutter pub get
 ```
 
-## Ejecutar el proyecto
+## Run the project
 
 ```powershell
 flutter run -d windows
@@ -143,15 +143,15 @@ flutter run -d linux
 flutter run -d macos
 ```
 
-Para listar dispositivos disponibles:
+List available devices with:
 
 ```powershell
 flutter devices
 ```
 
-## Herramientas de Windows
+## Windows tools
 
-Los binarios de terceros **no se guardan en Git**. `yt-dlp` puede estar en el `PATH`, pero FFmpeg siempre se resuelve desde una carpeta `tools` para que cada paquete use una versión controlada. La disposición recomendada es:
+Third-party binaries are **not committed to Git**. `yt-dlp` may be available on `PATH`, but FFmpeg is always resolved from a `tools` directory so every package uses a controlled version. The recommended layout is:
 
 ```text
 windows/tools/
@@ -159,23 +159,23 @@ windows/tools/
   ffmpeg.exe
   tiktok-live-bridge/
     tiktok_live_bridge.exe
-    ...runtime generado...
+    ...generated runtime...
 ```
 
-También se reconoce `windows/tools/ffmpeg/bin/ffmpeg.exe`.
+`windows/tools/ffmpeg/bin/ffmpeg.exe` is also recognized.
 
-Instalación mediante `winget`:
+Install tools with `winget`:
 
 ```powershell
 winget install yt-dlp.yt-dlp
 winget install Gyan.FFmpeg
 ```
 
-Para una build portable de Windows, coloca versiones verificadas de `yt-dlp` y FFmpeg en `windows/tools` antes de compilar Release. CMake copiará las herramientas junto al ejecutable. En Debug se priorizan las herramientas del árbol del proyecto para evitar copiar o bloquear runtimes grandes en cada compilación.
+For a portable Windows build, place verified versions of `yt-dlp` and FFmpeg in `windows/tools` before compiling Release. CMake copies the tools next to the executable. Debug builds prioritize tools from the project tree to avoid copying or locking large runtimes on every build.
 
-## Herramientas y permisos de macOS
+## macOS tools and permissions
 
-Antes de compilar Release o Profile, coloca binarios nativos y verificados en:
+Before compiling Release or Profile, place verified native binaries in:
 
 ```text
 macos/tools/
@@ -183,23 +183,23 @@ macos/tools/
   ffmpeg
 ```
 
-También se reconocen `yt-dlp_macos` y `ffmpeg/bin/ffmpeg`. La fase **Bundle Desktop Tools** los copia como nombres estables a:
+`yt-dlp_macos` and `ffmpeg/bin/ffmpeg` are also recognized. The **Bundle Desktop Tools** phase copies them under stable names to:
 
 ```text
 bstream_music.app/Contents/Resources/tools/
 ```
 
-Durante la copia se asigna permiso de ejecución y, cuando Xcode está firmando la aplicación, también se firman los ejecutables Mach-O. Una build Release o Profile falla de forma explícita si falta cualquiera de las dos herramientas, evitando generar un paquete sin búsquedas o descargas.
+The copy phase sets executable permissions and, when Xcode signs the application, signs the Mach-O executables as well. A Release or Profile build fails explicitly if either tool is missing, preventing a package without search or download support.
 
-FFmpeg no utiliza Homebrew ni el `PATH` en tiempo de ejecución: siempre se toma de `tools`. `yt-dlp` prioriza el paquete y conserva el `PATH` como alternativa durante desarrollo.
+FFmpeg is not resolved through Homebrew or `PATH` at runtime: it always comes from `tools`. `yt-dlp` prioritizes the bundled copy and keeps `PATH` as a development fallback.
 
-La aplicación se distribuye fuera de la Mac App Store. El App Sandbox está desactivado porque BStream necesita iniciar `yt-dlp` y FFmpeg, acceder a la carpeta de descargas elegida y realizar conexiones de red. El Hardened Runtime permanece activo para permitir firma con Developer ID y notarización. TikTok LIVE continúa limitado a Windows.
+The application is distributed outside the Mac App Store. App Sandbox is disabled because BStream needs to launch `yt-dlp` and FFmpeg, access the selected download folder, and make network connections. Hardened Runtime remains enabled for Developer ID signing and notarization. TikTok LIVE remains limited to Windows.
 
-La ventana nativa de macOS impone el mismo mínimo de `960×600` que Windows.
+The native macOS window uses the same `960 × 600` minimum as Windows.
 
-## Herramientas de Linux
+## Linux tools
 
-Los ejecutables se preparan con esta disposición:
+Executables use this layout:
 
 ```text
 linux/tools/
@@ -207,52 +207,52 @@ linux/tools/
   ffmpeg
 ```
 
-CMake los copia a `tools/` dentro del bundle. La aplicación los resuelve desde esa ubicación y no necesita que FFmpeg esté en el `PATH`. El equipo de destino debe tener instaladas las bibliotecas de ejecución de GTK 3 y libmpv.
+CMake copies them into `tools/` inside the bundle. The application resolves them from that location and does not require FFmpeg on `PATH`. The target system must provide GTK 3, libmpv, and SQLite runtime libraries.
 
-## Puente de TikTok LIVE
+## TikTok LIVE bridge
 
-En desarrollo, BStream puede ejecutar directamente:
+During development, BStream can run the bridge directly:
 
 ```text
 scripts/tiktok_live_bridge.py
 ```
 
-La aplicación crea un entorno virtual automáticamente si no encuentra el puente empaquetado. También puedes prepararlo manualmente:
+The application creates a virtual environment automatically when the packaged bridge is unavailable. You can also prepare it manually:
 
 ```powershell
 py -3 -m venv .venv-tiktok
 .\.venv-tiktok\Scripts\python.exe -m pip install -r scripts\requirements-tiktok.txt
 ```
 
-Para generar el runtime portable que utiliza una build Release de Windows:
+Build the portable runtime used by a Windows Release build with:
 
 ```powershell
 .\scripts\build_tiktok_bridge.ps1 -Jobs 28
 ```
 
-El resultado se escribe en `windows/tools/tiktok-live-bridge/`. Esa carpeta contiene Python, DLLs y dependencias compiladas, por lo que está excluida de Git y debe regenerarse localmente. El puente vigila el PID de BStream y se cierra si la aplicación termina, evitando procesos huérfanos y DLLs bloqueadas.
+The result is written to `windows/tools/tiktok-live-bridge/`. This directory contains Python, DLLs, and compiled dependencies, so it is excluded from Git and must be regenerated locally. The bridge watches the BStream process ID and exits when the application closes, preventing orphan processes and locked DLLs.
 
 ## Android
 
-La integración nativa se encuentra en:
+Native integration is located at:
 
 ```text
 lib/platform_channels/android_ytdl_channel.dart
 android/app/src/main/kotlin/com/bstream/bstream_music/MainActivity.kt
 ```
 
-Dependencias principales:
+Main dependencies:
 
 ```kotlin
 implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
 implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 ```
 
-`youtubedl-android` y FFmpeg se descargan mediante Gradle; no se agregan ejecutables manuales al repositorio.
+`youtubedl-android` and FFmpeg are downloaded through Gradle; manual executables are not committed to the repository.
 
-### Firma de Release
+### Release signing
 
-Copia `android/key.properties.example` a `android/key.properties` y configura una llave fuera del repositorio:
+Copy `android/key.properties.example` to `android/key.properties` and configure a key outside the repository:
 
 ```properties
 storeFile=../release/bstream-upload-keystore.jks
@@ -261,7 +261,7 @@ keyAlias=bstream
 keyPassword=...
 ```
 
-También se aceptan estas variables de entorno:
+These environment variables are also supported:
 
 ```powershell
 $env:BSTREAM_ANDROID_STORE_FILE="D:\keys\bstream-upload-keystore.jks"
@@ -270,27 +270,27 @@ $env:BSTREAM_ANDROID_KEY_ALIAS="bstream"
 $env:BSTREAM_ANDROID_KEY_PASSWORD="..."
 ```
 
-`android/key.properties`, `*.jks` y `*.keystore` están excluidos de Git.
+`android/key.properties`, `*.jks`, and `*.keystore` are excluded from Git.
 
-## Base de datos, favoritos y respaldos
+## Database, favorites, and backups
 
-- Android/macOS usan `sqflite`; Windows y Linux usan `sqflite_common_ffi`.
-- Las migraciones son incrementales y conservan bibliotecas existentes.
-- Favoritos se implementa como una playlist reservada (`bstream:favorites`), por lo que no requiere una tabla separada.
-- El respaldo ZIP contiene la base de datos, `audio/`, `thumbnails/` y un manifiesto.
-- La restauración valida rutas y límites del archivo antes de reemplazar los datos locales.
+- Android/macOS use `sqflite`; Windows and Linux use `sqflite_common_ffi`.
+- Incremental migrations preserve existing libraries.
+- Favorites are implemented as a reserved playlist (`bstream:favorites`), so no separate table is required.
+- ZIP backups contain the database, `audio/`, `thumbnails/`, and a manifest.
+- Restore validates file paths and archive limits before replacing local data.
 
-## Generar iconos
+## Generate icons
 
-La fuente vive en `assets/icons/source/ico.png`. Para regenerar todas las variantes:
+The source asset is `assets/icons/source/ico.png`. Regenerate all variants with:
 
 ```powershell
 .\scripts\generate_app_icons.ps1
 ```
 
-El script produce los mipmaps de Android, el `.ico` de Windows, el AppIcon de macOS y las variantes de recursos Flutter.
+The script generates Android mipmaps, the Windows `.ico`, the macOS AppIcon, and Flutter resource variants.
 
-## Compilar
+## Build
 
 ```powershell
 flutter build windows --release
@@ -298,13 +298,13 @@ flutter build apk --release
 flutter build linux --release
 ```
 
-En una Mac, después de preparar `macos/tools`:
+On a Mac, after preparing `macos/tools`:
 
 ```bash
 flutter build macos --release
 ```
 
-Artefactos habituales:
+Typical artifacts:
 
 ```text
 build/windows/x64/runner/Release/bstream_music.exe
@@ -313,11 +313,11 @@ build/linux/x64/release/bundle/bstream_music
 build/macos/Build/Products/Release/bstream_music.app
 ```
 
-## Instaladores con GitHub Actions
+## Installers with GitHub Actions
 
-El workflow `Desktop installers` genera instaladores Release independientes para Windows, Linux y las dos arquitecturas de macOS. Puede ejecutarse manualmente desde la pestaña **Actions** y también se ejecuta en los pull requests, al publicar cambios en `main` o una etiqueta `v*`.
+The `Desktop installers` workflow generates independent Release installers for Windows, Linux, and both macOS architectures. It can be run manually from the **Actions** tab and also runs for pull requests, pushes to `main`, and `v*` tags.
 
-Cada job descarga `yt-dlp` desde sus releases oficiales y obtiene el ejecutable de FFmpeg apropiado para su sistema y arquitectura. Windows también compila y verifica el runtime portable del puente TikTok LIVE. Los binarios se incluyen dentro de los instaladores, pero no se guardan en el repositorio. Los artefactos quedan disponibles durante 30 días:
+Each job downloads `yt-dlp` from its official releases and obtains the FFmpeg executable appropriate for its system and architecture. Windows also builds and verifies the portable TikTok LIVE bridge runtime. Binaries are included in the installers but are not stored in the repository. Artifacts are retained for 30 days:
 
 ```text
 BStream-Music-1.1.9-Windows-x64-Setup.exe
@@ -327,21 +327,21 @@ BStream-Music-1.1.9-macOS-arm64.pkg
 BStream-Music-1.1.9-macOS-x64.pkg
 ```
 
-### Qué archivo instalar
+### Which file should I install?
 
-- **Windows 64 bits:** abre el archivo `Setup.exe`. El instalador muestra el selector de idioma, crea el acceso del menú Inicio y permite elegir si también se crea uno en el escritorio. La entrada de desinstalación se muestra como `BStream Music`, sin el número de versión.
-- **Ubuntu, Debian, Linux Mint y derivados:** instala el `.deb` con `sudo apt install ./BStream-Music-1.1.9-linux-amd64.deb`.
-- **Fedora, RHEL y derivados:** instala el `.rpm` con `sudo dnf install ./BStream-Music-1.1.9-linux-x86_64.rpm`.
-- **Mac con Apple Silicon (M1, M2, M3, M4 o posterior):** abre `BStream-Music-1.1.9-macOS-arm64.pkg`.
-- **Mac con procesador Intel:** abre `BStream-Music-1.1.9-macOS-x64.pkg`.
+- **Windows 64-bit:** open `Setup.exe`. The installer shows a language selector, creates a Start Menu shortcut, and lets you choose whether to create a desktop shortcut. The uninstaller entry is displayed as `BStream Music` without the version number.
+- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.1.9-linux-amd64.deb`.
+- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.1.9-linux-x86_64.rpm`.
+- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.1.9-macOS-arm64.pkg`.
+- **Mac with an Intel processor:** open `BStream-Music-1.1.9-macOS-x64.pkg`.
 
-Un archivo `.app` es la aplicación completa: debe abrirse como una sola unidad y no entrando en sus carpetas `Contents`, `Frameworks` o `Resources`. El nuevo `.pkg` coloca automáticamente `BStream Music.app` en `/Applications`.
+An `.app` is the complete application and should be opened as one unit, not by entering its `Contents`, `Frameworks`, or `Resources` folders. The `.pkg` installer places `BStream Music.app` in `/Applications` automatically.
 
-Los instaladores automáticos todavía no usan certificados comerciales. Windows puede mostrar una advertencia de SmartScreen y macOS puede mostrar una advertencia de Gatekeeper. Para una distribución pública sin esos avisos se necesitan un certificado de firma de código de Windows y certificados Apple Developer ID con notarización.
+The automated installers are not signed with commercial certificates yet. Windows may show a SmartScreen warning and macOS may show a Gatekeeper warning. Public distribution without those warnings requires a Windows code-signing certificate and Apple Developer ID certificates with notarization.
 
-La versión se define en `pubspec.yaml` y el texto mostrado por la aplicación en `lib/core/constants/app_constants.dart`.
+The version is defined in `pubspec.yaml`, while the text shown inside the application is defined in `lib/core/constants/app_constants.dart`.
 
-## Calidad
+## Quality
 
 ```powershell
 dart format .
@@ -349,15 +349,15 @@ flutter analyze
 flutter test
 ```
 
-La suite actual incluye pruebas de modelos, casos de uso, servicios, temporizador, permisos de TikTok, navegación, favoritos, cola, adaptación móvil y reproductor de Windows en su tamaño mínimo.
+The current test suite covers models, use cases, services, the sleep timer, TikTok permissions, navigation, favorites, queue behavior, mobile adaptation, and the Windows player at minimum size.
 
-## Archivos que no se publican
+## Files not published
 
-El repositorio excluye deliberadamente:
+The repository deliberately excludes:
 
-- Builds, APK, EXE y paquetes de distribución.
-- `yt-dlp`, FFmpeg y sus carpetas auxiliares.
-- Runtime compilado del puente de TikTok.
-- Entornos virtuales y cachés de Python.
-- Claves de firma, contraseñas y archivos locales de Android.
-- Bases de datos, música descargada, miniaturas y respaldos del usuario.
+- Builds, APKs, EXEs, and distribution packages.
+- `yt-dlp`, FFmpeg, and their auxiliary directories.
+- The compiled TikTok bridge runtime.
+- Python virtual environments and caches.
+- Signing keys, passwords, and local Android configuration files.
+- Databases, downloaded music, thumbnails, and user backups.
