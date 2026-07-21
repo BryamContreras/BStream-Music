@@ -169,6 +169,9 @@ jobs:
         run: |
           set -euo pipefail
           bundle="$PWD/build/linux/x64/release/bundle"
+          test -f "$bundle/tools/yt-dlp"
+          test -f "$bundle/tools/ffmpeg"
+          chmod 755 "$bundle/tools/yt-dlp" "$bundle/tools/ffmpeg"
           test -x "$bundle/tools/yt-dlp"
           test -x "$bundle/tools/ffmpeg"
 
