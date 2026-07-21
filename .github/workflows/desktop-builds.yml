@@ -1,4 +1,4 @@
-name: Desktop builds
+name: Desktop installers
 
 on:
   workflow_dispatch:
@@ -16,14 +16,38 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.44.0"
-  APP_VERSION: "1.1.9"
   FFMPEG_STATIC_VERSION: "5.3.0"
 
 jobs:
+  metadata:
+    name: Read app metadata
+    runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read version from pubspec
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' pubspec.yaml)"
+          if [[ -z "$app_version" ]]; then
+            echo "Could not read the application version from pubspec.yaml" >&2
+            exit 1
+          fi
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+
   windows:
-    name: Windows x64
-    runs-on: windows-latest
+    name: Windows x64 installer
+    needs: metadata
+    runs-on: windows-2022
     timeout-minutes: 60
+    env:
+      APP_VERSION: ${{ needs.metadata.outputs.app_version }}
 
     steps:
       - name: Checkout
@@ -78,42 +102,128 @@ jobs:
       - name: Build Windows release
         run: flutter build windows --release
 
-      - name: Package Windows release
+      - name: Bundle Visual C++ runtime
         shell: pwsh
         run: |
           $bundle = Join-Path $PWD "build/windows/x64/runner/Release"
-          $ytDlp = Join-Path $bundle "tools/yt-dlp.exe"
-          $ffmpeg = Join-Path $bundle "tools/ffmpeg.exe"
-          $liveBridge = Join-Path $bundle "tools/tiktok-live-bridge/tiktok_live_bridge.exe"
-          if (!(Test-Path -LiteralPath $ytDlp)) { throw "yt-dlp was not bundled." }
-          if (!(Test-Path -LiteralPath $ffmpeg)) { throw "FFmpeg was not bundled." }
-          if (!(Test-Path -LiteralPath $liveBridge)) { throw "TikTok LIVE bridge was not bundled." }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe was not found." }
+
+          $vsInstall = & $vswhere `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (!$vsInstall) { throw "A Visual Studio installation with C++ tools was not found." }
+
+          $redistRoot = Join-Path $vsInstall "VC/Redist/MSVC"
+          $crtDir = Get-ChildItem `
+            -Path (Join-Path $redistRoot "*/x64/Microsoft.VC*.CRT") `
+            -Directory |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "vcruntime140.dll") } |
+            Sort-Object {
+              (Get-Item (Join-Path $_.FullName "vcruntime140.dll")).VersionInfo.FileVersionRaw
+            } -Descending |
+            Select-Object -First 1
+          if (!$crtDir) { throw "The x64 Visual C++ runtime was not found." }
+
+          Copy-Item -Path (Join-Path $crtDir.FullName "*.dll") -Destination $bundle
+
+      - name: Verify Windows bundle
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $PWD "build/windows/x64/runner/Release"
+          $required = @(
+            (Join-Path $bundle "bstream_music.exe"),
+            (Join-Path $bundle "tools/yt-dlp.exe"),
+            (Join-Path $bundle "tools/ffmpeg.exe"),
+            (Join-Path $bundle "tools/tiktok-live-bridge/tiktok_live_bridge.exe"),
+            (Join-Path $bundle "msvcp140.dll"),
+            (Join-Path $bundle "vcruntime140.dll"),
+            (Join-Path $bundle "vcruntime140_1.dll")
+          )
+          foreach ($path in $required) {
+            if (!(Test-Path -LiteralPath $path)) {
+              throw "Required Windows bundle file is missing: $path"
+            }
+          }
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $isccCandidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $isccCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (!$iscc) { throw "Inno Setup 6 was not found on the runner." }
 
           New-Item -ItemType Directory -Force -Path "dist" | Out-Null
-          Compress-Archive `
-            -Path (Join-Path $bundle "*") `
-            -DestinationPath "dist/BStream-Music-$env:APP_VERSION-Windows-x64.zip" `
-            -Force
+          & $iscc "/DMyAppVersion=$env:APP_VERSION" "packaging/windows/BStreamMusic.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }
 
-      - name: Upload Windows artifact
+          $installer = Join-Path $PWD "dist/BStream-Music-$env:APP_VERSION-Windows-x64-Setup.exe"
+          if (!(Test-Path -LiteralPath $installer)) { throw "The Windows installer was not generated." }
+
+      - name: Smoke-test Windows installer
+        shell: pwsh
+        run: |
+          $installer = Join-Path $PWD "dist/BStream-Music-$env:APP_VERSION-Windows-x64-Setup.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "bstream-music-smoke-install"
+          $install = Start-Process `
+            -FilePath $installer `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/DIR=`"$installDir`"") `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($install.ExitCode)." }
+
+          $required = @(
+            (Join-Path $installDir "bstream_music.exe"),
+            (Join-Path $installDir "tools/yt-dlp.exe"),
+            (Join-Path $installDir "tools/ffmpeg.exe"),
+            (Join-Path $installDir "tools/tiktok-live-bridge/tiktok_live_bridge.exe"),
+            (Join-Path $installDir "msvcp140.dll"),
+            (Join-Path $installDir "vcruntime140.dll"),
+            (Join-Path $installDir "vcruntime140_1.dll")
+          )
+          foreach ($path in $required) {
+            if (!(Test-Path -LiteralPath $path)) {
+              throw "Installed file is missing: $path"
+            }
+          }
+
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          $uninstall = Start-Process `
+            -FilePath $uninstaller `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller smoke test failed with exit code $($uninstall.ExitCode)." }
+
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v7
         with:
-          name: BStream-Music-${{ env.APP_VERSION }}-Windows-x64
-          path: dist/BStream-Music-${{ env.APP_VERSION }}-Windows-x64.zip
+          name: BStream-Music-${{ env.APP_VERSION }}-Windows-x64-Setup
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-Windows-x64-Setup.exe
           if-no-files-found: error
           retention-days: 30
           archive: false
 
   linux:
-    name: Linux x64
-    runs-on: ubuntu-latest
+    name: Linux x64 installers
+    needs: metadata
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
+    env:
+      APP_VERSION: ${{ needs.metadata.outputs.app_version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install Linux build dependencies
+      - name: Install Linux build and packaging dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
@@ -124,7 +234,9 @@ jobs:
             libgtk-3-dev \
             liblzma-dev \
             libsqlite3-dev \
-            libmpv-dev
+            libmpv-dev \
+            desktop-file-utils \
+            rpm
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -164,44 +276,86 @@ jobs:
       - name: Build Linux release
         run: flutter build linux --release
 
-      - name: Package Linux release
+      - name: Verify Linux bundle
         shell: bash
         run: |
           set -euo pipefail
           bundle="$PWD/build/linux/x64/release/bundle"
-          test -f "$bundle/tools/yt-dlp"
-          test -f "$bundle/tools/ffmpeg"
-          chmod 755 "$bundle/tools/yt-dlp" "$bundle/tools/ffmpeg"
+          test -x "$bundle/bstream_music"
           test -x "$bundle/tools/yt-dlp"
           test -x "$bundle/tools/ffmpeg"
+          desktop-file-validate packaging/linux/com.bstream.bstream_music.desktop
 
-          cat >"$bundle/README-Linux.txt" <<'EOF'
-          BStream Music requiere GTK 3 y libmpv en el sistema Linux de destino.
-          Instala los paquetes equivalentes de tu distribucion antes de ejecutar
-          ./bstream_music. yt-dlp y FFmpeg ya vienen incluidos en tools/.
-          EOF
+          missing=0
+          while IFS= read -r -d '' candidate; do
+            if file "$candidate" | grep -q 'ELF'; then
+              dependencies="$(ldd "$candidate" 2>&1 || true)"
+              if grep -q 'not found' <<<"$dependencies"; then
+                printf 'Missing shared library for %s:\n%s\n' "$candidate" "$dependencies" >&2
+                missing=1
+              fi
+            fi
+          done < <(find "$bundle" -type f -print0)
+          test "$missing" -eq 0
 
-          mkdir -p dist
-          tar -C "$bundle" -czf \
-            "dist/BStream-Music-$APP_VERSION-Linux-x64.tar.gz" .
+      - name: Build DEB and RPM installers
+        shell: bash
+        run: |
+          chmod 755 packaging/linux/build_packages.sh packaging/linux/bstream-music
+          packaging/linux/build_packages.sh \
+            "$PWD/build/linux/x64/release/bundle" \
+            "$APP_VERSION" \
+            "$PWD/dist"
 
-      - name: Upload Linux artifact
+      - name: Upload Debian installer
         uses: actions/upload-artifact@v7
         with:
-          name: BStream-Music-${{ env.APP_VERSION }}-Linux-x64
-          path: dist/BStream-Music-${{ env.APP_VERSION }}-Linux-x64.tar.gz
+          name: BStream-Music-${{ env.APP_VERSION }}-Linux-DEB-amd64
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-linux-amd64.deb
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
+
+      - name: Upload RPM installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-Linux-RPM-x86_64
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-linux-x86_64.rpm
           if-no-files-found: error
           retention-days: 30
           archive: false
 
   macos:
-    name: macOS
-    runs-on: macos-latest
+    name: macOS ${{ matrix.arch }} installer
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    env:
+      APP_VERSION: ${{ needs.metadata.outputs.app_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            host_arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+            host_arch: x86_64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(uname -m)"
+          if [[ "$actual" != "${{ matrix.host_arch }}" ]]; then
+            echo "Expected ${{ matrix.host_arch }} runner, received $actual" >&2
+            exit 1
+          fi
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -241,23 +395,44 @@ jobs:
       - name: Build macOS release
         run: flutter build macos --release
 
-      - name: Package macOS release
+      - name: Build macOS PKG installer
         shell: bash
         run: |
           set -euo pipefail
           app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
-          test -x "$app/Contents/Resources/tools/yt-dlp"
-          test -x "$app/Contents/Resources/tools/ffmpeg"
+          executable="$app/Contents/MacOS/bstream_music"
+          bundled_tools="$app/Contents/Resources/tools"
+          test -x "$executable"
+          test -x "$bundled_tools/yt-dlp"
+          test -x "$bundled_tools/ffmpeg"
+
+          lipo -verify_arch "${{ matrix.host_arch }}" "$executable"
+          lipo -verify_arch "${{ matrix.host_arch }}" "$bundled_tools/yt-dlp"
+          lipo -verify_arch "${{ matrix.host_arch }}" "$bundled_tools/ffmpeg"
+
+          payload="$RUNNER_TEMP/bstream-pkg-root"
+          staged_app="$payload/Applications/BStream Music.app"
+          rm -rf "$payload"
+          mkdir -p "$payload/Applications"
+          ditto "$app" "$staged_app"
+          codesign --verify --deep --strict "$staged_app"
 
           mkdir -p dist
-          ditto -c -k --sequesterRsrc --keepParent "$app" \
-            "dist/BStream-Music-$APP_VERSION-macOS.zip"
+          package="dist/BStream-Music-$APP_VERSION-macOS-${{ matrix.arch }}.pkg"
+          pkgbuild \
+            --root "$payload" \
+            --install-location / \
+            --identifier com.bstream.bstreamMusic.pkg \
+            --version "$APP_VERSION" \
+            --ownership recommended \
+            "$package"
+          pkgutil --payload-files "$package" | grep -F "BStream Music.app/Contents/MacOS/bstream_music"
 
-      - name: Upload macOS artifact
+      - name: Upload macOS installer
         uses: actions/upload-artifact@v7
         with:
-          name: BStream-Music-${{ env.APP_VERSION }}-macOS
-          path: dist/BStream-Music-${{ env.APP_VERSION }}-macOS.zip
+          name: BStream-Music-${{ env.APP_VERSION }}-macOS-${{ matrix.arch }}
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-macOS-${{ matrix.arch }}.pkg
           if-no-files-found: error
           retention-days: 30
           archive: false

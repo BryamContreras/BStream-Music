@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=BStream Music
+Comment=Reproductor y gestor musical
+Exec=bstream-music
+Icon=com.bstream.bstream_music
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=com.bstream.bstream_music

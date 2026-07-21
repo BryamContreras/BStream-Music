@@ -4,7 +4,7 @@ BStream Music es un reproductor y gestor musical multiplataforma construido con 
 
 Versión actual: **1.1.9+119**.
 
-> Este proyecto no incluye contenido multimedia ni binarios de terceros. El usuario es responsable de cumplir los derechos de autor, los términos de cada proveedor y las licencias de las herramientas que instale.
+> El repositorio no almacena contenido multimedia ni binarios de terceros. Los instaladores generados por CI descargan e incorporan sus propias copias de `yt-dlp` y FFmpeg. El usuario es responsable de cumplir los derechos de autor, los términos de cada proveedor y las licencias de esas herramientas.
 
 ## Funciones principales
 
@@ -80,8 +80,8 @@ La integración usa una librería no oficial. Si TikTok cambia su protocolo, el 
 | --- | --- | --- | --- |
 | Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; FFmpeg llega como dependencia Gradle |
 | Windows | `media_kit` | `yt-dlp` + FFmpeg | TikTok LIVE, cola lateral y herramientas externas |
-| Linux | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Bundle x64; requiere GTK 3 y libmpv en el sistema |
-| macOS | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Runner, permisos, herramientas firmadas y ventana mínima `960×600` preparados; requiere validación final en hardware Apple |
+| Linux | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Instaladores x64 basados en Ubuntu 22.04; requieren GTK 3, libmpv y SQLite |
+| macOS | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Instaladores PKG separados para Apple Silicon e Intel; ventana mínima `960×600` |
 
 ## Arquitectura
 
@@ -313,19 +313,31 @@ build/linux/x64/release/bundle/bstream_music
 build/macos/Build/Products/Release/bstream_music.app
 ```
 
-## Compilaciones con GitHub Actions
+## Instaladores con GitHub Actions
 
-El workflow `Desktop builds` genera paquetes Release independientes para Windows x64, Linux x64 y macOS. Puede ejecutarse manualmente desde la pestaña **Actions** y también se ejecuta al publicar cambios en `main` o una etiqueta `v*`.
+El workflow `Desktop installers` genera instaladores Release independientes para Windows, Linux y las dos arquitecturas de macOS. Puede ejecutarse manualmente desde la pestaña **Actions** y también se ejecuta en los pull requests, al publicar cambios en `main` o una etiqueta `v*`.
 
-Cada job descarga `yt-dlp` desde sus releases oficiales y obtiene el ejecutable de FFmpeg apropiado para el runner. Windows también compila y verifica el runtime portable del puente TikTok LIVE. Los binarios se incluyen dentro del paquete resultante, pero no se guardan en el repositorio. Los artefactos quedan disponibles durante 30 días:
+Cada job descarga `yt-dlp` desde sus releases oficiales y obtiene el ejecutable de FFmpeg apropiado para su sistema y arquitectura. Windows también compila y verifica el runtime portable del puente TikTok LIVE. Los binarios se incluyen dentro de los instaladores, pero no se guardan en el repositorio. Los artefactos quedan disponibles durante 30 días:
 
 ```text
-BStream-Music-1.1.9-Windows-x64.zip
-BStream-Music-1.1.9-Linux-x64.tar.gz
-BStream-Music-1.1.9-macOS.zip
+BStream-Music-1.1.9-Windows-x64-Setup.exe
+BStream-Music-1.1.9-linux-amd64.deb
+BStream-Music-1.1.9-linux-x86_64.rpm
+BStream-Music-1.1.9-macOS-arm64.pkg
+BStream-Music-1.1.9-macOS-x64.pkg
 ```
 
-El paquete de macOS generado automáticamente usa firma ad hoc y no está notarizado. Para distribuirlo públicamente sin advertencias de Gatekeeper se necesita un certificado Apple Developer ID y credenciales de notarización.
+### Qué archivo instalar
+
+- **Windows 64 bits:** abre el archivo `Setup.exe`. El instalador muestra el selector de idioma, crea el acceso del menú Inicio y permite elegir si también se crea uno en el escritorio. La entrada de desinstalación se muestra como `BStream Music`, sin el número de versión.
+- **Ubuntu, Debian, Linux Mint y derivados:** instala el `.deb` con `sudo apt install ./BStream-Music-1.1.9-linux-amd64.deb`.
+- **Fedora, RHEL y derivados:** instala el `.rpm` con `sudo dnf install ./BStream-Music-1.1.9-linux-x86_64.rpm`.
+- **Mac con Apple Silicon (M1, M2, M3, M4 o posterior):** abre `BStream-Music-1.1.9-macOS-arm64.pkg`.
+- **Mac con procesador Intel:** abre `BStream-Music-1.1.9-macOS-x64.pkg`.
+
+Un archivo `.app` es la aplicación completa: debe abrirse como una sola unidad y no entrando en sus carpetas `Contents`, `Frameworks` o `Resources`. El nuevo `.pkg` coloca automáticamente `BStream Music.app` en `/Applications`.
+
+Los instaladores automáticos todavía no usan certificados comerciales. Windows puede mostrar una advertencia de SmartScreen y macOS puede mostrar una advertencia de Gatekeeper. Para una distribución pública sin esos avisos se necesitan un certificado de firma de código de Windows y certificados Apple Developer ID con notarización.
 
 La versión se define en `pubspec.yaml` y el texto mostrado por la aplicación en `lib/core/constants/app_constants.dart`.
 
