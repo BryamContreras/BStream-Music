@@ -1,10 +1,10 @@
 # BStream Music
 
-BStream Music es un reproductor y gestor musical multiplataforma construido con Flutter. Permite buscar música, reproducirla, descargarla, organizar una biblioteca local y administrar playlists desde Android y Windows.
+BStream Music es un reproductor y gestor musical multiplataforma construido con Flutter. Permite buscar música, reproducirla, descargarla, organizar una biblioteca local y administrar playlists desde Android, Windows, Linux y macOS.
 
 Versión actual: **1.1.9+119**.
 
-> Este proyecto no incluye contenido multimedia ni binarios de terceros. El usuario es responsable de cumplir los derechos de autor, los términos de cada proveedor y las licencias de las herramientas que instale.
+> El repositorio no almacena contenido multimedia ni binarios de terceros. Los instaladores generados por CI descargan e incorporan sus propias copias de `yt-dlp` y FFmpeg. El usuario es responsable de cumplir los derechos de autor, los términos de cada proveedor y las licencias de esas herramientas.
 
 ## Funciones principales
 
@@ -80,7 +80,8 @@ La integración usa una librería no oficial. Si TikTok cambia su protocolo, el 
 | --- | --- | --- | --- |
 | Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; FFmpeg llega como dependencia Gradle |
 | Windows | `media_kit` | `yt-dlp` + FFmpeg | TikTok LIVE, cola lateral y herramientas externas |
-| macOS | `media_kit` | `yt-dlp` + FFmpeg | Existe el scaffold; la versión 1.1.9 está enfocada y validada principalmente en Android/Windows |
+| Linux | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Instaladores x64 basados en Ubuntu 22.04; requieren GTK 3, libmpv y SQLite |
+| macOS | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Instaladores PKG separados para Apple Silicon e Intel; ventana mínima `960×600` |
 
 ## Arquitectura
 
@@ -114,13 +115,15 @@ lib/
     storage/
 ```
 
-Los contratos principales son `DownloaderService`, `PlayerService` y `LibraryRepository`. Android usa canales de plataforma para las tareas nativas; Windows ejecuta herramientas locales mediante listas de argumentos y procesa sus salidas de forma asíncrona.
+Los contratos principales son `DownloaderService`, `PlayerService` y `LibraryRepository`. Android usa canales de plataforma para las tareas nativas; Windows y macOS ejecutan herramientas locales mediante listas de argumentos y procesan sus salidas de forma asíncrona.
 
 ## Requisitos de desarrollo
 
 - Flutter estable compatible con Dart `^3.12.0`.
 - Android Studio y Android SDK para Android.
 - Visual Studio/Build Tools con **Desktop development with C++** para Windows.
+- Clang, CMake, Ninja, GTK 3 y libmpv para Linux.
+- Una Mac con Xcode para compilar, firmar y probar macOS.
 - Python 3.11–3.13 únicamente si se desarrolla o recompila el puente de TikTok.
 - `yt-dlp` y FFmpeg para búsquedas y descargas en escritorio.
 
@@ -136,6 +139,8 @@ flutter pub get
 ```powershell
 flutter run -d windows
 flutter run -d android
+flutter run -d linux
+flutter run -d macos
 ```
 
 Para listar dispositivos disponibles:
@@ -146,7 +151,7 @@ flutter devices
 
 ## Herramientas de Windows
 
-Los binarios de terceros **no se guardan en Git**. Durante desarrollo puedes instalarlos en el `PATH` o colocarlos así:
+Los binarios de terceros **no se guardan en Git**. `yt-dlp` puede estar en el `PATH`, pero FFmpeg siempre se resuelve desde una carpeta `tools` para que cada paquete use una versión controlada. La disposición recomendada es:
 
 ```text
 windows/tools/
@@ -167,6 +172,42 @@ winget install Gyan.FFmpeg
 ```
 
 Para una build portable de Windows, coloca versiones verificadas de `yt-dlp` y FFmpeg en `windows/tools` antes de compilar Release. CMake copiará las herramientas junto al ejecutable. En Debug se priorizan las herramientas del árbol del proyecto para evitar copiar o bloquear runtimes grandes en cada compilación.
+
+## Herramientas y permisos de macOS
+
+Antes de compilar Release o Profile, coloca binarios nativos y verificados en:
+
+```text
+macos/tools/
+  yt-dlp
+  ffmpeg
+```
+
+También se reconocen `yt-dlp_macos` y `ffmpeg/bin/ffmpeg`. La fase **Bundle Desktop Tools** los copia como nombres estables a:
+
+```text
+bstream_music.app/Contents/Resources/tools/
+```
+
+Durante la copia se asigna permiso de ejecución y, cuando Xcode está firmando la aplicación, también se firman los ejecutables Mach-O. Una build Release o Profile falla de forma explícita si falta cualquiera de las dos herramientas, evitando generar un paquete sin búsquedas o descargas.
+
+FFmpeg no utiliza Homebrew ni el `PATH` en tiempo de ejecución: siempre se toma de `tools`. `yt-dlp` prioriza el paquete y conserva el `PATH` como alternativa durante desarrollo.
+
+La aplicación se distribuye fuera de la Mac App Store. El App Sandbox está desactivado porque BStream necesita iniciar `yt-dlp` y FFmpeg, acceder a la carpeta de descargas elegida y realizar conexiones de red. El Hardened Runtime permanece activo para permitir firma con Developer ID y notarización. TikTok LIVE continúa limitado a Windows.
+
+La ventana nativa de macOS impone el mismo mínimo de `960×600` que Windows.
+
+## Herramientas de Linux
+
+Los ejecutables se preparan con esta disposición:
+
+```text
+linux/tools/
+  yt-dlp
+  ffmpeg
+```
+
+CMake los copia a `tools/` dentro del bundle. La aplicación los resuelve desde esa ubicación y no necesita que FFmpeg esté en el `PATH`. El equipo de destino debe tener instaladas las bibliotecas de ejecución de GTK 3 y libmpv.
 
 ## Puente de TikTok LIVE
 
@@ -233,7 +274,7 @@ $env:BSTREAM_ANDROID_KEY_PASSWORD="..."
 
 ## Base de datos, favoritos y respaldos
 
-- Android/macOS usan `sqflite`; Windows usa `sqflite_common_ffi`.
+- Android/macOS usan `sqflite`; Windows y Linux usan `sqflite_common_ffi`.
 - Las migraciones son incrementales y conservan bibliotecas existentes.
 - Favoritos se implementa como una playlist reservada (`bstream:favorites`), por lo que no requiere una tabla separada.
 - El respaldo ZIP contiene la base de datos, `audio/`, `thumbnails/` y un manifiesto.
@@ -254,6 +295,13 @@ El script produce los mipmaps de Android, el `.ico` de Windows, el AppIcon de ma
 ```powershell
 flutter build windows --release
 flutter build apk --release
+flutter build linux --release
+```
+
+En una Mac, después de preparar `macos/tools`:
+
+```bash
+flutter build macos --release
 ```
 
 Artefactos habituales:
@@ -261,7 +309,35 @@ Artefactos habituales:
 ```text
 build/windows/x64/runner/Release/bstream_music.exe
 build/app/outputs/flutter-apk/app-release.apk
+build/linux/x64/release/bundle/bstream_music
+build/macos/Build/Products/Release/bstream_music.app
 ```
+
+## Instaladores con GitHub Actions
+
+El workflow `Desktop installers` genera instaladores Release independientes para Windows, Linux y las dos arquitecturas de macOS. Puede ejecutarse manualmente desde la pestaña **Actions** y también se ejecuta en los pull requests, al publicar cambios en `main` o una etiqueta `v*`.
+
+Cada job descarga `yt-dlp` desde sus releases oficiales y obtiene el ejecutable de FFmpeg apropiado para su sistema y arquitectura. Windows también compila y verifica el runtime portable del puente TikTok LIVE. Los binarios se incluyen dentro de los instaladores, pero no se guardan en el repositorio. Los artefactos quedan disponibles durante 30 días:
+
+```text
+BStream-Music-1.1.9-Windows-x64-Setup.exe
+BStream-Music-1.1.9-linux-amd64.deb
+BStream-Music-1.1.9-linux-x86_64.rpm
+BStream-Music-1.1.9-macOS-arm64.pkg
+BStream-Music-1.1.9-macOS-x64.pkg
+```
+
+### Qué archivo instalar
+
+- **Windows 64 bits:** abre el archivo `Setup.exe`. El instalador muestra el selector de idioma, crea el acceso del menú Inicio y permite elegir si también se crea uno en el escritorio. La entrada de desinstalación se muestra como `BStream Music`, sin el número de versión.
+- **Ubuntu, Debian, Linux Mint y derivados:** instala el `.deb` con `sudo apt install ./BStream-Music-1.1.9-linux-amd64.deb`.
+- **Fedora, RHEL y derivados:** instala el `.rpm` con `sudo dnf install ./BStream-Music-1.1.9-linux-x86_64.rpm`.
+- **Mac con Apple Silicon (M1, M2, M3, M4 o posterior):** abre `BStream-Music-1.1.9-macOS-arm64.pkg`.
+- **Mac con procesador Intel:** abre `BStream-Music-1.1.9-macOS-x64.pkg`.
+
+Un archivo `.app` es la aplicación completa: debe abrirse como una sola unidad y no entrando en sus carpetas `Contents`, `Frameworks` o `Resources`. El nuevo `.pkg` coloca automáticamente `BStream Music.app` en `/Applications`.
+
+Los instaladores automáticos todavía no usan certificados comerciales. Windows puede mostrar una advertencia de SmartScreen y macOS puede mostrar una advertencia de Gatekeeper. Para una distribución pública sin esos avisos se necesitan un certificado de firma de código de Windows y certificados Apple Developer ID con notarización.
 
 La versión se define en `pubspec.yaml` y el texto mostrado por la aplicación en `lib/core/constants/app_constants.dart`.
 

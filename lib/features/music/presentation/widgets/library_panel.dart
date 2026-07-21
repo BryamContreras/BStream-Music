@@ -834,7 +834,7 @@ class _TrackListView extends ConsumerWidget {
                 : ListView.builder(
                     padding: const EdgeInsets.only(bottom: 12),
                     itemCount: tracks.length,
-                    itemExtent: 86,
+                    itemExtent: 76,
                     itemBuilder: (context, index) {
                       return Padding(
                         padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),

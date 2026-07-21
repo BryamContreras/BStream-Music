@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/platform/app_platform.dart';
 import '../../../../core/utils/image_source.dart';
 import '../providers/music_providers.dart';
 
@@ -16,7 +17,6 @@ class PlaybackGradientBackground extends ConsumerWidget {
         (player) => player.value?.thumbnailUrl?.trim(),
       ),
     );
-
     return RepaintBoundary(
       child: Stack(
         fit: StackFit.expand,
@@ -74,6 +74,19 @@ class PlayerPlaybackGradientBackground extends ConsumerWidget {
         (player) => player.value?.thumbnailUrl?.trim(),
       ),
     );
+    final overlayColors = AppPlatform.isDesktop
+        ? const [
+            Color(0xC0101712),
+            Color(0xC8080D0A),
+            Color(0xD0070B08),
+            Color(0xD8080C09),
+          ]
+        : const [
+            Color(0x78101712),
+            Color(0x84080D0A),
+            Color(0x90070B08),
+            Color(0x9C080C09),
+          ];
 
     return RepaintBoundary(
       child: Stack(
@@ -101,18 +114,13 @@ class PlayerPlaybackGradientBackground extends ConsumerWidget {
                     ),
             ),
           ),
-          const DecoratedBox(
+          DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xC0101712),
-                  Color(0xC8080D0A),
-                  Color(0xD0070B08),
-                  Color(0xD8080C09),
-                ],
-                stops: [0, 0.38, 0.72, 1],
+                colors: overlayColors,
+                stops: const [0, 0.38, 0.72, 1],
               ),
             ),
           ),

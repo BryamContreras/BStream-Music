@@ -17,13 +17,16 @@ import '../../features/music/domain/entities/track_info.dart';
 import 'downloader_service.dart';
 
 class DesktopDownloaderService implements DownloaderService {
-  DesktopDownloaderService({SharedPreferences? initialPreferences})
-    : _preferences = initialPreferences;
+  DesktopDownloaderService({
+    SharedPreferences? initialPreferences,
+    List<Directory>? toolDirectories,
+  }) : _preferences = initialPreferences,
+       _toolDirectoryOverrides = toolDirectories;
 
   static const _ytDlpPathKey = 'desktop.ytDlpPath';
-  static const _ffmpegPathKey = 'desktop.ffmpegPath';
 
   final SharedPreferences? _preferences;
+  final List<Directory>? _toolDirectoryOverrides;
   final _uuid = const Uuid();
   final _progressController = StreamController<DownloadProgress>.broadcast();
   final _activeProcesses = <int, Process>{};
@@ -54,15 +57,6 @@ class DesktopDownloaderService implements DownloaderService {
     await prefs.setString(_ytDlpPathKey, path.trim());
   }
 
-  Future<void> setFfmpegPath(String? path) async {
-    final prefs = await _prefs;
-    if (path == null || path.trim().isEmpty) {
-      await prefs.remove(_ffmpegPathKey);
-      return;
-    }
-    await prefs.setString(_ffmpegPathKey, path.trim());
-  }
-
   Future<String> getYtDlpPath() async {
     final configured = _configuredExecutable(
       (await _prefs).getString(_ytDlpPathKey),
@@ -73,17 +67,6 @@ class DesktopDownloaderService implements DownloaderService {
   }
 
   Future<String?> getFfmpegPath() async {
-    final names = [
-      'ffmpeg.exe',
-      'ffmpeg',
-      p.join('ffmpeg', 'bin', 'ffmpeg.exe'),
-      p.join('ffmpeg', 'bin', 'ffmpeg'),
-    ];
-    final configured = _configuredExecutable(
-      (await _prefs).getString(_ffmpegPathKey),
-      names,
-    );
-    if (configured != null) return configured;
     return _findBundledTool([
       'ffmpeg.exe',
       'ffmpeg',
@@ -97,9 +80,9 @@ class DesktopDownloaderService implements DownloaderService {
   }
 
   Future<bool> hasFfmpeg() async {
-    return _checkExecutable(await getFfmpegPath() ?? 'ffmpeg', const [
-      '-version',
-    ]);
+    final executable = await getFfmpegPath();
+    return executable != null &&
+        await _checkExecutable(executable, const ['-version']);
   }
 
   @override
@@ -491,16 +474,26 @@ class DesktopDownloaderService implements DownloaderService {
   }
 
   List<Directory> _toolDirectories() {
+    final overrides = _toolDirectoryOverrides;
+    if (overrides != null) {
+      return List.unmodifiable(overrides);
+    }
+
     final executableDirectory = File(Platform.resolvedExecutable).parent;
     final currentDirectory = Directory.current;
     final directories = <Directory>[
       Directory(p.join(executableDirectory.path, 'tools')),
+      Directory(p.join(executableDirectory.parent.path, 'Resources', 'tools')),
+      Directory(p.join(currentDirectory.path, 'linux', 'tools')),
+      Directory(p.join(currentDirectory.path, 'macos', 'tools')),
       Directory(p.join(currentDirectory.path, 'windows', 'tools')),
       Directory(p.join(currentDirectory.path, 'tools')),
     ];
 
     var cursor = executableDirectory;
     for (var index = 0; index < 8; index++) {
+      directories.add(Directory(p.join(cursor.path, 'linux', 'tools')));
+      directories.add(Directory(p.join(cursor.path, 'macos', 'tools')));
       directories.add(Directory(p.join(cursor.path, 'windows', 'tools')));
       final parent = cursor.parent;
       if (parent.path == cursor.path) {

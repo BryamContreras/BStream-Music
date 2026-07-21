@@ -235,6 +235,14 @@ class AppStrings {
     return '$count ${count == 1 ? 'cancion' : 'canciones'}';
   }
 
+  String playbackQueueSummary(int count) {
+    if (isEnglish) {
+      return 'Playback Queue - $count ${count == 1 ? 'Song' : 'Songs'}';
+    }
+    return 'Cola de Reproducción - $count '
+        '${count == 1 ? 'Canción' : 'Canciones'}';
+  }
+
   String liveQueueSummary(int total, int ready, int pending) {
     if (isEnglish) {
       return '$total requests - $ready ready - $pending pending';

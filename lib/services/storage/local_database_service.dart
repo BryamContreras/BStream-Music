@@ -176,7 +176,7 @@ class LocalDatabaseService {
   }
 
   Future<Database> _open() async {
-    if (Platform.isWindows) {
+    if (Platform.isWindows || Platform.isLinux) {
       sqfliteFfiInit();
       databaseFactory = databaseFactoryFfi;
     }

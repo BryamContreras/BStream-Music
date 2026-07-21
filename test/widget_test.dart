@@ -525,6 +525,7 @@ void main() {
 
       await tester.tap(find.byTooltip('Cola de reproduccion'));
       await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Cola de Reproducción - 2 Canciones'), findsOneWidget);
       expect(find.text('Primera cancion'), findsWidgets);
       expect(find.text('Segunda cancion'), findsOneWidget);
       expect(

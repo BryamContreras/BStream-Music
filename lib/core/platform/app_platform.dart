@@ -1,6 +1,6 @@
 import 'dart:io';
 
-enum AppPlatformType { android, windows, macos, unsupported }
+enum AppPlatformType { android, windows, linux, macos, unsupported }
 
 class AppPlatform {
   const AppPlatform._();
@@ -12,6 +12,9 @@ class AppPlatform {
     if (Platform.isWindows) {
       return AppPlatformType.windows;
     }
+    if (Platform.isLinux) {
+      return AppPlatformType.linux;
+    }
     if (Platform.isMacOS) {
       return AppPlatformType.macos;
     }
@@ -22,6 +25,10 @@ class AppPlatform {
 
   static bool get isWindows => current == AppPlatformType.windows;
 
+  static bool get isLinux => current == AppPlatformType.linux;
+
   static bool get isDesktop =>
-      current == AppPlatformType.windows || current == AppPlatformType.macos;
+      current == AppPlatformType.windows ||
+      current == AppPlatformType.linux ||
+      current == AppPlatformType.macos;
 }
