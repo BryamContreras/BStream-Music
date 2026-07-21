@@ -62,13 +62,15 @@ app.*.map.json
 .env.*
 !.env.example
 
-# Optional bundled desktop tools. Keep windows/tools/README.md tracked.
+# Optional bundled desktop tools. Keep each platform README tracked.
 /windows/tools/*.exe
 /windows/tools/ffmpeg/
 /windows/tools/tiktok-live-bridge/
 /windows/tools/tiktok_live_bridge/
 /windows/tools/*.dll
 /windows/tools/*.pyd
+/macos/tools/*
+!/macos/tools/README.md
 
 # Locally exported packages and user data
 *.apk

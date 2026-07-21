@@ -436,39 +436,39 @@ class _PlaybackQueuePanel extends ConsumerWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xB0090C0A),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: colors.onSurface.withValues(alpha: 0.14)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 10, 8, 8),
+            padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
             child: Row(
               children: [
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        strings.playbackQueue,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w900),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        strings.songCount(queue.entries.length),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    strings.playbackQueueSummary(queue.entries.length),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
-                IconButton(
-                  tooltip: strings.close,
-                  icon: const Icon(Icons.close_rounded, size: 22),
-                  onPressed: onClose,
+                const SizedBox(width: 6),
+                SizedBox.square(
+                  dimension: 24,
+                  child: IconButton(
+                    tooltip: strings.close,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 24,
+                      height: 24,
+                    ),
+                    icon: const Icon(Icons.close_rounded, size: 17),
+                    onPressed: onClose,
+                  ),
                 ),
               ],
             ),

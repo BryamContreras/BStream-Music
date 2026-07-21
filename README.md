@@ -80,7 +80,7 @@ La integración usa una librería no oficial. Si TikTok cambia su protocolo, el 
 | --- | --- | --- | --- |
 | Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; FFmpeg llega como dependencia Gradle |
 | Windows | `media_kit` | `yt-dlp` + FFmpeg | TikTok LIVE, cola lateral y herramientas externas |
-| macOS | `media_kit` | `yt-dlp` + FFmpeg | Existe el scaffold; la versión 1.1.9 está enfocada y validada principalmente en Android/Windows |
+| macOS | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Runner, permisos, herramientas firmadas y ventana mínima `960×600` preparados; requiere validación final en hardware Apple |
 
 ## Arquitectura
 
@@ -114,13 +114,14 @@ lib/
     storage/
 ```
 
-Los contratos principales son `DownloaderService`, `PlayerService` y `LibraryRepository`. Android usa canales de plataforma para las tareas nativas; Windows ejecuta herramientas locales mediante listas de argumentos y procesa sus salidas de forma asíncrona.
+Los contratos principales son `DownloaderService`, `PlayerService` y `LibraryRepository`. Android usa canales de plataforma para las tareas nativas; Windows y macOS ejecutan herramientas locales mediante listas de argumentos y procesan sus salidas de forma asíncrona.
 
 ## Requisitos de desarrollo
 
 - Flutter estable compatible con Dart `^3.12.0`.
 - Android Studio y Android SDK para Android.
 - Visual Studio/Build Tools con **Desktop development with C++** para Windows.
+- Una Mac con Xcode para compilar, firmar y probar macOS.
 - Python 3.11–3.13 únicamente si se desarrolla o recompila el puente de TikTok.
 - `yt-dlp` y FFmpeg para búsquedas y descargas en escritorio.
 
@@ -136,6 +137,7 @@ flutter pub get
 ```powershell
 flutter run -d windows
 flutter run -d android
+flutter run -d macos
 ```
 
 Para listar dispositivos disponibles:
@@ -146,7 +148,7 @@ flutter devices
 
 ## Herramientas de Windows
 
-Los binarios de terceros **no se guardan en Git**. Durante desarrollo puedes instalarlos en el `PATH` o colocarlos así:
+Los binarios de terceros **no se guardan en Git**. `yt-dlp` puede estar en el `PATH`, pero FFmpeg siempre se resuelve desde una carpeta `tools` para que cada paquete use una versión controlada. La disposición recomendada es:
 
 ```text
 windows/tools/
@@ -167,6 +169,30 @@ winget install Gyan.FFmpeg
 ```
 
 Para una build portable de Windows, coloca versiones verificadas de `yt-dlp` y FFmpeg en `windows/tools` antes de compilar Release. CMake copiará las herramientas junto al ejecutable. En Debug se priorizan las herramientas del árbol del proyecto para evitar copiar o bloquear runtimes grandes en cada compilación.
+
+## Herramientas y permisos de macOS
+
+Antes de compilar Release o Profile, coloca binarios nativos y verificados en:
+
+```text
+macos/tools/
+  yt-dlp
+  ffmpeg
+```
+
+También se reconocen `yt-dlp_macos` y `ffmpeg/bin/ffmpeg`. La fase **Bundle Desktop Tools** los copia como nombres estables a:
+
+```text
+bstream_music.app/Contents/Resources/tools/
+```
+
+Durante la copia se asigna permiso de ejecución y, cuando Xcode está firmando la aplicación, también se firman los ejecutables Mach-O. Una build Release o Profile falla de forma explícita si falta cualquiera de las dos herramientas, evitando generar un paquete sin búsquedas o descargas.
+
+FFmpeg no utiliza Homebrew ni el `PATH` en tiempo de ejecución: siempre se toma de `tools`. `yt-dlp` prioriza el paquete y conserva el `PATH` como alternativa durante desarrollo.
+
+La aplicación se distribuye fuera de la Mac App Store. El App Sandbox está desactivado porque BStream necesita iniciar `yt-dlp` y FFmpeg, acceder a la carpeta de descargas elegida y realizar conexiones de red. El Hardened Runtime permanece activo para permitir firma con Developer ID y notarización. TikTok LIVE continúa limitado a Windows.
+
+La ventana nativa de macOS impone el mismo mínimo de `960×600` que Windows.
 
 ## Puente de TikTok LIVE
 
@@ -256,11 +282,18 @@ flutter build windows --release
 flutter build apk --release
 ```
 
+En una Mac, después de preparar `macos/tools`:
+
+```bash
+flutter build macos --release
+```
+
 Artefactos habituales:
 
 ```text
 build/windows/x64/runner/Release/bstream_music.exe
 build/app/outputs/flutter-apk/app-release.apk
+build/macos/Build/Products/Release/bstream_music.app
 ```
 
 La versión se define en `pubspec.yaml` y el texto mostrado por la aplicación en `lib/core/constants/app_constants.dart`.

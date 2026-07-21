@@ -147,21 +147,6 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     );
   }
 
-  Future<void> setFfmpegPath(String path) async {
-    final downloader = ref.read(downloaderServiceProvider);
-    if (downloader is! DesktopDownloaderService) {
-      return;
-    }
-    await downloader.setFfmpegPath(path);
-    final current = await future;
-    state = AsyncData(
-      current.copyWith(
-        ffmpegPath: await downloader.getFfmpegPath(),
-        hasFfmpeg: await downloader.hasFfmpeg(),
-      ),
-    );
-  }
-
   Future<void> refreshToolStatus() async {
     final downloader = ref.read(downloaderServiceProvider);
     if (downloader is! DesktopDownloaderService) {
@@ -170,7 +155,6 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final ytDlpPath = await downloader.getYtDlpPath();
     final ffmpegPath = await downloader.getFfmpegPath();
     await downloader.setYtDlpPath(ytDlpPath);
-    await downloader.setFfmpegPath(ffmpegPath);
 
     final current = await future;
     state = AsyncData(

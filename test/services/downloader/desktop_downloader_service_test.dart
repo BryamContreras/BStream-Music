@@ -34,7 +34,7 @@ void main() {
     await service.dispose();
   });
 
-  test('resolves configured tool directories without executing them', () async {
+  test('uses configured yt-dlp and bundled FFmpeg tools', () async {
     final temp = await Directory.systemTemp.createTemp(
       'bstream_desktop_tools_',
     );
@@ -44,18 +44,31 @@ void main() {
       }
     });
 
-    final ytDlp = File(p.join(temp.path, 'yt-dlp.exe'));
-    final ffmpeg = File(p.join(temp.path, 'ffmpeg.exe'));
+    final configuredDirectory = Directory(p.join(temp.path, 'configured'));
+    final bundledDirectory = Directory(p.join(temp.path, 'tools'));
+    await configuredDirectory.create(recursive: true);
+    await bundledDirectory.create(recursive: true);
+    final ytDlp = File(p.join(configuredDirectory.path, 'yt-dlp.exe'));
+    final ffmpeg = File(p.join(bundledDirectory.path, 'ffmpeg.exe'));
     await ytDlp.writeAsString('');
     await ffmpeg.writeAsString('');
 
-    final service = DesktopDownloaderService();
+    final service = DesktopDownloaderService(
+      toolDirectories: [bundledDirectory],
+    );
     addTearDown(service.dispose);
 
-    await service.setYtDlpPath(temp.path);
-    await service.setFfmpegPath(temp.path);
+    await service.setYtDlpPath(configuredDirectory.path);
 
     expect(await service.getYtDlpPath(), ytDlp.path);
     expect(await service.getFfmpegPath(), ffmpeg.path);
+  });
+
+  test('does not fall back to a system FFmpeg executable', () async {
+    final service = DesktopDownloaderService(toolDirectories: const []);
+    addTearDown(service.dispose);
+
+    expect(await service.getFfmpegPath(), isNull);
+    expect(await service.hasFfmpeg(), isFalse);
   });
 }
