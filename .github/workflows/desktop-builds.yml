@@ -406,9 +406,9 @@ jobs:
           test -x "$bundled_tools/yt-dlp"
           test -x "$bundled_tools/ffmpeg"
 
-          lipo -verify_arch "${{ matrix.host_arch }}" "$executable"
-          lipo -verify_arch "${{ matrix.host_arch }}" "$bundled_tools/yt-dlp"
-          lipo -verify_arch "${{ matrix.host_arch }}" "$bundled_tools/ffmpeg"
+          lipo "$executable" -verify_arch "${{ matrix.host_arch }}"
+          lipo "$bundled_tools/yt-dlp" -verify_arch "${{ matrix.host_arch }}"
+          lipo "$bundled_tools/ffmpeg" -verify_arch "${{ matrix.host_arch }}"
 
           payload="$RUNNER_TEMP/bstream-pkg-root"
           staged_app="$payload/Applications/BStream Music.app"
