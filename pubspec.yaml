@@ -47,6 +47,7 @@ dependencies:
   file_picker: ^11.0.2
   media_kit: ^1.2.6
   media_kit_libs_windows_audio: ^1.0.9
+  media_kit_libs_linux: ^1.2.1
   media_kit_libs_macos_audio: ^1.1.4
   just_audio_background: ^0.0.1-beta.17
   audio_service: ^0.18.18

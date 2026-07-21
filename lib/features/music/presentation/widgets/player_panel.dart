@@ -205,7 +205,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 maxWidth: stackedDesktop
                                     ? maxContentWidth
                                     : 520.0,
-                                showVolumeButton: AppPlatform.isWindows,
+                                showVolumeButton: AppPlatform.isDesktop,
                                 strings: strings,
                               );
 

@@ -484,6 +484,7 @@ class DesktopDownloaderService implements DownloaderService {
     final directories = <Directory>[
       Directory(p.join(executableDirectory.path, 'tools')),
       Directory(p.join(executableDirectory.parent.path, 'Resources', 'tools')),
+      Directory(p.join(currentDirectory.path, 'linux', 'tools')),
       Directory(p.join(currentDirectory.path, 'macos', 'tools')),
       Directory(p.join(currentDirectory.path, 'windows', 'tools')),
       Directory(p.join(currentDirectory.path, 'tools')),
@@ -491,6 +492,7 @@ class DesktopDownloaderService implements DownloaderService {
 
     var cursor = executableDirectory;
     for (var index = 0; index < 8; index++) {
+      directories.add(Directory(p.join(cursor.path, 'linux', 'tools')));
       directories.add(Directory(p.join(cursor.path, 'macos', 'tools')));
       directories.add(Directory(p.join(cursor.path, 'windows', 'tools')));
       final parent = cursor.parent;

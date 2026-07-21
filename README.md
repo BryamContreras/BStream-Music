@@ -1,6 +1,6 @@
 # BStream Music
 
-BStream Music es un reproductor y gestor musical multiplataforma construido con Flutter. Permite buscar música, reproducirla, descargarla, organizar una biblioteca local y administrar playlists desde Android y Windows.
+BStream Music es un reproductor y gestor musical multiplataforma construido con Flutter. Permite buscar música, reproducirla, descargarla, organizar una biblioteca local y administrar playlists desde Android, Windows, Linux y macOS.
 
 Versión actual: **1.1.9+119**.
 
@@ -80,6 +80,7 @@ La integración usa una librería no oficial. Si TikTok cambia su protocolo, el 
 | --- | --- | --- | --- |
 | Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; FFmpeg llega como dependencia Gradle |
 | Windows | `media_kit` | `yt-dlp` + FFmpeg | TikTok LIVE, cola lateral y herramientas externas |
+| Linux | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Bundle x64; requiere GTK 3 y libmpv en el sistema |
 | macOS | `media_kit` | `yt-dlp` + FFmpeg empaquetados | Runner, permisos, herramientas firmadas y ventana mínima `960×600` preparados; requiere validación final en hardware Apple |
 
 ## Arquitectura
@@ -121,6 +122,7 @@ Los contratos principales son `DownloaderService`, `PlayerService` y `LibraryRep
 - Flutter estable compatible con Dart `^3.12.0`.
 - Android Studio y Android SDK para Android.
 - Visual Studio/Build Tools con **Desktop development with C++** para Windows.
+- Clang, CMake, Ninja, GTK 3 y libmpv para Linux.
 - Una Mac con Xcode para compilar, firmar y probar macOS.
 - Python 3.11–3.13 únicamente si se desarrolla o recompila el puente de TikTok.
 - `yt-dlp` y FFmpeg para búsquedas y descargas en escritorio.
@@ -137,6 +139,7 @@ flutter pub get
 ```powershell
 flutter run -d windows
 flutter run -d android
+flutter run -d linux
 flutter run -d macos
 ```
 
@@ -193,6 +196,18 @@ FFmpeg no utiliza Homebrew ni el `PATH` en tiempo de ejecución: siempre se toma
 La aplicación se distribuye fuera de la Mac App Store. El App Sandbox está desactivado porque BStream necesita iniciar `yt-dlp` y FFmpeg, acceder a la carpeta de descargas elegida y realizar conexiones de red. El Hardened Runtime permanece activo para permitir firma con Developer ID y notarización. TikTok LIVE continúa limitado a Windows.
 
 La ventana nativa de macOS impone el mismo mínimo de `960×600` que Windows.
+
+## Herramientas de Linux
+
+Los ejecutables se preparan con esta disposición:
+
+```text
+linux/tools/
+  yt-dlp
+  ffmpeg
+```
+
+CMake los copia a `tools/` dentro del bundle. La aplicación los resuelve desde esa ubicación y no necesita que FFmpeg esté en el `PATH`. El equipo de destino debe tener instaladas las bibliotecas de ejecución de GTK 3 y libmpv.
 
 ## Puente de TikTok LIVE
 
@@ -259,7 +274,7 @@ $env:BSTREAM_ANDROID_KEY_PASSWORD="..."
 
 ## Base de datos, favoritos y respaldos
 
-- Android/macOS usan `sqflite`; Windows usa `sqflite_common_ffi`.
+- Android/macOS usan `sqflite`; Windows y Linux usan `sqflite_common_ffi`.
 - Las migraciones son incrementales y conservan bibliotecas existentes.
 - Favoritos se implementa como una playlist reservada (`bstream:favorites`), por lo que no requiere una tabla separada.
 - El respaldo ZIP contiene la base de datos, `audio/`, `thumbnails/` y un manifiesto.
@@ -280,6 +295,7 @@ El script produce los mipmaps de Android, el `.ico` de Windows, el AppIcon de ma
 ```powershell
 flutter build windows --release
 flutter build apk --release
+flutter build linux --release
 ```
 
 En una Mac, después de preparar `macos/tools`:
@@ -293,8 +309,23 @@ Artefactos habituales:
 ```text
 build/windows/x64/runner/Release/bstream_music.exe
 build/app/outputs/flutter-apk/app-release.apk
+build/linux/x64/release/bundle/bstream_music
 build/macos/Build/Products/Release/bstream_music.app
 ```
+
+## Compilaciones con GitHub Actions
+
+El workflow `Desktop builds` genera paquetes Release independientes para Windows x64, Linux x64 y macOS. Puede ejecutarse manualmente desde la pestaña **Actions** y también se ejecuta al publicar cambios en `main` o una etiqueta `v*`.
+
+Cada job descarga `yt-dlp` desde sus releases oficiales y obtiene el ejecutable de FFmpeg apropiado para el runner. Windows también compila y verifica el runtime portable del puente TikTok LIVE. Los binarios se incluyen dentro del paquete resultante, pero no se guardan en el repositorio. Los artefactos quedan disponibles durante 30 días:
+
+```text
+BStream-Music-1.1.9-Windows-x64.zip
+BStream-Music-1.1.9-Linux-x64.tar.gz
+BStream-Music-1.1.9-macOS.zip
+```
+
+El paquete de macOS generado automáticamente usa firma ad hoc y no está notarizado. Para distribuirlo públicamente sin advertencias de Gatekeeper se necesita un certificado Apple Developer ID y credenciales de notarización.
 
 La versión se define en `pubspec.yaml` y el texto mostrado por la aplicación en `lib/core/constants/app_constants.dart`.
 

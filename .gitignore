@@ -69,6 +69,8 @@ app.*.map.json
 /windows/tools/tiktok_live_bridge/
 /windows/tools/*.dll
 /windows/tools/*.pyd
+/linux/tools/*
+!/linux/tools/README.md
 /macos/tools/*
 !/macos/tools/README.md
 

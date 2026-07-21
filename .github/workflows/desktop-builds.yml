@@ -1,0 +1,257 @@
+name: Desktop builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.44.0"
+  APP_VERSION: "1.1.9"
+  FFMPEG_STATIC_VERSION: "5.3.0"
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python for TikTok LIVE bridge
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Prepare yt-dlp and FFmpeg
+        shell: pwsh
+        run: |
+          $tools = Join-Path $PWD "windows/tools"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+
+          Invoke-WebRequest `
+            -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -OutFile (Join-Path $tools "yt-dlp.exe")
+
+          $npmDir = Join-Path $env:RUNNER_TEMP "bstream-ffmpeg-static"
+          New-Item -ItemType Directory -Force -Path $npmDir | Out-Null
+          Push-Location $npmDir
+          npm init --yes | Out-Null
+          npm install --no-save "ffmpeg-static@$env:FFMPEG_STATIC_VERSION"
+          $ffmpeg = node -p "require('ffmpeg-static')"
+          Pop-Location
+          Copy-Item -LiteralPath $ffmpeg -Destination (Join-Path $tools "ffmpeg.exe")
+
+          & (Join-Path $tools "yt-dlp.exe") --version
+          & (Join-Path $tools "ffmpeg.exe") -version
+
+      - name: Build portable TikTok LIVE bridge
+        shell: pwsh
+        run: |
+          $python = (Get-Command python).Source
+          ./scripts/build_tiktok_bridge.ps1 `
+            -Python $python `
+            -Jobs 4 `
+            -Clean
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Package Windows release
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $PWD "build/windows/x64/runner/Release"
+          $ytDlp = Join-Path $bundle "tools/yt-dlp.exe"
+          $ffmpeg = Join-Path $bundle "tools/ffmpeg.exe"
+          $liveBridge = Join-Path $bundle "tools/tiktok-live-bridge/tiktok_live_bridge.exe"
+          if (!(Test-Path -LiteralPath $ytDlp)) { throw "yt-dlp was not bundled." }
+          if (!(Test-Path -LiteralPath $ffmpeg)) { throw "FFmpeg was not bundled." }
+          if (!(Test-Path -LiteralPath $liveBridge)) { throw "TikTok LIVE bridge was not bundled." }
+
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          Compress-Archive `
+            -Path (Join-Path $bundle "*") `
+            -DestinationPath "dist/BStream-Music-$env:APP_VERSION-Windows-x64.zip" `
+            -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-Windows-x64
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            clang \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libgtk-3-dev \
+            liblzma-dev \
+            libsqlite3-dev \
+            libmpv-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Prepare yt-dlp and FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$PWD/linux/tools"
+          mkdir -p "$tools"
+
+          curl --fail --location --retry 3 \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" \
+            --output "$tools/yt-dlp"
+
+          npm_dir="$RUNNER_TEMP/bstream-ffmpeg-static"
+          mkdir -p "$npm_dir"
+          (
+            cd "$npm_dir"
+            npm init --yes >/dev/null
+            npm install --no-save "ffmpeg-static@$FFMPEG_STATIC_VERSION"
+          )
+          ffmpeg="$(cd "$npm_dir" && node -p "require('ffmpeg-static')")"
+          cp "$ffmpeg" "$tools/ffmpeg"
+          chmod 755 "$tools/yt-dlp" "$tools/ffmpeg"
+
+          "$tools/yt-dlp" --version
+          "$tools/ffmpeg" -version
+
+      - name: Build Linux release
+        run: flutter build linux --release
+
+      - name: Package Linux release
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$PWD/build/linux/x64/release/bundle"
+          test -x "$bundle/tools/yt-dlp"
+          test -x "$bundle/tools/ffmpeg"
+
+          cat >"$bundle/README-Linux.txt" <<'EOF'
+          BStream Music requiere GTK 3 y libmpv en el sistema Linux de destino.
+          Instala los paquetes equivalentes de tu distribucion antes de ejecutar
+          ./bstream_music. yt-dlp y FFmpeg ya vienen incluidos en tools/.
+          EOF
+
+          mkdir -p dist
+          tar -C "$bundle" -czf \
+            "dist/BStream-Music-$APP_VERSION-Linux-x64.tar.gz" .
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-Linux-x64
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-Linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Prepare yt-dlp and FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$PWD/macos/tools"
+          mkdir -p "$tools"
+
+          curl --fail --location --retry 3 \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" \
+            --output "$tools/yt-dlp"
+
+          npm_dir="$RUNNER_TEMP/bstream-ffmpeg-static"
+          mkdir -p "$npm_dir"
+          (
+            cd "$npm_dir"
+            npm init --yes >/dev/null
+            npm install --no-save "ffmpeg-static@$FFMPEG_STATIC_VERSION"
+          )
+          ffmpeg="$(cd "$npm_dir" && node -p "require('ffmpeg-static')")"
+          cp "$ffmpeg" "$tools/ffmpeg"
+          chmod 755 "$tools/yt-dlp" "$tools/ffmpeg"
+
+          "$tools/yt-dlp" --version
+          "$tools/ffmpeg" -version
+
+      - name: Build macOS release
+        run: flutter build macos --release
+
+      - name: Package macOS release
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
+          test -x "$app/Contents/Resources/tools/yt-dlp"
+          test -x "$app/Contents/Resources/tools/ffmpeg"
+
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent "$app" \
+            "dist/BStream-Music-$APP_VERSION-macOS.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-macOS
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-macOS.zip
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
