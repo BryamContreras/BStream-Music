@@ -1,0 +1,4 @@
+storeFile=../release/bstream-upload-keystore.jks
+storePassword=change-me
+keyAlias=bstream
+keyPassword=change-me

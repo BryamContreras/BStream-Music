@@ -1,0 +1,81 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+/dist/
+/.venv-tiktok/
+**/__pycache__/
+*.py[cod]
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Generated Flutter platform files
+/android/build/
+/android/local.properties
+/macos/Flutter/ephemeral/
+/windows/flutter/ephemeral/
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Release signing material
+/android/key.properties
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
+
+# Optional bundled desktop tools. Keep windows/tools/README.md tracked.
+/windows/tools/*.exe
+/windows/tools/ffmpeg/
+/windows/tools/tiktok-live-bridge/
+/windows/tools/tiktok_live_bridge/
+/windows/tools/*.dll
+/windows/tools/*.pyd
+
+# Locally exported packages and user data
+*.apk
+*.aab
+*.msix
+*.msi
+*.zip
+*.db
+*.sqlite
+*.sqlite3
