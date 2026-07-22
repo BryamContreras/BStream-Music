@@ -4,6 +4,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/utils/duration_formatter.dart';
@@ -144,14 +145,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                           queueVisible: showSideQueue,
                           onToggleQueue: () {
                             if (AppPlatform.isAndroid) {
-                              unawaited(
-                                Navigator.of(context).push<void>(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        const _MobilePlaybackQueuePage(),
-                                  ),
-                                ),
-                              );
+                              unawaited(_openMobilePlaybackQueue(context));
                               return;
                             }
                             setState(() {
@@ -270,6 +264,33 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         );
       },
     );
+  }
+
+  Future<void> _openMobilePlaybackQueue(BuildContext context) async {
+    _hideKeyboard();
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const _MobilePlaybackQueuePage()),
+    );
+    if (!mounted) {
+      return;
+    }
+
+    // Persistent tabs can retain the search field's focus while the queue is
+    // open. Clear it after the route is popped so Android does not reopen the
+    // keyboard when returning to the player.
+    _hideKeyboard();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _hideKeyboard();
+      }
+    });
+  }
+
+  void _hideKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus(
+      disposition: UnfocusDisposition.scope,
+    );
+    unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
   }
 
   double _artworkExtent(

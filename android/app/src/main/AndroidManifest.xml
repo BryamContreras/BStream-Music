@@ -11,6 +11,10 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="true">
+        <!-- Keep the runtime-configured media notification icon in release APKs. -->
+        <meta-data
+            android:name="bstream_music.notification_icon"
+            android:resource="@drawable/ic_stat_bstream_music" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
