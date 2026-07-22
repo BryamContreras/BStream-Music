@@ -1,11 +1,12 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.1.9"
+  #define MyAppVersion "1.2.0"
 #endif
 
 #define MyAppName "BStream Music"
 #define MyAppPublisher "BryamContreras"
 #define MyAppURL "https://github.com/BryamContreras/BStream-Music"
 #define MyAppExeName "bstream_music.exe"
+#define MyAppUserModelId "BStreamMusic.Desktop"
 #define BundleDir "..\..\build\windows\x64\runner\Release"
 #define AppIcon "..\..\windows\runner\resources\app_icon.ico"
 
@@ -62,8 +63,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopShortcut}"; GroupDescription
 Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "{#MyAppUserModelId}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "{#MyAppUserModelId}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent

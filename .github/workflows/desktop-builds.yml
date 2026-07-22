@@ -1,4 +1,4 @@
-name: Desktop installers
+name: Release installers
 
 on:
   workflow_dispatch:
@@ -41,6 +41,109 @@ jobs:
           fi
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
 
+  android:
+    name: Android release APKs
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      APP_VERSION: ${{ needs.metadata.outputs.app_version }}
+      BSTREAM_ANDROID_KEYSTORE_BASE64: ${{ secrets.BSTREAM_ANDROID_KEYSTORE_BASE64 }}
+      BSTREAM_ANDROID_STORE_PASSWORD: ${{ secrets.BSTREAM_ANDROID_STORE_PASSWORD }}
+      BSTREAM_ANDROID_KEY_ALIAS: ${{ secrets.BSTREAM_ANDROID_KEY_ALIAS }}
+      BSTREAM_ANDROID_KEY_PASSWORD: ${{ secrets.BSTREAM_ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Configure Android release signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            BSTREAM_ANDROID_KEYSTORE_BASE64
+            BSTREAM_ANDROID_STORE_PASSWORD
+            BSTREAM_ANDROID_KEY_ALIAS
+            BSTREAM_ANDROID_KEY_PASSWORD
+          )
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "Required GitHub secret is missing: $variable" >&2
+              exit 1
+            fi
+          done
+
+          keystore="$RUNNER_TEMP/bstream-upload-keystore.jks"
+          printf '%s' "$BSTREAM_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          echo "BSTREAM_ANDROID_STORE_FILE=$keystore" >> "$GITHUB_ENV"
+
+      - name: Resolve dependencies
+        run: |
+          flutter clean
+          flutter pub get
+
+      - name: Build ARMv8 and x86_64 APKs
+        run: >-
+          flutter build apk
+          --release
+          --split-per-abi
+          --target-platform android-arm64,android-x64
+
+      - name: Verify and name Android APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$PWD/build/app/outputs/flutter-apk"
+          arm64="$output/app-arm64-v8a-release.apk"
+          x64="$output/app-x86_64-release.apk"
+          test -f "$arm64"
+          test -f "$x64"
+          test ! -e "$output/app-armeabi-v7a-release.apk"
+
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose "$arm64"
+          "$apksigner" verify --verbose "$x64"
+
+          mkdir -p dist
+          cp "$arm64" "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk"
+          cp "$x64" "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk"
+
+      - name: Upload Android ARMv8 APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-Android-arm64-v8a
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-Android-arm64-v8a.apk
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
+
+      - name: Upload Android x86_64 APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-Android-x86_64
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-Android-x86_64.apk
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
+
   windows:
     name: Windows x64 installer
     needs: metadata
@@ -64,6 +167,12 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+
+      - name: Set up Rust for Windows SMTC
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
 
       - name: Resolve dependencies
         run: flutter pub get

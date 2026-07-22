@@ -24,6 +24,7 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { it != null }
+val splitPerAbi = providers.gradleProperty("split-per-abi").orNull == "true"
 
 plugins {
     id("com.android.application")
@@ -48,7 +49,11 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
+        if (!splitPerAbi) {
+            ndk {
+                abiFilters += setOf("arm64-v8a", "x86_64")
+            }
+        }
     }
 
     signingConfigs {

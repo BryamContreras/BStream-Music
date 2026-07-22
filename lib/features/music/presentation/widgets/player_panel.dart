@@ -100,39 +100,40 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             ? (showSideQueue ? 12.0 : 24.0)
             : 20.0;
 
-        return Stack(
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (widget.drawBackground) ...[
-              _BlurredPlayerBackground(url: snapshot.thumbnailUrl),
-              const Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Color(0x70101A14),
-                        Color(0x80080D0A),
-                        Color(0x8C070B08),
-                        Color(0x98080C09),
-                      ],
-                      stops: [0, 0.38, 0.72, 1],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                wide ? (showSideQueue ? 16 : 34) : 20,
-                lerpDouble(regularTopPadding, 8, heightCompactness)!,
-                wide ? (showSideQueue ? 16 : 34) : 20,
-                lerpDouble(regularBottomPadding, 8, heightCompactness)!,
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+            Expanded(
+              key: const ValueKey('desktop-player-surface'),
+              child: Stack(
                 children: [
-                  Expanded(
+                  if (widget.drawBackground) ...[
+                    _BlurredPlayerBackground(url: snapshot.thumbnailUrl),
+                    const Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0x70101A14),
+                              Color(0x80080D0A),
+                              Color(0x8C070B08),
+                              Color(0x98080C09),
+                            ],
+                            stops: [0, 0.38, 0.72, 1],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      wide ? (showSideQueue ? 16 : 34) : 20,
+                      lerpDouble(regularTopPadding, 8, heightCompactness)!,
+                      wide ? (showSideQueue ? 16 : 34) : 20,
+                      lerpDouble(regularBottomPadding, 8, heightCompactness)!,
+                    ),
                     child: Column(
                       children: [
                         _PlayerHeader(
@@ -205,7 +206,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 maxWidth: stackedDesktop
                                     ? maxContentWidth
                                     : 520.0,
-                                showVolumeButton: AppPlatform.isDesktop,
+                                showVolumeButton: false,
                                 strings: strings,
                               );
 
@@ -237,21 +238,33 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                       ],
                     ),
                   ),
-                  if (showSideQueue) ...[
-                    const SizedBox(width: 12),
-                    SizedBox(
+                ],
+              ),
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 320),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              layoutBuilder: (currentChild, _) =>
+                  currentChild ?? const SizedBox.shrink(),
+              transitionBuilder: (child, animation) =>
+                  FadeTransition(opacity: animation, child: child),
+              child: showSideQueue
+                  ? SizedBox(
+                      key: const ValueKey('desktop-playback-queue-rail'),
                       width: outer.maxWidth >= 1180 ? 360 : 320,
                       child: _PlaybackQueuePanel(
                         queue: playbackQueue,
                         strings: strings,
+                        standaloneRail: true,
                         onClose: () {
                           setState(() => _showPlaybackQueue = false);
                         },
                       ),
+                    )
+                  : const SizedBox.shrink(
+                      key: ValueKey('desktop-playback-queue-hidden'),
                     ),
-                  ],
-                ],
-              ),
             ),
           ],
         );
@@ -419,11 +432,13 @@ class _PlaybackQueuePanel extends ConsumerWidget {
     required this.queue,
     required this.strings,
     required this.onClose,
+    this.standaloneRail = false,
   });
 
   final PlaybackQueueState queue;
   final AppStrings strings;
   final VoidCallback onClose;
+  final bool standaloneRail;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -433,84 +448,97 @@ class _PlaybackQueuePanel extends ConsumerWidget {
         (player) => player.value?.status == PlayerStatus.playing,
       ),
     );
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xB0090C0A),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: colors.onSurface.withValues(alpha: 0.14)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    strings.playbackQueueSummary(queue.entries.length),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                SizedBox.square(
-                  dimension: 24,
-                  child: IconButton(
-                    tooltip: strings.close,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(
-                      width: 24,
-                      height: 24,
-                    ),
-                    icon: const Icon(Icons.close_rounded, size: 17),
-                    onPressed: onClose,
-                  ),
-                ),
-              ],
-            ),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: standaloneRail
+                ? const Color(0xA0040504)
+                : const Color(0xB0090C0A),
+            borderRadius: standaloneRail ? null : BorderRadius.circular(6),
+            border: standaloneRail
+                ? const Border(left: BorderSide(color: Color(0xFF121812)))
+                : Border.all(color: colors.onSurface.withValues(alpha: 0.14)),
           ),
-          Divider(height: 1, color: colors.onSurface.withValues(alpha: 0.1)),
-          Expanded(
-            child: queue.entries.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+                child: Row(
+                  children: [
+                    Expanded(
                       child: Text(
-                        strings.playbackQueueEmpty,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: colors.onSurfaceVariant),
+                        strings.playbackQueueSummary(queue.entries.length),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w900),
                       ),
                     ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: queue.entries.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 2),
-                    itemBuilder: (context, index) {
-                      final entry = queue.entries[index];
-                      final isCurrent = index == queue.currentIndex;
-                      return _PlaybackQueueTile(
-                        entry: entry,
-                        isCurrent: isCurrent,
-                        isPlaying: isCurrent && isPlaying,
-                        onTap: isCurrent
-                            ? null
-                            : () {
-                                unawaited(
-                                  ref
-                                      .read(playerControllerProvider.notifier)
-                                      .playQueueIndex(index),
-                                );
-                              },
-                      );
-                    },
-                  ),
+                    const SizedBox(width: 6),
+                    SizedBox.square(
+                      dimension: 24,
+                      child: IconButton(
+                        tooltip: strings.close,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints.tightFor(
+                          width: 24,
+                          height: 24,
+                        ),
+                        icon: const Icon(Icons.close_rounded, size: 17),
+                        onPressed: onClose,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(
+                height: 1,
+                color: colors.onSurface.withValues(alpha: 0.1),
+              ),
+              Expanded(
+                child: queue.entries.isEmpty
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            strings.playbackQueueEmpty,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: colors.onSurfaceVariant),
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        itemCount: queue.entries.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 2),
+                        itemBuilder: (context, index) {
+                          final entry = queue.entries[index];
+                          final isCurrent = index == queue.currentIndex;
+                          return _PlaybackQueueTile(
+                            entry: entry,
+                            isCurrent: isCurrent,
+                            isPlaying: isCurrent && isPlaying,
+                            onTap: isCurrent
+                                ? null
+                                : () {
+                                    unawaited(
+                                      ref
+                                          .read(
+                                            playerControllerProvider.notifier,
+                                          )
+                                          .playQueueIndex(index),
+                                    );
+                                  },
+                          );
+                        },
+                      ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -634,13 +662,11 @@ class _MobilePlaybackQueuePage extends ConsumerWidget {
         children: [
           const PlayerPlaybackGradientBackground(),
           SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-              child: _PlaybackQueuePanel(
-                queue: queue,
-                strings: strings,
-                onClose: () => Navigator.of(context).pop(),
-              ),
+            child: _PlaybackQueuePanel(
+              queue: queue,
+              strings: strings,
+              standaloneRail: true,
+              onClose: () => Navigator.of(context).pop(),
             ),
           ),
         ],
@@ -1309,7 +1335,11 @@ class _PlayerMenu extends ConsumerWidget {
           case 'favorite':
             unawaited(_toggleFavorite(context, ref));
           case 'volume':
-            unawaited(_showVolumeControl(context));
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) {
+                _showVolumeControl(context);
+              }
+            });
         }
       },
       itemBuilder: (context) => [
@@ -1367,7 +1397,7 @@ class _PlayerMenu extends ConsumerWidget {
             ],
           ),
         ),
-        if (AppPlatform.isAndroid)
+        if (AppPlatform.isAndroid || AppPlatform.isDesktop)
           PopupMenuItem(
             value: 'volume',
             child: Row(
@@ -1388,22 +1418,46 @@ class _PlayerMenu extends ConsumerWidget {
     );
   }
 
-  Future<void> _showVolumeControl(BuildContext context) {
-    return showDialog<void>(
-      context: context,
-      barrierColor: Colors.transparent,
-      builder: (dialogContext) {
-        return Dialog(
-          alignment: Alignment.topRight,
-          insetPadding: const EdgeInsets.fromLTRB(12, 64, 12, 12),
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          child: _VolumePopover(
-            onClose: () => Navigator.of(dialogContext).pop(),
-          ),
+  void _showVolumeControl(BuildContext context) {
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    var closed = false;
+
+    void close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      if (!entry.mounted) {
+        return;
+      }
+      entry.remove();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        entry.dispose();
+      });
+    }
+
+    entry = OverlayEntry(
+      builder: (overlayContext) {
+        final top = MediaQuery.paddingOf(overlayContext).top + 64;
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: close,
+              ),
+            ),
+            Positioned(
+              top: top,
+              right: 12,
+              child: _VolumePopover(onClose: close),
+            ),
+          ],
         );
       },
     );
+    overlay.insert(entry);
   }
 
   void _downloadCurrent(BuildContext context, WidgetRef ref) {

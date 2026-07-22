@@ -2,7 +2,7 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, Windows, Linux, and macOS.
 
-Current version: **1.1.9+119**.
+Current version: **1.2.0+120**.
 
 > The repository does not store media content or third-party binaries. CI-generated installers download and bundle their own copies of `yt-dlp` and FFmpeg. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
 
@@ -28,9 +28,12 @@ Current version: **1.1.9+119**.
 - The active track is highlighted with a segmented 13-bar equalizer.
 - Dark dynamic background derived from the track artwork.
 - Animated progress bar with waves and artwork-derived color.
-- Volume control on Windows.
+- Volume control from the desktop player options menu.
 - Sleep timer with quick durations and a custom duration.
-- Android system media integration.
+- Native system media integration: Android media notifications, Windows
+  SMTC, Linux MPRIS, and macOS Now Playing.
+- Windows registers a stable application identity so SMTC shows the BStream
+  Music name and icon in system media controls.
 - Failed-track handling: a track that cannot be downloaded or played does not leave the queue stuck on the previous track.
 
 ### Interface
@@ -78,10 +81,10 @@ This integration uses an unofficial library. If TikTok changes its protocol, the
 
 | Platform | Player | Downloads | Notes |
 | --- | --- | --- | --- |
-| Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; FFmpeg is provided through the Gradle dependency |
-| Windows | `media_kit` | `yt-dlp` + FFmpeg | TikTok LIVE, queue side panel, and external tools |
-| Linux | `media_kit` | Bundled `yt-dlp` + FFmpeg | Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
-| macOS | `media_kit` | Bundled `yt-dlp` + FFmpeg | Separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
+| Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; Release APKs support `arm64-v8a` and `x86_64`; FFmpeg is provided through Gradle |
+| Windows | `media_kit` | `yt-dlp` + FFmpeg | SMTC controls, TikTok LIVE, queue side panel, and external tools |
+| Linux | `media_kit` | Bundled `yt-dlp` + FFmpeg | MPRIS controls; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
+| macOS | `media_kit` | Bundled `yt-dlp` + FFmpeg | Now Playing controls; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
 
 ## Architecture
 
@@ -111,6 +114,7 @@ lib/
   services/
     downloader/
     live/
+    media_session/
     player/
     storage/
 ```
@@ -122,6 +126,7 @@ The main contracts are `DownloaderService`, `PlayerService`, and `LibraryReposit
 - Stable Flutter compatible with Dart `^3.12.0`.
 - Android Studio and Android SDK for Android development.
 - Visual Studio/Build Tools with **Desktop development with C++** for Windows.
+- A stable Rust toolchain with the MSVC x64 target for Windows SMTC builds.
 - Clang, CMake, Ninja, GTK 3, and libmpv for Linux.
 - A Mac with Xcode to build, sign, and test macOS.
 - Python 3.11–3.13 only when developing or rebuilding the TikTok bridge.
@@ -250,6 +255,9 @@ implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 
 `youtubedl-android` and FFmpeg are downloaded through Gradle; manual executables are not committed to the repository.
 
+Release builds intentionally support only the 64-bit `arm64-v8a` (ARMv8) and
+`x86_64` ABIs. `armeabi-v7a` is no longer generated or supported.
+
 ### Release signing
 
 Copy `android/key.properties.example` to `android/key.properties` and configure a key outside the repository:
@@ -271,6 +279,17 @@ $env:BSTREAM_ANDROID_KEY_PASSWORD="..."
 ```
 
 `android/key.properties`, `*.jks`, and `*.keystore` are excluded from Git.
+
+GitHub Actions uses the same signing key through encrypted repository secrets:
+
+```text
+BSTREAM_ANDROID_KEYSTORE_BASE64
+BSTREAM_ANDROID_STORE_PASSWORD
+BSTREAM_ANDROID_KEY_ALIAS
+BSTREAM_ANDROID_KEY_PASSWORD
+```
+
+The workflow verifies both APK signatures before uploading the artifacts.
 
 ## Database, favorites, and backups
 
@@ -294,7 +313,7 @@ The script generates Android mipmaps, the Windows `.ico`, the macOS AppIcon, and
 
 ```powershell
 flutter build windows --release
-flutter build apk --release
+flutter build apk --release --split-per-abi --target-platform android-arm64,android-x64
 flutter build linux --release
 ```
 
@@ -308,32 +327,40 @@ Typical artifacts:
 
 ```text
 build/windows/x64/runner/Release/bstream_music.exe
-build/app/outputs/flutter-apk/app-release.apk
+build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+build/app/outputs/flutter-apk/app-x86_64-release.apk
 build/linux/x64/release/bundle/bstream_music
 build/macos/Build/Products/Release/bstream_music.app
 ```
 
-## Installers with GitHub Actions
+## Release packages with GitHub Actions
 
-The `Desktop installers` workflow generates independent Release installers for Windows, Linux, and both macOS architectures. It can be run manually from the **Actions** tab and also runs for pull requests, pushes to `main`, and `v*` tags.
+The `Release installers` workflow generates signed Android APKs and independent
+Release installers for Windows, Linux, and both macOS architectures. It can be
+run manually from the **Actions** tab and also runs for pull requests, pushes to
+`main`, and `v*` tags.
 
 Each job downloads `yt-dlp` from its official releases and obtains the FFmpeg executable appropriate for its system and architecture. Windows also builds and verifies the portable TikTok LIVE bridge runtime. Binaries are included in the installers but are not stored in the repository. Artifacts are retained for 30 days:
 
 ```text
-BStream-Music-1.1.9-Windows-x64-Setup.exe
-BStream-Music-1.1.9-linux-amd64.deb
-BStream-Music-1.1.9-linux-x86_64.rpm
-BStream-Music-1.1.9-macOS-arm64.pkg
-BStream-Music-1.1.9-macOS-x64.pkg
+BStream-Music-1.2.0-Android-arm64-v8a.apk
+BStream-Music-1.2.0-Android-x86_64.apk
+BStream-Music-1.2.0-Windows-x64-Setup.exe
+BStream-Music-1.2.0-linux-amd64.deb
+BStream-Music-1.2.0-linux-x86_64.rpm
+BStream-Music-1.2.0-macOS-arm64.pkg
+BStream-Music-1.2.0-macOS-x64.pkg
 ```
 
 ### Which file should I install?
 
+- **Most Android phones and tablets:** install `BStream-Music-1.2.0-Android-arm64-v8a.apk`.
+- **Android x86_64 devices and emulators:** install `BStream-Music-1.2.0-Android-x86_64.apk`.
 - **Windows 64-bit:** open `Setup.exe`. The installer shows a language selector, creates a Start Menu shortcut, and lets you choose whether to create a desktop shortcut. The uninstaller entry is displayed as `BStream Music` without the version number.
-- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.1.9-linux-amd64.deb`.
-- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.1.9-linux-x86_64.rpm`.
-- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.1.9-macOS-arm64.pkg`.
-- **Mac with an Intel processor:** open `BStream-Music-1.1.9-macOS-x64.pkg`.
+- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.2.0-linux-amd64.deb`.
+- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.2.0-linux-x86_64.rpm`.
+- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.2.0-macOS-arm64.pkg`.
+- **Mac with an Intel processor:** open `BStream-Music-1.2.0-macOS-x64.pkg`.
 
 An `.app` is the complete application and should be opened as one unit, not by entering its `Contents`, `Frameworks`, or `Resources` folders. The `.pkg` installer places `BStream Music.app` in `/Applications` automatically.
 

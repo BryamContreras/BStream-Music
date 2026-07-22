@@ -2,7 +2,7 @@ class AppConstants {
   const AppConstants._();
 
   static const appName = 'BStream Music';
-  static const appVersion = '1.1.9';
+  static const appVersion = '1.2.0';
   static const databaseName = 'bstream_music.db';
   static const databaseVersion = 3;
   static const androidYtdlChannel = 'bstream_music/ytdl';

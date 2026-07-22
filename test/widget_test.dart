@@ -420,7 +420,7 @@ void main() {
         tester.getBottomLeft(artwork).dy,
         lessThan(tester.getTopLeft(titleText).dy),
       );
-      expect(find.byTooltip('Volumen'), findsOneWidget);
+      expect(find.byTooltip('Volumen'), findsNothing);
       expect(find.byTooltip('Cola de reproduccion'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Cola de reproduccion'));
@@ -431,18 +431,12 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('No hay canciones en la cola actual.'), findsNothing);
 
-      await tester.tap(find.byTooltip('Volumen'));
+      await tester.tap(find.byIcon(Icons.more_vert_rounded));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Control de Volumen'), findsOneWidget);
+      Navigator.of(tester.element(find.text('Control de Volumen'))).pop();
       await tester.pump(const Duration(milliseconds: 300));
 
-      expect(find.byType(AlertDialog), findsNothing);
-      expect(find.byIcon(Icons.close_rounded), findsOneWidget);
-      expect(find.byType(Slider), findsOneWidget);
-      expect(find.text('72%'), findsOneWidget);
-
-      await tester.tap(find.byIcon(Icons.close_rounded));
-      await tester.pump(const Duration(milliseconds: 300));
-
-      expect(find.byType(Slider), findsNothing);
       expect(
         errors.where(
           (error) => error.exceptionAsString().contains('debugNeedsLayout'),
@@ -528,6 +522,15 @@ void main() {
       expect(find.text('Cola de Reproducción - 2 Canciones'), findsOneWidget);
       expect(find.text('Primera cancion'), findsWidgets);
       expect(find.text('Segunda cancion'), findsOneWidget);
+      final playerSurface = tester.getRect(
+        find.byKey(const ValueKey('desktop-player-surface')),
+      );
+      final queueRail = tester.getRect(
+        find.byKey(const ValueKey('desktop-playback-queue-rail')),
+      );
+      expect(queueRail.left, playerSurface.right);
+      expect(queueRail.top, 0);
+      expect(queueRail.bottom, 600);
       expect(
         tester.getRect(find.byTooltip('Pausar')).bottom,
         lessThanOrEqualTo(600),
@@ -647,6 +650,7 @@ Widget _testApp({
   return ProviderScope(
     overrides: [
       downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
+      desktopMediaSessionFactoryProvider.overrideWithValue(() => null),
       playerServiceProvider.overrideWithValue(
         playerService ?? _FakePlayerService(),
       ),

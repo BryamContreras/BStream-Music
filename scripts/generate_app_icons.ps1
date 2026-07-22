@@ -193,7 +193,7 @@ try {
 
     foreach ($entry in $androidIcons.GetEnumerator()) {
         Save-PngIcon $source $entry.Value `
-            (Join-Path $Root "android\app\src\main\res\$($entry.Key)") 0.065
+            (Join-Path $Root "android\app\src\main\res\$($entry.Key)") 0.075
     }
 
     foreach ($size in @(16, 32, 64, 128, 256, 512, 1024)) {
