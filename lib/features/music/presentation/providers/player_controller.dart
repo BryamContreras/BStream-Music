@@ -87,6 +87,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Set<int> _shufflePlayedIndices = <int>{};
   bool _handlingCompletion = false;
   bool _changingLocalTrack = false;
+  bool _explicitlyStopped = false;
   bool _useNativeLocalQueue = true;
   String? _activeLocalQueueSourceId;
   int _playRequestId = 0;
@@ -133,6 +134,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   Future<void> _playRemoteTrack(TrackInfo track) async {
+    _explicitlyStopped = false;
     final requestId = ++_playRequestId;
     final pendingSnapshot = _remoteLoadingSnapshot(track);
     _pendingRemoteSnapshot = pendingSnapshot;
@@ -326,6 +328,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   Future<void> _playLocalTrack(LocalTrack track) async {
+    _explicitlyStopped = false;
     _playRequestId++;
     _pendingRemoteSnapshot = null;
     _changingLocalTrack = true;
@@ -362,6 +365,15 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   Future<void> resume() async {
+    final snapshot =
+        state.value ?? ref.read(playerServiceProvider).currentSnapshot;
+    if ((snapshot.status == PlayerStatus.stopped || _explicitlyStopped) &&
+        _queueIndex >= 0 &&
+        _queueIndex < _queue.length) {
+      await _playQueueItem(_queue[_queueIndex]);
+      return;
+    }
+    _explicitlyStopped = false;
     await ref.read(playerServiceProvider).resume();
   }
 
@@ -420,6 +432,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Future<void> stop() async {
     _playRequestId++;
     _pendingRemoteSnapshot = null;
+    _explicitlyStopped = true;
     await ref.read(playerServiceProvider).stop();
   }
 
@@ -432,17 +445,31 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   void toggleShuffle() {
-    _shuffleEnabled = !_shuffleEnabled;
+    setShuffleEnabled(!_shuffleEnabled);
+  }
+
+  void setShuffleEnabled(bool enabled) {
+    if (_shuffleEnabled == enabled) {
+      return;
+    }
+    _shuffleEnabled = enabled;
     _resetShuffleHistory();
     _syncPlaybackOptions();
   }
 
   void cycleRepeatMode() {
-    _repeatMode = switch (_repeatMode) {
+    setRepeatMode(switch (_repeatMode) {
       PlaybackRepeatMode.off => PlaybackRepeatMode.all,
       PlaybackRepeatMode.all => PlaybackRepeatMode.one,
       PlaybackRepeatMode.one => PlaybackRepeatMode.off,
-    };
+    });
+  }
+
+  void setRepeatMode(PlaybackRepeatMode mode) {
+    if (_repeatMode == mode) {
+      return;
+    }
+    _repeatMode = mode;
     _syncPlaybackOptions();
   }
 
@@ -618,7 +645,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   void _maybeHandleCompletion(PlayerSnapshot snapshot) {
-    if (_changingLocalTrack ||
+    if (_explicitlyStopped ||
+        _changingLocalTrack ||
         (snapshot.status != PlayerStatus.stopped &&
             snapshot.status != PlayerStatus.failed) ||
         snapshot.trackId == null ||

@@ -4,6 +4,7 @@ import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/services/media_session/desktop_media_session.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -249,15 +250,108 @@ void main() {
       expect(container.read(playbackQueueProvider).currentIndex, 0);
     },
   );
+
+  test(
+    'desktop media session mirrors playback and routes system commands',
+    () async {
+      final player = _FakePlayerService();
+      final session = _FakeDesktopMediaSession();
+      final container = _container(player, desktopSession: session);
+      var containerDisposed = false;
+      addTearDown(() {
+        if (!containerDisposed) {
+          container.dispose();
+        }
+      });
+
+      container.read(desktopMediaSessionProvider);
+      await container.read(playerControllerProvider.future);
+      await _flushCompletion();
+
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playLocal(_track(1), queue: [_track(1), _track(2)]);
+      await _flushCompletion();
+
+      expect(session.callbacks, isNotNull);
+      expect(session.states, isNotEmpty);
+      expect(session.states.last.snapshot.trackId, 'track-1');
+      expect(session.states.last.queue.map((entry) => entry.id), [
+        'track-1',
+        'track-2',
+      ]);
+      expect(session.states.last.currentIndex, 0);
+
+      final callbacks = session.callbacks!;
+      await callbacks.pause();
+      await callbacks.play();
+      expect(player.pauseCalls, 1);
+      expect(player.resumeCalls, 1);
+
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'track-1',
+          title: 'Track 1',
+          artist: 'BStream Music',
+          position: Duration(seconds: 50),
+          duration: Duration(minutes: 1),
+        ),
+      );
+      await _flushCompletion();
+      await callbacks.seekBy(const Duration(seconds: 15));
+      expect(player.lastSeekPosition, const Duration(minutes: 1));
+      await callbacks.seekBy(const Duration(seconds: -90));
+      expect(player.lastSeekPosition, Duration.zero);
+
+      await callbacks.setShuffleEnabled(true);
+      await _flushCompletion();
+      final shuffleUpdateCount = player.shuffleValues.length;
+      await callbacks.setShuffleEnabled(true);
+      await _flushCompletion();
+      expect(player.shuffleValues.length, shuffleUpdateCount);
+      expect(player.shuffleValues.last, isTrue);
+
+      await callbacks.setRepeatMode(PlaybackRepeatMode.one);
+      await _flushCompletion();
+      final repeatUpdateCount = player.repeatModes.length;
+      await callbacks.setRepeatMode(PlaybackRepeatMode.one);
+      await _flushCompletion();
+      expect(player.repeatModes.length, repeatUpdateCount);
+      expect(player.repeatModes.last, PlaybackRepeatMode.one);
+
+      await callbacks.playQueueIndex(1);
+      expect(player.currentSnapshot.trackId, 'track-2');
+      await callbacks.previous();
+      expect(player.currentSnapshot.trackId, 'track-1');
+
+      await callbacks.stop();
+      await _flushCompletion();
+      expect(player.stopCalls, 1);
+      expect(container.read(playbackQueueProvider).currentIndex, 0);
+
+      await callbacks.play();
+      expect(player.currentSnapshot.trackId, 'track-1');
+
+      container.dispose();
+      containerDisposed = true;
+      await _flushCompletion();
+      expect(session.disposed, isTrue);
+    },
+  );
 }
 
 ProviderContainer _container(
   _FakePlayerService player, {
   _FakeLibraryRepository? repository,
+  DesktopMediaSession? desktopSession,
 }) {
   return ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
+      if (desktopSession != null)
+        desktopMediaSessionFactoryProvider.overrideWithValue(
+          () => desktopSession,
+        ),
       libraryRepositoryProvider.overrideWithValue(
         repository ?? _FakeLibraryRepository(),
       ),
@@ -285,6 +379,11 @@ class _FakePlayerService implements PlayerService {
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   int playLocalQueueCalls = 0;
   int stopCalls = 0;
+  int pauseCalls = 0;
+  int resumeCalls = 0;
+  Duration? lastSeekPosition;
+  final List<bool> shuffleValues = [];
+  final List<PlaybackRepeatMode> repeatModes = [];
   final List<String> playedLocalIds = [];
 
   @override
@@ -304,7 +403,10 @@ class _FakePlayerService implements PlayerService {
   }
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async {
+    pauseCalls++;
+    emit(_snapshot.copyWith(status: PlayerStatus.paused));
+  }
 
   @override
   Future<void> playLocal(LocalTrack track) async {
@@ -329,18 +431,26 @@ class _FakePlayerService implements PlayerService {
   Future<void> playRemote(track) async {}
 
   @override
-  Future<void> resume() async {}
+  Future<void> resume() async {
+    resumeCalls++;
+    emit(_snapshot.copyWith(status: PlayerStatus.playing));
+  }
 
   @override
-  Future<void> seek(Duration position) async {}
+  Future<void> seek(Duration position) async {
+    lastSeekPosition = position;
+    emit(_snapshot.copyWith(position: position));
+  }
 
   @override
   Future<void> setRepeatMode(PlaybackRepeatMode mode) async {
+    repeatModes.add(mode);
     emit(_snapshot.copyWith(repeatMode: mode));
   }
 
   @override
   Future<void> setShuffleEnabled(bool enabled) async {
+    shuffleValues.add(enabled);
     emit(_snapshot.copyWith(shuffleEnabled: enabled));
   }
 
@@ -355,6 +465,27 @@ class _FakePlayerService implements PlayerService {
 
   @override
   Future<void> togglePlayPause() async {}
+}
+
+class _FakeDesktopMediaSession implements DesktopMediaSession {
+  DesktopMediaSessionCallbacks? callbacks;
+  final List<DesktopMediaSessionState> states = [];
+  bool disposed = false;
+
+  @override
+  Future<void> initialize(DesktopMediaSessionCallbacks callbacks) async {
+    this.callbacks = callbacks;
+  }
+
+  @override
+  Future<void> update(DesktopMediaSessionState state) async {
+    states.add(state);
+  }
+
+  @override
+  Future<void> dispose() async {
+    disposed = true;
+  }
 }
 
 class _FakeLibraryRepository implements LibraryRepository {

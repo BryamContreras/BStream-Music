@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -112,6 +113,12 @@ class _HomePageState extends ConsumerState<HomePage> {
         _libraryNavigationController.maybePop()) {
       return;
     }
+    // The player can be opened directly by a media notification, without a
+    // previous in-app tab. Keep Back inside the app in that case.
+    if (_selectedIndex == _playerIndex &&
+        _restorePreviousView(fallback: _homeIndex)) {
+      return;
+    }
     if (_restorePreviousView()) {
       return;
     }
@@ -150,21 +157,29 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   bool _restorePreviousView({int? fallback}) {
-    final previous = _viewHistory.isNotEmpty
-        ? _viewHistory.removeLast()
-        : fallback;
-    if (previous == null || previous == _selectedIndex) {
+    int? previous;
+    while (_viewHistory.isNotEmpty) {
+      final candidate = _viewHistory.removeLast();
+      if (candidate != _selectedIndex) {
+        previous = candidate;
+        break;
+      }
+    }
+    previous ??= fallback;
+    final target = previous;
+    if (target == null || target == _selectedIndex) {
       return false;
     }
 
     setState(() {
-      _selectedIndex = previous;
+      _selectedIndex = target;
     });
     return true;
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(desktopMediaSessionProvider);
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesAndroidNavigation;
     final strings = ref.watch(appStringsProvider);
@@ -427,43 +442,48 @@ class _SideNavigation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 360),
-      curve: Curves.easeOutCubic,
-      decoration: BoxDecoration(
-        color: dimPlaybackBackground
-            ? const Color(0xDC040504)
-            : const Color(0x66040504),
-        border: const Border(right: BorderSide(color: Color(0xFF121812))),
-      ),
-      child: SafeArea(
-        right: false,
-        child: SizedBox(
-          width: 248,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(18, 20, 18, 26),
-                child: _SideNavigationBrand(),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 360),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            color: dimPlaybackBackground
+                ? const Color(0xA0040504)
+                : const Color(0x66040504),
+            border: const Border(right: BorderSide(color: Color(0xFF121812))),
+          ),
+          child: SafeArea(
+            right: false,
+            child: SizedBox(
+              width: 248,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(18, 20, 18, 26),
+                    child: _SideNavigationBrand(),
+                  ),
+                  Expanded(
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      itemCount: destinations.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final destination = destinations[index];
+                        return _SideNavigationItem(
+                          icon: destination.icon,
+                          label: destination.label,
+                          selected: selectedIndex == destination.index,
+                          onTap: () => onSelected(destination.index),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-              Expanded(
-                child: ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: destinations.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final destination = destinations[index];
-                    return _SideNavigationItem(
-                      icon: destination.icon,
-                      label: destination.label,
-                      selected: selectedIndex == destination.index,
-                      onTap: () => onSelected(destination.index),
-                    );
-                  },
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -495,16 +515,19 @@ class _SideNavigationItem extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: itemBorderRadius,
+        hoverColor: const Color(0x12080A08),
+        focusColor: const Color(0x18080A08),
+        highlightColor: const Color(0x22080A08),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 260),
           curve: Curves.easeOutCubic,
           height: 62,
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFF101A12) : Colors.transparent,
+            color: selected ? const Color(0xA0080A08) : Colors.transparent,
             borderRadius: itemBorderRadius,
             border: Border.all(
-              color: selected ? const Color(0xFF284F32) : Colors.transparent,
+              color: selected ? const Color(0x70243026) : Colors.transparent,
             ),
           ),
           child: Row(
@@ -624,6 +647,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
       children: [
         if (_visitedIndexes.contains(widget.homeIndex))
           _PersistentViewSlot(
+            key: const ValueKey('home-view'),
             selected: widget.selectedIndex == widget.homeIndex,
             child: _HomeView(
               onOpenPlayer: widget.onOpenPlayer,
@@ -632,11 +656,13 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           ),
         if (_visitedIndexes.contains(widget.searchIndex))
           _PersistentViewSlot(
+            key: const ValueKey('search-view'),
             selected: widget.selectedIndex == widget.searchIndex,
             child: _SearchView(onOpenPlayer: widget.onOpenPlayer),
           ),
         if (widget.selectedIndex == widget.playerIndex)
           _PersistentViewSlot(
+            key: const ValueKey('player-view'),
             selected: true,
             child: PlayerPanel(
               onOpenSearch: widget.onOpenSearch,
@@ -645,6 +671,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           ),
         if (_visitedIndexes.contains(widget.libraryIndex))
           _PersistentViewSlot(
+            key: const ValueKey('library-view'),
             selected: widget.selectedIndex == widget.libraryIndex,
             child: LibraryPanel(
               onOpenPlayer: widget.onOpenPlayer,
@@ -653,6 +680,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           ),
         if (_visitedIndexes.contains(widget.settingsIndex))
           _PersistentViewSlot(
+            key: const ValueKey('settings-view'),
             selected: widget.selectedIndex == widget.settingsIndex,
             child: const SettingsPanel(),
           ),
@@ -661,28 +689,68 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
   }
 }
 
-class _PersistentViewSlot extends StatelessWidget {
-  const _PersistentViewSlot({required this.selected, required this.child});
+class _PersistentViewSlot extends StatefulWidget {
+  const _PersistentViewSlot({
+    required this.selected,
+    required this.child,
+    super.key,
+  });
 
   final bool selected;
   final Widget child;
 
   @override
+  State<_PersistentViewSlot> createState() => _PersistentViewSlotState();
+}
+
+class _PersistentViewSlotState extends State<_PersistentViewSlot> {
+  bool _hasEntered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.selected) {
+      _scheduleEntryAnimation();
+    } else {
+      _hasEntered = true;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _PersistentViewSlot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selected && !oldWidget.selected) {
+      setState(() => _hasEntered = false);
+      _scheduleEntryAnimation();
+    }
+  }
+
+  void _scheduleEntryAnimation() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() => _hasEntered = true);
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Positioned.fill(
       child: IgnorePointer(
-        ignoring: !selected,
+        ignoring: !widget.selected,
         child: ExcludeSemantics(
-          excluding: !selected,
+          excluding: !widget.selected,
           child: AnimatedOpacity(
-            opacity: selected ? 1 : 0,
+            opacity: widget.selected && _hasEntered ? 1 : 0,
             duration: const Duration(milliseconds: 320),
             curve: Curves.easeOutCubic,
             child: AnimatedSlide(
-              offset: selected ? Offset.zero : const Offset(0.018, 0),
+              offset: widget.selected && _hasEntered
+                  ? Offset.zero
+                  : const Offset(0.018, 0),
               duration: const Duration(milliseconds: 320),
               curve: Curves.easeOutCubic,
-              child: TickerMode(enabled: selected, child: child),
+              child: TickerMode(enabled: widget.selected, child: widget.child),
             ),
           ),
         ),

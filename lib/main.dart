@@ -14,6 +14,8 @@ Future<void> main() async {
     await JustAudioBackground.init(
       androidNotificationChannelId: 'com.bstream.bstream_music.audio',
       androidNotificationChannelName: 'BStream Music',
+      notificationColor: const Color(0xFF18C75A),
+      androidNotificationIcon: 'drawable/ic_stat_bstream_music',
       androidNotificationOngoing: true,
       androidShowNotificationBadge: true,
     );

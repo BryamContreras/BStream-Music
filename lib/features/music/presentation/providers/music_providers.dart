@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -19,6 +20,8 @@ import '../../../../services/downloader/android_downloader_service.dart';
 import '../../../../services/downloader/desktop_downloader_service.dart';
 import '../../../../services/downloader/downloader_service.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
+import '../../../../services/media_session/desktop_media_session.dart';
+import '../../../../services/media_session/desktop_media_session_factory.dart';
 import '../../../../services/player/just_audio_player_service.dart';
 import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
@@ -82,6 +85,121 @@ final playerServiceProvider = Provider<PlayerService>((ref) {
       : JustAudioPlayerService();
   ref.onDispose(service.dispose);
   return service;
+});
+
+typedef DesktopMediaSessionFactory = DesktopMediaSession? Function();
+
+final desktopMediaSessionFactoryProvider = Provider<DesktopMediaSessionFactory>(
+  (ref) =>
+      () => AppPlatform.isDesktop ? createDesktopMediaSession() : null,
+);
+
+final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
+  final session = ref.watch(desktopMediaSessionFactoryProvider)();
+  if (session == null) {
+    return null;
+  }
+
+  PlayerSnapshot? latestSnapshot;
+  var latestQueue = const PlaybackQueueState();
+
+  Future<void> runSafely(
+    String operation,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (error) {
+      // A system media integration must never interrupt app playback.
+      debugPrint('Desktop media session $operation failed: $error');
+    }
+  }
+
+  void publishState() {
+    final snapshot = latestSnapshot;
+    if (snapshot == null) {
+      return;
+    }
+    final queue = latestQueue;
+    unawaited(
+      runSafely(
+        'update',
+        () => session.update(
+          DesktopMediaSessionState(
+            snapshot: snapshot,
+            queue: queue.entries
+                .map(
+                  (entry) => DesktopMediaQueueItem(
+                    id: entry.id,
+                    title: entry.title,
+                    artist: entry.artist,
+                    thumbnailUrl: entry.thumbnailUrl,
+                  ),
+                )
+                .toList(growable: false),
+            currentIndex: queue.currentIndex,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Duration relativeSeekPosition(Duration offset) {
+    final snapshot = latestSnapshot;
+    if (snapshot == null) {
+      return Duration.zero;
+    }
+    final duration = snapshot.duration;
+    final maximum = duration == null || duration <= Duration.zero
+        ? snapshot.position + offset.abs()
+        : duration;
+    final milliseconds = (snapshot.position + offset).inMilliseconds.clamp(
+      0,
+      maximum.inMilliseconds,
+    );
+    return Duration(milliseconds: milliseconds.toInt());
+  }
+
+  final callbacks = DesktopMediaSessionCallbacks(
+    play: () => ref.read(playerControllerProvider.notifier).resume(),
+    pause: () => ref.read(playerControllerProvider.notifier).pause(),
+    togglePlayPause: () =>
+        ref.read(playerControllerProvider.notifier).togglePlayPause(),
+    next: () => ref.read(playerControllerProvider.notifier).playNext(),
+    previous: () => ref.read(playerControllerProvider.notifier).playPrevious(),
+    stop: () => ref.read(playerControllerProvider.notifier).stop(),
+    seek: (position) =>
+        ref.read(playerControllerProvider.notifier).seek(position),
+    seekBy: (offset) => ref
+        .read(playerControllerProvider.notifier)
+        .seek(relativeSeekPosition(offset)),
+    setShuffleEnabled: (enabled) async {
+      ref.read(playerControllerProvider.notifier).setShuffleEnabled(enabled);
+    },
+    setRepeatMode: (mode) async {
+      ref.read(playerControllerProvider.notifier).setRepeatMode(mode);
+    },
+    playQueueIndex: (index) =>
+        ref.read(playerControllerProvider.notifier).playQueueIndex(index),
+  );
+
+  ref.listen<AsyncValue<PlayerSnapshot>>(playerControllerProvider, (_, next) {
+    final snapshot = next.value;
+    if (snapshot != null) {
+      latestSnapshot = snapshot;
+      publishState();
+    }
+  }, fireImmediately: true);
+  ref.listen<PlaybackQueueState>(playbackQueueProvider, (_, next) {
+    latestQueue = next;
+    publishState();
+  }, fireImmediately: true);
+
+  unawaited(runSafely('initialization', () => session.initialize(callbacks)));
+  ref.onDispose(() {
+    unawaited(runSafely('disposal', session.dispose));
+  });
+  return session;
 });
 
 final databaseServiceProvider = Provider<LocalDatabaseService>((ref) {
