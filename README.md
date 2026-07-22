@@ -6,6 +6,10 @@ Current version: **1.2.0+120**.
 
 > The repository does not store media content or third-party binaries. CI-generated installers download and bundle their own copies of `yt-dlp` and FFmpeg. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
 
+<img width="1317" height="774" alt="imagen" src="https://github.com/user-attachments/assets/40e3057f-dfa0-4c51-aa40-905195e81e99" /> <img width="1317" height="770" alt="Capture1" src="https://github.com/user-attachments/assets/b86973f9-c578-444a-b474-3ca1842c56d6" />
+
+
+
 ## Main features
 
 ### Search, downloads, and library
