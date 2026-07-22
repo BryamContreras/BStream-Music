@@ -110,6 +110,53 @@ function Save-PngIcon {
     $bitmap.Dispose()
 }
 
+function Save-MonochromeNotificationIcon {
+    param(
+        [System.Drawing.Image]$Source,
+        [int]$Size,
+        [string]$Path,
+        [float]$CropInsetFactor = 0.0
+    )
+
+    $directory = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    }
+
+    # Android status icons must be a white/alpha mask. Extract the green
+    # BStream mark from the source instead of using the generic music-note
+    # glyph that Android would otherwise show in media notifications.
+    $base = New-BStreamIcon $Source $Size $CropInsetFactor
+    $bitmap = [System.Drawing.Bitmap]::new(
+        $Size,
+        $Size,
+        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+    )
+
+    for ($y = 0; $y -lt $Size; $y++) {
+        for ($x = 0; $x -lt $Size; $x++) {
+            $pixel = $base.GetPixel($x, $y)
+            $green = [int]$pixel.G
+            $other = [Math]::Max([int]$pixel.R, [int]$pixel.B)
+            $strength = $green - $other
+            if ($green -gt 35 -and $strength -gt 18) {
+                $alpha = [Math]::Min(255, [Math]::Max(0, ($strength - 18) * 12))
+                $bitmap.SetPixel(
+                    $x,
+                    $y,
+                    [System.Drawing.Color]::FromArgb($alpha, 255, 255, 255)
+                )
+            } else {
+                $bitmap.SetPixel($x, $y, [System.Drawing.Color]::Transparent)
+            }
+        }
+    }
+
+    $base.Dispose()
+    $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bitmap.Dispose()
+}
+
 function Get-PngBytes {
     param(
         [System.Drawing.Image]$Source,
@@ -193,8 +240,11 @@ try {
 
     foreach ($entry in $androidIcons.GetEnumerator()) {
         Save-PngIcon $source $entry.Value `
-            (Join-Path $Root "android\app\src\main\res\$($entry.Key)") 0.075
+            (Join-Path $Root "android\app\src\main\res\$($entry.Key)") 0.025
     }
+
+    Save-MonochromeNotificationIcon $source 96 `
+        (Join-Path $Root "android\app\src\main\res\drawable-nodpi\ic_stat_bstream_music.png") 0.075
 
     foreach ($size in @(16, 32, 64, 128, 256, 512, 1024)) {
         Save-PngIcon $source $size (Join-Path $Root "macos\Runner\Assets.xcassets\AppIcon.appiconset\app_icon_$size.png")

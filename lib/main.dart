@@ -15,6 +15,7 @@ Future<void> main() async {
       androidNotificationChannelId: 'com.bstream.bstream_music.audio',
       androidNotificationChannelName: 'BStream Music',
       notificationColor: const Color(0xFF18C75A),
+      // Android/Samsung media surfaces expect a monochrome notification mask.
       androidNotificationIcon: 'drawable/ic_stat_bstream_music',
       androidNotificationOngoing: true,
       androidShowNotificationBadge: true,
