@@ -11,10 +11,12 @@ The Xcode build phase copies them into:
 bstream_music.app/Contents/Resources/tools/
 ```
 
-The copied executables are renamed to `yt-dlp` and `ffmpeg`, receive executable
-permissions, and are code-signed when Xcode is signing the app. FFmpeg is always
-resolved from a bundled `tools` directory; BStream does not fall back to the
-system FFmpeg installation.
+The copied executables are renamed to `yt-dlp` and `ffmpeg` and receive
+executable permissions. Xcode signs FFmpeg with the application. The official
+`yt-dlp_macos` executable is a PyInstaller onefile archive, so its existing
+signature and bytes must be preserved; post-signing only its launcher breaks
+the embedded Python runtime on macOS. FFmpeg is always resolved from a bundled
+`tools` directory; BStream does not fall back to the system FFmpeg installation.
 
 Use native macOS binaries compatible with the architectures you distribute.
 For a universal app, both tools must support Apple Silicon (`arm64`) and Intel

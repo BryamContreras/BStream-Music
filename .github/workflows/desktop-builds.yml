@@ -17,6 +17,10 @@ permissions:
 env:
   FLUTTER_VERSION: "3.44.0"
   FFMPEG_STATIC_VERSION: "5.3.0"
+  YT_DLP_VERSION: "2026.07.04"
+  YT_DLP_WINDOWS_SHA256: "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8"
+  YT_DLP_LINUX_X64_SHA256: "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae"
+  YT_DLP_MACOS_SHA256: "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
 
 jobs:
   metadata:
@@ -184,8 +188,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path $tools | Out-Null
 
           Invoke-WebRequest `
-            -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -Uri "https://github.com/yt-dlp/yt-dlp/releases/download/$env:YT_DLP_VERSION/yt-dlp.exe" `
             -OutFile (Join-Path $tools "yt-dlp.exe")
+
+          $ytDlp = Join-Path $tools "yt-dlp.exe"
+          $ytDlpHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ytDlp).Hash.ToLowerInvariant()
+          if ($ytDlpHash -ne $env:YT_DLP_WINDOWS_SHA256) {
+            throw "yt-dlp.exe checksum mismatch: $ytDlpHash"
+          }
 
           $npmDir = Join-Path $env:RUNNER_TEMP "bstream-ffmpeg-static"
           New-Item -ItemType Directory -Force -Path $npmDir | Out-Null
@@ -365,8 +375,11 @@ jobs:
           mkdir -p "$tools"
 
           curl --fail --location --retry 3 \
-            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/$YT_DLP_VERSION/yt-dlp_linux" \
             --output "$tools/yt-dlp"
+
+          echo "$YT_DLP_LINUX_X64_SHA256  $tools/yt-dlp" \
+            | sha256sum --check -
 
           npm_dir="$RUNNER_TEMP/bstream-ffmpeg-static"
           mkdir -p "$npm_dir"
@@ -484,8 +497,11 @@ jobs:
           mkdir -p "$tools"
 
           curl --fail --location --retry 3 \
-            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/$YT_DLP_VERSION/yt-dlp_macos" \
             --output "$tools/yt-dlp"
+
+          echo "$YT_DLP_MACOS_SHA256  $tools/yt-dlp" \
+            | shasum -a 256 --check
 
           npm_dir="$RUNNER_TEMP/bstream-ffmpeg-static"
           mkdir -p "$npm_dir"
@@ -498,6 +514,7 @@ jobs:
           cp "$ffmpeg" "$tools/ffmpeg"
           chmod 755 "$tools/yt-dlp" "$tools/ffmpeg"
 
+          codesign --verify --strict --verbose=2 "$tools/yt-dlp"
           "$tools/yt-dlp" --version
           "$tools/ffmpeg" -version
 
@@ -520,6 +537,19 @@ jobs:
             "$app" \
             "${{ matrix.host_arch }}" \
             "$APP_VERSION"
+
+      - name: Smoke test bundled macOS tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
+          bundled_yt_dlp="$app/Contents/Resources/tools/yt-dlp"
+
+          cmp "$PWD/macos/tools/yt-dlp" "$bundled_yt_dlp"
+          bash macos/verify_bundled_tools.sh \
+            "$app" \
+            "${{ matrix.host_arch }}" \
+            "$YT_DLP_MACOS_SHA256"
 
       - name: Smoke test macOS launch
         shell: bash
@@ -566,6 +596,10 @@ jobs:
           mkdir -p "$payload/Applications"
           ditto "$app" "$staged_app"
           codesign --verify --deep --strict "$staged_app"
+          bash macos/verify_bundled_tools.sh \
+            "$staged_app" \
+            "${{ matrix.host_arch }}" \
+            "$YT_DLP_MACOS_SHA256"
 
           mkdir -p dist
           package="dist/BStream-Music-$APP_VERSION-macOS-${{ matrix.arch }}.pkg"
@@ -587,6 +621,19 @@ jobs:
           grep -Fq \
             "BStream Music.app/Contents/Resources/tools/ffmpeg" \
             "$payload_files"
+
+          expanded_package="$RUNNER_TEMP/bstream-expanded-pkg"
+          rm -rf "$expanded_package"
+          pkgutil --expand-full "$package" "$expanded_package"
+          packaged_app="$(
+            find "$expanded_package" -type d -name "BStream Music.app" \
+              -print -quit
+          )"
+          test -n "$packaged_app"
+          bash macos/verify_bundled_tools.sh \
+            "$packaged_app" \
+            "${{ matrix.host_arch }}" \
+            "$YT_DLP_MACOS_SHA256"
 
       - name: Upload macOS installer
         uses: actions/upload-artifact@v7

@@ -45,15 +45,27 @@ if [ -n "${missing_tools}" ]; then
   echo "warning: Missing optional macOS desktop tools:${missing_tools}. Search and downloads will be unavailable."
 fi
 
+# FFmpeg is a regular Mach-O executable and can be signed with the application.
+# Keep the official PyInstaller onefile yt-dlp executable byte-for-byte intact:
+# post-signing its launcher would not update its archived Python runtime.
 if [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] && \
   [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
-  for tool in "${destination_dir}/yt-dlp" "${destination_dir}/ffmpeg"; do
-    if [ -f "${tool}" ] && /usr/bin/file "${tool}" | /usr/bin/grep -q "Mach-O"; then
-      /usr/bin/codesign \
-        --force \
-        --options runtime \
-        --sign "${EXPANDED_CODE_SIGN_IDENTITY}" \
-        "${tool}"
+  yt_dlp_tool="${destination_dir}/yt-dlp"
+  if [ -f "${yt_dlp_tool}" ] && \
+    /usr/bin/file "${yt_dlp_tool}" | /usr/bin/grep -q "Mach-O"; then
+    if ! /usr/bin/codesign --verify --strict "${yt_dlp_tool}"; then
+      echo "error: yt-dlp has an invalid upstream code signature."
+      exit 1
     fi
-  done
+  fi
+
+  ffmpeg_tool="${destination_dir}/ffmpeg"
+  if [ -f "${ffmpeg_tool}" ] && \
+    /usr/bin/file "${ffmpeg_tool}" | /usr/bin/grep -q "Mach-O"; then
+    /usr/bin/codesign \
+      --force \
+      --options runtime \
+      --sign "${EXPANDED_CODE_SIGN_IDENTITY}" \
+      "${ffmpeg_tool}"
+  fi
 fi

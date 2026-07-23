@@ -32,6 +32,8 @@ if [[ "$signing_identity" == "-" ]]; then
   timestamp_args=(--timestamp=none)
 fi
 
+preserved_yt_dlp="$app_bundle/Contents/Resources/tools/yt-dlp"
+
 sign_macho_files() {
   local root="$1"
 
@@ -39,6 +41,15 @@ sign_macho_files() {
 
   while IFS= read -r -d '' candidate; do
     if /usr/bin/file -b "$candidate" | /usr/bin/grep -q "Mach-O"; then
+      # yt-dlp_macos is a PyInstaller onefile executable. Its Python runtime
+      # lives inside the executable archive, so post-signing only the launcher
+      # with Hardened Runtime makes the extracted Python fail Team ID library
+      # validation. Preserve and validate the complete upstream executable.
+      if [[ "$candidate" == "$preserved_yt_dlp" ]]; then
+        /usr/bin/codesign --verify --strict --verbose=2 "$candidate"
+        continue
+      fi
+
       /usr/bin/codesign \
         --force \
         --options runtime \
