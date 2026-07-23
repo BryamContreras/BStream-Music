@@ -57,6 +57,12 @@ while IFS= read -r -d '' candidate; do
 
   while IFS= read -r dependency; do
     [[ -n "$dependency" ]] || continue
+
+    # For a dynamic library, otool includes LC_ID_DYLIB before its actual
+    # dependencies. Some vendored frameworks retain their build-time absolute
+    # path there; it identifies the current file and is never loaded by dyld.
+    [[ "$dependency" == "$candidate" ]] && continue
+
     case "$dependency" in
       @rpath/*)
         relative_path="${dependency#@rpath/}"
