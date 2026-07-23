@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<!--
+		The audio engine bundles third-party FFmpeg/libmpv frameworks. Release
+		builds use the Hardened Runtime, so macOS must allow those embedded
+		frameworks to load even when the unsigned CI package has no Apple Team ID.
+		The release workflow still re-signs every nested Mach-O consistently.
+	-->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
 </plist>
