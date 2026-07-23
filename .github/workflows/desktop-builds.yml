@@ -445,10 +445,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-26
             arch: arm64
             host_arch: arm64
-          - runner: macos-15-intel
+          - runner: macos-26-intel
             arch: x64
             host_arch: x86_64
 
@@ -504,6 +504,47 @@ jobs:
       - name: Build macOS release
         run: flutter build macos --release
 
+      - name: Sign embedded macOS code consistently
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
+          bash macos/sign_release_bundle.sh "$app"
+
+      - name: Audit macOS application bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
+          bash macos/verify_release_bundle.sh \
+            "$app" \
+            "${{ matrix.host_arch }}" \
+            "$APP_VERSION"
+
+      - name: Smoke test macOS launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
+          executable="$app/Contents/MacOS/bstream_music"
+          log="$RUNNER_TEMP/bstream-macos-smoke.log"
+
+          "$executable" >"$log" 2>&1 &
+          app_pid=$!
+
+          for _ in {1..8}; do
+            sleep 1
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              wait "$app_pid" || true
+              cat "$log"
+              echo "BStream Music terminated during the macOS launch smoke test." >&2
+              exit 1
+            fi
+          done
+
+          kill -TERM "$app_pid" 2>/dev/null || true
+          wait "$app_pid" || true
+
       - name: Build macOS PKG installer
         shell: bash
         run: |
@@ -535,7 +576,17 @@ jobs:
             --version "$APP_VERSION" \
             --ownership recommended \
             "$package"
-          pkgutil --payload-files "$package" | grep -F "BStream Music.app/Contents/MacOS/bstream_music"
+          payload_files="$RUNNER_TEMP/bstream-payload-files.txt"
+          pkgutil --payload-files "$package" >"$payload_files"
+          grep -Fq \
+            "BStream Music.app/Contents/MacOS/bstream_music" \
+            "$payload_files"
+          grep -Fq \
+            "BStream Music.app/Contents/Resources/tools/yt-dlp" \
+            "$payload_files"
+          grep -Fq \
+            "BStream Music.app/Contents/Resources/tools/ffmpeg" \
+            "$payload_files"
 
       - name: Upload macOS installer
         uses: actions/upload-artifact@v7
