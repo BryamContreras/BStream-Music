@@ -62,8 +62,17 @@ class DesktopDownloaderService implements DownloaderService {
       (await _prefs).getString(_ytDlpPathKey),
       ['yt-dlp.exe', 'yt-dlp'],
     );
-    if (configured != null) return configured;
-    return _findBundledTool(['yt-dlp.exe', 'yt-dlp']) ?? 'yt-dlp';
+    final bundled = _findBundledTool(['yt-dlp.exe', 'yt-dlp']);
+
+    // Older builds could persist the bare command `yt-dlp` after checking the
+    // desktop tools. That works from an interactive shell but fails when
+    // macOS launches the app from Finder, Dock, or Launchpad because those
+    // processes do not inherit the shell PATH. Prefer an explicit user path,
+    // then the bundled executable, and use a bare command only as a fallback.
+    if (configured != null && File(configured).isAbsolute) {
+      return configured;
+    }
+    return bundled ?? configured ?? 'yt-dlp';
   }
 
   Future<String?> getFfmpegPath() async {

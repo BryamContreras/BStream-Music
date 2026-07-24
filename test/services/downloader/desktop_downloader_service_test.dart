@@ -64,6 +64,28 @@ void main() {
     expect(await service.getFfmpegPath(), ffmpeg.path);
   });
 
+  test('prefers bundled yt-dlp over a persisted bare command', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'bstream_bundled_ytdlp_',
+    );
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+
+    final executableName = Platform.isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+    final bundledYtDlp = File(p.join(temp.path, executableName));
+    await bundledYtDlp.writeAsString('');
+
+    final service = DesktopDownloaderService(toolDirectories: [temp]);
+    addTearDown(service.dispose);
+
+    await service.setYtDlpPath('yt-dlp');
+
+    expect(await service.getYtDlpPath(), bundledYtDlp.path);
+  });
+
   test('does not fall back to a system FFmpeg executable', () async {
     final service = DesktopDownloaderService(toolDirectories: const []);
     addTearDown(service.dispose);
