@@ -308,7 +308,25 @@ class DesktopDownloaderService implements DownloaderService {
       );
     }
     try {
-      final process = await Process.start(executable, args);
+      // Finder and Dock do not provide the interactive shell environment.
+      // Include the tool's directory explicitly so yt-dlp can still resolve
+      // helper binaries when the app is launched outside Terminal.
+      final environment = Map<String, String>.from(Platform.environment);
+      final executablePath = File(executable);
+      if (executablePath.isAbsolute) {
+        final toolDirectory = executablePath.parent.path;
+        final separator = Platform.isWindows ? ';' : ':';
+        final existingPath = environment['PATH'];
+        environment['PATH'] = [
+          toolDirectory,
+          if (existingPath != null && existingPath.isNotEmpty) existingPath,
+        ].join(separator);
+      }
+      final process = await Process.start(
+        executable,
+        args,
+        environment: environment,
+      );
       _activeProcesses[process.pid] = process;
       return process;
     } on ProcessException catch (error) {
@@ -489,6 +507,32 @@ class DesktopDownloaderService implements DownloaderService {
       Directory(p.join(currentDirectory.path, 'windows', 'tools')),
       Directory(p.join(currentDirectory.path, 'tools')),
     ];
+
+    // LaunchServices (Finder/Dock) can start a macOS Flutter executable with
+    // a minimal environment. In that case some Flutter builds expose a
+    // relative `resolvedExecutable`, so the paths derived only from the
+    // executable directory are not sufficient. Keep the standard bundle
+    // locations as deterministic fallbacks; this does not depend on PATH.
+    if (Platform.isMacOS) {
+      final home = Platform.environment['HOME'];
+      directories.add(
+        Directory('/Applications/BStream Music.app/Contents/Resources/tools'),
+      );
+      if (home != null && home.isNotEmpty) {
+        directories.add(
+          Directory(
+            p.join(
+              home,
+              'Applications',
+              'BStream Music.app',
+              'Contents',
+              'Resources',
+              'tools',
+            ),
+          ),
+        );
+      }
+    }
 
     var cursor = executableDirectory;
     for (var index = 0; index < 8; index++) {
