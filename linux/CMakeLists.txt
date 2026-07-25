@@ -57,6 +57,15 @@ pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# PipeWire uses the basename of /proc/self/exe as the native client name on
+# Linux. Keep Flutter's expected `bstream_music` entry point as a tiny exec
+# launcher, while the actual runner binary has the human-readable name that
+# KDE's volume controls display.
+set_target_properties(${BINARY_NAME}
+  PROPERTIES
+  OUTPUT_NAME "BStream Music"
+)
+
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
@@ -92,6 +101,11 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/runner/bstream_music_launcher"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  RENAME "${BINARY_NAME}"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

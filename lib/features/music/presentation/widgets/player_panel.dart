@@ -1923,6 +1923,30 @@ class _WavySeekBarState extends State<_WavySeekBar>
     final totalMs = widget.duration?.inMilliseconds ?? 0;
     final currentMs = widget.position.inMilliseconds.clamp(0, totalMs);
     final fraction = totalMs <= 0 ? 0.0 : currentMs / totalMs;
+    final canSeek = totalMs > 0;
+
+    String percentageFor(int milliseconds) {
+      final seekFraction = milliseconds / totalMs;
+      return '${(seekFraction * 100).round()}%';
+    }
+
+    final currentValue = '${(fraction * 100).round()}%';
+    final increasedValue = canSeek
+        ? percentageFor(
+            (currentMs + const Duration(seconds: 10).inMilliseconds).clamp(
+              0,
+              totalMs,
+            ),
+          )
+        : null;
+    final decreasedValue = canSeek
+        ? percentageFor(
+            (currentMs - const Duration(seconds: 10).inMilliseconds).clamp(
+              0,
+              totalMs,
+            ),
+          )
+        : null;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1947,14 +1971,16 @@ class _WavySeekBarState extends State<_WavySeekBar>
 
         return Semantics(
           slider: true,
-          enabled: totalMs > 0,
-          value: '${(fraction * 100).round()}%',
-          onIncrease: totalMs <= 0
-              ? null
-              : () => seekBy(const Duration(seconds: 10)),
-          onDecrease: totalMs <= 0
-              ? null
-              : () => seekBy(const Duration(seconds: -10)),
+          enabled: canSeek,
+          value: currentValue,
+          increasedValue: increasedValue,
+          decreasedValue: decreasedValue,
+          onIncrease: canSeek
+              ? () => seekBy(const Duration(seconds: 10))
+              : null,
+          onDecrease: canSeek
+              ? () => seekBy(const Duration(seconds: -10))
+              : null,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTapDown: (details) => seekFromDx(details.localPosition.dx),

@@ -102,9 +102,24 @@ static gboolean my_application_local_command_line(GApplication* application,
 
 // Implements GApplication::startup.
 static void my_application_startup(GApplication* application) {
-  // MyApplication* self = MY_APPLICATION(object);
-
-  // Perform any actions required at application startup.
+  // Publish stable desktop metadata before media_kit/libmpv opens its first
+  // audio stream. GTK forwards these values to PulseAudio/PipeWire, allowing
+  // volume controls to show the application name and its XDG icon instead of
+  // the executable and package defaults.
+  g_set_application_name("BStream Music");
+  gtk_window_set_default_icon_name(APPLICATION_ID);
+  g_setenv("PULSE_PROP_application.name", "BStream Music", TRUE);
+  g_setenv("PULSE_PROP_application.icon_name", APPLICATION_ID, TRUE);
+  g_setenv("PULSE_PROP_media.role", "music", TRUE);
+  // Fedora commonly uses mpv's native PipeWire backend instead of
+  // pipewire-pulse. PIPEWIRE_PROPS is consumed by that backend and keeps the
+  // stream metadata independent of the executable name.
+  g_setenv(
+      "PIPEWIRE_PROPS",
+      "{ application.name = \"BStream Music\" application.icon-name = "
+      "\"com.bstream.bstream_music\" application.id = "
+      "\"com.bstream.bstream_music\" }",
+      TRUE);
 
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
 }

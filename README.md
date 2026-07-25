@@ -2,7 +2,7 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, Windows, Linux, and macOS.
 
-Current version: **1.2.0+120**.
+Current version: **1.2.1+121**.
 
 > The repository does not store media content or third-party binaries. CI-generated installers download and bundle their own copies of `yt-dlp` and FFmpeg. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
 
@@ -347,24 +347,24 @@ run manually from the **Actions** tab and also runs for pull requests, pushes to
 Each job downloads `yt-dlp` from its official releases and obtains the FFmpeg executable appropriate for its system and architecture. Windows also builds and verifies the portable TikTok LIVE bridge runtime. Binaries are included in the installers but are not stored in the repository. Artifacts are retained for 30 days:
 
 ```text
-BStream-Music-1.2.0-Android-arm64-v8a.apk
-BStream-Music-1.2.0-Android-x86_64.apk
-BStream-Music-1.2.0-Windows-x64-Setup.exe
-BStream-Music-1.2.0-linux-amd64.deb
-BStream-Music-1.2.0-linux-x86_64.rpm
-BStream-Music-1.2.0-macOS-arm64.pkg
-BStream-Music-1.2.0-macOS-x64.pkg
+BStream-Music-1.2.1-Android-arm64-v8a.apk
+BStream-Music-1.2.1-Android-x86_64.apk
+BStream-Music-1.2.1-Windows-x64-Setup.exe
+BStream-Music-1.2.1-linux-amd64.deb
+BStream-Music-1.2.1-linux-x86_64.rpm
+BStream-Music-1.2.1-macOS-arm64.pkg
+BStream-Music-1.2.1-macOS-x64.pkg
 ```
 
 ### Which file should I install?
 
-- **Most Android phones and tablets:** install `BStream-Music-1.2.0-Android-arm64-v8a.apk`.
-- **Android x86_64 devices and emulators:** install `BStream-Music-1.2.0-Android-x86_64.apk`.
+- **Most Android phones and tablets:** install `BStream-Music-1.2.1-Android-arm64-v8a.apk`.
+- **Android x86_64 devices and emulators:** install `BStream-Music-1.2.1-Android-x86_64.apk`.
 - **Windows 64-bit:** open `Setup.exe`. The installer shows a language selector, creates a Start Menu shortcut, and lets you choose whether to create a desktop shortcut. The uninstaller entry is displayed as `BStream Music` without the version number.
-- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.2.0-linux-amd64.deb`.
-- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.2.0-linux-x86_64.rpm`.
-- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.2.0-macOS-arm64.pkg`.
-- **Mac with an Intel processor:** open `BStream-Music-1.2.0-macOS-x64.pkg`.
+- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.2.1-linux-amd64.deb`.
+- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.2.1-linux-x86_64.rpm`.
+- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.2.1-macOS-arm64.pkg`.
+- **Mac with an Intel processor:** open `BStream-Music-1.2.1-macOS-x64.pkg`.
 
 An `.app` is the complete application and should be opened as one unit, not by entering its `Contents`, `Frameworks`, or `Resources` folders. The `.pkg` installer places `BStream Music.app` in `/Applications` automatically.
 

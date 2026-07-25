@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:media_kit/media_kit.dart';
 
+import '../../core/constants/app_constants.dart';
 import '../../core/errors/app_exception.dart';
+import '../../core/platform/app_platform.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import 'player_service.dart';
@@ -10,7 +12,14 @@ import 'player_service.dart';
 class MediaKitPlayerService implements PlayerService {
   MediaKitPlayerService() {
     _ensureInitialized();
-    _player = Player();
+    _player = Player(
+      configuration: const PlayerConfiguration(
+        // The default value (`package:media_kit`) is exposed by the native
+        // audio backend in Linux volume controls and media notifications.
+        title: AppConstants.appName,
+      ),
+    );
+    _audioMetadataReady = _configureLinuxAudioClientName();
     _subscriptions.addAll([
       _player.stream.position.listen((position) {
         _emit(_snapshot.copyWith(position: position));
@@ -55,6 +64,7 @@ class MediaKitPlayerService implements PlayerService {
   }
 
   late final Player _player;
+  late final Future<void> _audioMetadataReady;
   final _snapshotController = StreamController<PlayerSnapshot>.broadcast();
   final _subscriptions = <StreamSubscription<Object?>>[];
 
@@ -90,6 +100,7 @@ class MediaKitPlayerService implements PlayerService {
         isRemote: true,
       ),
     );
+    await _audioMetadataReady;
     await _player.open(
       Media(source, httpHeaders: track.httpHeaders),
       play: true,
@@ -112,6 +123,7 @@ class MediaKitPlayerService implements PlayerService {
         isRemote: false,
       ),
     );
+    await _audioMetadataReady;
     await _player.open(Media(track.filePath), play: true);
     _emit(_snapshot.copyWith(status: PlayerStatus.playing));
   }
@@ -186,6 +198,24 @@ class MediaKitPlayerService implements PlayerService {
     }
     MediaKit.ensureInitialized();
     _initialized = true;
+  }
+
+  Future<void> _configureLinuxAudioClientName() async {
+    if (!AppPlatform.isLinux) {
+      return;
+    }
+
+    final platform = _player.platform;
+    if (platform is NativePlayer) {
+      try {
+        // PipeWire's native mpv backend uses this option instead of the
+        // PulseAudio application properties set by the GTK runner.
+        await platform.setProperty('audio-client-name', AppConstants.appName);
+      } catch (_) {
+        // Playback must remain functional if an older libmpv ignores this
+        // optional metadata property.
+      }
+    }
   }
 
   void _emit(PlayerSnapshot snapshot) {

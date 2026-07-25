@@ -50,6 +50,8 @@ class BStreamMusicApp extends ConsumerWidget {
       themeMode: ThemeMode.dark,
       darkTheme: ThemeData(
         useMaterial3: true,
+        fontFamily: AppPlatform.isLinux ? 'Roboto' : null,
+        fontFamilyFallback: AppPlatform.isLinux ? const [] : null,
         brightness: Brightness.dark,
         colorScheme:
             ColorScheme.fromSeed(
