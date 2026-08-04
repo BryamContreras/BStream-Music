@@ -16,12 +16,23 @@ class RemotePlaybackCache {
   static const _userAgent =
       'BStreamMusic/${AppConstants.appVersion} (Android) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
   static const _audioExtensions = {
+    '.aiff',
+    '.alac',
+    '.flac',
     '.m4a',
+    '.m4b',
+    '.mka',
     '.mp3',
+    '.mp4',
     '.aac',
+    '.oga',
     '.ogg',
     '.opus',
+    '.vorbis',
+    '.wav',
+    '.weba',
     '.webm',
+    '.wma',
   };
 
   final _inFlight = <String, _RemoteCacheWarmup>{};
@@ -321,11 +332,18 @@ class RemotePlaybackCache {
     if (mime.contains('audio/ogg') || mime.contains('ogg')) {
       return '.ogg';
     }
+    if (mime.contains('opus')) {
+      return '.opus';
+    }
     if (mime.contains('mpeg') || mime.contains('mp3')) {
       return '.mp3';
     }
     if (mime.contains('aac')) {
       return '.aac';
+    }
+    final pathExtension = p.extension(uri.path).toLowerCase();
+    if (_audioExtensions.contains(pathExtension)) {
+      return pathExtension;
     }
     return '.m4a';
   }

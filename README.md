@@ -4,7 +4,7 @@ BStream Music is a cross-platform music player and library manager built with Fl
 
 Current version: **1.2.1+121**.
 
-> The repository does not store media content or third-party binaries. CI-generated installers download and bundle their own copies of `yt-dlp` and FFmpeg. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
+> The repository does not store media content or third-party binaries. CI-generated desktop installers download and bundle verified copies of `yt-dlp` and Deno. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
 
 <img width="1317" height="774" alt="imagen" src="https://github.com/user-attachments/assets/40e3057f-dfa0-4c51-aa40-905195e81e99" /> <img width="1317" height="770" alt="Capture1" src="https://github.com/user-attachments/assets/b86973f9-c578-444a-b474-3ca1842c56d6" />
 
@@ -32,7 +32,10 @@ Current version: **1.2.1+121**.
 - The active track is highlighted with a segmented 13-bar equalizer.
 - Dark dynamic background derived from the track artwork.
 - Animated progress bar with waves and artwork-derived color.
-- Volume control from the desktop player options menu.
+- Direct volume control beside the repeat button.
+- Synchronized lyrics powered by LRCLIB, with plain-lyrics fallback, automatic
+  scrolling, tap-to-seek, and a manual timing offset from `-10` to `+10` seconds
+  in `0.50`-second steps.
 - Sleep timer with quick durations and a custom duration.
 - Native system media integration: Android media notifications, Windows
   SMTC, Linux MPRIS, and macOS Now Playing.
@@ -85,10 +88,27 @@ This integration uses an unofficial library. If TikTok changes its protocol, the
 
 | Platform | Player | Downloads | Notes |
 | --- | --- | --- | --- |
-| Android | `just_audio` + `audio_service` | `youtubedl-android` | `minSdk 24`; Release APKs support `arm64-v8a` and `x86_64`; FFmpeg is provided through Gradle |
-| Windows | `media_kit` | `yt-dlp` + FFmpeg | SMTC controls, TikTok LIVE, queue side panel, and external tools |
-| Linux | `media_kit` | Bundled `yt-dlp` + FFmpeg | MPRIS controls; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
-| macOS | `media_kit` | Bundled `yt-dlp` + FFmpeg | Now Playing controls; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
+| Android | `just_audio` + `audio_service` | `youtubedl-android` + QuickJS | `minSdk 24`; Release APKs support `arm64-v8a` and `x86_64` |
+| Windows | `media_kit` | Bundled `yt-dlp` + Deno | SMTC controls, TikTok LIVE, queue side panel, and external tools |
+| Linux | `media_kit` | Bundled `yt-dlp` + Deno | MPRIS controls; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
+| macOS | `media_kit` | Bundled `yt-dlp` + Deno | Now Playing controls; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
+
+Downloads and remote playback use the same native-audio selection policy on
+every platform: prefer the best available M4A/AAC stream, otherwise use the
+best original audio stream. BStream preserves the source container and does
+not extract, remux, transcode, or embed tags/artwork. Library metadata is kept
+in SQLite and artwork is saved as a separate thumbnail file.
+
+BStream does not invoke or bundle standalone `ffmpeg` or `ffprobe`
+executables. Desktop playback still relies on the codec libraries included by
+`media_kit`/libmpv; those libraries decode M4A, Opus, and other formats during
+playback, but they are not a transcoding or download post-processing step.
+
+Lyrics are requested from [LRCLIB](https://lrclib.net) only when the lyrics
+view is opened. BStream sends the current title, artist, duration, and album
+when available, identifies itself with the required client header, and keeps a
+short in-memory cache to avoid duplicate requests. Lyrics are not embedded in
+downloaded audio files.
 
 ## Architecture
 
@@ -118,12 +138,16 @@ lib/
   services/
     downloader/
     live/
+    lyrics/
     media_session/
     player/
     storage/
 ```
 
-The main contracts are `DownloaderService`, `PlayerService`, and `LibraryRepository`. Android uses platform channels for native tasks; Windows and macOS execute local tools through argument lists and process their output asynchronously.
+The main contracts are `DownloaderService`, `PlayerService`, `LyricsService`,
+and `LibraryRepository`. Android uses platform channels for native tasks;
+Windows and macOS execute local tools through argument lists and process their
+output asynchronously.
 
 ## Development requirements
 
@@ -134,7 +158,8 @@ The main contracts are `DownloaderService`, `PlayerService`, and `LibraryReposit
 - Clang, CMake, Ninja, GTK 3, and libmpv for Linux.
 - A Mac with Xcode to build, sign, and test macOS.
 - Python 3.11–3.13 only when developing or rebuilding the TikTok bridge.
-- `yt-dlp` and FFmpeg for desktop searches and downloads.
+- `yt-dlp` and Deno 2.3 or newer for complete YouTube support on desktop.
+  Node.js 22 or newer can be used as a development fallback.
 
 Check the environment with:
 
@@ -160,49 +185,50 @@ flutter devices
 
 ## Windows tools
 
-Third-party binaries are **not committed to Git**. `yt-dlp` may be available on `PATH`, but FFmpeg is always resolved from a `tools` directory so every package uses a controlled version. The recommended layout is:
+Third-party binaries are **not committed to Git**. `yt-dlp` may be available on `PATH`. The recommended layout is:
 
 ```text
 windows/tools/
   yt-dlp.exe
-  ffmpeg.exe
+  deno.exe
   tiktok-live-bridge/
     tiktok_live_bridge.exe
     ...generated runtime...
 ```
 
-`windows/tools/ffmpeg/bin/ffmpeg.exe` is also recognized.
-
-Install tools with `winget`:
+Install `yt-dlp` with `winget`:
 
 ```powershell
 winget install yt-dlp.yt-dlp
-winget install Gyan.FFmpeg
 ```
 
-For a portable Windows build, place verified versions of `yt-dlp` and FFmpeg in `windows/tools` before compiling Release. CMake copies the tools next to the executable. Debug builds prioritize tools from the project tree to avoid copying or locking large runtimes on every build.
+For a portable Windows build, place verified `yt-dlp` and Deno executables in
+`windows/tools` before compiling Release. CMake copies both next to the
+executable. During development, BStream can enable a compatible Node.js from
+`PATH` when a bundled Deno executable is unavailable.
 
 ## macOS tools and permissions
 
-Before compiling Release or Profile, place verified native binaries in:
+Before compiling Release or Profile, place a verified native binary in:
 
 ```text
 macos/tools/
   yt-dlp
-  ffmpeg
+  deno
 ```
 
-`yt-dlp_macos` and `ffmpeg/bin/ffmpeg` are also recognized. The **Bundle Desktop Tools** phase copies them under stable names to:
+`yt-dlp_macos` is also recognized. The **Bundle Desktop Tools** phase copies it under a stable name to:
 
 ```text
 bstream_music.app/Contents/Resources/tools/
 ```
 
-The copy phase sets executable permissions and, when Xcode signs the application, signs the Mach-O executables as well. A Release or Profile build fails explicitly if either tool is missing, preventing a package without search or download support.
+The copy phase sets executable permissions. A Release or Profile build fails
+explicitly if `yt-dlp` or Deno is missing, preventing a package with incomplete
+YouTube support. BStream prioritizes the bundled tools and keeps `PATH` as a
+development fallback.
 
-FFmpeg is not resolved through Homebrew or `PATH` at runtime: it always comes from `tools`. `yt-dlp` prioritizes the bundled copy and keeps `PATH` as a development fallback.
-
-The application is distributed outside the Mac App Store. App Sandbox is disabled because BStream needs to launch `yt-dlp` and FFmpeg, access the selected download folder, and make network connections. Hardened Runtime remains enabled for Developer ID signing and notarization. TikTok LIVE remains limited to Windows.
+The application is distributed outside the Mac App Store. App Sandbox is disabled because BStream needs to launch `yt-dlp`, access the selected download folder, and make network connections. Hardened Runtime remains enabled for Developer ID signing and notarization. TikTok LIVE remains limited to Windows.
 
 The native macOS window uses the same `960 × 600` minimum as Windows.
 
@@ -213,10 +239,12 @@ Executables use this layout:
 ```text
 linux/tools/
   yt-dlp
-  ffmpeg
+  deno
 ```
 
-CMake copies them into `tools/` inside the bundle. The application resolves them from that location and does not require FFmpeg on `PATH`. The target system must provide GTK 3, libmpv, and SQLite runtime libraries.
+CMake copies both executables into `tools/` inside the bundle. The target system
+must provide GTK 3, libmpv, and SQLite runtime libraries for the application
+and its `media_kit` player.
 
 ## TikTok LIVE bridge
 
@@ -254,10 +282,9 @@ Main dependencies:
 
 ```kotlin
 implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
-implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 ```
 
-`youtubedl-android` and FFmpeg are downloaded through Gradle; manual executables are not committed to the repository.
+`youtubedl-android` is downloaded through Gradle; manual executables are not committed to the repository.
 
 Release builds intentionally support only the 64-bit `arm64-v8a` (ARMv8) and
 `x86_64` ABIs. `armeabi-v7a` is no longer generated or supported.
@@ -344,7 +371,10 @@ Release installers for Windows, Linux, and both macOS architectures. It can be
 run manually from the **Actions** tab and also runs for pull requests, pushes to
 `main`, and `v*` tags.
 
-Each job downloads `yt-dlp` from its official releases and obtains the FFmpeg executable appropriate for its system and architecture. Windows also builds and verifies the portable TikTok LIVE bridge runtime. Binaries are included in the installers but are not stored in the repository. Artifacts are retained for 30 days:
+Each desktop job downloads `yt-dlp` and Deno from their official releases and
+verifies their pinned checksums. Windows also builds and verifies the portable
+TikTok LIVE bridge runtime. Binaries are included in the installers but are not
+stored in the repository. Artifacts are retained for 30 days:
 
 ```text
 BStream-Music-1.2.1-Android-arm64-v8a.apk
@@ -387,7 +417,7 @@ The current test suite covers models, use cases, services, the sleep timer, TikT
 The repository deliberately excludes:
 
 - Builds, APKs, EXEs, and distribution packages.
-- `yt-dlp`, FFmpeg, and their auxiliary directories.
+- `yt-dlp`, Deno, and their auxiliary directories.
 - The compiled TikTok bridge runtime.
 - Python virtual environments and caches.
 - Signing keys, passwords, and local Android configuration files.

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/download_result.dart';
 import '../providers/music_providers.dart';
 import 'gradient_progress_bar.dart';
@@ -26,6 +27,11 @@ class DownloadProgressPanel extends ConsumerWidget {
       DownloadProgressStatus.completed => strings.completed,
       DownloadProgressStatus.failed => strings.error,
     };
+    final progressLabel =
+        active.status == DownloadProgressStatus.running &&
+            active.progress != null
+        ? '$label ${(active.progress! * 100).clamp(0, 100).round()}%'
+        : label;
 
     return Material(
       color: const Color(0xFF060806),
@@ -33,10 +39,7 @@ class DownloadProgressPanel extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
         child: Row(
           children: [
-            Icon(
-              Icons.music_note_rounded,
-              color: Theme.of(context).colorScheme.secondary,
-            ),
+            Icon(Icons.music_note_rounded, color: AppColors.downloadAccent),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -46,7 +49,7 @@ class DownloadProgressPanel extends ConsumerWidget {
                   Text(
                     active.status == DownloadProgressStatus.running
                         ? strings.downloadLabel(
-                            label,
+                            progressLabel,
                             active.title ?? active.url,
                             queuedCount,
                           )
@@ -68,7 +71,7 @@ class DownloadProgressPanel extends ConsumerWidget {
                             Theme.of(context).colorScheme.error,
                             const Color(0xFFFFB3B3),
                           ]
-                        : const [Color(0xFF159071), Color(0xFF5FA833)],
+                        : AppColors.downloadGradient,
                   ),
                   if (active.errorMessage != null)
                     Padding(
@@ -93,20 +96,17 @@ class DownloadProgressPanel extends ConsumerWidget {
 
   double _visibleProgress(DownloadTaskState task) {
     return switch (task.status) {
-      DownloadProgressStatus.queued => 0.06,
-      DownloadProgressStatus.running => (task.progress ?? 0.08).clamp(
-        0.08,
-        0.98,
-      ),
+      DownloadProgressStatus.queued => 0,
+      DownloadProgressStatus.running => (task.progress ?? 0).clamp(0, 0.98),
       DownloadProgressStatus.completed => 1,
-      DownloadProgressStatus.failed => (task.progress ?? 1).clamp(0.08, 1),
+      DownloadProgressStatus.failed => (task.progress ?? 0).clamp(0, 1),
     };
   }
 
   bool _isIndeterminate(DownloadTaskState task) {
     return task.status == DownloadProgressStatus.queued ||
         (task.status == DownloadProgressStatus.running &&
-            (task.progress ?? 0) <= 0.02);
+            task.progress == null);
   }
 
   DownloadTaskState _activeTask(List<DownloadTaskState> tasks) {

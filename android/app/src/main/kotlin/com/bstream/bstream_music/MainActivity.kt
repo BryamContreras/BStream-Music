@@ -11,7 +11,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.ryanheise.audioservice.AudioServiceActivity
-import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import io.flutter.embedding.engine.FlutterEngine
@@ -29,8 +28,6 @@ class MainActivity : AudioServiceActivity() {
     private val updateLock = Object()
     private var progressSink: EventChannel.EventSink? = null
     private var youtubeDlInitialized = false
-    private var ffmpegInitialized = false
-    private var updateStarted = false
     private var updateRunning = false
     private var updateCompleted = false
     private val progressEmissionLock = Object()
@@ -163,9 +160,6 @@ class MainActivity : AudioServiceActivity() {
     private fun initYtdl(result: MethodChannel.Result) {
         runAsync(result) {
             ensureYoutubeDlInitialized()
-            if (!updateYoutubeDlBlocking(force = false)) {
-                throw IllegalStateException("No se pudo preparar yt-dlp. Revisa tu conexion e intenta de nuevo.")
-            }
             true
         }
     }
@@ -200,7 +194,7 @@ class MainActivity : AudioServiceActivity() {
             addBaseNetworkOptions(request)
             request.addOption("--dump-single-json")
             request.addOption("--no-playlist")
-            request.addOption("-f", REMOTE_PLAYBACK_FORMAT)
+            request.addOption("-f", AUDIO_FORMAT_SELECTOR)
             val response = YoutubeDL.getInstance().execute(request)
             JSONObject(response.out).toMap()
         }
@@ -211,24 +205,75 @@ class MainActivity : AudioServiceActivity() {
             val startedAt = SystemClock.elapsedRealtime()
             val request = YoutubeDLRequest(url)
             addBaseNetworkOptions(request)
+            request.addOption("--dump-single-json")
+            request.addOption("--skip-download")
             request.addOption("--no-playlist")
-            request.addOption("-f", REMOTE_PLAYBACK_FORMAT)
-            request.addOption("--get-url")
+            request.addOption("-f", AUDIO_FORMAT_SELECTOR)
             val response = YoutubeDL.getInstance().execute(request)
-            Log.i(TAG, "getPlaybackInfo --get-url completed in ${SystemClock.elapsedRealtime() - startedAt}ms")
-            val streamUrl = response.out
-                .lineSequence()
-                .map { it.trim() }
-                .firstOrNull { it.startsWith("http") }
+            Log.i(
+                TAG,
+                "getPlaybackInfo JSON completed in ${SystemClock.elapsedRealtime() - startedAt}ms",
+            )
+            val info = JSONObject(response.out)
+            val selectedFormat = selectedPlaybackFormat(info)
+            val streamUrl = selectedFormat.nonBlankString("url")
                 ?: throw IllegalStateException("No se encontro una URL reproducible.")
-
+            val httpHeaders = (
+                selectedFormat.optJSONObject("http_headers")
+                    ?: info.optJSONObject("http_headers")
+                )?.toMap()
+            val semanticTitle = info.nonBlankString("track")
+                ?: info.nonBlankString("title")
             mapOf(
-                "webpage_url" to url,
-                "original_url" to url,
+                "id" to info.nonBlankString("id"),
+                "title" to semanticTitle,
+                "track" to info.nonBlankString("track"),
+                "artist" to info.nonBlankString("artist"),
+                "artists" to (
+                    info.optJSONArray("artists")?.toList()
+                        ?: info.nonBlankString("artists")
+                    ),
+                "creator" to info.nonBlankString("creator"),
+                "uploader" to info.nonBlankString("uploader"),
+                "channel" to info.nonBlankString("channel"),
+                "webpage_url" to (info.nonBlankString("webpage_url") ?: url),
+                "original_url" to (info.nonBlankString("original_url") ?: url),
                 "url" to url,
                 "streamUrl" to streamUrl,
+                "thumbnail" to info.nonBlankString("thumbnail"),
+                "duration" to info.opt("duration").takeUnless { it == JSONObject.NULL },
+                "extractor" to info.nonBlankString("extractor"),
+                "extractor_key" to info.nonBlankString("extractor_key"),
+                "album" to info.nonBlankString("album"),
+                "view_count" to info.opt("view_count").takeUnless { it == JSONObject.NULL },
+                "http_headers" to httpHeaders,
             )
         }
+    }
+
+    private fun selectedPlaybackFormat(info: JSONObject): JSONObject {
+        for (key in listOf("requested_downloads", "requested_formats")) {
+            val formats = info.optJSONArray(key) ?: continue
+            for (index in 0 until formats.length()) {
+                val format = formats.optJSONObject(index) ?: continue
+                if (format.nonBlankString("url")?.startsWith("http") == true) {
+                    return format
+                }
+            }
+        }
+
+        if (info.nonBlankString("url")?.startsWith("http") == true) {
+            return info
+        }
+        return info
+    }
+
+    private fun JSONObject.nonBlankString(key: String): String? {
+        val value = opt(key)
+        if (value == null || value == JSONObject.NULL) {
+            return null
+        }
+        return value.toString().trim().takeIf { it.isNotEmpty() }
     }
 
     private fun executeSearchRequest(query: String): List<Map<String, Any?>> {
@@ -249,23 +294,14 @@ class MainActivity : AudioServiceActivity() {
     private fun downloadAudio(call: MethodCall, result: MethodChannel.Result) {
         val url = call.requiredString("url")
         val path = call.requiredString("path")
-        val quality = call.argument<String>("quality") ?: "0"
-        val audioFormat = call.argument<String>("audioFormat") ?: "mp3"
-        val embedMetadata = call.argument<Boolean>("embedMetadata") ?: true
         val restrictFileNames = call.argument<Boolean>("restrictFileNames") ?: true
 
         runAsync(result) {
             ensureYoutubeDlInitialized()
-            if (embedMetadata) {
-                ensureFfmpegInitialized()
-            }
             executeAudioDownload(
                 call = call,
                 url = url,
                 path = path,
-                quality = quality,
-                audioFormat = audioFormat,
-                embedMetadata = embedMetadata,
                 restrictFileNames = restrictFileNames,
             )
         }
@@ -275,16 +311,16 @@ class MainActivity : AudioServiceActivity() {
         call: MethodCall,
         url: String,
         path: String,
-        quality: String,
-        audioFormat: String,
-        embedMetadata: Boolean,
         restrictFileNames: Boolean,
     ): Map<String, Any?> {
+        val eventTaskId = call.argument<String>("taskId")
+            ?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString()
         return executeWithExtractorRetry(
             operation = "downloadAudio",
             onRetry = {
                 emitProgress(
-                    UUID.randomUUID().toString(),
+                    eventTaskId,
                     url,
                     "running",
                     0.03f,
@@ -298,13 +334,11 @@ class MainActivity : AudioServiceActivity() {
                     call = call,
                     url = url,
                     path = path,
-                    quality = quality,
-                    audioFormat = audioFormat,
-                    embedMetadata = embedMetadata,
                     restrictFileNames = restrictFileNames,
                 ),
                 url,
                 path,
+                eventTaskId,
             )
         }
     }
@@ -313,22 +347,10 @@ class MainActivity : AudioServiceActivity() {
         call: MethodCall,
         url: String,
         path: String,
-        quality: String,
-        audioFormat: String,
-        embedMetadata: Boolean,
         restrictFileNames: Boolean,
     ): YoutubeDLRequest {
         val request = baseDownloadRequest(call, url, path, restrictFileNames)
-        if (!embedMetadata) {
-            request.addOption("-f", REMOTE_PLAYBACK_FORMAT)
-            return request
-        }
-
-        request.addOption("-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best")
-        request.addOption("-x")
-        request.addOption("--audio-format", audioFormat)
-        request.addOption("--audio-quality", quality)
-        request.addOption("--embed-metadata")
+        request.addOption("-f", AUDIO_FORMAT_SELECTOR)
         return request
     }
 
@@ -348,7 +370,12 @@ class MainActivity : AudioServiceActivity() {
         }
         request.addOption("--newline")
         request.addOption("--no-playlist")
+        request.addOption("--fixup", "never")
+        request.addOption("--downloader", "native")
         addBaseNetworkOptions(request)
+        request.addOption("--progress")
+        request.addOption("--progress-template", PROGRESS_TEMPLATE)
+        request.addOption("--progress-delta", "0.2")
         request.addOption("--print", "after_move:filepath")
         if (restrictFileNames) {
             request.addOption("--restrict-filenames")
@@ -361,29 +388,73 @@ class MainActivity : AudioServiceActivity() {
         request: YoutubeDLRequest,
         url: String,
         path: String,
+        eventTaskId: String,
     ): Map<String, Any?> {
-        val taskId = UUID.randomUUID().toString()
-        emitProgress(taskId, url, "queued", 0f, "Preparando descarga", null)
+        val executionTaskId = UUID.randomUUID().toString()
+        emitProgress(eventTaskId, url, "queued", 0f, "Preparando descarga", null)
 
-        val response = YoutubeDL.getInstance().execute(request, taskId) { progress, eta, line ->
-            val normalizedProgress = if (progress in 0f..100f) {
+        val response = YoutubeDL.getInstance().execute(request, executionTaskId) { progress, eta, line ->
+            val parsed = parseDownloadProgressLine(line)
+            val normalizedProgress = parsed?.progress ?: if (progress in 0f..100f) {
                 (progress / 100f).coerceAtMost(0.98f)
             } else {
                 null
             }
-            emitProgress(taskId, url, "running", normalizedProgress, line, eta)
+            val etaSeconds = parsed?.etaSeconds ?: eta.takeIf { it >= 0L }
+            val message = normalizedProgress?.let {
+                "Descargando ${String.format("%.1f", it * 100f)}%"
+            } ?: line
+            emitProgress(eventTaskId, url, "running", normalizedProgress, message, etaSeconds)
             Unit
         }
 
         val filePath = response.out
             .lineSequence()
             .map { it.trim() }
-            .lastOrNull { isExistingAudioFile(it) }
+            .lastOrNull { isExistingDownloadedFile(it) }
             ?: newestAudioFile(path)
             ?: throw IllegalStateException("La descarga termino sin un archivo de audio valido.")
 
-        emitProgress(taskId, url, "completed", 1f, "Descarga completada", null)
+        emitProgress(eventTaskId, url, "completed", 1f, "Descarga completada", null)
         return mapOf("filePath" to filePath)
+    }
+
+    private fun parseDownloadProgressLine(line: String): DownloadProgressSample? {
+        val structured = STRUCTURED_PROGRESS_REGEX.find(line)
+        if (structured != null) {
+            val rawProgress = structured.groupValues[1].toFloatOrNull() ?: return null
+            val rawEta = structured.groupValues[2].trim()
+            val etaSeconds = rawEta.toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it >= 0.0 }
+                ?.toLong()
+            return DownloadProgressSample(
+                progress = (rawProgress / 100f).coerceIn(0f, 0.98f),
+                etaSeconds = etaSeconds,
+            )
+        }
+
+        val standard = STANDARD_PROGRESS_REGEX.find(line) ?: return null
+        val rawProgress = standard.groupValues[1].toFloatOrNull() ?: return null
+        val etaSeconds = STANDARD_ETA_REGEX.find(line)
+            ?.groupValues
+            ?.get(1)
+            ?.let(::parseEtaSeconds)
+        return DownloadProgressSample(
+            progress = (rawProgress / 100f).coerceIn(0f, 0.98f),
+            etaSeconds = etaSeconds,
+        )
+    }
+
+    private fun parseEtaSeconds(value: String): Long? {
+        val parts = value.split(':').map { it.toLongOrNull() }
+        if (parts.any { it == null }) {
+            return null
+        }
+        return when (parts.size) {
+            2 -> parts[0]!! * 60L + parts[1]!!
+            3 -> parts[0]!! * 3600L + parts[1]!! * 60L + parts[2]!!
+            else -> null
+        }
     }
 
     private fun newestAudioFile(path: String): String? {
@@ -394,12 +465,12 @@ class MainActivity : AudioServiceActivity() {
             ?.absolutePath
     }
 
-    private fun isExistingAudioFile(path: String): Boolean {
+    private fun isExistingDownloadedFile(path: String): Boolean {
         if (path.isBlank()) {
             return false
         }
         val file = File(path)
-        return file.exists() && file.isFile && isAudioExtension(file.extension)
+        return file.exists() && file.isFile
     }
 
     private fun isAudioExtension(extension: String): Boolean {
@@ -415,45 +486,23 @@ class MainActivity : AudioServiceActivity() {
         youtubeDlInitialized = true
     }
 
-    @Synchronized
-    private fun ensureFfmpegInitialized() {
-        if (ffmpegInitialized) {
-            return
-        }
-        FFmpeg.getInstance().init(applicationContext)
-        ffmpegInitialized = true
-    }
-
-    private fun startBackgroundUpdate() {
+    private fun updateYoutubeDlBlocking(): Boolean {
         synchronized(updateLock) {
-            if (updateStarted || updateRunning || updateCompleted) {
-                return
-            }
-            updateStarted = true
-        }
-        thread(name = "BStreamYtdlUpdate") {
-            updateYoutubeDlBlocking(force = false)
-        }
-    }
-
-    private fun updateYoutubeDlBlocking(force: Boolean): Boolean {
-        synchronized(updateLock) {
-            if (!force && updateCompleted) {
+            if (updateCompleted) {
                 return true
             }
             while (updateRunning) {
                 updateLock.wait()
-                if (!force && updateCompleted) {
+                if (updateCompleted) {
                     return true
                 }
             }
             updateRunning = true
-            updateStarted = true
         }
 
         return try {
             val status = YoutubeDL.getInstance()
-                .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
+                .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
             Log.i(TAG, "yt-dlp update status: $status")
             synchronized(updateLock) {
                 updateCompleted = true
@@ -471,6 +520,7 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun addBaseNetworkOptions(request: YoutubeDLRequest) {
+        request.addOption("--ignore-config")
         request.addOption("--no-warnings")
         request.addOption("--socket-timeout", "20")
     }
@@ -482,17 +532,34 @@ class MainActivity : AudioServiceActivity() {
     ): T {
         return try {
             block()
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
+            if (!shouldRetryAfterExtractorUpdate(error)) {
+                throw error
+            }
             Log.w(TAG, "Retrying $operation after yt-dlp update", error)
             onRetry?.invoke()
-            updateYoutubeDlBlocking(force = true)
+            if (!updateYoutubeDlBlocking()) {
+                throw error
+            }
             try {
                 block()
-            } catch (retryError: Throwable) {
+            } catch (retryError: Exception) {
                 retryError.addSuppressed(error)
                 throw retryError
             }
         }
+    }
+
+    private fun shouldRetryAfterExtractorUpdate(error: Throwable): Boolean {
+        val details = generateSequence(error) { it.cause }
+            .take(6)
+            .joinToString(" ") { it.message.orEmpty() }
+            .lowercase()
+
+        if (DEFINITIVE_EXTRACTION_ERRORS.any(details::contains)) {
+            return false
+        }
+        return RECOVERABLE_EXTRACTOR_ERRORS.any(details::contains)
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -632,11 +699,61 @@ class MainActivity : AudioServiceActivity() {
         private const val TAG = "BStreamYtdl"
         private const val PROGRESS_MIN_INTERVAL_MS = 200L
         private const val PROGRESS_MIN_DELTA = 0.01f
-        private const val REMOTE_PLAYBACK_FORMAT =
-            "139/bestaudio[ext=m4a][abr<=96]/bestaudio[ext=m4a][abr<=128]/140/bestaudio[ext=m4a]/bestaudio[abr<=96]/bestaudio[abr<=128]/worstaudio/bestaudio/best"
+        private const val PROGRESS_TEMPLATE =
+            "download:BSTREAM_PROGRESS|%(progress._percent_str)s|%(progress.eta)s"
+        private const val AUDIO_FORMAT_SELECTOR =
+            "bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[acodec^=mp4a]/bestaudio[acodec^=aac]/bestaudio"
+        private val STRUCTURED_PROGRESS_REGEX =
+            Regex("""BSTREAM_PROGRESS\|\s*~?\s*([0-9]+(?:\.[0-9]+)?)%\|([^|\r\n]*)""")
+        private val STANDARD_PROGRESS_REGEX =
+            Regex("""\[download]\s+([0-9]+(?:\.[0-9]+)?)%""")
+        private val STANDARD_ETA_REGEX =
+            Regex("""ETA\s+((?:[0-9]+:)?[0-9]{1,2}:[0-9]{2})""")
+        private val DEFINITIVE_EXTRACTION_ERRORS = listOf(
+            "private video",
+            "video unavailable",
+            "this video is unavailable",
+            "has been removed",
+            "no longer available",
+            "copyright",
+            "not available in your country",
+            "geo-restricted",
+            "geo restricted",
+            "login required",
+            "sign in to confirm",
+            "confirm you're not a bot",
+            "members-only",
+            "members only",
+            "drm protected",
+            "not a valid url",
+        )
+        private val RECOVERABLE_EXTRACTOR_ERRORS = listOf(
+            "no se encontro una url reproducible",
+            "unable to extract",
+            "failed to extract",
+            "extractor error",
+            "signature",
+            "nsig",
+            "javascript runtime",
+            "challenge",
+            "no video formats",
+            "requested format is not available",
+            "http error 403",
+            "forbidden",
+        )
         private val AUDIO_EXTENSIONS = setOf(
+            "aiff",
+            "alac",
+            "oga",
+            "vorbis",
+            "weba",
+            "wma",
             "mp3",
             "m4a",
+            "m4b",
+            "mp4",
+            "webm",
+            "mka",
             "opus",
             "flac",
             "aac",
@@ -649,5 +766,10 @@ class MainActivity : AudioServiceActivity() {
         val emittedAt: Long,
         val progress: Float?,
         val status: String,
+    )
+
+    private data class DownloadProgressSample(
+        val progress: Float,
+        val etaSeconds: Long?,
     )
 }

@@ -19,6 +19,10 @@ class LocalMusicDataSource {
     return _databaseService.deleteLocalTrack(trackId);
   }
 
+  Future<Set<String>> purgeMissingLocalTracks(List<LocalTrack> tracks) {
+    return _databaseService.purgeMissingLocalTracks(tracks);
+  }
+
   Future<void> markPlayed(String trackId, DateTime playedAt) {
     return _databaseService.markPlayed(trackId, playedAt);
   }

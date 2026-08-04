@@ -49,6 +49,21 @@ class _HomePageState extends ConsumerState<HomePage> {
         ref.read(settingsControllerProvider.future),
       ]).catchError((_) => <Object?>[]),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_reconcileLocalLibrary());
+      }
+    });
+  }
+
+  Future<void> _reconcileLocalLibrary() async {
+    try {
+      await ref.read(localLibraryReconciliationProvider.future);
+    } catch (error, stackTrace) {
+      // A background catalog cleanup must never prevent the app from opening.
+      debugPrint('Local library reconciliation failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
   }
 
   bool get _usesAndroidNavigation =>

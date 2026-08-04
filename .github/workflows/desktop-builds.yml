@@ -16,11 +16,15 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.44.0"
-  FFMPEG_STATIC_VERSION: "5.3.0"
   YT_DLP_VERSION: "2026.07.04"
   YT_DLP_WINDOWS_SHA256: "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8"
   YT_DLP_LINUX_X64_SHA256: "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae"
   YT_DLP_MACOS_SHA256: "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
+  DENO_VERSION: "2.9.4"
+  DENO_WINDOWS_X64_SHA256: "68ed08b05c56cf887e9aa509947dc3f468f7e12f47a13e5c1abd51d46d1453ef"
+  DENO_LINUX_X64_SHA256: "c24f955d9fbfe0ea5ae2b501c8e71ae76e31e4c9782390a54a284b3364fda725"
+  DENO_MACOS_X64_SHA256: "f757df6d3991e37601c69fad56c22b37c4ea77b5dcfad3636a642c2ba4c9b19f"
+  DENO_MACOS_ARM64_SHA256: "6d17647fdbf9c587a581dba205054c4ccf732dae0a196cc1e9b44c07589db412"
 
 jobs:
   metadata:
@@ -181,7 +185,7 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get
 
-      - name: Prepare yt-dlp and FFmpeg
+      - name: Prepare yt-dlp and Deno
         shell: pwsh
         run: |
           $tools = Join-Path $PWD "windows/tools"
@@ -197,17 +201,32 @@ jobs:
             throw "yt-dlp.exe checksum mismatch: $ytDlpHash"
           }
 
-          $npmDir = Join-Path $env:RUNNER_TEMP "bstream-ffmpeg-static"
-          New-Item -ItemType Directory -Force -Path $npmDir | Out-Null
-          Push-Location $npmDir
-          npm init --yes | Out-Null
-          npm install --no-save "ffmpeg-static@$env:FFMPEG_STATIC_VERSION"
-          $ffmpeg = node -p "require('ffmpeg-static')"
-          Pop-Location
-          Copy-Item -LiteralPath $ffmpeg -Destination (Join-Path $tools "ffmpeg.exe")
+          $denoArchive = Join-Path $env:RUNNER_TEMP "deno-windows-x64.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/denoland/deno/releases/download/v$env:DENO_VERSION/deno-x86_64-pc-windows-msvc.zip" `
+            -OutFile $denoArchive
 
-          & (Join-Path $tools "yt-dlp.exe") --version
-          & (Join-Path $tools "ffmpeg.exe") -version
+          $denoHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $denoArchive).Hash.ToLowerInvariant()
+          if ($denoHash -ne $env:DENO_WINDOWS_X64_SHA256) {
+            throw "Deno archive checksum mismatch: $denoHash"
+          }
+
+          Expand-Archive -LiteralPath $denoArchive -DestinationPath $tools -Force
+          $deno = Join-Path $tools "deno.exe"
+          if (!(Test-Path -LiteralPath $deno)) {
+            throw "Deno executable was not extracted."
+          }
+
+          & $deno --version
+          if ($LASTEXITCODE -ne 0) { throw "Deno could not start: $LASTEXITCODE" }
+          & $deno eval 'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
+          if ($LASTEXITCODE -ne 0) { throw "Deno could not execute JavaScript: $LASTEXITCODE" }
+          & (Join-Path $tools "yt-dlp.exe") `
+            --ignore-config `
+            --js-runtimes "deno:$deno" `
+            --js-runtimes node `
+            --version
+          if ($LASTEXITCODE -ne 0) { throw "yt-dlp rejected Deno: $LASTEXITCODE" }
 
       - name: Build portable TikTok LIVE bridge
         shell: pwsh
@@ -255,7 +274,7 @@ jobs:
           $required = @(
             (Join-Path $bundle "bstream_music.exe"),
             (Join-Path $bundle "tools/yt-dlp.exe"),
-            (Join-Path $bundle "tools/ffmpeg.exe"),
+            (Join-Path $bundle "tools/deno.exe"),
             (Join-Path $bundle "tools/tiktok-live-bridge/tiktok_live_bridge.exe"),
             (Join-Path $bundle "msvcp140.dll"),
             (Join-Path $bundle "vcruntime140.dll"),
@@ -266,6 +285,18 @@ jobs:
               throw "Required Windows bundle file is missing: $path"
             }
           }
+
+          $bundledDeno = Join-Path $bundle "tools/deno.exe"
+          & $bundledDeno --version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled Deno could not start: $LASTEXITCODE" }
+          & $bundledDeno eval 'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
+          if ($LASTEXITCODE -ne 0) { throw "Bundled Deno could not execute JavaScript: $LASTEXITCODE" }
+          & (Join-Path $bundle "tools/yt-dlp.exe") `
+            --ignore-config `
+            --js-runtimes "deno:$bundledDeno" `
+            --js-runtimes node `
+            --version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled yt-dlp rejected Deno: $LASTEXITCODE" }
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -300,7 +331,7 @@ jobs:
           $required = @(
             (Join-Path $installDir "bstream_music.exe"),
             (Join-Path $installDir "tools/yt-dlp.exe"),
-            (Join-Path $installDir "tools/ffmpeg.exe"),
+            (Join-Path $installDir "tools/deno.exe"),
             (Join-Path $installDir "tools/tiktok-live-bridge/tiktok_live_bridge.exe"),
             (Join-Path $installDir "msvcp140.dll"),
             (Join-Path $installDir "vcruntime140.dll"),
@@ -311,6 +342,18 @@ jobs:
               throw "Installed file is missing: $path"
             }
           }
+
+          $installedDeno = Join-Path $installDir "tools/deno.exe"
+          & $installedDeno --version
+          if ($LASTEXITCODE -ne 0) { throw "Installed Deno could not start: $LASTEXITCODE" }
+          & $installedDeno eval 'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
+          if ($LASTEXITCODE -ne 0) { throw "Installed Deno could not execute JavaScript: $LASTEXITCODE" }
+          & (Join-Path $installDir "tools/yt-dlp.exe") `
+            --ignore-config `
+            --js-runtimes "deno:$installedDeno" `
+            --js-runtimes node `
+            --version
+          if ($LASTEXITCODE -ne 0) { throw "Installed yt-dlp rejected Deno: $LASTEXITCODE" }
 
           $uninstaller = Join-Path $installDir "unins000.exe"
           $uninstall = Start-Process `
@@ -355,7 +398,8 @@ jobs:
             libsqlite3-dev \
             libmpv-dev \
             desktop-file-utils \
-            rpm
+            rpm \
+            unzip
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -367,7 +411,7 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get
 
-      - name: Prepare yt-dlp and FFmpeg
+      - name: Prepare yt-dlp and Deno
         shell: bash
         run: |
           set -euo pipefail
@@ -381,19 +425,25 @@ jobs:
           echo "$YT_DLP_LINUX_X64_SHA256  $tools/yt-dlp" \
             | sha256sum --check -
 
-          npm_dir="$RUNNER_TEMP/bstream-ffmpeg-static"
-          mkdir -p "$npm_dir"
-          (
-            cd "$npm_dir"
-            npm init --yes >/dev/null
-            npm install --no-save "ffmpeg-static@$FFMPEG_STATIC_VERSION"
-          )
-          ffmpeg="$(cd "$npm_dir" && node -p "require('ffmpeg-static')")"
-          cp "$ffmpeg" "$tools/ffmpeg"
-          chmod 755 "$tools/yt-dlp" "$tools/ffmpeg"
+          deno_archive="$RUNNER_TEMP/deno-linux-x64.zip"
+          curl --fail --location --retry 3 \
+            "https://github.com/denoland/deno/releases/download/v$DENO_VERSION/deno-x86_64-unknown-linux-gnu.zip" \
+            --output "$deno_archive"
 
-          "$tools/yt-dlp" --version
-          "$tools/ffmpeg" -version
+          echo "$DENO_LINUX_X64_SHA256  $deno_archive" \
+            | sha256sum --check -
+
+          unzip -o "$deno_archive" -d "$tools"
+          chmod 755 "$tools/yt-dlp" "$tools/deno"
+
+          "$tools/deno" --version
+          "$tools/deno" eval \
+            'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
+          "$tools/yt-dlp" \
+            --ignore-config \
+            --js-runtimes "deno:$tools/deno" \
+            --js-runtimes node \
+            --version
 
       - name: Build Linux release
         run: flutter build linux --release
@@ -405,7 +455,15 @@ jobs:
           bundle="$PWD/build/linux/x64/release/bundle"
           test -x "$bundle/bstream_music"
           test -x "$bundle/tools/yt-dlp"
-          test -x "$bundle/tools/ffmpeg"
+          test -x "$bundle/tools/deno"
+          "$bundle/tools/deno" --version
+          "$bundle/tools/deno" eval \
+            'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
+          "$bundle/tools/yt-dlp" \
+            --ignore-config \
+            --js-runtimes "deno:$bundle/tools/deno" \
+            --js-runtimes node \
+            --version
           desktop-file-validate packaging/linux/com.bstream.bstream_music.desktop
 
           missing=0
@@ -489,7 +547,7 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get
 
-      - name: Prepare yt-dlp and FFmpeg
+      - name: Prepare yt-dlp and Deno
         shell: bash
         run: |
           set -euo pipefail
@@ -503,20 +561,39 @@ jobs:
           echo "$YT_DLP_MACOS_SHA256  $tools/yt-dlp" \
             | shasum -a 256 --check
 
-          npm_dir="$RUNNER_TEMP/bstream-ffmpeg-static"
-          mkdir -p "$npm_dir"
-          (
-            cd "$npm_dir"
-            npm init --yes >/dev/null
-            npm install --no-save "ffmpeg-static@$FFMPEG_STATIC_VERSION"
-          )
-          ffmpeg="$(cd "$npm_dir" && node -p "require('ffmpeg-static')")"
-          cp "$ffmpeg" "$tools/ffmpeg"
-          chmod 755 "$tools/yt-dlp" "$tools/ffmpeg"
+          case "${{ matrix.host_arch }}" in
+            arm64)
+              deno_target="aarch64-apple-darwin"
+              deno_sha256="$DENO_MACOS_ARM64_SHA256"
+              ;;
+            x86_64)
+              deno_target="x86_64-apple-darwin"
+              deno_sha256="$DENO_MACOS_X64_SHA256"
+              ;;
+            *)
+              echo "Unsupported Deno architecture: ${{ matrix.host_arch }}" >&2
+              exit 1
+              ;;
+          esac
+
+          deno_archive="$RUNNER_TEMP/deno-$deno_target.zip"
+          curl --fail --location --retry 3 \
+            "https://github.com/denoland/deno/releases/download/v$DENO_VERSION/deno-$deno_target.zip" \
+            --output "$deno_archive"
+
+          echo "$deno_sha256  $deno_archive" | shasum -a 256 --check
+          /usr/bin/ditto -x -k "$deno_archive" "$tools"
+          chmod 755 "$tools/yt-dlp" "$tools/deno"
 
           codesign --verify --strict --verbose=2 "$tools/yt-dlp"
-          "$tools/yt-dlp" --version
-          "$tools/ffmpeg" -version
+          "$tools/deno" --version
+          "$tools/deno" eval \
+            'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
+          "$tools/yt-dlp" \
+            --ignore-config \
+            --js-runtimes "deno:$tools/deno" \
+            --js-runtimes node \
+            --version
 
       - name: Build macOS release
         run: flutter build macos --release
@@ -584,11 +661,11 @@ jobs:
           bundled_tools="$app/Contents/Resources/tools"
           test -x "$executable"
           test -x "$bundled_tools/yt-dlp"
-          test -x "$bundled_tools/ffmpeg"
+          test -x "$bundled_tools/deno"
 
           lipo "$executable" -verify_arch "${{ matrix.host_arch }}"
           lipo "$bundled_tools/yt-dlp" -verify_arch "${{ matrix.host_arch }}"
-          lipo "$bundled_tools/ffmpeg" -verify_arch "${{ matrix.host_arch }}"
+          lipo "$bundled_tools/deno" -verify_arch "${{ matrix.host_arch }}"
 
           payload="$RUNNER_TEMP/bstream-pkg-root"
           staged_app="$payload/Applications/BStream Music.app"
@@ -619,7 +696,7 @@ jobs:
             "BStream Music.app/Contents/Resources/tools/yt-dlp" \
             "$payload_files"
           grep -Fq \
-            "BStream Music.app/Contents/Resources/tools/ffmpeg" \
+            "BStream Music.app/Contents/Resources/tools/deno" \
             "$payload_files"
 
           expanded_package="$RUNNER_TEMP/bstream-expanded-pkg"

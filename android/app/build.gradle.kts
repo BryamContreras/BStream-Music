@@ -90,7 +90,6 @@ android {
         jniLibs {
             useLegacyPackaging = true
             keepDebugSymbols += listOf(
-                "**/libffmpeg.zip.so",
                 "**/libpython.zip.so",
             )
         }
@@ -111,5 +110,4 @@ dependencies {
     val youtubedlAndroid = "0.18.1"
 
     implementation("io.github.junkfood02.youtubedl-android:library:$youtubedlAndroid")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$youtubedlAndroid")
 }

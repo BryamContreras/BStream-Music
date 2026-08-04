@@ -1,13 +1,14 @@
 # Linux tools
 
-Release bundles expect executable copies of:
+Release bundles require executable copies of:
 
 - `yt-dlp` (or `yt-dlp_linux`)
-- `ffmpeg` (or `ffmpeg/bin/ffmpeg`)
+- `deno` (Deno 2.3 or newer)
 
-Place verified x86_64 Linux binaries in this directory before building. CMake
-copies the complete `tools` directory next to `bstream_music`, and the desktop
-downloader resolves FFmpeg only from that bundled location.
+Place verified x86_64 Linux binaries in this directory before building. Deno is
+passed explicitly to `yt-dlp` to solve YouTube JavaScript challenges. CMake
+copies the complete `tools` directory next to `bstream_music`.
 
 GitHub Actions provisions both tools automatically. The binaries are excluded
-from Git and are published only inside generated workflow artifacts.
+from Git and are published only inside generated workflow artifacts. Release
+builds currently pin and checksum Deno 2.9.4.

@@ -5,6 +5,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import 'core/constants/app_constants.dart';
 import 'core/platform/app_platform.dart';
+import 'core/theme/app_colors.dart';
 import 'features/music/presentation/pages/home_page.dart';
 import 'features/music/presentation/providers/music_providers.dart';
 
@@ -14,7 +15,7 @@ Future<void> main() async {
     await JustAudioBackground.init(
       androidNotificationChannelId: 'com.bstream.bstream_music.audio',
       androidNotificationChannelName: 'BStream Music',
-      notificationColor: const Color(0xFF18C75A),
+      notificationColor: AppColors.brandGreen,
       // Android/Samsung media surfaces expect a monochrome notification mask.
       androidNotificationIcon: 'drawable/ic_stat_bstream_music',
       androidNotificationOngoing: true,
@@ -29,7 +30,10 @@ class BStreamMusicApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    const seed = Color(0xFF18C75A);
+    const seed = AppColors.brandGreen;
+    // Keep the per-track lyrics offset synchronized even while its route is
+    // closed, without rebuilding the app when the offset itself changes.
+    ref.watch(lyricsOffsetControllerProvider.select((_) => null));
     final language =
         ref.watch(settingsControllerProvider).value?.language ??
         AppLanguage.spanish;
@@ -88,7 +92,18 @@ class BStreamMusicApp extends ConsumerWidget {
           ),
         ),
         popupMenuTheme: PopupMenuThemeData(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          color: AppColors.menuBackground,
+          surfaceTintColor: Colors.transparent,
+          shadowColor: const Color(0xB3000000),
+          elevation: 14,
+          textStyle: const TextStyle(
+            color: AppColors.menuForeground,
+            fontWeight: FontWeight.w600,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: const BorderSide(color: AppColors.menuBorder),
+          ),
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,

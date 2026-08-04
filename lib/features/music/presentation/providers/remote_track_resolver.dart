@@ -44,6 +44,7 @@ class RemoteTrackResolver {
   Future<TrackInfo> resolve(
     TrackInfo track, {
     bool forceRefresh = false,
+    bool allowStaleStreamFallback = true,
   }) async {
     final key = _cacheKey(track);
     if (key.isEmpty) {
@@ -57,7 +58,11 @@ class RemoteTrackResolver {
       return cached.future.then((resolved) => _mergeTrackInfo(track, resolved));
     }
 
-    final future = _resolveAndCache(track, key);
+    final future = _resolveAndCache(
+      track,
+      key,
+      allowStaleStreamFallback: allowStaleStreamFallback,
+    );
 
     _entries[key] = _TrackResolutionEntry(future);
     return future;
@@ -74,7 +79,11 @@ class RemoteTrackResolver {
     return track.id;
   }
 
-  Future<TrackInfo> _resolveAndCache(TrackInfo track, String key) async {
+  Future<TrackInfo> _resolveAndCache(
+    TrackInfo track,
+    String key, {
+    required bool allowStaleStreamFallback,
+  }) async {
     try {
       final resolver = AppPlatform.isAndroid
           ? _ref.read(getPlaybackInfoProvider).call
@@ -86,7 +95,10 @@ class RemoteTrackResolver {
       return resolved;
     } catch (_) {
       _entries.remove(key);
-      return track;
+      if (allowStaleStreamFallback && _hasPlayableStream(track)) {
+        return track;
+      }
+      rethrow;
     }
   }
 

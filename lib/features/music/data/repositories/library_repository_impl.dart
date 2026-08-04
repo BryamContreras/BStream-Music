@@ -24,6 +24,11 @@ class LibraryRepositoryImpl implements LibraryRepository {
   }
 
   @override
+  Future<Set<String>> purgeMissingLocalTracks(List<LocalTrack> tracks) {
+    return _localDataSource.purgeMissingLocalTracks(tracks);
+  }
+
+  @override
   Future<void> markPlayed(String trackId, DateTime playedAt) {
     return _localDataSource.markPlayed(trackId, playedAt);
   }

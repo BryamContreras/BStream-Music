@@ -11,6 +11,7 @@ app_bundle="$1"
 signing_identity="${2:--}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 entitlements="${3:-$script_dir/Runner/Release.entitlements}"
+deno_entitlements="$script_dir/Runner/Deno.entitlements"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This script must run on macOS." >&2
@@ -24,6 +25,11 @@ fi
 
 if [[ ! -f "$entitlements" ]]; then
   echo "Missing entitlements file: $entitlements" >&2
+  exit 66
+fi
+
+if [[ ! -f "$deno_entitlements" ]]; then
+  echo "Missing Deno entitlements file: $deno_entitlements" >&2
   exit 66
 fi
 
@@ -47,6 +53,17 @@ sign_macho_files() {
       # validation. Preserve and validate the complete upstream executable.
       if [[ "$candidate" == "$preserved_yt_dlp" ]]; then
         /usr/bin/codesign --verify --strict --verbose=2 "$candidate"
+        continue
+      fi
+
+      if [[ "$candidate" == "$app_bundle/Contents/Resources/tools/deno" ]]; then
+        /usr/bin/codesign \
+          --force \
+          --options runtime \
+          --entitlements "$deno_entitlements" \
+          --sign "$signing_identity" \
+          "${timestamp_args[@]}" \
+          "$candidate"
         continue
       fi
 

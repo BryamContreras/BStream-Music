@@ -125,7 +125,11 @@ if(EXISTS "${BSTREAM_TOOLS_DIR}")
   install(DIRECTORY "${BSTREAM_TOOLS_DIR}"
     DESTINATION "${CMAKE_INSTALL_PREFIX}"
     USE_SOURCE_PERMISSIONS
-    COMPONENT Runtime)
+    COMPONENT Runtime
+    PATTERN "ffmpeg*" EXCLUDE
+    PATTERN "FFmpeg*" EXCLUDE
+    PATTERN "ffprobe*" EXCLUDE
+    PATTERN "FFprobe*" EXCLUDE)
 endif()
 
 # Copy the native assets provided by the build.dart from all packages.

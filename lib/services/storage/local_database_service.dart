@@ -134,6 +134,62 @@ class LocalDatabaseService {
     await db.delete('local_tracks', where: 'id = ?', whereArgs: [trackId]);
   }
 
+  Future<Set<String>> purgeMissingLocalTracks(List<LocalTrack> tracks) async {
+    final candidates = <String, String>{};
+    for (final track in tracks) {
+      final id = track.id.trim();
+      final filePath = track.filePath.trim();
+      if (id.isNotEmpty && filePath.isNotEmpty) {
+        candidates[id] = filePath;
+      }
+    }
+    if (candidates.isEmpty) {
+      return const <String>{};
+    }
+
+    final db = await database;
+    return db.transaction((transaction) async {
+      final removedIds = <String>{};
+      for (final candidate in candidates.entries) {
+        final removed = await transaction.delete(
+          'local_tracks',
+          where: 'id = ? AND file_path = ?',
+          whereArgs: [candidate.key, candidate.value],
+        );
+        if (removed > 0) {
+          removedIds.add(candidate.key);
+        }
+      }
+      if (removedIds.isEmpty) {
+        return const <String>{};
+      }
+
+      final playlistRows = await transaction.query('playlists');
+      final batch = transaction.batch();
+      for (final row in playlistRows) {
+        final playlist = PlaylistModel.fromMap(row);
+        final remainingTrackIds = playlist.trackIds
+            .where((id) => !removedIds.contains(id))
+            .toList(growable: false);
+        if (remainingTrackIds.length == playlist.trackIds.length) {
+          continue;
+        }
+
+        final encodedTrackIds = PlaylistModel.fromEntity(
+          playlist.copyWith(trackIds: remainingTrackIds),
+        ).toMap()['track_ids'];
+        batch.update(
+          'playlists',
+          {'track_ids': encodedTrackIds},
+          where: 'id = ?',
+          whereArgs: [playlist.id],
+        );
+      }
+      await batch.commit(noResult: true);
+      return Set<String>.unmodifiable(removedIds);
+    });
+  }
+
   Future<void> markPlayed(String trackId, DateTime playedAt) async {
     final db = await database;
     await db.update(

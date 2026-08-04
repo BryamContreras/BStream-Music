@@ -49,6 +49,23 @@ class JustAudioPlayerService implements PlayerService {
       };
       _emit(_snapshot.copyWith(status: status));
     });
+    _playbackEventSubscription = _player.playbackEventStream.listen(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        developer.log(
+          'remote playback failed',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        _emit(
+          _snapshot.copyWith(
+            status: PlayerStatus.failed,
+            errorMessage: error.toString(),
+          ),
+        );
+      },
+    );
     _sequenceStateSubscription = _player.sequenceStateStream.listen((state) {
       final tag = state.currentSource?.tag;
       if (tag is! MediaItem) {
@@ -91,6 +108,7 @@ class JustAudioPlayerService implements PlayerService {
   late final StreamSubscription<Duration?> _durationSubscription;
   late final StreamSubscription<double> _volumeSubscription;
   late final StreamSubscription<PlayerState> _stateSubscription;
+  late final StreamSubscription<PlaybackEvent> _playbackEventSubscription;
   late final StreamSubscription<SequenceState?> _sequenceStateSubscription;
 
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
@@ -122,6 +140,7 @@ class JustAudioPlayerService implements PlayerService {
         status: PlayerStatus.loading,
         title: track.title,
         artist: track.artist,
+        album: track.album,
         trackId: track.id.isEmpty ? track.url : track.id,
         sourceUrl: track.url,
         thumbnailUrl: track.thumbnailUrl,
@@ -149,12 +168,11 @@ class JustAudioPlayerService implements PlayerService {
       name: 'BStreamPlayback',
     );
     await _applyPlaybackOptions();
-    await _player.play();
+    _startPlayback();
     developer.log(
-      'play returned after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
+      'play requested after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
       name: 'BStreamPlayback',
     );
-    _emit(_snapshot.copyWith(status: PlayerStatus.playing));
   }
 
   @override
@@ -175,8 +193,7 @@ class JustAudioPlayerService implements PlayerService {
     );
     await _player.setAudioSource(_localAudioSource(track));
     await _applyPlaybackOptions();
-    await _player.play();
-    _emit(_snapshot.copyWith(status: PlayerStatus.playing));
+    _startPlayback();
   }
 
   @override
@@ -212,8 +229,7 @@ class JustAudioPlayerService implements PlayerService {
       _localQueueIds = queueIds;
     }
     await _applyPlaybackOptions();
-    await _player.play();
-    _emit(_snapshot.copyWith(status: PlayerStatus.playing));
+    _startPlayback();
   }
 
   @override
@@ -224,8 +240,7 @@ class JustAudioPlayerService implements PlayerService {
 
   @override
   Future<void> resume() async {
-    await _player.play();
-    _emit(_snapshot.copyWith(status: PlayerStatus.playing));
+    _startPlayback();
   }
 
   @override
@@ -270,6 +285,7 @@ class JustAudioPlayerService implements PlayerService {
     await _durationSubscription.cancel();
     await _volumeSubscription.cancel();
     await _stateSubscription.cancel();
+    await _playbackEventSubscription.cancel();
     await _sequenceStateSubscription.cancel();
     await _player.dispose();
     await _snapshotController.close();
@@ -321,6 +337,23 @@ class JustAudioPlayerService implements PlayerService {
   Future<void> _applyPlaybackOptions() async {
     await _player.setShuffleModeEnabled(_shuffleEnabled);
     await _player.setLoopMode(_loopMode);
+  }
+
+  void _startPlayback() {
+    // just_audio's play Future completes when playback is paused, stopped, or
+    // reaches the end. Awaiting it would keep playRemote/playLocal pending for
+    // the entire song and could overwrite a later completed state. Playback
+    // state and failures remain authoritative through the subscriptions above.
+    unawaited(
+      _player.play().catchError((Object error, StackTrace stackTrace) {
+        developer.log(
+          'play request failed',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }),
+    );
   }
 
   LoopMode get _loopMode {

@@ -20,6 +20,7 @@ import '../../../../services/downloader/android_downloader_service.dart';
 import '../../../../services/downloader/desktop_downloader_service.dart';
 import '../../../../services/downloader/downloader_service.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
+import '../../../../services/lyrics/lyrics_service.dart';
 import '../../../../services/media_session/desktop_media_session.dart';
 import '../../../../services/media_session/desktop_media_session_factory.dart';
 import '../../../../services/player/just_audio_player_service.dart';
@@ -27,6 +28,7 @@ import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
 import '../../../../services/storage/backup_service.dart';
 import '../../../../services/storage/local_database_service.dart';
+import '../../../../services/storage/local_library_reconciler.dart';
 import '../../data/datasources/local_music_datasource.dart';
 import '../../data/datasources/remote_music_datasource.dart';
 import '../../data/models/track_info_model.dart';
@@ -35,6 +37,7 @@ import '../../data/repositories/music_repository_impl.dart';
 import '../../domain/entities/download_options.dart';
 import '../../domain/entities/download_result.dart';
 import '../../domain/entities/local_track.dart';
+import '../../domain/entities/lyrics.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/track_info.dart';
 import '../../domain/repositories/library_repository.dart';
@@ -50,6 +53,7 @@ import '../../domain/usecases/search_tracks.dart';
 part 'app_strings.dart';
 part 'download_controller.dart';
 part 'local_track_download_helper.dart';
+part 'lyrics_offset_controller.dart';
 part 'player_controller.dart';
 part 'playlists_controller.dart';
 part 'remote_playback_cache.dart';
@@ -71,7 +75,7 @@ final downloaderServiceProvider = Provider<DownloaderService>((ref) {
   }
 
   throw const UnsupportedPlatformException(
-    'BStream Music soporta Android, Windows y macOS.',
+    'BStream Music soporta Android, Windows, Linux y macOS.',
   );
 });
 
@@ -86,6 +90,120 @@ final playerServiceProvider = Provider<PlayerService>((ref) {
   ref.onDispose(service.dispose);
   return service;
 });
+
+final lyricsServiceProvider = Provider<LyricsService>((ref) {
+  final service = LrclibLyricsService(
+    userAgent:
+        '${AppConstants.appName}/${AppConstants.appVersion} '
+        '(https://github.com/BryamContreras/BStream-Music)',
+    // This short cache exists only in RAM. It avoids querying LRCLIB again when
+    // returning to the lyrics screen and is discarded when the app closes.
+    cacheTtl: const Duration(minutes: 5),
+  );
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+final currentLyricsLookupProvider = playerControllerProvider.select((player) {
+  final snapshot = player.value;
+  final metadata = (
+    title: snapshot?.title,
+    artist: snapshot?.artist,
+    album: snapshot?.album,
+    duration: snapshot?.duration,
+    // A track id is stable when a remote stream URL is refreshed.
+    sourceId: snapshot?.trackId ?? snapshot?.sourceUrl,
+  );
+  final title = metadata.title?.trim();
+  if (title == null || title.isEmpty) {
+    return null;
+  }
+  return LyricsLookup(
+    title: title,
+    artist: metadata.artist?.trim() ?? '',
+    album: metadata.album?.trim(),
+    duration: metadata.duration,
+    sourceId: metadata.sourceId,
+  );
+});
+
+final currentPlaybackPositionProvider = playerControllerProvider.select(
+  (player) => player.value?.position ?? Duration.zero,
+);
+
+final lyricsProvider = FutureProvider.autoDispose
+    .family<LyricsDocument?, LyricsLookup>((ref, lookup) {
+      return ref.watch(lyricsServiceProvider).findLyrics(lookup);
+    });
+
+final similarLyricsProvider = FutureProvider.autoDispose
+    .family<List<LyricsCandidate>, LyricsLookup>((ref, lookup) {
+      return ref.watch(lyricsServiceProvider).findSimilarLyrics(lookup);
+    });
+
+typedef ManualLyricsSearch = ({String title, LyricsLookup context});
+
+final manualLyricsSearchProvider = FutureProvider.autoDispose
+    .family<List<LyricsCandidate>, ManualLyricsSearch>((ref, request) {
+      return ref
+          .watch(lyricsServiceProvider)
+          .searchLyricsByTitle(request.title, context: request.context);
+    });
+
+final _currentLyricsSelectionIdentityProvider = playerControllerProvider.select(
+  (player) {
+    final snapshot = player.value;
+    final title = snapshot?.title?.trim();
+    if (title == null || title.isEmpty) {
+      return null;
+    }
+    final sourceId = (snapshot?.trackId ?? snapshot?.sourceUrl)?.trim();
+    final artist = snapshot?.artist?.trim() ?? '';
+    if (sourceId != null && sourceId.isNotEmpty) {
+      return 'source:$sourceId';
+    }
+    return '${title.toLowerCase()}\u0000${artist.toLowerCase()}';
+  },
+);
+
+/// Keeps an explicitly chosen LRCLIB result only for the current song and
+/// only in memory. It survives closing/reopening the lyrics route, while a
+/// track change immediately discards it.
+final selectedLyricsControllerProvider =
+    NotifierProvider<SelectedLyricsController, LyricsDocument?>(
+      SelectedLyricsController.new,
+    );
+
+class SelectedLyricsController extends Notifier<LyricsDocument?> {
+  String? _lastIdentity;
+
+  @override
+  LyricsDocument? build() {
+    // Keep the identity provider alive even while the lyrics route is closed.
+    // Rebuilding this notifier through ref.watch can otherwise invalidate it
+    // lazily while LyricsPage itself is building, which Riverpod correctly
+    // rejects as a build-phase state change.
+    _lastIdentity = ref.read(_currentLyricsSelectionIdentityProvider);
+    ref.listen<String?>(_currentLyricsSelectionIdentityProvider, (_, next) {
+      // Loading/error snapshots may temporarily have no value while the same
+      // remote song is being refreshed. They must not discard the listener's
+      // manual choice; only another concrete track identity resets it.
+      if (next == null) {
+        return;
+      }
+      final previous = _lastIdentity;
+      _lastIdentity = next;
+      if (previous != next && state != null) {
+        state = null;
+      }
+    });
+    return null;
+  }
+
+  void select(LyricsDocument document) => state = document;
+
+  void clear() => state = null;
+}
 
 typedef DesktopMediaSessionFactory = DesktopMediaSession? Function();
 
@@ -225,6 +343,32 @@ final musicRepositoryProvider = Provider<MusicRepository>((ref) {
 final libraryRepositoryProvider = Provider<LibraryRepository>((ref) {
   return LibraryRepositoryImpl(ref.watch(localMusicDataSourceProvider));
 });
+
+final localTrackFileProbeProvider = Provider<LocalTrackFileProbe>((ref) {
+  return probeLocalTrackFile;
+});
+
+final localLibraryReconcilerProvider = Provider<LocalLibraryReconciler>((ref) {
+  return LocalLibraryReconciler(
+    ref.read(libraryRepositoryProvider),
+    ref.read(localTrackFileProbeProvider),
+  );
+});
+
+final localLibraryReconciliationProvider =
+    FutureProvider<LocalLibraryReconciliationResult>((ref) async {
+      // Android may migrate the managed media folder and rewrite stored paths
+      // while settings initialize. Never inspect the old paths before it ends.
+      await ref.read(settingsControllerProvider.future);
+      final result = await ref.read(localLibraryReconcilerProvider).reconcile();
+      if (result.changed) {
+        ref
+          ..invalidate(libraryTracksProvider)
+          ..invalidate(historyProvider)
+          ..invalidate(playlistsControllerProvider);
+      }
+      return result;
+    });
 
 final getTrackInfoProvider = Provider<GetTrackInfo>((ref) {
   return GetTrackInfo(ref.watch(musicRepositoryProvider));

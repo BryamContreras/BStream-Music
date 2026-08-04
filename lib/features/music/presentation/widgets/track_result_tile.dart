@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/download_result.dart';
@@ -140,30 +141,24 @@ class TrackResultTile extends ConsumerWidget {
         Theme.of(context).colorScheme.error,
         const Color(0xFFFFA2A2),
       ],
-      DownloadProgressStatus.completed => const [
-        Color(0xFF18C75A),
-        Color(0xFF5FA833),
-      ],
-      _ => const [Color(0xFF159071), Color(0xFF18C75A)],
+      DownloadProgressStatus.completed => AppColors.downloadGradient,
+      _ => AppColors.downloadGradient,
     };
   }
 
   double _visibleProgress(DownloadTaskState state) {
     return switch (state.status) {
-      DownloadProgressStatus.queued => 0.05,
-      DownloadProgressStatus.running => (state.progress ?? 0.08).clamp(
-        0.08,
-        0.98,
-      ),
+      DownloadProgressStatus.queued => 0,
+      DownloadProgressStatus.running => (state.progress ?? 0).clamp(0, 0.98),
       DownloadProgressStatus.completed => 1,
-      DownloadProgressStatus.failed => (state.progress ?? 1).clamp(0.08, 1),
+      DownloadProgressStatus.failed => (state.progress ?? 0).clamp(0, 1),
     };
   }
 
   bool _isIndeterminate(DownloadTaskState state) {
     return state.status == DownloadProgressStatus.queued ||
         (state.status == DownloadProgressStatus.running &&
-            (state.progress ?? 0) <= 0.02);
+            state.progress == null);
   }
 }
 

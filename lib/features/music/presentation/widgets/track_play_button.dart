@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/platform/app_platform.dart';
+import '../../../../core/theme/app_colors.dart';
 
 /// Shared play/pause control used by every track list.
 class TrackPlayButton extends StatelessWidget {
@@ -32,7 +33,7 @@ class TrackPlayButton extends StatelessWidget {
           fixedSize: Size.square(buttonSize),
           minimumSize: Size.square(buttonSize),
           maximumSize: Size.square(buttonSize),
-          foregroundColor: colors.onSurface,
+          foregroundColor: AppColors.playerControlForeground,
           backgroundColor: const Color(0xFF282D2A),
           hoverColor: colors.onSurface.withValues(alpha: 0.1),
           focusColor: colors.onSurface.withValues(alpha: 0.12),

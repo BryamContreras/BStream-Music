@@ -72,6 +72,54 @@ class AppStrings {
   String get playbackError => choose('Error de reproduccion', 'Playback error');
   String get volume => choose('Volumen', 'Volume');
   String get volumeControl => choose('Control de Volumen', 'Volume control');
+  String get lyrics => choose('Letras', 'Lyrics');
+  String get lyricsLoading =>
+      choose('Buscando la letra...', 'Finding lyrics...');
+  String get lyricsNotFound => choose(
+    'No encontramos una letra para esta cancion.',
+    'We could not find lyrics for this song.',
+  );
+  String get lyricsLoadError =>
+      choose('No se pudo obtener la letra.', 'Lyrics could not be loaded.');
+  String get similarLyrics => choose('Letras similares', 'Similar lyrics');
+  String get similarLyricsLoading =>
+      choose('Buscando letras similares...', 'Finding similar lyrics...');
+  String get similarLyricsEmpty => choose(
+    'No encontramos letras similares seguras.',
+    'We could not find any safe similar lyrics.',
+  );
+  String get chooseSimilarLyrics =>
+      choose('Elige la coincidencia correcta', 'Choose the correct match');
+  String get manualLyricsSearchHint =>
+      choose('Buscar por otro titulo', 'Search by another title');
+  String get manualLyricsSearchAction =>
+      choose('Buscar letras', 'Search lyrics');
+  String get syncedLyricsLabel => choose('Sincronizada', 'Synchronized');
+  String get plainLyricsLabel => choose('Sin sincronizar', 'Not synchronized');
+  String get backToLyrics => choose('Volver', 'Back');
+  String get lyricsNoInternet =>
+      choose('No hay conexión a Internet.', 'No Internet connection.');
+  String get lyricsInstrumental => choose(
+    'Esta cancion aparece como instrumental.',
+    'This track is marked as instrumental.',
+  );
+  String get lyricsUnsynced => choose(
+    'Esta letra no incluye tiempos sincronizados.',
+    'These lyrics do not include synchronized timing.',
+  );
+  String get lyricsOffset => choose('Desfase', 'Offset');
+  String get lyricsOffsetHint => choose(
+    'Ajustalo si la letra aparece antes o despues de la voz.',
+    'Adjust it if the lyrics appear before or after the vocals.',
+  );
+  String get resetLyricsOffset => choose('Restablecer desfase', 'Reset offset');
+  String get retry => choose('Reintentar', 'Retry');
+  String get lyricsSource =>
+      choose('Letras proporcionadas por LRCLIB', 'Lyrics provided by LRCLIB');
+  String get tapLyricsToSeek => choose(
+    'Toca una linea para ir a ese momento.',
+    'Tap a line to seek to that moment.',
+  );
   String get close => choose('Cerrar', 'Close');
   String get moreOptions => choose('Mas opciones', 'More options');
   String get addToPlaylist => choose('Anadir a playlist', 'Add to playlist');
@@ -190,7 +238,10 @@ class AppStrings {
       choose('Pedidos pendientes', 'Pending requests');
   String get roomId => 'room_id';
   String get browseFolder => choose('Explorar carpeta', 'Browse folder');
-  String get save => choose('Guardar', 'Save');
+  String get downloadFolderSaveFailed => choose(
+    'No se pudo guardar la carpeta de descargas.',
+    'The downloads folder could not be saved.',
+  );
   String get verify => choose('Verificar', 'Check');
   String get available => choose('disponible', 'available');
   String get notFound => choose('no encontrado', 'not found');

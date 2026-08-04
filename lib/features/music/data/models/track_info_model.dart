@@ -18,9 +18,14 @@ class TrackInfoModel extends TrackInfo {
   factory TrackInfoModel.fromJson(Map<String, dynamic> json) {
     return TrackInfoModel(
       id: _stringValue(json['id']) ?? _stringValue(json['display_id']) ?? '',
-      title: _stringValue(json['title']) ?? 'Sin titulo',
+      title:
+          _stringValue(json['track']) ??
+          _stringValue(json['title']) ??
+          'Sin titulo',
       artist:
           _stringValue(json['artist']) ??
+          _stringListValue(json['artists']) ??
+          _stringValue(json['creator']) ??
           _stringValue(json['uploader']) ??
           _stringValue(json['channel']) ??
           'Desconocido',
@@ -134,8 +139,9 @@ class TrackInfoModel extends TrackInfo {
     }
 
     final requested = json['requested_downloads'];
-    if (requested is List && requested.isNotEmpty && requested.first is Map) {
-      return _mapToStringMap((requested.first as Map)['http_headers']);
+    final fromRequested = _headersFromFormats(requested);
+    if (fromRequested != null) {
+      return fromRequested;
     }
 
     final requestedFormats = json['requested_formats'];
@@ -150,6 +156,12 @@ class TrackInfoModel extends TrackInfo {
   static Map<String, String>? _headersFromFormats(Object? formats) {
     if (formats is! List) {
       return null;
+    }
+    final preferredHeaders = _mapToStringMap(
+      _preferredAudioFormat(formats)?['http_headers'],
+    );
+    if (preferredHeaders != null) {
+      return preferredHeaders;
     }
     for (final format in formats.whereType<Map>()) {
       final headers = _mapToStringMap(format['http_headers']);
@@ -176,29 +188,9 @@ class TrackInfoModel extends TrackInfo {
       return null;
     }
 
-    final audioOnly = formats.whereType<Map>().where((format) {
-      final acodec = _stringValue(format['acodec']);
-      final vcodec = _stringValue(format['vcodec']);
-      return acodec != null && acodec != 'none' && vcodec == 'none';
-    }).toList();
-
-    if (audioOnly.isNotEmpty) {
-      audioOnly.sort((left, right) {
-        final leftScore = _streamCompatibilityScore(left);
-        final rightScore = _streamCompatibilityScore(right);
-        if (leftScore != rightScore) {
-          return rightScore.compareTo(leftScore);
-        }
-        final leftBitrate =
-            _intValue(left['abr']) ?? _intValue(left['tbr']) ?? 0;
-        final rightBitrate =
-            _intValue(right['abr']) ?? _intValue(right['tbr']) ?? 0;
-        if (leftBitrate == 0 || rightBitrate == 0) {
-          return rightBitrate.compareTo(leftBitrate);
-        }
-        return leftBitrate.compareTo(rightBitrate);
-      });
-      return _stringValue(audioOnly.first['url']);
+    final preferredUrl = _stringValue(_preferredAudioFormat(formats)?['url']);
+    if (preferredUrl != null) {
+      return preferredUrl;
     }
 
     for (final format in formats.whereType<Map>()) {
@@ -210,7 +202,32 @@ class TrackInfoModel extends TrackInfo {
     return null;
   }
 
-  static int _streamCompatibilityScore(Map<dynamic, dynamic> format) {
+  static Map<dynamic, dynamic>? _preferredAudioFormat(List<dynamic> formats) {
+    final audioOnly = formats.whereType<Map>().where((format) {
+      final acodec = _stringValue(format['acodec']);
+      final vcodec = _stringValue(format['vcodec']);
+      return acodec != null && acodec != 'none' && vcodec == 'none';
+    }).toList();
+
+    if (audioOnly.isNotEmpty) {
+      audioOnly.sort((left, right) {
+        final leftScore = _nativeAudioPreferenceScore(left);
+        final rightScore = _nativeAudioPreferenceScore(right);
+        if (leftScore != rightScore) {
+          return rightScore.compareTo(leftScore);
+        }
+        final leftBitrate =
+            _intValue(left['abr']) ?? _intValue(left['tbr']) ?? 0;
+        final rightBitrate =
+            _intValue(right['abr']) ?? _intValue(right['tbr']) ?? 0;
+        return rightBitrate.compareTo(leftBitrate);
+      });
+      return audioOnly.first;
+    }
+    return null;
+  }
+
+  static int _nativeAudioPreferenceScore(Map<dynamic, dynamic> format) {
     final ext = _stringValue(format['ext'])?.toLowerCase();
     final audioExt = _stringValue(format['audio_ext'])?.toLowerCase();
     final acodec = _stringValue(format['acodec'])?.toLowerCase() ?? '';
@@ -220,14 +237,12 @@ class TrackInfoModel extends TrackInfo {
     if (ext == 'm4a' ||
         audioExt == 'm4a' ||
         acodec.startsWith('mp4a') ||
+        acodec.startsWith('aac') ||
+        ext == 'aac' ||
+        audioExt == 'aac' ||
         container.contains('m4a') ||
-        mime.contains('audio/mp4')) {
-      return 3;
-    }
-    if (ext == 'mp3' || acodec.contains('mp3') || mime.contains('mpeg')) {
-      return 2;
-    }
-    if (ext == 'webm' || acodec.contains('opus')) {
+        mime.contains('audio/mp4') ||
+        mime.contains('audio/aac')) {
       return 1;
     }
     return 0;
@@ -269,6 +284,17 @@ class TrackInfoModel extends TrackInfo {
     }
     final text = value.toString().trim();
     return text.isEmpty ? null : text;
+  }
+
+  static String? _stringListValue(Object? value) {
+    if (value is! List) {
+      return null;
+    }
+    final entries = value
+        .map(_stringValue)
+        .whereType<String>()
+        .toList(growable: false);
+    return entries.isEmpty ? null : entries.join(', ');
   }
 
   static Duration? _durationValue(Object? value) {

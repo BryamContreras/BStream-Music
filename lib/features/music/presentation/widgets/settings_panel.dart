@@ -10,6 +10,19 @@ import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../providers/music_providers.dart';
 
+typedef DownloadDirectoryPicker =
+    Future<String?> Function({String? dialogTitle, String? initialDirectory});
+
+final downloadDirectoryPickerProvider = Provider<DownloadDirectoryPicker>((
+  ref,
+) {
+  return ({String? dialogTitle, String? initialDirectory}) =>
+      FilePicker.getDirectoryPath(
+        dialogTitle: dialogTitle,
+        initialDirectory: initialDirectory,
+      );
+});
+
 class SettingsPanel extends ConsumerStatefulWidget {
   const SettingsPanel({super.key});
 
@@ -62,7 +75,6 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                 if (tiktokState != null) {
                   _syncTikTokController(tiktokState);
                 }
-                final canChooseDownloadFolder = !AppPlatform.isAndroid;
                 return ListView(
                   children: [
                     _SettingsGroup(
@@ -94,8 +106,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                         ),
                       ],
                     ),
-                    if (!AppPlatform.isAndroid)
+                    if (AppPlatform.isDesktop)
                       _SettingsGroup(
+                        key: const ValueKey('downloads-settings-group'),
                         title: strings.downloads,
                         children: [
                           _PathField(
@@ -104,29 +117,29 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                             label: strings.folder,
                             icon: Icons.folder_rounded,
                             browseTooltip: strings.browseFolder,
-                            saveTooltip: strings.save,
-                            readOnly: !canChooseDownloadFolder,
-                            showActions: canChooseDownloadFolder,
                             onBrowse: _pickDownloadDirectory,
-                            onSave: () => ref
-                                .read(settingsControllerProvider.notifier)
-                                .setDownloadDirectory(
-                                  _downloadPathController.text,
-                                ),
+                          ),
+                          const SizedBox(height: 16),
+                          _BackupActions(
+                            strings: strings,
+                            busy: _backupBusy,
+                            onExport: _exportBackup,
+                            onImport: _importBackup,
                           ),
                         ],
                       ),
-                    _SettingsGroup(
-                      title: strings.backup,
-                      children: [
-                        _BackupActions(
-                          strings: strings,
-                          busy: _backupBusy,
-                          onExport: _exportBackup,
-                          onImport: _importBackup,
-                        ),
-                      ],
-                    ),
+                    if (!AppPlatform.isDesktop)
+                      _SettingsGroup(
+                        title: strings.backup,
+                        children: [
+                          _BackupActions(
+                            strings: strings,
+                            busy: _backupBusy,
+                            onExport: _exportBackup,
+                            onImport: _importBackup,
+                          ),
+                        ],
+                      ),
                     if (tiktokLive != null)
                       _SettingsGroup(
                         title: strings.liveConnection,
@@ -166,11 +179,6 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                               _ToolStatus(
                                 label: 'yt-dlp',
                                 available: state.hasYtDlp,
-                                strings: strings,
-                              ),
-                              _ToolStatus(
-                                label: 'FFmpeg',
-                                available: state.hasFfmpeg,
                                 strings: strings,
                               ),
                               FilledButton.icon(
@@ -272,19 +280,34 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   }
 
   Future<void> _pickDownloadDirectory() async {
-    final selected = await FilePicker.getDirectoryPath(
-      dialogTitle: ref.read(appStringsProvider).selectDownloadFolder,
-      initialDirectory: _downloadPathController.text.isEmpty
-          ? null
-          : _downloadPathController.text,
-    );
-    if (selected == null) {
-      return;
+    final strings = ref.read(appStringsProvider);
+    final controller = ref.read(settingsControllerProvider.notifier);
+    final pickDirectory = ref.read(downloadDirectoryPickerProvider);
+    final previousPath = _downloadPathController.text;
+    try {
+      final selected = await pickDirectory(
+        dialogTitle: strings.selectDownloadFolder,
+        initialDirectory: previousPath.isEmpty ? null : previousPath,
+      );
+      if (!mounted || selected == null) {
+        return;
+      }
+      await controller.setDownloadDirectory(selected);
+      if (!mounted) {
+        return;
+      }
+      _downloadPathController.text =
+          ref.read(settingsControllerProvider).value?.downloadDirectory ??
+          selected;
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _downloadPathController.text =
+          ref.read(settingsControllerProvider).value?.downloadDirectory ??
+          previousPath;
+      _showSnackBar(strings.downloadFolderSaveFailed);
     }
-    _downloadPathController.text = selected;
-    await ref
-        .read(settingsControllerProvider.notifier)
-        .setDownloadDirectory(selected);
   }
 
   Future<void> _exportBackup() async {
@@ -475,12 +498,13 @@ class _SleepTimerSettings extends StatelessWidget {
     final customSelected = !_presets.contains(state.selectedDuration);
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 520),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xA0101410),
+      child: Material(
+        color: const Color(0xA0101410),
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0x70243026)),
+          side: const BorderSide(color: Color(0x70243026)),
         ),
+        clipBehavior: Clip.antiAlias,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -614,7 +638,11 @@ class _SleepTimerOptionButton extends StatelessWidget {
 }
 
 class _SettingsGroup extends StatelessWidget {
-  const _SettingsGroup({required this.title, required this.children});
+  const _SettingsGroup({
+    required this.title,
+    required this.children,
+    super.key,
+  });
 
   final String title;
   final List<Widget> children;
@@ -656,6 +684,7 @@ class _BackupActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Wrap(
+      key: const ValueKey('backup-actions'),
       spacing: 10,
       runSpacing: 10,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -855,11 +884,7 @@ class _PathField extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.browseTooltip,
-    required this.saveTooltip,
-    this.readOnly = false,
-    this.showActions = true,
     required this.onBrowse,
-    required this.onSave,
   });
 
   final TextEditingController controller;
@@ -867,11 +892,7 @@ class _PathField extends StatelessWidget {
   final String label;
   final IconData icon;
   final String browseTooltip;
-  final String saveTooltip;
-  final bool readOnly;
-  final bool showActions;
   final VoidCallback onBrowse;
-  final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -881,29 +902,23 @@ class _PathField extends StatelessWidget {
         children: [
           Expanded(
             child: TextField(
+              key: const ValueKey('download-directory-field'),
               controller: controller,
               focusNode: focusNode,
-              readOnly: readOnly,
+              readOnly: true,
               decoration: InputDecoration(
                 labelText: label,
                 prefixIcon: Icon(icon),
               ),
             ),
           ),
-          if (showActions) ...[
-            const SizedBox(width: 10),
-            IconButton.filledTonal(
-              tooltip: browseTooltip,
-              icon: const Icon(Icons.folder_open_rounded),
-              onPressed: onBrowse,
-            ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              tooltip: saveTooltip,
-              icon: const Icon(Icons.save_rounded),
-              onPressed: onSave,
-            ),
-          ],
+          const SizedBox(width: 10),
+          IconButton.filledTonal(
+            key: const ValueKey('download-directory-browse'),
+            tooltip: browseTooltip,
+            icon: const Icon(Icons.folder_open_rounded),
+            onPressed: onBrowse,
+          ),
         ],
       ),
     );

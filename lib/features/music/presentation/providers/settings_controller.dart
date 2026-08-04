@@ -5,33 +5,25 @@ class SettingsState {
     required this.downloadDirectory,
     required this.language,
     this.ytDlpPath,
-    this.ffmpegPath,
     this.hasYtDlp,
-    this.hasFfmpeg,
   });
 
   final String downloadDirectory;
   final AppLanguage language;
   final String? ytDlpPath;
-  final String? ffmpegPath;
   final bool? hasYtDlp;
-  final bool? hasFfmpeg;
 
   SettingsState copyWith({
     String? downloadDirectory,
     AppLanguage? language,
     String? ytDlpPath,
-    String? ffmpegPath,
     bool? hasYtDlp,
-    bool? hasFfmpeg,
   }) {
     return SettingsState(
       downloadDirectory: downloadDirectory ?? this.downloadDirectory,
       language: language ?? this.language,
       ytDlpPath: ytDlpPath ?? this.ytDlpPath,
-      ffmpegPath: ffmpegPath ?? this.ffmpegPath,
       hasYtDlp: hasYtDlp ?? this.hasYtDlp,
-      hasFfmpeg: hasFfmpeg ?? this.hasFfmpeg,
     );
   }
 }
@@ -75,9 +67,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         downloadDirectory: downloadDirectory,
         language: language,
         ytDlpPath: await downloader.getYtDlpPath(),
-        ffmpegPath: await downloader.getFfmpegPath(),
         hasYtDlp: await downloader.hasYtDlp(),
-        hasFfmpeg: await downloader.hasFfmpeg(),
       );
     }
 
@@ -153,16 +143,13 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       return;
     }
     final ytDlpPath = await downloader.getYtDlpPath();
-    final ffmpegPath = await downloader.getFfmpegPath();
     await downloader.setYtDlpPath(ytDlpPath);
 
     final current = await future;
     state = AsyncData(
       current.copyWith(
         ytDlpPath: ytDlpPath,
-        ffmpegPath: ffmpegPath,
         hasYtDlp: await downloader.hasYtDlp(),
-        hasFfmpeg: await downloader.hasFfmpeg(),
       ),
     );
   }

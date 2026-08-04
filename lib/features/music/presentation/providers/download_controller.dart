@@ -8,6 +8,7 @@ final downloadControllerProvider =
 class DownloadTaskState {
   const DownloadTaskState({
     required this.url,
+    required this.taskId,
     required this.mediaType,
     required this.status,
     this.progress,
@@ -18,6 +19,7 @@ class DownloadTaskState {
   });
 
   final String url;
+  final String taskId;
   final DownloadMediaType mediaType;
   final DownloadProgressStatus status;
   final double? progress;
@@ -36,6 +38,7 @@ class DownloadTaskState {
   }) {
     return DownloadTaskState(
       url: url,
+      taskId: taskId,
       mediaType: mediaType,
       status: status ?? this.status,
       progress: progress ?? this.progress,
@@ -55,10 +58,11 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
   @override
   Map<String, DownloadTaskState> build() {
     final subscription = ref
-        .read(downloaderServiceProvider)
+        .watch(downloaderServiceProvider)
         .progressStream
         .listen((progress) {
-          final existing = state[progress.url];
+          final taskKey = _taskKeyForProgress(progress);
+          final existing = taskKey == null ? null : state[taskKey];
           if (existing == null) {
             return;
           }
@@ -77,7 +81,7 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
           }
           state = {
             ...state,
-            progress.url: existing.copyWith(
+            taskKey!: existing.copyWith(
               status: nextStatus,
               progress: nextProgress,
               errorMessage: nextError,
@@ -137,9 +141,9 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
       ...state,
       track.url: DownloadTaskState(
         url: track.url,
+        taskId: const Uuid().v4(),
         mediaType: mediaType,
         status: DownloadProgressStatus.queued,
-        progress: 0,
         title: track.title,
       ),
     };
@@ -232,7 +236,6 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
       ...state,
       track.url: state[track.url]!.copyWith(
         status: DownloadProgressStatus.running,
-        progress: math.max(state[track.url]!.progress ?? 0, 0.02),
       ),
     };
 
@@ -249,6 +252,7 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
       fileName: safeFileName(
         '${metadataTrack.artist} - ${metadataTrack.title}',
       ),
+      taskId: state[track.url]!.taskId,
     );
 
     state = {
@@ -317,6 +321,17 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
     }
 
     return progress.status;
+  }
+
+  String? _taskKeyForProgress(DownloadProgress progress) {
+    if (progress.taskId.isNotEmpty) {
+      for (final entry in state.entries) {
+        if (entry.value.taskId == progress.taskId) {
+          return entry.key;
+        }
+      }
+    }
+    return state.containsKey(progress.url) ? progress.url : null;
   }
 
   double? _nextProgress(double? current, double? incoming) {

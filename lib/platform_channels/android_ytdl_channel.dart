@@ -81,11 +81,9 @@ class AndroidYtdlChannel {
     final result = await _invoke<Map<Object?, Object?>>('downloadAudio', {
       'url': url,
       'path': options.outputDirectory,
-      'quality': options.quality ?? AppConstants.defaultAudioQuality,
       'fileName': options.fileName,
-      'audioFormat': options.audioFormat,
-      'embedMetadata': options.embedMetadata,
       'restrictFileNames': options.restrictFileNames,
+      'taskId': options.taskId,
     });
     return _downloadResult(result, DownloadMediaType.audio, url);
   }

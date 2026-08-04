@@ -1,20 +1,28 @@
 import 'dart:async';
 import 'dart:io' as io;
 
+import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
+import 'package:bstream_music/features/music/domain/entities/lyrics.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
+import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/download_progress_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/gradient_progress_bar.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/track_result_tile.dart';
 import 'package:bstream_music/main.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
+import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -53,6 +61,162 @@ void main() {
     expect(find.text('Inicio'), findsWidgets);
     expect(find.byIcon(Icons.search_rounded), findsWidgets);
     expect(find.text('Reproductor'), findsNothing);
+  });
+
+  testWidgets('popup menus use the shared neutral black surface', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_testApp());
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final context = tester.element(find.byType(Scaffold).first);
+    final popupTheme = Theme.of(context).popupMenuTheme;
+    expect(popupTheme.color, AppColors.menuBackground);
+    expect(popupTheme.surfaceTintColor, Colors.transparent);
+    final shape = popupTheme.shape! as RoundedRectangleBorder;
+    expect(shape.side.color, AppColors.menuBorder);
+    _expectNeutralDark(AppColors.menuBackground);
+    _expectNeutral(AppColors.menuForeground);
+  });
+
+  testWidgets(
+    'desktop Downloads contains backup actions and auto-saves a picked folder',
+    (tester) async {
+      if (!io.Platform.isWindows &&
+          !io.Platform.isLinux &&
+          !io.Platform.isMacOS) {
+        return;
+      }
+      tester.view.physicalSize = const Size(1280, 1400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      final initialPath = io.Platform.isWindows
+          ? r'C:\Music\Initial'
+          : '/tmp/music/initial';
+      final selectedPath = io.Platform.isWindows
+          ? r'D:\Music\Selected'
+          : '/tmp/music/selected';
+      final settingsController = _FakeSettingsController(
+        SettingsState(
+          downloadDirectory: initialPath,
+          language: AppLanguage.spanish,
+        ),
+      );
+      var pickerCalls = 0;
+      String? receivedTitle;
+      String? receivedInitialDirectory;
+
+      await tester.pumpWidget(
+        _settingsTestApp(
+          settingsController: settingsController,
+          directoryPicker:
+              ({String? dialogTitle, String? initialDirectory}) async {
+                pickerCalls++;
+                receivedTitle = dialogTitle;
+                receivedInitialDirectory = initialDirectory;
+                return selectedPath;
+              },
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final downloadsGroup = find.byKey(
+        const ValueKey('downloads-settings-group'),
+      );
+      final directoryField = find.byKey(
+        const ValueKey('download-directory-field'),
+      );
+      final backupActions = find.byKey(const ValueKey('backup-actions'));
+      expect(downloadsGroup, findsOneWidget);
+      expect(directoryField, findsOneWidget);
+      expect(backupActions, findsOneWidget);
+      expect(find.text('Respaldo'), findsNothing);
+      expect(
+        find.descendant(of: downloadsGroup, matching: find.text('Exportar')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: downloadsGroup, matching: find.text('Importar')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(backupActions).dy,
+        greaterThan(tester.getBottomLeft(directoryField).dy),
+      );
+      expect(
+        find.descendant(
+          of: downloadsGroup,
+          matching: find.byIcon(Icons.save_rounded),
+        ),
+        findsNothing,
+      );
+      expect(tester.widget<TextField>(directoryField).readOnly, isTrue);
+
+      await tester.tap(find.byKey(const ValueKey('download-directory-browse')));
+      await tester.pump(const Duration(milliseconds: 800));
+
+      expect(pickerCalls, 1);
+      expect(receivedTitle, 'Selecciona carpeta de descargas');
+      expect(receivedInitialDirectory, initialPath);
+      expect(settingsController.savedDirectories, [selectedPath]);
+      expect(
+        tester.widget<TextField>(directoryField).controller?.text,
+        selectedPath,
+      );
+    },
+  );
+
+  testWidgets('cancelling the desktop folder picker keeps the current folder', (
+    tester,
+  ) async {
+    if (!io.Platform.isWindows &&
+        !io.Platform.isLinux &&
+        !io.Platform.isMacOS) {
+      return;
+    }
+    tester.view.physicalSize = const Size(1280, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final initialPath = io.Platform.isWindows
+        ? r'C:\Music\Initial'
+        : '/tmp/music/initial';
+    final settingsController = _FakeSettingsController(
+      SettingsState(
+        downloadDirectory: initialPath,
+        language: AppLanguage.spanish,
+      ),
+    );
+    var pickerCalls = 0;
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async {
+              pickerCalls++;
+              return null;
+            },
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    final directoryField = find.byKey(
+      const ValueKey('download-directory-field'),
+    );
+    final before = tester.widget<TextField>(directoryField).controller!.text;
+
+    await tester.tap(find.byKey(const ValueKey('download-directory-browse')));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(pickerCalls, 1);
+    expect(tester.widget<TextField>(directoryField).controller?.text, before);
+    expect(before, initialPath);
+    expect(settingsController.savedDirectories, isEmpty);
   });
 
   testWidgets('system back remembers only the last two visited tabs', (
@@ -121,6 +285,104 @@ void main() {
 
     expect(find.text('Descargar'), findsOneWidget);
     expect(find.text('Anadir a playlist'), findsOneWidget);
+  });
+
+  testWidgets('download bars show realtime progress from the active task id', (
+    tester,
+  ) async {
+    const track = TrackInfo(
+      id: 'progress-track',
+      title: 'Progreso visible',
+      artist: 'BStream Music',
+      url: 'https://example.com/watch?v=progress-track',
+      thumbnailUrl: '',
+      duration: Duration(minutes: 3),
+    );
+    final downloader = _ControllableDownloaderService();
+    final container = ProviderContainer(
+      overrides: [
+        downloaderServiceProvider.overrideWithValue(downloader),
+        desktopMediaSessionFactoryProvider.overrideWithValue(() => null),
+        playerServiceProvider.overrideWithValue(_FakePlayerService()),
+        libraryRepositoryProvider.overrideWithValue(_FakeLibraryRepository()),
+      ],
+    );
+    addTearDown(() async {
+      container.dispose();
+      await downloader.close();
+    });
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                Expanded(
+                  child: TrackResultTile(track: track, onOpenPlayer: () {}),
+                ),
+                const DownloadProgressPanel(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await container
+        .read(downloadControllerProvider.notifier)
+        .downloadAudio(track);
+    await tester.pump();
+    final taskId = container
+        .read(downloadControllerProvider)[track.url]!
+        .taskId;
+
+    downloader.emitProgress(
+      taskId: taskId,
+      progress: 0.01,
+      url: 'https://canonical.example/progress-track',
+    );
+    await tester.pump();
+
+    var bars = tester
+        .widgetList<GradientProgressBar>(find.byType(GradientProgressBar))
+        .toList();
+    expect(bars, hasLength(2));
+    expect(bars.every((bar) => !bar.indeterminate), isTrue);
+    expect(bars.every((bar) => bar.value == 0.01), isTrue);
+    expect(
+      bars.every((bar) => listEquals(bar.colors, AppColors.downloadGradient)),
+      isTrue,
+    );
+    final downloadNote = tester.widget<Icon>(
+      find.descendant(
+        of: find.byType(DownloadProgressPanel),
+        matching: find.byIcon(Icons.music_note_rounded),
+      ),
+    );
+    expect(downloadNote.color, AppColors.downloadAccent);
+    expect(find.textContaining('1%'), findsOneWidget);
+
+    downloader.emitProgress(taskId: taskId, progress: 0.62);
+    await tester.pump();
+    bars = tester
+        .widgetList<GradientProgressBar>(find.byType(GradientProgressBar))
+        .toList();
+    expect(bars.every((bar) => bar.value == 0.62), isTrue);
+
+    downloader.emitProgress(taskId: taskId, progress: 0.30);
+    await tester.pump();
+    expect(
+      container.read(downloadControllerProvider)[track.url]?.progress,
+      0.62,
+    );
+
+    if (downloader.started.isCompleted) {
+      downloader.complete();
+    }
+    await tester.pump(const Duration(milliseconds: 200));
   });
 
   test('downloadAudioForLibrary returns the saved local track', () async {
@@ -278,13 +540,10 @@ void main() {
   });
 
   testWidgets('player controls fit on narrow mobile viewports', (tester) async {
-    final errors = <FlutterErrorDetails>[];
-    final previousOnError = FlutterError.onError;
-    FlutterError.onError = errors.add;
+    const expectedProgressColor = Color(0xFF7B8DFF);
     tester.view.physicalSize = const Size(320, 720);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
-      FlutterError.onError = previousOnError;
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
@@ -297,7 +556,149 @@ void main() {
             title: 'Cancion larga para probar controles',
             artist: 'BStream Music',
             trackId: 'test-track',
+            thumbnailUrl: 'test-artwork.invalid',
             duration: Duration(minutes: 4),
+          ),
+        ),
+        artworkProgressColorService: _FakeArtworkProgressColorService(
+          expectedProgressColor,
+        ),
+      ),
+    );
+
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    final miniPlayerControl = tester.widget<IconButton>(
+      find.byKey(const ValueKey('mini-player-primary-control')),
+    );
+    expect(
+      miniPlayerControl.style?.foregroundColor?.resolve(<WidgetState>{}),
+      AppColors.playbackPrimaryForeground,
+    );
+    expect(
+      miniPlayerControl.style?.backgroundColor?.resolve(<WidgetState>{}),
+      AppColors.playbackPrimaryBackground,
+    );
+    expect(
+      miniPlayerControl.style?.foregroundColor?.resolve(<WidgetState>{
+        WidgetState.disabled,
+      }),
+      AppColors.playbackPrimaryDisabledForeground,
+    );
+    expect(
+      miniPlayerControl.style?.backgroundColor?.resolve(<WidgetState>{
+        WidgetState.disabled,
+      }),
+      AppColors.playbackPrimaryDisabledBackground,
+    );
+    final miniProgressAnimation = tester.widget<TweenAnimationBuilder<Color?>>(
+      find.byKey(const ValueKey('mini-progress-color-animation')),
+    );
+    final miniProgressColor = miniProgressAnimation.tween.end;
+    expect(miniProgressColor, expectedProgressColor);
+
+    await tester.tap(find.byType(MiniPlayer));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    expect(find.text('En reproduccion'), findsOneWidget);
+    final playerControl = tester.widget<IconButton>(
+      find.byKey(const ValueKey('player-primary-control')),
+    );
+    expect(
+      playerControl.style?.foregroundColor?.resolve(<WidgetState>{}),
+      AppColors.playbackPrimaryForeground,
+    );
+    expect(
+      playerControl.style?.backgroundColor?.resolve(<WidgetState>{}),
+      AppColors.playbackPrimaryBackground,
+    );
+    expect(
+      playerControl.style?.foregroundColor?.resolve(<WidgetState>{
+        WidgetState.disabled,
+      }),
+      AppColors.playbackPrimaryDisabledForeground,
+    );
+    expect(
+      playerControl.style?.backgroundColor?.resolve(<WidgetState>{
+        WidgetState.disabled,
+      }),
+      AppColors.playbackPrimaryDisabledBackground,
+    );
+    final playerProgressAnimation = tester
+        .widget<TweenAnimationBuilder<Color?>>(
+          find.byKey(const ValueKey('player-progress-color-animation')),
+        );
+    expect(playerProgressAnimation.tween.end, expectedProgressColor);
+    expect(playerProgressAnimation.tween.end, miniProgressColor);
+    expect(find.byTooltip('Letras'), findsOneWidget);
+    expect(find.byTooltip('Volumen'), findsOneWidget);
+    expect(
+      tester.getCenter(find.byTooltip('Letras')).dx,
+      lessThan(tester.getCenter(find.byTooltip('Activar aleatorio')).dx),
+    );
+    expect(
+      tester.getCenter(find.byTooltip('Volumen')).dx,
+      greaterThan(tester.getCenter(find.byTooltip('Repetir cola')).dx),
+    );
+
+    await tester.tap(find.byTooltip('Volumen'));
+    await tester.pump(const Duration(milliseconds: 300));
+    final popover = find.byKey(const ValueKey('volume-popover'));
+    expect(popover, findsOneWidget);
+    final popoverDecoration =
+        tester.widget<Container>(popover).decoration! as BoxDecoration;
+    expect(popoverDecoration.color, AppColors.menuBackground);
+    expect(
+      (popoverDecoration.border! as Border).top.color,
+      AppColors.menuBorder,
+    );
+
+    final sliderTheme = tester.widget<SliderTheme>(
+      find.descendant(of: popover, matching: find.byType(SliderTheme)),
+    );
+    expect(sliderTheme.data.activeTrackColor, AppColors.menuForeground);
+    expect(sliderTheme.data.thumbColor, AppColors.menuForeground);
+    expect(
+      sliderTheme.data.inactiveTrackColor,
+      AppColors.neutralSliderInactive,
+    );
+    _expectNeutral(sliderTheme.data.activeTrackColor!);
+    _expectNeutral(sliderTheme.data.thumbColor!);
+    _expectNeutral(sliderTheme.data.inactiveTrackColor!);
+  });
+
+  testWidgets('lyrics control opens the synchronized lyrics page', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _testApp(
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Cancion con letra',
+            artist: 'Artista de prueba',
+            trackId: 'lyrics-track',
+            sourceUrl: 'https://example.com/lyrics-track',
+            position: Duration(seconds: 12),
+            duration: Duration(minutes: 3),
+          ),
+        ),
+        lyricsService: _FakeLyricsService(
+          const LyricsDocument(
+            provider: 'LRCLIB',
+            trackName: 'Cancion con letra',
+            artistName: 'Artista de prueba',
+            lines: [
+              LyricLine(timestamp: Duration(seconds: 10), text: 'Linea activa'),
+              LyricLine(
+                timestamp: Duration(seconds: 20),
+                text: 'Linea siguiente',
+              ),
+            ],
           ),
         ),
       ),
@@ -306,13 +707,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.byType(MiniPlayer));
     await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.byTooltip('Letras'));
+    await tester.pumpAndSettle();
 
-    expect(find.text('En reproduccion'), findsOneWidget);
+    expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsOneWidget);
+    expect(find.text('Linea activa'), findsOneWidget);
     expect(
-      errors.where(
-        (error) => error.exceptionAsString().contains('RenderFlex overflowed'),
+      find.descendant(
+        of: find.byKey(const ValueKey('active-lyric-line')),
+        matching: find.text('Linea activa'),
       ),
-      isEmpty,
+      findsOneWidget,
     );
   });
 
@@ -420,7 +825,8 @@ void main() {
         tester.getBottomLeft(artwork).dy,
         lessThan(tester.getTopLeft(titleText).dy),
       );
-      expect(find.byTooltip('Volumen'), findsNothing);
+      expect(find.byTooltip('Volumen'), findsOneWidget);
+      expect(find.byTooltip('Letras'), findsOneWidget);
       expect(find.byTooltip('Cola de reproduccion'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Cola de reproduccion'));
@@ -433,9 +839,22 @@ void main() {
 
       await tester.tap(find.byIcon(Icons.more_vert_rounded));
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('Control de Volumen'), findsOneWidget);
-      Navigator.of(tester.element(find.text('Control de Volumen'))).pop();
+      expect(find.text('Control de Volumen'), findsNothing);
+      Navigator.of(
+        tester.element(find.byType(PopupMenuItem<String>).first),
+      ).pop();
       await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.tap(find.byTooltip('Volumen'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const ValueKey('volume-popover')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('volume-popover')),
+          matching: find.byType(Slider),
+        ),
+        findsOneWidget,
+      );
 
       expect(
         errors.where(
@@ -482,6 +901,9 @@ void main() {
           downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
           playerServiceProvider.overrideWithValue(player),
           libraryRepositoryProvider.overrideWithValue(_FakeLibraryRepository()),
+          localTrackFileProbeProvider.overrideWithValue(
+            (_) async => LocalTrackFileAvailability.present,
+          ),
         ],
       );
       addTearDown(container.dispose);
@@ -639,13 +1061,42 @@ void main() {
   });
 }
 
+void _expectNeutral(Color color) {
+  expect((color.r - color.g).abs(), lessThanOrEqualTo(0.01));
+  expect((color.g - color.b).abs(), lessThanOrEqualTo(0.01));
+}
+
+void _expectNeutralDark(Color color) {
+  _expectNeutral(color);
+  expect(color.computeLuminance(), lessThan(0.03));
+}
+
 Future<void> _pumpTestApp(WidgetTester tester) {
   return tester.pumpWidget(_testApp());
+}
+
+Widget _settingsTestApp({
+  required _FakeSettingsController settingsController,
+  required DownloadDirectoryPicker directoryPicker,
+}) {
+  return ProviderScope(
+    overrides: [
+      settingsControllerProvider.overrideWith(() => settingsController),
+      downloadDirectoryPickerProvider.overrideWithValue(directoryPicker),
+      appStringsProvider.overrideWithValue(
+        const AppStrings(AppLanguage.spanish),
+      ),
+    ],
+    child: const MaterialApp(home: Scaffold(body: SettingsPanel())),
+  );
 }
 
 Widget _testApp({
   PlayerService? playerService,
   LibraryRepository? libraryRepository,
+  LyricsService? lyricsService,
+  ArtworkProgressColorService? artworkProgressColorService,
+  DownloadDirectoryPicker? directoryPicker,
 }) {
   return ProviderScope(
     overrides: [
@@ -654,12 +1105,37 @@ Widget _testApp({
       playerServiceProvider.overrideWithValue(
         playerService ?? _FakePlayerService(),
       ),
+      if (lyricsService != null)
+        lyricsServiceProvider.overrideWithValue(lyricsService),
+      if (artworkProgressColorService != null)
+        artworkProgressColorServiceProvider.overrideWithValue(
+          artworkProgressColorService,
+        ),
+      if (directoryPicker != null)
+        downloadDirectoryPickerProvider.overrideWithValue(directoryPicker),
       libraryRepositoryProvider.overrideWithValue(
         libraryRepository ?? _FakeLibraryRepository(),
       ),
     ],
     child: const BStreamMusicApp(),
   );
+}
+
+class _FakeSettingsController extends SettingsController {
+  _FakeSettingsController(this.initialState);
+
+  final SettingsState initialState;
+  final List<String> savedDirectories = [];
+
+  @override
+  Future<SettingsState> build() async => initialState;
+
+  @override
+  Future<void> setDownloadDirectory(String path) async {
+    savedDirectories.add(path);
+    final current = await future;
+    state = AsyncData(current.copyWith(downloadDirectory: path));
+  }
 }
 
 class _FakeDownloaderService implements DownloaderService {
@@ -695,7 +1171,7 @@ class _FakeDownloaderService implements DownloaderService {
     }
 
     final id = url.split('/').last;
-    final fileName = '${options.fileName ?? id}.${options.audioFormat}';
+    final fileName = '${options.fileName ?? id}.m4a';
     final filePath = '${options.outputDirectory}\\$fileName';
     return DownloadResult(
       id: 'downloaded-$id',
@@ -724,6 +1200,119 @@ class _FakeDownloaderService implements DownloaderService {
   Future<List<TrackInfo>> search(String query) async {
     return const [];
   }
+}
+
+class _FakeLyricsService implements LyricsService {
+  const _FakeLyricsService(this.document);
+
+  final LyricsDocument? document;
+
+  @override
+  Future<LyricsDocument?> findLyrics(LyricsLookup lookup) async => document;
+
+  @override
+  Future<List<LyricsCandidate>> findSimilarLyrics(
+    LyricsLookup lookup, {
+    int limit = 8,
+  }) async => const [];
+
+  @override
+  Future<List<LyricsCandidate>> searchLyricsByTitle(
+    String title, {
+    required LyricsLookup context,
+    int limit = 8,
+  }) async => const [];
+
+  @override
+  void dispose() {}
+}
+
+class _FakeArtworkProgressColorService extends ArtworkProgressColorService {
+  _FakeArtworkProgressColorService(this.color);
+
+  final Color color;
+
+  @override
+  Future<Color> resolve(String? rawSource) async => color;
+}
+
+class _ControllableDownloaderService implements DownloaderService {
+  final _progressController = StreamController<DownloadProgress>.broadcast();
+  final _completion = Completer<DownloadResult>();
+  final started = Completer<void>();
+
+  String? _url;
+  DownloadOptions? _options;
+
+  @override
+  Stream<DownloadProgress> get progressStream => _progressController.stream;
+
+  @override
+  Future<DownloadResult> downloadAudio(String url, DownloadOptions options) {
+    _url = url;
+    _options = options;
+    if (!started.isCompleted) {
+      started.complete();
+    }
+    return _completion.future;
+  }
+
+  void emitProgress({
+    required String taskId,
+    required double progress,
+    String? url,
+  }) {
+    _progressController.add(
+      DownloadProgress(
+        taskId: taskId,
+        url: url ?? _url ?? '',
+        status: DownloadProgressStatus.running,
+        progress: progress,
+      ),
+    );
+  }
+
+  void complete() {
+    if (_completion.isCompleted) {
+      return;
+    }
+    final url = _url!;
+    final options = _options!;
+    final fileName = '${options.fileName ?? 'track'}.m4a';
+    _completion.complete(
+      DownloadResult(
+        id: 'completed-progress-track',
+        sourceUrl: url,
+        filePath: '${options.outputDirectory}\\$fileName',
+        fileName: fileName,
+        mediaType: DownloadMediaType.audio,
+        completedAt: DateTime(2026),
+      ),
+    );
+  }
+
+  Future<void> close() async {
+    if (_url != null && _options != null) {
+      complete();
+    }
+    await _progressController.close();
+  }
+
+  @override
+  Future<TrackInfo> getInfo(String url) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<TrackInfo> getPlaybackInfo(String url) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<List<TrackInfo>> search(String query) async => const [];
 }
 
 class _FakePlayerService implements PlayerService {
@@ -797,6 +1386,11 @@ class _FakeLibraryRepository implements LibraryRepository {
 
   @override
   Future<void> deleteLocalTrack(String trackId) async {}
+
+  @override
+  Future<Set<String>> purgeMissingLocalTracks(List<LocalTrack> tracks) async {
+    return const <String>{};
+  }
 
   @override
   Future<void> deletePlaylist(String playlistId) async {

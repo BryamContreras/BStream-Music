@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_colors.dart';
+
 class GradientProgressBar extends StatefulWidget {
   const GradientProgressBar({
     required this.value,
     this.height = 4,
     this.backgroundColor = const Color(0x6636463A),
-    this.colors = const [Color(0xFF18C75A), Color(0xFF0E9F4D)],
+    this.colors = AppColors.downloadGradient,
     this.indeterminate = false,
     super.key,
   });
@@ -96,21 +98,23 @@ class _DeterminateTrack extends StatelessWidget {
     return Stack(
       children: [
         Positioned.fill(child: ColoredBox(color: backgroundColor)),
-        TweenAnimationBuilder<double>(
-          tween: Tween<double>(end: progress),
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          builder: (context, animatedProgress, child) {
-            return Align(
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
+        Positioned.fill(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: progress),
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            builder: (context, animatedProgress, child) {
+              return FractionallySizedBox(
+                alignment: Alignment.centerLeft,
                 widthFactor: animatedProgress,
                 child: child,
+              );
+            },
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: colors),
               ),
-            );
-          },
-          child: DecoratedBox(
-            decoration: BoxDecoration(gradient: LinearGradient(colors: colors)),
+            ),
           ),
         ),
       ],

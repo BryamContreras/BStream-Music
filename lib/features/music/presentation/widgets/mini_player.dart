@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../services/player/player_service.dart';
+import '../providers/artwork_progress_color_provider.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
+import 'playback_progress_line.dart';
 
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({this.onOpenPlayer, super.key});
@@ -140,9 +143,20 @@ class MiniPlayer extends ConsumerWidget {
                       SizedBox.square(
                         dimension: playButtonSize,
                         child: IconButton.filled(
+                          key: const ValueKey('mini-player-primary-control'),
                           tooltip: presentation.status == PlayerStatus.playing
                               ? strings.pause
                               : strings.play,
+                          style: IconButton.styleFrom(
+                            backgroundColor:
+                                AppColors.playbackPrimaryBackground,
+                            foregroundColor:
+                                AppColors.playbackPrimaryForeground,
+                            disabledBackgroundColor:
+                                AppColors.playbackPrimaryDisabledBackground,
+                            disabledForegroundColor:
+                                AppColors.playbackPrimaryDisabledForeground,
+                          ),
                           iconSize: compactAndroid ? 24 : null,
                           padding: EdgeInsets.zero,
                           constraints: BoxConstraints.tight(
@@ -207,9 +221,14 @@ class _MiniProgress extends ConsumerWidget {
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
+          thumbnailUrl: snapshot?.thumbnailUrl,
         );
       }),
     );
+    final progressColor =
+        ref.watch(artworkProgressColorProvider(timeline.thumbnailUrl)).value ??
+        ArtworkProgressColor.fallback;
+    final strings = ref.watch(appStringsProvider);
     final duration = timeline.duration;
     final position = timeline.position;
     final progress = duration == null || duration.inMilliseconds <= 0
@@ -218,32 +237,14 @@ class _MiniProgress extends ConsumerWidget {
               .clamp(0.0, 1.0)
               .toDouble();
 
-    return SizedBox(
-      height: 3,
-      child: ColoredBox(
-        color: Colors.black.withValues(alpha: 0.2),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(end: progress),
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            builder: (context, value, _) {
-              return FractionallySizedBox(
-                widthFactor: value,
-                child: const SizedBox.expand(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF0E9F4D), Color(0xFF18C75A)],
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
+    return PlaybackProgressLine(
+      value: progress,
+      color: progressColor,
+      colorAnimationKey: const ValueKey('mini-progress-color-animation'),
+      fillKey: const ValueKey('mini-progress-fill'),
+      semanticsLabel: strings.choose(
+        'Progreso de reproducción',
+        'Playback progress',
       ),
     );
   }

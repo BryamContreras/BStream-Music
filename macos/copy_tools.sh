@@ -31,10 +31,9 @@ if ! copy_tool "yt-dlp" \
   missing_tools="${missing_tools} yt-dlp"
 fi
 
-if ! copy_tool "ffmpeg" \
-  "${source_dir}/ffmpeg" \
-  "${source_dir}/ffmpeg/bin/ffmpeg"; then
-  missing_tools="${missing_tools} ffmpeg"
+if ! copy_tool "deno" \
+  "${source_dir}/deno"; then
+  missing_tools="${missing_tools} deno"
 fi
 
 if [ -n "${missing_tools}" ]; then
@@ -45,7 +44,6 @@ if [ -n "${missing_tools}" ]; then
   echo "warning: Missing optional macOS desktop tools:${missing_tools}. Search and downloads will be unavailable."
 fi
 
-# FFmpeg is a regular Mach-O executable and can be signed with the application.
 # Keep the official PyInstaller onefile yt-dlp executable byte-for-byte intact:
 # post-signing its launcher would not update its archived Python runtime.
 if [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] && \
@@ -59,13 +57,16 @@ if [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] && \
     fi
   fi
 
-  ffmpeg_tool="${destination_dir}/ffmpeg"
-  if [ -f "${ffmpeg_tool}" ] && \
-    /usr/bin/file "${ffmpeg_tool}" | /usr/bin/grep -q "Mach-O"; then
+  # Deno is a regular Mach-O executable and must share the application's
+  # signing identity before the outer bundle seals its Resources directory.
+  deno_tool="${destination_dir}/deno"
+  if [ -f "${deno_tool}" ] && \
+    /usr/bin/file "${deno_tool}" | /usr/bin/grep -q "Mach-O"; then
     /usr/bin/codesign \
       --force \
       --options runtime \
+      --entitlements "${PROJECT_DIR}/Runner/Deno.entitlements" \
       --sign "${EXPANDED_CODE_SIGN_IDENTITY}" \
-      "${ffmpeg_tool}"
+      "${deno_tool}"
   fi
 fi

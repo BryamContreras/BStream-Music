@@ -10,6 +10,7 @@ class PlayerSnapshot {
     required this.status,
     this.title,
     this.artist,
+    this.album,
     this.trackId,
     this.sourceUrl,
     this.thumbnailUrl,
@@ -25,6 +26,7 @@ class PlayerSnapshot {
   final PlayerStatus status;
   final String? title;
   final String? artist;
+  final String? album;
   final String? trackId;
   final String? sourceUrl;
   final String? thumbnailUrl;
@@ -40,6 +42,7 @@ class PlayerSnapshot {
     PlayerStatus? status,
     String? title,
     String? artist,
+    String? album,
     String? trackId,
     String? sourceUrl,
     String? thumbnailUrl,
@@ -55,6 +58,7 @@ class PlayerSnapshot {
       status: status ?? this.status,
       title: title ?? this.title,
       artist: artist ?? this.artist,
+      album: album ?? this.album,
       trackId: trackId ?? this.trackId,
       sourceUrl: sourceUrl ?? this.sourceUrl,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,

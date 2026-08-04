@@ -16,12 +16,22 @@ if [[ ! -x "$bundle/bstream_music" ]]; then
   exit 1
 fi
 
-for tool in yt-dlp ffmpeg; do
+for tool in yt-dlp deno; do
   if [[ ! -x "$bundle/tools/$tool" ]]; then
     echo "Bundled tool is missing or not executable: $bundle/tools/$tool" >&2
     exit 1
   fi
 done
+
+unexpected_media_tool="$(
+  find "$bundle/tools" -mindepth 1 \
+    \( -iname 'ffmpeg*' -o -iname 'ffprobe*' \) \
+    -print -quit
+)"
+if [[ -n "$unexpected_media_tool" ]]; then
+  echo "Unexpected external media tool in bundle: $unexpected_media_tool" >&2
+  exit 1
+fi
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT

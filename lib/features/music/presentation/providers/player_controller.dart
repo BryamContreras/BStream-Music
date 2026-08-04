@@ -91,16 +91,22 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   bool _useNativeLocalQueue = true;
   String? _activeLocalQueueSourceId;
   int _playRequestId = 0;
+  int? _remoteRecoveryAttemptedRequestId;
   PlayerSnapshot? _pendingRemoteSnapshot;
 
   @override
   Future<PlayerSnapshot> build() async {
     final service = ref.watch(playerServiceProvider);
     final subscription = service.snapshotStream.listen((snapshot) {
+      if (_isStaleRemoteSnapshot(snapshot)) {
+        return;
+      }
       final decorated = _decorateSnapshot(snapshot);
       _syncQueueIndexFromSnapshot(decorated);
       state = AsyncData(decorated);
-      _maybeHandleCompletion(decorated);
+      if (!_maybeRecoverRemoteFailure(decorated)) {
+        _maybeHandleCompletion(decorated);
+      }
     });
     ref.onDispose(subscription.cancel);
     return _decorateSnapshot(service.currentSnapshot);
@@ -175,16 +181,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         await ref.read(playerServiceProvider).playRemote(playableTrack);
         _clearPendingRemoteSnapshot(requestId);
       } catch (_) {
-        final refreshed = await _resolveRemoteTrack(
-          playableTrack,
-          forceRefresh: true,
-        );
-        if (!_isCurrentPlayRequest(requestId)) {
-          return;
+        if (_remoteRecoveryAttemptedRequestId != requestId) {
+          await _refreshAndReplayRemote(playableTrack, requestId);
         }
-
-        await ref.read(playerServiceProvider).playRemote(refreshed);
-        _clearPendingRemoteSnapshot(requestId);
       }
     } catch (error, stackTrace) {
       if (_isCurrentPlayRequest(requestId)) {
@@ -199,6 +198,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       status: PlayerStatus.loading,
       title: track.title,
       artist: track.artist,
+      album: track.album,
       trackId: track.id.isEmpty ? track.url : track.id,
       sourceUrl: track.url,
       thumbnailUrl: track.thumbnailUrl,
@@ -220,9 +220,110 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
   }
 
+  bool _maybeRecoverRemoteFailure(PlayerSnapshot snapshot) {
+    if (_explicitlyStopped ||
+        _changingLocalTrack ||
+        snapshot.status != PlayerStatus.failed ||
+        snapshot.trackId == null ||
+        _queueIndex < 0 ||
+        _queueIndex >= _queue.length) {
+      return false;
+    }
+
+    final track = _queue[_queueIndex].remote;
+    if (track == null || !_snapshotBelongsToTrack(snapshot, track)) {
+      return false;
+    }
+
+    final requestId = _playRequestId;
+    if (_remoteRecoveryAttemptedRequestId == requestId) {
+      // A failed remote stream is not a completed song. Keep the failure on
+      // the current item instead of silently advancing through the queue.
+      return true;
+    }
+
+    _remoteRecoveryAttemptedRequestId = requestId;
+    unawaited(_recoverRemoteFailure(track, requestId));
+    return true;
+  }
+
+  bool _snapshotBelongsToTrack(PlayerSnapshot snapshot, TrackInfo track) {
+    final trackId = track.id.isEmpty ? track.url : track.id;
+    final snapshotTrackId = snapshot.trackId?.trim();
+    if (snapshotTrackId != null && snapshotTrackId.isNotEmpty) {
+      return snapshotTrackId == trackId;
+    }
+    return snapshot.sourceUrl == track.url;
+  }
+
+  bool _isStaleRemoteSnapshot(PlayerSnapshot snapshot) {
+    final current = _currentRemoteTrack;
+    if (current == null) {
+      return false;
+    }
+    if (_isCachedRemoteSnapshot(snapshot, current)) {
+      return false;
+    }
+    final expectedTrackId = current.id.isEmpty ? current.url : current.id;
+    final snapshotTrackId = snapshot.trackId?.trim();
+    if (snapshotTrackId != null && snapshotTrackId.isNotEmpty) {
+      return snapshotTrackId != expectedTrackId;
+    }
+    final sourceUrl = snapshot.sourceUrl?.trim();
+    return snapshot.isRemote &&
+        sourceUrl != null &&
+        sourceUrl.isNotEmpty &&
+        sourceUrl != current.url;
+  }
+
+  Future<void> _recoverRemoteFailure(TrackInfo track, int requestId) async {
+    final pendingSnapshot = _remoteLoadingSnapshot(track);
+    _pendingRemoteSnapshot = pendingSnapshot;
+    state = AsyncData(pendingSnapshot);
+    try {
+      await _refreshAndReplayRemote(track, requestId);
+    } catch (error, stackTrace) {
+      if (_isCurrentPlayRequest(requestId)) {
+        _pendingRemoteSnapshot = null;
+        state = AsyncError(error, stackTrace);
+      }
+    }
+  }
+
+  Future<void> _refreshAndReplayRemote(TrackInfo track, int requestId) async {
+    _remoteRecoveryAttemptedRequestId = requestId;
+    final refreshed = await _resolveRemoteTrack(
+      track,
+      forceRefresh: true,
+      allowStaleStreamFallback: false,
+    );
+    if (!_isCurrentPlayRequest(requestId)) {
+      return;
+    }
+
+    _replaceCurrentRemoteTrack(refreshed);
+    await ref.read(playerServiceProvider).playRemote(refreshed);
+    _clearPendingRemoteSnapshot(requestId);
+  }
+
+  void _replaceCurrentRemoteTrack(TrackInfo track) {
+    if (_queueIndex < 0 || _queueIndex >= _queue.length) {
+      return;
+    }
+    final current = _queue[_queueIndex].remote;
+    if (current == null || current.url != track.url) {
+      return;
+    }
+    final next = List<_QueueItem>.of(_queue);
+    next[_queueIndex] = _QueueItem.remote(track);
+    _queue = List.unmodifiable(next);
+    _publishPlaybackQueue();
+  }
+
   Future<TrackInfo> _resolveRemoteTrack(
     TrackInfo track, {
     bool forceRefresh = false,
+    bool allowStaleStreamFallback = true,
   }) async {
     if (!forceRefresh &&
         track.streamUrl != null &&
@@ -232,7 +333,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
     return ref
         .read(remoteTrackResolverProvider)
-        .resolve(track, forceRefresh: forceRefresh);
+        .resolve(
+          track,
+          forceRefresh: forceRefresh,
+          allowStaleStreamFallback: allowStaleStreamFallback,
+        );
   }
 
   Future<LocalTrack?> _cachedRemoteTrack(TrackInfo track) async {
@@ -328,6 +433,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   Future<void> _playLocalTrack(LocalTrack track) async {
+    if (await _purgeLocalTrackIfMissing(track)) {
+      return;
+    }
+
     _explicitlyStopped = false;
     _playRequestId++;
     _pendingRemoteSnapshot = null;
@@ -358,6 +467,57 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     } finally {
       _changingLocalTrack = false;
     }
+  }
+
+  Future<bool> _purgeLocalTrackIfMissing(LocalTrack track) async {
+    try {
+      final result = await ref
+          .read(localLibraryReconcilerProvider)
+          .reconcile(tracks: [track]);
+      if (!result.changed) {
+        return false;
+      }
+
+      _removeLocalTracksFromQueue(result.removedTrackIds);
+      ref
+        ..invalidate(libraryTracksProvider)
+        ..invalidate(historyProvider)
+        ..invalidate(playlistsControllerProvider);
+      return result.removedTrackIds.contains(track.id);
+    } catch (error) {
+      // A transient filesystem/database error should not block a playable file.
+      debugPrint('Local track availability check failed: $error');
+      return false;
+    }
+  }
+
+  void _removeLocalTracksFromQueue(Set<String> trackIds) {
+    if (trackIds.isEmpty || _queue.isEmpty) {
+      return;
+    }
+
+    final activeId = _queueIndex >= 0 && _queueIndex < _queue.length
+        ? _queue[_queueIndex].id
+        : null;
+    final nextQueue = _queue
+        .where(
+          (item) => item.local == null || !trackIds.contains(item.local!.id),
+        )
+        .toList(growable: false);
+    if (nextQueue.length == _queue.length) {
+      return;
+    }
+
+    _queue = List.unmodifiable(nextQueue);
+    _queueIndex = activeId == null || trackIds.contains(activeId)
+        ? -1
+        : _queue.indexWhere((item) => item.id == activeId);
+    if (_queue.isEmpty) {
+      _useNativeLocalQueue = true;
+      _activeLocalQueueSourceId = null;
+    }
+    _resetShuffleHistory();
+    _publishPlaybackQueue();
   }
 
   Future<void> pause() async {
@@ -585,6 +745,18 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   PlayerSnapshot _decorateSnapshot(PlayerSnapshot snapshot) {
+    final remote = _currentRemoteTrack;
+    if (remote != null) {
+      final cachedRemote = _isCachedRemoteSnapshot(snapshot, remote);
+      snapshot = snapshot.copyWith(
+        trackId: cachedRemote
+            ? (remote.id.isEmpty ? remote.url : remote.id)
+            : snapshot.trackId,
+        sourceUrl: remote.url,
+        isRemote: true,
+      );
+    }
+
     final pending = _pendingRemoteSnapshot;
     if (pending != null && !_snapshotMatchesPending(snapshot, pending)) {
       return pending.copyWith(
@@ -594,14 +766,18 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       );
     }
 
-    final remote = _currentRemoteTrack;
-    if (remote != null) {
-      snapshot = snapshot.copyWith(sourceUrl: remote.url, isRemote: true);
-    }
     return snapshot.copyWith(
       shuffleEnabled: _shuffleEnabled,
       repeatMode: _repeatMode,
     );
+  }
+
+  bool _isCachedRemoteSnapshot(PlayerSnapshot snapshot, TrackInfo remote) {
+    final trackId = snapshot.trackId;
+    return !snapshot.isRemote &&
+        trackId != null &&
+        trackId.startsWith('remote-cache:') &&
+        snapshot.sourceUrl == remote.url;
   }
 
   bool _snapshotMatchesPending(
@@ -609,10 +785,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     PlayerSnapshot pending,
   ) {
     final pendingTrackId = pending.trackId;
-    if (pendingTrackId != null &&
-        pendingTrackId.isNotEmpty &&
-        snapshot.trackId == pendingTrackId) {
-      return true;
+    if (pendingTrackId != null && pendingTrackId.isNotEmpty) {
+      final snapshotTrackId = snapshot.trackId?.trim();
+      if (snapshotTrackId != null && snapshotTrackId.isNotEmpty) {
+        return snapshotTrackId == pendingTrackId;
+      }
     }
     final pendingSourceUrl = pending.sourceUrl;
     return pendingSourceUrl != null &&
@@ -647,6 +824,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   void _maybeHandleCompletion(PlayerSnapshot snapshot) {
     if (_explicitlyStopped ||
         _changingLocalTrack ||
+        (snapshot.status == PlayerStatus.failed && snapshot.isRemote) ||
         (snapshot.status != PlayerStatus.stopped &&
             snapshot.status != PlayerStatus.failed) ||
         snapshot.trackId == null ||

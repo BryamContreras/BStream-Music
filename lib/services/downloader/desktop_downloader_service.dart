@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -24,6 +25,27 @@ class DesktopDownloaderService implements DownloaderService {
        _toolDirectoryOverrides = toolDirectories;
 
   static const _ytDlpPathKey = 'desktop.ytDlpPath';
+  static const _progressTemplate =
+      'download:BSTREAM_PROGRESS|%(progress._percent_str)s|%(progress.eta)s';
+  static const _audioFileExtensions = {
+    '.aac',
+    '.aiff',
+    '.alac',
+    '.flac',
+    '.m4a',
+    '.m4b',
+    '.mka',
+    '.mp3',
+    '.mp4',
+    '.oga',
+    '.ogg',
+    '.opus',
+    '.vorbis',
+    '.wav',
+    '.weba',
+    '.webm',
+    '.wma',
+  };
 
   final SharedPreferences? _preferences;
   final List<Directory>? _toolDirectoryOverrides;
@@ -75,23 +97,8 @@ class DesktopDownloaderService implements DownloaderService {
     return bundled ?? configured ?? 'yt-dlp';
   }
 
-  Future<String?> getFfmpegPath() async {
-    return _findBundledTool([
-      'ffmpeg.exe',
-      'ffmpeg',
-      p.join('ffmpeg', 'bin', 'ffmpeg.exe'),
-      p.join('ffmpeg', 'bin', 'ffmpeg'),
-    ]);
-  }
-
   Future<bool> hasYtDlp() async {
     return _checkExecutable(await getYtDlpPath(), const ['--version']);
-  }
-
-  Future<bool> hasFfmpeg() async {
-    final executable = await getFfmpegPath();
-    return executable != null &&
-        await _checkExecutable(executable, const ['-version']);
   }
 
   @override
@@ -101,7 +108,7 @@ class DesktopDownloaderService implements DownloaderService {
       '--no-playlist',
       '--no-warnings',
       '-f',
-      AppConstants.remotePlaybackAudioFormat,
+      AppConstants.preferredNativeAudioFormat,
       url,
     ]);
 
@@ -136,21 +143,51 @@ class DesktopDownloaderService implements DownloaderService {
       url: url,
       options: options,
       mediaType: DownloadMediaType.audio,
-      args: [
-        '--newline',
-        '--no-playlist',
-        '--print',
-        'after_move:filepath',
-        '-f',
-        'bestaudio/best',
-        '-x',
-        '--audio-format',
-        options.audioFormat,
-        '--audio-quality',
-        options.quality ?? AppConstants.defaultAudioQuality,
-        if (options.embedMetadata) ...['--embed-metadata', '--embed-thumbnail'],
-      ],
+      args: buildAudioDownloadArguments(url, options),
     );
+  }
+
+  @visibleForTesting
+  List<String> buildAudioDownloadArguments(
+    String url,
+    DownloadOptions options,
+  ) {
+    return [
+      '--ignore-config',
+      '--newline',
+      '--no-playlist',
+      '--fixup',
+      'never',
+      '--downloader',
+      'native',
+      '--progress',
+      '--progress-template',
+      _progressTemplate,
+      '--progress-delta',
+      '0.2',
+      '--print',
+      'after_move:filepath',
+      '-f',
+      AppConstants.preferredNativeAudioFormat,
+      if (options.restrictFileNames) '--restrict-filenames',
+      '-o',
+      buildAudioOutputTemplate(options),
+      url,
+    ];
+  }
+
+  @visibleForTesting
+  String buildAudioOutputTemplate(DownloadOptions options) {
+    final fileName =
+        options.fileName == null || options.fileName!.trim().isEmpty
+        ? '%(uploader,channel,artist|BStream)s - %(title)s'
+        : safeFileName(options.fileName!);
+    return p.join(options.outputDirectory, '$fileName.%(ext)s');
+  }
+
+  @visibleForTesting
+  bool isSupportedAudioFilePath(String filePath) {
+    return _audioFileExtensions.contains(p.extension(filePath).toLowerCase());
   }
 
   Future<String> _runYtDlp(List<String> args) async {
@@ -199,23 +236,12 @@ class DesktopDownloaderService implements DownloaderService {
     required DownloadMediaType mediaType,
     required List<String> args,
   }) async {
-    final taskId = _uuid.v4();
+    final requestedTaskId = options.taskId?.trim();
+    final taskId = requestedTaskId == null || requestedTaskId.isEmpty
+        ? _uuid.v4()
+        : requestedTaskId;
     final outputDirectory = Directory(options.outputDirectory);
     await outputDirectory.create(recursive: true);
-
-    final template = _outputTemplate(options, mediaType);
-    final ffmpegPath = await getFfmpegPath();
-    final fullArgs = [
-      ...args,
-      if (options.restrictFileNames) '--restrict-filenames',
-      if (ffmpegPath != null && ffmpegPath.trim().isNotEmpty) ...[
-        '--ffmpeg-location',
-        ffmpegPath,
-      ],
-      '-o',
-      template,
-      url,
-    ];
 
     _emitProgress(
       DownloadProgress(
@@ -228,7 +254,7 @@ class DesktopDownloaderService implements DownloaderService {
     );
 
     final executable = await getYtDlpPath();
-    final process = await _startProcess(executable, fullArgs);
+    final process = await _startProcess(executable, args);
     final errorBuffer = StringBuffer();
     String? printedFilePath;
 
@@ -258,7 +284,11 @@ class DesktopDownloaderService implements DownloaderService {
       final stderrDone = process.stderr
           .transform(const Utf8Decoder(allowMalformed: true))
           .transform(const LineSplitter())
-          .listen((line) => errorBuffer.writeln(line))
+          .listen((line) {
+            if (!_handleProgressLine(taskId, url, line)) {
+              errorBuffer.writeln(line);
+            }
+          })
           .asFuture<void>();
 
       final exitCode = await process.exitCode;
@@ -333,7 +363,7 @@ class DesktopDownloaderService implements DownloaderService {
       }
       final process = await Process.start(
         executable,
-        args,
+        buildYtDlpProcessArguments(executable, args),
         environment: environment,
       );
       _activeProcesses[process.pid] = process;
@@ -369,34 +399,63 @@ class DesktopDownloaderService implements DownloaderService {
     process.kill();
   }
 
-  String _outputTemplate(DownloadOptions options, DownloadMediaType mediaType) {
-    final extension = options.audioFormat;
-    final fileName =
-        options.fileName == null || options.fileName!.trim().isEmpty
-        ? '%(uploader,channel,artist|BStream)s - %(title)s'
-        : safeFileName(options.fileName!);
-    return p.join(options.outputDirectory, '$fileName.$extension');
-  }
-
-  void _handleProgressLine(String taskId, String url, String line) {
-    final match = RegExp(
-      r'\[download\]\s+([0-9]+(?:\.[0-9]+)?)%',
-    ).firstMatch(line);
-    if (match == null) {
-      return;
+  bool _handleProgressLine(String taskId, String url, String line) {
+    final sample = parseAudioDownloadProgressLine(line);
+    if (sample == null) {
+      return false;
     }
 
-    final rawProgress = double.tryParse(match.group(1)!);
-    final eta = RegExp(r'ETA\s+([0-9:]+)').firstMatch(line)?.group(1);
+    final progress = sample.progress.clamp(0.0, 0.98).toDouble();
     _emitProgress(
       DownloadProgress(
         taskId: taskId,
         url: url,
         status: DownloadProgressStatus.running,
-        progress: rawProgress == null ? null : rawProgress / 100,
-        message: line.replaceFirst('[download]', '').trim(),
-        eta: _parseEta(eta),
+        progress: progress,
+        message: 'Descargando ${(progress * 100).toStringAsFixed(1)}%',
+        eta: sample.eta,
       ),
+    );
+    return true;
+  }
+
+  @visibleForTesting
+  ({double progress, Duration? eta})? parseAudioDownloadProgressLine(
+    String line,
+  ) {
+    final structured = RegExp(
+      r'BSTREAM_PROGRESS\|\s*~?\s*([0-9]+(?:\.[0-9]+)?)%\|([^|\r\n]*)',
+    ).firstMatch(line);
+    if (structured != null) {
+      final rawProgress = double.tryParse(structured.group(1)!);
+      if (rawProgress == null) {
+        return null;
+      }
+      final rawEta = structured.group(2)?.trim();
+      final etaSeconds = rawEta == null ? null : double.tryParse(rawEta);
+      return (
+        progress: (rawProgress / 100).clamp(0.0, 1.0).toDouble(),
+        eta: etaSeconds == null || !etaSeconds.isFinite || etaSeconds < 0
+            ? null
+            : Duration(milliseconds: (etaSeconds * 1000).round()),
+      );
+    }
+
+    final standard = RegExp(
+      r'\[download\]\s+([0-9]+(?:\.[0-9]+)?)%',
+    ).firstMatch(line);
+    final rawProgress = standard == null
+        ? null
+        : double.tryParse(standard.group(1)!);
+    if (rawProgress == null) {
+      return null;
+    }
+    final eta = RegExp(
+      r'ETA\s+((?:[0-9]+:)?[0-9]{1,2}:[0-9]{2})',
+    ).firstMatch(line)?.group(1);
+    return (
+      progress: (rawProgress / 100).clamp(0.0, 1.0).toDouble(),
+      eta: _parseEta(eta),
     );
   }
 
@@ -416,23 +475,10 @@ class DesktopDownloaderService implements DownloaderService {
     Directory directory,
     DownloadMediaType mediaType,
   ) async {
-    final allowedExtensions = {
-      '.mp3',
-      '.m4a',
-      '.opus',
-      '.flac',
-      '.aac',
-      '.wav',
-    };
-
     final files = await directory
         .list()
         .where(
-          (entity) =>
-              entity is File &&
-              allowedExtensions.contains(
-                p.extension(entity.path).toLowerCase(),
-              ),
+          (entity) => entity is File && isSupportedAudioFilePath(entity.path),
         )
         .cast<File>()
         .toList();
@@ -448,7 +494,7 @@ class DesktopDownloaderService implements DownloaderService {
     try {
       final result = await Process.run(
         executable,
-        args,
+        buildYtDlpProcessArguments(executable, args),
         stdoutEncoding: const Utf8Codec(allowMalformed: true),
         stderrEncoding: const Utf8Codec(allowMalformed: true),
       );
@@ -456,6 +502,65 @@ class DesktopDownloaderService implements DownloaderService {
     } on ProcessException {
       return false;
     }
+  }
+
+  @visibleForTesting
+  List<String> buildYtDlpProcessArguments(
+    String ytDlpExecutable,
+    List<String> args,
+  ) {
+    final arguments = List<String>.of(args);
+    if (!arguments.contains('--ignore-config')) {
+      arguments.insert(0, '--ignore-config');
+    }
+    var insertionIndex = arguments.indexOf('--ignore-config') + 1;
+
+    final deno = _findBundledDeno(ytDlpExecutable);
+    if (deno != null && !_hasJavaScriptRuntime(arguments, 'deno')) {
+      arguments.insertAll(insertionIndex, [
+        '--js-runtimes',
+        'deno:${p.absolute(deno)}',
+      ]);
+      insertionIndex += 2;
+    }
+
+    // Deno is bundled in release builds. Explicitly enabling Node as a second
+    // choice also keeps local/development builds working when Deno has not yet
+    // been provisioned but a supported Node installation is on PATH.
+    if (!_hasJavaScriptRuntime(arguments, 'node')) {
+      arguments.insertAll(insertionIndex, const ['--js-runtimes', 'node']);
+    }
+    return arguments;
+  }
+
+  bool _hasJavaScriptRuntime(List<String> args, String runtime) {
+    for (var index = 0; index < args.length; index++) {
+      final argument = args[index];
+      String? value;
+      if (argument == '--js-runtimes' && index + 1 < args.length) {
+        value = args[index + 1];
+      } else if (argument.startsWith('--js-runtimes=')) {
+        value = argument.substring('--js-runtimes='.length);
+      }
+      if (value != null &&
+          (value == runtime || value.startsWith('$runtime:'))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String? _findBundledDeno(String ytDlpExecutable) {
+    final executable = File(ytDlpExecutable);
+    if (executable.isAbsolute) {
+      for (final name in const ['deno.exe', 'deno']) {
+        final sibling = File(p.join(executable.parent.path, name));
+        if (sibling.existsSync()) {
+          return sibling.path;
+        }
+      }
+    }
+    return _findBundledTool(const ['deno.exe', 'deno']);
   }
 
   String? _findBundledTool(List<String> relativeNames) {
