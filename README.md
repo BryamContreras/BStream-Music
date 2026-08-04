@@ -388,12 +388,12 @@ BStream-Music-1.2.1-macOS-x64.pkg
 
 ### Which file should I install?
 
-- **Most Android phones and tablets:** install `BStream-Music-1.2.1-Android-arm64-v8a.apk`.
-- **Android x86_64 devices and emulators:** install `BStream-Music-1.2.1-Android-x86_64.apk`.
+- **Most Android phones and tablets:** install `BStream-Music-1.2.2-Android-arm64-v8a.apk`.
+- **Android x86_64 devices and emulators:** install `BStream-Music-1.2.2-Android-x86_64.apk`.
 - **Windows 64-bit:** open `Setup.exe`. The installer shows a language selector, creates a Start Menu shortcut, and lets you choose whether to create a desktop shortcut. The uninstaller entry is displayed as `BStream Music` without the version number.
-- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.2.1-linux-amd64.deb`.
-- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.2.1-linux-x86_64.rpm`.
-- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.2.1-macOS-arm64.pkg`.
+- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.2.2-linux-amd64.deb`.
+- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.2.2-linux-x86_64.rpm`.
+- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.2.2-macOS-arm64.pkg`.
 - **Mac with an Intel processor:** open `BStream-Music-1.2.1-macOS-x64.pkg`.
 
 An `.app` is the complete application and should be opened as one unit, not by entering its `Contents`, `Frameworks`, or `Resources` folders. The `.pkg` installer places `BStream Music.app` in `/Applications` automatically.
