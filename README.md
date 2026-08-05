@@ -6,9 +6,7 @@ Current version: **1.2.1+121**.
 
 > The repository does not store media content or third-party binaries. CI-generated desktop installers download and bundle verified copies of `yt-dlp` and Deno. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
 
-<img width="1317" height="774" alt="imagen" src="https://github.com/user-attachments/assets/40e3057f-dfa0-4c51-aa40-905195e81e99" /> <img width="1317" height="770" alt="Capture1" src="https://github.com/user-attachments/assets/b86973f9-c578-444a-b474-3ca1842c56d6" />
-
-
+<img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
 
 ## Main features
 
