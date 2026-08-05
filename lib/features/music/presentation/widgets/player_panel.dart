@@ -990,9 +990,20 @@ class _PlaybackButtons extends ConsumerWidget {
           compactPlaySize,
           compactness,
         )!;
-        final smallIconSize = (smallButtonSize * 0.62).clamp(22.0, 34.0);
-        final sideIconSize = (sideButtonSize * 0.84).clamp(36.0, 58.0);
+        final compactPrimaryIconScale = compactness > 0.9 ? 0.86 : 0.84;
+        final sideIconSize = (sideButtonSize * compactPrimaryIconScale).clamp(36.0, 58.0);
         final playIconSize = (playSize * 0.62).clamp(40.0, 64.0);
+        final secondarySideButtonSize = (sideButtonSize - 4.0).clamp(42.0, 66.0);
+        final secondarySideIconSize =
+            (secondarySideButtonSize * 0.84).clamp(30.0, 50.0);
+        final largerSideButtonSize = (sideButtonSize + 4.0).clamp(52.0, 76.0);
+        final largerSideIconSize =
+            (largerSideButtonSize * 0.84).clamp(38.0, 58.0);
+        final enlargedPlaySize = (playSize + 6.0).clamp(
+          roomy ? 84.0 : 76.0,
+          compact ? 94.0 : 116.0,
+        );
+        final enlargedPlayIconSize = (enlargedPlaySize * 0.64).clamp(42.0, 68.0);
         final centerGap = narrow ? 9.0 : (width * 0.034).clamp(9.0, 32.0);
         final outerGap = narrow ? 16.0 : (width * 0.075).clamp(16.0, 60.0);
         final edgeGap = narrow ? 6.0 : (width * 0.018).clamp(8.0, 16.0);
@@ -1005,9 +1016,9 @@ class _PlaybackButtons extends ConsumerWidget {
               children: [
                 _ControlButton(
                   key: const ValueKey('player-lyrics-control'),
-                  size: sideButtonSize,
+                  size: secondarySideButtonSize,
                   tooltip: strings.lyrics,
-                  iconSize: sideIconSize,
+                  iconSize: secondarySideIconSize,
                   color: inactiveColor,
                   icon: Icons.lyrics_rounded,
                   onPressed: hasTrack ? onOpenLyrics : null,
@@ -1015,11 +1026,11 @@ class _PlaybackButtons extends ConsumerWidget {
                 SizedBox(width: edgeGap),
                 _ControlButton(
                   key: const ValueKey('player-shuffle-control'),
-                  size: sideButtonSize,
+                  size: secondarySideButtonSize,
                   tooltip: snapshot.shuffleEnabled
                       ? strings.deactivateShuffle
                       : strings.activateShuffle,
-                  iconSize: sideIconSize,
+                  iconSize: secondarySideIconSize,
                   color: snapshot.shuffleEnabled ? activeColor : inactiveColor,
                   icon: Icons.shuffle_rounded,
                   onPressed: hasTrack
@@ -1030,9 +1041,9 @@ class _PlaybackButtons extends ConsumerWidget {
                 ),
                 SizedBox(width: outerGap),
                 _ControlButton(
-                  size: sideButtonSize,
+                  size: largerSideButtonSize,
                   tooltip: strings.previous,
-                  iconSize: sideIconSize,
+                  iconSize: largerSideIconSize,
                   color: const Color(0xFFF5FFF7),
                   icon: Icons.skip_previous_rounded,
                   onPressed: hasTrack
@@ -1043,8 +1054,8 @@ class _PlaybackButtons extends ConsumerWidget {
                 ),
                 SizedBox(width: centerGap),
                 SizedBox(
-                  width: playSize,
-                  height: playSize,
+                  width: enlargedPlaySize,
+                  height: enlargedPlaySize,
                   child: IconButton.filled(
                     key: const ValueKey('player-primary-control'),
                     tooltip: isPlaying ? strings.pause : strings.play,
@@ -1057,8 +1068,9 @@ class _PlaybackButtons extends ConsumerWidget {
                           AppColors.playbackPrimaryDisabledForeground,
                     ),
                     padding: EdgeInsets.zero,
-                    constraints: BoxConstraints.tight(Size.square(playSize)),
-                    iconSize: playIconSize,
+                    constraints:
+                        BoxConstraints.tight(Size.square(enlargedPlaySize)),
+                    iconSize: enlargedPlayIconSize,
                     icon: Icon(
                       isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                     ),
@@ -1071,9 +1083,9 @@ class _PlaybackButtons extends ConsumerWidget {
                 ),
                 SizedBox(width: centerGap),
                 _ControlButton(
-                  size: sideButtonSize,
+                  size: largerSideButtonSize,
                   tooltip: strings.next,
-                  iconSize: sideIconSize,
+                  iconSize: largerSideIconSize,
                   color: const Color(0xFFF5FFF7),
                   icon: Icons.skip_next_rounded,
                   onPressed: hasTrack
@@ -1085,13 +1097,13 @@ class _PlaybackButtons extends ConsumerWidget {
                 SizedBox(width: outerGap),
                 _ControlButton(
                   key: const ValueKey('player-repeat-control'),
-                  size: sideButtonSize,
+                  size: secondarySideButtonSize,
                   tooltip: switch (snapshot.repeatMode) {
                     PlaybackRepeatMode.off => strings.repeatQueue,
                     PlaybackRepeatMode.all => strings.repeatOne,
                     PlaybackRepeatMode.one => strings.disableRepeat,
                   },
-                  iconSize: sideIconSize,
+                  iconSize: secondarySideIconSize,
                   color: snapshot.repeatMode == PlaybackRepeatMode.off
                       ? inactiveColor
                       : activeColor,
@@ -1108,9 +1120,9 @@ class _PlaybackButtons extends ConsumerWidget {
                 _VolumeButton(
                   key: const ValueKey('player-volume-control'),
                   snapshot: snapshot,
-                  size: sideButtonSize,
+                  size: secondarySideButtonSize,
                   tooltip: strings.volume,
-                  iconSize: sideIconSize,
+                  iconSize: secondarySideIconSize,
                   color: const Color(0xFFE4EEE7),
                 ),
               ],
