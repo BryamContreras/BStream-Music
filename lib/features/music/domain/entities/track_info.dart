@@ -7,6 +7,8 @@ class TrackInfo {
     this.thumbnailUrl,
     this.duration,
     this.streamUrl,
+    this.streamExtension,
+    this.streamMimeType,
     this.extractor,
     this.album,
     this.viewCount,
@@ -20,6 +22,8 @@ class TrackInfo {
   final String? thumbnailUrl;
   final Duration? duration;
   final String? streamUrl;
+  final String? streamExtension;
+  final String? streamMimeType;
   final String? extractor;
   final String? album;
   final int? viewCount;
@@ -33,6 +37,8 @@ class TrackInfo {
     String? thumbnailUrl,
     Duration? duration,
     String? streamUrl,
+    String? streamExtension,
+    String? streamMimeType,
     String? extractor,
     String? album,
     int? viewCount,
@@ -46,6 +52,8 @@ class TrackInfo {
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
       duration: duration ?? this.duration,
       streamUrl: streamUrl ?? this.streamUrl,
+      streamExtension: streamExtension ?? this.streamExtension,
+      streamMimeType: streamMimeType ?? this.streamMimeType,
       extractor: extractor ?? this.extractor,
       album: album ?? this.album,
       viewCount: viewCount ?? this.viewCount,

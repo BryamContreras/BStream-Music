@@ -163,13 +163,15 @@ class JustAudioPlayerService implements PlayerService {
     _remoteStartupWatch = Stopwatch()..start();
     _loggedRemoteDuration = track.duration != null;
     developer.log(
-      'playRemote start, hasDuration=${track.duration != null}, hasHeaders=${track.httpHeaders?.isNotEmpty == true}',
+      'playRemote start, hasDuration=${track.duration != null}, '
+      'hasHeaders=${track.httpHeaders?.isNotEmpty == true}, '
+      'format=${track.streamExtension ?? 'unknown'}',
       name: 'BStreamPlayback',
     );
     try {
       await _player.setAudioSource(
         AudioSource.uri(
-          Uri.parse(source),
+          _remoteSourceUri(track),
           headers: track.httpHeaders,
           tag: _remoteMediaItem(track),
         ),
@@ -437,6 +439,41 @@ class JustAudioPlayerService implements PlayerService {
     return AudioSource.file(track.filePath, tag: _localMediaItem(track));
   }
 
+  Uri _remoteSourceUri(TrackInfo track) {
+    final source = Uri.parse(track.streamUrl!);
+    if (source.fragment.isNotEmpty || _hasKnownAudioExtension(source.path)) {
+      return source;
+    }
+
+    final extension = _remoteExtension(track);
+    return extension == null ? source : source.replace(fragment: '.$extension');
+  }
+
+  String? _remoteExtension(TrackInfo track) {
+    final direct = track.streamExtension?.trim().toLowerCase();
+    if (direct != null && direct.isNotEmpty) {
+      return direct.replaceFirst('.', '');
+    }
+
+    final mime = track.streamMimeType?.split(';').first.trim().toLowerCase();
+    return switch (mime) {
+      'audio/mp4' => 'm4a',
+      'audio/aac' => 'aac',
+      'audio/mpeg' => 'mp3',
+      'audio/webm' => 'webm',
+      'audio/ogg' => 'ogg',
+      'audio/wav' || 'audio/x-wav' => 'wav',
+      _ => null,
+    };
+  }
+
+  bool _hasKnownAudioExtension(String path) {
+    return RegExp(
+      r'\.(?:m4a|mp4|aac|mp3|webm|weba|ogg|oga|opus|wav)$',
+      caseSensitive: false,
+    ).hasMatch(path);
+  }
+
   MediaItem _remoteMediaItem(TrackInfo track) {
     return MediaItem(
       id: track.id.isEmpty ? track.url : track.id,
@@ -588,8 +625,6 @@ class JustAudioPlayerService implements PlayerService {
         }
         request.headers.set(key, value);
       });
-      request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-1');
-
       final response = await request.close().timeout(
         const Duration(seconds: 6),
       );
@@ -599,10 +634,11 @@ class JustAudioPlayerService implements PlayerService {
           ? 'HTTP $status'
           : 'HTTP $status ($reason)';
 
-      // Cancel after the headers arrive. The probe must never download the
-      // audio stream or retain a second copy of the media.
-      final subscription = response.listen((_) {});
-      await subscription.cancel();
+      // Read only the first response chunk. This is enough to recognize the
+      // container while never downloading or retaining the audio stream.
+      final firstChunk = await response.first;
+      final signature = _mediaSignature(firstChunk);
+      final signatureText = signature == null ? '' : '; detected $signature';
 
       if (status >= 400) {
         return statusText;
@@ -610,7 +646,7 @@ class JustAudioPlayerService implements PlayerService {
 
       final contentType = response.headers.contentType?.mimeType;
       final typeText = contentType == null ? '' : '; content-type $contentType';
-      return '$statusText$typeText; ExoPlayer no pudo decodificar la respuesta';
+      return '$statusText$typeText$signatureText; ExoPlayer no pudo decodificar la respuesta';
     } on TimeoutException {
       return 'HTTP timeout';
     } on SocketException {
@@ -622,6 +658,30 @@ class JustAudioPlayerService implements PlayerService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  String? _mediaSignature(List<int> bytes) {
+    if (bytes.length >= 8 &&
+        String.fromCharCodes(bytes.sublist(4, 8)) == 'ftyp') {
+      return 'MP4';
+    }
+    if (bytes.length >= 4 &&
+        bytes[0] == 0x1a &&
+        bytes[1] == 0x45 &&
+        bytes[2] == 0xdf &&
+        bytes[3] == 0xa3) {
+      return 'WebM';
+    }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0x49 &&
+        bytes[1] == 0x44 &&
+        bytes[2] == 0x33) {
+      return 'MP3';
+    }
+    if (bytes.isNotEmpty && bytes.first == 0x3c) {
+      return 'HTML';
+    }
+    return null;
   }
 
   String _playerErrorMessage(Object error) {

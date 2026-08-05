@@ -205,6 +205,7 @@ class MainActivity : AudioServiceActivity() {
             val startedAt = SystemClock.elapsedRealtime()
             val request = YoutubeDLRequest(url)
             addBaseNetworkOptions(request)
+            addYoutubePlaybackOptions(request)
             request.addOption("--dump-single-json")
             request.addOption("--skip-download")
             request.addOption("--no-playlist")
@@ -240,6 +241,11 @@ class MainActivity : AudioServiceActivity() {
                 "original_url" to (info.nonBlankString("original_url") ?: url),
                 "url" to url,
                 "streamUrl" to streamUrl,
+                "stream_extension" to (
+                    selectedFormat.nonBlankString("audio_ext")
+                        ?: selectedFormat.nonBlankString("ext")
+                    ),
+                "stream_mime_type" to selectedFormat.nonBlankString("mime_type"),
                 "thumbnail" to info.nonBlankString("thumbnail"),
                 "duration" to info.opt("duration").takeUnless { it == JSONObject.NULL },
                 "extractor" to info.nonBlankString("extractor"),
@@ -525,6 +531,10 @@ class MainActivity : AudioServiceActivity() {
         request.addOption("--socket-timeout", "20")
     }
 
+    private fun addYoutubePlaybackOptions(request: YoutubeDLRequest) {
+        request.addOption("--extractor-args", YOUTUBE_EXTRACTOR_ARGS)
+    }
+
     private fun <T> executeWithExtractorRetry(
         operation: String,
         onRetry: (() -> Unit)? = null,
@@ -703,6 +713,8 @@ class MainActivity : AudioServiceActivity() {
             "download:BSTREAM_PROGRESS|%(progress._percent_str)s|%(progress.eta)s"
         private const val AUDIO_FORMAT_SELECTOR =
             "bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[acodec^=mp4a]/bestaudio[acodec^=aac]/bestaudio"
+        private const val YOUTUBE_EXTRACTOR_ARGS =
+            "youtube:player_client=android_vr"
         private val STRUCTURED_PROGRESS_REGEX =
             Regex("""BSTREAM_PROGRESS\|\s*~?\s*([0-9]+(?:\.[0-9]+)?)%\|([^|\r\n]*)""")
         private val STANDARD_PROGRESS_REGEX =

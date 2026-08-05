@@ -91,6 +91,8 @@ void main() {
       track.streamUrl,
       'https://rr2---sn.googlevideo.com/videoplayback?itag=140',
     );
+    expect(track.streamExtension, 'm4a');
+    expect(track.streamMimeType, 'audio/mp4');
     expect(track.httpHeaders, {'User-Agent': 'Mozilla/5.0', 'Accept': '*/*'});
   });
 

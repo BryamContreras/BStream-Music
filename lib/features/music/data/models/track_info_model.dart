@@ -9,6 +9,8 @@ class TrackInfoModel extends TrackInfo {
     super.thumbnailUrl,
     super.duration,
     super.streamUrl,
+    super.streamExtension,
+    super.streamMimeType,
     super.extractor,
     super.album,
     super.viewCount,
@@ -33,6 +35,8 @@ class TrackInfoModel extends TrackInfo {
       thumbnailUrl: _thumbnailUrl(json),
       duration: _durationValue(json['duration']),
       streamUrl: _stringValue(json['streamUrl']) ?? _streamUrl(json),
+      streamExtension: _streamExtension(json),
+      streamMimeType: _streamMimeType(json),
       extractor:
           _stringValue(json['extractor']) ??
           _stringValue(json['extractor_key']) ??
@@ -58,6 +62,8 @@ class TrackInfoModel extends TrackInfo {
       'thumbnail': thumbnailUrl,
       'duration': duration?.inSeconds,
       'streamUrl': streamUrl,
+      'stream_extension': streamExtension,
+      'stream_mime_type': streamMimeType,
       'extractor': extractor,
       'album': album,
       'view_count': viewCount,
@@ -151,6 +157,81 @@ class TrackInfoModel extends TrackInfo {
     }
 
     return _headersFromFormats(json['formats']);
+  }
+
+  static String? _streamExtension(Map<String, dynamic> json) {
+    final direct = _normalizeExtension(
+      _stringValue(json['stream_extension']) ??
+          _stringValue(json['audio_ext']) ??
+          _stringValue(json['ext']),
+    );
+    if (direct != null) {
+      return direct;
+    }
+
+    final format = _selectedStreamFormat(json);
+    return _normalizeExtension(
+      _stringValue(format?['audio_ext']) ?? _stringValue(format?['ext']),
+    );
+  }
+
+  static String? _streamMimeType(Map<String, dynamic> json) {
+    final direct =
+        _stringValue(json['stream_mime_type']) ??
+        _stringValue(json['mime_type']);
+    if (direct != null) {
+      return direct.toLowerCase();
+    }
+
+    final formatMime = _stringValue(_selectedStreamFormat(json)?['mime_type']);
+    if (formatMime != null) {
+      return formatMime.toLowerCase();
+    }
+
+    return _mimeTypeForExtension(_streamExtension(json));
+  }
+
+  static Map<dynamic, dynamic>? _selectedStreamFormat(
+    Map<String, dynamic> json,
+  ) {
+    for (final key in const ['requested_downloads', 'requested_formats']) {
+      final formats = json[key];
+      if (formats is! List) {
+        continue;
+      }
+      final preferred = _preferredAudioFormat(formats);
+      if (preferred != null) {
+        return preferred;
+      }
+      for (final format in formats.whereType<Map>()) {
+        if (_stringValue(format['url'])?.startsWith('http') == true) {
+          return format;
+        }
+      }
+    }
+
+    final formats = json['formats'];
+    if (formats is List) {
+      return _preferredAudioFormat(formats);
+    }
+    return null;
+  }
+
+  static String? _normalizeExtension(String? extension) {
+    final value = extension?.trim().toLowerCase().replaceFirst('.', '');
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  static String? _mimeTypeForExtension(String? extension) {
+    return switch (extension) {
+      'm4a' || 'mp4' => 'audio/mp4',
+      'aac' => 'audio/aac',
+      'mp3' => 'audio/mpeg',
+      'webm' || 'weba' => 'audio/webm',
+      'ogg' || 'oga' || 'opus' => 'audio/ogg',
+      'wav' => 'audio/wav',
+      _ => null,
+    };
   }
 
   static Map<String, String>? _headersFromFormats(Object? formats) {

@@ -49,6 +49,8 @@ void main() {
             'artist': 'Artist',
             'webpage_url': 'https://www.youtube.com/watch?v=video-id',
             'streamUrl': 'https://media.example/audio.m4a',
+            'stream_extension': 'm4a',
+            'stream_mime_type': 'audio/mp4',
             'http_headers': <String, String>{
               'User-Agent': 'BStream test agent',
               'Referer': 'https://www.youtube.com/',
@@ -71,6 +73,8 @@ void main() {
     );
 
     expect(track.streamUrl, 'https://media.example/audio.m4a');
+    expect(track.streamExtension, 'm4a');
+    expect(track.streamMimeType, 'audio/mp4');
     expect(track.httpHeaders, {
       'User-Agent': 'BStream test agent',
       'Referer': 'https://www.youtube.com/',
