@@ -77,9 +77,17 @@ abstract class PlayerService {
   Stream<PlayerSnapshot> get snapshotStream;
   PlayerSnapshot get currentSnapshot;
 
+  /// Whether this backend can update an already loaded local playlist without
+  /// reopening the current track.
+  bool get supportsLocalQueueReplacement;
+
   Future<void> playRemote(TrackInfo track);
   Future<void> playLocal(LocalTrack track);
   Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex);
+
+  /// Replaces the loaded local queue while retaining the current item when it
+  /// is still present. [preferredIndex] is used if that item was removed.
+  Future<void> replaceLocalQueue(List<LocalTrack> tracks, int preferredIndex);
   Future<void> pause();
   Future<void> resume();
   Future<void> togglePlayPause();

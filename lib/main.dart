@@ -20,6 +20,11 @@ Future<void> main() async {
       androidNotificationIcon: 'drawable/ic_stat_bstream_music',
       androidNotificationOngoing: true,
       androidShowNotificationBadge: true,
+      // Notification artwork is decoded by Android and kept in a native LRU
+      // cache. Bounding it prevents high-resolution thumbnails from creating
+      // avoidable memory pressure during long background sessions.
+      artDownscaleWidth: 320,
+      artDownscaleHeight: 320,
     );
   }
   runApp(const ProviderScope(child: BStreamMusicApp()));

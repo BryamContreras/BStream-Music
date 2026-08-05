@@ -190,11 +190,18 @@ class LocalDatabaseService {
     });
   }
 
-  Future<void> markPlayed(String trackId, DateTime playedAt) async {
+  Future<void> markPlayed(
+    String trackId,
+    DateTime playedAt, {
+    String? playlistId,
+  }) async {
     final db = await database;
     await db.update(
       'local_tracks',
-      {'last_played_at': playedAt.toIso8601String()},
+      {
+        'last_played_at': playedAt.toIso8601String(),
+        'last_played_playlist_id': playlistId,
+      },
       where: 'id = ?',
       whereArgs: [trackId],
     );
@@ -228,7 +235,19 @@ class LocalDatabaseService {
 
   Future<void> deletePlaylist(String playlistId) async {
     final db = await database;
-    await db.delete('playlists', where: 'id = ?', whereArgs: [playlistId]);
+    await db.transaction((transaction) async {
+      await transaction.update(
+        'local_tracks',
+        {'last_played_playlist_id': null},
+        where: 'last_played_playlist_id = ?',
+        whereArgs: [playlistId],
+      );
+      await transaction.delete(
+        'playlists',
+        where: 'id = ?',
+        whereArgs: [playlistId],
+      );
+    });
   }
 
   Future<Database> _open() async {
@@ -254,7 +273,8 @@ class LocalDatabaseService {
             thumbnail_path TEXT,
             duration_seconds INTEGER,
             added_at TEXT NOT NULL,
-            last_played_at TEXT
+            last_played_at TEXT,
+            last_played_playlist_id TEXT
           )
         ''');
         await db.execute('''
@@ -276,6 +296,12 @@ class LocalDatabaseService {
         }
         if (oldVersion < 3) {
           await _createIndexes(db);
+        }
+        if (oldVersion < 4) {
+          await db.execute(
+            'ALTER TABLE local_tracks '
+            'ADD COLUMN last_played_playlist_id TEXT',
+          );
         }
       },
     );

@@ -102,6 +102,7 @@ void main() {
           status: PlayerStatus.failed,
           trackId: 'q8j3zwNhLNo',
           sourceUrl: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+          position: Duration(minutes: 5, seconds: 12),
           isRemote: true,
           errorMessage: 'HTTP 403',
         ),
@@ -110,6 +111,7 @@ void main() {
 
       expect(repository.infoCalls, 2);
       expect(player.playedRemote.last.streamUrl, contains('refreshed.m4a'));
+      expect(player.lastSeekPosition, const Duration(minutes: 5, seconds: 12));
       expect(container.read(playbackQueueProvider).currentIndex, 0);
 
       player.emit(
@@ -482,6 +484,263 @@ void main() {
   );
 
   test(
+    'queue-capable mobile service keeps an editable playlist native',
+    () async {
+      final player = _FakePlayerService(supportsLocalQueueReplacement: true);
+      final repository = _FakeLibraryRepository()
+        ..localTracks.addAll([_track(1), _track(2)])
+        ..playlists.add(
+          Playlist(
+            id: 'native-playlist',
+            name: 'Native playlist',
+            trackIds: const ['track-1'],
+            createdAt: DateTime(2026),
+            updatedAt: DateTime(2026),
+          ),
+        );
+      final container = _container(player, repository: repository);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container.read(playlistsControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(
+            _track(1),
+            queue: [_track(1)],
+            useNativeQueue: false,
+            queueSourceId: PlayerController.playlistQueueSourceId(
+              'native-playlist',
+            ),
+          );
+
+      expect(player.playLocalQueueCalls, 1);
+      expect(player.playedLocalIds, ['track-1']);
+
+      await container
+          .read(playlistsControllerProvider.notifier)
+          .addTrackToPlaylist('native-playlist', 'track-2');
+
+      expect(player.replaceLocalQueueCalls, 1);
+      expect(player.lastLocalQueue?.map((track) => track.id), [
+        'track-1',
+        'track-2',
+      ]);
+      expect(player.lastLocalQueueIndex, 0);
+
+      player.emit(
+        const PlayerSnapshot(status: PlayerStatus.playing, trackId: 'track-2'),
+      );
+      await _flushCompletion();
+
+      expect(player.playLocalQueueCalls, 1);
+      expect(repository.playMarks.last, (
+        trackId: 'track-2',
+        playlistId: 'native-playlist',
+      ));
+    },
+  );
+
+  test(
+    'recent playback rebuilds its playlist and keeps context on automatic next',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeLibraryRepository()
+        ..localTracks.addAll([_track(1), _track(2), _track(3)])
+        ..playlists.add(
+          Playlist(
+            id: 'recent-playlist',
+            name: 'Recent playlist',
+            trackIds: const ['track-3', 'track-1', 'track-2'],
+            createdAt: DateTime(2026),
+            updatedAt: DateTime(2026),
+          ),
+        );
+      final container = _container(player, repository: repository);
+      addTearDown(container.dispose);
+      final historyTrack = _track(
+        1,
+      ).copyWith(lastPlayedPlaylistId: 'recent-playlist');
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playFromHistory(historyTrack, fallbackQueue: [historyTrack]);
+
+      expect(player.playLocalQueueCalls, 0);
+      expect(player.playedLocalIds, ['track-1']);
+      expect(
+        container.read(playbackQueueProvider).entries.map((entry) => entry.id),
+        ['track-3', 'track-1', 'track-2'],
+      );
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(repository.playMarks.last, (
+        trackId: 'track-1',
+        playlistId: 'recent-playlist',
+      ));
+
+      player.emit(
+        const PlayerSnapshot(status: PlayerStatus.stopped, trackId: 'track-1'),
+      );
+      await _flushCompletion();
+
+      expect(player.playedLocalIds, ['track-1', 'track-2']);
+      expect(container.read(playbackQueueProvider).currentIndex, 2);
+      expect(repository.playMarks.last, (
+        trackId: 'track-2',
+        playlistId: 'recent-playlist',
+      ));
+    },
+  );
+
+  test(
+    'native background track changes are recorded once with playlist context',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeLibraryRepository();
+      final container = _container(player, repository: repository);
+      addTearDown(container.dispose);
+      final tracks = [_track(1), _track(2)];
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(
+            tracks.first,
+            queue: tracks,
+            queueSourceId: PlayerController.playlistQueueSourceId(
+              'background-playlist',
+            ),
+          );
+
+      expect(repository.playMarks, [
+        (trackId: 'track-1', playlistId: 'background-playlist'),
+      ]);
+
+      // just_audio advances its native sequence without calling playLocal on
+      // the controller. The following snapshots also model the repeated
+      // position/state notifications received while the app is backgrounded.
+      player.emit(
+        const PlayerSnapshot(status: PlayerStatus.playing, trackId: 'track-2'),
+      );
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'track-2',
+          position: Duration(seconds: 1),
+        ),
+      );
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'track-2',
+          position: Duration(seconds: 2),
+        ),
+      );
+      await _flushCompletion();
+
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(repository.playMarks, [
+        (trackId: 'track-1', playlistId: 'background-playlist'),
+        (trackId: 'track-2', playlistId: 'background-playlist'),
+      ]);
+    },
+  );
+
+  test(
+    'notification selection is recorded when it starts playing, not while paused',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeLibraryRepository();
+      final container = _container(player, repository: repository);
+      addTearDown(container.dispose);
+      final tracks = [_track(1), _track(2)];
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(tracks.first, queue: tracks);
+
+      player.emit(
+        const PlayerSnapshot(status: PlayerStatus.paused, trackId: 'track-2'),
+      );
+      await _flushCompletion();
+      expect(repository.playMarks.map((mark) => mark.trackId), ['track-1']);
+
+      player.emit(
+        const PlayerSnapshot(status: PlayerStatus.playing, trackId: 'track-2'),
+      );
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'track-2',
+          position: Duration(milliseconds: 500),
+        ),
+      );
+      await _flushCompletion();
+
+      expect(repository.playMarks.map((mark) => mark.trackId), [
+        'track-1',
+        'track-2',
+      ]);
+    },
+  );
+
+  test(
+    'playing the same track standalone clears old playlist context',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeLibraryRepository();
+      final container = _container(player, repository: repository);
+      addTearDown(container.dispose);
+      final track = _track(1);
+
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playLocal(
+        track,
+        queue: [track],
+        useNativeQueue: false,
+        queueSourceId: PlayerController.playlistQueueSourceId('playlist-1'),
+      );
+      await controller.playLocal(track, queue: [track]);
+
+      expect(repository.playMarks, [
+        (trackId: 'track-1', playlistId: 'playlist-1'),
+        (trackId: 'track-1', playlistId: null),
+      ]);
+    },
+  );
+
+  test(
+    'legacy history without playlist context uses its fallback queue',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeLibraryRepository()
+        ..localTracks.addAll([_track(1), _track(2)]);
+      final container = _container(player, repository: repository);
+      addTearDown(container.dispose);
+      final legacyHistoryTrack = _track(2);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playFromHistory(
+            legacyHistoryTrack,
+            fallbackQueue: [_track(1), legacyHistoryTrack],
+          );
+
+      expect(player.playLocalQueueCalls, 1);
+      expect(player.lastLocalQueue?.map((track) => track.id), [
+        'track-1',
+        'track-2',
+      ]);
+      expect(player.lastLocalQueueIndex, 1);
+      expect(repository.playMarks.last.playlistId, isNull);
+    },
+  );
+
+  test(
     'desktop media session mirrors playback and routes system commands',
     () async {
       final player = _FakePlayerService();
@@ -637,6 +896,8 @@ TrackInfo _remoteTrack({required String streamUrl}) {
 }
 
 class _FakePlayerService implements PlayerService {
+  _FakePlayerService({this.supportsLocalQueueReplacement = false});
+
   final _controller = StreamController<PlayerSnapshot>.broadcast();
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   int playLocalQueueCalls = 0;
@@ -648,6 +909,12 @@ class _FakePlayerService implements PlayerService {
   final List<PlaybackRepeatMode> repeatModes = [];
   final List<String> playedLocalIds = [];
   final List<TrackInfo> playedRemote = [];
+  List<LocalTrack>? lastLocalQueue;
+  int? lastLocalQueueIndex;
+  int replaceLocalQueueCalls = 0;
+
+  @override
+  final bool supportsLocalQueueReplacement;
 
   @override
   PlayerSnapshot get currentSnapshot => _snapshot;
@@ -689,6 +956,8 @@ class _FakePlayerService implements PlayerService {
   @override
   Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
     playLocalQueueCalls++;
+    lastLocalQueue = List.unmodifiable(tracks);
+    lastLocalQueueIndex = initialIndex;
     await playLocal(tracks[initialIndex]);
   }
 
@@ -705,6 +974,16 @@ class _FakePlayerService implements PlayerService {
         isRemote: true,
       ),
     );
+  }
+
+  @override
+  Future<void> replaceLocalQueue(
+    List<LocalTrack> tracks,
+    int preferredIndex,
+  ) async {
+    replaceLocalQueueCalls++;
+    lastLocalQueue = List.unmodifiable(tracks);
+    lastLocalQueueIndex = preferredIndex;
   }
 
   @override
@@ -804,6 +1083,7 @@ class _FakeMusicRepository implements MusicRepository {
 class _FakeLibraryRepository implements LibraryRepository {
   final List<LocalTrack> localTracks = [];
   final List<Playlist> playlists = [];
+  final List<({String trackId, String? playlistId})> playMarks = [];
 
   @override
   Future<void> deleteLocalTrack(String trackId) async {}
@@ -840,7 +1120,13 @@ class _FakeLibraryRepository implements LibraryRepository {
   Future<List<Playlist>> getPlaylists() async => List.of(playlists);
 
   @override
-  Future<void> markPlayed(String trackId, DateTime playedAt) async {}
+  Future<void> markPlayed(
+    String trackId,
+    DateTime playedAt, {
+    String? playlistId,
+  }) async {
+    playMarks.add((trackId: trackId, playlistId: playlistId));
+  }
 
   @override
   Future<void> saveLocalTrack(LocalTrack track) async {}

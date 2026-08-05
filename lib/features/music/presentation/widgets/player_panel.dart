@@ -954,7 +954,6 @@ class _PlaybackButtons extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final activeColor = Theme.of(context).colorScheme.primary;
     final inactiveColor = const Color(0xFFC9D4CC);
-
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth.isFinite
@@ -1006,20 +1005,21 @@ class _PlaybackButtons extends ConsumerWidget {
               children: [
                 _ControlButton(
                   key: const ValueKey('player-lyrics-control'),
-                  size: smallButtonSize,
+                  size: sideButtonSize,
                   tooltip: strings.lyrics,
-                  iconSize: smallIconSize,
+                  iconSize: sideIconSize,
                   color: inactiveColor,
                   icon: Icons.lyrics_rounded,
                   onPressed: hasTrack ? onOpenLyrics : null,
                 ),
                 SizedBox(width: edgeGap),
                 _ControlButton(
-                  size: smallButtonSize,
+                  key: const ValueKey('player-shuffle-control'),
+                  size: sideButtonSize,
                   tooltip: snapshot.shuffleEnabled
                       ? strings.deactivateShuffle
                       : strings.activateShuffle,
-                  iconSize: smallIconSize,
+                  iconSize: sideIconSize,
                   color: snapshot.shuffleEnabled ? activeColor : inactiveColor,
                   icon: Icons.shuffle_rounded,
                   onPressed: hasTrack
@@ -1060,9 +1060,7 @@ class _PlaybackButtons extends ConsumerWidget {
                     constraints: BoxConstraints.tight(Size.square(playSize)),
                     iconSize: playIconSize,
                     icon: Icon(
-                      isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
+                      isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                     ),
                     onPressed: hasTrack
                         ? () => ref
@@ -1086,13 +1084,14 @@ class _PlaybackButtons extends ConsumerWidget {
                 ),
                 SizedBox(width: outerGap),
                 _ControlButton(
-                  size: smallButtonSize,
+                  key: const ValueKey('player-repeat-control'),
+                  size: sideButtonSize,
                   tooltip: switch (snapshot.repeatMode) {
                     PlaybackRepeatMode.off => strings.repeatQueue,
                     PlaybackRepeatMode.all => strings.repeatOne,
                     PlaybackRepeatMode.one => strings.disableRepeat,
                   },
-                  iconSize: smallIconSize,
+                  iconSize: sideIconSize,
                   color: snapshot.repeatMode == PlaybackRepeatMode.off
                       ? inactiveColor
                       : activeColor,
@@ -1109,9 +1108,9 @@ class _PlaybackButtons extends ConsumerWidget {
                 _VolumeButton(
                   key: const ValueKey('player-volume-control'),
                   snapshot: snapshot,
-                  size: smallButtonSize,
+                  size: sideButtonSize,
                   tooltip: strings.volume,
-                  iconSize: smallIconSize,
+                  iconSize: sideIconSize,
                   color: const Color(0xFFE4EEE7),
                 ),
               ],

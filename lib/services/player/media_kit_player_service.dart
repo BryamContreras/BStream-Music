@@ -79,6 +79,9 @@ class MediaKitPlayerService implements PlayerService {
   PlayerSnapshot get currentSnapshot => _snapshot;
 
   @override
+  bool get supportsLocalQueueReplacement => false;
+
+  @override
   Future<void> playRemote(TrackInfo track) async {
     final source = track.streamUrl;
     if (source == null || source.isEmpty) {
@@ -137,6 +140,46 @@ class MediaKitPlayerService implements PlayerService {
     }
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
     return playLocal(tracks[safeIndex]);
+  }
+
+  @override
+  Future<void> replaceLocalQueue(
+    List<LocalTrack> tracks,
+    int preferredIndex,
+  ) async {
+    // Desktop playback remains controller-managed. If the current item still
+    // exists, updating the controller queue is enough and preserves position.
+    if (tracks.any((track) => track.id == _snapshot.trackId)) {
+      return;
+    }
+    if (tracks.isEmpty) {
+      await stop();
+      return;
+    }
+
+    final safeIndex = preferredIndex.clamp(0, tracks.length - 1).toInt();
+    final track = tracks[safeIndex];
+    final shouldPlay = _snapshot.status == PlayerStatus.playing;
+    _emit(
+      PlayerSnapshot(
+        status: PlayerStatus.loading,
+        title: track.title,
+        artist: track.artist,
+        trackId: track.id,
+        sourceUrl: track.sourceUrl,
+        thumbnailUrl: track.thumbnailPath ?? track.thumbnailUrl,
+        duration: track.duration,
+        volume: _snapshot.volume,
+        isRemote: false,
+      ),
+    );
+    await _audioMetadataReady;
+    await _player.open(Media(track.filePath), play: shouldPlay);
+    _emit(
+      _snapshot.copyWith(
+        status: shouldPlay ? PlayerStatus.playing : PlayerStatus.paused,
+      ),
+    );
   }
 
   @override

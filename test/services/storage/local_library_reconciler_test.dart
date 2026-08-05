@@ -206,7 +206,11 @@ class _FakeLibraryRepository implements LibraryRepository {
   Future<List<Playlist>> getPlaylists() async => const [];
 
   @override
-  Future<void> markPlayed(String trackId, DateTime playedAt) async {}
+  Future<void> markPlayed(
+    String trackId,
+    DateTime playedAt, {
+    String? playlistId,
+  }) async {}
 
   @override
   Future<void> saveLocalTrack(LocalTrack track) async {}

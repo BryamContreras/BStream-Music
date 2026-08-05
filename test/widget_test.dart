@@ -541,9 +541,11 @@ void main() {
 
   testWidgets('player controls fit on narrow mobile viewports', (tester) async {
     const expectedProgressColor = Color(0xFF7B8DFF);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     tester.view.physicalSize = const Size(320, 720);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
@@ -636,13 +638,33 @@ void main() {
     expect(playerProgressAnimation.tween.end, miniProgressColor);
     expect(find.byTooltip('Letras'), findsOneWidget);
     expect(find.byTooltip('Volumen'), findsOneWidget);
+    final lyricsControl = find.byKey(const ValueKey('player-lyrics-control'));
+    final shuffleControl = find.byKey(const ValueKey('player-shuffle-control'));
+    final volumeControl = find.byKey(const ValueKey('player-volume-control'));
+    final repeatControl = find.byKey(const ValueKey('player-repeat-control'));
     expect(
-      tester.getCenter(find.byTooltip('Letras')).dx,
-      lessThan(tester.getCenter(find.byTooltip('Activar aleatorio')).dx),
+      tester.getCenter(lyricsControl).dx,
+      closeTo(tester.getCenter(shuffleControl).dx, 0.1),
     );
     expect(
-      tester.getCenter(find.byTooltip('Volumen')).dx,
-      greaterThan(tester.getCenter(find.byTooltip('Repetir cola')).dx),
+      tester.getCenter(lyricsControl).dy,
+      lessThan(tester.getCenter(shuffleControl).dy),
+    );
+    expect(
+      tester.getSize(lyricsControl).height,
+      lessThan(tester.getSize(shuffleControl).height),
+    );
+    expect(
+      tester.getCenter(volumeControl).dx,
+      closeTo(tester.getCenter(repeatControl).dx, 0.1),
+    );
+    expect(
+      tester.getCenter(volumeControl).dy,
+      lessThan(tester.getCenter(repeatControl).dy),
+    );
+    expect(
+      tester.getSize(volumeControl).height,
+      lessThan(tester.getSize(repeatControl).height),
     );
 
     await tester.tap(find.byTooltip('Volumen'));
@@ -669,6 +691,7 @@ void main() {
     _expectNeutral(sliderTheme.data.activeTrackColor!);
     _expectNeutral(sliderTheme.data.thumbColor!);
     _expectNeutral(sliderTheme.data.inactiveTrackColor!);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('lyrics control opens the synchronized lyrics page', (
@@ -786,10 +809,12 @@ void main() {
       final errors = <FlutterErrorDetails>[];
       final previousOnError = FlutterError.onError;
       FlutterError.onError = errors.add;
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       tester.view.physicalSize = const Size(1280, 720);
       tester.view.devicePixelRatio = 1;
       addTearDown(() {
         FlutterError.onError = previousOnError;
+        debugDefaultTargetPlatformOverride = null;
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();
       });
@@ -828,6 +853,28 @@ void main() {
       expect(find.byTooltip('Volumen'), findsOneWidget);
       expect(find.byTooltip('Letras'), findsOneWidget);
       expect(find.byTooltip('Cola de reproduccion'), findsOneWidget);
+      final lyricsControl = find.byKey(const ValueKey('player-lyrics-control'));
+      final shuffleControl = find.byKey(
+        const ValueKey('player-shuffle-control'),
+      );
+      final volumeControl = find.byKey(const ValueKey('player-volume-control'));
+      final repeatControl = find.byKey(const ValueKey('player-repeat-control'));
+      expect(
+        tester.getCenter(lyricsControl).dx,
+        lessThan(tester.getCenter(shuffleControl).dx),
+      );
+      expect(
+        tester.getCenter(volumeControl).dx,
+        greaterThan(tester.getCenter(repeatControl).dx),
+      );
+      expect(
+        tester.getCenter(lyricsControl).dy,
+        closeTo(tester.getCenter(shuffleControl).dy, 0.1),
+      );
+      expect(
+        tester.getCenter(volumeControl).dy,
+        closeTo(tester.getCenter(repeatControl).dy, 0.1),
+      );
 
       await tester.tap(find.byTooltip('Cola de reproduccion'));
       await tester.pump(const Duration(milliseconds: 300));
@@ -869,6 +916,7 @@ void main() {
         ),
         isEmpty,
       );
+      debugDefaultTargetPlatformOverride = null;
     },
     skip: !io.Platform.isWindows,
   );
@@ -1330,6 +1378,9 @@ class _FakePlayerService implements PlayerService {
   PlayerSnapshot get currentSnapshot => snapshot;
 
   @override
+  bool get supportsLocalQueueReplacement => false;
+
+  @override
   Stream<PlayerSnapshot> get snapshotStream => _snapshotController.stream;
 
   @override
@@ -1355,6 +1406,12 @@ class _FakePlayerService implements PlayerService {
 
   @override
   Future<void> playRemote(track) async {}
+
+  @override
+  Future<void> replaceLocalQueue(
+    List<LocalTrack> tracks,
+    int preferredIndex,
+  ) async {}
 
   @override
   Future<void> resume() async {
@@ -1408,7 +1465,11 @@ class _FakeLibraryRepository implements LibraryRepository {
   Future<List<Playlist>> getPlaylists() async => playlists;
 
   @override
-  Future<void> markPlayed(String trackId, DateTime playedAt) async {}
+  Future<void> markPlayed(
+    String trackId,
+    DateTime playedAt, {
+    String? playlistId,
+  }) async {}
 
   @override
   Future<void> saveLocalTrack(LocalTrack track) async {

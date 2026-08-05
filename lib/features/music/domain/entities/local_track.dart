@@ -10,6 +10,7 @@ class LocalTrack {
     this.thumbnailPath,
     this.duration,
     this.lastPlayedAt,
+    this.lastPlayedPlaylistId,
   });
 
   final String id;
@@ -22,6 +23,7 @@ class LocalTrack {
   final String? thumbnailPath;
   final Duration? duration;
   final DateTime? lastPlayedAt;
+  final String? lastPlayedPlaylistId;
 
   LocalTrack copyWith({
     String? id,
@@ -34,6 +36,7 @@ class LocalTrack {
     String? thumbnailPath,
     Duration? duration,
     DateTime? lastPlayedAt,
+    String? lastPlayedPlaylistId,
   }) {
     return LocalTrack(
       id: id ?? this.id,
@@ -46,6 +49,7 @@ class LocalTrack {
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
       duration: duration ?? this.duration,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
+      lastPlayedPlaylistId: lastPlayedPlaylistId ?? this.lastPlayedPlaylistId,
     );
   }
 }

@@ -808,7 +808,7 @@ class _HomeView extends ConsumerWidget {
             onTrackSelected: (track, queue) {
               final playFuture = ref
                   .read(playerControllerProvider.notifier)
-                  .playLocal(track, queue: queue);
+                  .playFromHistory(track, fallbackQueue: queue);
               onOpenPlayer();
               unawaited(playFuture);
             },

@@ -29,8 +29,16 @@ class LibraryRepositoryImpl implements LibraryRepository {
   }
 
   @override
-  Future<void> markPlayed(String trackId, DateTime playedAt) {
-    return _localDataSource.markPlayed(trackId, playedAt);
+  Future<void> markPlayed(
+    String trackId,
+    DateTime playedAt, {
+    String? playlistId,
+  }) {
+    return _localDataSource.markPlayed(
+      trackId,
+      playedAt,
+      playlistId: playlistId,
+    );
   }
 
   @override

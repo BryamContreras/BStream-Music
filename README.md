@@ -48,7 +48,9 @@ Current version: **1.2.1+121**.
 - Responsive layouts for Android and Windows.
 - Navigation remembers only the two most recent views.
 - Returning from the player restores the previously opened playlist or section.
-- Home displays up to 10 recently played items and 10 playlists.
+- Home displays up to 10 recently played items and 10 playlists. Recent items
+  restore their last valid source playlist and fall back safely when that
+  playlist no longer exists.
 - Subtle gradients, translucent cards, and shared visual controls.
 - Spanish and English selectable from Settings.
 - Windows window minimum size of `960 × 600`; the player progressively adapts artwork, text, spacing, and controls to the available height.

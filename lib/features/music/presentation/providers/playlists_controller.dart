@@ -140,6 +140,7 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     final next = [...playlists];
     next[index] = updated;
     state = AsyncData(_sorted(next));
+    await _syncActivePlaybackQueue(updated);
   }
 
   Future<bool> toggleFavorite(String trackId) async {
@@ -180,12 +181,14 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     final next = [...playlists];
     next[index] = updated;
     state = AsyncData(_sorted(next));
+    await _syncActivePlaybackQueue(updated);
     return !wasFavorite;
   }
 
   Future<void> removeTrackFromAllPlaylists(String trackId) async {
     final playlists = await future;
     final next = <Playlist>[];
+    final updatedPlaylists = <Playlist>[];
     var changed = false;
 
     for (final playlist in playlists) {
@@ -206,6 +209,7 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
       );
       await ref.read(libraryRepositoryProvider).savePlaylist(updated);
       next.add(updated);
+      updatedPlaylists.add(updated);
     }
 
     if (!changed) {
@@ -213,6 +217,9 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     }
 
     state = AsyncData(_sorted(next));
+    for (final playlist in updatedPlaylists) {
+      await _syncActivePlaybackQueue(playlist);
+    }
   }
 
   List<Playlist> _sorted(Iterable<Playlist> playlists) {
@@ -241,6 +248,6 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
         .map((id) => tracksById[id])
         .whereType<LocalTrack>()
         .toList(growable: false);
-    player.syncLocalQueueSource(sourceId, orderedTracks);
+    await player.syncLocalQueueSource(sourceId, orderedTracks);
   }
 }

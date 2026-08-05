@@ -12,6 +12,7 @@ class LocalTrackModel extends LocalTrack {
     super.thumbnailPath,
     super.duration,
     super.lastPlayedAt,
+    super.lastPlayedPlaylistId,
   });
 
   factory LocalTrackModel.fromMap(Map<String, Object?> map) {
@@ -26,6 +27,7 @@ class LocalTrackModel extends LocalTrack {
       thumbnailPath: map['thumbnail_path'] as String?,
       duration: _duration(map['duration_seconds']),
       lastPlayedAt: _date(map['last_played_at']),
+      lastPlayedPlaylistId: map['last_played_playlist_id'] as String?,
     );
   }
 
@@ -41,6 +43,7 @@ class LocalTrackModel extends LocalTrack {
       thumbnailPath: track.thumbnailPath,
       duration: track.duration,
       lastPlayedAt: track.lastPlayedAt,
+      lastPlayedPlaylistId: track.lastPlayedPlaylistId,
     );
   }
 
@@ -56,6 +59,7 @@ class LocalTrackModel extends LocalTrack {
       'duration_seconds': duration?.inSeconds,
       'added_at': addedAt.toIso8601String(),
       'last_played_at': lastPlayedAt?.toIso8601String(),
+      'last_played_playlist_id': lastPlayedPlaylistId,
     };
   }
 

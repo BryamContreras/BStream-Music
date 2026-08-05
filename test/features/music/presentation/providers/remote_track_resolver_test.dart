@@ -101,6 +101,49 @@ void main() {
     );
     expect(repository.infoCalls, 1);
   });
+
+  test(
+    'keeps the RAM cache bounded and evicts its oldest resolutions',
+    () async {
+      final repository = _SuccessfulMusicRepository();
+      final container = ProviderContainer(
+        overrides: [musicRepositoryProvider.overrideWithValue(repository)],
+      );
+      addTearDown(container.dispose);
+      final resolver = container.read(remoteTrackResolverProvider);
+      final tracks = List.generate(
+        40,
+        (index) => TrackInfo(
+          id: 'video-$index',
+          title: 'Track $index',
+          artist: 'Artist',
+          url: 'https://www.youtube.com/watch?v=video-$index',
+        ),
+      );
+
+      for (final track in tracks) {
+        await resolver.resolve(track);
+      }
+      expect(repository.infoCalls, 40);
+
+      // The newest 32 entries (8 through 39) remain available without another
+      // extractor call. Looking them up must not accidentally grow the cache.
+      for (var index = 39; index >= 8; index--) {
+        final resolved = await resolver.resolve(tracks[index]);
+        expect(resolved.id, tracks[index].id);
+      }
+      expect(repository.infoCalls, 40);
+
+      // Entry 7 belongs to the eight oldest items and must have been evicted.
+      await resolver.resolve(tracks[7]);
+      expect(repository.infoCalls, 41);
+
+      // The newly resolved item and a recent item remain cached after trimming.
+      await resolver.resolve(tracks[7]);
+      await resolver.resolve(tracks.last);
+      expect(repository.infoCalls, 41);
+    },
+  );
 }
 
 class _FakeMusicRepository implements MusicRepository {
@@ -113,6 +156,37 @@ class _FakeMusicRepository implements MusicRepository {
   Future<TrackInfo> getInfo(String url) async {
     infoCalls++;
     throw error;
+  }
+
+  @override
+  Future<TrackInfo> getPlaybackInfo(String url) => getInfo(url);
+
+  @override
+  Future<List<TrackInfo>> search(String query) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<DownloadResult> downloadAudio(String url, DownloadOptions options) {
+    throw UnimplementedError();
+  }
+}
+
+class _SuccessfulMusicRepository implements MusicRepository {
+  int infoCalls = 0;
+
+  @override
+  Future<TrackInfo> getInfo(String url) async {
+    infoCalls++;
+    final id = Uri.parse(url).queryParameters['v'] ?? '';
+    return TrackInfo(
+      id: id,
+      title: 'Resolved $id',
+      artist: 'Resolved artist',
+      url: url,
+      // Deliberately omit a stream URL: this test isolates the in-memory cache
+      // and avoids involving the independent SharedPreferences cache.
+    );
   }
 
   @override

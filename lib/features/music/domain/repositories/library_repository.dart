@@ -6,7 +6,11 @@ abstract class LibraryRepository {
   Future<void> saveLocalTrack(LocalTrack track);
   Future<void> deleteLocalTrack(String trackId);
   Future<Set<String>> purgeMissingLocalTracks(List<LocalTrack> tracks);
-  Future<void> markPlayed(String trackId, DateTime playedAt);
+  Future<void> markPlayed(
+    String trackId,
+    DateTime playedAt, {
+    String? playlistId,
+  });
   Future<List<LocalTrack>> getHistory();
   Future<List<Playlist>> getPlaylists();
   Future<void> savePlaylist(Playlist playlist);

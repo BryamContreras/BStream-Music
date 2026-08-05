@@ -55,6 +55,46 @@ void main() {
     expect(_activeLine('First line'), findsNothing);
   });
 
+  testWidgets('Android lyrics use reduced horizontal content margins', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+
+    final scroll = tester.widget<SingleChildScrollView>(
+      find.byKey(const ValueKey('synced-lyrics-scroll')),
+    );
+    final padding = scroll.padding! as EdgeInsets;
+
+    expect(padding.left, 12);
+    expect(padding.right, 12);
+  });
+
+  testWidgets('desktop lyrics retain their existing horizontal margins', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.windows,
+    );
+
+    final scroll = tester.widget<SingleChildScrollView>(
+      find.byKey(const ValueKey('synced-lyrics-scroll')),
+    );
+    final padding = scroll.padding! as EdgeInsets;
+
+    expect(padding.left, 24);
+    expect(padding.right, 24);
+  });
+
   testWidgets('header progress follows the current playback fraction', (
     tester,
   ) async {
@@ -604,6 +644,7 @@ Future<ProviderContainer> _pumpLyricsPage(
   required _FakeLyricsService lyrics,
   ArtworkProgressColorService? artworkProgressColorService,
   AppLanguage language = AppLanguage.english,
+  TargetPlatform? platform,
 }) async {
   final container = ProviderContainer(
     overrides: [
@@ -629,7 +670,10 @@ Future<ProviderContainer> _pumpLyricsPage(
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
-      child: const MaterialApp(home: LyricsPage()),
+      child: MaterialApp(
+        theme: platform == null ? null : ThemeData(platform: platform),
+        home: const LyricsPage(),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -724,6 +768,9 @@ class _FakePlayerService implements PlayerService {
   PlayerSnapshot get currentSnapshot => _snapshot;
 
   @override
+  bool get supportsLocalQueueReplacement => false;
+
+  @override
   Stream<PlayerSnapshot> get snapshotStream => _snapshots.stream;
 
   @override
@@ -743,6 +790,12 @@ class _FakePlayerService implements PlayerService {
 
   @override
   Future<void> playRemote(TrackInfo track) async {}
+
+  @override
+  Future<void> replaceLocalQueue(
+    List<LocalTrack> tracks,
+    int preferredIndex,
+  ) async {}
 
   @override
   Future<void> resume() async {}

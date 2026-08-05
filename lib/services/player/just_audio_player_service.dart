@@ -3,9 +3,9 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
-import 'package:just_audio/just_audio.dart' hide PlayerException;
+import 'package:just_audio/just_audio.dart';
 
-import '../../core/errors/app_exception.dart';
+import '../../core/errors/app_exception.dart' as app_errors;
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import '../../core/constants/app_constants.dart';
@@ -13,9 +13,18 @@ import 'player_service.dart';
 
 class JustAudioPlayerService implements PlayerService {
   JustAudioPlayerService() {
-    _positionSubscription = _player.positionStream.listen((position) {
-      _emit(_snapshot.copyWith(position: position));
-    });
+    // The stock stream can publish five timeline snapshots per second for the
+    // whole lifetime of the foreground service. Four updates per second keeps
+    // short tracks smooth, while the 500 ms ceiling bounds background work for
+    // very long mixes.
+    _positionSubscription = _player
+        .createPositionStream(
+          minPeriod: const Duration(milliseconds: 250),
+          maxPeriod: const Duration(milliseconds: 500),
+        )
+        .listen((position) {
+          _emit(_snapshot.copyWith(position: position));
+        });
     _durationSubscription = _player.durationStream.listen((duration) {
       final watch = _remoteStartupWatch;
       if (watch != null && duration != null && !_loggedRemoteDuration) {
@@ -49,23 +58,15 @@ class JustAudioPlayerService implements PlayerService {
       };
       _emit(_snapshot.copyWith(status: status));
     });
-    _playbackEventSubscription = _player.playbackEventStream.listen(
-      (_) {},
-      onError: (Object error, StackTrace stackTrace) {
-        developer.log(
-          'remote playback failed',
-          name: 'BStreamPlayback',
-          error: error,
-          stackTrace: stackTrace,
-        );
-        _emit(
-          _snapshot.copyWith(
-            status: PlayerStatus.failed,
-            errorMessage: error.toString(),
-          ),
-        );
-      },
-    );
+    _playbackErrorSubscription = _player.errorStream.listen((error) {
+      developer.log('playback failed', name: 'BStreamPlayback', error: error);
+      _emit(
+        _snapshot.copyWith(
+          status: PlayerStatus.failed,
+          errorMessage: error.message,
+        ),
+      );
+    });
     _sequenceStateSubscription = _player.sequenceStateStream.listen((state) {
       final tag = state.currentSource?.tag;
       if (tag is! MediaItem) {
@@ -108,7 +109,7 @@ class JustAudioPlayerService implements PlayerService {
   late final StreamSubscription<Duration?> _durationSubscription;
   late final StreamSubscription<double> _volumeSubscription;
   late final StreamSubscription<PlayerState> _stateSubscription;
-  late final StreamSubscription<PlaybackEvent> _playbackEventSubscription;
+  late final StreamSubscription<PlayerException> _playbackErrorSubscription;
   late final StreamSubscription<SequenceState?> _sequenceStateSubscription;
 
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
@@ -125,10 +126,13 @@ class JustAudioPlayerService implements PlayerService {
   PlayerSnapshot get currentSnapshot => _snapshot;
 
   @override
+  bool get supportsLocalQueueReplacement => true;
+
+  @override
   Future<void> playRemote(TrackInfo track) async {
     final source = track.streamUrl;
     if (source == null || source.isEmpty) {
-      throw const PlayerException(
+      throw const app_errors.PlayerException(
         'No hay una URL reproducible. Obtén la informacion del track primero.',
         code: 'missing_stream_url',
       );
@@ -233,6 +237,98 @@ class JustAudioPlayerService implements PlayerService {
   }
 
   @override
+  Future<void> replaceLocalQueue(
+    List<LocalTrack> tracks,
+    int preferredIndex,
+  ) async {
+    if (tracks.isEmpty) {
+      _localQueueIds = const [];
+      await _player.stop();
+      await _player.clearAudioSources();
+      _emit(
+        PlayerSnapshot(
+          status: PlayerStatus.stopped,
+          volume: _snapshot.volume,
+          shuffleEnabled: _shuffleEnabled,
+          repeatMode: _repeatMode,
+        ),
+      );
+      return;
+    }
+
+    final nextIds = tracks.map((track) => track.id).toList(growable: false);
+    if (_sameQueue(nextIds, _localQueueIds) &&
+        _player.sequence.length == tracks.length) {
+      return;
+    }
+
+    final shouldKeepPlaying =
+        _snapshot.status == PlayerStatus.playing ||
+        (_snapshot.status == PlayerStatus.loading && _player.playing);
+    final currentTrackId = _snapshot.trackId;
+    final currentPosition = _player.position;
+    final canUpdateIncrementally =
+        _localQueueIds.isNotEmpty &&
+        _player.sequence.length == _localQueueIds.length;
+
+    if (canUpdateIncrementally) {
+      final workingIds = List<String>.of(_localQueueIds);
+      for (var index = 0; index < nextIds.length; index++) {
+        final desiredId = nextIds[index];
+        if (index < workingIds.length && workingIds[index] == desiredId) {
+          continue;
+        }
+
+        final existingIndex = workingIds.indexOf(desiredId, index + 1);
+        if (existingIndex >= 0) {
+          await _player.moveAudioSource(existingIndex, index);
+          final moved = workingIds.removeAt(existingIndex);
+          workingIds.insert(index, moved);
+        } else {
+          await _player.insertAudioSource(
+            index,
+            _localAudioSource(tracks[index]),
+          );
+          workingIds.insert(index, desiredId);
+        }
+      }
+      while (workingIds.length > nextIds.length) {
+        await _player.removeAudioSourceAt(workingIds.length - 1);
+        workingIds.removeLast();
+      }
+    } else {
+      final retainedIndex = currentTrackId == null
+          ? -1
+          : nextIds.indexOf(currentTrackId);
+      final safeIndex = retainedIndex >= 0
+          ? retainedIndex
+          : preferredIndex.clamp(0, tracks.length - 1).toInt();
+      await _player.setAudioSources(
+        tracks.map(_localAudioSource).toList(growable: false),
+        initialIndex: safeIndex,
+        initialPosition: retainedIndex >= 0 ? currentPosition : Duration.zero,
+      );
+    }
+
+    _localQueueIds = nextIds;
+    final retainedIndex = currentTrackId == null
+        ? -1
+        : nextIds.indexOf(currentTrackId);
+    if (retainedIndex >= 0) {
+      await _player.seek(currentPosition, index: retainedIndex);
+    } else {
+      final safeIndex = preferredIndex.clamp(0, tracks.length - 1).toInt();
+      await _player.seek(Duration.zero, index: safeIndex);
+    }
+    await _applyPlaybackOptions();
+    if (shouldKeepPlaying && !_player.playing) {
+      _startPlayback();
+    } else if (!shouldKeepPlaying && _player.playing) {
+      await _player.pause();
+    }
+  }
+
+  @override
   Future<void> pause() async {
     await _player.pause();
     _emit(_snapshot.copyWith(status: PlayerStatus.paused));
@@ -285,7 +381,7 @@ class JustAudioPlayerService implements PlayerService {
     await _durationSubscription.cancel();
     await _volumeSubscription.cancel();
     await _stateSubscription.cancel();
-    await _playbackEventSubscription.cancel();
+    await _playbackErrorSubscription.cancel();
     await _sequenceStateSubscription.cancel();
     await _player.dispose();
     await _snapshotController.close();

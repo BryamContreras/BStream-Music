@@ -79,6 +79,8 @@ class _QueueItem {
 }
 
 class PlayerController extends AsyncNotifier<PlayerSnapshot> {
+  static const _playlistQueueSourcePrefix = 'playlist:';
+
   final _random = math.Random();
   List<_QueueItem> _queue = const [];
   int _queueIndex = -1;
@@ -93,6 +95,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   int _playRequestId = 0;
   int? _remoteRecoveryAttemptedRequestId;
   PlayerSnapshot? _pendingRemoteSnapshot;
+  String? _lastRecordedLocalTrackId;
+  Future<void> _historyWrite = Future<void>.value();
 
   @override
   Future<PlayerSnapshot> build() async {
@@ -103,6 +107,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       }
       final decorated = _decorateSnapshot(snapshot);
       _syncQueueIndexFromSnapshot(decorated);
+      _recordNativeLocalTrackChange(decorated);
       state = AsyncData(decorated);
       if (!_maybeRecoverRemoteFailure(decorated)) {
         _maybeHandleCompletion(decorated);
@@ -243,7 +248,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
 
     _remoteRecoveryAttemptedRequestId = requestId;
-    unawaited(_recoverRemoteFailure(track, requestId));
+    unawaited(
+      _recoverRemoteFailure(
+        track,
+        requestId,
+        resumePosition: snapshot.position,
+      ),
+    );
     return true;
   }
 
@@ -276,12 +287,20 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         sourceUrl != current.url;
   }
 
-  Future<void> _recoverRemoteFailure(TrackInfo track, int requestId) async {
+  Future<void> _recoverRemoteFailure(
+    TrackInfo track,
+    int requestId, {
+    required Duration resumePosition,
+  }) async {
     final pendingSnapshot = _remoteLoadingSnapshot(track);
     _pendingRemoteSnapshot = pendingSnapshot;
     state = AsyncData(pendingSnapshot);
     try {
-      await _refreshAndReplayRemote(track, requestId);
+      await _refreshAndReplayRemote(
+        track,
+        requestId,
+        resumePosition: resumePosition,
+      );
     } catch (error, stackTrace) {
       if (_isCurrentPlayRequest(requestId)) {
         _pendingRemoteSnapshot = null;
@@ -290,7 +309,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
   }
 
-  Future<void> _refreshAndReplayRemote(TrackInfo track, int requestId) async {
+  Future<void> _refreshAndReplayRemote(
+    TrackInfo track,
+    int requestId, {
+    Duration resumePosition = Duration.zero,
+  }) async {
     _remoteRecoveryAttemptedRequestId = requestId;
     final refreshed = await _resolveRemoteTrack(
       track,
@@ -302,7 +325,21 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
 
     _replaceCurrentRemoteTrack(refreshed);
-    await ref.read(playerServiceProvider).playRemote(refreshed);
+    final service = ref.read(playerServiceProvider);
+    await service.playRemote(refreshed);
+    if (_isCurrentPlayRequest(requestId) && resumePosition > Duration.zero) {
+      final duration = refreshed.duration;
+      final safeResumePosition = duration != null && resumePosition >= duration
+          ? Duration(
+              microseconds: math.max(
+                0,
+                duration.inMicroseconds -
+                    const Duration(seconds: 1).inMicroseconds,
+              ),
+            )
+          : resumePosition;
+      await service.seek(safeResumePosition);
+    }
     _clearPendingRemoteSnapshot(requestId);
   }
 
@@ -365,7 +402,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     bool useNativeQueue = true,
     String? queueSourceId,
   }) async {
-    _useNativeLocalQueue = useNativeQueue;
+    final service = ref.read(playerServiceProvider);
+    final isPlaylistQueue = _playlistIdFromQueueSourceId(queueSourceId) != null;
+    _useNativeLocalQueue =
+        useNativeQueue ||
+        (isPlaylistQueue && service.supportsLocalQueueReplacement);
     _activeLocalQueueSourceId = queueSourceId;
     if (queue != null && queue.isNotEmpty) {
       _queue = List.unmodifiable(queue.map(_QueueItem.local));
@@ -385,6 +426,63 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _publishPlaybackQueue();
 
     await _playLocalTrack(track);
+  }
+
+  /// Restores the playlist that was active when [track] was last played.
+  ///
+  /// History rows created before playlist context was introduced, deleted
+  /// playlists and tracks removed from their former playlist keep the legacy
+  /// behavior by using [fallbackQueue].
+  Future<void> playFromHistory(
+    LocalTrack track, {
+    List<LocalTrack>? fallbackQueue,
+  }) async {
+    final playlistId = track.lastPlayedPlaylistId?.trim();
+    if (playlistId != null && playlistId.isNotEmpty) {
+      try {
+        final repository = ref.read(libraryRepositoryProvider);
+        final playlistsFuture = repository.getPlaylists();
+        final tracksFuture = repository.getLocalTracks();
+        final playlists = await playlistsFuture;
+        final libraryTracks = await tracksFuture;
+
+        Playlist? sourcePlaylist;
+        for (final playlist in playlists) {
+          if (playlist.id == playlistId) {
+            sourcePlaylist = playlist;
+            break;
+          }
+        }
+
+        if (sourcePlaylist != null) {
+          final tracksById = {
+            for (final libraryTrack in libraryTracks)
+              libraryTrack.id: libraryTrack,
+          };
+          final playlistQueue = sourcePlaylist.trackIds
+              .map((trackId) => tracksById[trackId])
+              .whereType<LocalTrack>()
+              .toList(growable: false);
+          final selectedIndex = playlistQueue.indexWhere(
+            (candidate) => candidate.id == track.id,
+          );
+          if (selectedIndex >= 0) {
+            await playLocal(
+              playlistQueue[selectedIndex],
+              queue: playlistQueue,
+              useNativeQueue: false,
+              queueSourceId: playlistQueueSourceId(playlistId),
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        // History must remain playable if its optional context cannot be read.
+        debugPrint('Recently played playlist restore failed: $error');
+      }
+    }
+
+    await playLocal(track, queue: fallbackQueue);
   }
 
   void replaceLocalQueue(List<LocalTrack> tracks, {String? currentTrackId}) {
@@ -416,19 +514,34 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   static String playlistQueueSourceId(String playlistId) {
-    return 'playlist:$playlistId';
+    return '$_playlistQueueSourcePrefix$playlistId';
+  }
+
+  static String? _playlistIdFromQueueSourceId(String? sourceId) {
+    if (sourceId == null || !sourceId.startsWith(_playlistQueueSourcePrefix)) {
+      return null;
+    }
+    final playlistId = sourceId.substring(_playlistQueueSourcePrefix.length);
+    return playlistId.isEmpty ? null : playlistId;
   }
 
   bool isLocalQueueSourceActive(String sourceId) {
     return _activeLocalQueueSourceId == sourceId;
   }
 
-  bool syncLocalQueueSource(String sourceId, List<LocalTrack> tracks) {
-    if (_activeLocalQueueSourceId != sourceId || _useNativeLocalQueue) {
+  Future<bool> syncLocalQueueSource(
+    String sourceId,
+    List<LocalTrack> tracks,
+  ) async {
+    if (_activeLocalQueueSourceId != sourceId) {
       return false;
     }
     replaceLocalQueue(tracks);
     _activeLocalQueueSourceId = sourceId;
+    final service = ref.read(playerServiceProvider);
+    if (_useNativeLocalQueue && service.supportsLocalQueueReplacement) {
+      await service.replaceLocalQueue(tracks, _queueIndex);
+    }
     return true;
   }
 
@@ -458,10 +571,12 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       } else {
         await service.playLocal(track);
       }
-      await ref
-          .read(libraryRepositoryProvider)
-          .markPlayed(track.id, DateTime.now());
-      ref.invalidate(historyProvider);
+      // The service emits several loading/position snapshots for an explicit
+      // request. Claim the transition before persisting it so the stream
+      // observer cannot write the same play a second time.
+      _lastRecordedLocalTrackId = track.id;
+      _changingLocalTrack = false;
+      await _recordLocalTrackPlayed(track.id);
     } catch (error, stackTrace) {
       state = AsyncError(error, stackTrace);
     } finally {
@@ -673,6 +788,56 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       _markCurrentQueueIndexPlayed();
       _publishPlaybackQueue();
     }
+  }
+
+  void _recordNativeLocalTrackChange(PlayerSnapshot snapshot) {
+    // Explicit requests are recorded by _playLocalTrack after the player
+    // accepts them. This observer exists for transitions made internally by
+    // just_audio, including automatic advancement and notification controls.
+    if (_changingLocalTrack ||
+        snapshot.isRemote ||
+        snapshot.status != PlayerStatus.playing) {
+      return;
+    }
+
+    final trackId = snapshot.trackId?.trim();
+    if (trackId == null ||
+        trackId.isEmpty ||
+        trackId == _lastRecordedLocalTrackId) {
+      return;
+    }
+
+    final isQueuedLocalTrack = _queue.any((item) => item.local?.id == trackId);
+    if (!isQueuedLocalTrack) {
+      return;
+    }
+
+    // Set this synchronously. Position, duration and state streams may all
+    // publish the same track before the database write finishes.
+    _lastRecordedLocalTrackId = trackId;
+    unawaited(_recordLocalTrackPlayed(trackId));
+  }
+
+  Future<void> _recordLocalTrackPlayed(String trackId) {
+    final repository = ref.read(libraryRepositoryProvider);
+    final playlistId = _playlistIdFromQueueSourceId(_activeLocalQueueSourceId);
+    final playedAt = DateTime.now();
+    final previousWrite = _historyWrite;
+
+    final write = () async {
+      await previousWrite;
+      try {
+        await repository.markPlayed(trackId, playedAt, playlistId: playlistId);
+        ref.invalidate(historyProvider);
+      } catch (error, stackTrace) {
+        // Playback must remain healthy if a history update fails. Keeping the
+        // writes serialized also prevents a rapid sequence of notification
+        // skips from committing in the wrong order.
+        debugPrint('Recently played update failed: $error\n$stackTrace');
+      }
+    }();
+    _historyWrite = write;
+    return write;
   }
 
   void _publishPlaybackQueue() {

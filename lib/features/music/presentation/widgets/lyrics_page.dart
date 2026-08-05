@@ -693,6 +693,8 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     final strings = ref.watch(appStringsProvider);
     final viewportHeight = MediaQuery.sizeOf(context).height;
     final verticalPadding = (viewportHeight * 0.27).clamp(96.0, 260.0);
+    final horizontalPadding =
+        Theme.of(context).platform == TargetPlatform.android ? 12.0 : 24.0;
 
     return NotificationListener<ScrollStartNotification>(
       onNotification: (notification) {
@@ -703,7 +705,12 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
       },
       child: SingleChildScrollView(
         key: const ValueKey('synced-lyrics-scroll'),
-        padding: EdgeInsets.fromLTRB(24, verticalPadding, 24, verticalPadding),
+        padding: EdgeInsets.fromLTRB(
+          horizontalPadding,
+          verticalPadding,
+          horizontalPadding,
+          verticalPadding,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -951,9 +958,16 @@ class _PlainLyricsView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
+    final horizontalPadding =
+        Theme.of(context).platform == TargetPlatform.android ? 16.0 : 28.0;
     return SingleChildScrollView(
       key: const ValueKey('plain-lyrics-scroll'),
-      padding: const EdgeInsets.fromLTRB(28, 26, 28, 48),
+      padding: EdgeInsets.fromLTRB(
+        horizontalPadding,
+        26,
+        horizontalPadding,
+        48,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

@@ -36,6 +36,7 @@ class RemoteTrackResolver {
   static const _ttl = Duration(minutes: 20);
   static const _prefsKey = 'remote_track_resolution_cache_v2';
   static const _maxPersistentEntries = 24;
+  static const _maxMemoryEntries = 32;
 
   final Ref _ref;
   final _entries = <String, _TrackResolutionEntry>{};
@@ -52,6 +53,7 @@ class RemoteTrackResolver {
     }
 
     await _loadPersistentCache();
+    _trimMemoryEntries();
 
     final cached = _entries[key];
     if (!forceRefresh && cached != null && !cached.isExpired) {
@@ -65,6 +67,7 @@ class RemoteTrackResolver {
     );
 
     _entries[key] = _TrackResolutionEntry(future);
+    _trimMemoryEntries(preserveKey: key);
     return future;
   }
 
@@ -189,6 +192,26 @@ class RemoteTrackResolver {
 
     for (final entry in entries.take(cache.length - _maxPersistentEntries)) {
       cache.remove(entry.key);
+    }
+  }
+
+  void _trimMemoryEntries({String? preserveKey}) {
+    _entries.removeWhere((key, entry) => key != preserveKey && entry.isExpired);
+    if (_entries.length <= _maxMemoryEntries) {
+      return;
+    }
+
+    final oldest =
+        _entries.entries
+            .where((entry) => entry.key != preserveKey)
+            .toList(growable: false)
+          ..sort(
+            (left, right) =>
+                left.value.createdAt.compareTo(right.value.createdAt),
+          );
+    final removeCount = _entries.length - _maxMemoryEntries;
+    for (final entry in oldest.take(removeCount)) {
+      _entries.remove(entry.key);
     }
   }
 
