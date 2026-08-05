@@ -54,8 +54,8 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           isRemote: snapshot.isRemote,
           shuffleEnabled: snapshot.shuffleEnabled,
           repeatMode: snapshot.repeatMode,
-          hasError: player.hasError,
-          errorText: player.error?.toString(),
+          hasError: player.hasError || snapshot.status == PlayerStatus.failed,
+          errorText: player.error?.toString() ?? snapshot.errorMessage,
         );
       }),
     );
@@ -970,6 +970,7 @@ class _PlaybackButtons extends ConsumerWidget {
           compactSmallButtonSize,
           compactness,
         )!;
+        final smallIconSize = (smallButtonSize * 0.84).clamp(28.0, 50.0);
         final regularSideButtonSize = (width * 0.145).clamp(
           roomy ? 56.0 : 44.0,
           compact ? 62.0 : 72.0,
@@ -990,23 +991,82 @@ class _PlaybackButtons extends ConsumerWidget {
           compactPlaySize,
           compactness,
         )!;
-        final compactPrimaryIconScale = compactness > 0.9 ? 0.86 : 0.84;
-        final sideIconSize = (sideButtonSize * compactPrimaryIconScale).clamp(36.0, 58.0);
-        final playIconSize = (playSize * 0.62).clamp(40.0, 64.0);
-        final secondarySideButtonSize = (sideButtonSize - 4.0).clamp(42.0, 66.0);
-        final secondarySideIconSize =
-            (secondarySideButtonSize * 0.84).clamp(30.0, 50.0);
+        final secondarySideButtonSize = (sideButtonSize - 4.0).clamp(
+          42.0,
+          66.0,
+        );
+        final secondarySideIconSize = (secondarySideButtonSize * 0.84).clamp(
+          30.0,
+          50.0,
+        );
         final largerSideButtonSize = (sideButtonSize + 4.0).clamp(52.0, 76.0);
-        final largerSideIconSize =
-            (largerSideButtonSize * 0.84).clamp(38.0, 58.0);
+        final largerSideIconSize = (largerSideButtonSize * 0.84).clamp(
+          38.0,
+          58.0,
+        );
         final enlargedPlaySize = (playSize + 6.0).clamp(
           roomy ? 84.0 : 76.0,
           compact ? 94.0 : 116.0,
         );
-        final enlargedPlayIconSize = (enlargedPlaySize * 0.64).clamp(42.0, 68.0);
+        final enlargedPlayIconSize = (enlargedPlaySize * 0.64).clamp(
+          42.0,
+          68.0,
+        );
         final centerGap = narrow ? 9.0 : (width * 0.034).clamp(9.0, 32.0);
         final outerGap = narrow ? 16.0 : (width * 0.075).clamp(16.0, 60.0);
         final edgeGap = narrow ? 6.0 : (width * 0.018).clamp(8.0, 16.0);
+        final lyricsButton = _ControlButton(
+          key: const ValueKey('player-lyrics-control'),
+          size: narrow ? smallButtonSize : secondarySideButtonSize,
+          tooltip: strings.lyrics,
+          iconSize: narrow ? smallIconSize : secondarySideIconSize,
+          color: inactiveColor,
+          icon: Icons.lyrics_rounded,
+          onPressed: hasTrack ? onOpenLyrics : null,
+        );
+        final shuffleButton = _ControlButton(
+          key: const ValueKey('player-shuffle-control'),
+          size: secondarySideButtonSize,
+          tooltip: snapshot.shuffleEnabled
+              ? strings.deactivateShuffle
+              : strings.activateShuffle,
+          iconSize: secondarySideIconSize,
+          color: snapshot.shuffleEnabled ? activeColor : inactiveColor,
+          icon: Icons.shuffle_rounded,
+          onPressed: hasTrack
+              ? () =>
+                    ref.read(playerControllerProvider.notifier).toggleShuffle()
+              : null,
+        );
+        final repeatButton = _ControlButton(
+          key: const ValueKey('player-repeat-control'),
+          size: secondarySideButtonSize,
+          tooltip: switch (snapshot.repeatMode) {
+            PlaybackRepeatMode.off => strings.repeatQueue,
+            PlaybackRepeatMode.all => strings.repeatOne,
+            PlaybackRepeatMode.one => strings.disableRepeat,
+          },
+          iconSize: secondarySideIconSize,
+          color: snapshot.repeatMode == PlaybackRepeatMode.off
+              ? inactiveColor
+              : activeColor,
+          icon: snapshot.repeatMode == PlaybackRepeatMode.one
+              ? Icons.repeat_one_rounded
+              : Icons.repeat_rounded,
+          onPressed: hasTrack
+              ? () => ref
+                    .read(playerControllerProvider.notifier)
+                    .cycleRepeatMode()
+              : null,
+        );
+        final volumeButton = _VolumeButton(
+          key: const ValueKey('player-volume-control'),
+          snapshot: snapshot,
+          size: narrow ? smallButtonSize : secondarySideButtonSize,
+          tooltip: strings.volume,
+          iconSize: narrow ? smallIconSize : secondarySideIconSize,
+          color: const Color(0xFFE4EEE7),
+        );
 
         return Center(
           child: FittedBox(
@@ -1014,31 +1074,20 @@ class _PlaybackButtons extends ConsumerWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _ControlButton(
-                  key: const ValueKey('player-lyrics-control'),
-                  size: secondarySideButtonSize,
-                  tooltip: strings.lyrics,
-                  iconSize: secondarySideIconSize,
-                  color: inactiveColor,
-                  icon: Icons.lyrics_rounded,
-                  onPressed: hasTrack ? onOpenLyrics : null,
-                ),
-                SizedBox(width: edgeGap),
-                _ControlButton(
-                  key: const ValueKey('player-shuffle-control'),
-                  size: secondarySideButtonSize,
-                  tooltip: snapshot.shuffleEnabled
-                      ? strings.deactivateShuffle
-                      : strings.activateShuffle,
-                  iconSize: secondarySideIconSize,
-                  color: snapshot.shuffleEnabled ? activeColor : inactiveColor,
-                  icon: Icons.shuffle_rounded,
-                  onPressed: hasTrack
-                      ? () => ref
-                            .read(playerControllerProvider.notifier)
-                            .toggleShuffle()
-                      : null,
-                ),
+                if (narrow)
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      lyricsButton,
+                      SizedBox(height: edgeGap),
+                      shuffleButton,
+                    ],
+                  )
+                else ...[
+                  lyricsButton,
+                  SizedBox(width: edgeGap),
+                  shuffleButton,
+                ],
                 SizedBox(width: outerGap),
                 _ControlButton(
                   size: largerSideButtonSize,
@@ -1068,11 +1117,14 @@ class _PlaybackButtons extends ConsumerWidget {
                           AppColors.playbackPrimaryDisabledForeground,
                     ),
                     padding: EdgeInsets.zero,
-                    constraints:
-                        BoxConstraints.tight(Size.square(enlargedPlaySize)),
+                    constraints: BoxConstraints.tight(
+                      Size.square(enlargedPlaySize),
+                    ),
                     iconSize: enlargedPlayIconSize,
                     icon: Icon(
-                      isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
                     ),
                     onPressed: hasTrack
                         ? () => ref
@@ -1095,36 +1147,20 @@ class _PlaybackButtons extends ConsumerWidget {
                       : null,
                 ),
                 SizedBox(width: outerGap),
-                _ControlButton(
-                  key: const ValueKey('player-repeat-control'),
-                  size: secondarySideButtonSize,
-                  tooltip: switch (snapshot.repeatMode) {
-                    PlaybackRepeatMode.off => strings.repeatQueue,
-                    PlaybackRepeatMode.all => strings.repeatOne,
-                    PlaybackRepeatMode.one => strings.disableRepeat,
-                  },
-                  iconSize: secondarySideIconSize,
-                  color: snapshot.repeatMode == PlaybackRepeatMode.off
-                      ? inactiveColor
-                      : activeColor,
-                  icon: snapshot.repeatMode == PlaybackRepeatMode.one
-                      ? Icons.repeat_one_rounded
-                      : Icons.repeat_rounded,
-                  onPressed: hasTrack
-                      ? () => ref
-                            .read(playerControllerProvider.notifier)
-                            .cycleRepeatMode()
-                      : null,
-                ),
-                SizedBox(width: edgeGap),
-                _VolumeButton(
-                  key: const ValueKey('player-volume-control'),
-                  snapshot: snapshot,
-                  size: secondarySideButtonSize,
-                  tooltip: strings.volume,
-                  iconSize: secondarySideIconSize,
-                  color: const Color(0xFFE4EEE7),
-                ),
+                if (narrow)
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      volumeButton,
+                      SizedBox(height: edgeGap),
+                      repeatButton,
+                    ],
+                  )
+                else ...[
+                  repeatButton,
+                  SizedBox(width: edgeGap),
+                  volumeButton,
+                ],
               ],
             ),
           ),

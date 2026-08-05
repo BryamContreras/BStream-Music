@@ -7,7 +7,9 @@ final searchControllerProvider =
 
 class SearchController extends AsyncNotifier<List<TrackInfo>> {
   static const _prefetchLimit = 1;
-  static const _androidPrefetchLimit = 3;
+  // Android must not resolve several signed YouTube URLs in parallel. Apart
+  // from wasting requests, that pattern can trigger YouTube's bot checks.
+  static const _androidPrefetchLimit = 1;
   int _searchGeneration = 0;
 
   @override

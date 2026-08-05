@@ -8,7 +8,6 @@ import 'package:just_audio/just_audio.dart';
 import '../../core/errors/app_exception.dart' as app_errors;
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
-import '../../core/constants/app_constants.dart';
 import 'player_service.dart';
 
 class JustAudioPlayerService implements PlayerService {
@@ -40,6 +39,12 @@ class JustAudioPlayerService implements PlayerService {
       _emit(_snapshot.copyWith(volume: volume.clamp(0, 1).toDouble()));
     });
     _stateSubscription = _player.playerStateStream.listen((state) {
+      // just_audio changes its native state to idle after a load error. Keep
+      // the explicit failure until a new source is selected so the controller
+      // and UI can process the error instead of seeing a misleading pause.
+      if (_snapshot.status == PlayerStatus.failed) {
+        return;
+      }
       final watch = _remoteStartupWatch;
       if (watch != null) {
         developer.log(
@@ -59,12 +64,14 @@ class JustAudioPlayerService implements PlayerService {
       _emit(_snapshot.copyWith(status: status));
     });
     _playbackErrorSubscription = _player.errorStream.listen((error) {
-      developer.log('playback failed', name: 'BStreamPlayback', error: error);
+      final message = _playerErrorMessage(error);
+      developer.log(
+        'playback failed: $message',
+        name: 'BStreamPlayback',
+        error: error,
+      );
       _emit(
-        _snapshot.copyWith(
-          status: PlayerStatus.failed,
-          errorMessage: error.message,
-        ),
+        _snapshot.copyWith(status: PlayerStatus.failed, errorMessage: message),
       );
     });
     _sequenceStateSubscription = _player.sequenceStateStream.listen((state) {
@@ -86,11 +93,10 @@ class JustAudioPlayerService implements PlayerService {
     });
   }
 
-  static const _userAgent =
-      'BStreamMusic/${AppConstants.appVersion} (Android) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
-
   final AudioPlayer _player = AudioPlayer(
-    userAgent: _userAgent,
+    // Let yt-dlp's per-stream User-Agent pass through unchanged. A player-wide
+    // User-Agent overrides that header in just_audio and can invalidate signed
+    // YouTube media URLs on Android.
     useProxyForRequestHeaders: false,
     audioLoadConfiguration: const AudioLoadConfiguration(
       androidLoadControl: AndroidLoadControl(
@@ -113,6 +119,7 @@ class JustAudioPlayerService implements PlayerService {
   late final StreamSubscription<SequenceState?> _sequenceStateSubscription;
 
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
+  int _playbackGeneration = 0;
   bool _shuffleEnabled = false;
   PlaybackRepeatMode _repeatMode = PlaybackRepeatMode.off;
   List<String> _localQueueIds = const [];
@@ -130,6 +137,7 @@ class JustAudioPlayerService implements PlayerService {
 
   @override
   Future<void> playRemote(TrackInfo track) async {
+    final generation = ++_playbackGeneration;
     final source = track.streamUrl;
     if (source == null || source.isEmpty) {
       throw const app_errors.PlayerException(
@@ -165,14 +173,23 @@ class JustAudioPlayerService implements PlayerService {
         headers: track.httpHeaders,
         tag: _remoteMediaItem(track),
       ),
-      preload: false,
+      // Validate the signed URL before reporting that playback has started.
+      // This turns HTTP/format failures into a catchable error instead of a
+      // later, easily lost background event.
+      preload: true,
     );
+    if (generation != _playbackGeneration) {
+      return;
+    }
     developer.log(
       'setAudioSource returned after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
       name: 'BStreamPlayback',
     );
     await _applyPlaybackOptions();
-    _startPlayback();
+    if (generation != _playbackGeneration) {
+      return;
+    }
+    _startPlayback(generation);
     developer.log(
       'play requested after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
       name: 'BStreamPlayback',
@@ -181,6 +198,7 @@ class JustAudioPlayerService implements PlayerService {
 
   @override
   Future<void> playLocal(LocalTrack track) async {
+    final generation = ++_playbackGeneration;
     _localQueueIds = const [];
     _emit(
       PlayerSnapshot(
@@ -196,8 +214,14 @@ class JustAudioPlayerService implements PlayerService {
       ),
     );
     await _player.setAudioSource(_localAudioSource(track));
+    if (generation != _playbackGeneration) {
+      return;
+    }
     await _applyPlaybackOptions();
-    _startPlayback();
+    if (generation != _playbackGeneration) {
+      return;
+    }
+    _startPlayback(generation);
   }
 
   @override
@@ -205,6 +229,7 @@ class JustAudioPlayerService implements PlayerService {
     if (tracks.isEmpty) {
       return;
     }
+    final generation = ++_playbackGeneration;
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
     final current = tracks[safeIndex];
     _emit(
@@ -233,7 +258,10 @@ class JustAudioPlayerService implements PlayerService {
       _localQueueIds = queueIds;
     }
     await _applyPlaybackOptions();
-    _startPlayback();
+    if (generation != _playbackGeneration) {
+      return;
+    }
+    _startPlayback(generation);
   }
 
   @override
@@ -322,7 +350,7 @@ class JustAudioPlayerService implements PlayerService {
     }
     await _applyPlaybackOptions();
     if (shouldKeepPlaying && !_player.playing) {
-      _startPlayback();
+      _startPlayback(_playbackGeneration);
     } else if (!shouldKeepPlaying && _player.playing) {
       await _player.pause();
     }
@@ -336,7 +364,7 @@ class JustAudioPlayerService implements PlayerService {
 
   @override
   Future<void> resume() async {
-    _startPlayback();
+    _startPlayback(_playbackGeneration);
   }
 
   @override
@@ -346,6 +374,7 @@ class JustAudioPlayerService implements PlayerService {
 
   @override
   Future<void> stop() {
+    _playbackGeneration++;
     return _player.stop();
   }
 
@@ -435,21 +464,45 @@ class JustAudioPlayerService implements PlayerService {
     await _player.setLoopMode(_loopMode);
   }
 
-  void _startPlayback() {
+  void _startPlayback(int generation) {
     // just_audio's play Future completes when playback is paused, stopped, or
     // reaches the end. Awaiting it would keep playRemote/playLocal pending for
     // the entire song and could overwrite a later completed state. Playback
     // state and failures remain authoritative through the subscriptions above.
-    unawaited(
-      _player.play().catchError((Object error, StackTrace stackTrace) {
-        developer.log(
-          'play request failed',
-          name: 'BStreamPlayback',
-          error: error,
-          stackTrace: stackTrace,
+    unawaited(_playAndReportFailure(generation));
+  }
+
+  Future<void> _playAndReportFailure(int generation) async {
+    try {
+      await _player.play();
+    } catch (error, stackTrace) {
+      final message = _playerErrorMessage(error);
+      developer.log(
+        'play request failed: $message',
+        name: 'BStreamPlayback',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (generation == _playbackGeneration) {
+        _emit(
+          _snapshot.copyWith(
+            status: PlayerStatus.failed,
+            errorMessage: message,
+          ),
         );
-      }),
-    );
+      }
+    }
+  }
+
+  String _playerErrorMessage(Object error) {
+    if (error is PlayerException) {
+      final message = error.message?.trim();
+      if (message != null && message.isNotEmpty) {
+        return message;
+      }
+    }
+    final message = error.toString().trim();
+    return message.isEmpty ? 'Error desconocido de reproduccion.' : message;
   }
 
   LoopMode get _loopMode {

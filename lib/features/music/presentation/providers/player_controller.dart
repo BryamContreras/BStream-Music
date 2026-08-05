@@ -185,10 +185,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       try {
         await ref.read(playerServiceProvider).playRemote(playableTrack);
         _clearPendingRemoteSnapshot(requestId);
-      } catch (_) {
-        if (_remoteRecoveryAttemptedRequestId != requestId) {
+      } catch (error) {
+        if (_remoteRecoveryAttemptedRequestId != requestId &&
+            _shouldRefreshRemoteError(error)) {
           await _refreshAndReplayRemote(playableTrack, requestId);
+          return;
         }
+        rethrow;
       }
     } catch (error, stackTrace) {
       if (_isCurrentPlayRequest(requestId)) {
@@ -239,6 +242,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (track == null || !_snapshotBelongsToTrack(snapshot, track)) {
       return false;
     }
+    if (!_shouldRefreshRemoteFailure(snapshot)) {
+      return false;
+    }
 
     final requestId = _playRequestId;
     if (_remoteRecoveryAttemptedRequestId == requestId) {
@@ -260,11 +266,55 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
   bool _snapshotBelongsToTrack(PlayerSnapshot snapshot, TrackInfo track) {
     final trackId = track.id.isEmpty ? track.url : track.id;
+    if (snapshot.sourceUrl == track.url) {
+      return true;
+    }
     final snapshotTrackId = snapshot.trackId?.trim();
     if (snapshotTrackId != null && snapshotTrackId.isNotEmpty) {
       return snapshotTrackId == trackId;
     }
-    return snapshot.sourceUrl == track.url;
+    return false;
+  }
+
+  bool _shouldRefreshRemoteFailure(PlayerSnapshot snapshot) {
+    return _shouldRefreshRemoteErrorMessage(snapshot.errorMessage);
+  }
+
+  bool _shouldRefreshRemoteError(Object error) {
+    return _shouldRefreshRemoteErrorMessage(error.toString());
+  }
+
+  bool _shouldRefreshRemoteErrorMessage(String? rawMessage) {
+    final message = rawMessage?.trim().toLowerCase() ?? '';
+    if (message.isEmpty) {
+      return true;
+    }
+
+    const nonRefreshableMarkers = [
+      'sign in',
+      'not a bot',
+      'confirm you',
+      'cookies',
+      'login required',
+      'private video',
+      'video unavailable',
+      'members-only',
+      'drm',
+      'unrecognized input',
+      'parserexception',
+      'decoder',
+      'format is not supported',
+      'requested format is not available',
+    ];
+    if (nonRefreshableMarkers.any(message.contains)) {
+      return false;
+    }
+
+    // Native backends use different messages for expired URLs, transport
+    // failures and cache failures. Keep the existing one-refresh recovery for
+    // unknown errors, while the definitive markers above prevent useless
+    // retries for authentication, bot and format failures.
+    return true;
   }
 
   bool _isStaleRemoteSnapshot(PlayerSnapshot snapshot) {
@@ -277,14 +327,18 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
     final expectedTrackId = current.id.isEmpty ? current.url : current.id;
     final snapshotTrackId = snapshot.trackId?.trim();
-    if (snapshotTrackId != null && snapshotTrackId.isNotEmpty) {
-      return snapshotTrackId != expectedTrackId;
+    if (snapshotTrackId != null &&
+        snapshotTrackId.isNotEmpty &&
+        snapshotTrackId == expectedTrackId) {
+      return false;
     }
     final sourceUrl = snapshot.sourceUrl?.trim();
-    return snapshot.isRemote &&
-        sourceUrl != null &&
-        sourceUrl.isNotEmpty &&
-        sourceUrl != current.url;
+    if (sourceUrl != null && sourceUrl.isNotEmpty) {
+      return snapshot.isRemote && sourceUrl != current.url;
+    }
+    return snapshotTrackId != null &&
+        snapshotTrackId.isNotEmpty &&
+        snapshotTrackId != expectedTrackId;
   }
 
   Future<void> _recoverRemoteFailure(
@@ -363,6 +417,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     bool allowStaleStreamFallback = true,
   }) async {
     if (!forceRefresh &&
+        !AppPlatform.isAndroid &&
         track.streamUrl != null &&
         track.thumbnailUrl != null) {
       return track;

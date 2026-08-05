@@ -29,8 +29,8 @@ class MiniPlayer extends ConsumerWidget {
           artist: snapshot?.artist,
           trackId: snapshot?.trackId,
           thumbnailUrl: snapshot?.thumbnailUrl,
-          hasError: player.hasError,
-          errorText: player.error?.toString(),
+          hasError: player.hasError || snapshot?.status == PlayerStatus.failed,
+          errorText: player.error?.toString() ?? snapshot?.errorMessage,
         );
       }),
     );

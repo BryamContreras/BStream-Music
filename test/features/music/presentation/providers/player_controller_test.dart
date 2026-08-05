@@ -131,6 +131,91 @@ void main() {
     },
   );
 
+  test(
+    'keeps bot and cookie playback failures visible without refreshing',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeMusicRepository([
+        _remoteTrack(streamUrl: 'https://media.example/first.m4a'),
+        _remoteTrack(streamUrl: 'https://media.example/unexpected.m4a'),
+      ]);
+      final container = _container(player, musicRepository: repository);
+      addTearDown(container.dispose);
+      const searchTrack = TrackInfo(
+        id: 'q8j3zwNhLNo',
+        title: 'YO SOY TU TITAN',
+        artist: 'Pamorkil',
+        url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+        thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+      );
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(searchTrack);
+
+      expect(repository.infoCalls, 1);
+      expect(player.playedRemote, hasLength(1));
+
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.failed,
+          trackId: 'q8j3zwNhLNo',
+          sourceUrl: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+          isRemote: true,
+          errorMessage:
+              'Source error: Sign in to confirm you are not a bot. '
+              'Use --cookies-from-browser or --cookies.',
+        ),
+      );
+      await _flushCompletion();
+
+      expect(repository.infoCalls, 1);
+      expect(player.playedRemote, hasLength(1));
+      expect(
+        container.read(playerControllerProvider).value?.errorMessage,
+        contains('cookies'),
+      );
+    },
+  );
+
+  test(
+    'does not refresh a synchronous bot error from the player backend',
+    () async {
+      final player = _FakePlayerService(
+        remotePlayError: StateError(
+          'Source error: Sign in to confirm you are not a bot. Use --cookies.',
+        ),
+      );
+      final repository = _FakeMusicRepository([
+        _remoteTrack(streamUrl: 'https://media.example/first.m4a'),
+        _remoteTrack(streamUrl: 'https://media.example/unexpected.m4a'),
+      ]);
+      final container = _container(player, musicRepository: repository);
+      addTearDown(container.dispose);
+      const searchTrack = TrackInfo(
+        id: 'q8j3zwNhLNo',
+        title: 'YO SOY TU TITAN',
+        artist: 'Pamorkil',
+        url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+        thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+      );
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(searchTrack);
+
+      expect(repository.infoCalls, 1);
+      expect(player.playedRemote, isEmpty);
+      expect(container.read(playerControllerProvider).hasError, isTrue);
+      expect(
+        container.read(playerControllerProvider).error.toString(),
+        contains('cookies'),
+      );
+    },
+  );
+
   test('a late failure from the previous remote track is ignored', () async {
     final player = _FakePlayerService();
     final repository = _FakeMusicRepository([
@@ -896,7 +981,10 @@ TrackInfo _remoteTrack({required String streamUrl}) {
 }
 
 class _FakePlayerService implements PlayerService {
-  _FakePlayerService({this.supportsLocalQueueReplacement = false});
+  _FakePlayerService({
+    this.supportsLocalQueueReplacement = false,
+    this.remotePlayError,
+  });
 
   final _controller = StreamController<PlayerSnapshot>.broadcast();
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
@@ -915,6 +1003,7 @@ class _FakePlayerService implements PlayerService {
 
   @override
   final bool supportsLocalQueueReplacement;
+  final Object? remotePlayError;
 
   @override
   PlayerSnapshot get currentSnapshot => _snapshot;
@@ -963,6 +1052,10 @@ class _FakePlayerService implements PlayerService {
 
   @override
   Future<void> playRemote(TrackInfo track) async {
+    final error = remotePlayError;
+    if (error != null) {
+      throw error;
+    }
     playedRemote.add(track);
     emit(
       PlayerSnapshot(

@@ -63,6 +63,7 @@ class RemoteTrackResolver {
     final future = _resolveAndCache(
       track,
       key,
+      forceRefresh: forceRefresh,
       allowStaleStreamFallback: allowStaleStreamFallback,
     );
 
@@ -85,6 +86,7 @@ class RemoteTrackResolver {
   Future<TrackInfo> _resolveAndCache(
     TrackInfo track,
     String key, {
+    required bool forceRefresh,
     required bool allowStaleStreamFallback,
   }) async {
     try {
@@ -98,6 +100,9 @@ class RemoteTrackResolver {
       return resolved;
     } catch (_) {
       _entries.remove(key);
+      if (forceRefresh) {
+        unawaited(_removePersistentEntry(key));
+      }
       if (allowStaleStreamFallback && _hasPlayableStream(track)) {
         return track;
       }
@@ -156,6 +161,19 @@ class RemoteTrackResolver {
     };
     _trimPersistentCache(cache);
     await prefs.setString(_prefsKey, jsonEncode(cache));
+  }
+
+  Future<void> _removePersistentEntry(String key) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cache = _readPersistentCache(prefs.getString(_prefsKey));
+      if (cache.remove(key) == null) {
+        return;
+      }
+      await prefs.setString(_prefsKey, jsonEncode(cache));
+    } catch (_) {
+      // A cache cleanup failure must not hide the original playback error.
+    }
   }
 
   Map<String, dynamic> _readPersistentCache(String? raw) {
