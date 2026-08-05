@@ -644,27 +644,31 @@ void main() {
     final repeatControl = find.byKey(const ValueKey('player-repeat-control'));
     expect(
       tester.getCenter(lyricsControl).dx,
-      closeTo(tester.getCenter(shuffleControl).dx, 0.1),
+      lessThan(tester.getCenter(shuffleControl).dx),
     );
     expect(
       tester.getCenter(lyricsControl).dy,
-      lessThan(tester.getCenter(shuffleControl).dy),
+      closeTo(tester.getCenter(shuffleControl).dy, 0.1),
     );
     expect(
       tester.getSize(lyricsControl).height,
-      lessThan(tester.getSize(shuffleControl).height),
+      closeTo(tester.getSize(shuffleControl).height, 0.1),
     );
     expect(
-      tester.getCenter(volumeControl).dx,
-      closeTo(tester.getCenter(repeatControl).dx, 0.1),
+      tester.getCenter(shuffleControl).dx,
+      lessThan(tester.getCenter(repeatControl).dx),
     );
     expect(
-      tester.getCenter(volumeControl).dy,
-      lessThan(tester.getCenter(repeatControl).dy),
+      tester.getCenter(repeatControl).dx,
+      lessThan(tester.getCenter(volumeControl).dx),
+    );
+    expect(
+      tester.getCenter(repeatControl).dy,
+      closeTo(tester.getCenter(volumeControl).dy, 0.1),
     );
     expect(
       tester.getSize(volumeControl).height,
-      lessThan(tester.getSize(repeatControl).height),
+      closeTo(tester.getSize(repeatControl).height, 0.1),
     );
 
     await tester.tap(find.byTooltip('Volumen'));

@@ -64,14 +64,8 @@ class JustAudioPlayerService implements PlayerService {
       _emit(_snapshot.copyWith(status: status));
     });
     _playbackErrorSubscription = _player.errorStream.listen((error) {
-      final message = _playerErrorMessage(error);
-      developer.log(
-        'playback failed: $message',
-        name: 'BStreamPlayback',
-        error: error,
-      );
-      _emit(
-        _snapshot.copyWith(status: PlayerStatus.failed, errorMessage: message),
+      unawaited(
+        _reportPlaybackFailure(error, _playbackGeneration, _activeRemoteTrack),
       );
     });
     _sequenceStateSubscription = _player.sequenceStateStream.listen((state) {
@@ -120,6 +114,10 @@ class JustAudioPlayerService implements PlayerService {
 
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   int _playbackGeneration = 0;
+  int? _reportedFailureGeneration;
+  int? _diagnosticGeneration;
+  Future<String>? _diagnosticFuture;
+  TrackInfo? _activeRemoteTrack;
   bool _shuffleEnabled = false;
   PlaybackRepeatMode _repeatMode = PlaybackRepeatMode.off;
   List<String> _localQueueIds = const [];
@@ -146,6 +144,7 @@ class JustAudioPlayerService implements PlayerService {
       );
     }
 
+    _activeRemoteTrack = track;
     _localQueueIds = const [];
     _emit(
       PlayerSnapshot(
@@ -167,17 +166,32 @@ class JustAudioPlayerService implements PlayerService {
       'playRemote start, hasDuration=${track.duration != null}, hasHeaders=${track.httpHeaders?.isNotEmpty == true}',
       name: 'BStreamPlayback',
     );
-    await _player.setAudioSource(
-      AudioSource.uri(
-        Uri.parse(source),
-        headers: track.httpHeaders,
-        tag: _remoteMediaItem(track),
-      ),
-      // Validate the signed URL before reporting that playback has started.
-      // This turns HTTP/format failures into a catchable error instead of a
-      // later, easily lost background event.
-      preload: true,
-    );
+    try {
+      await _player.setAudioSource(
+        AudioSource.uri(
+          Uri.parse(source),
+          headers: track.httpHeaders,
+          tag: _remoteMediaItem(track),
+        ),
+        // Validate the signed URL before reporting that playback has started.
+        // This turns HTTP/format failures into a catchable error instead of a
+        // later, easily lost background event.
+        preload: true,
+      );
+    } catch (error) {
+      if (generation == _playbackGeneration) {
+        final baseMessage = _playerErrorMessage(error);
+        final message = await _diagnosticMessage(error, generation, track);
+        if (message != baseMessage) {
+          throw app_errors.PlayerException(
+            message,
+            code: 'playback_source_error',
+            details: error,
+          );
+        }
+      }
+      rethrow;
+    }
     if (generation != _playbackGeneration) {
       return;
     }
@@ -199,6 +213,7 @@ class JustAudioPlayerService implements PlayerService {
   @override
   Future<void> playLocal(LocalTrack track) async {
     final generation = ++_playbackGeneration;
+    _activeRemoteTrack = null;
     _localQueueIds = const [];
     _emit(
       PlayerSnapshot(
@@ -230,6 +245,7 @@ class JustAudioPlayerService implements PlayerService {
       return;
     }
     final generation = ++_playbackGeneration;
+    _activeRemoteTrack = null;
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
     final current = tracks[safeIndex];
     _emit(
@@ -375,6 +391,7 @@ class JustAudioPlayerService implements PlayerService {
   @override
   Future<void> stop() {
     _playbackGeneration++;
+    _activeRemoteTrack = null;
     return _player.stop();
   }
 
@@ -476,21 +493,134 @@ class JustAudioPlayerService implements PlayerService {
     try {
       await _player.play();
     } catch (error, stackTrace) {
-      final message = _playerErrorMessage(error);
+      await _reportPlaybackFailure(error, generation, _activeRemoteTrack);
       developer.log(
-        'play request failed: $message',
+        'play request failed',
         name: 'BStreamPlayback',
         error: error,
         stackTrace: stackTrace,
       );
-      if (generation == _playbackGeneration) {
-        _emit(
-          _snapshot.copyWith(
-            status: PlayerStatus.failed,
-            errorMessage: message,
-          ),
-        );
+    }
+  }
+
+  Future<void> _reportPlaybackFailure(
+    Object error,
+    int generation,
+    TrackInfo? track,
+  ) async {
+    if (generation != _playbackGeneration ||
+        _reportedFailureGeneration == generation) {
+      return;
+    }
+    _reportedFailureGeneration = generation;
+
+    final message = await _diagnosticMessage(error, generation, track);
+    if (generation != _playbackGeneration) {
+      return;
+    }
+    developer.log(
+      'playback failed: $message',
+      name: 'BStreamPlayback',
+      error: error,
+    );
+    _emit(
+      _snapshot.copyWith(status: PlayerStatus.failed, errorMessage: message),
+    );
+  }
+
+  Future<String> _diagnosticMessage(
+    Object error,
+    int generation,
+    TrackInfo? track,
+  ) {
+    final cachedGeneration = _diagnosticGeneration;
+    final cachedFuture = _diagnosticFuture;
+    if (cachedGeneration == generation && cachedFuture != null) {
+      return cachedFuture;
+    }
+
+    final baseMessage = _playerErrorMessage(error);
+    final future = _buildDiagnosticMessage(baseMessage, track);
+    _diagnosticGeneration = generation;
+    _diagnosticFuture = future;
+    return future;
+  }
+
+  Future<String> _buildDiagnosticMessage(
+    String baseMessage,
+    TrackInfo? track,
+  ) async {
+    if (!_needsHttpDiagnostic(baseMessage) || track == null) {
+      return baseMessage;
+    }
+
+    final detail = await _probeRemoteSource(track);
+    return detail == null ? baseMessage : '$baseMessage: $detail';
+  }
+
+  bool _needsHttpDiagnostic(String message) {
+    final normalized = message.trim().toLowerCase();
+    return normalized.isEmpty || normalized.contains('source error');
+  }
+
+  Future<String?> _probeRemoteSource(TrackInfo track) async {
+    final source = track.streamUrl?.trim();
+    final uri = source == null ? null : Uri.tryParse(source);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
+    }
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 4)
+      ..idleTimeout = const Duration(seconds: 4);
+    try {
+      final request = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 6));
+      request.followRedirects = true;
+      request.maxRedirects = 3;
+      track.httpHeaders?.forEach((key, value) {
+        final normalized = key.toLowerCase();
+        if (normalized == 'host' ||
+            normalized == 'content-length' ||
+            normalized == 'range') {
+          return;
+        }
+        request.headers.set(key, value);
+      });
+      request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-1');
+
+      final response = await request.close().timeout(
+        const Duration(seconds: 6),
+      );
+      final status = response.statusCode;
+      final reason = response.reasonPhrase.trim();
+      final statusText = reason.isEmpty
+          ? 'HTTP $status'
+          : 'HTTP $status ($reason)';
+
+      // Cancel after the headers arrive. The probe must never download the
+      // audio stream or retain a second copy of the media.
+      final subscription = response.listen((_) {});
+      await subscription.cancel();
+
+      if (status >= 400) {
+        return statusText;
       }
+
+      final contentType = response.headers.contentType?.mimeType;
+      final typeText = contentType == null ? '' : '; content-type $contentType';
+      return '$statusText$typeText; ExoPlayer no pudo decodificar la respuesta';
+    } on TimeoutException {
+      return 'HTTP timeout';
+    } on SocketException {
+      return 'error de red';
+    } on HttpException {
+      return 'error HTTP';
+    } catch (_) {
+      return 'fallo al verificar la URL';
+    } finally {
+      client.close(force: true);
     }
   }
 
@@ -500,6 +630,7 @@ class JustAudioPlayerService implements PlayerService {
       if (message != null && message.isNotEmpty) {
         return message;
       }
+      return 'ExoPlayer error code ${error.code}';
     }
     final message = error.toString().trim();
     return message.isEmpty ? 'Error desconocido de reproduccion.' : message;

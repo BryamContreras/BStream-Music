@@ -970,7 +970,6 @@ class _PlaybackButtons extends ConsumerWidget {
           compactSmallButtonSize,
           compactness,
         )!;
-        final smallIconSize = (smallButtonSize * 0.84).clamp(28.0, 50.0);
         final regularSideButtonSize = (width * 0.145).clamp(
           roomy ? 56.0 : 44.0,
           compact ? 62.0 : 72.0,
@@ -999,6 +998,12 @@ class _PlaybackButtons extends ConsumerWidget {
           30.0,
           50.0,
         );
+        final secondaryControlSize = narrow
+            ? (smallButtonSize - 4.0).clamp(30.0, 40.0)
+            : secondarySideButtonSize;
+        final secondaryControlIconSize = narrow
+            ? (secondaryControlSize * 0.82).clamp(24.0, 34.0)
+            : secondarySideIconSize;
         final largerSideButtonSize = (sideButtonSize + 4.0).clamp(52.0, 76.0);
         final largerSideIconSize = (largerSideButtonSize * 0.84).clamp(
           38.0,
@@ -1012,25 +1017,25 @@ class _PlaybackButtons extends ConsumerWidget {
           42.0,
           68.0,
         );
-        final centerGap = narrow ? 9.0 : (width * 0.034).clamp(9.0, 32.0);
-        final outerGap = narrow ? 16.0 : (width * 0.075).clamp(16.0, 60.0);
-        final edgeGap = narrow ? 6.0 : (width * 0.018).clamp(8.0, 16.0);
+        final centerGap = narrow ? 4.0 : (width * 0.034).clamp(9.0, 32.0);
+        final outerGap = narrow ? 6.0 : (width * 0.075).clamp(16.0, 60.0);
+        final edgeGap = narrow ? 3.0 : (width * 0.018).clamp(8.0, 16.0);
         final lyricsButton = _ControlButton(
           key: const ValueKey('player-lyrics-control'),
-          size: narrow ? smallButtonSize : secondarySideButtonSize,
+          size: secondaryControlSize,
           tooltip: strings.lyrics,
-          iconSize: narrow ? smallIconSize : secondarySideIconSize,
+          iconSize: secondaryControlIconSize,
           color: inactiveColor,
           icon: Icons.lyrics_rounded,
           onPressed: hasTrack ? onOpenLyrics : null,
         );
         final shuffleButton = _ControlButton(
           key: const ValueKey('player-shuffle-control'),
-          size: secondarySideButtonSize,
+          size: secondaryControlSize,
           tooltip: snapshot.shuffleEnabled
               ? strings.deactivateShuffle
               : strings.activateShuffle,
-          iconSize: secondarySideIconSize,
+          iconSize: secondaryControlIconSize,
           color: snapshot.shuffleEnabled ? activeColor : inactiveColor,
           icon: Icons.shuffle_rounded,
           onPressed: hasTrack
@@ -1040,13 +1045,13 @@ class _PlaybackButtons extends ConsumerWidget {
         );
         final repeatButton = _ControlButton(
           key: const ValueKey('player-repeat-control'),
-          size: secondarySideButtonSize,
+          size: secondaryControlSize,
           tooltip: switch (snapshot.repeatMode) {
             PlaybackRepeatMode.off => strings.repeatQueue,
             PlaybackRepeatMode.all => strings.repeatOne,
             PlaybackRepeatMode.one => strings.disableRepeat,
           },
-          iconSize: secondarySideIconSize,
+          iconSize: secondaryControlIconSize,
           color: snapshot.repeatMode == PlaybackRepeatMode.off
               ? inactiveColor
               : activeColor,
@@ -1062,9 +1067,9 @@ class _PlaybackButtons extends ConsumerWidget {
         final volumeButton = _VolumeButton(
           key: const ValueKey('player-volume-control'),
           snapshot: snapshot,
-          size: narrow ? smallButtonSize : secondarySideButtonSize,
+          size: secondaryControlSize,
           tooltip: strings.volume,
-          iconSize: narrow ? smallIconSize : secondarySideIconSize,
+          iconSize: secondaryControlIconSize,
           color: const Color(0xFFE4EEE7),
         );
 
@@ -1074,20 +1079,9 @@ class _PlaybackButtons extends ConsumerWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (narrow)
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      lyricsButton,
-                      SizedBox(height: edgeGap),
-                      shuffleButton,
-                    ],
-                  )
-                else ...[
-                  lyricsButton,
-                  SizedBox(width: edgeGap),
-                  shuffleButton,
-                ],
+                lyricsButton,
+                SizedBox(width: edgeGap),
+                shuffleButton,
                 SizedBox(width: outerGap),
                 _ControlButton(
                   size: largerSideButtonSize,
@@ -1147,20 +1141,9 @@ class _PlaybackButtons extends ConsumerWidget {
                       : null,
                 ),
                 SizedBox(width: outerGap),
-                if (narrow)
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      volumeButton,
-                      SizedBox(height: edgeGap),
-                      repeatButton,
-                    ],
-                  )
-                else ...[
-                  repeatButton,
-                  SizedBox(width: edgeGap),
-                  volumeButton,
-                ],
+                repeatButton,
+                SizedBox(width: edgeGap),
+                volumeButton,
               ],
             ),
           ),
