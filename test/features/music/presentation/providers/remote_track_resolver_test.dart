@@ -102,6 +102,46 @@ void main() {
     expect(repository.infoCalls, 1);
   });
 
+  test('does not persist signed streams on Android', () async {
+    SharedPreferences.setMockInitialValues({
+      'remote_track_resolution_cache_v2': '{"stale":{}}',
+    });
+    final repository = _SuccessfulMusicRepository(includeStream: true);
+    final container = ProviderContainer(
+      overrides: [
+        musicRepositoryProvider.overrideWithValue(repository),
+        remoteTrackResolverProvider.overrideWith(
+          (ref) => RemoteTrackResolver(ref, isAndroid: true),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    const track = TrackInfo(
+      id: 'android-video',
+      title: 'Android track',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=android-video',
+    );
+
+    await container.read(remoteTrackResolverProvider).resolve(track);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('remote_track_resolution_cache_v2'), isNull);
+
+    final secondContainer = ProviderContainer(
+      overrides: [
+        musicRepositoryProvider.overrideWithValue(repository),
+        remoteTrackResolverProvider.overrideWith(
+          (ref) => RemoteTrackResolver(ref, isAndroid: true),
+        ),
+      ],
+    );
+    addTearDown(secondContainer.dispose);
+    await secondContainer.read(remoteTrackResolverProvider).resolve(track);
+
+    expect(repository.infoCalls, 2);
+  });
+
   test(
     'keeps the RAM cache bounded and evicts its oldest resolutions',
     () async {
@@ -173,6 +213,9 @@ class _FakeMusicRepository implements MusicRepository {
 }
 
 class _SuccessfulMusicRepository implements MusicRepository {
+  _SuccessfulMusicRepository({this.includeStream = false});
+
+  final bool includeStream;
   int infoCalls = 0;
 
   @override
@@ -184,8 +227,9 @@ class _SuccessfulMusicRepository implements MusicRepository {
       title: 'Resolved $id',
       artist: 'Resolved artist',
       url: url,
-      // Deliberately omit a stream URL: this test isolates the in-memory cache
-      // and avoids involving the independent SharedPreferences cache.
+      streamUrl: includeStream ? 'https://media.example/$id.m4a' : null,
+      // The default omits a stream URL so cache-size tests stay independent
+      // from the persistent SharedPreferences cache.
     );
   }
 

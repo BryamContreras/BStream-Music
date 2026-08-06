@@ -327,8 +327,8 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           .toDouble();
     } else {
       regularExtent = math
-          .min(constraints.maxWidth - 16, constraints.maxHeight * 0.46)
-          .clamp(210.0, 360.0)
+          .min(constraints.maxWidth - 16, constraints.maxHeight * 0.56)
+          .clamp(210.0, 400.0)
           .toDouble();
     }
 
@@ -725,6 +725,7 @@ class _LargeArtwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
+      key: const ValueKey('player-large-artwork'),
       constraints: BoxConstraints(maxWidth: maxExtent, maxHeight: maxExtent),
       child: AspectRatio(
         aspectRatio: 1,

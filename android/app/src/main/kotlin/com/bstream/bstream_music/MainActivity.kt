@@ -2,6 +2,7 @@ package com.bstream.bstream_music
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -10,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.WindowManager
 import com.ryanheise.audioservice.AudioServiceActivity
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -67,6 +69,16 @@ class MainActivity : AudioServiceActivity() {
             }
         }
 
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SCREEN_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setKeepScreenOn" -> setKeepScreenOn(call, result)
+                else -> result.notImplemented()
+            }
+        }
+
         EventChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             PROGRESS_CHANNEL,
@@ -109,6 +121,16 @@ class MainActivity : AudioServiceActivity() {
             clearPendingFileExport()
             result.error("export_start_failed", error.message, error.stackTraceToString())
         }
+    }
+
+    private fun setKeepScreenOn(call: MethodCall, result: MethodChannel.Result) {
+        val enabled = call.argument<Boolean>("enabled") ?: false
+        if (enabled) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        result.success(null)
     }
 
     @Deprecated("Deprecated in the Android framework, required by the document picker callback")
@@ -508,8 +530,12 @@ class MainActivity : AudioServiceActivity() {
 
         return try {
             val status = YoutubeDL.getInstance()
-                .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
-            Log.i(TAG, "yt-dlp update status: $status")
+                .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
+            Log.i(
+                TAG,
+                "yt-dlp update status: $status, " +
+                    "version=${YoutubeDL.getInstance().versionName(applicationContext)}",
+            )
             synchronized(updateLock) {
                 updateCompleted = true
             }
@@ -521,6 +547,31 @@ class MainActivity : AudioServiceActivity() {
             synchronized(updateLock) {
                 updateRunning = false
                 updateLock.notifyAll()
+            }
+        }
+    }
+
+    private fun restoreBundledYoutubeDl() {
+        val ytdlpDir = File(
+            applicationContext.noBackupFilesDir,
+            "${YoutubeDL.baseName}/${YoutubeDL.ytdlpDirName}",
+        )
+
+        try {
+            if (ytdlpDir.exists() && !ytdlpDir.deleteRecursively()) {
+                throw IllegalStateException("No se pudo limpiar la copia de yt-dlp.")
+            }
+            YoutubeDL.init_ytdlp(applicationContext, ytdlpDir)
+            applicationContext
+                .getSharedPreferences(YTDLP_SHARED_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(YTDLP_VERSION_KEY)
+                .remove(YTDLP_VERSION_NAME_KEY)
+                .apply()
+            Log.w(TAG, "Se restauro la copia incluida de yt-dlp")
+        } finally {
+            synchronized(updateLock) {
+                updateCompleted = false
             }
         }
     }
@@ -555,6 +606,12 @@ class MainActivity : AudioServiceActivity() {
                 block()
             } catch (retryError: Exception) {
                 retryError.addSuppressed(error)
+                try {
+                    // Never leave an extractor that failed its own retry.
+                    restoreBundledYoutubeDl()
+                } catch (restoreError: Throwable) {
+                    retryError.addSuppressed(restoreError)
+                }
                 throw retryError
             }
         }
@@ -704,9 +761,13 @@ class MainActivity : AudioServiceActivity() {
         private const val METHOD_CHANNEL = "bstream_music/ytdl"
         private const val PROGRESS_CHANNEL = "bstream_music/ytdl_progress"
         private const val FILE_EXPORT_CHANNEL = "bstream_music/file_export"
+        private const val SCREEN_CHANNEL = "bstream_music/screen"
         private const val NOTIFICATION_PERMISSION_REQUEST = 4010
         private const val FILE_EXPORT_REQUEST = 4011
         private const val TAG = "BStreamYtdl"
+        private const val YTDLP_SHARED_PREFS = "youtubedl-android"
+        private const val YTDLP_VERSION_KEY = "dlpVersion"
+        private const val YTDLP_VERSION_NAME_KEY = "dlpVersionName"
         private const val PROGRESS_MIN_INTERVAL_MS = 200L
         private const val PROGRESS_MIN_DELTA = 0.01f
         private const val PROGRESS_TEMPLATE =
@@ -738,9 +799,12 @@ class MainActivity : AudioServiceActivity() {
             "members only",
             "drm protected",
             "not a valid url",
+            "requested format is not available",
+            "format is not supported",
+            "no video formats",
+            "no se encontro una url reproducible",
         )
         private val RECOVERABLE_EXTRACTOR_ERRORS = listOf(
-            "no se encontro una url reproducible",
             "unable to extract",
             "failed to extract",
             "extractor error",
@@ -748,8 +812,6 @@ class MainActivity : AudioServiceActivity() {
             "nsig",
             "javascript runtime",
             "challenge",
-            "no video formats",
-            "requested format is not available",
             "http error 403",
             "forbidden",
         )

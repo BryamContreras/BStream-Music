@@ -33,7 +33,8 @@ final remoteTrackResolverProvider = Provider<RemoteTrackResolver>((ref) {
 });
 
 class RemoteTrackResolver {
-  RemoteTrackResolver(this._ref);
+  RemoteTrackResolver(this._ref, {bool? isAndroid})
+    : _isAndroid = isAndroid ?? AppPlatform.isAndroid;
 
   static const _ttl = Duration(minutes: 20);
   static const _prefsKey = 'remote_track_resolution_cache_v2';
@@ -41,6 +42,7 @@ class RemoteTrackResolver {
   static const _maxMemoryEntries = 32;
 
   final Ref _ref;
+  final bool _isAndroid;
   final _entries = <String, _TrackResolutionEntry>{};
   bool _loadedPersistentCache = false;
 
@@ -92,7 +94,7 @@ class RemoteTrackResolver {
     required bool allowStaleStreamFallback,
   }) async {
     try {
-      final resolver = AppPlatform.isAndroid
+      final resolver = _isAndroid
           ? _ref.read(getPlaybackInfoProvider).call
           : _ref.read(getTrackInfoProvider).call;
       final resolved = _mergeTrackInfo(track, await resolver(track.url));
@@ -117,6 +119,14 @@ class RemoteTrackResolver {
       return;
     }
     _loadedPersistentCache = true;
+
+    // Stream URLs and their headers are signed and short-lived. They must not
+    // survive an Android process restart or be reused after a download.
+    if (_isAndroid) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefsKey);
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
     final cache = _readPersistentCache(prefs.getString(_prefsKey));
@@ -149,7 +159,7 @@ class RemoteTrackResolver {
   }
 
   Future<void> _persistResolvedEntry(String key, TrackInfo track) async {
-    if (!_hasPlayableStream(track)) {
+    if (_isAndroid || !_hasPlayableStream(track)) {
       return;
     }
 
@@ -166,6 +176,10 @@ class RemoteTrackResolver {
   }
 
   Future<void> _removePersistentEntry(String key) async {
+    if (_isAndroid) {
+      return;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final cache = _readPersistentCache(prefs.getString(_prefsKey));

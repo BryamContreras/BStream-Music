@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../platform_channels/android_screen_channel.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/lyrics.dart';
@@ -21,14 +23,28 @@ class LyricsPage extends ConsumerStatefulWidget {
 
 class _LyricsPageState extends ConsumerState<LyricsPage> {
   final _manualSearchController = TextEditingController();
+  final _screenChannel = const AndroidScreenChannel();
   String? _lookupIdentity;
   bool _showSimilarLyrics = false;
   String _manualSearchTitle = '';
 
   @override
+  void initState() {
+    super.initState();
+    _setKeepScreenOn(true);
+  }
+
+  @override
   void dispose() {
+    _setKeepScreenOn(false);
     _manualSearchController.dispose();
     super.dispose();
+  }
+
+  void _setKeepScreenOn(bool enabled) {
+    if (AppPlatform.isAndroid) {
+      unawaited(_screenChannel.setKeepScreenOn(enabled));
+    }
   }
 
   @override

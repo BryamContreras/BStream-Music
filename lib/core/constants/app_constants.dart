@@ -8,6 +8,7 @@ class AppConstants {
   static const androidYtdlChannel = 'bstream_music/ytdl';
   static const androidYtdlProgressChannel = 'bstream_music/ytdl_progress';
   static const androidFileExportChannel = 'bstream_music/file_export';
+  static const androidScreenChannel = 'bstream_music/screen';
   static const preferredNativeAudioFormat =
       'bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[acodec^=mp4a]/bestaudio[acodec^=aac]/bestaudio';
   static const defaultSearchLimit = 10;

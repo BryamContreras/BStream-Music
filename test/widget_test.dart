@@ -607,6 +607,11 @@ void main() {
     expect(tester.takeException(), isNull);
 
     expect(find.text('En reproduccion'), findsOneWidget);
+    final largeArtwork = tester.getSize(
+      find.byKey(const ValueKey('player-large-artwork')),
+    );
+    expect(largeArtwork.width, greaterThan(220));
+    expect(largeArtwork.height, closeTo(largeArtwork.width, 0.1));
     final playerControl = tester.widget<IconButton>(
       find.byKey(const ValueKey('player-primary-control')),
     );
