@@ -107,6 +107,6 @@ void main() {
       'query': 'Artist - Song',
       'limit': AppConstants.defaultSearchLimit,
     });
-    expect(AppConstants.defaultSearchLimit, 15);
+    expect(AppConstants.defaultSearchLimit, 20);
   });
 }

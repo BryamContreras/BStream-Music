@@ -20,7 +20,7 @@ abstract final class ArtworkProgressColor {
 /// player do not sample the same artwork independently.
 class ArtworkProgressColorService {
   ArtworkProgressColorService({
-    this.maximumCacheEntries = 64,
+    this.maximumCacheEntries = 32,
     this.imageLoadTimeout = const Duration(seconds: 20),
   }) : assert(maximumCacheEntries > 0),
        assert(imageLoadTimeout > Duration.zero);
@@ -211,7 +211,9 @@ class ArtworkProgressColorService {
 
 final artworkProgressColorServiceProvider =
     Provider<ArtworkProgressColorService>((ref) {
-      return ArtworkProgressColorService();
+      final service = ArtworkProgressColorService();
+      ref.onDispose(service.clearCache);
+      return service;
     });
 
 final artworkProgressColorProvider = FutureProvider.autoDispose

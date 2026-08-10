@@ -33,7 +33,9 @@ final supportDevelopmentLauncherProvider = Provider<SupportDevelopmentLauncher>(
 );
 
 class SettingsPanel extends ConsumerStatefulWidget {
-  const SettingsPanel({super.key});
+  const SettingsPanel({this.active = true, super.key});
+
+  final bool active;
 
   @override
   ConsumerState<SettingsPanel> createState() => _SettingsPanelState();
@@ -45,6 +47,15 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   final _downloadPathFocusNode = FocusNode();
   final _tiktokLiveFocusNode = FocusNode();
   bool _backupBusy = false;
+  bool _accentPaletteExpanded = false;
+
+  @override
+  void didUpdateWidget(covariant SettingsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.active && !widget.active) {
+      _accentPaletteExpanded = false;
+    }
+  }
 
   @override
   void dispose() {
@@ -90,6 +101,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                     _AppearanceSettings(
                       themeMode: state.themeMode,
                       accent: state.accent,
+                      accentPaletteExpanded: _accentPaletteExpanded,
                       strings: strings,
                       onThemeModeChanged: (mode) => ref
                           .read(settingsControllerProvider.notifier)
@@ -97,6 +109,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                       onAccentChanged: (accent) => ref
                           .read(settingsControllerProvider.notifier)
                           .setAccent(accent),
+                      onExpandAccentPalette: () =>
+                          setState(() => _accentPaletteExpanded = true),
                     ),
                   ],
                 );
@@ -573,16 +587,20 @@ class _AppearanceSettings extends StatelessWidget {
   const _AppearanceSettings({
     required this.themeMode,
     required this.accent,
+    required this.accentPaletteExpanded,
     required this.strings,
     required this.onThemeModeChanged,
     required this.onAccentChanged,
+    required this.onExpandAccentPalette,
   });
 
   final AppThemeMode themeMode;
   final AppAccent accent;
+  final bool accentPaletteExpanded;
   final AppStrings strings;
   final ValueChanged<AppThemeMode> onThemeModeChanged;
   final ValueChanged<AppAccent> onAccentChanged;
+  final VoidCallback onExpandAccentPalette;
 
   @override
   Widget build(BuildContext context) {
@@ -640,18 +658,46 @@ class _AppearanceSettings extends StatelessWidget {
             ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 10),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              for (final option in AppAccent.values)
-                _AccentSwatch(
-                  accent: option,
-                  selected: option == accent,
-                  label: strings.accentLabel(option),
-                  onTap: () => onAccentChanged(option),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 328),
+              child: AnimatedSize(
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.topLeft,
+                child: GridView.builder(
+                  key: const ValueKey('accent-palette-grid'),
+                  shrinkWrap: true,
+                  primary: false,
+                  physics: const NeverScrollableScrollPhysics(),
+                  padding: EdgeInsets.zero,
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 6,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                  ),
+                  itemCount: accentPaletteExpanded
+                      ? AppAccent.values.length
+                      : 6,
+                  itemBuilder: (context, index) {
+                    if (!accentPaletteExpanded && index == 5) {
+                      return _MoreAccentSwatch(
+                        label: strings.moreAccentColors,
+                        onTap: onExpandAccentPalette,
+                      );
+                    }
+                    final option = AppAccent.values[index];
+                    return _AccentSwatch(
+                      accent: option,
+                      selected: option == accent,
+                      label: strings.accentLabel(option),
+                      onTap: () => onAccentChanged(option),
+                    );
+                  },
                 ),
-            ],
+              ),
+            ),
           ),
         ],
       ),
@@ -676,6 +722,7 @@ class _AccentSwatch extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Semantics(
+      key: ValueKey('accent-${accent.code}'),
       button: true,
       selected: selected,
       label: label,
@@ -713,12 +760,51 @@ class _AccentSwatch extends StatelessWidget {
             child: selected
                 ? Icon(
                     Icons.check_rounded,
-                    color: accent == AppAccent.white
+                    color: accent.seedColor.computeLuminance() > 0.58
                         ? Colors.black
                         : Colors.white,
                     size: 22,
                   )
                 : null,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MoreAccentSwatch extends StatelessWidget {
+  const _MoreAccentSwatch({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      key: const ValueKey('accent-expand-button'),
+      button: true,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(13),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: scheme.outline, width: 1.2),
+            ),
+            child: Icon(
+              Icons.add_rounded,
+              color: scheme.onSurfaceVariant,
+              size: 25,
+            ),
           ),
         ),
       ),

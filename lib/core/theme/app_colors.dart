@@ -62,11 +62,25 @@ abstract final class AppColors {
   /// same alpha keeps search/library cards visually comparable while the
   /// theme supplies the appropriate light or dark base color.
   static Color cardSurfaceFor(BuildContext context) {
-    return Theme.of(context).colorScheme.surface.withValues(alpha: 0.64);
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+    final tintedSurface = Color.alphaBlend(
+      accent.withValues(alpha: 0.045),
+      colors.surface,
+    );
+    return tintedSurface.withValues(alpha: 0.66);
   }
 
   static Color cardBorderFor(BuildContext context) {
-    return Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.7);
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+    final tintedBorder = Color.alphaBlend(
+      accent.withValues(alpha: 0.18),
+      colors.outlineVariant,
+    );
+    return tintedBorder.withValues(alpha: 0.78);
   }
 
   static Color playbackPrimaryBackgroundFor(BuildContext context) {

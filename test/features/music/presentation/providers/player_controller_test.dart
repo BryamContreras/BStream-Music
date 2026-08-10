@@ -373,6 +373,43 @@ void main() {
   );
 
   test(
+    'remote cache follows the previous, current, and next queue tracks',
+    () async {
+      final player = _FakePlayerService();
+      final cache = _TrackingRemotePlaybackCache();
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+        _queuedRemoteTrack('fourth'),
+      ];
+      final container = _container(player, remoteCache: cache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+
+      expect(cache.retainedWindows.last, [
+        tracks[0].url,
+        tracks[3].url,
+        tracks[1].url,
+      ]);
+
+      await container.read(playerControllerProvider.notifier).playNext();
+      expect(cache.retainedWindows.last, [
+        tracks[1].url,
+        tracks[0].url,
+        tracks[2].url,
+      ]);
+
+      await container.read(playerControllerProvider.notifier).stop();
+      expect(cache.retainedWindows.last, isEmpty);
+    },
+  );
+
+  test(
     'automatic completion does not replay a single track with repeat off',
     () async {
       final player = _FakePlayerService();
@@ -1169,6 +1206,17 @@ TrackInfo _remoteTrackWithThumbnail({
   );
 }
 
+TrackInfo _queuedRemoteTrack(String id) {
+  return TrackInfo(
+    id: id,
+    title: 'Track $id',
+    artist: 'BStream',
+    url: 'https://www.youtube.com/watch?v=$id',
+    thumbnailUrl: 'https://i.ytimg.com/vi/$id/hqdefault.jpg',
+    streamUrl: 'https://media.example/$id.m4a',
+  );
+}
+
 class _FakePlayerService implements PlayerService {
   _FakePlayerService({
     this.supportsLocalQueueReplacement = false,
@@ -1313,6 +1361,18 @@ class _FakeRemotePlaybackCache extends RemotePlaybackCache {
 
   @override
   Future<File?> cachedFile(TrackInfo track) async => file;
+}
+
+class _TrackingRemotePlaybackCache extends RemotePlaybackCache {
+  final List<List<String>> retainedWindows = [];
+
+  @override
+  Future<File?> cachedFile(TrackInfo track) async => null;
+
+  @override
+  Future<void> retainOnlyTracks(Iterable<TrackInfo> tracks) async {
+    retainedWindows.add(tracks.map((track) => track.url).toList());
+  }
 }
 
 class _FakeDesktopMediaSession implements DesktopMediaSession {

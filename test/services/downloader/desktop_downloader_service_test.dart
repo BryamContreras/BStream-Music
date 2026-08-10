@@ -150,13 +150,13 @@ void main() {
     );
   });
 
-  test('requests 15 search results from desktop yt-dlp', () {
+  test('requests 20 search results from desktop yt-dlp', () {
     final service = DesktopDownloaderService(toolDirectories: const []);
     addTearDown(service.dispose);
 
     expect(
       service.buildSearchArguments('Artist - Song'),
-      contains('ytsearch15:Artist - Song'),
+      contains('ytsearch20:Artist - Song'),
     );
   });
 

@@ -20,7 +20,7 @@ void main() {
   });
 
   test('uses the requested search size and support URL', () {
-    expect(AppConstants.defaultSearchLimit, 15);
+    expect(AppConstants.defaultSearchLimit, 20);
     expect(
       AppConstants.supportDevelopmentUrl,
       'https://ko-fi.com/soybryam06c/donate',

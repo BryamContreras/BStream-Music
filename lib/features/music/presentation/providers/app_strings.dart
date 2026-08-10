@@ -225,7 +225,12 @@ class AppStrings {
     AppAccent.yellow => choose('Amarillo', 'Yellow'),
     AppAccent.pink => choose('Rosa', 'Pink'),
     AppAccent.teal => choose('Turquesa', 'Teal'),
+    AppAccent.cyan => choose('Cian', 'Cyan'),
+    AppAccent.indigo => choose('Índigo', 'Indigo'),
+    AppAccent.lime => choose('Lima', 'Lime'),
   };
+  String get moreAccentColors =>
+      choose('Mostrar más colores', 'Show more colors');
   String get spanish => choose('Espanol', 'Spanish');
   String get english => 'English';
   String get sleepTimer => choose('Temporizador', 'Sleep timer');

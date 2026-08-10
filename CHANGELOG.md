@@ -6,7 +6,8 @@
 
 - Android `Open with` support for local audio, including a folder-backed queue
   when media-library access and provider metadata are available.
-- System, Light, and Dark themes with nine persistent accent palettes.
+- System, Light, and Dark themes with twelve persistent accent palettes and a
+  compact expandable color picker.
 - Long-press queue reordering that preserves the active track and synchronizes
   Android's native media queue.
 - Controlled preloading of only the next remote track.
@@ -19,7 +20,10 @@
 
 - Unified high-quality artwork selection and proportional cropping across
   search, playback, playlists, downloads, and older YouTube thumbnails.
-- Search now returns up to 15 results on Android and desktop.
+- All 20 search thumbnails now load eagerly at their display-appropriate size,
+  remain stable while scrolling, and search cards retain accent hover feedback
+  during playback and downloads.
+- Search now returns up to 20 results on Android and desktop.
 - Accent-aware gradients, tabs, progress bars, lyrics, cards, menus, and player
   controls in both light and dark themes.
 - Android remote playback with earlier source validation, preserved request
@@ -28,8 +32,10 @@
 - Android APK builds now bundle checksum-verified stable yt-dlp `2026.07.04`,
   matching the desktop release version. Existing installations migrate older
   bundled copies while preserving an equal or newer downloaded update.
-- Long-session resource use with bounded artwork, thumbnail, remote-audio, and
-  LRCLIB caches, request limits, and reduced position-update work.
+- Long-session resource use with smaller bounded artwork, thumbnail, and LRCLIB
+  caches; remote audio now retains only the previous, current, and next track,
+  removes abandoned partial files, and expires interrupted-session leftovers
+  after 30 minutes.
 - Backup restore validation for manifests, archive paths and limits, SQLite
   integrity, schema, and version, followed by staged activation and rollback.
 - Recent playback retains its playlist context and queue changes remain aligned

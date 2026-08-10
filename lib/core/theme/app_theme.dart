@@ -32,7 +32,10 @@ enum AppAccent {
   red,
   yellow,
   pink,
-  teal;
+  teal,
+  cyan,
+  indigo,
+  lime;
 
   String get code => name;
 
@@ -46,6 +49,9 @@ enum AppAccent {
     AppAccent.yellow => const Color(0xFFFFD54F),
     AppAccent.pink => const Color(0xFFFF5C93),
     AppAccent.teal => const Color(0xFF2DD4BF),
+    AppAccent.cyan => const Color(0xFF22D3EE),
+    AppAccent.indigo => const Color(0xFF818CF8),
+    AppAccent.lime => const Color(0xFFA3E635),
   };
 
   Color get darkColor => switch (this) {
@@ -58,6 +64,9 @@ enum AppAccent {
     AppAccent.yellow => const Color(0xFFC49A00),
     AppAccent.pink => const Color(0xFFC52D65),
     AppAccent.teal => const Color(0xFF0F8F80),
+    AppAccent.cyan => const Color(0xFF0E7490),
+    AppAccent.indigo => const Color(0xFF4338CA),
+    AppAccent.lime => const Color(0xFF4D7C0F),
   };
 
   static AppAccent fromCode(String? code) => switch (code) {
@@ -70,6 +79,9 @@ enum AppAccent {
     'yellow' => AppAccent.yellow,
     'pink' => AppAccent.pink,
     'teal' => AppAccent.teal,
+    'cyan' => AppAccent.cyan,
+    'indigo' => AppAccent.indigo,
+    'lime' => AppAccent.lime,
     _ => AppAccent.white,
   };
 }

@@ -771,7 +771,9 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('settings-view'),
             selected: widget.selectedIndex == widget.settingsIndex,
-            child: const SettingsPanel(),
+            child: SettingsPanel(
+              active: widget.selectedIndex == widget.settingsIndex,
+            ),
           ),
       ],
     );

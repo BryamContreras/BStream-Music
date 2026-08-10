@@ -14,6 +14,13 @@ void main() {
     expect(AppAccent.fromCode('green'), AppAccent.green);
   });
 
+  test('expanded palette exposes twelve persistent accent codes', () {
+    expect(AppAccent.values, hasLength(12));
+    expect(AppAccent.fromCode('cyan'), AppAccent.cyan);
+    expect(AppAccent.fromCode('indigo'), AppAccent.indigo);
+    expect(AppAccent.fromCode('lime'), AppAccent.lime);
+  });
+
   testWidgets('dark full-player control uses the selected accent', (
     tester,
   ) async {

@@ -12,12 +12,14 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/download_progress_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/gradient_progress_bar.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/features/music/presentation/widgets/track_result_tile.dart';
 import 'package:bstream_music/main.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
@@ -25,7 +27,8 @@ import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart' hide SearchController;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -257,6 +260,68 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('accent palette expands to two rows and resets when inactive', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(430, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final active = ValueNotifier(true);
+    addTearDown(active.dispose);
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsControllerProvider.overrideWith(() => settingsController),
+          appStringsProvider.overrideWithValue(
+            const AppStrings(AppLanguage.spanish),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ValueListenableBuilder<bool>(
+              valueListenable: active,
+              builder: (_, isActive, _) => SettingsPanel(active: isActive),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byKey(const ValueKey('accent-white')), findsOneWidget);
+    expect(find.byKey(const ValueKey('accent-orange')), findsOneWidget);
+    expect(find.byKey(const ValueKey('accent-red')), findsNothing);
+    expect(find.byKey(const ValueKey('accent-expand-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('accent-expand-button')));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byKey(const ValueKey('accent-expand-button')), findsNothing);
+    expect(find.byKey(const ValueKey('accent-red')), findsOneWidget);
+    expect(find.byKey(const ValueKey('accent-cyan')), findsOneWidget);
+    expect(find.byKey(const ValueKey('accent-indigo')), findsOneWidget);
+    expect(find.byKey(const ValueKey('accent-lime')), findsOneWidget);
+
+    active.value = false;
+    await tester.pump();
+    active.value = true;
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byKey(const ValueKey('accent-expand-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('accent-red')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('support section opens the exact Ko-fi donation page', (
     tester,
   ) async {
@@ -421,6 +486,112 @@ void main() {
     expect(find.text('Anadir a playlist'), findsOneWidget);
   });
 
+  testWidgets('current search result retains visible hover feedback', (
+    tester,
+  ) async {
+    const track = TrackInfo(
+      id: 'playing-result',
+      title: 'Resultado activo',
+      artist: 'BStream Music',
+      url: 'https://example.com/playing-result',
+      thumbnailUrl: '',
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
+          playerServiceProvider.overrideWithValue(
+            _FakePlayerService(
+              snapshot: PlayerSnapshot(
+                status: PlayerStatus.playing,
+                trackId: track.id,
+                sourceUrl: track.url,
+                isRemote: true,
+              ),
+            ),
+          ),
+          libraryRepositoryProvider.overrideWithValue(_FakeLibraryRepository()),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 600,
+                child: TrackResultTile(track: track, onOpenPlayer: _noop),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final surface = find.byKey(
+      const ValueKey('track-result-surface-playing-result'),
+    );
+    var decoration =
+        tester.widget<AnimatedContainer>(surface).decoration! as BoxDecoration;
+    expect((decoration.border! as Border).top.width, 1);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(surface));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    decoration =
+        tester.widget<AnimatedContainer>(surface).decoration! as BoxDecoration;
+    expect((decoration.border! as Border).top.width, 1.4);
+  });
+
+  testWidgets('search eagerly keeps all capped result thumbnails mounted', (
+    tester,
+  ) async {
+    final tracks = List.generate(
+      20,
+      (index) => TrackInfo(
+        id: 'search-$index',
+        title: 'Resultado $index',
+        artist: 'BStream Music',
+        url: 'https://example.com/search-$index',
+        thumbnailUrl: '',
+      ),
+    );
+    tester.view.physicalSize = const Size(430, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          searchControllerProvider.overrideWith(
+            () => _FakeSearchController(tracks),
+          ),
+          downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
+          playerServiceProvider.overrideWithValue(_FakePlayerService()),
+          libraryRepositoryProvider.overrideWithValue(_FakeLibraryRepository()),
+          appStringsProvider.overrideWithValue(
+            const AppStrings(AppLanguage.spanish),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(body: SearchView(onOpenPlayer: _noop)),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byType(TrackResultTile), findsNWidgets(20));
+    final artwork = tester
+        .widgetList<ProportionalArtwork>(find.byType(ProportionalArtwork))
+        .toList(growable: false);
+    expect(artwork, hasLength(20));
+    expect(artwork.every((image) => image.cacheWidth == 512), isTrue);
+  });
+
   testWidgets('download bars show realtime progress from the active task id', (
     tester,
   ) async {
@@ -505,6 +676,18 @@ void main() {
         .widgetList<GradientProgressBar>(find.byType(GradientProgressBar))
         .toList();
     expect(bars.every((bar) => bar.value == 0.62), isTrue);
+
+    final surface = find.byKey(
+      const ValueKey('track-result-surface-progress-track'),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(surface));
+    await tester.pump(const Duration(milliseconds: 300));
+    final decoration =
+        tester.widget<AnimatedContainer>(surface).decoration! as BoxDecoration;
+    expect((decoration.border! as Border).top.width, 1.4);
 
     downloader.emitProgress(taskId: taskId, progress: 0.30);
     await tester.pump();
@@ -1282,6 +1465,8 @@ Future<void> _pumpTestApp(WidgetTester tester) {
   return tester.pumpWidget(_testApp());
 }
 
+void _noop() {}
+
 Widget _settingsTestApp({
   required _FakeSettingsController settingsController,
   required DownloadDirectoryPicker directoryPicker,
@@ -1346,6 +1531,15 @@ class _FakeSettingsController extends SettingsController {
     final current = await future;
     state = AsyncData(current.copyWith(downloadDirectory: path));
   }
+}
+
+class _FakeSearchController extends SearchController {
+  _FakeSearchController(this.tracks);
+
+  final List<TrackInfo> tracks;
+
+  @override
+  Future<List<TrackInfo>> build() async => tracks;
 }
 
 class _FakeDownloaderService implements DownloaderService {

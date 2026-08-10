@@ -15,7 +15,7 @@ Current version: **1.2.3+123**.
 
 - Open local Android audio with BStream and populate the queue from the
   selected file's folder when Android grants media-library access.
-- Choose System, Light, or Dark appearance and one of nine persistent accent
+- Choose System, Light, or Dark appearance and one of twelve persistent accent
   palettes applied across gradients, tabs, progress, controls, lyrics, cards,
   and menus.
 - Reorder the active queue with a long press without restarting the current
@@ -24,7 +24,7 @@ Current version: **1.2.3+123**.
   and downloads, including proportional cropping and older-video fallbacks.
 - Keep search text until it is explicitly cleared, and show total duration
   beside song counts in playlists and downloaded songs.
-- Get up to 15 results per search and optionally support continued development
+- Get up to 20 results per search and optionally support continued development
   from the contribution link below the version in Settings.
 - Improve Android playback recovery for expired URLs, HTTP errors, extractor
   changes, and format mismatches. Android APKs now include the same pinned
@@ -40,7 +40,7 @@ Current version: **1.2.3+123**.
 
 ### Search, downloads, and library
 
-- Up to 15 search results with thumbnail, title, artist/channel, and duration.
+- Up to 20 search results with thumbnail, title, artist/channel, and duration.
 - Search text remains available between searches and has an inline clear action.
 - Remote playback and audio downloads with real-time progress.
 - High-quality artwork uses one proportional crop policy from search through
@@ -59,7 +59,9 @@ Current version: **1.2.3+123**.
 - Playback queue synchronized with playlists and the library.
 - Queue side panel on Windows and a dedicated queue view on Android.
 - Change tracks directly from the queue and reorder them with a long press.
-- Controlled preloading warms only the next remote track.
+- Controlled preloading warms only the next remote track. The disk window keeps
+  at most the previous, current, and next tracks; other queue audio is removed
+  immediately and interrupted-session leftovers expire after 30 minutes.
 - The active track is highlighted with a segmented 13-bar equalizer.
 - Theme-aware dynamic background derived from the track artwork.
 - Animated progress bar with waves and the selected accent color.
@@ -77,7 +79,7 @@ Current version: **1.2.3+123**.
 ### Interface
 
 - Responsive layouts for Android and Windows.
-- System, Light, and Dark themes with nine persistent accent palettes.
+- System, Light, and Dark themes with twelve persistent accent palettes.
 - Navigation remembers only the two most recent views.
 - Returning from the player restores the previously opened playlist or section.
 - Home displays up to 10 recently played items and 10 playlists. Recent items
@@ -143,8 +145,9 @@ playback, but they are not a transcoding or download post-processing step.
 Lyrics are requested from [LRCLIB](https://lrclib.net) only when the lyrics
 view is opened. BStream sends the current title, artist, duration, and album
 when available, identifies itself with the required client header, and keeps a
-short in-memory cache to avoid duplicate requests. Lyrics are not embedded in
-downloaded audio files.
+15-minute in-memory cache of at most 24 songs to avoid duplicate requests.
+Lyrics are not embedded in downloaded audio files, and this cache disappears
+when the app process closes.
 
 ## Architecture
 

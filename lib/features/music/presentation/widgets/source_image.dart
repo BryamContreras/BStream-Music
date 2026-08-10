@@ -11,11 +11,13 @@ class SourceImage extends StatelessWidget {
     required this.source,
     required this.fallback,
     this.fit = BoxFit.cover,
+    this.cacheWidth = _maximumDecodedDimension,
     super.key,
   });
 
   final String? source;
   final BoxFit fit;
+  final int cacheWidth;
   final Widget fallback;
 
   // Artwork is displayed in bounded cards and player surfaces. Keep the
@@ -45,7 +47,7 @@ class SourceImage extends StatelessWidget {
       file,
       fit: fit,
       gaplessPlayback: true,
-      cacheWidth: _maximumDecodedDimension,
+      cacheWidth: cacheWidth,
       errorBuilder: (_, _, _) => fallback,
     );
   }
@@ -63,7 +65,7 @@ class SourceImage extends StatelessWidget {
         candidates[index],
         fit: fit,
         gaplessPlayback: true,
-        cacheWidth: _maximumDecodedDimension,
+        cacheWidth: cacheWidth,
         errorBuilder: (_, _, _) => buildCandidate(index + 1),
       );
     }
@@ -79,11 +81,13 @@ class ProportionalArtwork extends StatelessWidget {
   const ProportionalArtwork({
     required this.source,
     required this.fallback,
+    this.cacheWidth = SourceImage._maximumDecodedDimension,
     super.key,
   });
 
   final String? source;
   final Widget fallback;
+  final int cacheWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -103,6 +107,7 @@ class ProportionalArtwork extends StatelessWidget {
               child: SourceImage(
                 source: normalized,
                 fit: BoxFit.cover,
+                cacheWidth: cacheWidth,
                 fallback: const SizedBox.expand(),
               ),
             ),
@@ -113,7 +118,12 @@ class ProportionalArtwork extends StatelessWidget {
         // zoom it to the frame and crop only the overflowing sides. Using a
         // loose `Center` here would make the image keep its small intrinsic
         // size and leave large empty margins.
-        SourceImage(source: normalized, fit: BoxFit.cover, fallback: fallback),
+        SourceImage(
+          source: normalized,
+          fit: BoxFit.cover,
+          cacheWidth: cacheWidth,
+          fallback: fallback,
+        ),
       ],
     );
   }

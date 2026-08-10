@@ -110,20 +110,29 @@ ThemeData _buildDarkTheme({
     scaffoldBackgroundColor: const Color(0xFF030504),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: const Color(0xFF050705),
-      indicatorColor: accent.darkColor.withValues(alpha: 0.28),
+      indicatorColor: accent.darkColor.withValues(alpha: 0.34),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: const Color(0xFF050705),
-      indicatorColor: accent.darkColor.withValues(alpha: 0.28),
+      indicatorColor: accent.darkColor.withValues(alpha: 0.34),
     ),
     cardTheme: CardThemeData(
-      color: scheme.surface.withValues(alpha: 0.64),
+      color: Color.alphaBlend(
+        accent.seedColor.withValues(alpha: 0.045),
+        scheme.surface,
+      ).withValues(alpha: 0.66),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.7)),
+        side: BorderSide(
+          color: Color.alphaBlend(
+            accent.seedColor.withValues(alpha: 0.18),
+            scheme.outlineVariant,
+          ).withValues(alpha: 0.78),
+        ),
       ),
     ),
+    segmentedButtonTheme: _segmentedButtonTheme(accent, scheme),
     dialogTheme: DialogThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
@@ -182,20 +191,29 @@ ThemeData _buildLightTheme({
     scaffoldBackgroundColor: const Color(0xFFF5F8F6),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: Colors.white,
-      indicatorColor: accent.seedColor.withValues(alpha: 0.16),
+      indicatorColor: accent.seedColor.withValues(alpha: 0.21),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: Colors.white,
-      indicatorColor: accent.seedColor.withValues(alpha: 0.16),
+      indicatorColor: accent.seedColor.withValues(alpha: 0.21),
     ),
     cardTheme: CardThemeData(
-      color: scheme.surface.withValues(alpha: 0.64),
+      color: Color.alphaBlend(
+        accent.seedColor.withValues(alpha: 0.045),
+        scheme.surface,
+      ).withValues(alpha: 0.66),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: scheme.outlineVariant),
+        side: BorderSide(
+          color: Color.alphaBlend(
+            accent.seedColor.withValues(alpha: 0.18),
+            scheme.outlineVariant,
+          ).withValues(alpha: 0.78),
+        ),
       ),
     ),
+    segmentedButtonTheme: _segmentedButtonTheme(accent, scheme),
     dialogTheme: DialogThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
@@ -261,6 +279,34 @@ TextButtonThemeData _textButtonTheme(bool isDesktop, double height) {
       textStyle: const WidgetStatePropertyAll(
         TextStyle(fontWeight: FontWeight.w800),
       ),
+    ),
+  );
+}
+
+SegmentedButtonThemeData _segmentedButtonTheme(
+  AppAccent accent,
+  ColorScheme scheme,
+) {
+  final selectedBorder = scheme.brightness == Brightness.dark
+      ? accent.seedColor
+      : accent.darkColor;
+  return SegmentedButtonThemeData(
+    style: ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith<Color?>((states) {
+        if (!states.contains(WidgetState.selected)) {
+          return null;
+        }
+        return accent.seedColor.withValues(alpha: 0.22);
+      }),
+      side: WidgetStateProperty.resolveWith<BorderSide?>((states) {
+        if (!states.contains(WidgetState.selected)) {
+          return null;
+        }
+        return BorderSide(
+          color: selectedBorder.withValues(alpha: 0.66),
+          width: 1.2,
+        );
+      }),
     ),
   );
 }

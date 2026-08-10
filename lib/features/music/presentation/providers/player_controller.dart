@@ -102,6 +102,22 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   @override
   Future<PlayerSnapshot> build() async {
     final service = ref.watch(playerServiceProvider);
+    final initialSnapshot = _decorateSnapshot(service.currentSnapshot);
+    final activeCachedSource =
+        (!initialSnapshot.isRemote &&
+            initialSnapshot.trackId?.startsWith('remote-cache:') == true)
+        ? initialSnapshot.sourceUrl?.trim()
+        : null;
+    unawaited(
+      ref
+          .read(remotePlaybackCacheProvider)
+          .prepareSession(
+            protectedSourceUrls: [
+              if (activeCachedSource != null && activeCachedSource.isNotEmpty)
+                activeCachedSource,
+            ],
+          ),
+    );
     final subscription = service.snapshotStream.listen((snapshot) {
       if (_isStaleRemoteSnapshot(snapshot)) {
         return;
@@ -115,12 +131,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       }
     });
     ref.onDispose(subscription.cancel);
-    return _decorateSnapshot(service.currentSnapshot);
+    return initialSnapshot;
   }
 
   Future<void> playRemote(TrackInfo track, {List<TrackInfo>? queue}) async {
-    final remoteCache = ref.read(remotePlaybackCacheProvider);
-    remoteCache.cancelPlaybackWarmups();
     _remotePrefetchKey = null;
     _useNativeLocalQueue = true;
     _activeLocalQueueSourceId = null;
@@ -160,6 +174,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       if (!_isCurrentPlayRequest(requestId)) {
         return;
       }
+      unawaited(_retainRemoteCacheWindow());
 
       final cachedTrack = await _cachedRemoteTrack(track);
       if (!_isCurrentPlayRequest(requestId)) {
@@ -491,6 +506,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _publishPlaybackQueue();
 
     await _playLocalTrack(track);
+    unawaited(
+      ref
+          .read(remotePlaybackCacheProvider)
+          .retainOnlyTracks(const <TrackInfo>[]),
+    );
   }
 
   /// Restores the playlist that was active when [track] was last played.
@@ -808,6 +828,12 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         localQueue != null &&
         service.supportsLocalQueueReplacement) {
       await service.replaceLocalQueue(localQueue, _queueIndex);
+      return;
+    }
+    if (_queueIndex >= 0 &&
+        _queueIndex < _queue.length &&
+        _queue[_queueIndex].remote != null) {
+      unawaited(_warmNextRemoteTrack(_playRequestId));
     }
   }
 
@@ -818,6 +844,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _pendingRemoteSnapshot = null;
     _explicitlyStopped = true;
     await ref.read(playerServiceProvider).stop();
+    await ref
+        .read(remotePlaybackCacheProvider)
+        .retainOnlyTracks(const <TrackInfo>[]);
   }
 
   Future<void> seek(Duration position) async {
@@ -839,6 +868,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _shuffleEnabled = enabled;
     _resetShuffleHistory();
     _syncPlaybackOptions();
+    unawaited(_warmNextRemoteTrack(_playRequestId));
   }
 
   void cycleRepeatMode() {
@@ -855,6 +885,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
     _repeatMode = mode;
     _syncPlaybackOptions();
+    unawaited(_warmNextRemoteTrack(_playRequestId));
   }
 
   Future<void> _playQueueItem(_QueueItem item) async {
@@ -875,22 +906,15 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         !_isCurrentPlayRequest(requestId) ||
         _queueIndex < 0 ||
         _queueIndex >= _queue.length ||
-        _queue[_queueIndex].remote == null ||
-        _queue.length < 2 ||
-        _shuffleEnabled ||
-        _repeatMode == PlaybackRepeatMode.one) {
+        _queue[_queueIndex].remote == null) {
       return;
     }
 
-    final nextIndex = _queueIndex + 1 < _queue.length
-        ? _queueIndex + 1
-        : (_repeatMode == PlaybackRepeatMode.all ? 0 : -1);
-    if (nextIndex < 0) {
-      return;
-    }
-
-    final next = _queue[nextIndex].remote;
-    if (next == null) {
+    final next = _nextRemoteTrackForPrefetch();
+    final cache = ref.read(remotePlaybackCacheProvider);
+    await cache.retainOnlyTracks(_remoteCacheWindow());
+    if (!_isCurrentPlayRequest(requestId) || next == null) {
+      _remotePrefetchKey = null;
       return;
     }
     final key = next.id.isEmpty ? next.url : next.id;
@@ -899,8 +923,6 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
     _remotePrefetchKey = key;
 
-    final cache = ref.read(remotePlaybackCacheProvider);
-    cache.cancelPlaybackWarmups();
     try {
       final resolved = await _resolveRemoteTrack(next);
       if (!_isCurrentPlayRequest(requestId) ||
@@ -918,6 +940,58 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         _remotePrefetchKey = null;
       }
     }
+  }
+
+  Future<void> _retainRemoteCacheWindow() {
+    return ref
+        .read(remotePlaybackCacheProvider)
+        .retainOnlyTracks(_remoteCacheWindow());
+  }
+
+  List<TrackInfo> _remoteCacheWindow() {
+    final tracks = <TrackInfo>[];
+    final identities = <String>{};
+
+    void add(TrackInfo? track) {
+      if (track == null) {
+        return;
+      }
+      final identity = track.url.trim().isNotEmpty ? track.url : track.id;
+      if (identities.add(identity)) {
+        tracks.add(track);
+      }
+    }
+
+    add(_currentRemoteTrack);
+    add(_previousRemoteTrackForRetention());
+    add(_nextRemoteTrackForPrefetch());
+    return tracks;
+  }
+
+  TrackInfo? _previousRemoteTrackForRetention() {
+    if (_queue.length < 2 ||
+        _queueIndex < 0 ||
+        _queueIndex >= _queue.length ||
+        _queue[_queueIndex].remote == null) {
+      return null;
+    }
+    final previousIndex = _queueIndex > 0 ? _queueIndex - 1 : _queue.length - 1;
+    return _queue[previousIndex].remote;
+  }
+
+  TrackInfo? _nextRemoteTrackForPrefetch() {
+    if (_queue.length < 2 ||
+        _queueIndex < 0 ||
+        _queueIndex >= _queue.length ||
+        _queue[_queueIndex].remote == null ||
+        _shuffleEnabled ||
+        _repeatMode == PlaybackRepeatMode.one) {
+      return null;
+    }
+    final nextIndex = _queueIndex + 1 < _queue.length
+        ? _queueIndex + 1
+        : (_repeatMode == PlaybackRepeatMode.all ? 0 : -1);
+    return nextIndex < 0 ? null : _queue[nextIndex].remote;
   }
 
   List<LocalTrack>? get _localQueue {

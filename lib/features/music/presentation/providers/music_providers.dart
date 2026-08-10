@@ -103,8 +103,10 @@ final lyricsServiceProvider = Provider<LyricsService>((ref) {
         '${AppConstants.appName}/${AppConstants.appVersion} '
         '(https://github.com/BryamContreras/BStream-Music)',
     // This short cache exists only in RAM. It avoids querying LRCLIB again when
-    // returning to the lyrics screen and is discarded when the app closes.
-    cacheTtl: const Duration(minutes: 5),
+    // returning to the lyrics screen, keeps only a small recent working set,
+    // and is discarded when the app closes.
+    cacheTtl: const Duration(minutes: 15),
+    maxCacheEntries: 24,
   );
   ref.onDispose(service.dispose);
   return service;

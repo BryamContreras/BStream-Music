@@ -62,15 +62,25 @@ class SearchView extends ConsumerWidget {
             }
             return SliverPadding(
               padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
-              sliver: SliverList.separated(
-                itemCount: tracks.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 6),
-                itemBuilder: (context, index) {
-                  return TrackResultTile(
-                    track: tracks[index],
-                    onOpenPlayer: onOpenPlayer,
-                  );
-                },
+              // Search is intentionally capped at 20 items. Building this
+              // small result set eagerly starts every thumbnail request and
+              // keeps each decoded 512 px image alive while scrolling, instead
+              // of recreating network images when a lazy sliver evicts rows.
+              sliver: SliverToBoxAdapter(
+                child: Column(
+                  children: [
+                    for (var index = 0; index < tracks.length; index++) ...[
+                      TrackResultTile(
+                        key: ValueKey(
+                          'search-result-${tracks[index].id.isNotEmpty ? tracks[index].id : tracks[index].url}',
+                        ),
+                        track: tracks[index],
+                        onOpenPlayer: onOpenPlayer,
+                      ),
+                      if (index < tracks.length - 1) const SizedBox(height: 6),
+                    ],
+                  ],
+                ),
               ),
             );
           },

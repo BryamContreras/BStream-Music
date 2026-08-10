@@ -1090,7 +1090,7 @@ class MainActivity : AudioServiceActivity() {
         private const val FILE_EXPORT_REQUEST = 4011
         private const val EXTERNAL_AUDIO_PERMISSION_REQUEST = 4012
         private const val MAX_PENDING_EXTERNAL_AUDIO_EVENTS = 8
-        private const val DEFAULT_SEARCH_RESULT_LIMIT = 15
+        private const val DEFAULT_SEARCH_RESULT_LIMIT = 20
         private const val MAX_SEARCH_RESULT_LIMIT = 50
         private const val TAG = "BStreamYtdl"
         private const val EXTERNAL_AUDIO_TAG = "BStreamExternalAudio"

@@ -23,8 +23,8 @@ void main() {
     Duration requestTimeout = const Duration(seconds: 10),
     Duration exactRequestTimeout = const Duration(milliseconds: 1500),
     Duration lookupTimeout = const Duration(seconds: 9),
-    Duration cacheTtl = const Duration(minutes: 30),
-    int maxCacheEntries = 64,
+    Duration cacheTtl = const Duration(minutes: 15),
+    int maxCacheEntries = 24,
   }) {
     var virtualElapsed = Duration.zero;
     final virtualDelay = delay == null
@@ -1996,17 +1996,86 @@ void main() {
       );
     final service = createService(
       clock: () => now,
-      cacheTtl: const Duration(minutes: 5),
+      cacheTtl: const Duration(minutes: 15),
     );
 
     final first = await service.findLyrics(_lookup());
-    now = now.add(const Duration(minutes: 6));
+    now = now.add(const Duration(minutes: 16));
     final refreshed = await service.findLyrics(_lookup());
 
     expect(first?.providerId, '60');
     expect(refreshed?.providerId, '61');
     expect(transport.requests, hasLength(2));
   });
+
+  test(
+    'evicts the oldest lyrics when the memory cache reaches its limit',
+    () async {
+      LyricsLookup lookup(String title) => LyricsLookup(
+        title: title,
+        artist: 'Artist',
+        duration: const Duration(seconds: 180),
+      );
+
+      transport
+        ..enqueue(
+          _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 1,
+              trackName: 'First',
+              artistName: 'Artist',
+              duration: 180,
+              plainLyrics: 'First lyrics',
+            ),
+          ),
+        )
+        ..enqueue(
+          _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 2,
+              trackName: 'Second',
+              artistName: 'Artist',
+              duration: 180,
+              plainLyrics: 'Second lyrics',
+            ),
+          ),
+        )
+        ..enqueue(
+          _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 3,
+              trackName: 'Third',
+              artistName: 'Artist',
+              duration: 180,
+              plainLyrics: 'Third lyrics',
+            ),
+          ),
+        )
+        ..enqueue(
+          _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 4,
+              trackName: 'First',
+              artistName: 'Artist',
+              duration: 180,
+              plainLyrics: 'First lyrics refreshed',
+            ),
+          ),
+        );
+      final service = createService(delay: (_) async {}, maxCacheEntries: 2);
+
+      expect((await service.findLyrics(lookup('First')))?.providerId, '1');
+      expect((await service.findLyrics(lookup('Second')))?.providerId, '2');
+      expect((await service.findLyrics(lookup('Third')))?.providerId, '3');
+      expect((await service.findLyrics(lookup('First')))?.providerId, '4');
+
+      expect(transport.requests, hasLength(4));
+    },
+  );
 
   test('does not cache HTTP failures', () async {
     transport

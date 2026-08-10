@@ -386,6 +386,7 @@ class _SimilarLyricsList extends ConsumerWidget {
       separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final candidate = candidates[index];
+        final accent = AppColors.downloadAccentFor(context);
         final duration = candidate.duration;
         final metadata = <String>[
           if (duration != null) _formatLyricsDuration(duration),
@@ -401,7 +402,7 @@ class _SimilarLyricsList extends ConsumerWidget {
           color: Colors.black.withValues(alpha: 0.46),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+            side: BorderSide(color: accent.withValues(alpha: 0.30)),
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -414,7 +415,7 @@ class _SimilarLyricsList extends ConsumerWidget {
                     candidate.isSynced
                         ? Icons.graphic_eq_rounded
                         : Icons.subject_rounded,
-                    color: Colors.white.withValues(alpha: 0.72),
+                    color: accent.withValues(alpha: 0.86),
                     size: 23,
                   ),
                   const SizedBox(width: 12),
@@ -458,7 +459,7 @@ class _SimilarLyricsList extends ConsumerWidget {
                   const SizedBox(width: 8),
                   Icon(
                     Icons.chevron_right_rounded,
-                    color: Colors.white.withValues(alpha: 0.55),
+                    color: accent.withValues(alpha: 0.70),
                   ),
                 ],
               ),
@@ -797,8 +798,9 @@ class _LyricLineTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = AppColors.downloadAccentFor(context);
     final color = active
-        ? Colors.white
+        ? Color.alphaBlend(accent.withValues(alpha: 0.30), Colors.white)
         : Colors.white.withValues(alpha: passed ? 0.62 : 0.38);
     return Semantics(
       selected: active,
@@ -816,7 +818,12 @@ class _LyricLineTile extends StatelessWidget {
             fontWeight: FontWeight.w900,
             letterSpacing: -0.45,
             shadows: active
-                ? const [
+                ? [
+                    Shadow(
+                      color: accent.withValues(alpha: 0.14),
+                      blurRadius: 16,
+                      offset: const Offset(0, 2),
+                    ),
                     Shadow(
                       color: Color(0xA8000000),
                       blurRadius: 12,

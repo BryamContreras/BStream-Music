@@ -400,7 +400,7 @@ class _PlayerHeader extends StatelessWidget {
                 backgroundColor: queueVisible
                     ? Theme.of(
                         context,
-                      ).colorScheme.onSurface.withValues(alpha: 0.12)
+                      ).colorScheme.primary.withValues(alpha: 0.16)
                     : Colors.transparent,
               ),
               icon: const Icon(Icons.queue_music_rounded, size: 28),
