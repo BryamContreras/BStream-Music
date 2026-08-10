@@ -59,9 +59,16 @@ Current version: **1.2.3+123**.
 - Playback queue synchronized with playlists and the library.
 - Queue side panel on Windows and a dedicated queue view on Android.
 - Change tracks directly from the queue and reorder them with a long press.
-- Controlled preloading warms only the next remote track. The disk window keeps
-  at most the previous, current, and next tracks; other queue audio is removed
-  immediately and interrupted-session leftovers expire after 30 minutes.
+- Android keeps a rolling native queue for remote playback, with up to three
+  upcoming tracks prepared sequentially so locked-screen transitions do not
+  depend on reopening the app. The bounded disk window prioritizes the current
+  track, those three upcoming tracks, and the previous track; interrupted-
+  session leftovers expire after 30 minutes.
+- Desktop also prepares up to three upcoming remote tracks as complete local
+  files. Its 12-hour LRU cache keeps at most 24 files, 256 MiB total, and
+  128 MiB per track; changing queues or stopping playback releases protection
+  without discarding reusable audio. Minimizing or locking the PC keeps the
+  player running, while closing the application exits playback.
 - The active track is highlighted with a segmented 13-bar equalizer.
 - Theme-aware dynamic background derived from the track artwork.
 - Animated progress bar with waves and the selected accent color.

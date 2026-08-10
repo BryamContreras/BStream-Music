@@ -14,6 +14,7 @@ class PlayerSnapshot {
     this.artist,
     this.album,
     this.trackId,
+    this.queueEntryId,
     this.sourceUrl,
     this.thumbnailUrl,
     this.position = Duration.zero,
@@ -31,6 +32,7 @@ class PlayerSnapshot {
   final String? artist;
   final String? album;
   final String? trackId;
+  final String? queueEntryId;
   final String? sourceUrl;
   final String? thumbnailUrl;
   final Duration position;
@@ -48,6 +50,7 @@ class PlayerSnapshot {
     Object? artist = _unsetPlayerSnapshotValue,
     Object? album = _unsetPlayerSnapshotValue,
     Object? trackId = _unsetPlayerSnapshotValue,
+    Object? queueEntryId = _unsetPlayerSnapshotValue,
     Object? sourceUrl = _unsetPlayerSnapshotValue,
     Object? thumbnailUrl = _unsetPlayerSnapshotValue,
     Duration? position,
@@ -73,6 +76,9 @@ class PlayerSnapshot {
       trackId: identical(trackId, _unsetPlayerSnapshotValue)
           ? this.trackId
           : trackId as String?,
+      queueEntryId: identical(queueEntryId, _unsetPlayerSnapshotValue)
+          ? this.queueEntryId
+          : queueEntryId as String?,
       sourceUrl: identical(sourceUrl, _unsetPlayerSnapshotValue)
           ? this.sourceUrl
           : sourceUrl as String?,
@@ -93,6 +99,38 @@ class PlayerSnapshot {
       repeatMode: repeatMode ?? this.repeatMode,
     );
   }
+}
+
+class RemotePlaybackSource {
+  const RemotePlaybackSource({
+    required this.track,
+    required this.uri,
+    required this.queueEntryId,
+    this.httpHeaders,
+    this.isOnlyLogicalQueueItem = false,
+  });
+
+  final TrackInfo track;
+  final Uri uri;
+  final String queueEntryId;
+  final Map<String, String>? httpHeaders;
+  final bool isOnlyLogicalQueueItem;
+
+  String get sourceKey => '$queueEntryId\u0000$uri';
+}
+
+/// Optional capability implemented by Android's native player. It keeps
+/// prepared remote sources inside ExoPlayer so track boundaries do not depend
+/// on a Dart completion callback.
+abstract interface class NativeRemoteQueuePlayer {
+  Future<void> playRemoteSource(RemotePlaybackSource source);
+
+  /// Reconciles only the sources after the currently playing remote item.
+  /// Previously played sources remain available for native Previous controls.
+  Future<void> updateRemoteQueue(
+    List<RemotePlaybackSource> upcoming, {
+    bool finalize = true,
+  });
 }
 
 abstract class PlayerService {

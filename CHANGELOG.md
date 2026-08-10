@@ -10,7 +10,8 @@
   compact expandable color picker.
 - Long-press queue reordering that preserves the active track and synchronizes
   Android's native media queue.
-- Controlled preloading of only the next remote track.
+- Controlled sequential preloading of up to three upcoming remote tracks on
+  Android and desktop.
 - Song-count and total-duration summaries for playlists and downloaded songs.
 - An inline search clear button that appears only while the field has text.
 - A localized support section in Settings with a direct Ko-fi contribution
@@ -33,9 +34,11 @@
   matching the desktop release version. Existing installations migrate older
   bundled copies while preserving an equal or newer downloaded update.
 - Long-session resource use with smaller bounded artwork, thumbnail, and LRCLIB
-  caches; remote audio now retains only the previous, current, and next track,
-  removes abandoned partial files, and expires interrupted-session leftovers
-  after 30 minutes.
+  caches. Android remote audio now prioritizes the current, next three, and
+  previous tracks under strict limits and expires leftovers after 30 minutes.
+- Desktop remote audio now uses an application-cache LRU with a 12-hour TTL,
+  24-file and 256 MiB limits, a 128 MiB per-track cap, collision-resistant
+  keys, atomic multi-instance publishing, and invalid-response filtering.
 - Backup restore validation for manifests, archive paths and limits, SQLite
   integrity, schema, and version, followed by staged activation and rollback.
 - Recent playback retains its playlist context and queue changes remain aligned
@@ -45,6 +48,10 @@
 
 ### Fixed
 
+- Android transitions between remote tracks, whether automatic or requested
+  from media controls, now use a rolling native queue. The foreground audio
+  service stays active across track boundaries after the app is removed from
+  recent tasks, and the queue refills as playback advances.
 - Cancelling the custom sleep-timer dialog no longer raises an error.
 - Artwork no longer changes crop or stretches after remote extraction or after
   saving a previously played track.

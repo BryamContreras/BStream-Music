@@ -77,6 +77,7 @@ void main() {
         id: 'q8j3zwNhLNo',
         title: 'YO SOY TU TITAN',
         artist: 'Pamorkil',
+        album: 'Titanes',
         url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
         thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
       );
@@ -128,6 +129,64 @@ void main() {
       expect(repository.infoCalls, 2);
       expect(player.playedRemote, hasLength(2));
       expect(container.read(playbackQueueProvider).currentIndex, 0);
+    },
+  );
+
+  test(
+    'a native skip invalidates an in-flight recovery for the previous track',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
+      final repository = _DelayedRefreshMusicRepository(
+        _remoteTrack(streamUrl: 'https://media.example/first.m4a'),
+      );
+      final cache = _TrackingRemotePlaybackCache();
+      const first = TrackInfo(
+        id: 'q8j3zwNhLNo',
+        title: 'YO SOY TU TITAN',
+        artist: 'Pamorkil',
+        url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+        thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+      );
+      final second = _queuedRemoteTrack('second');
+      final container = _container(
+        player,
+        musicRepository: repository,
+        remoteCache: cache,
+      );
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(first, queue: [first, second]);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.isNotEmpty &&
+            player.remoteWindows.last.isNotEmpty,
+      );
+      final nextSource = player.remoteWindows.last.first;
+
+      player.emit(
+        player.currentSnapshot.copyWith(
+          status: PlayerStatus.failed,
+          errorMessage: 'HTTP 403',
+        ),
+      );
+      await _waitUntil(() => repository.infoCalls == 2);
+
+      player.emitNativeTransition(nextSource);
+      await _waitUntil(
+        () => container.read(playbackQueueProvider).currentIndex == 1,
+        reason: 'native skip was blocked by the previous recovery',
+      );
+      repository.completeRefresh(
+        _remoteTrack(streamUrl: 'https://media.example/refreshed.m4a'),
+      );
+      await _flushCompletion();
+
+      expect(player.nativeRemoteStarts, 1);
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(player.currentSnapshot.trackId, second.id);
     },
   );
 
@@ -330,10 +389,11 @@ void main() {
       final repository = _FakeMusicRepository([
         _remoteTrack(streamUrl: 'https://media.example/refreshed.m4a'),
       ]);
+      final remoteCache = _FakeRemotePlaybackCache(cachedFile);
       final container = _container(
         player,
         musicRepository: repository,
-        remoteCache: _FakeRemotePlaybackCache(cachedFile),
+        remoteCache: remoteCache,
       );
       addTearDown(container.dispose);
       const track = TrackInfo(
@@ -352,6 +412,10 @@ void main() {
       expect(cachedTrackId, startsWith('remote-cache:'));
       expect(container.read(playerControllerProvider).value?.trackId, track.id);
       expect(container.read(playerControllerProvider).value?.isRemote, isTrue);
+      expect(
+        container.read(playerControllerProvider).value?.album,
+        track.album,
+      );
 
       player.emit(
         PlayerSnapshot(
@@ -361,21 +425,512 @@ void main() {
           trackId: cachedTrackId,
           sourceUrl: track.url,
           isRemote: false,
-          errorMessage: 'cached file became unavailable',
+          errorMessage: 'decoder: invalid cached audio',
         ),
       );
       await _waitUntil(() => player.playedRemote.isNotEmpty);
 
       expect(repository.infoCalls, 1);
+      expect(remoteCache.evictCalls, 1);
       expect(player.playedRemote.single.streamUrl, contains('refreshed.m4a'));
       expect(container.read(playerControllerProvider).value?.trackId, track.id);
     },
   );
 
   test(
-    'remote cache follows the previous, current, and next queue tracks',
+    'a synchronous cached-file open error falls back to the network stream',
+    () async {
+      final temporaryDirectory = await Directory.systemTemp.createTemp(
+        'bstream-player-invalid-cache-test-',
+      );
+      addTearDown(() => temporaryDirectory.delete(recursive: true));
+      final cachedFile = File('${temporaryDirectory.path}/invalid.m4a');
+      await cachedFile.writeAsBytes(const [0, 1, 2, 3]);
+      final player = _FakePlayerService(
+        localPlayError: StateError('decoder failed to open cache'),
+      );
+      final remoteCache = _FakeRemotePlaybackCache(cachedFile);
+      final track = _remoteTrack(
+        streamUrl: 'https://media.example/network-fallback.m4a',
+      );
+      final container = _container(player, remoteCache: remoteCache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container.read(playerControllerProvider.notifier).playRemote(track);
+
+      expect(player.playedLocalIds, hasLength(1));
+      expect(player.playedRemote, [track]);
+      expect(remoteCache.evictCalls, 1);
+      expect(container.read(playerControllerProvider).hasError, isFalse);
+    },
+  );
+
+  test(
+    'a cache entry appearing after resolve still falls back when invalid',
+    () async {
+      final temporaryDirectory = await Directory.systemTemp.createTemp(
+        'bstream-player-late-cache-test-',
+      );
+      addTearDown(() => temporaryDirectory.delete(recursive: true));
+      final cachedFile = File('${temporaryDirectory.path}/late-invalid.m4a');
+      await cachedFile.writeAsBytes(const [0, 1, 2, 3]);
+      final player = _FakePlayerService(
+        localPlayError: StateError('late cache decoder failure'),
+      );
+      final remoteCache = _FakeRemotePlaybackCache(
+        cachedFile,
+        missesBeforeHit: 1,
+      );
+      final track = _remoteTrack(
+        streamUrl: 'https://media.example/late-network-fallback.m4a',
+      );
+      final container = _container(player, remoteCache: remoteCache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container.read(playerControllerProvider.notifier).playRemote(track);
+
+      expect(remoteCache.lookupCalls, 2);
+      expect(remoteCache.evictCalls, 1);
+      expect(player.playedRemote, [track]);
+      expect(container.read(playerControllerProvider).hasError, isFalse);
+    },
+  );
+
+  test(
+    'native cached source appearing after resolve falls back to its network source',
+    () async {
+      final temporaryDirectory = await Directory.systemTemp.createTemp(
+        'bstream-player-late-native-cache-test-',
+      );
+      addTearDown(() => temporaryDirectory.delete(recursive: true));
+      final cachedFile = File('${temporaryDirectory.path}/late-invalid.m4a');
+      await cachedFile.writeAsBytes(const [0, 1, 2, 3]);
+      final player = _NativeRemoteQueuePlayerService(failCachedOpen: true);
+      final remoteCache = _FakeRemotePlaybackCache(
+        cachedFile,
+        missesBeforeHit: 2,
+      );
+      final track = _remoteTrack(
+        streamUrl: 'https://media.example/native-network-fallback.m4a',
+      );
+      final container = _container(player, remoteCache: remoteCache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container.read(playerControllerProvider.notifier).playRemote(track);
+
+      expect(remoteCache.lookupCalls, 3);
+      expect(remoteCache.evictCalls, 1);
+      expect(player.cachedOpenFailures, 1);
+      expect(player.nativeRemoteStarts, 1);
+      expect(player.nativeRemoteSources.single.uri.scheme, 'https');
+      expect(container.read(playerControllerProvider).hasError, isFalse);
+    },
+  );
+
+  test('a cache file removed during lookup falls back to streaming', () async {
+    final player = _FakePlayerService();
+    final temporaryDirectory = await Directory.systemTemp.createTemp(
+      'bstream-missing-remote-cache-',
+    );
+    addTearDown(() => temporaryDirectory.delete(recursive: true));
+    final missingFile = File('${temporaryDirectory.path}/removed.m4a');
+    final container = _container(
+      player,
+      remoteCache: _FakeRemotePlaybackCache(missingFile),
+    );
+    addTearDown(container.dispose);
+    final track = _remoteTrack(
+      streamUrl: 'https://media.example/direct-fallback.m4a',
+    );
+
+    await container.read(playerControllerProvider.future);
+    await container.read(playerControllerProvider.notifier).playRemote(track);
+
+    expect(player.playedLocalIds, isEmpty);
+    expect(player.playedRemote, [track]);
+    expect(container.read(playerControllerProvider).hasError, isFalse);
+  });
+
+  test(
+    'remote cache retains current, three upcoming, and previous tracks',
     () async {
       final player = _FakePlayerService();
+      final cache = _TrackingRemotePlaybackCache();
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+        _queuedRemoteTrack('fourth'),
+        _queuedRemoteTrack('fifth'),
+        _queuedRemoteTrack('sixth'),
+      ];
+      final container = _container(player, remoteCache: cache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(() => cache.warmedUrls.length >= 3);
+
+      expect(cache.retainedWindows.last, [
+        tracks[0].url,
+        tracks[1].url,
+        tracks[2].url,
+        tracks[3].url,
+        tracks[5].url,
+      ]);
+      expect(cache.warmedUrls.take(3), [
+        tracks[1].url,
+        tracks[2].url,
+        tracks[3].url,
+      ]);
+      expect(player.stopCalls, 1);
+
+      await container.read(playerControllerProvider.notifier).playNext();
+      expect(player.stopCalls, 1);
+      expect(cache.retainedWindows.last, [
+        tracks[1].url,
+        tracks[2].url,
+        tracks[3].url,
+        tracks[4].url,
+        tracks[0].url,
+      ]);
+
+      await container.read(playerControllerProvider.notifier).stop();
+      expect(cache.retainedWindows.last, isEmpty);
+    },
+  );
+
+  test(
+    'manual remote replacement protects the new source and active previous source',
+    () async {
+      final player = _FakePlayerService();
+      final cache = _TrackingRemotePlaybackCache();
+      final first = _queuedRemoteTrack('protected-first');
+      final second = _queuedRemoteTrack('protected-second');
+      final replacement = _queuedRemoteTrack('protected-replacement');
+      final container = _container(player, remoteCache: cache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(first, queue: [first, second]);
+      await _waitUntil(() => cache.warmedUrls.isNotEmpty);
+
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(replacement);
+
+      expect(cache.protectedWindows.last, [replacement.url, first.url]);
+      expect(cache.retainedWindows.last, [replacement.url, first.url]);
+    },
+  );
+
+  test('controller rebuild protects an active remote source URL', () async {
+    final player = _FakePlayerService();
+    final cache = _TrackingRemotePlaybackCache();
+    const sourceUrl = 'https://www.youtube.com/watch?v=active-rebuild';
+    player.emit(
+      const PlayerSnapshot(
+        status: PlayerStatus.playing,
+        trackId: 'active-rebuild',
+        sourceUrl: sourceUrl,
+        isRemote: true,
+      ),
+    );
+    final container = _container(player, remoteCache: cache);
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    await _waitUntil(() => cache.preparedSources.isNotEmpty);
+
+    expect(cache.preparedSources.last, [sourceUrl]);
+  });
+
+  test(
+    'automatic remote transitions keep the service alive across four tracks',
+    () async {
+      final player = _FakePlayerService();
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+        _queuedRemoteTrack('fourth'),
+      ];
+      final container = _container(player);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+
+      expect(player.stopCalls, 1);
+      for (
+        var expectedCount = 2;
+        expectedCount <= tracks.length;
+        expectedCount++
+      ) {
+        player.emit(
+          player.currentSnapshot.copyWith(status: PlayerStatus.stopped),
+        );
+        await _waitUntil(() => player.playedRemote.length == expectedCount);
+        expect(player.stopCalls, 1);
+      }
+
+      expect(
+        player.playedRemote.map((track) => track.id),
+        tracks.map((track) => track.id),
+      );
+    },
+  );
+
+  test(
+    'native remote queue advances and refills without Dart completion',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
+      final cache = _TrackingRemotePlaybackCache();
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+        _queuedRemoteTrack('fourth'),
+        _queuedRemoteTrack('fifth'),
+        _queuedRemoteTrack('sixth'),
+      ];
+      final container = _container(player, remoteCache: cache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.isNotEmpty &&
+            player.remoteWindows.last.length == 3 &&
+            player.remoteWindowFinalizations.length >= 6,
+      );
+
+      expect(player.nativeRemoteStarts, 1);
+      expect(player.remoteWindows.last.map((source) => source.track.id), [
+        'second',
+        'third',
+        'fourth',
+      ]);
+
+      for (var index = 1; index < tracks.length; index++) {
+        final previousUpdateCount = player.remoteWindows.length;
+        final nextSource = player.remoteWindows.last.firstWhere(
+          (source) => source.track.id == tracks[index].id,
+        );
+        player.emitNativeTransition(nextSource);
+        await _waitUntil(
+          () => container.read(playbackQueueProvider).currentIndex == index,
+        );
+        if (index < tracks.length - 1) {
+          await _waitUntil(
+            () => player.remoteWindows.length > previousUpdateCount,
+          );
+          expect(
+            player.remoteWindowFinalizations[previousUpdateCount],
+            isFalse,
+          );
+          await _waitUntil(
+            () =>
+                player.remoteWindows.isNotEmpty &&
+                player.remoteWindows.last.isNotEmpty &&
+                player.remoteWindows.last.first.track.id ==
+                    tracks[index + 1].id,
+          );
+        } else {
+          await _waitUntil(
+            () =>
+                player.remoteWindows.isNotEmpty &&
+                player.remoteWindows.last.isEmpty,
+          );
+        }
+      }
+
+      expect(player.nativeRemoteStarts, 1);
+      expect(player.stopCalls, 1);
+      expect(player.playedRemote.map((track) => track.id), ['first']);
+    },
+  );
+
+  test(
+    'a failed refill preserves the native successors already prepared',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+        _queuedRemoteTrack('fourth'),
+        _queuedRemoteTrack('fifth'),
+      ];
+      final cache = _TrackingRemotePlaybackCache(
+        failCachedLookupUrl: tracks[2].url,
+        failCachedLookupOnCall: 2,
+      );
+      final container = _container(player, remoteCache: cache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(() => player.remoteWindows.length >= 6);
+      final previousUpdateCount = player.remoteWindows.length;
+      final nextSource = player.remoteWindows.last.firstWhere(
+        (source) => source.track.id == 'second',
+      );
+
+      player.emitNativeTransition(nextSource);
+      await _waitUntil(
+        () => container.read(playbackQueueProvider).currentIndex == 1,
+      );
+      await _waitUntil(() => cache.cachedLookupCalls[tracks[2].url] == 2);
+      await _flushCompletion();
+
+      // No exact empty/short window is sent, so ExoPlayer retains third and
+      // fourth while the failed resolver is retried later.
+      expect(player.remoteWindows.length, previousUpdateCount);
+    },
+  );
+
+  test(
+    'native remote shuffle advances through the same plan it prefetched',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
+      final cache = _TrackingRemotePlaybackCache();
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+        _queuedRemoteTrack('fourth'),
+        _queuedRemoteTrack('fifth'),
+        _queuedRemoteTrack('sixth'),
+      ];
+      final container = _container(player, remoteCache: cache);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.length >= 6 &&
+            player.remoteWindows.last.length == 3 &&
+            cache.warmedUrls.length == 3,
+        reason: 'initial native remote window did not finish warming',
+      );
+
+      final previousWindowCount = player.remoteWindows.length;
+      container.read(playerControllerProvider.notifier).setShuffleEnabled(true);
+      await _waitUntil(
+        () =>
+            player.shuffleValues.isNotEmpty &&
+            player.shuffleValues.last &&
+            player.remoteWindows.length > previousWindowCount &&
+            player.remoteWindows.last.length == 3,
+        reason: 'shuffle plan did not replace the native remote window',
+      );
+
+      final prefetchedPlan = List<RemotePlaybackSource>.of(
+        player.remoteWindows.last,
+      );
+      expect(
+        prefetchedPlan.map((source) => source.track.id).toSet(),
+        hasLength(3),
+      );
+      expect(
+        prefetchedPlan.map((source) => source.track.id),
+        isNot(contains('first')),
+      );
+
+      player.emitNativeTransition(prefetchedPlan.first);
+      final expectedIndex = tracks.indexWhere(
+        (track) => track.id == prefetchedPlan.first.track.id,
+      );
+      await _waitUntil(
+        () =>
+            container.read(playbackQueueProvider).currentIndex == expectedIndex,
+        reason: 'native shuffle transition did not update the logical index',
+      );
+      await _waitUntil(
+        () =>
+            player.remoteWindows.isNotEmpty &&
+            player.remoteWindows.last.isNotEmpty &&
+            player.remoteWindows.last.first.queueEntryId ==
+                prefetchedPlan[1].queueEntryId,
+        reason: 'native shuffle refill did not consume the prefetched plan',
+      );
+
+      expect(player.nativeRemoteStarts, 1);
+    },
+  );
+
+  test('native remote repeat all wraps inside the rolling queue', () async {
+    final player = _NativeRemoteQueuePlayerService();
+    final cache = _TrackingRemotePlaybackCache();
+    final tracks = [
+      _queuedRemoteTrack('first'),
+      _queuedRemoteTrack('second'),
+      _queuedRemoteTrack('third'),
+      _queuedRemoteTrack('fourth'),
+    ];
+    final container = _container(player, remoteCache: cache);
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    container
+        .read(playerControllerProvider.notifier)
+        .setRepeatMode(PlaybackRepeatMode.all);
+    await container
+        .read(playerControllerProvider.notifier)
+        .playRemote(tracks[2], queue: tracks);
+    await _waitUntil(
+      () =>
+          player.remoteWindows.isNotEmpty &&
+          player.remoteWindows.last.length == 3,
+    );
+
+    expect(player.remoteWindows.last.map((source) => source.track.id), [
+      'fourth',
+      'first',
+      'second',
+    ]);
+
+    player.emitNativeTransition(player.remoteWindows.last.first);
+    await _waitUntil(
+      () => container.read(playbackQueueProvider).currentIndex == 3,
+    );
+    await _waitUntil(
+      () =>
+          player.remoteWindows.isNotEmpty &&
+          player.remoteWindows.last.isNotEmpty &&
+          player.remoteWindows.last.first.track.id == 'first',
+    );
+    final first = player.remoteWindows.last.first;
+    player.emitNativeTransition(first);
+    await _waitUntil(
+      () => container.read(playbackQueueProvider).currentIndex == 0,
+    );
+
+    expect(player.nativeRemoteStarts, 1);
+  });
+
+  test(
+    'shuffle repeat all keeps a full native horizon across its cycle',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
       final cache = _TrackingRemotePlaybackCache();
       final tracks = [
         _queuedRemoteTrack('first'),
@@ -390,22 +945,60 @@ void main() {
       await container
           .read(playerControllerProvider.notifier)
           .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(() => player.remoteWindows.length >= 6);
 
-      expect(cache.retainedWindows.last, [
-        tracks[0].url,
-        tracks[3].url,
-        tracks[1].url,
-      ]);
+      final previousWindowCount = player.remoteWindows.length;
+      final controller = container.read(playerControllerProvider.notifier);
+      controller.setRepeatMode(PlaybackRepeatMode.all);
+      controller.setShuffleEnabled(true);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.length > previousWindowCount &&
+            player.remoteWindows.last.length == 3,
+      );
+      final initialPlan = List<RemotePlaybackSource>.of(
+        player.remoteWindows.last,
+      );
 
-      await container.read(playerControllerProvider.notifier).playNext();
-      expect(cache.retainedWindows.last, [
-        tracks[1].url,
-        tracks[0].url,
-        tracks[2].url,
-      ]);
+      player.emitNativeTransition(initialPlan.first);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.last.length == 3 &&
+            player.remoteWindows.last[0].queueEntryId ==
+                initialPlan[1].queueEntryId &&
+            player.remoteWindows.last[1].queueEntryId ==
+                initialPlan[2].queueEntryId,
+        reason: 'shuffle repeat-all let the native horizon shrink at wrap',
+      );
 
-      await container.read(playerControllerProvider.notifier).stop();
-      expect(cache.retainedWindows.last, isEmpty);
+      expect(
+        player.remoteWindows.last.map((source) => source.track.id).toSet(),
+        hasLength(3),
+      );
+      expect(player.nativeRemoteStarts, 1);
+    },
+  );
+
+  test(
+    'a single remote repeat-all source is marked for native looping',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
+      final track = _queuedRemoteTrack('only');
+      final container = _container(
+        player,
+        remoteCache: _TrackingRemotePlaybackCache(),
+      );
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      container
+          .read(playerControllerProvider.notifier)
+          .setRepeatMode(PlaybackRepeatMode.all);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(track, queue: [track]);
+
+      expect(player.nativeRemoteSources.single.isOnlyLogicalQueueItem, isTrue);
     },
   );
 
@@ -1147,8 +1740,10 @@ ProviderContainer _container(
         desktopMediaSessionFactoryProvider.overrideWithValue(
           () => desktopSession,
         ),
-      if (remoteCache != null)
-        remotePlaybackCacheProvider.overrideWithValue(remoteCache),
+      remotePlaybackCacheProvider.overrideWithValue(
+        remoteCache ??
+            RemotePlaybackCache(policy: RemotePlaybackCachePolicy.disabled),
+      ),
       libraryRepositoryProvider.overrideWithValue(
         repository ?? _FakeLibraryRepository(),
       ),
@@ -1174,14 +1769,17 @@ Future<void> _flushCompletion() async {
   await Future<void>.delayed(Duration.zero);
 }
 
-Future<void> _waitUntil(bool Function() predicate) async {
+Future<void> _waitUntil(
+  bool Function() predicate, {
+  String reason = 'Timed out waiting for asynchronous playback recovery.',
+}) async {
   for (var attempt = 0; attempt < 100; attempt++) {
     if (predicate()) {
       return;
     }
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
-  fail('Timed out waiting for asynchronous playback recovery.');
+  fail(reason);
 }
 
 TrackInfo _remoteTrack({required String streamUrl}) {
@@ -1221,6 +1819,7 @@ class _FakePlayerService implements PlayerService {
   _FakePlayerService({
     this.supportsLocalQueueReplacement = false,
     this.remotePlayError,
+    this.localPlayError,
   });
 
   final _controller = StreamController<PlayerSnapshot>.broadcast();
@@ -1241,6 +1840,7 @@ class _FakePlayerService implements PlayerService {
   @override
   final bool supportsLocalQueueReplacement;
   final Object? remotePlayError;
+  final Object? localPlayError;
 
   @override
   PlayerSnapshot get currentSnapshot => _snapshot;
@@ -1267,6 +1867,10 @@ class _FakePlayerService implements PlayerService {
   @override
   Future<void> playLocal(LocalTrack track) async {
     playedLocalIds.add(track.id);
+    final error = localPlayError;
+    if (error != null) {
+      throw error;
+    }
     emit(
       PlayerSnapshot(
         status: PlayerStatus.playing,
@@ -1354,24 +1958,128 @@ class _FakePlayerService implements PlayerService {
   Future<void> togglePlayPause() async {}
 }
 
-class _FakeRemotePlaybackCache extends RemotePlaybackCache {
-  _FakeRemotePlaybackCache(this.file);
+class _NativeRemoteQueuePlayerService extends _FakePlayerService
+    implements NativeRemoteQueuePlayer {
+  _NativeRemoteQueuePlayerService({this.failCachedOpen = false});
 
-  final File file;
+  bool failCachedOpen;
+  int cachedOpenFailures = 0;
+  int nativeRemoteStarts = 0;
+  final List<RemotePlaybackSource> nativeRemoteSources = [];
+  final List<List<RemotePlaybackSource>> remoteWindows = [];
+  final List<bool> remoteWindowFinalizations = [];
 
   @override
-  Future<File?> cachedFile(TrackInfo track) async => file;
+  Future<void> playRemoteSource(RemotePlaybackSource source) async {
+    if (failCachedOpen && source.uri.scheme == 'file') {
+      failCachedOpen = false;
+      cachedOpenFailures++;
+      throw StateError('simulated native cache decoder failure');
+    }
+    nativeRemoteStarts++;
+    nativeRemoteSources.add(source);
+    playedRemote.add(source.track);
+    emit(_remoteSnapshot(source));
+  }
+
+  @override
+  Future<void> updateRemoteQueue(
+    List<RemotePlaybackSource> upcoming, {
+    bool finalize = true,
+  }) async {
+    remoteWindows.add(List.unmodifiable(upcoming));
+    remoteWindowFinalizations.add(finalize);
+  }
+
+  void emitNativeTransition(RemotePlaybackSource source) {
+    emit(_remoteSnapshot(source));
+  }
+
+  PlayerSnapshot _remoteSnapshot(RemotePlaybackSource source) {
+    final track = source.track;
+    return PlayerSnapshot(
+      status: PlayerStatus.playing,
+      title: track.title,
+      artist: track.artist,
+      trackId: track.id.isEmpty ? track.url : track.id,
+      queueEntryId: source.queueEntryId,
+      sourceUrl: track.url,
+      thumbnailUrl: track.thumbnailUrl,
+      duration: track.duration,
+      isRemote: true,
+    );
+  }
+}
+
+class _FakeRemotePlaybackCache extends RemotePlaybackCache {
+  _FakeRemotePlaybackCache(this.file, {this.missesBeforeHit = 0})
+    : super(policy: RemotePlaybackCachePolicy.disabled);
+
+  final File file;
+  final int missesBeforeHit;
+  int lookupCalls = 0;
+  int evictCalls = 0;
+
+  @override
+  Future<File?> cachedFile(TrackInfo track) async {
+    lookupCalls++;
+    return lookupCalls <= missesBeforeHit ? null : file;
+  }
+
+  @override
+  Future<void> evict(TrackInfo track) async {
+    evictCalls++;
+  }
 }
 
 class _TrackingRemotePlaybackCache extends RemotePlaybackCache {
+  _TrackingRemotePlaybackCache({
+    this.failCachedLookupUrl,
+    this.failCachedLookupOnCall,
+  }) : super(policy: RemotePlaybackCachePolicy.android);
+
   final List<List<String>> retainedWindows = [];
+  final List<List<String>> protectedWindows = [];
+  final List<List<String>> preparedSources = [];
+  final List<String> warmedUrls = [];
+  final Map<String, int> cachedLookupCalls = {};
+  final String? failCachedLookupUrl;
+  final int? failCachedLookupOnCall;
 
   @override
-  Future<File?> cachedFile(TrackInfo track) async => null;
+  Future<File?> cachedFile(TrackInfo track) async {
+    final calls = (cachedLookupCalls[track.url] ?? 0) + 1;
+    cachedLookupCalls[track.url] = calls;
+    if (track.url == failCachedLookupUrl && calls == failCachedLookupOnCall) {
+      throw StateError('simulated cache lookup failure');
+    }
+    return null;
+  }
 
   @override
   Future<void> retainOnlyTracks(Iterable<TrackInfo> tracks) async {
     retainedWindows.add(tracks.map((track) => track.url).toList());
+  }
+
+  @override
+  void protectPlaybackWindow(Iterable<TrackInfo> tracks) {
+    protectedWindows.add(tracks.map((track) => track.url).toList());
+  }
+
+  @override
+  Future<void> prepareSession({
+    Iterable<String> protectedSourceUrls = const <String>[],
+  }) async {
+    preparedSources.add(protectedSourceUrls.toList());
+  }
+
+  @override
+  Future<File?> warmResolved(
+    TrackInfo track, {
+    bool cancelOnSearchChange = false,
+  }) async {
+    warmedUrls.add(track.url);
+    return File('remote-cache-${track.id}.m4a');
   }
 }
 
@@ -1420,6 +2128,27 @@ class _FakeMusicRepository implements MusicRepository {
   @override
   Future<DownloadResult> downloadAudio(String url, DownloadOptions options) {
     throw UnimplementedError();
+  }
+}
+
+class _DelayedRefreshMusicRepository extends _FakeMusicRepository {
+  _DelayedRefreshMusicRepository(TrackInfo initial) : super([initial]);
+
+  final Completer<TrackInfo> _refresh = Completer<TrackInfo>();
+
+  @override
+  Future<TrackInfo> getInfo(String url) {
+    infoCalls++;
+    if (infoCalls == 1) {
+      return Future<TrackInfo>.value(responses.first);
+    }
+    return _refresh.future;
+  }
+
+  void completeRefresh(TrackInfo track) {
+    if (!_refresh.isCompleted) {
+      _refresh.complete(track);
+    }
   }
 }
 

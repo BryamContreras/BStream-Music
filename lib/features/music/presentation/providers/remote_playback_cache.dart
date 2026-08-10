@@ -2,32 +2,114 @@ part of 'music_providers.dart';
 
 final remotePlaybackCacheProvider = Provider<RemotePlaybackCache>((ref) {
   final cache = RemotePlaybackCache();
-  ref.onDispose(cache.dispose);
+  ref.onDispose(() => unawaited(cache.dispose()));
   return cache;
 });
 
+class RemotePlaybackCachePolicy {
+  const RemotePlaybackCachePolicy({
+    required this.enabled,
+    required this.evictOutsidePlaybackWindow,
+    required this.useApplicationCacheDirectory,
+    required this.useHashedKeys,
+    required this.maximumAge,
+    required this.maximumFiles,
+    required this.maximumBytes,
+    required this.maximumEntryBytes,
+    required this.partialMaximumAge,
+  });
+
+  static const disabled = RemotePlaybackCachePolicy(
+    enabled: false,
+    evictOutsidePlaybackWindow: true,
+    useApplicationCacheDirectory: false,
+    useHashedKeys: false,
+    maximumAge: Duration.zero,
+    maximumFiles: 1,
+    maximumBytes: 1,
+    maximumEntryBytes: 1,
+    partialMaximumAge: Duration.zero,
+  );
+
+  static const android = RemotePlaybackCachePolicy(
+    enabled: true,
+    evictOutsidePlaybackWindow: true,
+    useApplicationCacheDirectory: false,
+    useHashedKeys: false,
+    maximumAge: Duration(minutes: 30),
+    maximumFiles: 5,
+    maximumBytes: 64 * 1024 * 1024,
+    maximumEntryBytes: 64 * 1024 * 1024,
+    partialMaximumAge: Duration.zero,
+  );
+
+  static const desktop = RemotePlaybackCachePolicy(
+    enabled: true,
+    evictOutsidePlaybackWindow: false,
+    useApplicationCacheDirectory: true,
+    useHashedKeys: true,
+    maximumAge: Duration(hours: 12),
+    maximumFiles: 24,
+    maximumBytes: 256 * 1024 * 1024,
+    maximumEntryBytes: 128 * 1024 * 1024,
+    // Another BStream process may own a recent partial file on desktop.
+    partialMaximumAge: Duration(hours: 1),
+  );
+
+  static RemotePlaybackCachePolicy current() {
+    if (AppPlatform.isAndroid) {
+      return android;
+    }
+    if (AppPlatform.isDesktop) {
+      return desktop;
+    }
+    return disabled;
+  }
+
+  final bool enabled;
+  final bool evictOutsidePlaybackWindow;
+  final bool useApplicationCacheDirectory;
+  final bool useHashedKeys;
+  final Duration maximumAge;
+  final int maximumFiles;
+  final int maximumBytes;
+  final int maximumEntryBytes;
+  final Duration partialMaximumAge;
+}
+
 class RemotePlaybackCache {
   RemotePlaybackCache({
-    bool? isAndroid,
+    RemotePlaybackCachePolicy? policy,
     this.cacheDirectoryProvider,
     DateTime Function()? clock,
-    Duration maximumAge = const Duration(minutes: 30),
-    int maximumFiles = 3,
-    int maximumBytes = 64 * 1024 * 1024,
-  }) : assert(maximumAge >= Duration.zero),
-       assert(maximumFiles > 0),
-       assert(maximumBytes > 0),
-       _isAndroid = isAndroid ?? AppPlatform.isAndroid,
+    Duration? maximumAge,
+    int? maximumFiles,
+    int? maximumBytes,
+    int? maximumEntryBytes,
+  }) : assert(maximumAge == null || maximumAge >= Duration.zero),
+       assert(maximumFiles == null || maximumFiles > 0),
+       assert(maximumBytes == null || maximumBytes > 0),
+       assert(maximumEntryBytes == null || maximumEntryBytes > 0),
+       _policy = policy ?? RemotePlaybackCachePolicy.current(),
        _clock = clock ?? DateTime.now,
-       _maximumAge = maximumAge,
-       _maximumFiles = maximumFiles,
-       _maximumBytes = maximumBytes;
+       _maximumAge =
+           maximumAge ??
+           (policy ?? RemotePlaybackCachePolicy.current()).maximumAge,
+       _maximumFiles =
+           maximumFiles ??
+           (policy ?? RemotePlaybackCachePolicy.current()).maximumFiles,
+       _maximumBytes =
+           maximumBytes ??
+           (policy ?? RemotePlaybackCachePolicy.current()).maximumBytes,
+       _maximumEntryBytes =
+           maximumEntryBytes ??
+           (policy ?? RemotePlaybackCachePolicy.current()).maximumEntryBytes;
 
   static const _cacheFolderName = 'remote-playback-cache';
   static const _downloadIdleTimeout = Duration(seconds: 20);
   static const _downloadTotalTimeout = Duration(minutes: 30);
   static const _userAgent =
-      'BStreamMusic/${AppConstants.appVersion} (Android) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
+      'BStreamMusic/${AppConstants.appVersion} AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
   static const _audioExtensions = {
     '.aiff',
     '.alac',
@@ -48,23 +130,38 @@ class RemotePlaybackCache {
     '.wma',
   };
 
-  final bool _isAndroid;
+  final RemotePlaybackCachePolicy _policy;
   final Future<Directory> Function()? cacheDirectoryProvider;
   final DateTime Function() _clock;
   final Duration _maximumAge;
   final int _maximumFiles;
   final int _maximumBytes;
+  final int _maximumEntryBytes;
   final _inFlight = <String, _RemoteCacheWarmup>{};
-  Set<String> _protectedKeys = <String>{};
+  final _invalidKeys = <String>{};
+  List<String> _protectedKeys = <String>[];
   Future<void> _downloadTail = Future<void>.value();
+  int _retentionGeneration = 0;
+  final String _partialOwnerId = const Uuid().v4();
   bool _disposed = false;
+  Future<void>? _disposeFuture;
 
-  void dispose() {
+  bool get isEnabled => _policy.enabled && !_disposed;
+
+  Future<void> dispose() {
+    final existing = _disposeFuture;
+    if (existing != null) {
+      return existing;
+    }
     _disposed = true;
+    _retentionGeneration++;
     for (final job in _inFlight.values) {
       job.cancel();
     }
     _inFlight.clear();
+    final future = _downloadTail.catchError((_) {}).then((_) {});
+    _disposeFuture = future;
+    return future;
   }
 
   /// Removes abandoned partial files and bounds leftovers from an interrupted
@@ -73,40 +170,55 @@ class RemotePlaybackCache {
   Future<void> prepareSession({
     Iterable<String> protectedSourceUrls = const <String>[],
   }) {
-    if (!_isAndroid || _disposed) {
+    if (!_policy.enabled || _disposed) {
       return Future<void>.value();
     }
     _protectedKeys = protectedSourceUrls
         .map((source) => source.trim())
         .where((source) => source.isNotEmpty)
         .map(_cacheKeyFromSource)
-        .toSet();
+        .toSet()
+        .toList(growable: false);
+    final retentionGeneration = ++_retentionGeneration;
     return _scheduleMaintenance(() async {
+      if (!_isRetentionCurrent(retentionGeneration)) {
+        return;
+      }
       final directory = await _cacheDirectory();
-      await _trimCache(directory);
+      await _trimCache(directory, retentionGeneration);
     });
   }
 
   /// Keeps only the files required by the active playback window. The caller
-  /// passes the previous, current, and predictable next remote tracks. Only
+  /// passes the current, predictable next, and previous remote tracks in
+  /// retention-priority order. Only
   /// tracks that have already been played or explicitly warmed exist on disk;
   /// retaining a track never downloads it by itself.
   Future<void> retainOnlyTracks(Iterable<TrackInfo> tracks) {
-    if (!_isAndroid || _disposed) {
+    if (!_policy.enabled || _disposed) {
       return Future<void>.value();
     }
-    final protectedKeys = tracks.map(_cacheKey).toSet();
-    _protectedKeys = protectedKeys;
-    for (final entry in _inFlight.entries) {
-      if (!protectedKeys.contains(entry.key)) {
-        entry.value.cancel();
-      }
-    }
+    final retentionGeneration = _protectTracks(tracks);
     return _scheduleMaintenance(() async {
+      if (!_isRetentionCurrent(retentionGeneration)) {
+        return;
+      }
       final directory = await _cacheDirectory();
-      await _deleteUnprotectedAudio(directory);
-      await _trimCache(directory);
+      if (_policy.evictOutsidePlaybackWindow) {
+        await _deleteUnprotectedAudio(directory, retentionGeneration);
+      }
+      await _trimCache(directory, retentionGeneration);
     });
+  }
+
+  /// Updates protection and cancels obsolete downloads immediately without
+  /// deleting files. This closes the transition race between selecting a new
+  /// queue item and replacing the source currently open in the backend.
+  void protectPlaybackWindow(Iterable<TrackInfo> tracks) {
+    if (!_policy.enabled || _disposed) {
+      return;
+    }
+    _protectTracks(tracks);
   }
 
   void cancelSearchWarmups() {
@@ -117,7 +229,7 @@ class RemotePlaybackCache {
     }
   }
 
-  /// Cancels the single-track playback warmup when the user changes the
+  /// Cancels playback warmups when the user changes the
   /// current queue item. Search warmups use a separate cancellation policy.
   void cancelPlaybackWarmups() {
     for (final job in _inFlight.values) {
@@ -127,28 +239,59 @@ class RemotePlaybackCache {
     }
   }
 
+  /// Stops reusing a cache entry that the player could not open. Deletion is
+  /// best effort because another desktop process (or the active backend) may
+  /// still hold the file open; the in-memory invalid marker makes lookups fall
+  /// back to streaming immediately either way.
+  Future<void> evict(TrackInfo track) {
+    if (!_policy.enabled || _disposed) {
+      return Future<void>.value();
+    }
+    final key = _cacheKey(track);
+    _invalidKeys.add(key);
+    _inFlight.remove(key)?.cancel();
+    final baseName = _baseName(track);
+    return _scheduleMaintenance(() async {
+      final directory = await _cacheDirectory();
+      await _deleteCachedVariants(directory, baseName);
+    });
+  }
+
   Future<File?> cachedFile(TrackInfo track) async {
-    if (!_isAndroid) {
+    if (!_policy.enabled || _disposed) {
       return null;
     }
 
-    final directory = await _cacheDirectory();
-    final file = await _findCachedFile(directory, _baseName(track));
-    if (file != null) {
+    try {
+      final key = _cacheKey(track);
+      if (_invalidKeys.contains(key)) {
+        return null;
+      }
+      final directory = await _cacheDirectory();
+      final file = await _findCachedFile(directory, _baseName(track));
+      if (_invalidKeys.contains(key) ||
+          file == null ||
+          !await file.exists() ||
+          await file.length() == 0) {
+        return null;
+      }
       try {
-        await file.setLastModified(DateTime.now());
+        await file.setLastModified(_clock());
       } catch (_) {
         // The file remains usable even if touching it fails.
       }
+      return await file.exists() && await file.length() > 0 ? file : null;
+    } catch (_) {
+      // Maintenance may remove an entry between discovery and validation.
+      return null;
     }
-    return file;
   }
 
   Future<File?> warmResolved(
     TrackInfo track, {
     bool cancelOnSearchChange = false,
   }) {
-    if (!_isAndroid || _disposed || !_hasStream(track)) {
+    if (!_policy.enabled || _disposed || !_hasStream(track)) {
       return Future<File?>.value();
     }
 
@@ -162,21 +305,35 @@ class RemotePlaybackCache {
     }
 
     final job = _RemoteCacheWarmup(cancelOnSearchChange: cancelOnSearchChange);
-    final future = _downloadTail.then((_) {
+    final future = _downloadTail.then((_) async {
       if (_disposed || job.cancelled) {
         return null;
       }
-      return _downloadIfMissing(track, job);
+      try {
+        return await _downloadIfMissing(track, job);
+      } catch (_) {
+        // The playback cache is an optimization. Directory/provider failures
+        // must always fall back to streaming instead of surfacing as playback
+        // errors.
+        return null;
+      }
     });
     job.future = future;
     _inFlight[key] = job;
     _downloadTail = future.catchError((_) => null).then((_) {});
     unawaited(
-      future.whenComplete(() {
-        if (identical(_inFlight[key], job)) {
-          _inFlight.remove(key);
-        }
-      }),
+      future.then<void>(
+        (_) {
+          if (identical(_inFlight[key], job)) {
+            _inFlight.remove(key);
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_inFlight[key], job)) {
+            _inFlight.remove(key);
+          }
+        },
+      ),
     );
     return future;
   }
@@ -190,12 +347,21 @@ class RemotePlaybackCache {
     }
 
     final directory = await _cacheDirectory();
-    await _trimCache(directory);
+    await _trimCache(directory, _retentionGeneration);
+    if (job.cancelled) {
+      return null;
+    }
 
     final baseName = _baseName(track);
-    final cached = await _findCachedFile(directory, baseName);
-    if (cached != null) {
-      return cached;
+    final key = _cacheKey(track);
+    final replacingInvalidEntry = _invalidKeys.contains(key);
+    if (replacingInvalidEntry) {
+      await _deleteCachedVariants(directory, baseName);
+    } else {
+      final cached = await _findCachedFile(directory, baseName);
+      if (cached != null) {
+        return cached;
+      }
     }
 
     final uri = Uri.tryParse(track.streamUrl ?? '');
@@ -203,7 +369,9 @@ class RemotePlaybackCache {
       return null;
     }
 
-    final tempFile = File(p.join(directory.path, '$baseName.part'));
+    final tempFile = File(
+      p.join(directory.path, '$baseName.$_partialOwnerId.part'),
+    );
     job.tempFile = tempFile;
     if (await tempFile.exists()) {
       await tempFile.delete();
@@ -235,17 +403,20 @@ class RemotePlaybackCache {
         await _deleteIfExists(tempFile);
         return null;
       }
+      if (!_isCacheableAudioContentType(response.headers.contentType)) {
+        await _deleteIfExists(tempFile);
+        return null;
+      }
 
       final extension = _audioExtension(
         uri,
         response.headers.contentType?.mimeType,
       );
       final finalFile = File(p.join(directory.path, '$baseName$extension'));
-      await _deleteExistingVariants(directory, baseName);
       final written = await writeBoundedByteStreamToFile(
         response,
         tempFile,
-        maximumBytes: _maximumBytes,
+        maximumBytes: _maximumEntryBytes,
         declaredLength: response.contentLength < 0
             ? null
             : response.contentLength,
@@ -262,9 +433,20 @@ class RemotePlaybackCache {
         await _deleteIfExists(tempFile);
         return null;
       }
-      await tempFile.rename(finalFile.path);
-      await _trimCache(directory);
-      return finalFile;
+      final published = await _publishDownloadedFile(
+        directory: directory,
+        baseName: baseName,
+        tempFile: tempFile,
+        finalFile: finalFile,
+        replacingInvalidEntry: replacingInvalidEntry,
+      );
+      if (published == null) {
+        await _deleteIfExists(tempFile);
+        return null;
+      }
+      _invalidKeys.remove(key);
+      await _trimCache(directory, _retentionGeneration);
+      return await published.exists() ? published : null;
     } catch (_) {
       await _deleteIfExists(tempFile);
       return null;
@@ -285,12 +467,13 @@ class RemotePlaybackCache {
       await directory.create(recursive: true);
       return directory;
     }
+    final root = _policy.useApplicationCacheDirectory
+        ? await getApplicationCacheDirectory()
+        : await getTemporaryDirectory();
     final directory = Directory(
-      p.join(
-        (await getTemporaryDirectory()).path,
-        'BStream-Music',
-        _cacheFolderName,
-      ),
+      _policy.useApplicationCacheDirectory
+          ? p.join(root.path, _cacheFolderName)
+          : p.join(root.path, 'BStream-Music', _cacheFolderName),
     );
     await directory.create(recursive: true);
     return directory;
@@ -311,11 +494,11 @@ class RemotePlaybackCache {
               p.basenameWithoutExtension(file.path) == baseName;
         })
         .toList();
-    final existing = <File>[];
+    final existing = <({File file, DateTime modified})>[];
     for (final file in files) {
       try {
         if (await file.length() > 0) {
-          existing.add(file);
+          existing.add((file: file, modified: await file.lastModified()));
         }
       } catch (_) {
         // Ignore stale files that disappear while scanning.
@@ -324,88 +507,240 @@ class RemotePlaybackCache {
     if (existing.isEmpty) {
       return null;
     }
-    existing.sort(
-      (left, right) =>
-          right.lastModifiedSync().compareTo(left.lastModifiedSync()),
-    );
-    return existing.first;
+    existing.sort((left, right) => right.modified.compareTo(left.modified));
+    return existing.first.file;
   }
 
-  Future<void> _deleteUnprotectedAudio(Directory directory) async {
-    if (!await directory.exists()) {
+  Future<File?> _publishDownloadedFile({
+    required Directory directory,
+    required String baseName,
+    required File tempFile,
+    required File finalFile,
+    required bool replacingInvalidEntry,
+  }) async {
+    if (!_policy.useApplicationCacheDirectory) {
+      return _publishDownloadedFileUnlocked(
+        directory: directory,
+        baseName: baseName,
+        tempFile: tempFile,
+        finalFile: finalFile,
+        replacingInvalidEntry: replacingInvalidEntry,
+      );
+    }
+
+    final lockFile = File(p.join(directory.path, '$baseName.publish.lock'));
+    RandomAccessFile? lockHandle;
+    try {
+      lockHandle = await lockFile.open(mode: FileMode.append);
+      try {
+        await lockFile.setLastModified(_clock());
+      } catch (_) {
+        // The lock itself still works if its maintenance timestamp cannot be
+        // updated.
+      }
+      await lockHandle.lock(FileLock.blockingExclusive);
+    } catch (_) {
+      await lockHandle?.close();
+      // A cache directory that does not support advisory locks can still use
+      // the existing atomic rename/winner check.
+      return _publishDownloadedFileUnlocked(
+        directory: directory,
+        baseName: baseName,
+        tempFile: tempFile,
+        finalFile: finalFile,
+        replacingInvalidEntry: replacingInvalidEntry,
+      );
+    }
+
+    try {
+      return await _publishDownloadedFileUnlocked(
+        directory: directory,
+        baseName: baseName,
+        tempFile: tempFile,
+        finalFile: finalFile,
+        replacingInvalidEntry: replacingInvalidEntry,
+      );
+    } finally {
+      try {
+        await lockHandle.unlock();
+      } catch (_) {
+        // Closing the handle also releases the OS lock.
+      }
+      await lockHandle.close();
+    }
+  }
+
+  Future<File?> _publishDownloadedFileUnlocked({
+    required Directory directory,
+    required String baseName,
+    required File tempFile,
+    required File finalFile,
+    required bool replacingInvalidEntry,
+  }) async {
+    if (!replacingInvalidEntry) {
+      final concurrentlyCached = await _findCachedFile(directory, baseName);
+      if (concurrentlyCached != null) {
+        await _deleteIfExists(tempFile);
+        return concurrentlyCached;
+      }
+    } else {
+      // Retry after MediaKit has switched away from the failed local source;
+      // Windows may have kept the corrupt file locked during the first
+      // invalidation pass.
+      await _deleteCachedVariants(directory, baseName);
+    }
+    try {
+      return await tempFile.rename(finalFile.path);
+    } catch (_) {
+      final winner = replacingInvalidEntry
+          ? null
+          : await _findCachedFile(directory, baseName);
+      if (winner != null) {
+        await _deleteIfExists(tempFile);
+        return winner;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _deleteUnprotectedAudio(
+    Directory directory,
+    int retentionGeneration,
+  ) async {
+    if (!await directory.exists() ||
+        !_isRetentionCurrent(retentionGeneration)) {
       return;
     }
     await for (final entity in directory.list()) {
+      if (!_isRetentionCurrent(retentionGeneration)) {
+        return;
+      }
       if (entity is! File) {
         continue;
       }
       final extension = p.extension(entity.path).toLowerCase();
       final baseName = p.basenameWithoutExtension(entity.path);
       if (extension == '.part') {
-        await _deleteIfExists(entity);
+        await _deleteIfExists(entity, retentionGeneration: retentionGeneration);
       } else if (_audioExtensions.contains(extension) &&
           !_protectedBaseNames.contains(baseName)) {
-        await _deleteIfExists(entity);
+        if (!_isRetentionCurrent(retentionGeneration)) {
+          return;
+        }
+        await _deleteIfExists(entity, retentionGeneration: retentionGeneration);
       }
     }
   }
 
-  Future<void> _trimCache(Directory directory) async {
-    if (!await directory.exists()) {
+  Future<void> _trimCache(Directory directory, int retentionGeneration) async {
+    if (!await directory.exists() ||
+        !_isRetentionCurrent(retentionGeneration)) {
       return;
     }
 
     final now = _clock();
-    final files = <File>[];
+    final files = <({File file, DateTime modified, int length})>[];
     await for (final entity in directory.list()) {
+      if (!_isRetentionCurrent(retentionGeneration)) {
+        return;
+      }
       if (entity is! File) {
         continue;
       }
       try {
         final modified = await entity.lastModified();
+        final extension = p.extension(entity.path).toLowerCase();
+        if (extension == '.part' || extension == '.lock') {
+          final partialExpired =
+              _policy.partialMaximumAge == Duration.zero ||
+              now.difference(modified) > _policy.partialMaximumAge;
+          if (partialExpired) {
+            if (!_isRetentionCurrent(retentionGeneration)) {
+              return;
+            }
+            await _deleteIfExists(
+              entity,
+              retentionGeneration: retentionGeneration,
+            );
+          }
+          continue;
+        }
+        if (!_audioExtensions.contains(extension)) {
+          continue;
+        }
+        final length = await entity.length();
+        if (length <= 0) {
+          await _deleteIfExists(
+            entity,
+            retentionGeneration: retentionGeneration,
+          );
+          continue;
+        }
         final protected = _protectedBaseNames.contains(
           p.basenameWithoutExtension(entity.path),
         );
-        if (p.extension(entity.path) == '.part' ||
-            (!protected && now.difference(modified) > _maximumAge)) {
-          await entity.delete();
+        if (!protected && now.difference(modified) > _maximumAge) {
+          if (!_isRetentionCurrent(retentionGeneration)) {
+            return;
+          }
+          await _deleteIfExists(
+            entity,
+            retentionGeneration: retentionGeneration,
+          );
           continue;
         }
-        if (_audioExtensions.contains(p.extension(entity.path).toLowerCase())) {
-          files.add(entity);
-        }
+        files.add((file: entity, modified: modified, length: length));
       } catch (_) {
         // Best effort cache cleanup.
       }
     }
 
+    final protectedPriorities = <String, int>{
+      for (var index = 0; index < _protectedKeys.length; index++)
+        'remote_${_protectedKeys[index]}': index,
+    };
+    int? protectionPriority(File file) =>
+        protectedPriorities[p.basenameWithoutExtension(file.path)];
+
     files.sort((left, right) {
-      final leftProtected = _isProtectedFile(left);
-      final rightProtected = _isProtectedFile(right);
-      if (leftProtected != rightProtected) {
-        return leftProtected ? -1 : 1;
+      final leftPriority = protectionPriority(left.file);
+      final rightPriority = protectionPriority(right.file);
+      if (leftPriority != null || rightPriority != null) {
+        if (leftPriority == null) {
+          return 1;
+        }
+        if (rightPriority == null) {
+          return -1;
+        }
+        final priorityOrder = leftPriority.compareTo(rightPriority);
+        if (priorityOrder != 0) {
+          return priorityOrder;
+        }
       }
-      return right.lastModifiedSync().compareTo(left.lastModifiedSync());
+      return right.modified.compareTo(left.modified);
     });
 
     var totalBytes = 0;
     var retainedFiles = 0;
     for (var index = 0; index < files.length; index++) {
-      final file = files[index];
+      final entry = files[index];
+      final file = entry.file;
       try {
-        final length = await file.length();
-        if (_isProtectedFile(file)) {
-          retainedFiles++;
-          totalBytes += length;
-          continue;
+        if (!_isRetentionCurrent(retentionGeneration)) {
+          return;
         }
-        if (retainedFiles >= _maximumFiles ||
-            totalBytes + length > _maximumBytes) {
+        final priority = protectionPriority(file);
+        final exceedsLimits =
+            retainedFiles >= _maximumFiles ||
+            totalBytes + entry.length > _maximumBytes;
+        // The active source (priority zero) may temporarily exceed a new
+        // limit because deleting a file that ExoPlayer has open is unsafe.
+        if (exceedsLimits && priority != 0) {
           await file.delete();
           continue;
         }
         retainedFiles++;
-        totalBytes += length;
+        totalBytes += entry.length;
       } catch (_) {
         // Best effort cache cleanup.
       }
@@ -422,24 +757,51 @@ class RemotePlaybackCache {
     return future.catchError((_) {});
   }
 
+  bool _isRetentionCurrent(int generation) {
+    return !_disposed && generation == _retentionGeneration;
+  }
+
+  int _protectTracks(Iterable<TrackInfo> tracks) {
+    final protectedKeys = tracks.map(_cacheKey).toSet().toList(growable: false);
+    _protectedKeys = protectedKeys;
+    final protectedKeySet = protectedKeys.toSet();
+    for (final entry in _inFlight.entries) {
+      if (!protectedKeySet.contains(entry.key)) {
+        entry.value.cancel();
+      }
+    }
+    return ++_retentionGeneration;
+  }
+
   Set<String> get _protectedBaseNames => {
     for (final key in _protectedKeys) 'remote_$key',
   };
 
-  bool _isProtectedFile(File file) {
-    return _protectedBaseNames.contains(p.basenameWithoutExtension(file.path));
+  Future<void> _deleteCachedVariants(
+    Directory directory,
+    String baseName,
+  ) async {
+    if (!await directory.exists()) {
+      return;
+    }
+    await for (final entity in directory.list()) {
+      if (entity is! File ||
+          p.basenameWithoutExtension(entity.path) != baseName ||
+          !_audioExtensions.contains(p.extension(entity.path).toLowerCase())) {
+        continue;
+      }
+      await _deleteIfExists(entity);
+    }
   }
 
-  Future<void> _deleteExistingVariants(Directory directory, String baseName) {
-    return Future.wait([
-      for (final extension in _audioExtensions)
-        _deleteIfExists(File(p.join(directory.path, '$baseName$extension'))),
-    ]);
-  }
-
-  Future<void> _deleteIfExists(File file) async {
+  Future<void> _deleteIfExists(File file, {int? retentionGeneration}) async {
     try {
-      if (await file.exists()) {
+      final exists = await file.exists();
+      if (retentionGeneration != null &&
+          !_isRetentionCurrent(retentionGeneration)) {
+        return;
+      }
+      if (exists) {
         await file.delete();
       }
     } catch (_) {
@@ -452,6 +814,21 @@ class RemotePlaybackCache {
     return streamUrl != null && streamUrl.trim().isNotEmpty;
   }
 
+  bool _isCacheableAudioContentType(ContentType? contentType) {
+    final mime = contentType?.mimeType.toLowerCase();
+    if (mime == null || mime.isEmpty) {
+      return true;
+    }
+    return mime.startsWith('audio/') ||
+        mime.startsWith('video/') ||
+        mime == 'application/octet-stream' ||
+        mime == 'binary/octet-stream' ||
+        mime == 'application/ogg' ||
+        mime == 'application/mp4' ||
+        mime == 'application/webm' ||
+        mime == 'application/x-m4a';
+  }
+
   String _baseName(TrackInfo track) => 'remote_${_cacheKey(track)}';
 
   String _cacheKey(TrackInfo track) {
@@ -460,6 +837,9 @@ class RemotePlaybackCache {
   }
 
   String _cacheKeyFromSource(String source) {
+    if (_policy.useHashedKeys) {
+      return sha256.convert(utf8.encode(source)).toString();
+    }
     final encoded = base64Url.encode(utf8.encode(source)).replaceAll('=', '');
     if (encoded.length <= 72) {
       return encoded;
