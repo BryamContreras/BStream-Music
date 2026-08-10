@@ -16,6 +16,8 @@
 - An inline search clear button that appears only while the field has text.
 - A localized support section in Settings with a direct Ko-fi contribution
   link; the app remains free.
+- A persistent one-button Normal/Centered lyrics alignment control on mobile
+  and desktop.
 
 ### Improved
 
@@ -27,6 +29,10 @@
 - Search now returns up to 20 results on Android and desktop.
 - Accent-aware gradients, tabs, progress bars, lyrics, cards, menus, and player
   controls in both light and dark themes.
+- Desktop song lyrics now scale across compact, standard, and wide windows to
+  make better use of the available reading space.
+- Lyrics lookup now ignores empty blocks and karaoke presentation suffixes
+  while preserving legitimate titles and the downloaded track metadata.
 - Android remote playback with earlier source validation, preserved request
   headers, selective extractor updates, one retry, clearer HTTP/format errors,
   and restoration of the bundled extractor after a failed update retry.

@@ -1,11 +1,26 @@
 part of 'music_providers.dart';
 
+enum LyricsTextAlignment {
+  normal,
+  centered;
+
+  String get code => name;
+
+  static LyricsTextAlignment fromCode(String? code) {
+    return switch (code) {
+      'centered' => LyricsTextAlignment.centered,
+      _ => LyricsTextAlignment.normal,
+    };
+  }
+}
+
 class SettingsState {
   const SettingsState({
     required this.downloadDirectory,
     required this.language,
     this.themeMode = AppThemeMode.system,
     this.accent = AppAccent.white,
+    this.lyricsTextAlignment = LyricsTextAlignment.normal,
     this.ytDlpPath,
     this.hasYtDlp,
   });
@@ -14,6 +29,7 @@ class SettingsState {
   final AppLanguage language;
   final AppThemeMode themeMode;
   final AppAccent accent;
+  final LyricsTextAlignment lyricsTextAlignment;
   final String? ytDlpPath;
   final bool? hasYtDlp;
 
@@ -22,6 +38,7 @@ class SettingsState {
     AppLanguage? language,
     AppThemeMode? themeMode,
     AppAccent? accent,
+    LyricsTextAlignment? lyricsTextAlignment,
     String? ytDlpPath,
     bool? hasYtDlp,
   }) {
@@ -30,6 +47,7 @@ class SettingsState {
       language: language ?? this.language,
       themeMode: themeMode ?? this.themeMode,
       accent: accent ?? this.accent,
+      lyricsTextAlignment: lyricsTextAlignment ?? this.lyricsTextAlignment,
       ytDlpPath: ytDlpPath ?? this.ytDlpPath,
       hasYtDlp: hasYtDlp ?? this.hasYtDlp,
     );
@@ -41,7 +59,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _languageKey = 'settings.language';
   static const _themeModeKey = 'settings.themeMode';
   static const _accentKey = 'settings.accent';
+  static const _lyricsTextAlignmentKey = 'settings.lyricsAlignment';
   static const _mediaRootDirectoryName = 'BStream-Music';
+  Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
 
   @override
   Future<SettingsState> build() async {
@@ -50,6 +70,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final language = AppLanguageLabel.fromCode(prefs.getString(_languageKey));
     final themeMode = AppThemeMode.fromCode(prefs.getString(_themeModeKey));
     final accent = AppAccent.fromCode(prefs.getString(_accentKey));
+    final lyricsTextAlignment = LyricsTextAlignment.fromCode(
+      prefs.getString(_lyricsTextAlignmentKey),
+    );
     final storedDirectory = prefs.getString(_downloadDirectoryKey);
     var downloadDirectory = _migrateLegacyDownloadDirectory(
       prefs.getString(_downloadDirectoryKey) ?? defaultDirectory,
@@ -80,6 +103,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         language: language,
         themeMode: themeMode,
         accent: accent,
+        lyricsTextAlignment: lyricsTextAlignment,
         ytDlpPath: await downloader.getYtDlpPath(),
         hasYtDlp: await downloader.hasYtDlp(),
       );
@@ -90,6 +114,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       language: language,
       themeMode: themeMode,
       accent: accent,
+      lyricsTextAlignment: lyricsTextAlignment,
     );
   }
 
@@ -129,6 +154,34 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await prefs.setString(_accentKey, accent.code);
     final current = await future;
     state = AsyncData(current.copyWith(accent: accent));
+  }
+
+  Future<void> setLyricsTextAlignment(
+    LyricsTextAlignment lyricsTextAlignment,
+  ) async {
+    final current = state.asData?.value ?? await future;
+    if (current.lyricsTextAlignment == lyricsTextAlignment) {
+      return;
+    }
+    state = AsyncData(
+      current.copyWith(lyricsTextAlignment: lyricsTextAlignment),
+    );
+    final write = _lyricsTextAlignmentWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lyricsTextAlignmentKey, lyricsTextAlignment.code);
+    });
+    _lyricsTextAlignmentWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> toggleLyricsTextAlignment() async {
+    final current = state.asData?.value ?? await future;
+    final next = current.lyricsTextAlignment == LyricsTextAlignment.centered
+        ? LyricsTextAlignment.normal
+        : LyricsTextAlignment.centered;
+    await setLyricsTextAlignment(next);
   }
 
   Future<File> createBackupFile() async {

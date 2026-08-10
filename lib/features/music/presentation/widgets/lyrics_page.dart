@@ -13,6 +13,29 @@ import '../providers/music_providers.dart';
 import 'playback_gradient_background.dart';
 import 'playback_progress_line.dart';
 
+({double inactive, double active, double plain}) _lyricsTypographyFor(
+  BuildContext context,
+) {
+  final desktop = switch (Theme.of(context).platform) {
+    TargetPlatform.windows ||
+    TargetPlatform.linux ||
+    TargetPlatform.macOS => true,
+    _ => false,
+  };
+  if (!desktop) {
+    return (inactive: 27, active: 30, plain: 25);
+  }
+
+  final width = MediaQuery.sizeOf(context).width;
+  if (width < 840) {
+    return (inactive: 29, active: 32, plain: 27);
+  }
+  if (width < 1200) {
+    return (inactive: 33, active: 36, plain: 30);
+  }
+  return (inactive: 36, active: 39, plain: 33);
+}
+
 class LyricsPage extends ConsumerStatefulWidget {
   const LyricsPage({super.key});
 
@@ -52,6 +75,10 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     final lookup = ref.watch(currentLyricsLookupProvider);
     final offset = ref.watch(lyricsOffsetControllerProvider);
     final selectedLyrics = ref.watch(selectedLyricsControllerProvider);
+    final settings = ref.watch(settingsControllerProvider).value;
+    final lyricsTextAlignment =
+        settings?.lyricsTextAlignment ?? LyricsTextAlignment.normal;
+    final lyricsCentered = lyricsTextAlignment == LyricsTextAlignment.centered;
     _syncLookup(lookup);
 
     return Scaffold(
@@ -66,7 +93,17 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
           SafeArea(
             child: Column(
               children: [
-                _LyricsHeader(lookup: lookup),
+                _LyricsHeader(
+                  lookup: lookup,
+                  lyricsCentered: lyricsCentered,
+                  onToggleLyricsAlignment: settings == null
+                      ? null
+                      : () => unawaited(
+                          ref
+                              .read(settingsControllerProvider.notifier)
+                              .toggleLyricsTextAlignment(),
+                        ),
+                ),
                 Expanded(
                   child: lookup == null
                       ? _LyricsMessage(
@@ -76,7 +113,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
                       : _showSimilarLyrics
                       ? _buildSimilarLyrics(lookup)
                       : selectedLyrics != null
-                      ? _buildLyrics(selectedLyrics, offset)
+                      ? _buildLyrics(selectedLyrics, offset, lyricsCentered)
                       : ref
                             .watch(lyricsProvider(lookup))
                             .when(
@@ -100,7 +137,8 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
                                       ref.invalidate(lyricsProvider(lookup)),
                                 );
                               },
-                              data: (lyrics) => _buildLyrics(lyrics, offset),
+                              data: (lyrics) =>
+                                  _buildLyrics(lyrics, offset, lyricsCentered),
                             ),
                 ),
               ],
@@ -111,7 +149,11 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     );
   }
 
-  Widget _buildLyrics(LyricsDocument? lyrics, Duration offset) {
+  Widget _buildLyrics(
+    LyricsDocument? lyrics,
+    Duration offset,
+    bool lyricsCentered,
+  ) {
     final strings = ref.watch(appStringsProvider);
     if (lyrics == null) {
       return _LyricsMessage(
@@ -138,6 +180,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
             lines: lyrics.lines,
             offset: offset,
             sourceFooter: sourceFooter,
+            lyricsCentered: lyricsCentered,
           ),
           Align(
             alignment: Alignment.bottomCenter,
@@ -158,7 +201,11 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
 
     final plainLyrics = lyrics.plainLyrics?.trim();
     if (plainLyrics != null && plainLyrics.isNotEmpty) {
-      return _PlainLyricsView(lyrics: plainLyrics, sourceFooter: sourceFooter);
+      return _PlainLyricsView(
+        lyrics: plainLyrics,
+        sourceFooter: sourceFooter,
+        lyricsCentered: lyricsCentered,
+      );
     }
     return _LyricsMessage(
       icon: Icons.search_off_rounded,
@@ -472,14 +519,24 @@ class _SimilarLyricsList extends ConsumerWidget {
 }
 
 class _LyricsHeader extends ConsumerWidget {
-  const _LyricsHeader({required this.lookup});
+  const _LyricsHeader({
+    required this.lookup,
+    required this.lyricsCentered,
+    required this.onToggleLyricsAlignment,
+  });
 
   final LyricsLookup? lookup;
+  final bool lyricsCentered;
+  final VoidCallback? onToggleLyricsAlignment;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final currentLookup = lookup;
+    final accent = AppColors.downloadAccentFor(context);
+    final alignmentAction = lyricsCentered
+        ? strings.useNormalLyricsAlignment
+        : strings.centerLyrics;
     final isPlaying = ref.watch(
       playerControllerProvider.select(
         (player) => player.value?.status == PlayerStatus.playing,
@@ -529,11 +586,44 @@ class _LyricsHeader extends ConsumerWidget {
                   ],
                 ),
               ),
+              Semantics(
+                label: strings.lyricsAlignment,
+                value: lyricsCentered
+                    ? strings.centeredLyricsAlignment
+                    : strings.normalLyricsAlignment,
+                button: true,
+                toggled: lyricsCentered,
+                enabled: onToggleLyricsAlignment != null,
+                onTap: onToggleLyricsAlignment,
+                excludeSemantics: true,
+                child: IconButton(
+                  key: const ValueKey('lyrics-alignment-toggle'),
+                  tooltip: alignmentAction,
+                  style: IconButton.styleFrom(
+                    foregroundColor: lyricsCentered
+                        ? accent
+                        : Colors.white.withValues(alpha: 0.74),
+                    disabledForegroundColor: Colors.white.withValues(
+                      alpha: 0.30,
+                    ),
+                    backgroundColor: lyricsCentered
+                        ? accent.withValues(alpha: 0.16)
+                        : Colors.transparent,
+                  ),
+                  icon: Icon(
+                    lyricsCentered
+                        ? Icons.format_align_center_rounded
+                        : Icons.format_align_left_rounded,
+                  ),
+                  onPressed: onToggleLyricsAlignment,
+                ),
+              ),
+              const SizedBox(width: 2),
               IconButton.filled(
                 key: const ValueKey('lyrics-playback-control'),
                 tooltip: isPlaying ? strings.pause : strings.play,
                 style: IconButton.styleFrom(
-                  backgroundColor: AppColors.downloadAccentFor(context),
+                  backgroundColor: accent,
                   foregroundColor: AppColors.playIconForegroundFor(context),
                   disabledBackgroundColor: AppColors.downloadAccentFor(
                     context,
@@ -604,11 +694,13 @@ class _SyncedLyricsTimeline extends ConsumerStatefulWidget {
     required this.lines,
     required this.offset,
     required this.sourceFooter,
+    required this.lyricsCentered,
   });
 
   final List<LyricLine> lines;
   final Duration offset;
   final String sourceFooter;
+  final bool lyricsCentered;
 
   @override
   ConsumerState<_SyncedLyricsTimeline> createState() =>
@@ -621,6 +713,8 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   ProviderSubscription<Duration>? _positionSubscription;
   Timer? _resumeAutoScrollTimer;
   bool _autoScrollSuspended = false;
+  double? _activeFontSize;
+  double? _layoutWidth;
 
   @override
   void initState() {
@@ -646,6 +740,22 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     if (!identical(oldWidget.lines, widget.lines) ||
         oldWidget.offset != widget.offset) {
       _updateActiveLine(ref.read(currentPlaybackPositionProvider));
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextActiveFontSize = _lyricsTypographyFor(context).active;
+    final nextLayoutWidth = MediaQuery.sizeOf(context).width;
+    final previousActiveFontSize = _activeFontSize;
+    final previousLayoutWidth = _layoutWidth;
+    _activeFontSize = nextActiveFontSize;
+    _layoutWidth = nextLayoutWidth;
+    if (previousActiveFontSize != null &&
+        (previousActiveFontSize != nextActiveFontSize ||
+            previousLayoutWidth != nextLayoutWidth)) {
+      _scheduleAutoScroll();
     }
   }
 
@@ -708,6 +818,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   @override
   Widget build(BuildContext context) {
     final strings = ref.watch(appStringsProvider);
+    final typography = _lyricsTypographyFor(context);
     final viewportHeight = MediaQuery.sizeOf(context).height;
     final verticalPadding = (viewportHeight * 0.27).clamp(96.0, 260.0);
     final horizontalPadding =
@@ -741,6 +852,9 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
                   line: widget.lines[index],
                   active: index == _activeIndex,
                   passed: index < _activeIndex,
+                  lyricsCentered: widget.lyricsCentered,
+                  activeFontSize: typography.active,
+                  inactiveFontSize: typography.inactive,
                   onTap: () => _seekToLine(widget.lines[index]),
                 ),
               ),
@@ -787,6 +901,9 @@ class _LyricLineTile extends StatelessWidget {
     required this.line,
     required this.active,
     required this.passed,
+    required this.lyricsCentered,
+    required this.activeFontSize,
+    required this.inactiveFontSize,
     required this.onTap,
     super.key,
   });
@@ -794,6 +911,9 @@ class _LyricLineTile extends StatelessWidget {
   final LyricLine line;
   final bool active;
   final bool passed;
+  final bool lyricsCentered;
+  final double activeFontSize;
+  final double inactiveFontSize;
   final VoidCallback onTap;
 
   @override
@@ -813,7 +933,7 @@ class _LyricLineTile extends StatelessWidget {
           curve: Curves.easeOutCubic,
           style: TextStyle(
             color: color,
-            fontSize: active ? 30 : 27,
+            fontSize: active ? activeFontSize : inactiveFontSize,
             height: 1.16,
             fontWeight: FontWeight.w900,
             letterSpacing: -0.45,
@@ -834,7 +954,10 @@ class _LyricLineTile extends StatelessWidget {
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-            child: Text(line.text),
+            child: Text(
+              line.text,
+              textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
+            ),
           ),
         ),
       ),
@@ -986,14 +1109,23 @@ class _LyricsOffsetControls extends ConsumerWidget {
 }
 
 class _PlainLyricsView extends ConsumerWidget {
-  const _PlainLyricsView({required this.lyrics, required this.sourceFooter});
+  const _PlainLyricsView({
+    required this.lyrics,
+    required this.sourceFooter,
+    required this.lyricsCentered,
+  });
 
   final String lyrics;
   final String sourceFooter;
+  final bool lyricsCentered;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
+    final typography = _lyricsTypographyFor(context);
+    final displayedLyrics = lyricsCentered
+        ? lyrics.split('\n').map((line) => line.trim()).join('\n')
+        : lyrics;
     final horizontalPadding =
         Theme.of(context).platform == TargetPlatform.android ? 16.0 : 28.0;
     return SingleChildScrollView(
@@ -1028,10 +1160,12 @@ class _PlainLyricsView extends ConsumerWidget {
           ),
           const SizedBox(height: 24),
           Text(
-            lyrics,
+            key: const ValueKey('plain-lyrics-text'),
+            displayedLyrics,
+            textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.9),
-              fontSize: 25,
+              fontSize: typography.plain,
               height: 1.38,
               fontWeight: FontWeight.w800,
             ),

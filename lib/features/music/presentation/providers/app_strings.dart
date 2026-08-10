@@ -112,6 +112,13 @@ class AppStrings {
     'Adjust it if the lyrics appear before or after the vocals.',
   );
   String get resetLyricsOffset => choose('Restablecer desfase', 'Reset offset');
+  String get lyricsAlignment =>
+      choose('Alineación de letras', 'Lyrics alignment');
+  String get centerLyrics => choose('Centrar letras', 'Center lyrics');
+  String get useNormalLyricsAlignment =>
+      choose('Usar alineación normal', 'Use normal alignment');
+  String get normalLyricsAlignment => choose('Normal', 'Normal');
+  String get centeredLyricsAlignment => choose('Centrada', 'Centered');
   String get retry => choose('Reintentar', 'Retry');
   String get lyricsSource =>
       choose('Letras proporcionadas por LRCLIB', 'Lyrics provided by LRCLIB');

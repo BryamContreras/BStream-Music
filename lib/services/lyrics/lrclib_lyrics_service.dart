@@ -818,6 +818,12 @@ class LrclibLyricsService implements LyricsService {
   double _versionPenalty(String expected, String actual) {
     final expectedTags = _versionTags(expected);
     final actualTags = _versionTags(actual);
+    if (_hasQualifiedKaraokePresentation(expected)) {
+      expectedTags.remove('karaoke');
+    }
+    if (_hasQualifiedKaraokePresentation(actual)) {
+      actualTags.remove('karaoke');
+    }
     if (expectedTags.isEmpty && actualTags.isEmpty) {
       return 0;
     }
@@ -1064,17 +1070,10 @@ class LrclibLyricsService implements LyricsService {
   }
 
   String _normalizeText(String value) {
-    var normalized = _foldForComparison(value);
+    var normalized = _foldForComparison(_stripPresentationBlocks(value));
     normalized = normalized.replaceAll(
       RegExp(r'\b(?:ft|featuring)\b', caseSensitive: false),
       'feat',
-    );
-    normalized = normalized.replaceAll(
-      RegExp(
-        r'[\(\[][^\)\]]*(?:official|oficial|video|vídeo|audio|lyrics?|letra|visuali[sz]er|videolyric|video\s*lyric)[^\)\]]*[\)\]]',
-        caseSensitive: false,
-      ),
-      ' ',
     );
     final buffer = StringBuffer();
     var needsSpace = false;
@@ -1162,7 +1161,11 @@ class LrclibLyricsService implements LyricsService {
     final cleanedArtist = _cleanArtist(lookup.artist);
     final identities = <LrclibSearchIdentity>[];
 
-    void addIdentityVariants(String title, String artist) {
+    void addIdentityVariants(
+      String title,
+      String artist, {
+      bool preferTitleOnlyAfterPrimary = false,
+    }) {
       final titleVariants = _queryTitleVariants(title);
       if (titleVariants.isEmpty) {
         return;
@@ -1180,6 +1183,11 @@ class LrclibLyricsService implements LyricsService {
           artist: safeArtists.first,
         ),
       );
+      if (preferTitleOnlyAfterPrimary && safeArtists.first.isNotEmpty) {
+        for (final titleVariant in titleVariants) {
+          identities.add(LrclibSearchIdentity(title: titleVariant, artist: ''));
+        }
+      }
       for (final titleVariant in titleVariants.skip(1)) {
         identities.add(
           LrclibSearchIdentity(title: titleVariant, artist: safeArtists.first),
@@ -1222,7 +1230,13 @@ class LrclibLyricsService implements LyricsService {
       lookup.title,
       artistHint: cleanedArtist,
     );
-    var unreliableArtist = _isLikelyChannelArtist(lookup.artist);
+    final channelLikeArtist = _isLikelyChannelArtist(lookup.artist);
+    final hasDurationBackedTitleFallback =
+        segments.length < 2 &&
+        cleanedArtist.isNotEmpty &&
+        lookup.duration != null &&
+        lookup.duration! > Duration.zero;
+    var unreliableArtist = channelLikeArtist;
     var matchingArtistIndex = -1;
     var matchingArtistScore = 0.0;
     if (cleanedArtist.isNotEmpty) {
@@ -1237,7 +1251,7 @@ class LrclibLyricsService implements LyricsService {
     // "Grupo Barak" and "BARAK" are common metadata differences; the
     // similarity floor still rejects an unrelated uploader while allowing a
     // contained lead-artist name to orient the split.
-    final hasAlignedArtist = matchingArtistScore >= 0.40;
+    final hasAlignedArtist = !channelLikeArtist && matchingArtistScore >= 0.40;
     unreliableArtist =
         unreliableArtist ||
         (cleanedArtist.isNotEmpty && segments.length >= 2 && !hasAlignedArtist);
@@ -1296,25 +1310,29 @@ class LrclibLyricsService implements LyricsService {
     // Artist - Title form is tried first, except for semantic continuations
     // such as "Love - Part II". The unsplit form is always retained.
     addAlignedSplitIdentities();
+    final hasKaraokePresentationNoise = segments.any((segment) {
+      final stripped = _withoutKaraokePresentation(segment);
+      return stripped.isNotEmpty &&
+          _normalizeText(stripped) != _normalizeText(segment);
+    });
     final preserveWholeFirst =
-        _looksLikeTitleContinuation(segments) ||
+        (!hasKaraokePresentationNoise &&
+            _looksLikeTitleContinuation(segments)) ||
         (!hasAlignedArtist &&
             cleanedArtist.isNotEmpty &&
             !_isLikelyChannelArtist(lookup.artist));
     if (!hasAlignedArtist && segments.length >= 2 && !preserveWholeFirst) {
       addConventionalSplitIdentities();
     }
-    addIdentityVariants(cleanedTitle, cleanedArtist);
-    if (segments.length < 2 &&
-        cleanedArtist.isNotEmpty &&
-        lookup.duration != null &&
-        lookup.duration! > Duration.zero) {
+    addIdentityVariants(
+      cleanedTitle,
+      cleanedArtist,
       // Uploader names are unbounded ("Fans Music", labels, repost channels),
-      // so a finite channel-name blacklist can never be complete. Reserve a
-      // title-only identity and require close duration corroboration in the
-      // scorer before it can be selected automatically.
-      addIdentityVariants(cleanedTitle, '');
-    }
+      // so reserve the duration-backed title-only variants inside the network
+      // budget instead of appending them after every artist-bound variant.
+      preferTitleOnlyAfterPrimary:
+          channelLikeArtist || hasDurationBackedTitleFallback,
+    );
 
     if (segments.length >= 2) {
       if (!hasAlignedArtist && preserveWholeFirst) {
@@ -1368,8 +1386,22 @@ class LrclibLyricsService implements LyricsService {
       }
     }
     variants.add(cleaned);
+    final karaokeCleaned = _withoutKaraokePresentation(cleaned);
+    if (_normalizeText(karaokeCleaned) != _normalizeText(cleaned)) {
+      final composed = _withoutTechnicalPresentationSuffix(karaokeCleaned);
+      if (composed.isNotEmpty) {
+        variants.add(composed);
+      }
+    }
 
-    for (final candidate in List<String>.of(variants)) {
+    var variantIndex = 0;
+    while (variantIndex < variants.length) {
+      final candidate = variants.elementAt(variantIndex++);
+      final withoutKaraokePresentation = _withoutKaraokePresentation(candidate);
+      if (withoutKaraokePresentation.isNotEmpty) {
+        variants.add(withoutKaraokePresentation);
+      }
+
       final canonicalFeaturing = candidate
           .replaceAll(
             RegExp(r'\b(?:ft|featuring)\.?\s*', caseSensitive: false),
@@ -1410,20 +1442,26 @@ class LrclibLyricsService implements LyricsService {
         variants.add(withoutBlocks);
       }
 
-      final withoutTechnicalSuffix = candidate
-          .replaceFirst(
-            RegExp(
-              r'(?:\s+(?:#\w+|\d{3,4}p|[248]k|hd|uhd))+$',
-              caseSensitive: false,
-            ),
-            '',
-          )
-          .trim();
+      final withoutTechnicalSuffix = _withoutTechnicalPresentationSuffix(
+        candidate,
+      );
       if (withoutTechnicalSuffix.isNotEmpty) {
         variants.add(withoutTechnicalSuffix);
       }
     }
     return variants.toList(growable: false);
+  }
+
+  String _withoutTechnicalPresentationSuffix(String value) {
+    return value
+        .replaceFirst(
+          RegExp(
+            r'(?:\s+(?:#\w+|\d{3,4}p|[248]k|hd|uhd))+$',
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .trim();
   }
 
   List<String> _queryArtistVariants(String value) {
@@ -1498,7 +1536,9 @@ class LrclibLyricsService implements LyricsService {
         final title = _cleanQueryText(match.group(1)!);
         final prefix = _cleanArtist(value.substring(0, match.start));
         final suffix = _cleanArtist(value.substring(match.end));
-        if (title.isEmpty || _isPresentationSegment(title)) {
+        if (title.isEmpty ||
+            _isPresentationSegment(title) ||
+            _isKaraokePresentation(title)) {
           continue;
         }
         final prefixScore = artistHint.isEmpty || prefix.isEmpty
@@ -1696,14 +1736,7 @@ class LrclibLyricsService implements LyricsService {
   }
 
   String _cleanQueryText(String value) {
-    var cleaned = _replaceDecorativeSymbolsWithSpaces(value)
-        .replaceAll(
-          RegExp(
-            r'[\(\[][^\)\]]*(?:official|oficial|video|vídeo|audio|lyrics?|letra|visuali[sz]er|videolyric|video\s*lyric)[^\)\]]*[\)\]]',
-            caseSensitive: false,
-          ),
-          ' ',
-        )
+    var cleaned = _stripPresentationBlocks(_replaceDecorativeSymbolsWithSpaces(value))
         .replaceFirst(
           RegExp(
             r'\s*(?://+|\|)\s*(?:(?:official|oficial)\s+)?(?:music\s+)?(?:video|vídeo|audio|lyrics?|letra|visuali[sz]er|videolyric|video\s*lyric)\b.*$',
@@ -1734,6 +1767,131 @@ class LrclibLyricsService implements LyricsService {
         .replaceAll(RegExp(r'^["“”«»]+'), '')
         .replaceAll(RegExp(r'["“”«»]+$'), '')
         .trim();
+  }
+
+  String _stripPresentationBlocks(String value) {
+    return _stripEnclosedBlocks(
+      value,
+      shouldRemove: (content) =>
+          content.isEmpty || _isPresentationSegment(content),
+    );
+  }
+
+  String _withoutKaraokePresentation(
+    String value, {
+    bool allowBareSeparatedKaraoke = true,
+  }) {
+    var cleaned = _stripEnclosedBlocks(
+      value,
+      shouldRemove: (content) =>
+          content.isEmpty || _isKaraokePresentation(content),
+    );
+
+    final separators = RegExp(
+      r'\s*(?:\|+|//+)\s*|\s+[-\u2013\u2014]\s+',
+    ).allMatches(cleaned).toList(growable: false);
+    for (final separator in separators.reversed) {
+      final suffix = cleaned.substring(separator.end).trim();
+      final suffixTokenCount = _normalizeText(
+        suffix,
+      ).split(' ').where((token) => token.isNotEmpty).length;
+      if (_isKaraokePresentation(suffix) &&
+          (allowBareSeparatedKaraoke || suffixTokenCount >= 2)) {
+        cleaned = cleaned.substring(0, separator.start).trim();
+        break;
+      }
+    }
+
+    final bareSuffix = RegExp(
+      r'\s+((?:(?:karaoke|version|versión|track|pista|video|lyrics?|letra|'
+      r'instrumental|with|con|sing|along|official|oficial|music|hd|uhd|4k|'
+      r'8k|guide|melody|guía)\s*)+)$',
+      caseSensitive: false,
+    ).firstMatch(cleaned);
+    if (bareSuffix != null) {
+      final suffix = bareSuffix.group(1)!.trim();
+      if (_isKaraokePresentation(suffix) &&
+          _normalizeText(suffix).split(' ').length >= 2) {
+        cleaned = cleaned.substring(0, bareSuffix.start).trim();
+      }
+    }
+
+    return cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  bool _hasQualifiedKaraokePresentation(String value) {
+    final stripped = _withoutKaraokePresentation(
+      value,
+      allowBareSeparatedKaraoke: false,
+    );
+    return stripped.isNotEmpty &&
+        _normalizeText(stripped) != _normalizeText(value);
+  }
+
+  String _stripEnclosedBlocks(
+    String value, {
+    required bool Function(String content) shouldRemove,
+  }) {
+    var cleaned = value;
+    for (var pass = 0; pass < 4; pass++) {
+      var changed = false;
+      final next = cleaned.replaceAllMapped(
+        RegExp(r'\(([^()]*)\)|\[([^\[\]]*)\]|（([^（）]*)）|【([^【】]*)】'),
+        (match) {
+          final content = [
+            for (var group = 1; group <= 4; group++) match.group(group),
+          ].whereType<String>().first.trim();
+          if (!shouldRemove(content)) {
+            return match.group(0)!;
+          }
+          changed = true;
+          return ' ';
+        },
+      );
+      cleaned = next;
+      if (!changed) {
+        break;
+      }
+    }
+    return cleaned;
+  }
+
+  bool _isKaraokePresentation(String value) {
+    final tokens = _normalizeText(
+      value,
+    ).split(' ').where((token) => token.isNotEmpty).toList(growable: false);
+    if (!tokens.contains('karaoke')) {
+      return false;
+    }
+    if (tokens.first == 'with' || tokens.first == 'con') {
+      return false;
+    }
+    const allowedTokens = {
+      'karaoke',
+      'version',
+      'track',
+      'pista',
+      'video',
+      'lyric',
+      'lyrics',
+      'letra',
+      'instrumental',
+      'with',
+      'con',
+      'sing',
+      'along',
+      'official',
+      'oficial',
+      'music',
+      'hd',
+      'uhd',
+      '4k',
+      '8k',
+      'guide',
+      'melody',
+      'guia',
+    };
+    return tokens.every(allowedTokens.contains);
   }
 
   String _truncateAtPresentationSegment(String value) {
@@ -1782,8 +1940,59 @@ class LrclibLyricsService implements LyricsService {
       'videolyric',
       'visualizer',
       'visualiser',
+      'hd',
+      'uhd',
+      '4k',
+      '8k',
+      '720p',
+      '1080p',
+      '2160p',
     };
     if (labels.contains(normalized)) {
+      return true;
+    }
+    final tokens = normalized
+        .split(' ')
+        .where((token) => token.isNotEmpty)
+        .toList(growable: false);
+    const presentationTokens = {
+      'official',
+      'oficial',
+      'music',
+      'video',
+      'audio',
+      'lyric',
+      'lyrics',
+      'letra',
+      'letras',
+      'visualizer',
+      'visualiser',
+      'videolyric',
+      'clip',
+      'hd',
+      'uhd',
+      '4k',
+      '8k',
+      'subtitulado',
+      'subtitulos',
+      'espanol',
+    };
+    const presentationKinds = {
+      'official',
+      'oficial',
+      'video',
+      'audio',
+      'lyric',
+      'lyrics',
+      'letra',
+      'letras',
+      'visualizer',
+      'visualiser',
+      'videolyric',
+      'clip',
+    };
+    if (tokens.any(presentationKinds.contains) &&
+        tokens.every(presentationTokens.contains)) {
       return true;
     }
     return labels.any(
@@ -1824,10 +2033,13 @@ class LrclibLyricsService implements LyricsService {
       return false;
     }
     final normalized = _normalizeText(value);
-    return RegExp(
+    if (RegExp(
           r'(?:^|\s)(?:topic|official|oficial|lyrics|letras|records|channel|canal|radio)$',
         ).hasMatch(normalized) ||
-        RegExp(r'vevo$', caseSensitive: false).hasMatch(value.trim());
+        RegExp(r'vevo$', caseSensitive: false).hasMatch(value.trim())) {
+      return true;
+    }
+    return normalized.split(' ').length >= 2 && normalized.endsWith(' karaoke');
   }
 
   bool _isIgnoredComparisonRune(int rune) =>

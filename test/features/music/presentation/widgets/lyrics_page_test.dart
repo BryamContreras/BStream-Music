@@ -12,6 +12,7 @@ import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   const lookupSnapshot = PlayerSnapshot(
@@ -33,6 +34,49 @@ void main() {
       LyricLine(timestamp: Duration(seconds: 4), text: 'Third line'),
     ],
   );
+  const plainDocument = LyricsDocument(
+    provider: 'LRCLIB',
+    trackName: 'Test song',
+    artistName: 'Test artist',
+    plainLyrics: 'Plain first line\n   Plain second line',
+  );
+
+  test('lyrics alignment codes preserve a safe normal default', () {
+    expect(
+      LyricsTextAlignment.fromCode('centered'),
+      LyricsTextAlignment.centered,
+    );
+    expect(
+      LyricsTextAlignment.fromCode('future-value'),
+      LyricsTextAlignment.normal,
+    );
+    expect(LyricsTextAlignment.fromCode(null), LyricsTextAlignment.normal);
+  });
+
+  test('lyrics alignment persists the last rapid selection', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settingsController = _PersistingLyricsSettingsController();
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(() => settingsController),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(settingsControllerProvider.future);
+    final notifier = container.read(settingsControllerProvider.notifier);
+
+    await Future.wait([
+      notifier.toggleLyricsTextAlignment(),
+      notifier.toggleLyricsTextAlignment(),
+    ]);
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('settings.lyricsAlignment'), 'normal');
+    expect(
+      container.read(settingsControllerProvider).value?.lyricsTextAlignment,
+      LyricsTextAlignment.normal,
+    );
+  });
 
   testWidgets('synced lyrics follow the current playback position', (
     tester,
@@ -55,6 +99,92 @@ void main() {
     expect(_activeLine('First line'), findsNothing);
   });
 
+  testWidgets('one toggle centers and restores synchronized lyrics', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final player = _FakePlayerService(lookupSnapshot);
+    final container = await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+    final toggle = find.byKey(const ValueKey('lyrics-alignment-toggle'));
+
+    expect(toggle, findsOneWidget);
+    for (final line in const ['First line', 'Second line', 'Third line']) {
+      expect(tester.widget<Text>(find.text(line)).textAlign, TextAlign.start);
+    }
+    expect(
+      find.descendant(
+        of: toggle,
+        matching: find.byIcon(Icons.format_align_left_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    for (final line in const ['First line', 'Second line', 'Third line']) {
+      expect(tester.widget<Text>(find.text(line)).textAlign, TextAlign.center);
+    }
+    final pageRect = tester.getRect(find.byType(Scaffold));
+    final activeLineRect = tester.getRect(
+      find.byKey(const ValueKey('active-lyric-line')),
+    );
+    expect(
+      activeLineRect.left - pageRect.left,
+      closeTo(pageRect.right - activeLineRect.right, 0.01),
+    );
+    for (final line in const ['First line', 'Second line', 'Third line']) {
+      expect(
+        tester.getRect(find.text(line)).center.dx,
+        closeTo(pageRect.center.dx, 0.01),
+      );
+    }
+    expect(_activeLine('First line'), findsOneWidget);
+    expect(
+      container.read(settingsControllerProvider).value?.lyricsTextAlignment,
+      LyricsTextAlignment.centered,
+    );
+    expect(
+      find.descendant(
+        of: toggle,
+        matching: find.byIcon(Icons.format_align_center_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Second line'));
+    await tester.pump();
+    expect(player.seekPositions.last, const Duration(seconds: 2));
+
+    player.emit(
+      lookupSnapshot.copyWith(
+        trackId: 'next-track',
+        sourceUrl: 'https://example.com/next-track',
+        title: 'Next song',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<Text>(find.text('First line')).textAlign,
+      TextAlign.center,
+    );
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    for (final line in const ['First line', 'Second line', 'Third line']) {
+      expect(tester.widget<Text>(find.text(line)).textAlign, TextAlign.start);
+    }
+  });
+
   testWidgets('Android lyrics use reduced horizontal content margins', (
     tester,
   ) async {
@@ -73,11 +203,17 @@ void main() {
 
     expect(padding.left, 12);
     expect(padding.right, 12);
+    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 30);
+    expect(_lyricLineFontSize(tester, 'lyric-line-1'), 27);
   });
 
   testWidgets('desktop lyrics retain their existing horizontal margins', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(960, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(
       tester,
@@ -93,6 +229,19 @@ void main() {
 
     expect(padding.left, 24);
     expect(padding.right, 24);
+    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 36);
+    expect(_lyricLineFontSize(tester, 'lyric-line-1'), 33);
+
+    tester.view.physicalSize = const Size(1280, 800);
+    await tester.pumpAndSettle();
+
+    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 39);
+    expect(_lyricLineFontSize(tester, 'lyric-line-1'), 36);
+    expect(_activeLine('First line'), findsOneWidget);
+    final activeRect = tester.getRect(
+      find.byKey(const ValueKey('active-lyric-line')),
+    );
+    expect(activeRect.center.dy, inInclusiveRange(0, 800));
   });
 
   testWidgets('header progress follows the current playback fraction', (
@@ -365,18 +514,16 @@ void main() {
   testWidgets('plain lyrics are used when synchronized lines are unavailable', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(320, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(
       tester,
       player: player,
-      lyrics: _FakeLyricsService(
-        const LyricsDocument(
-          provider: 'LRCLIB',
-          trackName: 'Test song',
-          artistName: 'Test artist',
-          plainLyrics: 'Plain first line\nPlain second line',
-        ),
-      ),
+      lyrics: _FakeLyricsService(plainDocument),
+      platform: TargetPlatform.android,
     );
 
     expect(find.byKey(const ValueKey('plain-lyrics-scroll')), findsOneWidget);
@@ -387,6 +534,64 @@ void main() {
     );
     expect(find.text('Lyrics provided by LRCLIB'), findsOneWidget);
     expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsNothing);
+    final plainText = find.byKey(const ValueKey('plain-lyrics-text'));
+    expect(tester.widget<Text>(plainText).style?.fontSize, 25);
+    expect(tester.widget<Text>(plainText).textAlign, TextAlign.start);
+    expect(
+      tester.widget<Text>(plainText).data,
+      'Plain first line\n   Plain second line',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('lyrics-alignment-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<Text>(plainText).textAlign, TextAlign.center);
+    expect(
+      tester.widget<Text>(plainText).data,
+      'Plain first line\nPlain second line',
+    );
+    final pageRect = tester.getRect(find.byType(Scaffold));
+    final plainTextRect = tester.getRect(plainText);
+    expect(plainTextRect.center.dx, closeTo(pageRect.center.dx, 0.01));
+    expect(
+      plainTextRect.left - pageRect.left,
+      closeTo(pageRect.right - plainTextRect.right, 0.01),
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.text('These lyrics do not include synchronized timing.'),
+          )
+          .textAlign,
+      isNot(TextAlign.center),
+    );
+  });
+
+  testWidgets('wide desktop plain lyrics use the available space', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(plainDocument),
+      lyricsTextAlignment: LyricsTextAlignment.centered,
+      platform: TargetPlatform.windows,
+    );
+
+    final plainText = tester.widget<Text>(
+      find.byKey(const ValueKey('plain-lyrics-text')),
+    );
+    expect(plainText.style?.fontSize, 33);
+    expect(plainText.textAlign, TextAlign.center);
+    expect(
+      find.byKey(const ValueKey('lyrics-alignment-toggle')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('connection failures show a centered offline message', (
@@ -660,6 +865,16 @@ void main() {
   });
 }
 
+double _lyricLineFontSize(WidgetTester tester, String key) {
+  final style = tester.widget<AnimatedDefaultTextStyle>(
+    find.descendant(
+      of: find.byKey(ValueKey(key)),
+      matching: find.byType(AnimatedDefaultTextStyle),
+    ),
+  );
+  return style.style.fontSize!;
+}
+
 Finder _activeLine(String text) {
   return find.descendant(
     of: find.byKey(const ValueKey('active-lyric-line')),
@@ -679,13 +894,16 @@ Future<ProviderContainer> _pumpLyricsPage(
   required _FakeLyricsService lyrics,
   ArtworkProgressColorService? artworkProgressColorService,
   AppLanguage language = AppLanguage.english,
+  LyricsTextAlignment lyricsTextAlignment = LyricsTextAlignment.normal,
   TargetPlatform? platform,
 }) async {
+  final settingsController = _FakeLyricsSettingsController(lyricsTextAlignment);
   final container = ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
       lyricsServiceProvider.overrideWithValue(lyrics),
       appStringsProvider.overrideWithValue(AppStrings(language)),
+      settingsControllerProvider.overrideWith(() => settingsController),
       if (artworkProgressColorService != null)
         artworkProgressColorServiceProvider.overrideWithValue(
           artworkProgressColorService,
@@ -722,6 +940,37 @@ class _FakeArtworkProgressColorService extends ArtworkProgressColorService {
 
   @override
   Future<Color> resolve(String? rawSource) async => color;
+}
+
+class _FakeLyricsSettingsController extends SettingsController {
+  _FakeLyricsSettingsController(this.initialLyricsTextAlignment);
+
+  final LyricsTextAlignment initialLyricsTextAlignment;
+
+  @override
+  Future<SettingsState> build() async => SettingsState(
+    downloadDirectory: '/tmp/bstream-lyrics-test',
+    language: AppLanguage.english,
+    lyricsTextAlignment: initialLyricsTextAlignment,
+  );
+
+  @override
+  Future<void> setLyricsTextAlignment(
+    LyricsTextAlignment lyricsTextAlignment,
+  ) async {
+    final current = await future;
+    state = AsyncData(
+      current.copyWith(lyricsTextAlignment: lyricsTextAlignment),
+    );
+  }
+}
+
+class _PersistingLyricsSettingsController extends SettingsController {
+  @override
+  Future<SettingsState> build() async => const SettingsState(
+    downloadDirectory: '/tmp/bstream-lyrics-test',
+    language: AppLanguage.english,
+  );
 }
 
 class _FakeLyricsService implements LyricsService {
