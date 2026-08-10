@@ -189,6 +189,33 @@ void main() {
       (decoration.border! as Border).top.color,
       AppColors.menuBorderFor(controlsContext),
     );
+    final accent = AppColors.downloadAccentFor(controlsContext);
+    final activeLineStyle = tester
+        .widget<AnimatedDefaultTextStyle>(
+          find.descendant(
+            of: find.byKey(const ValueKey('active-lyric-line')),
+            matching: find.byType(AnimatedDefaultTextStyle),
+          ),
+        )
+        .style;
+    expect(
+      activeLineStyle.color,
+      Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white),
+    );
+    expect(
+      activeLineStyle.shadows?.first.color,
+      accent.withValues(alpha: 0.04),
+    );
+    final offsetText = tester.widget<Text>(
+      find.byKey(const ValueKey('lyrics-offset-value')),
+    );
+    expect(
+      offsetText.style?.color,
+      Color.alphaBlend(
+        accent.withValues(alpha: 0.08),
+        AppColors.menuForegroundFor(controlsContext),
+      ).withValues(alpha: 0.72),
+    );
     expect(tester.takeException(), isNull);
   });
 

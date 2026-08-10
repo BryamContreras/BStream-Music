@@ -800,7 +800,7 @@ class _LyricLineTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = AppColors.downloadAccentFor(context);
     final color = active
-        ? Color.alphaBlend(accent.withValues(alpha: 0.30), Colors.white)
+        ? Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white)
         : Colors.white.withValues(alpha: passed ? 0.62 : 0.38);
     return Semantics(
       selected: active,
@@ -820,7 +820,7 @@ class _LyricLineTile extends StatelessWidget {
             shadows: active
                 ? [
                     Shadow(
-                      color: accent.withValues(alpha: 0.14),
+                      color: accent.withValues(alpha: 0.04),
                       blurRadius: 16,
                       offset: const Offset(0, 2),
                     ),
@@ -861,6 +861,10 @@ class _LyricsOffsetControls extends ConsumerWidget {
     final accent = AppColors.downloadAccentFor(context);
     final surface = AppColors.menuBackgroundFor(context);
     final border = AppColors.menuBorderFor(context);
+    final subtleTextAccent = Color.alphaBlend(
+      accent.withValues(alpha: 0.08),
+      AppColors.menuForegroundFor(context),
+    );
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final seconds = offset.inMilliseconds / 1000;
     final formatted =
@@ -940,11 +944,12 @@ class _LyricsOffsetControls extends ConsumerWidget {
                             ],
                             Text(
                               formatted,
+                              key: const ValueKey('lyrics-offset-value'),
                               maxLines: 1,
                               style: TextStyle(
                                 color: offset == Duration.zero
-                                    ? accent.withValues(alpha: 0.72)
-                                    : accent,
+                                    ? subtleTextAccent.withValues(alpha: 0.72)
+                                    : subtleTextAccent,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: 0.1,
