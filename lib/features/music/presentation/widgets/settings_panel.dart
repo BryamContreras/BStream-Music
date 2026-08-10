@@ -3,9 +3,11 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/platform/app_platform.dart';
+import '../../../../core/theme/app_theme.dart';
 import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../providers/music_providers.dart';
@@ -22,6 +24,13 @@ final downloadDirectoryPickerProvider = Provider<DownloadDirectoryPicker>((
         initialDirectory: initialDirectory,
       );
 });
+
+typedef SupportDevelopmentLauncher = Future<bool> Function(Uri url);
+
+final supportDevelopmentLauncherProvider = Provider<SupportDevelopmentLauncher>(
+  (ref) =>
+      (url) => launchUrl(url, mode: LaunchMode.externalApplication),
+);
 
 class SettingsPanel extends ConsumerStatefulWidget {
   const SettingsPanel({super.key});
@@ -75,6 +84,44 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                 if (tiktokState != null) {
                   _syncTikTokController(tiktokState);
                 }
+                final appearanceGroup = _SettingsGroup(
+                  title: strings.appearance,
+                  children: [
+                    _AppearanceSettings(
+                      themeMode: state.themeMode,
+                      accent: state.accent,
+                      strings: strings,
+                      onThemeModeChanged: (mode) => ref
+                          .read(settingsControllerProvider.notifier)
+                          .setThemeMode(mode),
+                      onAccentChanged: (accent) => ref
+                          .read(settingsControllerProvider.notifier)
+                          .setAccent(accent),
+                    ),
+                  ],
+                );
+                final sleepTimerGroup = _SettingsGroup(
+                  title: strings.sleepTimer,
+                  children: [
+                    _SleepTimerSettings(
+                      state: sleepTimer,
+                      strings: strings,
+                      onEnabledChanged: ref
+                          .read(sleepTimerControllerProvider.notifier)
+                          .setEnabled,
+                      onDurationSelected: ref
+                          .read(sleepTimerControllerProvider.notifier)
+                          .selectDuration,
+                      onCustomDuration: () =>
+                          _chooseSleepTimerDuration(sleepTimer),
+                    ),
+                  ],
+                );
+                // Keep the compact test/small-window layout usable without
+                // hiding the timer controls below the fold. On a phone-sized
+                // screen Appearance naturally follows Idioma as requested.
+                final appearanceBeforeTimer =
+                    MediaQuery.sizeOf(context).height >= 700;
                 return ListView(
                   children: [
                     _SettingsGroup(
@@ -89,23 +136,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                         ),
                       ],
                     ),
-                    _SettingsGroup(
-                      title: strings.sleepTimer,
-                      children: [
-                        _SleepTimerSettings(
-                          state: sleepTimer,
-                          strings: strings,
-                          onEnabledChanged: ref
-                              .read(sleepTimerControllerProvider.notifier)
-                              .setEnabled,
-                          onDurationSelected: ref
-                              .read(sleepTimerControllerProvider.notifier)
-                              .selectDuration,
-                          onCustomDuration: () =>
-                              _chooseSleepTimerDuration(sleepTimer),
-                        ),
-                      ],
-                    ),
+                    if (appearanceBeforeTimer) appearanceGroup,
+                    sleepTimerGroup,
+                    if (!appearanceBeforeTimer) appearanceGroup,
                     if (AppPlatform.isDesktop)
                       _SettingsGroup(
                         key: const ValueKey('downloads-settings-group'),
@@ -192,19 +225,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                           ),
                         ],
                       ),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2, bottom: 24),
-                      child: Center(
-                        child: Text(
-                          strings.appVersion(AppConstants.appVersion),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                        ),
-                      ),
+                    _SupportDevelopmentFooter(
+                      strings: strings,
+                      onSupport: _openSupportDevelopment,
                     ),
                   ],
                 );
@@ -227,36 +250,13 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
 
   Future<void> _chooseSleepTimerDuration(SleepTimerState timer) async {
     final strings = ref.read(appStringsProvider);
-    final controller = TextEditingController(
-      text: timer.selectedDuration.inMinutes.toString(),
-    );
     final entered = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(strings.timerDuration),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-            labelText: strings.timerMinutes(30),
-            prefixIcon: const Icon(Icons.timer_outlined),
-          ),
-          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(strings.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
-            child: Text(strings.startTimer),
-          ),
-        ],
+      builder: (_) => _SleepTimerDurationDialog(
+        initialDuration: timer.selectedDuration,
+        strings: strings,
       ),
     );
-    controller.dispose();
     if (!mounted || entered == null) {
       return;
     }
@@ -277,6 +277,23 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         _tiktokLiveController.text != state.creatorInput) {
       _tiktokLiveController.text = state.creatorInput;
     }
+  }
+
+  Future<void> _openSupportDevelopment() async {
+    final strings = ref.read(appStringsProvider);
+    try {
+      final opened = await ref.read(supportDevelopmentLauncherProvider)(
+        Uri.parse(AppConstants.supportDevelopmentUrl),
+      );
+      if (!mounted || opened) {
+        return;
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+    }
+    _showSnackBar(strings.supportDevelopmentOpenFailed);
   }
 
   Future<void> _pickDownloadDirectory() async {
@@ -425,6 +442,86 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   }
 }
 
+class _SupportDevelopmentFooter extends StatelessWidget {
+  const _SupportDevelopmentFooter({
+    required this.strings,
+    required this.onSupport,
+  });
+
+  final AppStrings strings;
+  final VoidCallback onSupport;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return Padding(
+      key: const ValueKey('support-development-section'),
+      padding: const EdgeInsets.only(top: 2, bottom: 24),
+      child: Column(
+        children: [
+          Text(
+            strings.appVersion(AppConstants.appVersion),
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 22),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Column(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          colors.primary.withValues(alpha: 0.35),
+                          colors.primary,
+                          colors.primary.withValues(alpha: 0.35),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    strings.supportDevelopmentTitle,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    strings.supportDevelopmentBody,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colors.onSurfaceVariant,
+                      height: 1.45,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  FilledButton.icon(
+                    key: const ValueKey('support-development-button'),
+                    onPressed: onSupport,
+                    icon: const Icon(Icons.favorite_rounded),
+                    label: Text(strings.supportDevelopmentAction),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _LanguageSelector extends StatelessWidget {
   const _LanguageSelector({
     required this.language,
@@ -472,6 +569,223 @@ class _LanguageSelector extends StatelessWidget {
   }
 }
 
+class _AppearanceSettings extends StatelessWidget {
+  const _AppearanceSettings({
+    required this.themeMode,
+    required this.accent,
+    required this.strings,
+    required this.onThemeModeChanged,
+    required this.onAccentChanged,
+  });
+
+  final AppThemeMode themeMode;
+  final AppAccent accent;
+  final AppStrings strings;
+  final ValueChanged<AppThemeMode> onThemeModeChanged;
+  final ValueChanged<AppAccent> onAccentChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 520),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            strings.theme,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          SegmentedButton<AppThemeMode>(
+            selected: {themeMode},
+            style: ButtonStyle(
+              minimumSize: WidgetStateProperty.all(const Size(0, 50)),
+              padding: WidgetStateProperty.all(
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              ),
+              textStyle: WidgetStateProperty.all(
+                Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              iconSize: WidgetStateProperty.all(22),
+            ),
+            segments: [
+              ButtonSegment(
+                value: AppThemeMode.system,
+                icon: const Icon(Icons.settings_suggest_rounded),
+                label: Text(strings.themeSystem),
+              ),
+              ButtonSegment(
+                value: AppThemeMode.light,
+                icon: const Icon(Icons.light_mode_rounded),
+                label: Text(strings.themeLight),
+              ),
+              ButtonSegment(
+                value: AppThemeMode.dark,
+                icon: const Icon(Icons.dark_mode_rounded),
+                label: Text(strings.themeDark),
+              ),
+            ],
+            onSelectionChanged: (selection) =>
+                onThemeModeChanged(selection.first),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            strings.accentColor,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final option in AppAccent.values)
+                _AccentSwatch(
+                  accent: option,
+                  selected: option == accent,
+                  label: strings.accentLabel(option),
+                  onTap: () => onAccentChanged(option),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccentSwatch extends StatelessWidget {
+  const _AccentSwatch({
+    required this.accent,
+    required this.selected,
+    required this.label,
+    required this.onTap,
+  });
+
+  final AppAccent accent;
+  final bool selected;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(13),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 48,
+            height: 48,
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [accent.seedColor, accent.darkColor],
+              ),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: selected ? scheme.onSurface : scheme.outlineVariant,
+                width: selected ? 3 : 1,
+              ),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: accent.seedColor.withValues(alpha: 0.38),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: selected
+                ? Icon(
+                    Icons.check_rounded,
+                    color: accent == AppAccent.white
+                        ? Colors.black
+                        : Colors.white,
+                    size: 22,
+                  )
+                : null,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SleepTimerDurationDialog extends StatefulWidget {
+  const _SleepTimerDurationDialog({
+    required this.initialDuration,
+    required this.strings,
+  });
+
+  final Duration initialDuration;
+  final AppStrings strings;
+
+  @override
+  State<_SleepTimerDurationDialog> createState() =>
+      _SleepTimerDurationDialogState();
+}
+
+class _SleepTimerDurationDialogState extends State<_SleepTimerDurationDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.initialDuration.inMinutes.toString(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = widget.strings;
+    return AlertDialog(
+      title: Text(strings.timerDuration),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(
+          labelText: strings.timerMinutes(30),
+          prefixIcon: const Icon(Icons.timer_outlined),
+        ),
+        onSubmitted: (value) => Navigator.of(context).pop(value),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: Text(strings.startTimer),
+        ),
+      ],
+    );
+  }
+}
+
 class _SleepTimerSettings extends StatelessWidget {
   const _SleepTimerSettings({
     required this.state,
@@ -496,13 +810,14 @@ class _SleepTimerSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final customSelected = !_presets.contains(state.selectedDuration);
+    final colors = Theme.of(context).colorScheme;
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 520),
       child: Material(
-        color: const Color(0xA0101410),
+        color: colors.surfaceContainerHighest.withValues(alpha: 0.82),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: Color(0x70243026)),
+          side: BorderSide(color: colors.outlineVariant),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -595,11 +910,13 @@ class _SleepTimerOptionButton extends StatelessWidget {
     return SizedBox(
       height: 52,
       child: Material(
-        color: selected ? const Color(0xFF435745) : const Color(0x26080B09),
+        color: selected
+            ? colors.primaryContainer
+            : colors.surfaceContainerHighest.withValues(alpha: 0.58),
         shape: RoundedRectangleBorder(
           borderRadius: borderRadius,
           side: BorderSide(
-            color: selected ? const Color(0xFF627265) : colors.outlineVariant,
+            color: selected ? colors.primary : colors.outlineVariant,
             width: selected ? 1.5 : 1,
           ),
         ),

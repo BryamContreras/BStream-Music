@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:bstream_music/features/music/domain/entities/lyrics.dart';
 import 'package:bstream_music/services/lyrics/lrclib_lyrics_service.dart';
+import 'package:bstream_music/services/lyrics/lrclib_request_pacing.dart';
 import 'package:bstream_music/services/lyrics/lrclib_transport.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,17 +19,27 @@ void main() {
   LrclibLyricsService createService({
     LrclibDelay? delay,
     LrclibClock? clock,
+    LrclibMonotonicClock? monotonicClock,
     Duration requestTimeout = const Duration(seconds: 10),
     Duration exactRequestTimeout = const Duration(milliseconds: 1500),
     Duration lookupTimeout = const Duration(seconds: 9),
     Duration cacheTtl = const Duration(minutes: 30),
     int maxCacheEntries = 64,
   }) {
+    var virtualElapsed = Duration.zero;
+    final virtualDelay = delay == null
+        ? null
+        : (Duration duration) async {
+            await delay(duration);
+            virtualElapsed += duration;
+          };
     final service = LrclibLyricsService(
       userAgent: 'BStreamMusic/1.2.1 (lyrics tests)',
       transport: transport,
-      delay: delay,
+      delay: virtualDelay,
       clock: clock,
+      monotonicClock:
+          monotonicClock ?? (delay == null ? null : () => virtualElapsed),
       requestTimeout: requestTimeout,
       exactRequestTimeout: exactRequestTimeout,
       lookupTimeout: lookupTimeout,

@@ -5,6 +5,8 @@ enum PlayerStatus { idle, loading, playing, paused, stopped, failed }
 
 enum PlaybackRepeatMode { off, all, one }
 
+const _unsetPlayerSnapshotValue = Object();
+
 class PlayerSnapshot {
   const PlayerSnapshot({
     required this.status,
@@ -19,6 +21,7 @@ class PlayerSnapshot {
     this.volume = 1,
     this.errorMessage,
     this.isRemote = false,
+    this.isExternal = false,
     this.shuffleEnabled = false,
     this.repeatMode = PlaybackRepeatMode.off,
   });
@@ -35,38 +38,57 @@ class PlayerSnapshot {
   final double volume;
   final String? errorMessage;
   final bool isRemote;
+  final bool isExternal;
   final bool shuffleEnabled;
   final PlaybackRepeatMode repeatMode;
 
   PlayerSnapshot copyWith({
     PlayerStatus? status,
-    String? title,
-    String? artist,
-    String? album,
-    String? trackId,
-    String? sourceUrl,
-    String? thumbnailUrl,
+    Object? title = _unsetPlayerSnapshotValue,
+    Object? artist = _unsetPlayerSnapshotValue,
+    Object? album = _unsetPlayerSnapshotValue,
+    Object? trackId = _unsetPlayerSnapshotValue,
+    Object? sourceUrl = _unsetPlayerSnapshotValue,
+    Object? thumbnailUrl = _unsetPlayerSnapshotValue,
     Duration? position,
-    Duration? duration,
+    Object? duration = _unsetPlayerSnapshotValue,
     double? volume,
-    String? errorMessage,
+    Object? errorMessage = _unsetPlayerSnapshotValue,
     bool? isRemote,
+    bool? isExternal,
     bool? shuffleEnabled,
     PlaybackRepeatMode? repeatMode,
   }) {
     return PlayerSnapshot(
       status: status ?? this.status,
-      title: title ?? this.title,
-      artist: artist ?? this.artist,
-      album: album ?? this.album,
-      trackId: trackId ?? this.trackId,
-      sourceUrl: sourceUrl ?? this.sourceUrl,
-      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      title: identical(title, _unsetPlayerSnapshotValue)
+          ? this.title
+          : title as String?,
+      artist: identical(artist, _unsetPlayerSnapshotValue)
+          ? this.artist
+          : artist as String?,
+      album: identical(album, _unsetPlayerSnapshotValue)
+          ? this.album
+          : album as String?,
+      trackId: identical(trackId, _unsetPlayerSnapshotValue)
+          ? this.trackId
+          : trackId as String?,
+      sourceUrl: identical(sourceUrl, _unsetPlayerSnapshotValue)
+          ? this.sourceUrl
+          : sourceUrl as String?,
+      thumbnailUrl: identical(thumbnailUrl, _unsetPlayerSnapshotValue)
+          ? this.thumbnailUrl
+          : thumbnailUrl as String?,
       position: position ?? this.position,
-      duration: duration ?? this.duration,
+      duration: identical(duration, _unsetPlayerSnapshotValue)
+          ? this.duration
+          : duration as Duration?,
       volume: volume ?? this.volume,
-      errorMessage: errorMessage ?? this.errorMessage,
+      errorMessage: identical(errorMessage, _unsetPlayerSnapshotValue)
+          ? this.errorMessage
+          : errorMessage as String?,
       isRemote: isRemote ?? this.isRemote,
+      isExternal: isExternal ?? this.isExternal,
       shuffleEnabled: shuffleEnabled ?? this.shuffleEnabled,
       repeatMode: repeatMode ?? this.repeatMode,
     );

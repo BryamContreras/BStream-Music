@@ -116,6 +116,145 @@ void main() {
     expect(databaseService.rewriteMediaRootCalls, 1);
     expect(databaseService.rewriteMediaRoot, mediaRoot.path);
   });
+
+  test('restore validates the database before touching active data', () async {
+    await File(
+      p.join(mediaRoot.path, 'audio', 'old.mp3'),
+    ).create(recursive: true);
+    await File(p.join(mediaRoot.path, 'audio', 'old.mp3')).writeAsString('old');
+    databaseService.validationError = const FormatException('corrupt backup');
+
+    final backup = await _writeRestoreArchive(
+      sandbox: sandbox,
+      databaseContents: 'corrupt-database',
+      audioContents: 'new-audio',
+    );
+
+    await expectLater(
+      BackupService(
+        databaseService,
+      ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path),
+      throwsFormatException,
+    );
+
+    expect(await databaseFile.readAsString(), 'database-v1');
+    expect(
+      await File(p.join(mediaRoot.path, 'audio', 'old.mp3')).readAsString(),
+      'old',
+    );
+    expect(databaseService.validationCalls, 1);
+    expect(databaseService.closeCalls, 0);
+    expect(databaseService.initializeCalls, 0);
+  });
+
+  test('restore rejects an incompatible manifest before validation', () async {
+    final archive = Archive()
+      ..add(
+        ArchiveFile.string(
+          'manifest.json',
+          '{"app":"Another app","schema":1,'
+              '"database":"${AppConstants.databaseName}"}',
+        ),
+      )
+      ..add(
+        ArchiveFile.bytes(
+          'database/${AppConstants.databaseName}',
+          'database-v2'.codeUnits,
+        ),
+      );
+    final backup = File(p.join(sandbox.path, 'invalid-manifest.zip'));
+    await backup.writeAsBytes(ZipEncoder().encodeBytes(archive));
+
+    await expectLater(
+      BackupService(
+        databaseService,
+      ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path),
+      throwsFormatException,
+    );
+
+    expect(await databaseFile.readAsString(), 'database-v1');
+    expect(databaseService.validationCalls, 0);
+    expect(databaseService.closeCalls, 0);
+  });
+
+  test('restore rolls back database and media when activation fails', () async {
+    await File(
+      p.join(mediaRoot.path, 'audio', 'old.mp3'),
+    ).create(recursive: true);
+    await File(p.join(mediaRoot.path, 'audio', 'old.mp3')).writeAsString('old');
+    await File(
+      p.join(mediaRoot.path, 'thumbnails', 'old.jpg'),
+    ).create(recursive: true);
+    await File(
+      p.join(mediaRoot.path, 'thumbnails', 'old.jpg'),
+    ).writeAsString('old-thumbnail');
+    for (final suffix in const ['-wal', '-shm']) {
+      await File('${databaseFile.path}$suffix').writeAsString('old$suffix');
+    }
+    databaseService.failNextInitialize = true;
+    databaseService.createSidecarsOnFailedInitialize = true;
+
+    final backup = await _writeRestoreArchive(
+      sandbox: sandbox,
+      databaseContents: 'database-v2',
+      audioContents: 'new-audio',
+    );
+
+    await expectLater(
+      BackupService(
+        databaseService,
+      ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(await databaseFile.readAsString(), 'database-v1');
+    expect(
+      await File(p.join(mediaRoot.path, 'audio', 'old.mp3')).readAsString(),
+      'old',
+    );
+    expect(
+      await File(
+        p.join(mediaRoot.path, 'thumbnails', 'old.jpg'),
+      ).readAsString(),
+      'old-thumbnail',
+    );
+    expect(
+      File(p.join(mediaRoot.path, 'audio', 'song.mp3')).existsSync(),
+      isFalse,
+    );
+    for (final suffix in const ['-wal', '-shm']) {
+      expect(
+        await File('${databaseFile.path}$suffix').readAsString(),
+        'old$suffix',
+      );
+    }
+    expect(databaseService.closeCalls, 2);
+    expect(databaseService.initializeCalls, 2);
+    expect(databaseService.rewriteMediaRootCalls, 0);
+  });
+}
+
+Future<File> _writeRestoreArchive({
+  required Directory sandbox,
+  required String databaseContents,
+  required String audioContents,
+}) async {
+  final archive = Archive()
+    ..add(
+      ArchiveFile.bytes(
+        'database/${AppConstants.databaseName}',
+        databaseContents.codeUnits,
+      ),
+    )
+    ..add(ArchiveFile.bytes('audio/song.mp3', audioContents.codeUnits));
+  final backup = File(
+    p.join(
+      sandbox.path,
+      'restore-${DateTime.now().microsecondsSinceEpoch}.zip',
+    ),
+  );
+  await backup.writeAsBytes(ZipEncoder().encodeBytes(archive));
+  return backup;
 }
 
 class _FakeDatabaseService extends LocalDatabaseService {
@@ -124,8 +263,12 @@ class _FakeDatabaseService extends LocalDatabaseService {
   final String path;
   int closeCalls = 0;
   int initializeCalls = 0;
+  int validationCalls = 0;
   int rewriteMediaRootCalls = 0;
   String? rewriteMediaRoot;
+  Object? validationError;
+  bool failNextInitialize = false;
+  bool createSidecarsOnFailedInitialize = false;
 
   @override
   Future<String> databasePath() async => path;
@@ -138,6 +281,24 @@ class _FakeDatabaseService extends LocalDatabaseService {
   @override
   Future<void> initialize() async {
     initializeCalls++;
+    if (failNextInitialize) {
+      failNextInitialize = false;
+      if (createSidecarsOnFailedInitialize) {
+        for (final suffix in const ['-wal', '-shm']) {
+          await File('$path$suffix').writeAsString('new$suffix');
+        }
+      }
+      throw StateError('activation failed');
+    }
+  }
+
+  @override
+  Future<void> validateBackupDatabase(String path) async {
+    validationCalls++;
+    final error = validationError;
+    if (error != null) {
+      throw error;
+    }
   }
 
   @override

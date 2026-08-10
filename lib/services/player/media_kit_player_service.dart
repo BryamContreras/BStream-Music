@@ -126,6 +126,7 @@ class MediaKitPlayerService implements PlayerService {
         duration: track.duration,
         volume: _snapshot.volume,
         isRemote: false,
+        isExternal: track.isExternal,
       ),
     );
     await _audioMetadataReady;
@@ -171,6 +172,7 @@ class MediaKitPlayerService implements PlayerService {
         duration: track.duration,
         volume: _snapshot.volume,
         isRemote: false,
+        isExternal: track.isExternal,
       ),
     );
     await _audioMetadataReady;

@@ -122,12 +122,7 @@ class DesktopDownloaderService implements DownloaderService {
 
   @override
   Future<List<TrackInfo>> search(String query) async {
-    final output = await _runYtDlp([
-      '--dump-json',
-      '--flat-playlist',
-      '--no-warnings',
-      'ytsearch${AppConstants.defaultSearchLimit}:$query',
-    ]);
+    final output = await _runYtDlp(buildSearchArguments(query));
 
     return const LineSplitter()
         .convert(output)
@@ -135,6 +130,16 @@ class DesktopDownloaderService implements DownloaderService {
         .map((line) => jsonDecode(line) as Map<String, dynamic>)
         .map(TrackInfoModel.fromJson)
         .toList(growable: false);
+  }
+
+  @visibleForTesting
+  List<String> buildSearchArguments(String query) {
+    return [
+      '--dump-json',
+      '--flat-playlist',
+      '--no-warnings',
+      'ytsearch${AppConstants.defaultSearchLimit}:$query',
+    ];
   }
 
   @override

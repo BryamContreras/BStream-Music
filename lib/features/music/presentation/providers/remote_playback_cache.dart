@@ -13,6 +13,8 @@ class RemotePlaybackCache {
   static const _maxAge = Duration(days: 2);
   static const _maxFiles = 24;
   static const _maxBytes = 256 * 1024 * 1024;
+  static const _downloadIdleTimeout = Duration(seconds: 20);
+  static const _downloadTotalTimeout = Duration(minutes: 30);
   static const _userAgent =
       'BStreamMusic/${AppConstants.appVersion} (Android) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
   static const _audioExtensions = {
@@ -50,6 +52,16 @@ class RemotePlaybackCache {
   void cancelSearchWarmups() {
     for (final job in _inFlight.values) {
       if (job.cancelOnSearchChange) {
+        job.cancel();
+      }
+    }
+  }
+
+  /// Cancels the single-track playback warmup when the user changes the
+  /// current queue item. Search warmups use a separate cancellation policy.
+  void cancelPlaybackWarmups() {
+    for (final job in _inFlight.values) {
+      if (!job.cancelOnSearchChange) {
         job.cancel();
       }
     }
@@ -170,12 +182,23 @@ class RemotePlaybackCache {
       );
       final finalFile = File(p.join(directory.path, '$baseName$extension'));
       await _deleteExistingVariants(directory, baseName);
-      await response.pipe(tempFile.openWrite());
+      final written = await writeBoundedByteStreamToFile(
+        response,
+        tempFile,
+        maximumBytes: _maxBytes,
+        declaredLength: response.contentLength < 0
+            ? null
+            : response.contentLength,
+        idleTimeout: _downloadIdleTimeout,
+        totalTimeout: _downloadTotalTimeout,
+      );
       if (job.cancelled) {
         await _deleteIfExists(tempFile);
         return null;
       }
-      if (!await tempFile.exists() || await tempFile.length() == 0) {
+      if (written == 0 ||
+          !await tempFile.exists() ||
+          await tempFile.length() == 0) {
         await _deleteIfExists(tempFile);
         return null;
       }

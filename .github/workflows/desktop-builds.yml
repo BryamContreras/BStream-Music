@@ -14,9 +14,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-installers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   FLUTTER_VERSION: "3.44.0"
   YT_DLP_VERSION: "2026.07.04"
+  YT_DLP_ANDROID_SHA256: "495be29ff4d9d4e9be7eabdfef225221e5d5282e77f2f505abc6dca80349f3fd"
   YT_DLP_WINDOWS_SHA256: "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8"
   YT_DLP_LINUX_X64_SHA256: "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae"
   YT_DLP_MACOS_SHA256: "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
@@ -27,6 +32,34 @@ env:
   DENO_MACOS_ARM64_SHA256: "6d17647fdbf9c587a581dba205054c4ccf732dae0a196cc1e9b44c07589db412"
 
 jobs:
+  quality:
+    name: Format, analyze, and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze source
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test
+
   metadata:
     name: Read app metadata
     runs-on: ubuntu-latest
@@ -51,7 +84,7 @@ jobs:
 
   android:
     name: Android release APKs
-    needs: metadata
+    needs: [metadata, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -126,9 +159,30 @@ jobs:
           test ! -e "$output/app-armeabi-v7a-release.apk"
 
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          aapt2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
           test -x "$apksigner"
+          test -x "$aapt2"
           "$apksigner" verify --verbose "$arm64"
           "$apksigner" verify --verbose "$x64"
+
+          verify_ytdlp() {
+            apk="$1"
+            verify_dir="$(mktemp -d)"
+            resource_path="$(
+              "$aapt2" dump resources "$apk" |
+                sed -n '/raw\/ytdlp/{n;s/.*(file) \([^ ]*\).*/\1/p;q;}'
+            )"
+            test -n "$resource_path"
+            unzip -q -j "$apk" "$resource_path" -d "$verify_dir"
+            extracted="$verify_dir/$(basename "$resource_path")"
+            actual_hash="$(sha256sum "$extracted" | cut -d ' ' -f 1)"
+            test "$actual_hash" = "$YT_DLP_ANDROID_SHA256"
+            actual_version="$(python3 "$extracted" --version)"
+            test "$actual_version" = "$YT_DLP_VERSION"
+            rm -r "$verify_dir"
+          }
+          verify_ytdlp "$arm64"
+          verify_ytdlp "$x64"
 
           mkdir -p dist
           cp "$arm64" "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk"
@@ -154,7 +208,7 @@ jobs:
 
   windows:
     name: Windows x64 installer
-    needs: metadata
+    needs: [metadata, quality]
     runs-on: windows-2022
     timeout-minutes: 60
     env:
@@ -375,7 +429,7 @@ jobs:
 
   linux:
     name: Linux x64 installers
-    needs: metadata
+    needs: [metadata, quality]
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     env:
@@ -507,7 +561,7 @@ jobs:
 
   macos:
     name: macOS ${{ matrix.arch }} installer
-    needs: metadata
+    needs: [metadata, quality]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:

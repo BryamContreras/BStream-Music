@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -8,20 +7,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
+import '../../../../core/platform/app_platform.dart';
+import '../../../../platform_channels/android_external_audio_channel.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
 import '../providers/music_providers.dart';
-import '../widgets/download_progress_panel.dart';
 import '../widgets/bstream_logo.dart';
 import '../widgets/favorite_star_badge.dart';
 import '../widgets/library_panel.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/playback_gradient_background.dart';
 import '../widgets/player_panel.dart';
-import '../widgets/search_input.dart';
 import '../widgets/settings_panel.dart';
-import '../widgets/track_result_tile.dart';
+import '../widgets/source_image.dart';
+import 'search_view.dart';
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -39,6 +41,10 @@ class _HomePageState extends ConsumerState<HomePage> {
       LibraryNavigationController();
   int _rootBackCount = 0;
   DateTime? _lastRootBackAt;
+  StreamSubscription<ExternalAudioRequest>? _externalAudioSubscription;
+  Future<void> _externalAudioWork = Future<void>.value();
+  final Set<String> _startedExternalAudioRequests = <String>{};
+  final Set<String> _reportedIncompleteExternalFolders = <String>{};
 
   @override
   void initState() {
@@ -54,6 +60,59 @@ class _HomePageState extends ConsumerState<HomePage> {
         unawaited(_reconcileLocalLibrary());
       }
     });
+    if (AppPlatform.isAndroid) {
+      _externalAudioSubscription = const AndroidExternalAudioChannel().requests
+          .listen(
+            _queueExternalAudioRequest,
+            onError: (Object error, StackTrace stackTrace) {
+              debugPrint('External audio channel failed: $error');
+              debugPrintStack(stackTrace: stackTrace);
+            },
+          );
+    }
+  }
+
+  void _queueExternalAudioRequest(ExternalAudioRequest request) {
+    _externalAudioWork = _externalAudioWork
+        .then((_) => _handleExternalAudioRequest(request))
+        .catchError((Object error, StackTrace stackTrace) {
+          debugPrint('Could not open external audio: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        });
+  }
+
+  Future<void> _handleExternalAudioRequest(ExternalAudioRequest request) async {
+    if (!mounted) {
+      return;
+    }
+    final strings = ref.read(appStringsProvider);
+    final tracks = request.toLocalTracks(unknownArtist: strings.unknownArtist);
+    final player = ref.read(playerControllerProvider.notifier);
+
+    if (_startedExternalAudioRequests.add(request.requestId)) {
+      _openPlayer();
+      await ref.read(playerControllerProvider.future);
+      await player.playLocal(
+        tracks[request.selectedIndex],
+        queue: tracks,
+        useNativeQueue: true,
+        queueSourceId: request.queueSourceId,
+      );
+    } else if (player.isLocalQueueSourceActive(request.queueSourceId)) {
+      await player.syncLocalQueueSource(request.queueSourceId, tracks);
+    }
+
+    if (!mounted ||
+        request.permissionPending ||
+        request.folderQueueComplete ||
+        !_reportedIncompleteExternalFolders.add(request.requestId)) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(strings.externalAudioFolderUnavailable)),
+      );
   }
 
   Future<void> _reconcileLocalLibrary() async {
@@ -167,6 +226,7 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   void dispose() {
+    unawaited(_externalAudioSubscription?.cancel());
     _libraryNavigationController.dispose();
     super.dispose();
   }
@@ -259,15 +319,21 @@ class _HomePageState extends ConsumerState<HomePage> {
       child: Scaffold(
         body: SafeArea(
           child: DecoratedBox(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFF050705),
-                  Color(0xFF030403),
-                  Color(0xFF070907),
-                ],
+                colors: Theme.of(context).brightness == Brightness.dark
+                    ? const [
+                        Color(0xFF050705),
+                        Color(0xFF030403),
+                        Color(0xFF070907),
+                      ]
+                    : const [
+                        Color(0xFFF5F8F6),
+                        Color(0xFFFFFFFF),
+                        Color(0xFFEFF7F1),
+                      ],
               ),
             ),
             child: Stack(
@@ -305,8 +371,6 @@ class _HomePageState extends ConsumerState<HomePage> {
                                 onOpenPlaylist: _openPlaylistFromHome,
                               ),
                             ),
-                            if (!_isPlayerSelected)
-                              const DownloadProgressPanel(),
                             if (!_isPlayerSelected)
                               MiniPlayer(onOpenPlayer: _openPlayer),
                           ],
@@ -358,10 +422,13 @@ class _BottomNavigation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return DecoratedBox(
-      decoration: const BoxDecoration(
-        color: Color(0xFF040504),
-        border: Border(top: BorderSide(color: Color(0xFF121812))),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          top: BorderSide(color: theme.colorScheme.outlineVariant),
+        ),
       ),
       child: SafeArea(
         top: false,
@@ -457,6 +524,7 @@ class _SideNavigation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return ClipRect(
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
@@ -464,10 +532,12 @@ class _SideNavigation extends StatelessWidget {
           duration: const Duration(milliseconds: 360),
           curve: Curves.easeOutCubic,
           decoration: BoxDecoration(
-            color: dimPlaybackBackground
-                ? const Color(0xA0040504)
-                : const Color(0x66040504),
-            border: const Border(right: BorderSide(color: Color(0xFF121812))),
+            color: theme.colorScheme.surface.withValues(
+              alpha: dimPlaybackBackground ? 0.72 : 0.9,
+            ),
+            border: Border(
+              right: BorderSide(color: theme.colorScheme.outlineVariant),
+            ),
           ),
           child: SafeArea(
             right: false,
@@ -539,10 +609,14 @@ class _SideNavigationItem extends StatelessWidget {
           height: 62,
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
-            color: selected ? const Color(0xA0080A08) : Colors.transparent,
+            color: selected
+                ? AppColors.cardSurfaceFor(context)
+                : Colors.transparent,
             borderRadius: itemBorderRadius,
             border: Border.all(
-              color: selected ? const Color(0x70243026) : Colors.transparent,
+              color: selected
+                  ? AppColors.cardBorderFor(context)
+                  : Colors.transparent,
             ),
           ),
           child: Row(
@@ -673,7 +747,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('search-view'),
             selected: widget.selectedIndex == widget.searchIndex,
-            child: _SearchView(onOpenPlayer: widget.onOpenPlayer),
+            child: SearchView(onOpenPlayer: widget.onOpenPlayer),
           ),
         if (widget.selectedIndex == widget.playerIndex)
           _PersistentViewSlot(
@@ -907,9 +981,19 @@ class _HomePlaylistSection extends StatelessWidget {
               separatorBuilder: (_, _) => const SizedBox(width: 10),
               itemBuilder: (context, index) {
                 final playlist = visible[index];
+                final playlistTracks = playlist.trackIds
+                    .map((id) => tracksById[id])
+                    .whereType<LocalTrack>()
+                    .toList(growable: false);
                 return _HomePlaylistCard(
                   playlist: playlist,
                   strings: strings,
+                  subtitle: strings.songCountWithDuration(
+                    playlistTracks.length,
+                    sumKnownDurations(
+                      playlistTracks.map((track) => track.duration),
+                    ),
+                  ),
                   thumbnailSources: _homePlaylistThumbnailSources(
                     playlist,
                     tracksById,
@@ -945,7 +1029,7 @@ class _HomeSection extends StatelessWidget {
             child: Text(
               title,
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: const Color(0xFFF1FFF5),
+                color: Theme.of(context).colorScheme.onSurface,
                 fontWeight: FontWeight.w900,
               ),
             ),
@@ -971,7 +1055,7 @@ class _RecentTrackCard extends ConsumerWidget {
     return SizedBox(
       width: 132,
       child: Material(
-        color: const Color(0xA0080A08),
+        color: AppColors.cardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: InkWell(
@@ -1023,12 +1107,14 @@ class _HomePlaylistCard extends StatelessWidget {
   const _HomePlaylistCard({
     required this.playlist,
     required this.thumbnailSources,
+    required this.subtitle,
     required this.strings,
     required this.onTap,
   });
 
   final Playlist playlist;
   final List<String> thumbnailSources;
+  final String subtitle;
   final AppStrings strings;
   final VoidCallback onTap;
 
@@ -1037,7 +1123,7 @@ class _HomePlaylistCard extends StatelessWidget {
     return SizedBox(
       width: 144,
       child: Material(
-        color: const Color(0xA0080A08),
+        color: AppColors.cardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: InkWell(
@@ -1067,7 +1153,7 @@ class _HomePlaylistCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  strings.songCount(playlist.trackIds.length),
+                  subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -1094,7 +1180,7 @@ class _HomeArtwork extends StatelessWidget {
       borderRadius: BorderRadius.circular(8),
       child: AspectRatio(
         aspectRatio: 1,
-        child: _HomeImage(
+        child: ProportionalArtwork(
           source: source,
           fallback: const _HomeImageFallback(icon: Icons.music_note_rounded),
         ),
@@ -1128,7 +1214,7 @@ class _HomePlaylistCover extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _HomeImage(
+            SourceImage(
               source: sources.first,
               fallback: const _HomeImageFallback(
                 icon: Icons.queue_music_rounded,
@@ -1150,7 +1236,7 @@ class _HomePlaylistCover extends StatelessWidget {
                             padding: const EdgeInsets.all(1),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(3),
-                              child: _HomeImage(
+                              child: SourceImage(
                                 source: source,
                                 fallback: const _HomeImageFallback(
                                   icon: Icons.music_note_rounded,
@@ -1171,39 +1257,6 @@ class _HomePlaylistCover extends StatelessWidget {
   }
 }
 
-class _HomeImage extends StatelessWidget {
-  const _HomeImage({required this.source, required this.fallback});
-
-  final String? source;
-  final Widget fallback;
-
-  @override
-  Widget build(BuildContext context) {
-    final normalized = source?.trim();
-    if (normalized == null || normalized.isEmpty) {
-      return fallback;
-    }
-
-    if (isNetworkImageSource(normalized)) {
-      return Image.network(
-        normalized,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => fallback,
-      );
-    }
-
-    final file = imageFileFromSource(normalized);
-    if (file == null || !file.existsSync()) {
-      return fallback;
-    }
-    return Image.file(
-      File(file.path),
-      fit: BoxFit.cover,
-      errorBuilder: (_, _, _) => fallback,
-    );
-  }
-}
-
 class _HomeImageFallback extends StatelessWidget {
   const _HomeImageFallback({required this.icon, this.iconSize = 28});
 
@@ -1213,8 +1266,12 @@ class _HomeImageFallback extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: const Color(0xFF202520),
-      child: Icon(icon, size: iconSize),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Icon(
+        icon,
+        size: iconSize,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     );
   }
 }
@@ -1287,140 +1344,4 @@ String? _homeTrackThumbnailSource(LocalTrack track) {
     return null;
   }
   return file.path;
-}
-
-class _SearchView extends ConsumerWidget {
-  const _SearchView({required this.onOpenPlayer});
-
-  final VoidCallback onOpenPlayer;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final results = ref.watch(searchControllerProvider);
-    final strings = ref.watch(appStringsProvider);
-
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(0, 20, 0, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Text(
-                    strings.searchTitle,
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: SearchInput(
-                    hintText: strings.searchHint,
-                    tooltip: strings.search,
-                    onSubmitted: (query) => ref
-                        .read(searchControllerProvider.notifier)
-                        .submit(query),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        results.when(
-          data: (tracks) {
-            if (tracks.isEmpty) {
-              return SliverFillRemaining(
-                hasScrollBody: false,
-                child: _EmptyState(
-                  icon: Icons.album_rounded,
-                  title: strings.searchEmptyTitle,
-                  subtitle: strings.searchEmptySubtitle,
-                ),
-              );
-            }
-            return SliverPadding(
-              padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
-              sliver: SliverList.separated(
-                itemCount: tracks.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 6),
-                itemBuilder: (context, index) {
-                  return TrackResultTile(
-                    track: tracks[index],
-                    onOpenPlayer: onOpenPlayer,
-                  );
-                },
-              ),
-            );
-          },
-          loading: () => const SliverFillRemaining(
-            hasScrollBody: false,
-            child: Center(child: CircularProgressIndicator()),
-          ),
-          error: (error, _) => SliverFillRemaining(
-            hasScrollBody: false,
-            child: _EmptyState(
-              icon: Icons.error_outline_rounded,
-              title: strings.searchErrorTitle,
-              subtitle: error.toString(),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 46,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(height: 14),
-              Text(
-                title,
-                textAlign: TextAlign.center,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                subtitle,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }

@@ -122,7 +122,11 @@ void main() {
     final colorAnimation = tester.widget<TweenAnimationBuilder<Color?>>(
       find.byKey(const ValueKey('lyrics-header-progress-color-animation')),
     );
-    expect(colorAnimation.tween.end, expectedColor);
+    final progressContext = tester.element(progress);
+    expect(
+      colorAnimation.tween.end,
+      AppColors.downloadAccentFor(progressContext),
+    );
 
     player.emit(
       lookupSnapshot.copyWith(position: const Duration(seconds: 135)),
@@ -179,8 +183,12 @@ void main() {
     expect(tester.getSize(controls).width, lessThan(320));
     final decoration =
         tester.widget<Container>(controls).decoration! as BoxDecoration;
-    expect(decoration.color, AppColors.menuBackground);
-    expect((decoration.border! as Border).top.color, AppColors.menuBorder);
+    final controlsContext = tester.element(controls);
+    expect(decoration.color, AppColors.menuBackgroundFor(controlsContext));
+    expect(
+      (decoration.border! as Border).top.color,
+      AppColors.menuBorderFor(controlsContext),
+    );
     expect(tester.takeException(), isNull);
   });
 

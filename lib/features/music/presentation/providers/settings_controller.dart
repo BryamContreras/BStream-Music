@@ -4,24 +4,32 @@ class SettingsState {
   const SettingsState({
     required this.downloadDirectory,
     required this.language,
+    this.themeMode = AppThemeMode.system,
+    this.accent = AppAccent.white,
     this.ytDlpPath,
     this.hasYtDlp,
   });
 
   final String downloadDirectory;
   final AppLanguage language;
+  final AppThemeMode themeMode;
+  final AppAccent accent;
   final String? ytDlpPath;
   final bool? hasYtDlp;
 
   SettingsState copyWith({
     String? downloadDirectory,
     AppLanguage? language,
+    AppThemeMode? themeMode,
+    AppAccent? accent,
     String? ytDlpPath,
     bool? hasYtDlp,
   }) {
     return SettingsState(
       downloadDirectory: downloadDirectory ?? this.downloadDirectory,
       language: language ?? this.language,
+      themeMode: themeMode ?? this.themeMode,
+      accent: accent ?? this.accent,
       ytDlpPath: ytDlpPath ?? this.ytDlpPath,
       hasYtDlp: hasYtDlp ?? this.hasYtDlp,
     );
@@ -31,6 +39,8 @@ class SettingsState {
 class SettingsController extends AsyncNotifier<SettingsState> {
   static const _downloadDirectoryKey = 'settings.downloadDirectory';
   static const _languageKey = 'settings.language';
+  static const _themeModeKey = 'settings.themeMode';
+  static const _accentKey = 'settings.accent';
   static const _mediaRootDirectoryName = 'BStream-Music';
 
   @override
@@ -38,6 +48,8 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final prefs = await SharedPreferences.getInstance();
     final defaultDirectory = await _defaultDownloadDirectory();
     final language = AppLanguageLabel.fromCode(prefs.getString(_languageKey));
+    final themeMode = AppThemeMode.fromCode(prefs.getString(_themeModeKey));
+    final accent = AppAccent.fromCode(prefs.getString(_accentKey));
     final storedDirectory = prefs.getString(_downloadDirectoryKey);
     var downloadDirectory = _migrateLegacyDownloadDirectory(
       prefs.getString(_downloadDirectoryKey) ?? defaultDirectory,
@@ -66,6 +78,8 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       return SettingsState(
         downloadDirectory: downloadDirectory,
         language: language,
+        themeMode: themeMode,
+        accent: accent,
         ytDlpPath: await downloader.getYtDlpPath(),
         hasYtDlp: await downloader.hasYtDlp(),
       );
@@ -74,6 +88,8 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     return SettingsState(
       downloadDirectory: downloadDirectory,
       language: language,
+      themeMode: themeMode,
+      accent: accent,
     );
   }
 
@@ -99,6 +115,20 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await prefs.setString(_languageKey, language.code);
     final current = await future;
     state = AsyncData(current.copyWith(language: language));
+  }
+
+  Future<void> setThemeMode(AppThemeMode themeMode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_themeModeKey, themeMode.code);
+    final current = await future;
+    state = AsyncData(current.copyWith(themeMode: themeMode));
+  }
+
+  Future<void> setAccent(AppAccent accent) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_accentKey, accent.code);
+    final current = await future;
+    state = AsyncData(current.copyWith(accent: accent));
   }
 
   Future<File> createBackupFile() async {

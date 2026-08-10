@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
+import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../services/player/player_service.dart';
@@ -12,6 +14,7 @@ import '../../domain/entities/playlist.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'now_playing_equalizer.dart';
+import 'source_image.dart';
 import 'track_play_button.dart';
 
 enum _LibraryRouteType { root, downloads, live, playlist }
@@ -181,7 +184,10 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
           _LibraryRouteType.downloads => tracks.when(
             data: (items) => _TrackListView(
               title: strings.downloadedSongs,
-              subtitle: strings.songCount(items.length),
+              subtitle: strings.songCountWithDuration(
+                items.length,
+                sumKnownDurations(items.map((track) => track.duration)),
+              ),
               tracks: _filteredTracks(items),
               queueTracks: items,
               filterController: _filterController,
@@ -243,7 +249,12 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                     title: playlist.isFavorites
                         ? strings.favorites
                         : playlist.name,
-                    subtitle: strings.songCount(playlistTracks.length),
+                    subtitle: strings.songCountWithDuration(
+                      playlistTracks.length,
+                      sumKnownDurations(
+                        playlistTracks.map((track) => track.duration),
+                      ),
+                    ),
                     tracks: _filteredTracks(playlistTracks),
                     queueTracks: playlistTracks,
                     filterController: _filterController,
@@ -438,7 +449,10 @@ class _LibraryRootView extends StatelessWidget {
               child: _LibraryEntry(
                 icon: Icons.library_music_rounded,
                 title: strings.downloadedSongs,
-                subtitle: strings.songCount(items.length),
+                subtitle: strings.songCountWithDuration(
+                  items.length,
+                  sumKnownDurations(items.map((track) => track.duration)),
+                ),
                 onTap: onOpenDownloads,
               ),
             ),
@@ -603,10 +617,10 @@ class _LiveQueueTile extends ConsumerWidget {
       borderRadius: BorderRadius.circular(8),
       side: isCurrent
           ? BorderSide(color: Theme.of(context).colorScheme.primary)
-          : const BorderSide(color: Color(0x70243026)),
+          : BorderSide(color: AppColors.cardBorderFor(context)),
     );
     return Material(
-      color: const Color(0xA0080A08),
+      color: AppColors.cardSurfaceFor(context),
       clipBehavior: Clip.antiAlias,
       shape: shape,
       child: ListTile(
@@ -877,6 +891,8 @@ class _DetailHeader extends StatelessWidget {
         _NeutralLibraryIconButton(
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,
           icon: Icons.arrow_back_rounded,
+          iconSize: 28,
+          buttonSize: 42,
           onPressed: onBack,
         ),
         const SizedBox(width: 10),
@@ -914,26 +930,40 @@ class _NeutralLibraryIconButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.iconSize,
+    this.buttonSize,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback onPressed;
+  final double? iconSize;
+  final double? buttonSize;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return IconButton(
       tooltip: tooltip,
-      icon: Icon(icon),
+      icon: Icon(icon, size: iconSize),
       style: IconButton.styleFrom(
         foregroundColor: colors.onSurface,
-        backgroundColor: const Color(0xFF282D2A),
+        backgroundColor: colors.surfaceContainerHighest.withValues(alpha: 0.84),
         hoverColor: colors.onSurface.withValues(alpha: 0.1),
         focusColor: colors.onSurface.withValues(alpha: 0.12),
         highlightColor: colors.onSurface.withValues(alpha: 0.14),
-        shape: const CircleBorder(side: BorderSide(color: Color(0xFF3B423D))),
+        shape: CircleBorder(
+          side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.8)),
+        ),
+        fixedSize: buttonSize == null ? null : Size.square(buttonSize!),
+        tapTargetSize: buttonSize == null
+            ? null
+            : MaterialTapTargetSize.shrinkWrap,
       ),
+      constraints: buttonSize == null
+          ? null
+          : BoxConstraints.tightFor(width: buttonSize, height: buttonSize),
+      padding: buttonSize == null ? null : EdgeInsets.zero,
       onPressed: onPressed,
     );
   }
@@ -1177,7 +1207,7 @@ class _SectionTitle extends StatelessWidget {
       text,
       style: Theme.of(context).textTheme.titleLarge?.copyWith(
         fontWeight: FontWeight.w900,
-        color: const Color(0xFFF1FFF5),
+        color: Theme.of(context).colorScheme.onSurface,
       ),
     );
   }
@@ -1218,6 +1248,18 @@ class _PlaylistList extends StatelessWidget {
                   playlist,
                   tracksById,
                 ),
+                subtitle: strings.songCountWithDuration(
+                  playlist.trackIds
+                      .map((id) => tracksById[id])
+                      .whereType<LocalTrack>()
+                      .length,
+                  sumKnownDurations(
+                    playlist.trackIds
+                        .map((id) => tracksById[id])
+                        .whereType<LocalTrack>()
+                        .map((track) => track.duration),
+                  ),
+                ),
                 strings: strings,
                 onTap: () => onOpenPlaylist(playlist.id),
               ),
@@ -1232,12 +1274,14 @@ class _PlaylistRow extends StatelessWidget {
   const _PlaylistRow({
     required this.playlist,
     required this.thumbnailSources,
+    required this.subtitle,
     required this.strings,
     required this.onTap,
   });
 
   final Playlist playlist;
   final List<String> thumbnailSources;
+  final String subtitle;
   final AppStrings strings;
   final VoidCallback onTap;
 
@@ -1261,7 +1305,7 @@ class _PlaylistRow extends StatelessWidget {
               ],
             ),
       title: playlist.isFavorites ? strings.favorites : playlist.name,
-      subtitle: strings.songCount(playlist.trackIds.length),
+      subtitle: subtitle,
       trailing: const Icon(Icons.chevron_right_rounded),
       onTap: onTap,
     );
@@ -1330,10 +1374,14 @@ class _CreatePlaylistRow extends StatelessWidget {
                 width: 58,
                 height: 58,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2C2F34),
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.add_rounded, size: 34),
+                child: Icon(
+                  Icons.add_rounded,
+                  size: 34,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1411,7 +1459,10 @@ class _PlaylistCover extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _PlaylistCoverImage(source: sources.first),
+            SourceImage(
+              source: sources.first,
+              fallback: const _PlaylistCoverFallback(),
+            ),
             if (underlay.isNotEmpty)
               Positioned(
                 left: 0,
@@ -1433,7 +1484,10 @@ class _PlaylistCover extends StatelessWidget {
                             padding: const EdgeInsets.all(1),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(1.5),
-                              child: _PlaylistCoverImage(source: source),
+                              child: SourceImage(
+                                source: source,
+                                fallback: const _PlaylistCoverFallback(),
+                              ),
                             ),
                           ),
                         ),
@@ -1448,63 +1502,63 @@ class _PlaylistCover extends StatelessWidget {
   }
 }
 
-class _PlaylistCoverImage extends StatelessWidget {
-  const _PlaylistCoverImage({required this.source});
-
-  final String source;
-
-  @override
-  Widget build(BuildContext context) {
-    if (isNetworkImageSource(source)) {
-      return Image.network(
-        source,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => const _PlaylistCoverFallback(),
-      );
-    }
-
-    final file = imageFileFromSource(source);
-    if (file == null || !file.existsSync()) {
-      return const _PlaylistCoverFallback();
-    }
-
-    return Image.file(
-      file,
-      fit: BoxFit.cover,
-      errorBuilder: (_, _, _) => const _PlaylistCoverFallback(),
-    );
-  }
-}
-
 class _PlaylistCoverFallback extends StatelessWidget {
   const _PlaylistCoverFallback();
 
   @override
   Widget build(BuildContext context) {
-    return const ColoredBox(
-      color: Color(0xFF202520),
-      child: Icon(Icons.queue_music_rounded, size: 20),
+    final colors = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: colors.surfaceContainerHighest,
+      child: Icon(
+        Icons.queue_music_rounded,
+        size: 20,
+        color: colors.onSurfaceVariant,
+      ),
     );
   }
 }
 
-class _FolderShell extends StatelessWidget {
+class _FolderShell extends StatefulWidget {
   const _FolderShell({required this.child});
 
   final Widget child;
 
   @override
+  State<_FolderShell> createState() => _FolderShellState();
+}
+
+class _FolderShellState extends State<_FolderShell> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xA0080A08),
-      elevation: 0,
-      shadowColor: const Color(0x14000000),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Color(0x70243026)),
+    final colors = Theme.of(context).colorScheme;
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(8),
+      side: BorderSide(
+        color: _hovered ? colors.primary : AppColors.cardBorderFor(context),
       ),
-      child: child,
+    );
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        decoration: ShapeDecoration(
+          color: AppColors.cardSurfaceFor(context),
+          shape: shape,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          elevation: 0,
+          shadowColor: const Color(0x14000000),
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          child: widget.child,
+        ),
+      ),
     );
   }
 }
@@ -1516,23 +1570,27 @@ class _FolderIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = Theme.of(context).extension<AppAccentTheme>();
+    final gradientColors = accent == null
+        ? const [Color(0xFF18C75A), Color(0xFF0B8F43), Color(0xFF076B35)]
+        : [accent.seed, accent.dark, accent.dark.withValues(alpha: 0.78)];
     return Container(
       width: 58,
       height: 58,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF18C75A), Color(0xFF0B8F43), Color(0xFF076B35)],
+          colors: gradientColors,
         ),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Icon(icon, color: const Color(0xFF031008)),
+      child: Icon(icon, color: Theme.of(context).colorScheme.onPrimary),
     );
   }
 }
 
-class _LocalTrackTile extends ConsumerWidget {
+class _LocalTrackTile extends ConsumerStatefulWidget {
   const _LocalTrackTile({
     required this.track,
     required this.mode,
@@ -1548,7 +1606,20 @@ class _LocalTrackTile extends ConsumerWidget {
   final String? playlistId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_LocalTrackTile> createState() => _LocalTrackTileState();
+}
+
+class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
+  bool _hovered = false;
+
+  LocalTrack get track => widget.track;
+  _TrackListMode get mode => widget.mode;
+  VoidCallback get onOpenPlayer => widget.onOpenPlayer;
+  List<LocalTrack> get queueTracks => widget.queueTracks;
+  String? get playlistId => widget.playlistId;
+
+  @override
+  Widget build(BuildContext context) {
     final strings = ref.watch(appStringsProvider);
     final isFavorite = ref.watch(
       favoriteTrackIdsProvider.select((ids) => ids.contains(track.id)),
@@ -1569,193 +1640,203 @@ class _LocalTrackTile extends ConsumerWidget {
     final menuButtonSize = AppPlatform.isAndroid ? 42.0 : 52.0;
     final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
     final borderRadius = BorderRadius.circular(8);
-    final baseColor = const Color(0xA0080A08);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 240),
-      curve: Curves.easeOutCubic,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: isCurrent
-            ? Color.alphaBlend(
-                colors.onSurface.withValues(alpha: 0.075),
-                baseColor,
-              )
-            : baseColor,
-        borderRadius: borderRadius,
-        border: Border.all(
+    final baseColor = AppColors.cardSurfaceFor(context);
+    final borderColor = isCurrent
+        ? colors.primary
+        : _hovered
+        ? colors.primary
+        : AppColors.cardBorderFor(context);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
           color: isCurrent
-              ? colors.onSurfaceVariant.withValues(alpha: 0.46)
-              : const Color(0x70243026),
-          width: 1,
+              ? Color.alphaBlend(
+                  colors.onSurface.withValues(alpha: 0.075),
+                  baseColor,
+                )
+              : baseColor,
+          borderRadius: borderRadius,
+          border: Border.all(color: borderColor, width: _hovered ? 1.4 : 1),
         ),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: ListTile(
-          dense: false,
-          minTileHeight: 70,
-          minVerticalPadding: 7,
-          contentPadding: const EdgeInsets.only(left: 12, right: 4),
-          horizontalTitleGap: 10,
-          shape: RoundedRectangleBorder(borderRadius: borderRadius),
-          tileColor: Colors.transparent,
-          leading: Stack(
-            children: [
-              _LocalArtwork(source: track.thumbnailPath ?? track.thumbnailUrl),
-              if (isFavorite)
-                const Positioned(
-                  top: 1,
-                  right: 1,
-                  child: FavoriteStarBadge(iconSize: 15),
+        child: Material(
+          color: Colors.transparent,
+          child: ListTile(
+            dense: false,
+            minTileHeight: 70,
+            minVerticalPadding: 7,
+            contentPadding: const EdgeInsets.only(left: 12, right: 4),
+            horizontalTitleGap: 10,
+            shape: RoundedRectangleBorder(borderRadius: borderRadius),
+            tileColor: Colors.transparent,
+            leading: Stack(
+              children: [
+                _LocalArtwork(
+                  source: track.thumbnailPath ?? track.thumbnailUrl,
                 ),
-              if (isCurrent)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: NowPlayingEqualizer(
-                      key: ValueKey('now-playing-${track.id}'),
-                      isPlaying: isPlaying,
+                if (isFavorite)
+                  const Positioned(
+                    top: 1,
+                    right: 1,
+                    child: FavoriteStarBadge(iconSize: 15),
+                  ),
+                if (isCurrent)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: NowPlayingEqualizer(
+                        key: ValueKey('now-playing-${track.id}'),
+                        isPlaying: isPlaying,
+                      ),
                     ),
                   ),
-                ),
-            ],
-          ),
-          title: Text(
-            track.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
+              ],
             ),
-          ),
-          subtitle: Text(
-            '${track.artist}  -  ${formatDuration(track.duration)}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
-          ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TrackPlayButton(
-                tooltip: isPlaying ? strings.pause : strings.play,
-                isPlaying: isPlaying,
-                onPressed: () => _togglePlayback(ref),
+            title: Text(
+              track.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
               ),
-              SizedBox(
-                width: menuButtonSize,
-                height: menuButtonSize,
-                child: PopupMenuButton<_TrackMenuAction>(
-                  tooltip: strings.moreOptions,
-                  padding: EdgeInsets.zero,
-                  splashRadius: menuButtonSize / 2,
-                  iconSize: menuIconSize,
-                  child: Center(
-                    child: Icon(Icons.more_vert_rounded, size: menuIconSize),
-                  ),
-                  onSelected: (action) => _handleAction(context, ref, action),
-                  itemBuilder: (context) => switch (mode) {
-                    _TrackListMode.downloads => [
-                      PopupMenuItem(
-                        value: _TrackMenuAction.renameTrack,
-                        child: Row(
-                          children: [
-                            const Icon(Icons.drive_file_rename_outline_rounded),
-                            const SizedBox(width: 12),
-                            Text(strings.rename),
-                          ],
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _TrackMenuAction.addToPlaylist,
-                        child: Row(
-                          children: [
-                            const Icon(Icons.playlist_add_rounded),
-                            const SizedBox(width: 12),
-                            Text(strings.addToPlaylist),
-                          ],
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _TrackMenuAction.toggleFavorite,
-                        child: Row(
-                          children: [
-                            Icon(
-                              isFavorite
-                                  ? Icons.star_rounded
-                                  : Icons.star_border_rounded,
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              isFavorite
-                                  ? strings.removeFromFavorites
-                                  : strings.addToFavorites,
-                            ),
-                          ],
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _TrackMenuAction.deleteTrack,
-                        child: Row(
-                          children: [
-                            const Icon(Icons.delete_outline_rounded),
-                            const SizedBox(width: 12),
-                            Text(strings.deleteSong),
-                          ],
-                        ),
-                      ),
-                    ],
-                    _TrackListMode.playlist => [
-                      PopupMenuItem(
-                        value: _TrackMenuAction.renameTrack,
-                        child: Row(
-                          children: [
-                            const Icon(Icons.drive_file_rename_outline_rounded),
-                            const SizedBox(width: 12),
-                            Text(strings.rename),
-                          ],
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _TrackMenuAction.toggleFavorite,
-                        child: Row(
-                          children: [
-                            Icon(
-                              isFavorite
-                                  ? Icons.star_rounded
-                                  : Icons.star_border_rounded,
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              isFavorite
-                                  ? strings.removeFromFavorites
-                                  : strings.addToFavorites,
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (playlistId != Playlist.favoritesId)
+            ),
+            subtitle: Text(
+              '${track.artist}  -  ${formatDuration(track.duration)}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TrackPlayButton(
+                  tooltip: isPlaying ? strings.pause : strings.play,
+                  isPlaying: isPlaying,
+                  onPressed: () => _togglePlayback(ref),
+                ),
+                SizedBox(
+                  width: menuButtonSize,
+                  height: menuButtonSize,
+                  child: PopupMenuButton<_TrackMenuAction>(
+                    tooltip: strings.moreOptions,
+                    padding: EdgeInsets.zero,
+                    splashRadius: menuButtonSize / 2,
+                    iconSize: menuIconSize,
+                    child: Center(
+                      child: Icon(Icons.more_vert_rounded, size: menuIconSize),
+                    ),
+                    onSelected: (action) => _handleAction(context, ref, action),
+                    itemBuilder: (context) => switch (mode) {
+                      _TrackListMode.downloads => [
                         PopupMenuItem(
-                          value: _TrackMenuAction.removeFromPlaylist,
+                          value: _TrackMenuAction.renameTrack,
                           child: Row(
                             children: [
-                              const Icon(Icons.playlist_remove_rounded),
+                              const Icon(
+                                Icons.drive_file_rename_outline_rounded,
+                              ),
                               const SizedBox(width: 12),
-                              Text(strings.removeFromPlaylist),
+                              Text(strings.rename),
                             ],
                           ),
                         ),
-                    ],
-                  },
+                        PopupMenuItem(
+                          value: _TrackMenuAction.addToPlaylist,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.playlist_add_rounded),
+                              const SizedBox(width: 12),
+                              Text(strings.addToPlaylist),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: _TrackMenuAction.toggleFavorite,
+                          child: Row(
+                            children: [
+                              Icon(
+                                isFavorite
+                                    ? Icons.star_rounded
+                                    : Icons.star_border_rounded,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                isFavorite
+                                    ? strings.removeFromFavorites
+                                    : strings.addToFavorites,
+                              ),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: _TrackMenuAction.deleteTrack,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.delete_outline_rounded),
+                              const SizedBox(width: 12),
+                              Text(strings.deleteSong),
+                            ],
+                          ),
+                        ),
+                      ],
+                      _TrackListMode.playlist => [
+                        PopupMenuItem(
+                          value: _TrackMenuAction.renameTrack,
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.drive_file_rename_outline_rounded,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(strings.rename),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: _TrackMenuAction.toggleFavorite,
+                          child: Row(
+                            children: [
+                              Icon(
+                                isFavorite
+                                    ? Icons.star_rounded
+                                    : Icons.star_border_rounded,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                isFavorite
+                                    ? strings.removeFromFavorites
+                                    : strings.addToFavorites,
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (playlistId != Playlist.favoritesId)
+                          PopupMenuItem(
+                            value: _TrackMenuAction.removeFromPlaylist,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.playlist_remove_rounded),
+                                const SizedBox(width: 12),
+                                Text(strings.removeFromPlaylist),
+                              ],
+                            ),
+                          ),
+                      ],
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
+            onTap: () => _openOrPlay(ref),
           ),
-          onTap: () => _openOrPlay(ref),
         ),
       ),
     );
@@ -2000,38 +2081,18 @@ class _LocalArtwork extends StatelessWidget {
         width: 56,
         height: 56,
         child: DecoratedBox(
-          decoration: const BoxDecoration(color: Color(0xFF202520)),
-          child: _image(),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          ),
+          child: ProportionalArtwork(
+            source: source,
+            fallback: Icon(
+              Icons.audiotrack_rounded,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
         ),
       ),
-    );
-  }
-
-  Widget _image() {
-    final normalized = source?.trim();
-    if (normalized == null || normalized.isEmpty) {
-      return const Icon(Icons.audiotrack_rounded);
-    }
-
-    if (isNetworkImageSource(normalized)) {
-      return Image.network(
-        normalized,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => const Icon(Icons.audiotrack_rounded),
-      );
-    }
-
-    final file = imageFileFromSource(normalized);
-    if (file == null) {
-      return const Icon(Icons.audiotrack_rounded);
-    }
-    if (!file.existsSync()) {
-      return const Icon(Icons.audiotrack_rounded);
-    }
-    return Image.file(
-      file,
-      fit: BoxFit.cover,
-      errorBuilder: (_, _, _) => const Icon(Icons.audiotrack_rounded),
     );
   }
 }

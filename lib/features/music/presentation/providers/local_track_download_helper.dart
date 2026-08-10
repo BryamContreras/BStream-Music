@@ -23,6 +23,10 @@ class LocalTrackDownloadResult {
 class LocalTrackDownloadHelper {
   const LocalTrackDownloadHelper(this._ref);
 
+  static const _maxThumbnailBytes = 10 * 1024 * 1024;
+  static const _thumbnailIdleTimeout = Duration(seconds: 10);
+  static const _thumbnailTotalTimeout = Duration(seconds: 30);
+
   final Ref _ref;
 
   Future<LocalTrackDownloadResult> resolveForLibrary(
@@ -270,9 +274,14 @@ class LocalTrackDownloadHelper {
       return null;
     }
 
-    final bytes = await response.fold<List<int>>(
-      <int>[],
-      (previous, chunk) => previous..addAll(chunk),
+    final bytes = await collectBoundedByteStream(
+      response,
+      maximumBytes: _maxThumbnailBytes,
+      declaredLength: response.contentLength < 0
+          ? null
+          : response.contentLength,
+      idleTimeout: _thumbnailIdleTimeout,
+      totalTimeout: _thumbnailTotalTimeout,
     );
     final extension = _thumbnailExtension(
       uri,
@@ -316,11 +325,12 @@ class LocalTrackDownloadHelper {
   Iterable<Uri> _thumbnailCandidates(TrackInfo track) sync* {
     final seen = <String>{};
     final direct = track.thumbnailUrl?.trim();
-    final directUri = direct == null ? null : Uri.tryParse(direct);
-    if (directUri != null &&
-        directUri.hasScheme &&
-        seen.add(directUri.toString())) {
-      yield directUri;
+    final canonical = canonicalYouTubeThumbnailSource(direct);
+    for (final source in [canonical, direct]) {
+      final uri = source == null ? null : Uri.tryParse(source);
+      if (uri != null && uri.hasScheme && seen.add(uri.toString())) {
+        yield uri;
+      }
     }
 
     final videoId = _youtubeVideoId(track);

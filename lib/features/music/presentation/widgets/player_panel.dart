@@ -13,13 +13,13 @@ import '../../../../core/utils/image_source.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
-import '../providers/artwork_progress_color_provider.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'lyrics_page.dart';
 import 'now_playing_equalizer.dart';
 import 'playback_gradient_background.dart';
 import 'playlist_picker_dialog.dart';
+import 'source_image.dart';
 
 class PlayerPanel extends ConsumerStatefulWidget {
   const PlayerPanel({this.onOpenSearch, this.drawBackground = true, super.key});
@@ -52,6 +52,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           volume: snapshot.volume,
           errorMessage: snapshot.errorMessage,
           isRemote: snapshot.isRemote,
+          isExternal: snapshot.isExternal,
           shuffleEnabled: snapshot.shuffleEnabled,
           repeatMode: snapshot.repeatMode,
           hasError: player.hasError || snapshot.status == PlayerStatus.failed,
@@ -85,6 +86,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       volume: presentation.volume,
       errorMessage: presentation.errorMessage,
       isRemote: presentation.isRemote,
+      isExternal: presentation.isExternal,
       shuffleEnabled: presentation.shuffleEnabled,
       repeatMode: presentation.repeatMode,
     );
@@ -115,19 +117,14 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                 children: [
                   if (widget.drawBackground) ...[
                     _BlurredPlayerBackground(url: snapshot.thumbnailUrl),
-                    const Positioned.fill(
+                    Positioned.fill(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
-                            colors: [
-                              Color(0x70101A14),
-                              Color(0x80080D0A),
-                              Color(0x8C070B08),
-                              Color(0x98080C09),
-                            ],
-                            stops: [0, 0.38, 0.72, 1],
+                            colors: playerPlaybackOverlayColors(context),
+                            stops: const [0, 0.38, 0.72, 1],
                           ),
                         ),
                       ),
@@ -358,7 +355,7 @@ class _BlurredPlayerBackground extends StatelessWidget {
           imageFilter: ImageFilter.blur(sigmaX: 44, sigmaY: 44),
           child: Transform.scale(
             scale: 1.28,
-            child: _SourceImage(
+            child: SourceImage(
               source: source,
               fit: BoxFit.cover,
               fallback: const _FallbackBackground(),
@@ -421,7 +418,7 @@ class _PlayerHeader extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w900,
-                    color: const Color(0xFFF4FFF5),
+                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -438,13 +435,15 @@ class _PlayerHeader extends StatelessWidget {
             ),
           ),
           _HeaderIconSlot(
-            child: _PlayerMenu(
-              snapshot: snapshot,
-              isFavorite: isFavorite,
-              savedTrackId: savedTrackId,
-              onOpenSearch: onOpenSearch,
-              strings: strings,
-            ),
+            child: snapshot.isExternal
+                ? const SizedBox.shrink()
+                : _PlayerMenu(
+                    snapshot: snapshot,
+                    isFavorite: isFavorite,
+                    savedTrackId: savedTrackId,
+                    onOpenSearch: onOpenSearch,
+                    strings: strings,
+                  ),
           ),
         ],
       ),
@@ -489,13 +488,11 @@ class _PlaybackQueuePanel extends ConsumerWidget {
         filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: standaloneRail
-                ? const Color(0xA0040504)
-                : const Color(0xB0090C0A),
+            color: colors.surface.withValues(alpha: 0.64),
             borderRadius: standaloneRail ? null : BorderRadius.circular(6),
             border: standaloneRail
-                ? const Border(left: BorderSide(color: Color(0xFF121812)))
-                : Border.all(color: colors.onSurface.withValues(alpha: 0.14)),
+                ? Border(left: BorderSide(color: colors.outlineVariant))
+                : Border.all(color: colors.outlineVariant),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -546,28 +543,44 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                           ),
                         ),
                       )
-                    : ListView.separated(
+                    : ReorderableListView.builder(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         itemCount: queue.entries.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 2),
                         itemBuilder: (context, index) {
                           final entry = queue.entries[index];
                           final isCurrent = index == queue.currentIndex;
-                          return _PlaybackQueueTile(
-                            entry: entry,
-                            isCurrent: isCurrent,
-                            isPlaying: isCurrent && isPlaying,
-                            onTap: isCurrent
-                                ? null
-                                : () {
-                                    unawaited(
-                                      ref
-                                          .read(
-                                            playerControllerProvider.notifier,
-                                          )
-                                          .playQueueIndex(index),
-                                    );
-                                  },
+                          return Padding(
+                            key: ValueKey('playback-queue-$index-${entry.id}'),
+                            padding: EdgeInsets.only(
+                              bottom: index == queue.entries.length - 1 ? 0 : 2,
+                            ),
+                            child: ReorderableDelayedDragStartListener(
+                              index: index,
+                              child: _PlaybackQueueTile(
+                                entry: entry,
+                                isCurrent: isCurrent,
+                                isPlaying: isCurrent && isPlaying,
+                                onTap: isCurrent
+                                    ? null
+                                    : () {
+                                        unawaited(
+                                          ref
+                                              .read(
+                                                playerControllerProvider
+                                                    .notifier,
+                                              )
+                                              .playQueueIndex(index),
+                                        );
+                                      },
+                              ),
+                            ),
+                          );
+                        },
+                        onReorderItem: (oldIndex, newIndex) {
+                          unawaited(
+                            ref
+                                .read(playerControllerProvider.notifier)
+                                .reorderQueue(oldIndex, newIndex),
                           );
                         },
                       ),
@@ -621,8 +634,8 @@ class _PlaybackQueueTile extends StatelessWidget {
                           color: const Color(0xFF202520),
                           child: entry.thumbnailUrl == null
                               ? const Icon(Icons.music_note_rounded, size: 22)
-                              : _SourceImage(
-                                  source: entry.thumbnailUrl!,
+                              : SourceImage(
+                                  source: entry.thumbnailUrl,
                                   fit: BoxFit.cover,
                                   fallback: const Icon(
                                     Icons.music_note_rounded,
@@ -711,7 +724,7 @@ class _MobilePlaybackQueuePage extends ConsumerWidget {
   }
 }
 
-class _LargeArtwork extends StatelessWidget {
+class _LargeArtwork extends StatefulWidget {
   const _LargeArtwork({
     required this.url,
     required this.maxExtent,
@@ -723,103 +736,129 @@ class _LargeArtwork extends StatelessWidget {
   final bool isFavorite;
 
   @override
+  State<_LargeArtwork> createState() => _LargeArtworkState();
+}
+
+class _LargeArtworkState extends State<_LargeArtwork> {
+  String? _lastSource;
+  int _transitionId = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastSource = _normalizedSource(widget.url);
+  }
+
+  @override
+  void didUpdateWidget(covariant _LargeArtwork oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextSource = _normalizedSource(widget.url);
+    if (_lastSource != nextSource) {
+      _lastSource = nextSource;
+      _transitionId += 1;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
       key: const ValueKey('player-large-artwork'),
-      constraints: BoxConstraints(maxWidth: maxExtent, maxHeight: maxExtent),
+      constraints: BoxConstraints(
+        maxWidth: widget.maxExtent,
+        maxHeight: widget.maxExtent,
+      ),
       child: AspectRatio(
         aspectRatio: 1,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0xAA000000),
-                blurRadius: 42,
-                spreadRadius: 6,
-                offset: Offset(0, 18),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                DecoratedBox(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFF35E987), Color(0xFF176235)],
-                    ),
-                  ),
-                  child: url == null
-                      ? Icon(
-                          Icons.music_note_rounded,
-                          size: 108,
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onPrimaryContainer,
-                        )
-                      : _SourceImage(
-                          source: url!,
-                          fit: BoxFit.cover,
-                          fallback: Icon(
-                            Icons.music_note_rounded,
-                            size: 108,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onPrimaryContainer,
-                          ),
-                        ),
-                ),
-                if (isFavorite)
-                  const Positioned(
-                    top: 6,
-                    right: 6,
-                    child: FavoriteStarBadge(iconSize: 26),
-                  ),
-              ],
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          child: SizedBox.expand(
+            key: ValueKey(_transitionId),
+            child: _PlayerArtworkSurface(
+              url: _normalizedSource(widget.url),
+              isFavorite: widget.isFavorite,
             ),
           ),
         ),
       ),
     );
   }
+
+  String? _normalizedSource(String? source) {
+    final normalized = source?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return canonicalYouTubeThumbnailSource(normalized);
+  }
 }
 
-class _SourceImage extends StatelessWidget {
-  const _SourceImage({
-    required this.source,
-    required this.fit,
-    required this.fallback,
-  });
+class _PlayerArtworkSurface extends StatelessWidget {
+  const _PlayerArtworkSurface({required this.url, required this.isFavorite});
 
-  final String source;
-  final BoxFit fit;
-  final Widget fallback;
+  final String? url;
+  final bool isFavorite;
 
   @override
   Widget build(BuildContext context) {
-    final normalized = source.trim();
-    if (isNetworkImageSource(normalized)) {
-      return Image.network(
-        normalized,
-        fit: fit,
-        errorBuilder: (_, _, _) => fallback,
-      );
-    }
-
-    final file = imageFileFromSource(normalized);
-    if (file == null) {
-      return fallback;
-    }
-    if (!file.existsSync()) {
-      return fallback;
-    }
-
-    return Image.file(file, fit: fit, errorBuilder: (_, _, _) => fallback);
+    final colors = Theme.of(context).colorScheme;
+    final isDark = colors.brightness == Brightness.dark;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.67 : 0.2),
+            blurRadius: 42,
+            spreadRadius: 6,
+            offset: const Offset(0, 18),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: AppColors.downloadGradientFor(context),
+                ),
+              ),
+              child: url == null
+                  ? Icon(
+                      Icons.music_note_rounded,
+                      size: 108,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    )
+                  : ColoredBox(
+                      color: colors.surfaceContainerHighest,
+                      child: ProportionalArtwork(
+                        source: url,
+                        fallback: Icon(
+                          Icons.music_note_rounded,
+                          size: 108,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+            ),
+            if (isFavorite)
+              const Positioned(
+                top: 6,
+                right: 6,
+                child: FavoriteStarBadge(iconSize: 26),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -828,12 +867,15 @@ class _FallbackBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF111611), Color(0xFF070907), Color(0xFF030403)],
+          colors: isDark
+              ? const [Color(0xFF111611), Color(0xFF070907), Color(0xFF030403)]
+              : const [Color(0xFFE5F2E9), Color(0xFFF5F8F6), Colors.white],
         ),
       ),
     );
@@ -866,6 +908,7 @@ class _PlayerControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isPlaying = snapshot.status == PlayerStatus.playing;
+    final colors = Theme.of(context).colorScheme;
 
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
@@ -884,7 +927,7 @@ class _PlayerControls extends ConsumerWidget {
                 compactness,
               ),
               fontWeight: FontWeight.w900,
-              color: const Color(0xFFF8FFF9),
+              color: colors.onSurface,
             ),
           ),
           SizedBox(height: lerpDouble(6, 4, compactness)),
@@ -899,7 +942,7 @@ class _PlayerControls extends ConsumerWidget {
                 compactness,
               ),
               fontWeight: FontWeight.w800,
-              color: const Color(0xFFE2EFE5),
+              color: colors.onSurfaceVariant,
             ),
           ),
           SizedBox(height: lerpDouble(compact ? 22 : 36, 14, compactness)),
@@ -954,7 +997,8 @@ class _PlaybackButtons extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final activeColor = Theme.of(context).colorScheme.primary;
-    final inactiveColor = const Color(0xFFC9D4CC);
+    final colors = Theme.of(context).colorScheme;
+    final inactiveColor = colors.onSurfaceVariant;
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth.isFinite
@@ -1026,7 +1070,7 @@ class _PlaybackButtons extends ConsumerWidget {
           size: secondaryControlSize,
           tooltip: strings.lyrics,
           iconSize: secondaryControlIconSize,
-          color: inactiveColor,
+          color: colors.onSurface,
           icon: Icons.lyrics_rounded,
           onPressed: hasTrack ? onOpenLyrics : null,
         );
@@ -1071,7 +1115,7 @@ class _PlaybackButtons extends ConsumerWidget {
           size: secondaryControlSize,
           tooltip: strings.volume,
           iconSize: secondaryControlIconSize,
-          color: const Color(0xFFE4EEE7),
+          color: colors.onSurface,
         );
 
         return Center(
@@ -1088,7 +1132,7 @@ class _PlaybackButtons extends ConsumerWidget {
                   size: largerSideButtonSize,
                   tooltip: strings.previous,
                   iconSize: largerSideIconSize,
-                  color: const Color(0xFFF5FFF7),
+                  color: colors.onSurface,
                   icon: Icons.skip_previous_rounded,
                   onPressed: hasTrack
                       ? () => ref
@@ -1104,12 +1148,20 @@ class _PlaybackButtons extends ConsumerWidget {
                     key: const ValueKey('player-primary-control'),
                     tooltip: isPlaying ? strings.pause : strings.play,
                     style: IconButton.styleFrom(
-                      backgroundColor: AppColors.playbackPrimaryBackground,
-                      foregroundColor: AppColors.playbackPrimaryForeground,
+                      backgroundColor: AppColors.playbackPrimaryBackgroundFor(
+                        context,
+                      ),
+                      foregroundColor: AppColors.playbackPrimaryForegroundFor(
+                        context,
+                      ),
                       disabledBackgroundColor:
-                          AppColors.playbackPrimaryDisabledBackground,
+                          AppColors.playbackPrimaryDisabledBackgroundFor(
+                            context,
+                          ),
                       disabledForegroundColor:
-                          AppColors.playbackPrimaryDisabledForeground,
+                          AppColors.playbackPrimaryDisabledForegroundFor(
+                            context,
+                          ),
                     ),
                     padding: EdgeInsets.zero,
                     constraints: BoxConstraints.tight(
@@ -1133,7 +1185,7 @@ class _PlaybackButtons extends ConsumerWidget {
                   size: largerSideButtonSize,
                   tooltip: strings.next,
                   iconSize: largerSideIconSize,
-                  color: const Color(0xFFF5FFF7),
+                  color: colors.onSurface,
                   icon: Icons.skip_next_rounded,
                   onPressed: hasTrack
                       ? () => ref
@@ -1239,6 +1291,10 @@ class _VolumePopover extends ConsumerWidget {
         ref.watch(playerControllerProvider).value ??
         const PlayerSnapshot(status: PlayerStatus.idle);
     final volume = snapshot.volume.clamp(0.0, 1.0).toDouble();
+    final menuBackground = AppColors.menuBackgroundFor(context);
+    final menuForeground = AppColors.menuForegroundFor(context);
+    final menuBorder = AppColors.menuBorderFor(context);
+    final menuInactiveSlider = AppColors.menuInactiveSliderFor(context);
 
     return Material(
       color: Colors.transparent,
@@ -1247,9 +1303,9 @@ class _VolumePopover extends ConsumerWidget {
         width: math.min(282.0, MediaQuery.sizeOf(context).width - 24),
         padding: const EdgeInsets.fromLTRB(12, 8, 6, 10),
         decoration: BoxDecoration(
-          color: AppColors.menuBackground,
+          color: menuBackground,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.menuBorder),
+          border: Border.all(color: menuBorder),
           boxShadow: const [
             BoxShadow(
               color: Color(0xB3000000),
@@ -1267,7 +1323,7 @@ class _VolumePopover extends ConsumerWidget {
                   child: Text(
                     strings.volume,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: AppColors.menuForeground,
+                      color: menuForeground,
                       fontSize: 15,
                       fontWeight: FontWeight.w800,
                     ),
@@ -1297,20 +1353,16 @@ class _VolumePopover extends ConsumerWidget {
               height: 30,
               child: Row(
                 children: [
-                  Icon(
-                    _volumeIcon(volume),
-                    color: AppColors.menuForeground,
-                    size: 20,
-                  ),
+                  Icon(_volumeIcon(volume), color: menuForeground, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         trackHeight: 3,
-                        activeTrackColor: AppColors.menuForeground,
-                        inactiveTrackColor: AppColors.neutralSliderInactive,
-                        thumbColor: AppColors.menuForeground,
-                        overlayColor: const Color(0x24FFFFFF),
+                        activeTrackColor: menuForeground,
+                        inactiveTrackColor: menuInactiveSlider,
+                        thumbColor: menuForeground,
+                        overlayColor: menuForeground.withValues(alpha: 0.14),
                         thumbShape: const RoundSliderThumbShape(
                           enabledThumbRadius: 8,
                         ),
@@ -1333,8 +1385,8 @@ class _VolumePopover extends ConsumerWidget {
                     child: Text(
                       '${(volume * 100).round()}%',
                       textAlign: TextAlign.end,
-                      style: const TextStyle(
-                        color: AppColors.menuForeground,
+                      style: TextStyle(
+                        color: menuForeground,
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
                       ),
@@ -1683,15 +1735,13 @@ class _Timeline extends ConsumerWidget {
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
           isPlaying: snapshot?.status == PlayerStatus.playing,
-          thumbnailUrl: snapshot?.thumbnailUrl,
         );
       }),
     );
     final position = timeline.position;
     final duration = timeline.duration;
-    final progressColor =
-        ref.watch(artworkProgressColorProvider(timeline.thumbnailUrl)).value ??
-        ArtworkProgressColor.fallback;
+    final progressColor = AppColors.downloadAccentFor(context);
+    final colors = Theme.of(context).colorScheme;
     return Column(
       children: [
         Row(
@@ -1699,16 +1749,16 @@ class _Timeline extends ConsumerWidget {
           children: [
             Text(
               formatDuration(position),
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: Color(0xFFF5FFF7),
+                color: colors.onSurface,
               ),
             ),
             Text(
               formatDuration(duration),
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: Color(0xFFF5FFF7),
+                color: colors.onSurface,
               ),
             ),
           ],
@@ -1866,7 +1916,8 @@ class _WavySeekBarState extends State<_WavySeekBar>
                     fraction: fraction,
                     phase: _wavePhase,
                     enabled: totalMs > 0,
-                    waveColor: color ?? ArtworkProgressColor.fallback,
+                    waveColor: color ?? AppColors.downloadAccentFor(context),
+                    isDark: Theme.of(context).brightness == Brightness.dark,
                   ),
                 ),
               ),
@@ -1884,6 +1935,7 @@ class _WavySeekBarPainter extends CustomPainter {
     required this.phase,
     required this.enabled,
     required this.waveColor,
+    required this.isDark,
   }) : super(repaint: phase);
 
   static const _trackInset = 10.0;
@@ -1894,6 +1946,7 @@ class _WavySeekBarPainter extends CustomPainter {
   final Animation<double> phase;
   final bool enabled;
   final Color waveColor;
+  final bool isDark;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1903,7 +1956,9 @@ class _WavySeekBarPainter extends CustomPainter {
     final trackWidth = math.max(0.0, trackEnd - trackStart);
     final activeEnd = trackStart + (trackWidth * fraction.clamp(0.0, 1.0));
     final inactivePaint = Paint()
-      ..color = enabled ? const Color(0x66E7ECE8) : const Color(0x526B756E)
+      ..color = enabled
+          ? (isDark ? const Color(0x66E7ECE8) : const Color(0x665E6A62))
+          : (isDark ? const Color(0x526B756E) : const Color(0x523B463F))
       ..strokeWidth = _trackHalfHeight * 2
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
@@ -2091,21 +2146,25 @@ class _WavySeekBarPainter extends CustomPainter {
     canvas.drawCircle(
       thumbCenter,
       12.5,
-      Paint()..color = const Color(0x26000000),
+      Paint()..color = Colors.black.withValues(alpha: isDark ? 0.15 : 0.1),
     );
     canvas.drawCircle(
       thumbCenter,
       10.5,
       Paint()
         ..color = enabled
-            ? Color.lerp(waveColor, Colors.white, 0.18)!.withAlpha(236)
-            : const Color(0xFF747D76),
+            ? Color.lerp(
+                waveColor,
+                isDark ? Colors.white : Colors.black,
+                0.18,
+              )!.withAlpha(236)
+            : (isDark ? const Color(0xFF747D76) : const Color(0xFF9AA59D)),
     );
     canvas.drawCircle(
       thumbCenter,
       10.5,
       Paint()
-        ..color = const Color(0x704A544C)
+        ..color = isDark ? const Color(0x704A544C) : const Color(0x705B665E)
         ..strokeWidth = 1
         ..style = PaintingStyle.stroke,
     );
@@ -2115,6 +2174,7 @@ class _WavySeekBarPainter extends CustomPainter {
   bool shouldRepaint(covariant _WavySeekBarPainter oldDelegate) {
     return fraction != oldDelegate.fraction ||
         enabled != oldDelegate.enabled ||
-        waveColor != oldDelegate.waveColor;
+        waveColor != oldDelegate.waveColor ||
+        isDark != oldDelegate.isDark;
   }
 }

@@ -6,12 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/duration_formatter.dart';
-import '../../../../core/utils/image_source.dart';
 import '../../../../services/player/player_service.dart';
-import '../providers/artwork_progress_color_provider.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'playback_progress_line.dart';
+import 'source_image.dart';
 
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({this.onOpenPlayer, super.key});
@@ -45,6 +44,8 @@ class MiniPlayer extends ConsumerWidget {
     final horizontalPadding = compactAndroid ? 14.0 : 20.0;
     final artworkSize = compactAndroid ? 44.0 : 48.0;
     final playButtonSize = compactAndroid ? 48.0 : 54.0;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Material(
       color: Colors.transparent,
@@ -54,17 +55,23 @@ class MiniPlayer extends ConsumerWidget {
             Positioned.fill(
               child: _MiniBlurBackground(url: presentation.thumbnailUrl),
             ),
-            const Positioned.fill(
+            Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.centerLeft,
                     end: Alignment.centerRight,
-                    colors: [
-                      Color(0xDA0A100C),
-                      Color(0x99112816),
-                      Color(0xE407100A),
-                    ],
+                    colors: isDark
+                        ? const [
+                            Color(0xDA0A100C),
+                            Color(0x99112816),
+                            Color(0xE407100A),
+                          ]
+                        : const [
+                            Color(0xEAF5F8F6),
+                            Color(0xDDEAF3ED),
+                            Color(0xEEF5F8F6),
+                          ],
                   ),
                 ),
               ),
@@ -93,14 +100,16 @@ class MiniPlayer extends ConsumerWidget {
                               presentation.title ?? strings.noPlayback,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w800,
-                                shadows: [
-                                  Shadow(
-                                    color: Color(0xAA000000),
-                                    blurRadius: 8,
-                                  ),
-                                ],
+                                shadows: isDark
+                                    ? const [
+                                        Shadow(
+                                          color: Color(0xAA000000),
+                                          blurRadius: 8,
+                                        ),
+                                      ]
+                                    : null,
                               ),
                             ),
                             const SizedBox(height: 3),
@@ -109,15 +118,15 @@ class MiniPlayer extends ConsumerWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                                shadows: const [
-                                  Shadow(
-                                    color: Color(0x99000000),
-                                    blurRadius: 7,
-                                  ),
-                                ],
+                                color: theme.colorScheme.onSurfaceVariant,
+                                shadows: isDark
+                                    ? const [
+                                        Shadow(
+                                          color: Color(0x99000000),
+                                          blurRadius: 7,
+                                        ),
+                                      ]
+                                    : null,
                               ),
                             ),
                           ],
@@ -142,34 +151,47 @@ class MiniPlayer extends ConsumerWidget {
                       SizedBox(width: compactAndroid ? 8 : 12),
                       SizedBox.square(
                         dimension: playButtonSize,
-                        child: IconButton.filled(
-                          key: const ValueKey('mini-player-primary-control'),
-                          tooltip: presentation.status == PlayerStatus.playing
-                              ? strings.pause
-                              : strings.play,
-                          style: IconButton.styleFrom(
-                            backgroundColor:
-                                AppColors.playbackPrimaryBackground,
-                            foregroundColor:
-                                AppColors.playbackPrimaryForeground,
-                            disabledBackgroundColor:
-                                AppColors.playbackPrimaryDisabledBackground,
-                            disabledForegroundColor:
-                                AppColors.playbackPrimaryDisabledForeground,
+                        child: DecoratedBox(
+                          key: const ValueKey('mini-player-primary-gradient'),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: AppColors.downloadGradientFor(context),
+                            ),
                           ),
-                          iconSize: compactAndroid ? 24 : null,
-                          padding: EdgeInsets.zero,
-                          constraints: BoxConstraints.tight(
-                            Size.square(playButtonSize),
+                          child: IconButton(
+                            key: const ValueKey('mini-player-primary-control'),
+                            tooltip: presentation.status == PlayerStatus.playing
+                                ? strings.pause
+                                : strings.play,
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              foregroundColor: AppColors.playIconForegroundFor(
+                                context,
+                              ),
+                              disabledBackgroundColor: Colors.transparent,
+                              disabledForegroundColor:
+                                  AppColors.playIconDisabledForegroundFor(
+                                    context,
+                                  ),
+                              shape: const CircleBorder(),
+                            ),
+                            iconSize: compactAndroid ? 24 : null,
+                            padding: EdgeInsets.zero,
+                            constraints: BoxConstraints.tight(
+                              Size.square(playButtonSize),
+                            ),
+                            icon: Icon(
+                              presentation.status == PlayerStatus.playing
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                            ),
+                            onPressed: () => ref
+                                .read(playerControllerProvider.notifier)
+                                .togglePlayPause(),
                           ),
-                          icon: Icon(
-                            presentation.status == PlayerStatus.playing
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
-                          ),
-                          onPressed: () => ref
-                              .read(playerControllerProvider.notifier)
-                              .togglePlayPause(),
                         ),
                       ),
                     ],
@@ -200,7 +222,7 @@ class _MiniBlurBackground extends StatelessWidget {
       imageFilter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
       child: Transform.scale(
         scale: 1.28,
-        child: _MiniImage(
+        child: SourceImage(
           source: source,
           fit: BoxFit.cover,
           fallback: const _MiniFallbackBackground(),
@@ -221,13 +243,10 @@ class _MiniProgress extends ConsumerWidget {
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
-          thumbnailUrl: snapshot?.thumbnailUrl,
         );
       }),
     );
-    final progressColor =
-        ref.watch(artworkProgressColorProvider(timeline.thumbnailUrl)).value ??
-        ArtworkProgressColor.fallback;
+    final progressColor = AppColors.downloadAccentFor(context);
     final strings = ref.watch(appStringsProvider);
     final duration = timeline.duration;
     final position = timeline.position;
@@ -273,12 +292,15 @@ class _MiniFallbackBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.centerLeft,
           end: Alignment.centerRight,
-          colors: [Color(0xFF0B0E0B), Color(0xFF050605)],
+          colors: isDark
+              ? const [Color(0xFF0B0E0B), Color(0xFF050605)]
+              : const [Color(0xFFE9F3EC), Color(0xFFF5F8F6)],
         ),
       ),
     );
@@ -312,7 +334,10 @@ class _MiniArtwork extends StatelessWidget {
               ),
               child: url == null
                   ? const Icon(Icons.graphic_eq_rounded)
-                  : _MiniImage(source: url!, fit: BoxFit.cover),
+                  : ProportionalArtwork(
+                      source: url,
+                      fallback: const Icon(Icons.graphic_eq_rounded),
+                    ),
             ),
             if (isFavorite)
               const Positioned(
@@ -324,38 +349,5 @@ class _MiniArtwork extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _MiniImage extends StatelessWidget {
-  const _MiniImage({
-    required this.source,
-    required this.fit,
-    this.fallback = const Icon(Icons.graphic_eq_rounded),
-  });
-
-  final String source;
-  final BoxFit fit;
-  final Widget fallback;
-
-  @override
-  Widget build(BuildContext context) {
-    final normalized = source.trim();
-    if (isNetworkImageSource(normalized)) {
-      return Image.network(
-        normalized,
-        fit: fit,
-        errorBuilder: (_, _, _) => fallback,
-      );
-    }
-
-    final file = imageFileFromSource(normalized);
-    if (file == null) {
-      return fallback;
-    }
-    if (!file.existsSync()) {
-      return fallback;
-    }
-    return Image.file(file, fit: fit, errorBuilder: (_, _, _) => fallback);
   }
 }

@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_constants.dart';
+import 'backup_restore_transaction.dart';
 import 'local_database_service.dart';
 
 class BackupService {
@@ -86,62 +87,80 @@ class BackupService {
         );
       }
 
-      await Directory(mediaRoot).create(recursive: true);
-      await _databaseService.close();
-      try {
-        await _replaceDirectory(
-          source: Directory(p.join(temporaryRoot.path, 'audio')),
-          destination: Directory(p.join(mediaRoot, 'audio')),
-        );
-        await _replaceDirectory(
-          source: Directory(p.join(temporaryRoot.path, 'thumbnails')),
-          destination: Directory(p.join(mediaRoot, 'thumbnails')),
-        );
+      await _validateBackupManifest(temporaryRoot);
+      await _databaseService.validateBackupDatabase(extractedDatabase.path);
 
-        final databasePath = await _databaseService.databasePath();
-        final databaseFile = File(databasePath);
-        await databaseFile.parent.create(recursive: true);
-        await extractedDatabase.copy(databaseFile.path);
-      } finally {
+      final mediaDirectory = Directory(mediaRoot);
+      await mediaDirectory.create(recursive: true);
+      final databasePath = await _databaseService.databasePath();
+      final transaction = await BackupRestoreTransaction.prepare(
+        extractedRoot: temporaryRoot,
+        mediaRoot: mediaDirectory,
+        activeDatabase: File(databasePath),
+      );
+
+      try {
+        await _databaseService.close();
+        await transaction.commit();
         await _databaseService.initialize();
+        await _databaseService.rewriteLocalTrackMediaRoot(mediaRoot: mediaRoot);
+      } catch (error, stackTrace) {
+        Object? rollbackError;
+        StackTrace? rollbackStackTrace;
+
+        Future<void> attemptRollbackStep(Future<void> Function() action) async {
+          try {
+            await action();
+          } catch (failure, failureStackTrace) {
+            rollbackError ??= failure;
+            rollbackStackTrace ??= failureStackTrace;
+          }
+        }
+
+        await attemptRollbackStep(_databaseService.close);
+        await attemptRollbackStep(transaction.rollback);
+        await attemptRollbackStep(_databaseService.initialize);
+
+        if (rollbackError != null) {
+          Error.throwWithStackTrace(
+            BackupRestoreException(
+              restoreError: error,
+              rollbackError: rollbackError!,
+            ),
+            rollbackStackTrace ?? stackTrace,
+          );
+        }
+        Error.throwWithStackTrace(error, stackTrace);
       }
-      await _databaseService.rewriteLocalTrackMediaRoot(mediaRoot: mediaRoot);
+      try {
+        await transaction.complete();
+      } catch (_) {
+        // The restored library is already active. Cleanup is best effort so a
+        // stale inactive rollback copy never turns a successful restore into
+        // a reported data-loss failure.
+      }
     } finally {
       if (await temporaryRoot.exists()) {
         await temporaryRoot.delete(recursive: true);
       }
     }
   }
+}
 
-  Future<void> _replaceDirectory({
-    required Directory source,
-    required Directory destination,
-  }) async {
-    if (await destination.exists()) {
-      await destination.delete(recursive: true);
-    }
-    await destination.create(recursive: true);
-    if (!await source.exists()) {
-      return;
-    }
-    await _copyDirectory(source: source, destination: destination);
-  }
+class BackupRestoreException implements Exception {
+  const BackupRestoreException({
+    required this.restoreError,
+    required this.rollbackError,
+  });
 
-  Future<void> _copyDirectory({
-    required Directory source,
-    required Directory destination,
-  }) async {
-    await for (final entity in source.list(recursive: true)) {
-      final relative = p.relative(entity.path, from: source.path);
-      final targetPath = p.join(destination.path, relative);
-      if (entity is Directory) {
-        await Directory(targetPath).create(recursive: true);
-      } else if (entity is File) {
-        final target = File(targetPath);
-        await target.parent.create(recursive: true);
-        await entity.copy(target.path);
-      }
-    }
+  final Object restoreError;
+  final Object rollbackError;
+
+  @override
+  String toString() {
+    return 'La restauracion fallo y no se pudo recuperar completamente la '
+        'biblioteca anterior. Restauracion: $restoreError. '
+        'Recuperacion: $rollbackError';
   }
 }
 
@@ -241,8 +260,42 @@ Future<void> _extractBackupArchive({
   }
 }
 
+Future<void> _validateBackupManifest(Directory extractedRoot) async {
+  const maximumManifestBytes = 64 * 1024;
+  final manifest = File(p.join(extractedRoot.path, 'manifest.json'));
+  if (!await manifest.exists()) {
+    // Backups created before manifests were introduced remain importable; the
+    // SQLite integrity and schema checks are still authoritative.
+    return;
+  }
+  if (await manifest.length() > maximumManifestBytes) {
+    throw const FormatException(
+      'El manifiesto del respaldo excede el limite permitido.',
+    );
+  }
+
+  try {
+    final decoded = jsonDecode(await manifest.readAsString());
+    if (decoded is! Map ||
+        decoded['app'] != AppConstants.appName ||
+        decoded['schema'] != 1 ||
+        decoded['database'] != AppConstants.databaseName) {
+      throw const FormatException(
+        'El manifiesto del respaldo no es compatible.',
+      );
+    }
+  } on FormatException {
+    rethrow;
+  } catch (error) {
+    throw FormatException('El manifiesto del respaldo no es valido.', error);
+  }
+}
+
 String? _safeBackupEntryName(String name) {
   final normalized = name.replaceAll(r'\', '/').trim();
+  if (normalized == 'manifest.json') {
+    return 'manifest.json';
+  }
   if (normalized == 'database/${AppConstants.databaseName}') {
     return p.join('database', AppConstants.databaseName);
   }

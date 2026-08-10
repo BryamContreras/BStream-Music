@@ -150,6 +150,16 @@ void main() {
     );
   });
 
+  test('requests 15 search results from desktop yt-dlp', () {
+    final service = DesktopDownloaderService(toolDirectories: const []);
+    addTearDown(service.dispose);
+
+    expect(
+      service.buildSearchArguments('Artist - Song'),
+      contains('ytsearch15:Artist - Song'),
+    );
+  });
+
   test('builds native audio arguments without FFmpeg post-processing', () {
     final service = DesktopDownloaderService(toolDirectories: const []);
     addTearDown(service.dispose);

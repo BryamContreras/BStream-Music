@@ -14,6 +14,9 @@ import 'package:uuid/uuid.dart';
 import '../../../../core/errors/app_exception.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/platform/app_platform.dart';
+import '../../../../core/theme/app_theme.dart';
+import '../../../../core/utils/bounded_byte_stream.dart';
+import '../../../../core/utils/image_source.dart';
 import '../../../../core/utils/safe_file_name.dart';
 import '../../../../platform_channels/android_ytdl_channel.dart';
 import '../../../../services/downloader/android_downloader_service.dart';
@@ -49,8 +52,11 @@ import '../../domain/usecases/get_library_tracks.dart';
 import '../../domain/usecases/get_playlists.dart';
 import '../../domain/usecases/get_track_info.dart';
 import '../../domain/usecases/search_tracks.dart';
+import 'app_strings.dart';
 
-part 'app_strings.dart';
+export 'app_strings.dart';
+
+part 'app_strings_provider.dart';
 part 'download_controller.dart';
 part 'local_track_download_helper.dart';
 part 'lyrics_offset_controller.dart';

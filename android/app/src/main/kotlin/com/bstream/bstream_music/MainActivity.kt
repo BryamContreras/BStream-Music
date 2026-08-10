@@ -20,7 +20,9 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.ArrayDeque
 import java.util.UUID
+import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,10 +38,19 @@ class MainActivity : AudioServiceActivity() {
     private val progressEmissions = mutableMapOf<String, ProgressEmission>()
     private var pendingFileExportResult: MethodChannel.Result? = null
     private var pendingFileExportSourcePath: String? = null
+    private val externalAudioHandler by lazy { ExternalAudioIntentHandler(this) }
+    private val externalAudioExecutor = Executors.newSingleThreadExecutor()
+    private var externalAudioSink: EventChannel.EventSink? = null
+    private val pendingExternalAudioEvents = ArrayDeque<Map<String, Any?>>()
+    private var pendingExternalAudioPermissionRequest: ExternalAudioRequest? = null
+    private var audioPermissionRequestInFlight = false
+    private var notificationPermissionRequestInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestNotificationPermissionIfNeeded()
+        if (!handleExternalAudioIntent(intent)) {
+            requestNotificationPermissionIfNeeded()
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -93,6 +104,64 @@ class MainActivity : AudioServiceActivity() {
                 }
             },
         )
+
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            EXTERNAL_AUDIO_CHANNEL,
+        ).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    externalAudioSink = events
+                    while (pendingExternalAudioEvents.isNotEmpty()) {
+                        events?.success(pendingExternalAudioEvents.removeFirst())
+                    }
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    externalAudioSink = null
+                }
+            },
+        )
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleExternalAudioIntent(intent)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            EXTERNAL_AUDIO_PERMISSION_REQUEST -> {
+                audioPermissionRequestInFlight = false
+                val request = pendingExternalAudioPermissionRequest
+                pendingExternalAudioPermissionRequest = null
+                val granted = hasAudioLibraryPermission()
+                if (request != null) {
+                    resolveExternalAudio(
+                        request = request,
+                        includeFolder = granted,
+                        permissionPending = false,
+                        permissionDenied = !granted,
+                    )
+                }
+                requestNotificationPermissionIfNeeded()
+            }
+            NOTIFICATION_PERMISSION_REQUEST -> {
+                notificationPermissionRequestInFlight = false
+                requestExternalAudioPermissionIfNeeded()
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        externalAudioExecutor.shutdownNow()
+        super.onDestroy()
     }
 
     private fun saveFile(call: MethodCall, result: MethodChannel.Result) {
@@ -204,9 +273,11 @@ class MainActivity : AudioServiceActivity() {
 
     private fun search(call: MethodCall, result: MethodChannel.Result) {
         val query = call.requiredString("query")
+        val limit = (call.argument<Int>("limit") ?: DEFAULT_SEARCH_RESULT_LIMIT)
+            .coerceIn(1, MAX_SEARCH_RESULT_LIMIT)
         runAsync(result) {
             ensureYoutubeDlInitialized()
-            executeSearchRequest(query)
+            executeSearchRequest(query, limit)
         }
     }
 
@@ -225,6 +296,7 @@ class MainActivity : AudioServiceActivity() {
     private fun executePlaybackInfoRequest(url: String): Map<String, Any?> {
         return executeWithExtractorRetry("getPlaybackInfo") {
             val startedAt = SystemClock.elapsedRealtime()
+            Log.i(TAG, "getPlaybackInfo started urlLength=${url.length}")
             val request = YoutubeDLRequest(url)
             addBaseNetworkOptions(request)
             addYoutubePlaybackOptions(request)
@@ -241,6 +313,12 @@ class MainActivity : AudioServiceActivity() {
             val selectedFormat = selectedPlaybackFormat(info)
             val streamUrl = selectedFormat.nonBlankString("url")
                 ?: throw IllegalStateException("No se encontro una URL reproducible.")
+            Log.i(
+                TAG,
+                "getPlaybackInfo URL extracted in " +
+                    "${SystemClock.elapsedRealtime() - startedAt}ms " +
+                    "format=${selectedFormat.nonBlankString("format_id") ?: "unknown"}",
+            )
             val httpHeaders = (
                 selectedFormat.optJSONObject("http_headers")
                     ?: info.optJSONObject("http_headers")
@@ -304,18 +382,32 @@ class MainActivity : AudioServiceActivity() {
         return value.toString().trim().takeIf { it.isNotEmpty() }
     }
 
-    private fun executeSearchRequest(query: String): List<Map<String, Any?>> {
+    private fun executeSearchRequest(
+        query: String,
+        limit: Int,
+    ): List<Map<String, Any?>> {
         return executeWithExtractorRetry("search") {
-            val request = YoutubeDLRequest("ytsearch10:$query")
+            val startedAt = SystemClock.elapsedRealtime()
+            Log.i(
+                TAG,
+                "search started queryLength=${query.trim().length}",
+            )
+            val request = YoutubeDLRequest("ytsearch$limit:$query")
             addBaseNetworkOptions(request)
             request.addOption("--dump-json")
             request.addOption("--flat-playlist")
             val response = YoutubeDL.getInstance().execute(request)
-            response.out
+            val results = response.out
                 .lineSequence()
                 .filter { it.isNotBlank() }
                 .map { JSONObject(it).toMap() }
                 .toList()
+            Log.i(
+                TAG,
+                "search completed in ${SystemClock.elapsedRealtime() - startedAt}ms " +
+                    "results=${results.size}",
+            )
+            results
         }
     }
 
@@ -510,8 +602,109 @@ class MainActivity : AudioServiceActivity() {
         if (youtubeDlInitialized) {
             return
         }
+        val startedAt = SystemClock.elapsedRealtime()
+        val usingBundledVersion = prepareBundledYoutubeDlUpgrade()
         YoutubeDL.getInstance().init(applicationContext)
+        finishBundledYoutubeDlUpgrade(usingBundledVersion)
         youtubeDlInitialized = true
+        val effectiveVersion = applicationContext
+            .getSharedPreferences(YTDLP_SHARED_PREFS, Context.MODE_PRIVATE)
+            .getString(YTDLP_VERSION_NAME_KEY, null)
+            ?: BuildConfig.BUNDLED_YTDLP_VERSION
+        Log.i(
+            TAG,
+            "yt-dlp initialized version=$effectiveVersion in " +
+                "${SystemClock.elapsedRealtime() - startedAt}ms",
+        )
+    }
+
+    private fun prepareBundledYoutubeDlUpgrade(): Boolean {
+        val ytdlpDir = youtubeDlDirectory()
+        val ytdlpFile = File(ytdlpDir, YoutubeDL.ytdlpBin)
+        val preferences = applicationContext.getSharedPreferences(
+            YTDLP_SHARED_PREFS,
+            Context.MODE_PRIVATE,
+        )
+        val handledBundledVersion = preferences.getString(
+            BUNDLED_YTDLP_VERSION_KEY,
+            null,
+        )
+        if (
+            handledBundledVersion == BuildConfig.BUNDLED_YTDLP_VERSION &&
+            ytdlpFile.isFile
+        ) {
+            return false
+        }
+
+        val recordedVersions = listOfNotNull(
+            preferences.getString(YTDLP_VERSION_KEY, null),
+            preferences.getString(YTDLP_VERSION_NAME_KEY, null),
+        )
+        val keepExistingUpdate = ytdlpFile.isFile && recordedVersions.any { version ->
+            isYtDlpVersionAtLeast(version, BuildConfig.BUNDLED_YTDLP_VERSION)
+        }
+        if (keepExistingUpdate) {
+            Log.i(
+                TAG,
+                "Keeping installed yt-dlp ${recordedVersions.joinToString()} " +
+                    "over bundled ${BuildConfig.BUNDLED_YTDLP_VERSION}",
+            )
+            return false
+        }
+
+        if (ytdlpDir.exists() && !ytdlpDir.deleteRecursively()) {
+            throw IllegalStateException("No se pudo reemplazar la copia incluida de yt-dlp.")
+        }
+        preferences.edit()
+            .remove(YTDLP_VERSION_KEY)
+            .remove(YTDLP_VERSION_NAME_KEY)
+            .commit()
+        Log.i(TAG, "Preparing bundled yt-dlp ${BuildConfig.BUNDLED_YTDLP_VERSION}")
+        return true
+    }
+
+    private fun finishBundledYoutubeDlUpgrade(usingBundledVersion: Boolean) {
+        val editor = applicationContext
+            .getSharedPreferences(YTDLP_SHARED_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(BUNDLED_YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+        if (usingBundledVersion) {
+            editor
+                .putString(YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .putString(YTDLP_VERSION_NAME_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+        }
+        if (!editor.commit()) {
+            Log.w(TAG, "No se pudo guardar la version incluida de yt-dlp")
+        }
+    }
+
+    private fun youtubeDlDirectory(): File {
+        return File(
+            applicationContext.noBackupFilesDir,
+            "${YoutubeDL.baseName}/${YoutubeDL.ytdlpDirName}",
+        )
+    }
+
+    private fun isYtDlpVersionAtLeast(candidate: String, required: String): Boolean {
+        val candidateParts = parseYtDlpVersion(candidate) ?: return false
+        val requiredParts = parseYtDlpVersion(required) ?: return false
+        val partCount = maxOf(candidateParts.size, requiredParts.size)
+        for (index in 0 until partCount) {
+            val candidatePart = candidateParts.getOrElse(index) { 0L }
+            val requiredPart = requiredParts.getOrElse(index) { 0L }
+            if (candidatePart != requiredPart) {
+                return candidatePart > requiredPart
+            }
+        }
+        return true
+    }
+
+    private fun parseYtDlpVersion(value: String): List<Long>? {
+        return YTDLP_DATE_VERSION_REGEX.find(value)
+            ?.value
+            ?.split('.')
+            ?.mapNotNull(String::toLongOrNull)
+            ?.takeIf { it.size >= 3 }
     }
 
     private fun updateYoutubeDlBlocking(): Boolean {
@@ -552,10 +745,7 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun restoreBundledYoutubeDl() {
-        val ytdlpDir = File(
-            applicationContext.noBackupFilesDir,
-            "${YoutubeDL.baseName}/${YoutubeDL.ytdlpDirName}",
-        )
+        val ytdlpDir = youtubeDlDirectory()
 
         try {
             if (ytdlpDir.exists() && !ytdlpDir.deleteRecursively()) {
@@ -565,10 +755,14 @@ class MainActivity : AudioServiceActivity() {
             applicationContext
                 .getSharedPreferences(YTDLP_SHARED_PREFS, Context.MODE_PRIVATE)
                 .edit()
-                .remove(YTDLP_VERSION_KEY)
-                .remove(YTDLP_VERSION_NAME_KEY)
-                .apply()
-            Log.w(TAG, "Se restauro la copia incluida de yt-dlp")
+                .putString(YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .putString(YTDLP_VERSION_NAME_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .putString(BUNDLED_YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .commit()
+            Log.w(
+                TAG,
+                "Se restauro yt-dlp ${BuildConfig.BUNDLED_YTDLP_VERSION} incluido",
+            )
         } finally {
             synchronized(updateLock) {
                 updateCompleted = false
@@ -629,6 +823,128 @@ class MainActivity : AudioServiceActivity() {
         return RECOVERABLE_EXTRACTOR_ERRORS.any(details::contains)
     }
 
+    private fun handleExternalAudioIntent(intent: Intent?): Boolean {
+        if (!externalAudioHandler.accepts(intent)) {
+            return false
+        }
+        val safeIntent = Intent(intent!!)
+        retainExternalAudioPermission(safeIntent)
+        val request = ExternalAudioRequest(UUID.randomUUID().toString(), safeIntent)
+
+        if (hasAudioLibraryPermission()) {
+            resolveExternalAudio(
+                request = request,
+                includeFolder = true,
+                permissionPending = false,
+                permissionDenied = false,
+            )
+            requestNotificationPermissionIfNeeded()
+            return true
+        }
+
+        // The URI grant from ACTION_VIEW is enough to begin the selected file.
+        // The library permission is requested only to discover its siblings.
+        resolveExternalAudio(
+            request = request,
+            includeFolder = false,
+            permissionPending = true,
+            permissionDenied = false,
+        )
+        pendingExternalAudioPermissionRequest = request
+        requestExternalAudioPermissionIfNeeded()
+        return true
+    }
+
+    private fun retainExternalAudioPermission(intent: Intent) {
+        if (intent.flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION == 0) {
+            return
+        }
+        val uri = intent.data ?: return
+        val flags = intent.flags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        if (flags == 0) {
+            return
+        }
+        runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
+    }
+
+    private fun resolveExternalAudio(
+        request: ExternalAudioRequest,
+        includeFolder: Boolean,
+        permissionPending: Boolean,
+        permissionDenied: Boolean,
+    ) {
+        externalAudioExecutor.execute {
+            try {
+                val payload = externalAudioHandler.resolve(
+                    requestId = request.id,
+                    intent = request.intent,
+                    includeFolder = includeFolder,
+                    permissionPending = permissionPending,
+                    permissionDenied = permissionDenied,
+                )
+                Log.i(
+                    EXTERNAL_AUDIO_TAG,
+                    "Resolved external audio: tracks=" +
+                        "${(payload["tracks"] as? List<*>)?.size ?: 0}, " +
+                        "selected=${payload["selectedIndex"]}, " +
+                        "folderComplete=${payload["folderQueueComplete"]}, " +
+                        "permissionPending=$permissionPending",
+                )
+                mainHandler.post { emitExternalAudio(payload) }
+            } catch (error: Throwable) {
+                Log.e(TAG, "Could not resolve external audio", error)
+            }
+        }
+    }
+
+    private fun emitExternalAudio(payload: Map<String, Any?>) {
+        val sink = externalAudioSink
+        if (sink != null) {
+            sink.success(payload)
+            return
+        }
+        while (pendingExternalAudioEvents.size >= MAX_PENDING_EXTERNAL_AUDIO_EVENTS) {
+            pendingExternalAudioEvents.removeFirst()
+        }
+        pendingExternalAudioEvents.addLast(payload)
+    }
+
+    private fun requestExternalAudioPermissionIfNeeded() {
+        val pendingRequest = pendingExternalAudioPermissionRequest ?: return
+        if (hasAudioLibraryPermission()) {
+            pendingExternalAudioPermissionRequest = null
+            resolveExternalAudio(
+                request = pendingRequest,
+                includeFolder = true,
+                permissionPending = false,
+                permissionDenied = false,
+            )
+            requestNotificationPermissionIfNeeded()
+            return
+        }
+        if (audioPermissionRequestInFlight || notificationPermissionRequestInFlight) {
+            return
+        }
+        audioPermissionRequestInFlight = true
+        requestPermissions(
+            arrayOf(audioLibraryPermission()),
+            EXTERNAL_AUDIO_PERMISSION_REQUEST,
+        )
+    }
+
+    private fun hasAudioLibraryPermission(): Boolean {
+        return checkSelfPermission(audioLibraryPermission()) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun audioLibraryPermission(): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return
@@ -638,6 +954,13 @@ class MainActivity : AudioServiceActivity() {
         ) {
             return
         }
+        if (notificationPermissionRequestInFlight ||
+            audioPermissionRequestInFlight ||
+            pendingExternalAudioPermissionRequest != null
+        ) {
+            return
+        }
+        notificationPermissionRequestInFlight = true
         requestPermissions(
             arrayOf(Manifest.permission.POST_NOTIFICATIONS),
             NOTIFICATION_PERMISSION_REQUEST,
@@ -762,12 +1085,19 @@ class MainActivity : AudioServiceActivity() {
         private const val PROGRESS_CHANNEL = "bstream_music/ytdl_progress"
         private const val FILE_EXPORT_CHANNEL = "bstream_music/file_export"
         private const val SCREEN_CHANNEL = "bstream_music/screen"
+        private const val EXTERNAL_AUDIO_CHANNEL = "bstream_music/external_audio"
         private const val NOTIFICATION_PERMISSION_REQUEST = 4010
         private const val FILE_EXPORT_REQUEST = 4011
+        private const val EXTERNAL_AUDIO_PERMISSION_REQUEST = 4012
+        private const val MAX_PENDING_EXTERNAL_AUDIO_EVENTS = 8
+        private const val DEFAULT_SEARCH_RESULT_LIMIT = 15
+        private const val MAX_SEARCH_RESULT_LIMIT = 50
         private const val TAG = "BStreamYtdl"
+        private const val EXTERNAL_AUDIO_TAG = "BStreamExternalAudio"
         private const val YTDLP_SHARED_PREFS = "youtubedl-android"
         private const val YTDLP_VERSION_KEY = "dlpVersion"
         private const val YTDLP_VERSION_NAME_KEY = "dlpVersionName"
+        private const val BUNDLED_YTDLP_VERSION_KEY = "bstreamBundledYtDlpVersion"
         private const val PROGRESS_MIN_INTERVAL_MS = 200L
         private const val PROGRESS_MIN_DELTA = 0.01f
         private const val PROGRESS_TEMPLATE =
@@ -782,6 +1112,8 @@ class MainActivity : AudioServiceActivity() {
             Regex("""\[download]\s+([0-9]+(?:\.[0-9]+)?)%""")
         private val STANDARD_ETA_REGEX =
             Regex("""ETA\s+((?:[0-9]+:)?[0-9]{1,2}:[0-9]{2})""")
+        private val YTDLP_DATE_VERSION_REGEX =
+            Regex("""\d{4}\.\d{1,2}\.\d{1,2}(?:\.\d+)?""")
         private val DEFINITIVE_EXTRACTION_ERRORS = listOf(
             "private video",
             "video unavailable",
@@ -845,5 +1177,10 @@ class MainActivity : AudioServiceActivity() {
     private data class DownloadProgressSample(
         val progress: Float,
         val etaSeconds: Long?,
+    )
+
+    private data class ExternalAudioRequest(
+        val id: String,
+        val intent: Intent,
     )
 }

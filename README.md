@@ -2,22 +2,54 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, Windows, Linux, and macOS.
 
-Current version: **1.2.2+122**.
+Current version: **1.2.3+123**.
 
-> The repository does not store media content or third-party binaries. CI-generated desktop installers download and bundle verified copies of `yt-dlp` and Deno. Users are responsible for complying with copyright laws, provider terms, and the licenses of these tools.
+> The repository does not store media content or third-party binaries. Android
+> and desktop builds download and bundle a checksum-verified `yt-dlp`; desktop
+> installers also bundle Deno. Users are responsible for complying with
+> copyright laws, provider terms, and the licenses of these tools.
 
 <img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
+
+## What's new in 1.2.3
+
+- Open local Android audio with BStream and populate the queue from the
+  selected file's folder when Android grants media-library access.
+- Choose System, Light, or Dark appearance and one of nine persistent accent
+  palettes applied across gradients, tabs, progress, controls, lyrics, cards,
+  and menus.
+- Reorder the active queue with a long press without restarting the current
+  track, and warm only the next remote track for faster transitions.
+- Use consistent, higher-quality artwork across search, playback, playlists,
+  and downloads, including proportional cropping and older-video fallbacks.
+- Keep search text until it is explicitly cleared, and show total duration
+  beside song counts in playlists and downloaded songs.
+- Get up to 15 results per search and optionally support continued development
+  from the contribution link below the version in Settings.
+- Improve Android playback recovery for expired URLs, HTTP errors, extractor
+  changes, and format mismatches. Android APKs now include the same pinned
+  stable yt-dlp version as desktop builds.
+- Bound artwork, thumbnail, remote-audio, and LRCLIB resource usage for longer
+  listening sessions.
+- Validate and stage backup restores transactionally, with rollback if database
+  or media activation fails.
+- Fix custom sleep-timer cancellation, recent-playlist context, light-theme
+  controls and popups, and assorted player layout issues.
 
 ## Main features
 
 ### Search, downloads, and library
 
-- Search results with thumbnail, title, artist/channel, and duration.
+- Up to 15 search results with thumbnail, title, artist/channel, and duration.
+- Search text remains available between searches and has an inline clear action.
 - Remote playback and audio downloads with real-time progress.
+- High-quality artwork uses one proportional crop policy from search through
+  playback and downloaded-library storage.
 - SQLite-backed local library.
 - Reuse of downloaded tracks to avoid duplicate downloads.
 - Filtering, renaming, and deletion of saved tracks.
 - Playlist creation, renaming, and deletion.
+- Playlist and downloaded-song headers show both song count and total duration.
 - Dedicated **Favorites** playlist with a visible star on favorited tracks.
 - ZIP backup and restore for the database, audio files, and thumbnails.
 
@@ -26,10 +58,11 @@ Current version: **1.2.2+122**.
 - Play, pause, previous, next, repeat, and shuffle controls.
 - Playback queue synchronized with playlists and the library.
 - Queue side panel on Windows and a dedicated queue view on Android.
-- Change tracks directly from the queue.
+- Change tracks directly from the queue and reorder them with a long press.
+- Controlled preloading warms only the next remote track.
 - The active track is highlighted with a segmented 13-bar equalizer.
-- Dark dynamic background derived from the track artwork.
-- Animated progress bar with waves and artwork-derived color.
+- Theme-aware dynamic background derived from the track artwork.
+- Animated progress bar with waves and the selected accent color.
 - Direct volume control beside the repeat button.
 - Synchronized lyrics powered by LRCLIB, with plain-lyrics fallback, automatic
   scrolling, tap-to-seek, and a manual timing offset from `-10` to `+10` seconds
@@ -44,6 +77,7 @@ Current version: **1.2.2+122**.
 ### Interface
 
 - Responsive layouts for Android and Windows.
+- System, Light, and Dark themes with nine persistent accent palettes.
 - Navigation remembers only the two most recent views.
 - Returning from the player restores the previously opened playlist or section.
 - Home displays up to 10 recently played items and 10 playlists. Recent items
@@ -51,6 +85,8 @@ Current version: **1.2.2+122**.
   playlist no longer exists.
 - Subtle gradients, translucent cards, and shared visual controls.
 - Spanish and English selectable from Settings.
+- Optional Ko-fi development support link below the app version in Settings;
+  BStream Music remains free.
 - Windows window minimum size of `960 × 600`; the player progressively adapts artwork, text, spacing, and controls to the available height.
 - Icons generated from one source asset for Android, Windows, macOS, and Flutter resources.
 
@@ -88,7 +124,7 @@ This integration uses an unofficial library. If TikTok changes its protocol, the
 
 | Platform | Player | Downloads | Notes |
 | --- | --- | --- | --- |
-| Android | `just_audio` + `audio_service` | `youtubedl-android` + QuickJS | `minSdk 24`; Release APKs support `arm64-v8a` and `x86_64` |
+| Android | `just_audio` + `audio_service` | `youtubedl-android` + QuickJS | `minSdk 24`; open local audio from Android; release APKs support `arm64-v8a` and `x86_64` |
 | Windows | `media_kit` | Bundled `yt-dlp` + Deno | SMTC controls, TikTok LIVE, queue side panel, and external tools |
 | Linux | `media_kit` | Bundled `yt-dlp` + Deno | MPRIS controls; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
 | macOS | `media_kit` | Bundled `yt-dlp` + Deno | Now Playing controls; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
@@ -284,7 +320,17 @@ Main dependencies:
 implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
 ```
 
-`youtubedl-android` is downloaded through Gradle; manual executables are not committed to the repository.
+`youtubedl-android` is downloaded through Gradle. Its wrapper and embedded
+Python/QuickJS runtime are kept at `0.18.1`, while the app build downloads the
+pinned official `yt-dlp` zipapp, verifies its SHA-256 checksum, and overlays the
+older extractor resource shipped by the wrapper. The verified file is cached
+under the Gradle user directory and is not committed to the repository.
+
+The current Android bundle uses stable yt-dlp `2026.07.04`. When an installed
+APK is upgraded, BStream migrates an older extracted copy to the bundled
+version but preserves an updater-downloaded copy when it is the same version or
+newer. Recoverable extractor failures can still trigger one stable-channel
+update and retry at runtime.
 
 Release builds intentionally support only the 64-bit `arm64-v8a` (ARMv8) and
 `x86_64` ABIs. `armeabi-v7a` is no longer generated or supported.
@@ -328,7 +374,10 @@ The workflow verifies both APK signatures before uploading the artifacts.
 - Incremental migrations preserve existing libraries.
 - Favorites are implemented as a reserved playlist (`bstream:favorites`), so no separate table is required.
 - ZIP backups contain the database, `audio/`, `thumbnails/`, and a manifest.
-- Restore validates file paths and archive limits before replacing local data.
+- Restore validates the manifest, archive paths and limits, SQLite integrity,
+  schema, and version before touching local data. Database and media changes
+  are staged on their destination filesystems and rolled back if activation
+  fails.
 
 ## Generate icons
 
@@ -371,30 +420,32 @@ Release installers for Windows, Linux, and both macOS architectures. It can be
 run manually from the **Actions** tab and also runs for pull requests, pushes to
 `main`, and `v*` tags.
 
-Each desktop job downloads `yt-dlp` and Deno from their official releases and
-verifies their pinned checksums. Windows also builds and verifies the portable
-TikTok LIVE bridge runtime. Binaries are included in the installers but are not
-stored in the repository. Artifacts are retained for 30 days:
+Android and desktop jobs download `yt-dlp` from its official release and verify
+the pinned checksum. The Android job additionally opens both completed APKs and
+checks the embedded extractor's hash and reported version. Desktop jobs also
+bundle Deno, while Windows builds and verifies the portable TikTok LIVE bridge
+runtime. Binaries are included in the installers but are not stored in the
+repository. Artifacts are retained for 30 days:
 
 ```text
-BStream-Music-1.2.1-Android-arm64-v8a.apk
-BStream-Music-1.2.1-Android-x86_64.apk
-BStream-Music-1.2.1-Windows-x64-Setup.exe
-BStream-Music-1.2.1-linux-amd64.deb
-BStream-Music-1.2.1-linux-x86_64.rpm
-BStream-Music-1.2.1-macOS-arm64.pkg
-BStream-Music-1.2.1-macOS-x64.pkg
+BStream-Music-<version>-Android-arm64-v8a.apk
+BStream-Music-<version>-Android-x86_64.apk
+BStream-Music-<version>-Windows-x64-Setup.exe
+BStream-Music-<version>-linux-amd64.deb
+BStream-Music-<version>-linux-x86_64.rpm
+BStream-Music-<version>-macOS-arm64.pkg
+BStream-Music-<version>-macOS-x64.pkg
 ```
 
 ### Which file should I install?
 
-- **Most Android phones and tablets:** install `BStream-Music-1.2.2-Android-arm64-v8a.apk`.
-- **Android x86_64 devices and emulators:** install `BStream-Music-1.2.2-Android-x86_64.apk`.
+- **Most Android phones and tablets:** install `BStream-Music-<version>-Android-arm64-v8a.apk`.
+- **Android x86_64 devices and emulators:** install `BStream-Music-<version>-Android-x86_64.apk`.
 - **Windows 64-bit:** open `Setup.exe`. The installer shows a language selector, creates a Start Menu shortcut, and lets you choose whether to create a desktop shortcut. The uninstaller entry is displayed as `BStream Music` without the version number.
-- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-1.2.2-linux-amd64.deb`.
-- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-1.2.2-linux-x86_64.rpm`.
-- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-1.2.2-macOS-arm64.pkg`.
-- **Mac with an Intel processor:** open `BStream-Music-1.2.1-macOS-x64.pkg`.
+- **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-<version>-linux-amd64.deb`.
+- **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-<version>-linux-x86_64.rpm`.
+- **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-<version>-macOS-arm64.pkg`.
+- **Mac with an Intel processor:** open `BStream-Music-<version>-macOS-x64.pkg`.
 
 An `.app` is the complete application and should be opened as one unit, not by entering its `Contents`, `Frameworks`, or `Resources` folders. The `.pkg` installer places `BStream Music.app` in `/Applications` automatically.
 
@@ -410,7 +461,14 @@ flutter analyze
 flutter test
 ```
 
-The current test suite covers models, use cases, services, the sleep timer, TikTok permissions, navigation, favorites, queue behavior, mobile adaptation, and the Windows player at minimum size.
+The current test suite covers models, use cases, services, the sleep timer,
+TikTok permissions, navigation, favorites, queue behavior and reordering,
+external Android audio, themes, artwork handling, backup validation, mobile
+adaptation, and the Windows player at minimum size.
+
+The release workflow runs formatting, static analysis, and the complete test
+suite before any installer job. Pull-request runs are cancelled when a newer
+commit supersedes them.
 
 ## Files not published
 

@@ -9,7 +9,6 @@ import '../../../../platform_channels/android_screen_channel.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/lyrics.dart';
-import '../providers/artwork_progress_color_provider.dart';
 import '../providers/music_providers.dart';
 import 'playback_gradient_background.dart';
 import 'playback_progress_line.dart';
@@ -188,6 +187,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
               IconButton(
                 key: const ValueKey('similar-lyrics-back'),
                 tooltip: strings.backToLyrics,
+                color: AppColors.downloadAccentFor(context),
                 onPressed: () => setState(() => _showSimilarLyrics = false),
                 icon: const Icon(Icons.arrow_back_rounded),
               ),
@@ -238,7 +238,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
               ),
               prefixIcon: Icon(
                 Icons.search_rounded,
-                color: Colors.white.withValues(alpha: 0.68),
+                color: AppColors.downloadAccentFor(context),
               ),
               suffixIcon: IconButton(
                 key: ValueKey(
@@ -256,6 +256,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
                   _manualSearchTitle.isEmpty
                       ? Icons.arrow_forward_rounded
                       : Icons.close_rounded,
+                  color: AppColors.downloadAccentFor(context),
                 ),
               ),
               filled: true,
@@ -274,7 +275,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
                 borderSide: BorderSide(
-                  color: Colors.white.withValues(alpha: 0.42),
+                  color: AppColors.downloadAccentFor(context),
                 ),
               ),
             ),
@@ -495,6 +496,7 @@ class _LyricsHeader extends ConsumerWidget {
                 key: const ValueKey('lyrics-back-button'),
                 tooltip: strings.back,
                 icon: const Icon(Icons.arrow_back_rounded),
+                color: AppColors.downloadAccentFor(context),
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
               const SizedBox(width: 4),
@@ -530,12 +532,13 @@ class _LyricsHeader extends ConsumerWidget {
                 key: const ValueKey('lyrics-playback-control'),
                 tooltip: isPlaying ? strings.pause : strings.play,
                 style: IconButton.styleFrom(
-                  backgroundColor: AppColors.playbackPrimaryBackground,
-                  foregroundColor: AppColors.playbackPrimaryForeground,
-                  disabledBackgroundColor:
-                      AppColors.playbackPrimaryDisabledBackground,
+                  backgroundColor: AppColors.downloadAccentFor(context),
+                  foregroundColor: AppColors.playIconForegroundFor(context),
+                  disabledBackgroundColor: AppColors.downloadAccentFor(
+                    context,
+                  ).withValues(alpha: 0.42),
                   disabledForegroundColor:
-                      AppColors.playbackPrimaryDisabledForeground,
+                      AppColors.playIconDisabledForegroundFor(context),
                 ),
                 icon: Icon(
                   isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
@@ -566,13 +569,10 @@ class _LyricsHeaderProgress extends ConsumerWidget {
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
-          thumbnailUrl: snapshot?.thumbnailUrl,
         );
       }),
     );
-    final progressColor =
-        ref.watch(artworkProgressColorProvider(timeline.thumbnailUrl)).value ??
-        ArtworkProgressColor.fallback;
+    final progressColor = AppColors.downloadAccentFor(context);
     final totalMilliseconds = timeline.duration?.inMilliseconds ?? 0;
     final progress = totalMilliseconds <= 0
         ? 0.0
@@ -851,6 +851,10 @@ class _LyricsOffsetControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
+    final accent = AppColors.downloadAccentFor(context);
+    final surface = AppColors.menuBackgroundFor(context);
+    final border = AppColors.menuBorderFor(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final seconds = offset.inMilliseconds / 1000;
     final formatted =
         '${seconds >= 0 ? '+' : ''}${seconds.toStringAsFixed(2)} s';
@@ -866,12 +870,14 @@ class _LyricsOffsetControls extends ConsumerWidget {
           key: const ValueKey('lyrics-offset-control'),
           height: 48,
           decoration: BoxDecoration(
-            color: AppColors.menuBackground,
+            color: surface,
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppColors.menuBorder),
-            boxShadow: const [
+            border: Border.all(color: border),
+            boxShadow: [
               BoxShadow(
-                color: Color(0x80000000),
+                color: isDark
+                    ? const Color(0x80000000)
+                    : const Color(0x30000000),
                 blurRadius: 12,
                 offset: Offset(0, 3),
               ),
@@ -890,6 +896,7 @@ class _LyricsOffsetControls extends ConsumerWidget {
                   ),
                   padding: EdgeInsets.zero,
                   iconSize: 19,
+                  color: accent,
                   icon: const Icon(Icons.remove_rounded),
                   onPressed: onDecrease,
                 ),
@@ -909,8 +916,8 @@ class _LyricsOffsetControls extends ConsumerWidget {
                       key: const ValueKey('lyrics-offset-reset'),
                       onPressed: offset == Duration.zero ? null : onReset,
                       style: TextButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        disabledForegroundColor: Colors.white,
+                        foregroundColor: accent,
+                        disabledForegroundColor: accent.withValues(alpha: 0.54),
                         padding: EdgeInsets.zero,
                         minimumSize: const Size(92, 40),
                       ),
@@ -929,8 +936,8 @@ class _LyricsOffsetControls extends ConsumerWidget {
                               maxLines: 1,
                               style: TextStyle(
                                 color: offset == Duration.zero
-                                    ? Colors.white.withValues(alpha: 0.72)
-                                    : Colors.white,
+                                    ? accent.withValues(alpha: 0.72)
+                                    : accent,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: 0.1,
@@ -953,6 +960,7 @@ class _LyricsOffsetControls extends ConsumerWidget {
                   ),
                   padding: EdgeInsets.zero,
                   iconSize: 19,
+                  color: accent,
                   icon: const Icon(Icons.add_rounded),
                   onPressed: onIncrease,
                 ),
@@ -1065,7 +1073,7 @@ class _LyricsMessage extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 4),
               )
             else
-              Icon(icon, size: 52, color: AppColors.downloadAccent),
+              Icon(icon, size: 52, color: AppColors.downloadAccentFor(context)),
             const SizedBox(height: 18),
             Text(
               message,
@@ -1080,9 +1088,13 @@ class _LyricsMessage extends StatelessWidget {
               FilledButton.icon(
                 onPressed: onAction,
                 style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xB8000000),
-                  foregroundColor: Colors.white,
-                  side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+                  backgroundColor: AppColors.downloadAccentFor(context),
+                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                  side: BorderSide(
+                    color: AppColors.downloadAccentFor(
+                      context,
+                    ).withValues(alpha: 0.72),
+                  ),
                 ),
                 icon: Icon(actionIcon),
                 label: Text(actionLabel!),

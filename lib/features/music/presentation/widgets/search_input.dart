@@ -5,12 +5,14 @@ class SearchInput extends StatefulWidget {
     required this.onSubmitted,
     required this.hintText,
     required this.tooltip,
+    required this.clearTooltip,
     super.key,
   });
 
   final ValueChanged<String> onSubmitted;
   final String hintText;
   final String tooltip;
+  final String clearTooltip;
 
   @override
   State<SearchInput> createState() => _SearchInputState();
@@ -20,26 +22,53 @@ class _SearchInputState extends State<SearchInput> {
   final _controller = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_handleTextChanged);
+  }
+
+  void _handleTextChanged() {
+    setState(() {});
+  }
+
+  @override
   void dispose() {
+    _controller.removeListener(_handleTextChanged);
     _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    void submit() => widget.onSubmitted(_controller.text);
+
+    final hasText = _controller.text.isNotEmpty;
+
     return SizedBox(
       width: double.infinity,
       child: TextField(
         controller: _controller,
         textInputAction: TextInputAction.search,
-        onSubmitted: widget.onSubmitted,
+        onSubmitted: (_) => submit(),
         decoration: InputDecoration(
           hintText: widget.hintText,
           prefixIcon: const Icon(Icons.search_rounded),
-          suffixIcon: IconButton(
-            tooltip: widget.tooltip,
-            icon: const Icon(Icons.arrow_forward_rounded),
-            onPressed: () => widget.onSubmitted(_controller.text),
+          suffixIcon: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (hasText)
+                IconButton(
+                  key: const ValueKey('search-clear-button'),
+                  tooltip: widget.clearTooltip,
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: _controller.clear,
+                ),
+              IconButton(
+                tooltip: widget.tooltip,
+                icon: const Icon(Icons.arrow_forward_rounded),
+                onPressed: submit,
+              ),
+            ],
           ),
         ),
       ),

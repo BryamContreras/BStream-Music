@@ -1,4 +1,5 @@
-part of 'music_providers.dart';
+import '../../../../core/utils/duration_formatter.dart';
+import '../../../../core/theme/app_theme.dart';
 
 enum AppLanguage { spanish, english }
 
@@ -21,13 +22,6 @@ extension AppLanguageLabel on AppLanguage {
   }
 }
 
-final appStringsProvider = Provider<AppStrings>((ref) {
-  final language =
-      ref.watch(settingsControllerProvider).value?.language ??
-      AppLanguage.spanish;
-  return AppStrings(language);
-});
-
 class AppStrings {
   const AppStrings(this.appLanguage);
 
@@ -46,6 +40,7 @@ class AppStrings {
     'No recently played songs yet.',
   );
   String get search => choose('Buscar', 'Search');
+  String get clearSearch => choose('Limpiar búsqueda', 'Clear search');
   String get searchTitle => choose('Búsqueda', 'Search');
   String get player => choose('Reproductor', 'Player');
   String get library => choose('Biblioteca', 'Library');
@@ -70,6 +65,10 @@ class AppStrings {
   String get noTitle => choose('Sin titulo', 'Untitled');
   String get unknownArtist => choose('Desconocido', 'Unknown');
   String get playbackError => choose('Error de reproduccion', 'Playback error');
+  String get externalAudioFolderUnavailable => choose(
+    'Se reproducira el audio elegido, pero Android no permitio cargar el resto de la carpeta.',
+    'The selected audio will play, but Android did not allow the rest of the folder to be loaded.',
+  );
   String get volume => choose('Volumen', 'Volume');
   String get volumeControl => choose('Control de Volumen', 'Volume control');
   String get lyrics => choose('Letras', 'Lyrics');
@@ -210,6 +209,23 @@ class AppStrings {
   String get backupFailed =>
       choose('No se pudo completar el respaldo.', 'Backup failed.');
   String get language => choose('Idioma', 'Language');
+  String get appearance => choose('Apariencia', 'Appearance');
+  String get theme => choose('Tema', 'Theme');
+  String get themeSystem => choose('Sistema', 'System');
+  String get themeLight => choose('Claro', 'Light');
+  String get themeDark => choose('Oscuro', 'Dark');
+  String get accentColor => choose('Color de acento', 'Accent color');
+  String accentLabel(AppAccent accent) => switch (accent) {
+    AppAccent.white => choose('Blanco', 'White'),
+    AppAccent.green => choose('Verde', 'Green'),
+    AppAccent.blue => choose('Azul', 'Blue'),
+    AppAccent.purple => choose('Morado', 'Purple'),
+    AppAccent.orange => choose('Naranja', 'Orange'),
+    AppAccent.red => choose('Rojo', 'Red'),
+    AppAccent.yellow => choose('Amarillo', 'Yellow'),
+    AppAccent.pink => choose('Rosa', 'Pink'),
+    AppAccent.teal => choose('Turquesa', 'Teal'),
+  };
   String get spanish => choose('Espanol', 'Spanish');
   String get english => 'English';
   String get sleepTimer => choose('Temporizador', 'Sleep timer');
@@ -279,11 +295,33 @@ class AppStrings {
   String appVersion(String version) =>
       choose('Versión $version', 'Version $version');
 
+  String get supportDevelopmentTitle => choose(
+    '¿Te gusta la app? Apoya su desarrollo ❤️',
+    'Enjoying the app? Support its development ❤️',
+  );
+  String get supportDevelopmentBody => choose(
+    'La app seguirá siendo gratuita. Si te resulta útil, puedes hacer una contribución para ayudarme a mantenerla y seguir agregando funciones.',
+    'The app will remain free. If you find it useful, you can make a contribution to help me maintain it and continue adding features.',
+  );
+  String get supportDevelopmentAction => choose('Apoyar', 'Support');
+  String get supportDevelopmentOpenFailed => choose(
+    'No se pudo abrir la página de apoyo.',
+    'The support page could not be opened.',
+  );
+
   String songCount(int count) {
     if (isEnglish) {
       return '$count ${count == 1 ? 'song' : 'songs'}';
     }
     return '$count ${count == 1 ? 'cancion' : 'canciones'}';
+  }
+
+  String songCountWithDuration(int count, Duration? duration) {
+    final countText = songCount(count);
+    if (duration == null) {
+      return countText;
+    }
+    return '$countText · ${formatCollectionDuration(duration)}';
   }
 
   String playbackQueueSummary(int count) {

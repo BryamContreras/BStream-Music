@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../../core/utils/bounded_byte_stream.dart';
+
 class LrclibResponse {
   LrclibResponse({
     required this.statusCode,
@@ -32,6 +34,7 @@ class IoLrclibTransport implements LrclibTransport {
   IoLrclibTransport({
     HttpClient? client,
     Duration connectionTimeout = const Duration(seconds: 6),
+    this.maxResponseBytes = 2 * 1024 * 1024,
   }) : _client = client ?? HttpClient() {
     if (connectionTimeout <= Duration.zero) {
       throw ArgumentError.value(
@@ -40,10 +43,18 @@ class IoLrclibTransport implements LrclibTransport {
         'Must be positive.',
       );
     }
+    if (maxResponseBytes <= 0) {
+      throw ArgumentError.value(
+        maxResponseBytes,
+        'maxResponseBytes',
+        'Must be positive.',
+      );
+    }
     _client.connectionTimeout = connectionTimeout;
   }
 
   final HttpClient _client;
+  final int maxResponseBytes;
   bool _closed = false;
 
   @override
@@ -66,9 +77,24 @@ class IoLrclibTransport implements LrclibTransport {
       response.headers.forEach((name, values) {
         responseHeaders[name] = values.join(', ');
       });
+      final responseTimeout = timeout ?? const Duration(seconds: 30);
+      late final List<int> bodyBytes;
+      try {
+        bodyBytes = await collectBoundedByteStream(
+          response,
+          maximumBytes: maxResponseBytes,
+          declaredLength: response.contentLength < 0
+              ? null
+              : response.contentLength,
+          idleTimeout: responseTimeout,
+          totalTimeout: responseTimeout,
+        );
+      } on ByteStreamLimitException catch (error) {
+        throw FormatException(error.toString());
+      }
       return LrclibResponse(
         statusCode: response.statusCode,
-        body: await response.transform(utf8.decoder).join(),
+        body: utf8.decode(bodyBytes),
         headers: responseHeaders,
       );
     }();

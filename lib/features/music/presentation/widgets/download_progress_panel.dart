@@ -39,7 +39,10 @@ class DownloadProgressPanel extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
         child: Row(
           children: [
-            Icon(Icons.music_note_rounded, color: AppColors.downloadAccent),
+            Icon(
+              Icons.music_note_rounded,
+              color: AppColors.downloadAccentFor(context),
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -71,7 +74,7 @@ class DownloadProgressPanel extends ConsumerWidget {
                             Theme.of(context).colorScheme.error,
                             const Color(0xFFFFB3B3),
                           ]
-                        : AppColors.downloadGradient,
+                        : AppColors.downloadGradientFor(context),
                   ),
                   if (active.errorMessage != null)
                     Padding(

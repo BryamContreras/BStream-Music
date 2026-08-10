@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' as io;
 
+import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
@@ -63,7 +64,7 @@ void main() {
     expect(find.text('Reproductor'), findsNothing);
   });
 
-  testWidgets('popup menus use the shared neutral black surface', (
+  testWidgets('popup menus match the active appearance surface', (
     tester,
   ) async {
     await tester.pumpWidget(_testApp());
@@ -71,12 +72,21 @@ void main() {
 
     final context = tester.element(find.byType(Scaffold).first);
     final popupTheme = Theme.of(context).popupMenuTheme;
-    expect(popupTheme.color, AppColors.menuBackground);
+    final colors = Theme.of(context).colorScheme;
+    expect(
+      popupTheme.color,
+      colors.brightness == Brightness.dark
+          ? AppColors.menuBackground
+          : colors.surfaceContainerHighest.withValues(alpha: 0.97),
+    );
     expect(popupTheme.surfaceTintColor, Colors.transparent);
     final shape = popupTheme.shape! as RoundedRectangleBorder;
-    expect(shape.side.color, AppColors.menuBorder);
-    _expectNeutralDark(AppColors.menuBackground);
-    _expectNeutral(AppColors.menuForeground);
+    expect(
+      shape.side.color,
+      colors.brightness == Brightness.dark
+          ? AppColors.menuBorder
+          : colors.outlineVariant.withValues(alpha: 0.9),
+    );
   });
 
   testWidgets(
@@ -217,6 +227,130 @@ void main() {
     expect(tester.widget<TextField>(directoryField).controller?.text, before);
     expect(before, initialPath);
     expect(settingsController.savedDirectories, isEmpty);
+  });
+
+  testWidgets('cancelling custom sleep timer closes safely', (tester) async {
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Personalizar'));
+    await tester.pumpAndSettle();
+    expect(find.text('Duracion del temporizador'), findsOneWidget);
+
+    await tester.tap(find.text('Cancelar'));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('support section opens the exact Ko-fi donation page', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    Uri? launchedUrl;
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+        supportLauncher: (url) async {
+          launchedUrl = url;
+          return true;
+        },
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final button = find.byKey(const ValueKey('support-development-button'));
+    await tester.scrollUntilVisible(
+      button,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    expect(find.text('Versión 1.2.3'), findsOneWidget);
+    expect(
+      find.text('¿Te gusta la app? Apoya su desarrollo ❤️'),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'La app seguirá siendo gratuita. Si te resulta útil, puedes hacer una contribución para ayudarme a mantenerla y seguir agregando funciones.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(button);
+    await tester.pump();
+
+    expect(launchedUrl, Uri.parse(AppConstants.supportDevelopmentUrl));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('support section reports when the browser cannot open', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+        supportLauncher: (_) async => false,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final button = find.byKey(const ValueKey('support-development-button'));
+    await tester.scrollUntilVisible(
+      button,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pump();
+
+    expect(find.text('No se pudo abrir la página de apoyo.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('system back remembers only the last two visited tabs', (
@@ -575,31 +709,42 @@ void main() {
     final miniPlayerControl = tester.widget<IconButton>(
       find.byKey(const ValueKey('mini-player-primary-control')),
     );
+    final miniPlayerContext = tester.element(find.byType(MiniPlayer));
+    final miniGradient = AppColors.downloadGradientFor(miniPlayerContext);
+    final miniProgressAccent = AppColors.downloadAccentFor(miniPlayerContext);
+    final miniForeground = AppColors.playIconForegroundFor(miniPlayerContext);
     expect(
       miniPlayerControl.style?.foregroundColor?.resolve(<WidgetState>{}),
-      AppColors.playbackPrimaryForeground,
+      miniForeground,
     );
+    final miniGradientBox = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('mini-player-primary-gradient')),
+    );
+    final miniGradientDecoration = miniGradientBox.decoration as BoxDecoration;
+    final actualMiniGradient =
+        (miniGradientDecoration.gradient! as LinearGradient).colors;
+    expect(actualMiniGradient, miniGradient);
     expect(
       miniPlayerControl.style?.backgroundColor?.resolve(<WidgetState>{}),
-      AppColors.playbackPrimaryBackground,
+      Colors.transparent,
     );
     expect(
       miniPlayerControl.style?.foregroundColor?.resolve(<WidgetState>{
         WidgetState.disabled,
       }),
-      AppColors.playbackPrimaryDisabledForeground,
+      miniForeground.withValues(alpha: 0.62),
     );
     expect(
       miniPlayerControl.style?.backgroundColor?.resolve(<WidgetState>{
         WidgetState.disabled,
       }),
-      AppColors.playbackPrimaryDisabledBackground,
+      Colors.transparent,
     );
     final miniProgressAnimation = tester.widget<TweenAnimationBuilder<Color?>>(
       find.byKey(const ValueKey('mini-progress-color-animation')),
     );
     final miniProgressColor = miniProgressAnimation.tween.end;
-    expect(miniProgressColor, expectedProgressColor);
+    expect(miniProgressColor, miniProgressAccent);
 
     await tester.tap(find.byType(MiniPlayer));
     await tester.pump(const Duration(milliseconds: 500));
@@ -615,32 +760,40 @@ void main() {
     final playerControl = tester.widget<IconButton>(
       find.byKey(const ValueKey('player-primary-control')),
     );
+    final playerContext = tester.element(
+      find.byKey(const ValueKey('player-primary-control')),
+    );
     expect(
       playerControl.style?.foregroundColor?.resolve(<WidgetState>{}),
-      AppColors.playbackPrimaryForeground,
+      AppColors.playbackPrimaryForegroundFor(playerContext),
     );
     expect(
       playerControl.style?.backgroundColor?.resolve(<WidgetState>{}),
-      AppColors.playbackPrimaryBackground,
+      AppColors.playbackPrimaryBackgroundFor(playerContext),
     );
     expect(
       playerControl.style?.foregroundColor?.resolve(<WidgetState>{
         WidgetState.disabled,
       }),
-      AppColors.playbackPrimaryDisabledForeground,
+      AppColors.playbackPrimaryDisabledForegroundFor(playerContext),
     );
     expect(
       playerControl.style?.backgroundColor?.resolve(<WidgetState>{
         WidgetState.disabled,
       }),
-      AppColors.playbackPrimaryDisabledBackground,
+      AppColors.playbackPrimaryDisabledBackgroundFor(playerContext),
     );
     final playerProgressAnimation = tester
         .widget<TweenAnimationBuilder<Color?>>(
           find.byKey(const ValueKey('player-progress-color-animation')),
         );
-    expect(playerProgressAnimation.tween.end, expectedProgressColor);
-    expect(playerProgressAnimation.tween.end, miniProgressColor);
+    final playerProgressContext = tester.element(
+      find.byKey(const ValueKey('player-progress-color-animation')),
+    );
+    expect(
+      playerProgressAnimation.tween.end,
+      AppColors.downloadAccentFor(playerProgressContext),
+    );
     expect(find.byTooltip('Letras'), findsOneWidget);
     expect(find.byTooltip('Volumen'), findsOneWidget);
     final lyricsControl = find.byKey(const ValueKey('player-lyrics-control'));
@@ -680,26 +833,33 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     final popover = find.byKey(const ValueKey('volume-popover'));
     expect(popover, findsOneWidget);
+    final popoverContext = tester.element(popover);
     final popoverDecoration =
         tester.widget<Container>(popover).decoration! as BoxDecoration;
-    expect(popoverDecoration.color, AppColors.menuBackground);
+    expect(
+      popoverDecoration.color,
+      AppColors.menuBackgroundFor(popoverContext),
+    );
     expect(
       (popoverDecoration.border! as Border).top.color,
-      AppColors.menuBorder,
+      AppColors.menuBorderFor(popoverContext),
     );
 
     final sliderTheme = tester.widget<SliderTheme>(
       find.descendant(of: popover, matching: find.byType(SliderTheme)),
     );
-    expect(sliderTheme.data.activeTrackColor, AppColors.menuForeground);
-    expect(sliderTheme.data.thumbColor, AppColors.menuForeground);
+    expect(
+      sliderTheme.data.activeTrackColor,
+      AppColors.menuForegroundFor(popoverContext),
+    );
+    expect(
+      sliderTheme.data.thumbColor,
+      AppColors.menuForegroundFor(popoverContext),
+    );
     expect(
       sliderTheme.data.inactiveTrackColor,
-      AppColors.neutralSliderInactive,
+      AppColors.menuInactiveSliderFor(popoverContext),
     );
-    _expectNeutral(sliderTheme.data.activeTrackColor!);
-    _expectNeutral(sliderTheme.data.thumbColor!);
-    _expectNeutral(sliderTheme.data.inactiveTrackColor!);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -1118,16 +1278,6 @@ void main() {
   });
 }
 
-void _expectNeutral(Color color) {
-  expect((color.r - color.g).abs(), lessThanOrEqualTo(0.01));
-  expect((color.g - color.b).abs(), lessThanOrEqualTo(0.01));
-}
-
-void _expectNeutralDark(Color color) {
-  _expectNeutral(color);
-  expect(color.computeLuminance(), lessThan(0.03));
-}
-
 Future<void> _pumpTestApp(WidgetTester tester) {
   return tester.pumpWidget(_testApp());
 }
@@ -1135,11 +1285,14 @@ Future<void> _pumpTestApp(WidgetTester tester) {
 Widget _settingsTestApp({
   required _FakeSettingsController settingsController,
   required DownloadDirectoryPicker directoryPicker,
+  SupportDevelopmentLauncher? supportLauncher,
 }) {
   return ProviderScope(
     overrides: [
       settingsControllerProvider.overrideWith(() => settingsController),
       downloadDirectoryPickerProvider.overrideWithValue(directoryPicker),
+      if (supportLauncher != null)
+        supportDevelopmentLauncherProvider.overrideWithValue(supportLauncher),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),

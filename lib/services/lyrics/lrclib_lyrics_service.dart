@@ -6,8 +6,13 @@ import '../../features/music/data/parsers/lrc_parser.dart';
 import '../../features/music/domain/entities/lyrics_candidate.dart';
 import '../../features/music/domain/entities/lyrics_document.dart';
 import '../../features/music/domain/entities/lyrics_lookup.dart';
+import 'lrclib_exceptions.dart';
+import 'lrclib_models.dart';
+import 'lrclib_request_pacing.dart';
 import 'lrclib_transport.dart';
 import 'lyrics_service.dart';
+
+export 'lrclib_exceptions.dart';
 
 typedef LrclibDelay = Future<void> Function(Duration duration);
 typedef LrclibClock = DateTime Function();
@@ -25,6 +30,7 @@ class LrclibLyricsService implements LyricsService {
     LrcParser parser = const LrcParser(),
     LrclibDelay? delay,
     LrclibClock? clock,
+    LrclibMonotonicClock? monotonicClock,
   }) {
     final normalizedUserAgent = userAgent.trim();
     if (normalizedUserAgent.isEmpty) {
@@ -62,6 +68,7 @@ class LrclibLyricsService implements LyricsService {
       );
     }
 
+    final monotonicWatch = Stopwatch()..start();
     return LrclibLyricsService._(
       userAgent: normalizedUserAgent,
       transport:
@@ -75,6 +82,7 @@ class LrclibLyricsService implements LyricsService {
       parser: parser,
       delay: delay ?? Future<void>.delayed,
       clock: clock ?? DateTime.now,
+      monotonicClock: monotonicClock ?? () => monotonicWatch.elapsed,
     );
   }
 
@@ -90,6 +98,7 @@ class LrclibLyricsService implements LyricsService {
     required LrcParser parser,
     required LrclibDelay delay,
     required LrclibClock clock,
+    required LrclibMonotonicClock monotonicClock,
   }) : this._initialized(
          userAgent,
          transport,
@@ -102,6 +111,7 @@ class LrclibLyricsService implements LyricsService {
          parser,
          delay,
          clock,
+         monotonicClock,
        );
 
   LrclibLyricsService._initialized(
@@ -116,9 +126,9 @@ class LrclibLyricsService implements LyricsService {
     this._parser,
     this._delay,
     this._clock,
+    this._monotonicClock,
   );
 
-  static const _providerName = 'LRCLIB';
   static const _minimumCandidateScore = 0.62;
   static const _strongCandidateScore = 0.83;
   static const _maxLookupRequests = 6;
@@ -136,6 +146,7 @@ class LrclibLyricsService implements LyricsService {
   final LrcParser _parser;
   final LrclibDelay _delay;
   final LrclibClock _clock;
+  final LrclibMonotonicClock _monotonicClock;
   final Map<String, _CacheEntry> _cache = {};
 
   bool _disposed = false;
@@ -201,12 +212,12 @@ class LrclibLyricsService implements LyricsService {
       return const [];
     }
     final queries = _similarTitleQueries(lookup, identities);
-    final records = <_LrclibRecord>[];
-    var candidates = <_ScoredRecord>[];
-    final budget = _RequestBudget(_lookupTimeout);
-    final pacer = _RequestPacer(_minimumRequestSpacing);
+    final records = <LrclibRecord>[];
+    var candidates = <LrclibScoredRecord>[];
+    final budget = LrclibRequestBudget(_lookupTimeout, _monotonicClock);
+    final pacer = LrclibRequestPacer(_minimumRequestSpacing, _monotonicClock);
 
-    Future<List<_LrclibRecord>> requestSearch(String query) async {
+    Future<List<LrclibRecord>> requestSearch(String query) async {
       final wait = _requestSlotWait(budget, pacer);
       if (wait != null) {
         await wait;
@@ -266,7 +277,7 @@ class LrclibLyricsService implements LyricsService {
     }
 
     final records = await _search(_endpoint('search', {'q': manualTitle}));
-    final candidates = <_ScoredRecord>[];
+    final candidates = <LrclibScoredRecord>[];
     for (final record in records) {
       final document = record.toDocument(_parser);
       if (!document.hasPlainLyrics && !document.hasSyncedLyrics) {
@@ -274,7 +285,7 @@ class LrclibLyricsService implements LyricsService {
       }
       final score = _manualCandidateScore(manualTitle, context, record);
       if (score != null) {
-        candidates.add(_ScoredRecord(record: record, score: score));
+        candidates.add(LrclibScoredRecord(record: record, score: score));
       }
     }
     return _toLyricsCandidates(candidates, limit: limit);
@@ -288,9 +299,9 @@ class LrclibLyricsService implements LyricsService {
     final primaryIdentity = identities.first;
     final requestedUris = <String>{};
     var requestCount = 0;
-    _ScoredRecord? best;
-    final budget = _RequestBudget(_lookupTimeout);
-    final pacer = _RequestPacer(_minimumRequestSpacing);
+    LrclibScoredRecord? best;
+    final budget = LrclibRequestBudget(_lookupTimeout, _monotonicClock);
+    final pacer = LrclibRequestPacer(_minimumRequestSpacing, _monotonicClock);
 
     Future<LrclibResponse?> requestExact(
       Map<String, String> queryParameters,
@@ -312,7 +323,7 @@ class LrclibLyricsService implements LyricsService {
       return _get(uri, timeout: timeout);
     }
 
-    Future<List<_LrclibRecord>?> requestSearch(
+    Future<List<LrclibRecord>?> requestSearch(
       Map<String, String> queryParameters,
     ) async {
       final uri = _endpoint('search', queryParameters);
@@ -328,7 +339,7 @@ class LrclibLyricsService implements LyricsService {
       return _search(uri, timeout: budget.timeoutFor(_requestTimeout));
     }
 
-    void remember(_ScoredRecord? candidate) {
+    void remember(LrclibScoredRecord? candidate) {
       if (candidate != null &&
           (best == null || candidate.isBetterThan(best!))) {
         best = candidate;
@@ -419,7 +430,7 @@ class LrclibLyricsService implements LyricsService {
     return best?.record.toDocument(_parser);
   }
 
-  Future<List<_LrclibRecord>> _search(Uri uri, {Duration? timeout}) async {
+  Future<List<LrclibRecord>> _search(Uri uri, {Duration? timeout}) async {
     final response = await _get(uri, timeout: timeout);
     if (response.statusCode == HttpStatus.notFound ||
         response.statusCode == HttpStatus.noContent) {
@@ -436,17 +447,17 @@ class LrclibLyricsService implements LyricsService {
     }
     return decoded
         .map(_recordFromObject)
-        .whereType<_LrclibRecord>()
+        .whereType<LrclibRecord>()
         .where((record) => record.toDocument(_parser).hasContent)
         .toList(growable: false);
   }
 
-  _ScoredRecord? _bestMatch(
+  LrclibScoredRecord? _bestMatch(
     LyricsLookup lookup,
-    List<_SearchIdentity> identities,
-    List<_LrclibRecord> candidates,
+    List<LrclibSearchIdentity> identities,
+    List<LrclibRecord> candidates,
   ) {
-    _ScoredRecord? best;
+    LrclibScoredRecord? best;
     for (final record in candidates) {
       double? recordScore;
       for (final identity in identities) {
@@ -458,7 +469,7 @@ class LrclibLyricsService implements LyricsService {
       if (recordScore == null || recordScore < _minimumCandidateScore) {
         continue;
       }
-      final candidate = _ScoredRecord(record: record, score: recordScore);
+      final candidate = LrclibScoredRecord(record: record, score: recordScore);
       if (best == null || candidate.isBetterThan(best)) {
         best = candidate;
       }
@@ -468,8 +479,8 @@ class LrclibLyricsService implements LyricsService {
 
   double? _candidateScore(
     LyricsLookup lookup,
-    _SearchIdentity identity,
-    _LrclibRecord candidate,
+    LrclibSearchIdentity identity,
+    LrclibRecord candidate,
   ) {
     final titleScore = _titleSimilarity(identity.title, candidate.trackName);
     final hasArtist = identity.artist.isNotEmpty;
@@ -506,13 +517,13 @@ class LrclibLyricsService implements LyricsService {
     return score.clamp(0.0, 1.0);
   }
 
-  List<_ScoredRecord> _scoreSimilarRecords(
+  List<LrclibScoredRecord> _scoreSimilarRecords(
     LyricsLookup lookup,
-    List<_SearchIdentity> identities,
-    Iterable<_LrclibRecord> records, {
+    List<LrclibSearchIdentity> identities,
+    Iterable<LrclibRecord> records, {
     bool allowArtistOnly = false,
   }) {
-    final candidates = <_ScoredRecord>[];
+    final candidates = <LrclibScoredRecord>[];
     for (final record in records) {
       // Instrumental records count as content for automatic lookup, but they
       // are not useful in a list where the listener explicitly wants lyrics.
@@ -527,14 +538,14 @@ class LrclibLyricsService implements LyricsService {
         allowArtistOnly: allowArtistOnly,
       );
       if (score != null) {
-        candidates.add(_ScoredRecord(record: record, score: score));
+        candidates.add(LrclibScoredRecord(record: record, score: score));
       }
     }
     return candidates;
   }
 
   List<LyricsCandidate> _toLyricsCandidates(
-    List<_ScoredRecord> candidates, {
+    List<LrclibScoredRecord> candidates, {
     required int limit,
   }) {
     candidates.sort((left, right) {
@@ -571,7 +582,7 @@ class LrclibLyricsService implements LyricsService {
 
   List<String> _similarTitleQueries(
     LyricsLookup lookup,
-    List<_SearchIdentity> identities,
+    List<LrclibSearchIdentity> identities,
   ) {
     final contextArtist = _reliableContextArtist(lookup);
     final rawContextArtist = _cleanArtist(lookup.artist);
@@ -584,7 +595,7 @@ class LrclibLyricsService implements LyricsService {
     if (titleIdentities.isEmpty) {
       return const [];
     }
-    final orderedIdentities = List<_SearchIdentity>.of(titleIdentities)
+    final orderedIdentities = List<LrclibSearchIdentity>.of(titleIdentities)
       ..sort((left, right) {
         if (contextArtist != null) {
           final leftArtist = left.artist.isEmpty
@@ -626,7 +637,7 @@ class LrclibLyricsService implements LyricsService {
               _queryEquivalenceKey(rawContextArtist);
       final safeIdentity =
           _isLikelyChannelArtist(identity.artist) || isUnreliableContextIdentity
-          ? _SearchIdentity(title: identity.title, artist: '')
+          ? LrclibSearchIdentity(title: identity.title, artist: '')
           : identity;
       if (safeIdentity.artist.isNotEmpty) {
         addQuery(_broadQuery(safeIdentity));
@@ -672,7 +683,7 @@ class LrclibLyricsService implements LyricsService {
   double? _manualCandidateScore(
     String manualTitle,
     LyricsLookup context,
-    _LrclibRecord candidate,
+    LrclibRecord candidate,
   ) {
     final titleScore = _titleSimilarity(manualTitle, candidate.trackName);
     if (titleScore < 0.5) {
@@ -706,8 +717,8 @@ class LrclibLyricsService implements LyricsService {
 
   double? _similarCandidateScore(
     LyricsLookup lookup,
-    List<_SearchIdentity> identities,
-    _LrclibRecord candidate, {
+    List<LrclibSearchIdentity> identities,
+    LrclibRecord candidate, {
     bool allowArtistOnly = false,
   }) {
     if (allowArtistOnly) {
@@ -864,8 +875,8 @@ class LrclibLyricsService implements LyricsService {
   }
 
   double _albumScore(String? expected, String? actual) {
-    final normalizedExpected = _meaningfulMetadata(expected);
-    final normalizedActual = _meaningfulMetadata(actual);
+    final normalizedExpected = meaningfulLrclibMetadata(expected);
+    final normalizedActual = meaningfulLrclibMetadata(actual);
     if (normalizedExpected == null || normalizedActual == null) {
       return 0.5;
     }
@@ -1143,13 +1154,13 @@ class LrclibLyricsService implements LyricsService {
     return folded;
   }
 
-  List<_SearchIdentity> _searchIdentities(LyricsLookup lookup) {
+  List<LrclibSearchIdentity> _searchIdentities(LyricsLookup lookup) {
     final normalizedTitle = _cleanQueryText(lookup.title);
     final cleanedTitle = normalizedTitle.isEmpty
         ? lookup.title.trim()
         : normalizedTitle;
     final cleanedArtist = _cleanArtist(lookup.artist);
-    final identities = <_SearchIdentity>[];
+    final identities = <LrclibSearchIdentity>[];
 
     void addIdentityVariants(String title, String artist) {
       final titleVariants = _queryTitleVariants(title);
@@ -1164,16 +1175,22 @@ class LrclibLyricsService implements LyricsService {
       // Interleave title and artist fallbacks so one noisy field cannot spend
       // the complete network budget before another logical identity is tried.
       identities.add(
-        _SearchIdentity(title: titleVariants.first, artist: safeArtists.first),
+        LrclibSearchIdentity(
+          title: titleVariants.first,
+          artist: safeArtists.first,
+        ),
       );
       for (final titleVariant in titleVariants.skip(1)) {
         identities.add(
-          _SearchIdentity(title: titleVariant, artist: safeArtists.first),
+          LrclibSearchIdentity(title: titleVariant, artist: safeArtists.first),
         );
       }
       for (final artistVariant in safeArtists.skip(1)) {
         identities.add(
-          _SearchIdentity(title: titleVariants.first, artist: artistVariant),
+          LrclibSearchIdentity(
+            title: titleVariants.first,
+            artist: artistVariant,
+          ),
         );
       }
     }
@@ -1318,12 +1335,12 @@ class LrclibLyricsService implements LyricsService {
     if (cleanedArtist.isEmpty) {
       addIdentityVariants(cleanedTitle, '');
     } else if (unreliableArtist) {
-      for (final identity in List<_SearchIdentity>.of(identities)) {
-        identities.add(_SearchIdentity(title: identity.title, artist: ''));
+      for (final identity in List<LrclibSearchIdentity>.of(identities)) {
+        identities.add(LrclibSearchIdentity(title: identity.title, artist: ''));
       }
     }
 
-    final unique = <String, _SearchIdentity>{};
+    final unique = <String, LrclibSearchIdentity>{};
     for (final identity in identities) {
       if (identity.title.isEmpty) {
         continue;
@@ -1464,8 +1481,11 @@ class LrclibLyricsService implements LyricsService {
     return variants.toList(growable: false);
   }
 
-  List<_SearchIdentity> _enclosedIdentities(String value, String artistHint) {
-    final identities = <_SearchIdentity>[];
+  List<LrclibSearchIdentity> _enclosedIdentities(
+    String value,
+    String artistHint,
+  ) {
+    final identities = <LrclibSearchIdentity>[];
     final patterns = <RegExp>[
       RegExp(r'「([^「」]+)」'),
       RegExp(r'『([^『』]+)』'),
@@ -1490,17 +1510,17 @@ class LrclibLyricsService implements LyricsService {
         if (prefix.isNotEmpty &&
             (prefixScore >= 0.45 ||
                 _isPresentationSegment(value.substring(match.end)))) {
-          identities.add(_SearchIdentity(title: title, artist: prefix));
+          identities.add(LrclibSearchIdentity(title: title, artist: prefix));
         }
         if (suffix.isNotEmpty && suffixScore >= 0.45) {
-          identities.add(_SearchIdentity(title: title, artist: suffix));
+          identities.add(LrclibSearchIdentity(title: title, artist: suffix));
         }
       }
     }
     return identities;
   }
 
-  _DecoratedIdentity? _decoratedIdentity(String value, String artistHint) {
+  LrclibDecoratedIdentity? _decoratedIdentity(String value, String artistHint) {
     final segments = _splitOnDecorativeSymbols(value)
         .map(_trimEdgeSeparators)
         .where((segment) => segment.isNotEmpty)
@@ -1535,7 +1555,7 @@ class LrclibLyricsService implements LyricsService {
       return null;
     }
 
-    return _DecoratedIdentity(
+    return LrclibDecoratedIdentity(
       title: title,
       primaryArtist: primaryArtist,
       allArtists: artistSegments.join(', '),
@@ -1856,14 +1876,16 @@ class LrclibLyricsService implements LyricsService {
         (rune >= 0xff5b && rune <= 0xff65);
   }
 
-  String _broadQuery(_SearchIdentity identity) {
+  String _broadQuery(LrclibSearchIdentity identity) {
     return [
       if (identity.artist.isNotEmpty) identity.artist,
       identity.title,
     ].join(' ');
   }
 
-  _SearchIdentity _broadSearchIdentity(List<_SearchIdentity> identities) {
+  LrclibSearchIdentity _broadSearchIdentity(
+    List<LrclibSearchIdentity> identities,
+  ) {
     final withArtist = identities
         .where((identity) => identity.artist.isNotEmpty)
         .toList(growable: false);
@@ -1882,7 +1904,10 @@ class LrclibLyricsService implements LyricsService {
     return best;
   }
 
-  Future<void>? _requestSlotWait(_RequestBudget budget, _RequestPacer pacer) {
+  Future<void>? _requestSlotWait(
+    LrclibRequestBudget budget,
+    LrclibRequestPacer pacer,
+  ) {
     final wait = pacer.waitBeforeNextRequest;
     if (wait <= Duration.zero) {
       if (budget.isExpired) {
@@ -1947,6 +1972,8 @@ class LrclibLyricsService implements LyricsService {
       throw LyricsConnectionException(error);
     } on TimeoutException catch (error) {
       throw LyricsConnectionException(error);
+    } on FormatException catch (error) {
+      throw LrclibFormatException(error.message);
     }
   }
 
@@ -1976,11 +2003,11 @@ class LrclibLyricsService implements LyricsService {
     }
   }
 
-  _LrclibRecord? _recordFromObject(Object? value) {
+  LrclibRecord? _recordFromObject(Object? value) {
     if (value is! Map) {
       return null;
     }
-    final record = _LrclibRecord.fromJson(
+    final record = LrclibRecord.fromJson(
       value.map((key, data) => MapEntry(key.toString(), data)),
     );
     if (record.trackName.isEmpty || record.artistName.isEmpty) {
@@ -2038,85 +2065,6 @@ class LrclibLyricsService implements LyricsService {
   }
 }
 
-class LrclibException implements Exception {
-  const LrclibException(this.message);
-
-  final String message;
-
-  @override
-  String toString() => 'LrclibException: $message';
-}
-
-class LrclibHttpException extends LrclibException {
-  LrclibHttpException(this.statusCode, String body)
-    : body = body.trim(),
-      super('LRCLIB request failed with HTTP $statusCode.');
-
-  final int statusCode;
-  final String body;
-}
-
-class LrclibRateLimitException extends LrclibException {
-  const LrclibRateLimitException({this.retryAfter})
-    : super('LRCLIB rate limit was reached.');
-
-  final Duration? retryAfter;
-}
-
-class LrclibFormatException extends LrclibException {
-  const LrclibFormatException(super.message);
-}
-
-class _RequestBudget {
-  _RequestBudget(this.limit) : _watch = Stopwatch()..start();
-
-  final Duration limit;
-  final Stopwatch _watch;
-
-  Duration get remaining {
-    final value = limit - _watch.elapsed;
-    return value.isNegative ? Duration.zero : value;
-  }
-
-  bool get isExpired => remaining <= Duration.zero;
-
-  Duration timeoutFor(Duration requestTimeout) {
-    final available = remaining;
-    if (available <= Duration.zero) {
-      return const Duration(microseconds: 1);
-    }
-    return available < requestTimeout ? available : requestTimeout;
-  }
-}
-
-class _RequestPacer {
-  _RequestPacer(this.minimumSpacing) : _watch = Stopwatch()..start();
-
-  final Duration minimumSpacing;
-  final Stopwatch _watch;
-  Duration? _lastRequestStartedAt;
-
-  Duration get waitBeforeNextRequest {
-    final previous = _lastRequestStartedAt;
-    if (previous == null) {
-      return Duration.zero;
-    }
-    final elapsed = _watch.elapsed - previous;
-    // Fake transports complete in microseconds; treating that as zero keeps
-    // pacing tests deterministic while real network RTT still reduces the
-    // remaining wait between request starts.
-    if (elapsed <= const Duration(milliseconds: 5)) {
-      return minimumSpacing;
-    }
-    final wait = minimumSpacing - elapsed;
-    return wait.isNegative ? Duration.zero : wait;
-  }
-
-  void markRequestStarted() {
-    _lastRequestStartedAt = _watch.elapsed;
-  }
-}
-
 class _CacheEntry {
   _CacheEntry({required this.future, required this.createdAt});
 
@@ -2126,130 +2074,4 @@ class _CacheEntry {
 
   bool isExpired(DateTime now, Duration ttl) =>
       completed && now.difference(createdAt) >= ttl;
-}
-
-class _LrclibRecord {
-  const _LrclibRecord({
-    required this.id,
-    required this.trackName,
-    required this.artistName,
-    required this.instrumental,
-    this.albumName,
-    this.duration,
-    this.plainLyrics,
-    this.syncedLyrics,
-  });
-
-  factory _LrclibRecord.fromJson(Map<String, dynamic> json) {
-    return _LrclibRecord(
-      id: _string(json['id']),
-      trackName: _string(json['trackName']) ?? _string(json['name']) ?? '',
-      artistName: _string(json['artistName']) ?? '',
-      albumName: _string(json['albumName']),
-      duration: _duration(json['duration']),
-      instrumental: json['instrumental'] == true,
-      plainLyrics: _string(json['plainLyrics']),
-      syncedLyrics: _string(json['syncedLyrics']),
-    );
-  }
-
-  final String? id;
-  final String trackName;
-  final String artistName;
-  final String? albumName;
-  final Duration? duration;
-  final bool instrumental;
-  final String? plainLyrics;
-  final String? syncedLyrics;
-
-  bool get hasSyncedLyrics => syncedLyrics?.trim().isNotEmpty ?? false;
-
-  LyricsDocument toDocument(LrcParser parser) {
-    return LyricsDocument(
-      provider: LrclibLyricsService._providerName,
-      providerId: id,
-      trackName: trackName,
-      artistName: artistName,
-      albumName: albumName,
-      duration: duration,
-      instrumental: instrumental,
-      plainLyrics: plainLyrics,
-      syncedLyrics: syncedLyrics,
-      lines: List.unmodifiable(parser.parse(syncedLyrics)),
-    );
-  }
-
-  static String? _string(Object? value) {
-    if (value == null) {
-      return null;
-    }
-    final normalized = value.toString().trim();
-    return normalized.isEmpty ? null : normalized;
-  }
-
-  static Duration? _duration(Object? value) {
-    final seconds = value is num
-        ? value.toDouble()
-        : double.tryParse(value?.toString() ?? '');
-    if (seconds == null || !seconds.isFinite || seconds <= 0) {
-      return null;
-    }
-    return Duration(milliseconds: (seconds * 1000).round());
-  }
-}
-
-class _ScoredRecord {
-  const _ScoredRecord({required this.record, required this.score});
-
-  final _LrclibRecord record;
-  final double score;
-
-  bool isBetterThan(_ScoredRecord other) {
-    final difference = score - other.score;
-    if (difference.abs() > 0.0001) {
-      return difference > 0;
-    }
-    return record.hasSyncedLyrics && !other.record.hasSyncedLyrics;
-  }
-}
-
-class _SearchIdentity {
-  const _SearchIdentity({required this.title, required this.artist});
-
-  final String title;
-  final String artist;
-}
-
-class _DecoratedIdentity {
-  const _DecoratedIdentity({
-    required this.title,
-    required this.primaryArtist,
-    required this.allArtists,
-  });
-
-  final String title;
-  final String primaryArtist;
-  final String allArtists;
-}
-
-String? _meaningfulMetadata(String? value) {
-  final normalized = value?.trim();
-  if (normalized == null || normalized.isEmpty) {
-    return null;
-  }
-  final comparable = normalized
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
-      .trim();
-  if (const {
-    'unknown',
-    'unknown album',
-    'desconocido',
-    'album desconocido',
-    'n a',
-    'na',
-  }.contains(comparable)) {
-    return null;
-  }
-  return normalized;
 }

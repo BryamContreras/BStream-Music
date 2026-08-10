@@ -11,6 +11,7 @@ class LocalTrack {
     this.duration,
     this.lastPlayedAt,
     this.lastPlayedPlaylistId,
+    this.isExternal = false,
   });
 
   final String id;
@@ -25,6 +26,9 @@ class LocalTrack {
   final DateTime? lastPlayedAt;
   final String? lastPlayedPlaylistId;
 
+  /// True for a transient track opened from Android outside BStream's library.
+  final bool isExternal;
+
   LocalTrack copyWith({
     String? id,
     String? title,
@@ -37,6 +41,7 @@ class LocalTrack {
     Duration? duration,
     DateTime? lastPlayedAt,
     String? lastPlayedPlaylistId,
+    bool? isExternal,
   }) {
     return LocalTrack(
       id: id ?? this.id,
@@ -50,6 +55,7 @@ class LocalTrack {
       duration: duration ?? this.duration,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
       lastPlayedPlaylistId: lastPlayedPlaylistId ?? this.lastPlayedPlaylistId,
+      isExternal: isExternal ?? this.isExternal,
     );
   }
 }

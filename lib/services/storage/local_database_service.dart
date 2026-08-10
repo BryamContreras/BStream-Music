@@ -47,6 +47,81 @@ class LocalDatabaseService {
     return p.join(supportDirectory.path, AppConstants.databaseName);
   }
 
+  /// Validates an extracted backup without migrating or mutating it.
+  ///
+  /// Restore uses this before touching the active library so a truncated,
+  /// corrupt, or newer unsupported database can never replace user data.
+  Future<void> validateBackupDatabase(String path) async {
+    final file = File(path);
+    if (!await file.exists() || await file.length() == 0) {
+      throw const FormatException(
+        'El respaldo no contiene una base de datos valida.',
+      );
+    }
+
+    _configureDatabaseFactory();
+    Database? candidate;
+    try {
+      candidate = await openDatabase(
+        file.path,
+        readOnly: true,
+        singleInstance: false,
+      );
+
+      final integrityRows = await candidate.rawQuery('PRAGMA integrity_check');
+      final integrityValues = integrityRows
+          .expand((row) => row.values)
+          .map((value) => value?.toString().trim().toLowerCase())
+          .whereType<String>()
+          .toList(growable: false);
+      if (integrityValues.isEmpty ||
+          integrityValues.any((value) => value != 'ok')) {
+        throw const FormatException(
+          'La base de datos del respaldo esta corrupta.',
+        );
+      }
+
+      final versionRows = await candidate.rawQuery('PRAGMA user_version');
+      final rawVersion = versionRows.isEmpty
+          ? null
+          : versionRows.first['user_version'];
+      final version = rawVersion is num
+          ? rawVersion.toInt()
+          : int.tryParse('$rawVersion');
+      if (version == null ||
+          version <= 0 ||
+          version > AppConstants.databaseVersion) {
+        throw const FormatException(
+          'La version de la base de datos del respaldo no es compatible.',
+        );
+      }
+
+      final tableRows = await candidate.rawQuery(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'table' AND name IN (?, ?)",
+        const ['local_tracks', 'playlists'],
+      );
+      final tables = tableRows
+          .map((row) => row['name']?.toString())
+          .whereType<String>()
+          .toSet();
+      if (!tables.containsAll(const {'local_tracks', 'playlists'})) {
+        throw const FormatException(
+          'La base de datos del respaldo no contiene la biblioteca requerida.',
+        );
+      }
+    } on FormatException {
+      rethrow;
+    } catch (error) {
+      throw FormatException(
+        'No se pudo validar la base de datos del respaldo.',
+        error,
+      );
+    } finally {
+      await candidate?.close();
+    }
+  }
+
   Future<void> close() async {
     var current = _database;
     final opening = _databaseFuture;
@@ -251,10 +326,7 @@ class LocalDatabaseService {
   }
 
   Future<Database> _open() async {
-    if (Platform.isWindows || Platform.isLinux) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-    }
+    _configureDatabaseFactory();
 
     final dbPath = await databasePath();
 
@@ -305,6 +377,13 @@ class LocalDatabaseService {
         }
       },
     );
+  }
+
+  void _configureDatabaseFactory() {
+    if (Platform.isWindows || Platform.isLinux) {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    }
   }
 
   Future<void> _createIndexes(DatabaseExecutor db) async {

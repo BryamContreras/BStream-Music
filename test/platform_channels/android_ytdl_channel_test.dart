@@ -1,3 +1,4 @@
+import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/platform_channels/android_ytdl_channel.dart';
 import 'package:flutter/services.dart';
@@ -79,5 +80,33 @@ void main() {
       'User-Agent': 'BStream test agent',
       'Referer': 'https://www.youtube.com/',
     });
+  });
+
+  test('passes the shared result limit to Android searches', () async {
+    const methodChannel = MethodChannel('test/bstream_ytdl_search');
+    MethodCall? capturedCall;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(methodChannel, (call) async {
+          capturedCall = call;
+          return <Object?>[];
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(methodChannel, null);
+    });
+
+    final channel = AndroidYtdlChannel(
+      methodChannel: methodChannel,
+      progressChannel: const EventChannel('test/bstream_ytdl_search_progress'),
+    );
+    final results = await channel.search('Artist - Song');
+
+    expect(results, isEmpty);
+    expect(capturedCall?.method, 'search');
+    expect(capturedCall?.arguments, {
+      'query': 'Artist - Song',
+      'limit': AppConstants.defaultSearchLimit,
+    });
+    expect(AppConstants.defaultSearchLimit, 15);
   });
 }

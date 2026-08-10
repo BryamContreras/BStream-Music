@@ -11,6 +11,7 @@ import '../../domain/entities/download_result.dart';
 import '../../domain/entities/track_info.dart';
 import 'gradient_progress_bar.dart';
 import 'playlist_picker_dialog.dart';
+import 'source_image.dart';
 import 'track_play_button.dart';
 import '../providers/music_providers.dart';
 
@@ -141,8 +142,10 @@ class TrackResultTile extends ConsumerWidget {
         Theme.of(context).colorScheme.error,
         const Color(0xFFFFA2A2),
       ],
-      DownloadProgressStatus.completed => AppColors.downloadGradient,
-      _ => AppColors.downloadGradient,
+      DownloadProgressStatus.completed => AppColors.downloadGradientFor(
+        context,
+      ),
+      _ => AppColors.downloadGradientFor(context),
     };
   }
 
@@ -305,19 +308,13 @@ class _Thumbnail extends StatelessWidget {
       child: SizedBox(
         width: 56,
         height: 56,
-        child: url == null
-            ? const ColoredBox(
-                color: Color(0xFF202520),
-                child: Icon(Icons.music_note_rounded),
-              )
-            : Image.network(
-                url!,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const ColoredBox(
-                  color: Color(0xFF202520),
-                  child: Icon(Icons.music_note_rounded),
-                ),
-              ),
+        child: ProportionalArtwork(
+          source: url,
+          fallback: const ColoredBox(
+            color: Color(0xFF202520),
+            child: Icon(Icons.music_note_rounded),
+          ),
+        ),
       ),
     );
   }

@@ -6,6 +6,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../core/errors/app_exception.dart' as app_errors;
+import '../../core/utils/image_source.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import 'player_service.dart';
@@ -82,6 +83,7 @@ class JustAudioPlayerService implements PlayerService {
           thumbnailUrl: tag.artUri?.toString(),
           duration: tag.duration,
           isRemote: tag.extras?['isRemote'] == true,
+          isExternal: tag.extras?['isExternal'] == true,
         ),
       );
     });
@@ -228,6 +230,7 @@ class JustAudioPlayerService implements PlayerService {
         duration: track.duration,
         volume: _snapshot.volume,
         isRemote: false,
+        isExternal: track.isExternal,
       ),
     );
     await _player.setAudioSource(_localAudioSource(track));
@@ -261,6 +264,7 @@ class JustAudioPlayerService implements PlayerService {
         duration: current.duration,
         volume: _snapshot.volume,
         isRemote: false,
+        isExternal: current.isExternal,
       ),
     );
     final queueIds = tracks.map((track) => track.id).toList(growable: false);
@@ -436,6 +440,11 @@ class JustAudioPlayerService implements PlayerService {
   }
 
   AudioSource _localAudioSource(LocalTrack track) {
+    final source = Uri.tryParse(track.filePath.trim());
+    if (source != null &&
+        (source.scheme == 'content' || source.scheme == 'file')) {
+      return AudioSource.uri(source, tag: _localMediaItem(track));
+    }
     return AudioSource.file(track.filePath, tag: _localMediaItem(track));
   }
 
@@ -494,7 +503,11 @@ class JustAudioPlayerService implements PlayerService {
       artist: track.artist,
       artUri: _artUri(track.thumbnailPath ?? track.thumbnailUrl),
       duration: track.duration,
-      extras: {'sourceUrl': track.sourceUrl, 'isRemote': false},
+      extras: {
+        'sourceUrl': track.sourceUrl,
+        'isRemote': false,
+        'isExternal': track.isExternal,
+      },
     );
   }
 
@@ -503,13 +516,14 @@ class JustAudioPlayerService implements PlayerService {
     if (normalized == null || normalized.isEmpty) {
       return null;
     }
-    if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
-      return Uri.tryParse(normalized);
+    final stable = canonicalYouTubeThumbnailSource(normalized) ?? normalized;
+    if (stable.startsWith('http://') || stable.startsWith('https://')) {
+      return Uri.tryParse(stable);
     }
-    if (normalized.startsWith('file://')) {
-      return Uri.tryParse(normalized);
+    if (stable.startsWith('file://')) {
+      return Uri.tryParse(stable);
     }
-    final file = File(normalized);
+    final file = File(stable);
     return file.existsSync() ? file.uri : null;
   }
 

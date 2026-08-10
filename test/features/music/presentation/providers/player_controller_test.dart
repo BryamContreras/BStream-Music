@@ -132,6 +132,49 @@ void main() {
   );
 
   test(
+    'keeps the search artwork when the player backend reports another crop',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeMusicRepository([
+        _remoteTrackWithThumbnail(
+          streamUrl: 'https://media.example/track.m4a',
+          thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/maxresdefault.jpg',
+        ),
+      ]);
+      final container = _container(player, musicRepository: repository);
+      addTearDown(container.dispose);
+      const searchTrack = TrackInfo(
+        id: 'q8j3zwNhLNo',
+        title: 'YO SOY TU TITAN',
+        artist: 'Pamorkil',
+        url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+        thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+      );
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(searchTrack);
+
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'q8j3zwNhLNo',
+          sourceUrl: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+          thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/maxresdefault.jpg',
+          isRemote: true,
+        ),
+      );
+      await _flushCompletion();
+
+      expect(
+        container.read(playerControllerProvider).value?.thumbnailUrl,
+        'https://i.ytimg.com/vi/q8j3zwNhLNo/hq720.jpg',
+      );
+    },
+  );
+
+  test(
     'keeps bot and cookie playback failures visible without refreshing',
     () async {
       final player = _FakePlayerService();
@@ -393,6 +436,119 @@ void main() {
   );
 
   test(
+    'external audio uses the native queue without reconciliation or history',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeLibraryRepository();
+      var fileProbeCalls = 0;
+      final externalTracks = [
+        _track(1).copyWith(
+          id: 'external:1',
+          filePath: 'content://media/external/audio/media/1',
+          isExternal: true,
+        ),
+        _track(2).copyWith(
+          id: 'external:2',
+          filePath: 'content://media/external/audio/media/2',
+          isExternal: true,
+        ),
+      ];
+      final container = _container(
+        player,
+        repository: repository,
+        fileProbe: (_) async {
+          fileProbeCalls++;
+          return LocalTrackFileAvailability.missing;
+        },
+      );
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(
+            externalTracks[1],
+            queue: externalTracks,
+            queueSourceId: 'external-folder:request-1',
+          );
+
+      expect(player.playLocalQueueCalls, 1);
+      expect(player.lastLocalQueue, externalTracks);
+      expect(player.lastLocalQueueIndex, 1);
+      expect(fileProbeCalls, 0);
+      expect(repository.playMarks, isEmpty);
+      expect(
+        container.read(playerControllerProvider).value?.isExternal,
+        isTrue,
+      );
+
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'external:1',
+          isExternal: true,
+        ),
+      );
+      await _flushCompletion();
+
+      expect(repository.playMarks, isEmpty);
+      expect(container.read(playbackQueueProvider).currentIndex, 0);
+    },
+  );
+
+  test(
+    'granted folder access expands an active external queue in place',
+    () async {
+      final player = _FakePlayerService(supportsLocalQueueReplacement: true);
+      final repository = _FakeLibraryRepository();
+      final selected = _track(2).copyWith(
+        id: 'external:2',
+        filePath: 'content://media/external/audio/media/2',
+        isExternal: true,
+      );
+      final expanded = [
+        _track(1).copyWith(
+          id: 'external:1',
+          filePath: 'content://media/external/audio/media/1',
+          isExternal: true,
+        ),
+        selected,
+        _track(3).copyWith(
+          id: 'external:3',
+          filePath: 'content://media/external/audio/media/3',
+          isExternal: true,
+        ),
+      ];
+      final container = _container(player, repository: repository);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(
+            selected,
+            queue: [selected],
+            queueSourceId: 'external-folder:request-2',
+          );
+
+      final updated = await container
+          .read(playerControllerProvider.notifier)
+          .syncLocalQueueSource('external-folder:request-2', expanded);
+
+      expect(updated, isTrue);
+      expect(player.replaceLocalQueueCalls, 1);
+      expect(player.lastLocalQueue, expanded);
+      expect(player.lastLocalQueueIndex, 1);
+      expect(
+        container.read(playbackQueueProvider).entries.map((entry) => entry.id),
+        ['external:1', 'external:2', 'external:3'],
+      );
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(repository.playMarks, isEmpty);
+    },
+  );
+
+  test(
     'shuffle with repeat off stops after every queued track has played',
     () async {
       final player = _FakePlayerService();
@@ -475,6 +631,29 @@ void main() {
       expect(player.currentSnapshot.trackId, 'track-2');
     },
   );
+
+  test('reordering the playback queue keeps the current item active', () async {
+    final player = _FakePlayerService(supportsLocalQueueReplacement: true);
+    final container = _container(player);
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    await container
+        .read(playerControllerProvider.notifier)
+        .playLocal(_track(2), queue: [_track(1), _track(2), _track(3)]);
+
+    await container.read(playerControllerProvider.notifier).reorderQueue(0, 2);
+
+    final queue = container.read(playbackQueueProvider);
+    expect(queue.entries.map((entry) => entry.id), [
+      'track-2',
+      'track-3',
+      'track-1',
+    ]);
+    expect(queue.currentIndex, 0);
+    expect(player.replaceLocalQueueCalls, 1);
+    expect(player.lastLocalQueueIndex, 0);
+  });
 
   test(
     'controller-managed LIVE queue skips a failed gap and plays the next ready track',
@@ -969,12 +1148,22 @@ Future<void> _waitUntil(bool Function() predicate) async {
 }
 
 TrackInfo _remoteTrack({required String streamUrl}) {
+  return _remoteTrackWithThumbnail(
+    streamUrl: streamUrl,
+    thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+  );
+}
+
+TrackInfo _remoteTrackWithThumbnail({
+  required String streamUrl,
+  required String thumbnailUrl,
+}) {
   return TrackInfo(
     id: 'q8j3zwNhLNo',
     title: 'YO SOY TU TITAN',
     artist: 'Pamorkil',
     url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
-    thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+    thumbnailUrl: thumbnailUrl,
     streamUrl: streamUrl,
     httpHeaders: const {'User-Agent': 'Mozilla/5.0'},
   );
@@ -1038,6 +1227,7 @@ class _FakePlayerService implements PlayerService {
         trackId: track.id,
         sourceUrl: track.sourceUrl,
         isRemote: false,
+        isExternal: track.isExternal,
       ),
     );
   }

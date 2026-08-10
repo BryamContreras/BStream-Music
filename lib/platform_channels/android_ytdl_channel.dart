@@ -67,7 +67,10 @@ class AndroidYtdlChannel {
   }
 
   Future<List<TrackInfo>> search(String query) async {
-    final result = await _invoke<List<Object?>>('search', {'query': query});
+    final result = await _invoke<List<Object?>>('search', {
+      'query': query,
+      'limit': AppConstants.defaultSearchLimit,
+    });
     return result
         .whereType<Map<Object?, Object?>>()
         .map(TrackInfoModel.fromMethodChannel)
