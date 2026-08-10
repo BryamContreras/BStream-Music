@@ -234,29 +234,354 @@ void main() {
     },
   );
 
-  test('preserves Karaoke as a legitimate Artist - Song title', () async {
-    transport.responder = (uri) {
-      final query = uri.queryParameters;
-      if (query['track_name'] == 'Karaoke' && query['artist_name'] == 'Drake') {
-        return _jsonResponse(
-          HttpStatus.ok,
-          uri.path.endsWith('/get')
-              ? _record(
-                  id: 1702,
-                  trackName: 'Karaoke',
-                  artistName: 'Drake',
-                  duration: 231,
-                  syncedLyrics: '[00:01.00]Line',
-                )
-              : [
-                  _record(
-                    id: 1702,
+  test('preserves legitimate songs whose complete title is Karaoke', () async {
+    const cases = <({String artist, String sourceTitle})>[
+      (artist: 'Drake', sourceTitle: 'Drake - Karaoke'),
+      (artist: 'Smallpools', sourceTitle: 'Karaoke - Smallpools'),
+      (
+        artist: 'Boomdabash & Alessandra Amoroso',
+        sourceTitle: 'Boomdabash & Alessandra Amoroso - Karaoke',
+      ),
+      (artist: 'Cass McCombs', sourceTitle: 'Cass McCombs【Karaoke】'),
+    ];
+
+    for (var index = 0; index < cases.length; index++) {
+      final testCase = cases[index];
+      transport = _FakeTransport();
+      transport.responder = (uri) {
+        final query = uri.queryParameters;
+        if (query['track_name'] == 'Karaoke' &&
+            query['artist_name'] == testCase.artist) {
+          return _jsonResponse(
+            HttpStatus.ok,
+            uri.path.endsWith('/get')
+                ? _record(
+                    id: 1702 + index,
                     trackName: 'Karaoke',
-                    artistName: 'Drake',
+                    artistName: testCase.artist,
                     duration: 231,
                     syncedLyrics: '[00:01.00]Line',
-                  ),
-                ],
+                  )
+                : [
+                    _record(
+                      id: 1702 + index,
+                      trackName: 'Karaoke',
+                      artistName: testCase.artist,
+                      duration: 231,
+                      syncedLyrics: '[00:01.00]Line',
+                    ),
+                  ],
+          );
+        }
+        return uri.path.endsWith('/get')
+            ? _jsonResponse(HttpStatus.notFound, {'message': 'missing'})
+            : _jsonResponse(HttpStatus.ok, const []);
+      };
+      final service = createService(delay: (_) async {});
+
+      final result = await service.findLyrics(
+        LyricsLookup(
+          title: testCase.sourceTitle,
+          artist: testCase.artist,
+          duration: const Duration(seconds: 231),
+        ),
+      );
+
+      expect(
+        result?.providerId,
+        '${1702 + index}',
+        reason: testCase.sourceTitle,
+      );
+      expect(
+        transport.requests.any((request) {
+          final query = request.uri.queryParameters;
+          return query['track_name'] == 'Karaoke' &&
+              query['artist_name'] == testCase.artist;
+        }),
+        isTrue,
+        reason: testCase.sourceTitle,
+      );
+    }
+  });
+
+  test('keeps a real Karaoke title when it also has a karaoke label', () async {
+    transport.responder = (uri) {
+      final query = uri.queryParameters;
+      if (query['track_name'] == 'Karaoke' &&
+          query['artist_name'] == 'Smallpools') {
+        return _jsonResponse(HttpStatus.ok, [
+          _record(
+            id: 1709,
+            trackName: 'Karaoke',
+            artistName: 'Smallpools',
+            syncedLyrics: '[00:01.00]Line',
+          ),
+        ]);
+      }
+      return _jsonResponse(HttpStatus.ok, const []);
+    };
+    final service = createService(delay: (_) async {});
+
+    final result = await service.findLyrics(
+      const LyricsLookup(
+        title: 'Smallpools - Karaoke (Karaoke Version)',
+        artist: 'Smallpools',
+      ),
+    );
+
+    expect(result?.providerId, '1709');
+    expect(
+      transport.requests.length,
+      2,
+      reason: transport.requests
+          .map((request) => request.uri.toString())
+          .join('\n'),
+    );
+  });
+
+  test('scores an aligned enclosed Karaoke as the real title', () async {
+    transport.responder = (uri) {
+      final query = uri.queryParameters;
+      if (query['track_name'] == 'Karaoke' &&
+          query['artist_name'] == 'Cass McCombs') {
+        return _jsonResponse(HttpStatus.ok, [
+          _record(
+            id: 1708,
+            trackName: 'Karaoke',
+            artistName: 'Cass McCombs',
+            syncedLyrics: '[00:01.00]Line',
+          ),
+        ]);
+      }
+      return _jsonResponse(HttpStatus.ok, const []);
+    };
+    final service = createService(delay: (_) async {});
+
+    final result = await service.findLyrics(
+      const LyricsLookup(
+        title: 'Cass McCombs【Karaoke】',
+        artist: 'Cass McCombs',
+      ),
+    );
+
+    expect(result?.providerId, '1708');
+    expect(
+      transport.requests.length,
+      1,
+      reason: transport.requests
+          .map((request) => request.uri.toString())
+          .join('\n'),
+    );
+  });
+
+  test('preserves additional versions of a song titled Karaoke', () async {
+    transport.responder = (uri) {
+      if (uri.path.endsWith('/get')) {
+        return _jsonResponse(HttpStatus.notFound, {'message': 'missing'});
+      }
+      final title = uri.queryParameters['track_name'];
+      if (title == 'Karaoke (Live)') {
+        return _jsonResponse(HttpStatus.ok, [
+          _record(
+            id: 1720,
+            trackName: 'Karaoke (Remix)',
+            artistName: 'Smallpools',
+            duration: 180,
+            syncedLyrics: '[00:01.00]Remix line',
+          ),
+        ]);
+      }
+      if (title == 'Karaoke') {
+        return _jsonResponse(HttpStatus.ok, [
+          _record(
+            id: 1721,
+            trackName: 'Karaoke (Live)',
+            artistName: 'Smallpools',
+            duration: 190,
+            plainLyrics: 'Live line',
+          ),
+        ]);
+      }
+      return _jsonResponse(HttpStatus.ok, const []);
+    };
+    final service = createService(delay: (_) async {});
+
+    final result = await service.findLyrics(
+      const LyricsLookup(
+        title: 'Karaoke (Live)',
+        artist: 'Smallpools',
+        duration: Duration(seconds: 180),
+      ),
+    );
+
+    expect(result?.providerId, '1721');
+  });
+
+  test('preserves Lyrics when it is the real song title', () async {
+    const cases = <({String artist, String expectedTitle, String sourceTitle})>[
+      (artist: 'Solo Artist', expectedTitle: 'Lyrics', sourceTitle: 'Lyrics'),
+      (
+        artist: 'The Artist',
+        expectedTitle: 'Lyrics',
+        sourceTitle: 'The Artist - Lyrics',
+      ),
+      (
+        artist: 'The Artist',
+        expectedTitle: 'Lyrics',
+        sourceTitle: 'The Artist - Lyrics - Official Video',
+      ),
+      (
+        artist: 'Reverse Artist',
+        expectedTitle: 'Lyrics',
+        sourceTitle: 'Lyrics - Reverse Artist',
+      ),
+      (
+        artist: 'Reverse Artist',
+        expectedTitle: 'Lyrics',
+        sourceTitle: 'Lyrics - Reverse Artist - Official Video',
+      ),
+      (
+        artist: 'Wordsmith',
+        expectedTitle: 'The Lyrics',
+        sourceTitle: 'The Lyrics',
+      ),
+      (artist: 'Poet', expectedTitle: 'Lyrics', sourceTitle: 'Poet【Lyrics】'),
+    ];
+
+    for (var index = 0; index < cases.length; index++) {
+      final testCase = cases[index];
+      transport = _FakeTransport();
+      transport.responder = (uri) {
+        final query = uri.queryParameters;
+        if (query['track_name'] == testCase.expectedTitle &&
+            query['artist_name'] == testCase.artist) {
+          return _jsonResponse(
+            HttpStatus.ok,
+            uri.path.endsWith('/get')
+                ? _record(
+                    id: 1710 + index,
+                    trackName: testCase.expectedTitle,
+                    artistName: testCase.artist,
+                    duration: 180,
+                    syncedLyrics: '[00:01.00]Line',
+                  )
+                : [
+                    _record(
+                      id: 1710 + index,
+                      trackName: testCase.expectedTitle,
+                      artistName: testCase.artist,
+                      duration: 180,
+                      syncedLyrics: '[00:01.00]Line',
+                    ),
+                  ],
+          );
+        }
+        return uri.path.endsWith('/get')
+            ? _jsonResponse(HttpStatus.notFound, {'message': 'missing'})
+            : _jsonResponse(HttpStatus.ok, const []);
+      };
+      final service = createService(delay: (_) async {});
+
+      final result = await service.findLyrics(
+        LyricsLookup(
+          title: testCase.sourceTitle,
+          artist: testCase.artist,
+          duration: const Duration(seconds: 180),
+        ),
+      );
+
+      expect(
+        result?.providerId,
+        '${1710 + index}',
+        reason: testCase.sourceTitle,
+      );
+    }
+  });
+
+  test(
+    'does not invent an enclosed Lyrics title without artist evidence',
+    () async {
+      transport.responder = (uri) {
+        final query = uri.queryParameters;
+        if (query['track_name'] == 'Lyrics' &&
+            query['artist_name'] == 'Real Song') {
+          return _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 1722,
+              trackName: 'Lyrics',
+              artistName: 'Real Song',
+              duration: 180,
+              syncedLyrics: '[00:01.00]Wrong song',
+            ),
+          );
+        }
+        if (query['track_name'] == 'Real Song' &&
+            query['artist_name'] == 'Actual Artist') {
+          return _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 1723,
+              trackName: 'Real Song',
+              artistName: 'Actual Artist',
+              duration: 180,
+              syncedLyrics: '[00:01.00]Correct song',
+            ),
+          );
+        }
+        return uri.path.endsWith('/get')
+            ? _jsonResponse(HttpStatus.notFound, {'message': 'missing'})
+            : _jsonResponse(HttpStatus.ok, const []);
+      };
+      final service = createService(delay: (_) async {});
+
+      final result = await service.findLyrics(
+        const LyricsLookup(
+          title: 'Real Song【Lyrics】 Official Video',
+          artist: 'Actual Artist',
+          duration: Duration(seconds: 180),
+        ),
+      );
+
+      expect(result?.providerId, '1723');
+      expect(
+        transport.requests.any((request) {
+          final query = request.uri.queryParameters;
+          return query['track_name'] == 'Lyrics' &&
+              query['artist_name'] == 'Real Song';
+        }),
+        isFalse,
+      );
+    },
+  );
+
+  test('does not let a Lyrics label displace an existing song title', () async {
+    transport.responder = (uri) {
+      final query = uri.queryParameters;
+      if (query['track_name'] == 'Lyrics' &&
+          query['artist_name'] == 'Actual Artist') {
+        return _jsonResponse(
+          HttpStatus.ok,
+          _record(
+            id: 1724,
+            trackName: 'Lyrics',
+            artistName: 'Actual Artist',
+            duration: 180,
+            syncedLyrics: '[00:01.00]Wrong song',
+          ),
+        );
+      }
+      if (query['track_name'] == 'Real Song' &&
+          query['artist_name'] == 'Actual Artist') {
+        return _jsonResponse(
+          HttpStatus.ok,
+          _record(
+            id: 1725,
+            trackName: 'Real Song',
+            artistName: 'Actual Artist',
+            duration: 180,
+            syncedLyrics: '[00:01.00]Correct song',
+          ),
         );
       }
       return uri.path.endsWith('/get')
@@ -267,20 +592,148 @@ void main() {
 
     final result = await service.findLyrics(
       const LyricsLookup(
-        title: 'Drake - Karaoke',
-        artist: 'Drake',
-        duration: Duration(seconds: 231),
+        title: 'Real Song - Actual Artist - Lyrics - Official Video',
+        artist: 'Actual Artist',
+        duration: Duration(seconds: 180),
       ),
     );
 
-    expect(result?.providerId, '1702');
+    expect(result?.providerId, '1725');
     expect(
-      transport.requests.any(
-        (request) => request.uri.queryParameters['track_name'] == 'Karaoke',
-      ),
-      isTrue,
+      transport.requests.any((request) {
+        final query = request.uri.queryParameters;
+        return query['track_name'] == 'Lyrics' &&
+            query['artist_name'] == 'Actual Artist';
+      }),
+      isFalse,
     );
   });
+
+  test('treats Lyrics as a label when the artist is only a channel', () async {
+    transport.responder = (uri) {
+      final query = uri.queryParameters;
+      if (query['track_name'] == 'Song' && !query.containsKey('artist_name')) {
+        return _jsonResponse(HttpStatus.ok, [
+          _record(
+            id: 1719,
+            trackName: 'Song',
+            artistName: 'Real Artist',
+            duration: 180,
+            syncedLyrics: '[00:01.00]Line',
+          ),
+        ]);
+      }
+      return uri.path.endsWith('/get')
+          ? _jsonResponse(HttpStatus.notFound, {'message': 'missing'})
+          : _jsonResponse(HttpStatus.ok, const []);
+    };
+    final service = createService(delay: (_) async {});
+
+    final result = await service.findLyrics(
+      const LyricsLookup(
+        title: 'Song - Lyrics',
+        artist: 'A Lyrics Channel',
+        duration: Duration(seconds: 180),
+      ),
+    );
+
+    expect(result?.providerId, '1719');
+    expect(
+      transport.requests.any((request) {
+        final query = request.uri.queryParameters;
+        return query['track_name'] == 'Lyrics';
+      }),
+      isFalse,
+    );
+    expect(transport.requests.length, lessThanOrEqualTo(6));
+  });
+
+  test('strips only explicitly enclosed karaoke presentation labels', () async {
+    const decoratedTitles = [
+      'Song (Karaoke)',
+      'Song (karaoke version)',
+      'Song (version karaoke)',
+    ];
+
+    for (final title in decoratedTitles) {
+      transport = _FakeTransport();
+      transport.responder = (uri) {
+        final query = uri.queryParameters;
+        if (query['track_name'] == 'Song' && query['artist_name'] == 'Artist') {
+          return _jsonResponse(
+            HttpStatus.ok,
+            uri.path.endsWith('/get')
+                ? _record(
+                    id: title,
+                    trackName: 'Song',
+                    artistName: 'Artist',
+                    duration: 180,
+                    syncedLyrics: '[00:01.00]Line',
+                  )
+                : [
+                    _record(
+                      id: title,
+                      trackName: 'Song',
+                      artistName: 'Artist',
+                      duration: 180,
+                      syncedLyrics: '[00:01.00]Line',
+                    ),
+                  ],
+          );
+        }
+        return uri.path.endsWith('/get')
+            ? _jsonResponse(HttpStatus.notFound, {'message': 'missing'})
+            : _jsonResponse(HttpStatus.ok, const []);
+      };
+      final service = createService(delay: (_) async {});
+
+      final result = await service.findLyrics(
+        LyricsLookup(
+          title: title,
+          artist: 'Artist',
+          duration: const Duration(seconds: 180),
+        ),
+      );
+
+      expect(result?.providerId, title, reason: title);
+    }
+  });
+
+  test(
+    'does not strip unwrapped Karaoke Version or Lyrics from titles',
+    () async {
+      transport.responder = (uri) => uri.path.endsWith('/get')
+          ? _jsonResponse(HttpStatus.notFound, {'message': 'missing'})
+          : _jsonResponse(HttpStatus.ok, const []);
+      final service = createService(delay: (_) async {});
+
+      await service.findLyrics(
+        const LyricsLookup(
+          title: 'The Karaoke Version',
+          artist: 'Artist',
+          duration: Duration(seconds: 180),
+        ),
+      );
+      await service.findLyrics(
+        const LyricsLookup(
+          title: 'Song Lyrics',
+          artist: 'Artist',
+          duration: Duration(seconds: 180),
+        ),
+      );
+
+      final requestedTitles = transport.requests
+          .map((request) => request.uri.queryParameters['track_name'])
+          .whereType<String>()
+          .toSet();
+      expect(
+        requestedTitles,
+        containsAll({'The Karaoke Version', 'Song Lyrics'}),
+      );
+      expect(requestedTitles, isNot(contains('The')));
+      expect(requestedTitles, isNot(contains('Song')));
+    },
+  );
 
   test('keeps karaoke lookups distinct in the memory cache', () async {
     transport.responder = (uri) => _jsonResponse(

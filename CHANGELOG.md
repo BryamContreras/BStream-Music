@@ -31,8 +31,9 @@
   controls in both light and dark themes.
 - Desktop song lyrics now scale across compact, standard, and wide windows to
   make better use of the available reading space.
-- Lyrics lookup now ignores empty blocks and karaoke presentation suffixes
-  while preserving legitimate titles and the downloaded track metadata.
+- Lyrics lookup now ignores empty blocks and explicit karaoke/lyrics
+  presentation labels while preserving songs actually titled `Karaoke` or
+  `Lyrics` and leaving downloaded track metadata unchanged.
 - Android remote playback with earlier source validation, preserved request
   headers, selective extractor updates, one retry, clearer HTTP/format errors,
   and restoration of the bundled extractor after a failed update retry.
