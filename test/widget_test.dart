@@ -3,6 +3,7 @@ import 'dart:io' as io;
 
 import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/core/theme/app_colors.dart';
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
@@ -67,29 +68,126 @@ void main() {
     expect(find.text('Reproductor'), findsNothing);
   });
 
-  testWidgets('popup menus match the active appearance surface', (
+  testWidgets('all tab headings share the same themed foreground', (
     tester,
   ) async {
-    await tester.pumpWidget(_testApp());
-    await tester.pump(const Duration(milliseconds: 400));
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+        themeMode: AppThemeMode.dark,
+        accent: AppAccent.blue,
+      ),
+    );
+    await tester.pumpWidget(_testApp(settingsController: settingsController));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final homeColor = tester
+        .widget<Text>(find.byKey(const ValueKey('home-tab-title')))
+        .style
+        ?.color;
+
+    await tester.tap(find.text('Buscar').last);
+    await tester.pump(const Duration(milliseconds: 300));
+    final searchColor = tester
+        .widget<Text>(find.byKey(const ValueKey('search-tab-title')))
+        .style
+        ?.color;
+
+    await tester.tap(find.text('Biblioteca').last);
+    await tester.pump(const Duration(milliseconds: 300));
+    final libraryColor = tester
+        .widget<Text>(find.byKey(const ValueKey('library-tab-title')))
+        .style
+        ?.color;
+
+    await tester.tap(find.text('Ajustes').last);
+    await tester.pump(const Duration(milliseconds: 300));
+    final settingsColor = tester
+        .widget<Text>(find.byKey(const ValueKey('settings-tab-title')))
+        .style
+        ?.color;
+
+    expect(homeColor, isNotNull);
+    expect(searchColor, homeColor);
+    expect(libraryColor, homeColor);
+    expect(settingsColor, homeColor);
+  });
+
+  testWidgets('light popup text and icons follow the selected accent', (
+    tester,
+  ) async {
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+        themeMode: AppThemeMode.light,
+        accent: AppAccent.blue,
+      ),
+    );
+    await tester.pumpWidget(_testApp(settingsController: settingsController));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
 
     final context = tester.element(find.byType(Scaffold).first);
+    expect(
+      ProviderScope.containerOf(
+        context,
+      ).read(settingsControllerProvider).value?.themeMode,
+      AppThemeMode.light,
+    );
     final popupTheme = Theme.of(context).popupMenuTheme;
     final colors = Theme.of(context).colorScheme;
+    expect(colors.brightness, Brightness.light);
+    expect(popupTheme.color, AppColors.menuBackgroundFor(context));
+    expect(popupTheme.textStyle?.color, AppColors.menuForegroundFor(context));
+    expect(popupTheme.iconColor, AppColors.menuIconFor(context));
     expect(
       popupTheme.color,
-      colors.brightness == Brightness.dark
-          ? AppColors.menuBackground
-          : colors.surfaceContainerHighest.withValues(alpha: 0.97),
+      colors.surfaceContainerHighest.withValues(alpha: 0.97),
     );
     expect(popupTheme.surfaceTintColor, Colors.transparent);
     final shape = popupTheme.shape! as RoundedRectangleBorder;
-    expect(
-      shape.side.color,
-      colors.brightness == Brightness.dark
-          ? AppColors.menuBorder
-          : colors.outlineVariant.withValues(alpha: 0.9),
+    expect(shape.side.color, AppColors.menuBorderFor(context));
+    expect(shape.side.color, colors.outlineVariant.withValues(alpha: 0.9));
+  });
+
+  testWidgets('dark popup surface stays neutral while content uses accent', (
+    tester,
+  ) async {
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+        themeMode: AppThemeMode.dark,
+        accent: AppAccent.blue,
+      ),
     );
+    await tester.pumpWidget(_testApp(settingsController: settingsController));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final context = tester.element(find.byType(Scaffold).first);
+    expect(
+      ProviderScope.containerOf(
+        context,
+      ).read(settingsControllerProvider).value?.themeMode,
+      AppThemeMode.dark,
+    );
+    final popupTheme = Theme.of(context).popupMenuTheme;
+    final colors = Theme.of(context).colorScheme;
+    expect(colors.brightness, Brightness.dark);
+    expect(popupTheme.color, AppColors.menuBackground);
+    expect(popupTheme.textStyle?.color, AppColors.menuForegroundFor(context));
+    expect(popupTheme.textStyle?.color, isNot(AppColors.menuForeground));
+    expect(popupTheme.iconColor, AppColors.menuIconFor(context));
+    expect(popupTheme.iconColor, isNot(AppColors.menuForeground));
+    final shape = popupTheme.shape! as RoundedRectangleBorder;
+    expect(shape.side.color, AppColors.menuBorder);
   });
 
   testWidgets(
@@ -858,6 +956,14 @@ void main() {
 
   testWidgets('player controls fit on narrow mobile viewports', (tester) async {
     const expectedProgressColor = Color(0xFF7B8DFF);
+    const selectedAccent = Color(0xFF3D8BFF);
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+        accent: AppAccent.blue,
+      ),
+    );
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     tester.view.physicalSize = const Size(320, 720);
     tester.view.devicePixelRatio = 1;
@@ -869,6 +975,7 @@ void main() {
 
     await tester.pumpWidget(
       _testApp(
+        settingsController: settingsController,
         playerService: _FakePlayerService(
           snapshot: const PlayerSnapshot(
             status: PlayerStatus.playing,
@@ -946,9 +1053,30 @@ void main() {
     final playerContext = tester.element(
       find.byKey(const ValueKey('player-primary-control')),
     );
+    final playerTheme = Theme.of(playerContext);
+    final playerTabTitle = tester.widget<Text>(
+      find.byKey(const ValueKey('player-tab-title')),
+    );
+    expect(playerTabTitle.style?.color, playerTheme.colorScheme.onSurface);
+    final trackTitle = tester.widget<Text>(
+      find.byKey(const ValueKey('player-track-title')),
+    );
+    expect(trackTitle.style?.color, AppColors.playbackTitleFor(playerContext));
+    expect(trackTitle.style?.color, isNot(playerTheme.colorScheme.onSurface));
+    final trackArtist = tester.widget<Text>(
+      find.byKey(const ValueKey('player-track-artist')),
+    );
+    expect(
+      trackArtist.style?.color,
+      AppColors.contentSubtitleFor(playerContext),
+    );
+    expect(
+      trackArtist.style?.color,
+      isNot(playerTheme.colorScheme.onSurfaceVariant),
+    );
     expect(
       playerControl.style?.foregroundColor?.resolve(<WidgetState>{}),
-      AppColors.playbackPrimaryForegroundFor(playerContext),
+      playerTheme.colorScheme.onPrimary,
     );
     expect(
       playerControl.style?.backgroundColor?.resolve(<WidgetState>{}),
@@ -983,6 +1111,14 @@ void main() {
     final shuffleControl = find.byKey(const ValueKey('player-shuffle-control'));
     final volumeControl = find.byKey(const ValueKey('player-volume-control'));
     final repeatControl = find.byKey(const ValueKey('player-repeat-control'));
+    final lyricsIconButton = tester.widget<IconButton>(
+      find.descendant(of: lyricsControl, matching: find.byType(IconButton)),
+    );
+    expect(
+      lyricsIconButton.color,
+      AppColors.playbackControlForegroundFor(playerContext),
+    );
+    expect(lyricsIconButton.color, isNot(playerTheme.colorScheme.onSurface));
     expect(
       tester.getCenter(lyricsControl).dx,
       lessThan(tester.getCenter(shuffleControl).dx),
@@ -1027,17 +1163,22 @@ void main() {
       (popoverDecoration.border! as Border).top.color,
       AppColors.menuBorderFor(popoverContext),
     );
+    final popoverTitle = tester.widget<Text>(
+      find.descendant(of: popover, matching: find.text('Volumen')),
+    );
+    expect(
+      popoverTitle.style?.color,
+      AppColors.menuForegroundFor(popoverContext),
+    );
 
     final sliderTheme = tester.widget<SliderTheme>(
       find.descendant(of: popover, matching: find.byType(SliderTheme)),
     );
+    expect(sliderTheme.data.activeTrackColor, selectedAccent);
+    expect(sliderTheme.data.thumbColor, selectedAccent);
     expect(
-      sliderTheme.data.activeTrackColor,
-      AppColors.menuForegroundFor(popoverContext),
-    );
-    expect(
-      sliderTheme.data.thumbColor,
-      AppColors.menuForegroundFor(popoverContext),
+      sliderTheme.data.overlayColor,
+      selectedAccent.withValues(alpha: 0.14),
     );
     expect(
       sliderTheme.data.inactiveTrackColor,
@@ -1138,6 +1279,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
     final addFavoriteLabel = find.text('Anadir a favoritos');
     expect(addFavoriteLabel, findsOneWidget);
+    final favoriteMenuIcon = tester.widget<Icon>(
+      find.byIcon(Icons.star_border_rounded),
+    );
+    expect(
+      favoriteMenuIcon.color,
+      AppColors.menuIconFor(tester.element(addFavoriteLabel)),
+    );
 
     final menuButtonFinder = find.byType(PopupMenuButton<String>);
     final menuButton = tester.widget<PopupMenuButton<String>>(menuButtonFinder);
@@ -1487,6 +1635,7 @@ Widget _settingsTestApp({
 }
 
 Widget _testApp({
+  SettingsController? settingsController,
   PlayerService? playerService,
   LibraryRepository? libraryRepository,
   LyricsService? lyricsService,
@@ -1495,6 +1644,8 @@ Widget _testApp({
 }) {
   return ProviderScope(
     overrides: [
+      if (settingsController != null)
+        settingsControllerProvider.overrideWith(() => settingsController),
       downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
       desktopMediaSessionFactoryProvider.overrideWithValue(() => null),
       playerServiceProvider.overrideWithValue(

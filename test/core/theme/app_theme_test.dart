@@ -26,6 +26,12 @@ void main() {
   ) async {
     late Color background;
     late Color disabledBackground;
+    late Color title;
+    late Color contentHeading;
+    late Color contentTitle;
+    late Color contentSubtitle;
+    late Color neutralTitle;
+    late Color onSurfaceVariant;
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData(
@@ -38,6 +44,13 @@ void main() {
             disabledBackground = AppColors.playbackPrimaryDisabledBackgroundFor(
               context,
             );
+            title = AppColors.playbackTitleFor(context);
+            contentHeading = AppColors.contentHeadingFor(context);
+            contentTitle = AppColors.contentTitleFor(context);
+            contentSubtitle = AppColors.contentSubtitleFor(context);
+            neutralTitle = AppColors.neutralTitleFor(context);
+            final colors = Theme.of(context).colorScheme;
+            onSurfaceVariant = colors.onSurfaceVariant;
             return const SizedBox.shrink();
           },
         ),
@@ -49,5 +62,35 @@ void main() {
       disabledBackground,
       AppAccent.blue.seedColor.withValues(alpha: 0.38),
     );
+    expect(
+      title,
+      Color.alphaBlend(
+        AppAccent.blue.seedColor.withValues(alpha: 0.02),
+        Colors.white,
+      ),
+    );
+    expect(
+      contentHeading,
+      Color.alphaBlend(
+        AppAccent.blue.seedColor.withValues(alpha: 0.04),
+        Colors.white,
+      ),
+    );
+    expect(
+      contentTitle,
+      Color.alphaBlend(
+        AppAccent.blue.seedColor.withValues(alpha: 0.03),
+        Colors.white,
+      ),
+    );
+    expect(
+      contentSubtitle,
+      Color.alphaBlend(
+        AppAccent.blue.seedColor.withValues(alpha: 0.02),
+        onSurfaceVariant,
+      ),
+    );
+    expect(neutralTitle, Colors.white);
+    expect(contentTitle, isNot(AppAccent.blue.seedColor));
   });
 }

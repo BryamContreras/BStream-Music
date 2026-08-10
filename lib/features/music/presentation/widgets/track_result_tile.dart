@@ -113,6 +113,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                                 fontWeight: isCurrent
                                     ? FontWeight.w800
                                     : FontWeight.w700,
+                                color: AppColors.contentTitleFor(context),
                               ),
                         ),
                         const SizedBox(height: 2),
@@ -121,7 +122,9 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: colors.onSurfaceVariant),
+                              ?.copyWith(
+                                color: AppColors.contentSubtitleFor(context),
+                              ),
                         ),
                         if (downloadState != null) ...[
                           const SizedBox(height: 5),
@@ -224,6 +227,7 @@ class _TrackResultMenu extends ConsumerWidget {
     final compactAndroid = AppPlatform.isAndroid;
     final buttonSize = compactAndroid ? 42.0 : 52.0;
     final iconSize = compactAndroid ? 32.0 : 24.0;
+    final menuIconColor = AppColors.menuIconFor(context);
 
     return SizedBox.square(
       dimension: buttonSize,
@@ -245,7 +249,7 @@ class _TrackResultMenu extends ConsumerWidget {
             value: _TrackResultAction.download,
             child: Row(
               children: [
-                const Icon(Icons.download_rounded),
+                Icon(Icons.download_rounded, color: menuIconColor),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
@@ -261,7 +265,7 @@ class _TrackResultMenu extends ConsumerWidget {
             value: _TrackResultAction.addToPlaylist,
             child: Row(
               children: [
-                const Icon(Icons.playlist_add_rounded),
+                Icon(Icons.playlist_add_rounded, color: menuIconColor),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(

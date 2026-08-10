@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
@@ -24,7 +25,10 @@ class PlaylistPickerDialog extends StatelessWidget {
         .toList(growable: false);
 
     return SimpleDialog(
-      title: Text(title),
+      title: Text(
+        title,
+        style: TextStyle(color: AppColors.contentHeadingFor(context)),
+      ),
       children: selectablePlaylists
           .map(
             (playlist) => SimpleDialogOption(
@@ -64,9 +68,10 @@ class _PlaylistOption extends StatelessWidget {
             playlist.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: AppColors.contentTitleFor(context),
+            ),
           ),
         ),
       ],

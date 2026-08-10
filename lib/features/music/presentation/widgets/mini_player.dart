@@ -102,6 +102,7 @@ class MiniPlayer extends ConsumerWidget {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontWeight: FontWeight.w800,
+                                color: AppColors.playbackTitleFor(context),
                                 shadows: isDark
                                     ? const [
                                         Shadow(
@@ -118,7 +119,7 @@ class MiniPlayer extends ConsumerWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                color: theme.colorScheme.onSurfaceVariant,
+                                color: AppColors.contentSubtitleFor(context),
                                 shadows: isDark
                                     ? const [
                                         Shadow(
@@ -282,7 +283,9 @@ class _MiniPositionText extends ConsumerWidget {
     return Text(
       formatDuration(Duration(seconds: seconds)),
       textAlign: TextAlign.right,
-      style: Theme.of(context).textTheme.labelMedium,
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        color: AppColors.contentSubtitleFor(context),
+      ),
     );
   }
 }

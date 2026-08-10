@@ -81,6 +81,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
+            key: const ValueKey('settings-tab-title'),
             strings.settings,
             style: Theme.of(
               context,

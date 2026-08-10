@@ -48,6 +48,16 @@
 
 ### Fixed
 
+- Player, search/list, playlist, and library content text now receives a very
+  subtle accent tint in both themes. Tab headings share the standard themed
+  foreground, while lyrics remain unchanged.
+- Dark-mode content text, including player, library, and playlist titles, uses
+  a true-white base with only a barely perceptible accent tint.
+- Light-mode player controls and song titles now use softer,
+  accent-tinted foreground colors.
+- Popup and submenu icons follow the selected accent in both themes, with a
+  subtler accent tint on menu text in light and dark modes.
+- The volume slider track and thumb now follow the selected accent color.
 - Android transitions between remote tracks, whether automatic or requested
   from media controls, now use a rolling native queue. The foreground audio
   service stays active across track boundaries after the app is removed from

@@ -870,6 +870,7 @@ class _HomeView extends ConsumerWidget {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 22, 16, 8),
             child: Text(
+              key: const ValueKey('home-tab-title'),
               strings.home,
               style: Theme.of(
                 context,

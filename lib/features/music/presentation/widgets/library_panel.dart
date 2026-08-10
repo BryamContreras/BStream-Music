@@ -431,6 +431,7 @@ class _LibraryRootView extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(
+              key: const ValueKey('library-tab-title'),
               strings.library,
               style: Theme.of(
                 context,
@@ -570,7 +571,7 @@ class _LiveQueueView extends ConsumerWidget {
                     child: Text(
                       strings.liveQueueEmpty,
                       style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        color: AppColors.contentSubtitleFor(context),
                       ),
                     ),
                   )
@@ -635,9 +636,10 @@ class _LiveQueueTile extends ConsumerWidget {
           item.displayTitle,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(
-            context,
-          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: AppColors.contentTitleFor(context),
+          ),
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -650,6 +652,9 @@ class _LiveQueueTile extends ConsumerWidget {
                     '${strings.requestedBy}: ${item.requestedBy}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.contentSubtitleFor(context),
+                    ),
                   ),
                 ),
                 if (item.requestedByModerator) ...[
@@ -841,7 +846,7 @@ class _TrackListView extends ConsumerWidget {
                     child: Text(
                       strings.noSongsToShow,
                       style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        color: AppColors.contentSubtitleFor(context),
                       ),
                     ),
                   )
@@ -906,15 +911,14 @@ class _DetailHeader extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w900,
+                  color: AppColors.contentHeadingFor(context),
                 ),
               ),
               Text(
                 subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+                style: TextStyle(color: AppColors.contentSubtitleFor(context)),
               ),
             ],
           ),
@@ -980,6 +984,7 @@ class _PlaylistMenu extends ConsumerWidget {
     final strings = ref.watch(appStringsProvider);
     final buttonSize = AppPlatform.isAndroid ? 42.0 : 52.0;
     final iconSize = AppPlatform.isAndroid ? 32.0 : 24.0;
+    final menuIconColor = AppColors.menuIconFor(context);
     return SizedBox.square(
       dimension: buttonSize,
       child: PopupMenuButton<_PlaylistMenuAction>(
@@ -993,7 +998,10 @@ class _PlaylistMenu extends ConsumerWidget {
             value: _PlaylistMenuAction.renamePlaylist,
             child: Row(
               children: [
-                const Icon(Icons.drive_file_rename_outline_rounded),
+                Icon(
+                  Icons.drive_file_rename_outline_rounded,
+                  color: menuIconColor,
+                ),
                 const SizedBox(width: 12),
                 Text(strings.renamePlaylist),
               ],
@@ -1003,7 +1011,7 @@ class _PlaylistMenu extends ConsumerWidget {
             value: _PlaylistMenuAction.deletePlaylist,
             child: Row(
               children: [
-                const Icon(Icons.delete_outline_rounded),
+                Icon(Icons.delete_outline_rounded, color: menuIconColor),
                 const SizedBox(width: 12),
                 Text(strings.deletePlaylist),
               ],
@@ -1207,7 +1215,7 @@ class _SectionTitle extends StatelessWidget {
       text,
       style: Theme.of(context).textTheme.titleLarge?.copyWith(
         fontWeight: FontWeight.w900,
-        color: Theme.of(context).colorScheme.onSurface,
+        color: AppColors.contentHeadingFor(context),
       ),
     );
   }
@@ -1231,7 +1239,7 @@ class _PlaylistList extends StatelessWidget {
     if (playlists.isEmpty) {
       return Text(
         strings.noLocalPlaylists,
-        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+        style: TextStyle(color: AppColors.contentSubtitleFor(context)),
       );
     }
 
@@ -1389,7 +1397,10 @@ class _CreatePlaylistRow extends StatelessWidget {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontWeight: FontWeight.w900),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.contentTitleFor(context),
+                  ),
                 ),
               ),
             ],
@@ -1428,9 +1439,15 @@ class _LibraryEntry extends StatelessWidget {
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w800),
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            color: AppColors.contentTitleFor(context),
+          ),
         ),
-        subtitle: Text(subtitle),
+        subtitle: Text(
+          subtitle,
+          style: TextStyle(color: AppColors.contentSubtitleFor(context)),
+        ),
         trailing: trailing ?? const Icon(Icons.chevron_right_rounded),
         onTap: onTap,
       ),
@@ -1639,6 +1656,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     final colors = Theme.of(context).colorScheme;
     final menuButtonSize = AppPlatform.isAndroid ? 42.0 : 52.0;
     final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
+    final menuItemIconColor = AppColors.menuIconFor(context);
     final borderRadius = BorderRadius.circular(8);
     final baseColor = AppColors.cardSurfaceFor(context);
     final borderColor = isCurrent
@@ -1704,15 +1722,16 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
+                color: AppColors.contentTitleFor(context),
               ),
             ),
             subtitle: Text(
               '${track.artist}  -  ${formatDuration(track.duration)}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.contentSubtitleFor(context),
+              ),
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1740,8 +1759,9 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                           value: _TrackMenuAction.renameTrack,
                           child: Row(
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.drive_file_rename_outline_rounded,
+                                color: menuItemIconColor,
                               ),
                               const SizedBox(width: 12),
                               Text(strings.rename),
@@ -1752,7 +1772,10 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                           value: _TrackMenuAction.addToPlaylist,
                           child: Row(
                             children: [
-                              const Icon(Icons.playlist_add_rounded),
+                              Icon(
+                                Icons.playlist_add_rounded,
+                                color: menuItemIconColor,
+                              ),
                               const SizedBox(width: 12),
                               Text(strings.addToPlaylist),
                             ],
@@ -1766,6 +1789,9 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                 isFavorite
                                     ? Icons.star_rounded
                                     : Icons.star_border_rounded,
+                                color: isFavorite
+                                    ? const Color(0xFFFFD54F)
+                                    : menuItemIconColor,
                               ),
                               const SizedBox(width: 12),
                               Text(
@@ -1780,7 +1806,10 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                           value: _TrackMenuAction.deleteTrack,
                           child: Row(
                             children: [
-                              const Icon(Icons.delete_outline_rounded),
+                              Icon(
+                                Icons.delete_outline_rounded,
+                                color: menuItemIconColor,
+                              ),
                               const SizedBox(width: 12),
                               Text(strings.deleteSong),
                             ],
@@ -1792,8 +1821,9 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                           value: _TrackMenuAction.renameTrack,
                           child: Row(
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.drive_file_rename_outline_rounded,
+                                color: menuItemIconColor,
                               ),
                               const SizedBox(width: 12),
                               Text(strings.rename),
@@ -1808,6 +1838,9 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                 isFavorite
                                     ? Icons.star_rounded
                                     : Icons.star_border_rounded,
+                                color: isFavorite
+                                    ? const Color(0xFFFFD54F)
+                                    : menuItemIconColor,
                               ),
                               const SizedBox(width: 12),
                               Text(
@@ -1823,7 +1856,10 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                             value: _TrackMenuAction.removeFromPlaylist,
                             child: Row(
                               children: [
-                                const Icon(Icons.playlist_remove_rounded),
+                                Icon(
+                                  Icons.playlist_remove_rounded,
+                                  color: menuItemIconColor,
+                                ),
                                 const SizedBox(width: 12),
                                 Text(strings.removeFromPlaylist),
                               ],

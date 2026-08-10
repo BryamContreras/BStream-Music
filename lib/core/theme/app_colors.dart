@@ -38,10 +38,14 @@ abstract final class AppColors {
   }
 
   static Color menuForegroundFor(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return colors.brightness == Brightness.dark
-        ? menuForeground
-        : colors.onSurface;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    if (colors.brightness == Brightness.dark) {
+      final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+      return Color.alphaBlend(accent.withValues(alpha: 0.04), Colors.white);
+    }
+    final accent = theme.extension<AppAccentTheme>()?.dark ?? colors.primary;
+    return Color.alphaBlend(accent.withValues(alpha: 0.12), colors.onSurface);
   }
 
   static Color menuBorderFor(BuildContext context) {
@@ -49,6 +53,17 @@ abstract final class AppColors {
     return colors.brightness == Brightness.dark
         ? menuBorder
         : colors.outlineVariant.withValues(alpha: 0.9);
+  }
+
+  static Color menuIconFor(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    if (colors.brightness == Brightness.dark) {
+      final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+      return Color.alphaBlend(accent.withValues(alpha: 0.62), menuForeground);
+    }
+    final accent = theme.extension<AppAccentTheme>()?.dark ?? colors.primary;
+    return Color.alphaBlend(accent.withValues(alpha: 0.72), colors.onSurface);
   }
 
   static Color menuInactiveSliderFor(BuildContext context) {
@@ -94,7 +109,7 @@ abstract final class AppColors {
     final colors = Theme.of(context).colorScheme;
     return colors.brightness == Brightness.dark
         ? playbackPrimaryForeground
-        : Colors.black;
+        : colors.onPrimary;
   }
 
   static Color playbackPrimaryDisabledBackgroundFor(BuildContext context) {
@@ -108,7 +123,73 @@ abstract final class AppColors {
     final colors = Theme.of(context).colorScheme;
     return colors.brightness == Brightness.dark
         ? playbackPrimaryDisabledForeground
-        : Colors.black.withValues(alpha: 0.62);
+        : colors.onPrimary.withValues(alpha: 0.62);
+  }
+
+  static Color playbackTitleFor(BuildContext context) {
+    return _accentTextFor(
+      context,
+      base: neutralTitleFor(context),
+      lightStrength: 0.26,
+      darkStrength: 0.02,
+    );
+  }
+
+  static Color neutralTitleFor(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return colors.brightness == Brightness.dark
+        ? Colors.white
+        : colors.onSurface;
+  }
+
+  static Color contentHeadingFor(BuildContext context) {
+    return _accentTextFor(
+      context,
+      base: neutralTitleFor(context),
+      lightStrength: 0.13,
+      darkStrength: 0.04,
+    );
+  }
+
+  static Color contentTitleFor(BuildContext context) {
+    return _accentTextFor(
+      context,
+      base: neutralTitleFor(context),
+      lightStrength: 0.10,
+      darkStrength: 0.03,
+    );
+  }
+
+  static Color contentSubtitleFor(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return _accentTextFor(
+      context,
+      base: colors.onSurfaceVariant,
+      lightStrength: 0.05,
+      darkStrength: 0.02,
+    );
+  }
+
+  static Color playbackControlForegroundFor(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    if (colors.brightness == Brightness.dark) {
+      return colors.onSurface;
+    }
+    return Color.alphaBlend(
+      colors.primary.withValues(alpha: 0.32),
+      colors.onSurface,
+    );
+  }
+
+  static Color playbackSecondaryControlForegroundFor(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    if (colors.brightness == Brightness.dark) {
+      return colors.onSurfaceVariant;
+    }
+    return Color.alphaBlend(
+      colors.primary.withValues(alpha: 0.28),
+      colors.onSurfaceVariant,
+    );
   }
 
   static Color playIconForegroundFor(BuildContext context) {
@@ -120,5 +201,24 @@ abstract final class AppColors {
 
   static Color playIconDisabledForegroundFor(BuildContext context) {
     return playIconForegroundFor(context).withValues(alpha: 0.62);
+  }
+
+  static Color _accentTextFor(
+    BuildContext context, {
+    required Color base,
+    required double lightStrength,
+    required double darkStrength,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accentTheme = theme.extension<AppAccentTheme>();
+    final isDark = colors.brightness == Brightness.dark;
+    final accent = isDark
+        ? accentTheme?.seed ?? colors.primary
+        : accentTheme?.dark ?? colors.primary;
+    return Color.alphaBlend(
+      accent.withValues(alpha: isDark ? darkStrength : lightStrength),
+      base,
+    );
   }
 }

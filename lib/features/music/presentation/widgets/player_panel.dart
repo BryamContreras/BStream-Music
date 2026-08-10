@@ -388,6 +388,8 @@ class _PlayerHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final controlColor = AppColors.playbackControlForegroundFor(context);
     return SizedBox(
       height: 58,
       child: Row(
@@ -397,10 +399,9 @@ class _PlayerHeader extends StatelessWidget {
               tooltip: strings.playbackQueue,
               isSelected: queueVisible,
               style: IconButton.styleFrom(
+                foregroundColor: queueVisible ? colors.primary : controlColor,
                 backgroundColor: queueVisible
-                    ? Theme.of(
-                        context,
-                      ).colorScheme.primary.withValues(alpha: 0.16)
+                    ? colors.primary.withValues(alpha: 0.16)
                     : Colors.transparent,
               ),
               icon: const Icon(Icons.queue_music_rounded, size: 28),
@@ -413,12 +414,12 @@ class _PlayerHeader extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
+                  key: const ValueKey('player-tab-title'),
                   strings.nowPlaying,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w900,
-                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -507,7 +508,10 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w900),
+                            ?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.contentHeadingFor(context),
+                            ),
                       ),
                     ),
                     const SizedBox(width: 6),
@@ -539,7 +543,9 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                           child: Text(
                             strings.playbackQueueEmpty,
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: colors.onSurfaceVariant),
+                            style: TextStyle(
+                              color: AppColors.contentSubtitleFor(context),
+                            ),
                           ),
                         ),
                       )
@@ -674,6 +680,7 @@ class _PlaybackQueueTile extends StatelessWidget {
                           fontWeight: isCurrent
                               ? FontWeight.w900
                               : FontWeight.w700,
+                          color: AppColors.contentTitleFor(context),
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -682,7 +689,7 @@ class _PlaybackQueueTile extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: colors.onSurfaceVariant,
+                          color: AppColors.contentSubtitleFor(context),
                         ),
                       ),
                     ],
@@ -908,7 +915,6 @@ class _PlayerControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isPlaying = snapshot.status == PlayerStatus.playing;
-    final colors = Theme.of(context).colorScheme;
 
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
@@ -917,6 +923,7 @@ class _PlayerControls extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
+            key: const ValueKey('player-track-title'),
             snapshot.title ?? strings.noPlayback,
             maxLines: compact ? 2 : 3,
             overflow: TextOverflow.ellipsis,
@@ -927,11 +934,12 @@ class _PlayerControls extends ConsumerWidget {
                 compactness,
               ),
               fontWeight: FontWeight.w900,
-              color: colors.onSurface,
+              color: AppColors.playbackTitleFor(context),
             ),
           ),
           SizedBox(height: lerpDouble(6, 4, compactness)),
           Text(
+            key: const ValueKey('player-track-artist'),
             snapshot.artist ?? 'BStream Music',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -942,7 +950,7 @@ class _PlayerControls extends ConsumerWidget {
                 compactness,
               ),
               fontWeight: FontWeight.w800,
-              color: colors.onSurfaceVariant,
+              color: AppColors.contentSubtitleFor(context),
             ),
           ),
           SizedBox(height: lerpDouble(compact ? 22 : 36, 14, compactness)),
@@ -997,8 +1005,10 @@ class _PlaybackButtons extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final activeColor = Theme.of(context).colorScheme.primary;
-    final colors = Theme.of(context).colorScheme;
-    final inactiveColor = colors.onSurfaceVariant;
+    final controlColor = AppColors.playbackControlForegroundFor(context);
+    final inactiveColor = AppColors.playbackSecondaryControlForegroundFor(
+      context,
+    );
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth.isFinite
@@ -1070,7 +1080,7 @@ class _PlaybackButtons extends ConsumerWidget {
           size: secondaryControlSize,
           tooltip: strings.lyrics,
           iconSize: secondaryControlIconSize,
-          color: colors.onSurface,
+          color: controlColor,
           icon: Icons.lyrics_rounded,
           onPressed: hasTrack ? onOpenLyrics : null,
         );
@@ -1115,7 +1125,7 @@ class _PlaybackButtons extends ConsumerWidget {
           size: secondaryControlSize,
           tooltip: strings.volume,
           iconSize: secondaryControlIconSize,
-          color: colors.onSurface,
+          color: controlColor,
         );
 
         return Center(
@@ -1132,7 +1142,7 @@ class _PlaybackButtons extends ConsumerWidget {
                   size: largerSideButtonSize,
                   tooltip: strings.previous,
                   iconSize: largerSideIconSize,
-                  color: colors.onSurface,
+                  color: controlColor,
                   icon: Icons.skip_previous_rounded,
                   onPressed: hasTrack
                       ? () => ref
@@ -1185,7 +1195,7 @@ class _PlaybackButtons extends ConsumerWidget {
                   size: largerSideButtonSize,
                   tooltip: strings.next,
                   iconSize: largerSideIconSize,
-                  color: colors.onSurface,
+                  color: controlColor,
                   icon: Icons.skip_next_rounded,
                   onPressed: hasTrack
                       ? () => ref
@@ -1293,8 +1303,10 @@ class _VolumePopover extends ConsumerWidget {
     final volume = snapshot.volume.clamp(0.0, 1.0).toDouble();
     final menuBackground = AppColors.menuBackgroundFor(context);
     final menuForeground = AppColors.menuForegroundFor(context);
+    final menuIcon = AppColors.menuIconFor(context);
     final menuBorder = AppColors.menuBorderFor(context);
     final menuInactiveSlider = AppColors.menuInactiveSliderFor(context);
+    final accent = AppColors.downloadAccentFor(context);
 
     return Material(
       color: Colors.transparent,
@@ -1335,6 +1347,7 @@ class _VolumePopover extends ConsumerWidget {
                   child: SizedBox.square(
                     dimension: 28,
                     child: IconButton(
+                      color: menuIcon,
                       icon: const Icon(Icons.close_rounded),
                       iconSize: 18,
                       padding: EdgeInsets.zero,
@@ -1353,16 +1366,16 @@ class _VolumePopover extends ConsumerWidget {
               height: 30,
               child: Row(
                 children: [
-                  Icon(_volumeIcon(volume), color: menuForeground, size: 20),
+                  Icon(_volumeIcon(volume), color: menuIcon, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         trackHeight: 3,
-                        activeTrackColor: menuForeground,
+                        activeTrackColor: accent,
                         inactiveTrackColor: menuInactiveSlider,
-                        thumbColor: menuForeground,
-                        overlayColor: menuForeground.withValues(alpha: 0.14),
+                        thumbColor: accent,
+                        overlayColor: accent.withValues(alpha: 0.14),
                         thumbShape: const RoundSliderThumbShape(
                           enabledThumbRadius: 8,
                         ),
@@ -1465,10 +1478,12 @@ class _PlayerMenu extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final menuIconColor = AppColors.menuIconFor(context);
     return PopupMenuButton<String>(
       enabled: snapshot.trackId != null,
       tooltip: strings.moreOptions,
       padding: EdgeInsets.zero,
+      iconColor: AppColors.playbackControlForegroundFor(context),
       icon: const Icon(Icons.more_vert_rounded, size: 34),
       onSelected: (value) {
         switch (value) {
@@ -1486,7 +1501,7 @@ class _PlayerMenu extends ConsumerWidget {
             value: 'download',
             child: Row(
               children: [
-                const Icon(Icons.download_rounded),
+                Icon(Icons.download_rounded, color: menuIconColor),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
@@ -1502,7 +1517,7 @@ class _PlayerMenu extends ConsumerWidget {
           value: 'playlist',
           child: Row(
             children: [
-              const Icon(Icons.playlist_add_rounded),
+              Icon(Icons.playlist_add_rounded, color: menuIconColor),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -1520,7 +1535,7 @@ class _PlayerMenu extends ConsumerWidget {
             children: [
               Icon(
                 isFavorite ? Icons.star_rounded : Icons.star_border_rounded,
-                color: isFavorite ? const Color(0xFFFFD54F) : null,
+                color: isFavorite ? const Color(0xFFFFD54F) : menuIconColor,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1741,7 +1756,6 @@ class _Timeline extends ConsumerWidget {
     final position = timeline.position;
     final duration = timeline.duration;
     final progressColor = AppColors.downloadAccentFor(context);
-    final colors = Theme.of(context).colorScheme;
     return Column(
       children: [
         Row(
@@ -1751,14 +1765,14 @@ class _Timeline extends ConsumerWidget {
               formatDuration(position),
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: colors.onSurface,
+                color: AppColors.contentSubtitleFor(context),
               ),
             ),
             Text(
               formatDuration(duration),
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: colors.onSurface,
+                color: AppColors.contentSubtitleFor(context),
               ),
             ),
           ],

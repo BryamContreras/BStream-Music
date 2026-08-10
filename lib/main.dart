@@ -99,6 +99,14 @@ ThemeData _buildDarkTheme({
         secondary: accent.darkColor,
         tertiary: accent.seedColor,
       );
+  final menuIcon = Color.alphaBlend(
+    accent.seedColor.withValues(alpha: 0.62),
+    AppColors.menuForeground,
+  );
+  final menuForeground = Color.alphaBlend(
+    accent.seedColor.withValues(alpha: 0.04),
+    Colors.white,
+  );
 
   return ThemeData(
     useMaterial3: true,
@@ -141,10 +149,8 @@ ThemeData _buildDarkTheme({
       surfaceTintColor: Colors.transparent,
       shadowColor: const Color(0xB3000000),
       elevation: 14,
-      textStyle: const TextStyle(
-        color: AppColors.menuForeground,
-        fontWeight: FontWeight.w600,
-      ),
+      textStyle: TextStyle(color: menuForeground, fontWeight: FontWeight.w600),
+      iconColor: menuIcon,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
         side: const BorderSide(color: AppColors.menuBorder),
@@ -180,6 +186,14 @@ ThemeData _buildLightTheme({
         secondary: accent.darkColor,
         tertiary: accent.seedColor,
       );
+  final menuForeground = Color.alphaBlend(
+    accent.darkColor.withValues(alpha: 0.12),
+    scheme.onSurface,
+  );
+  final menuIcon = Color.alphaBlend(
+    accent.darkColor.withValues(alpha: 0.72),
+    scheme.onSurface,
+  );
 
   return ThemeData(
     useMaterial3: true,
@@ -222,10 +236,8 @@ ThemeData _buildLightTheme({
       surfaceTintColor: Colors.transparent,
       shadowColor: const Color(0x40000000),
       elevation: 8,
-      textStyle: TextStyle(
-        color: scheme.onSurface,
-        fontWeight: FontWeight.w600,
-      ),
+      textStyle: TextStyle(color: menuForeground, fontWeight: FontWeight.w600),
+      iconColor: menuIcon,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
         side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.9)),
