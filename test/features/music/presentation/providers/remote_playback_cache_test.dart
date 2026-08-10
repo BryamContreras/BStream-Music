@@ -472,9 +472,42 @@ void main() {
         expect(results, everyElement(isNotNull));
         expect(results[0]!.path, results[1]!.path);
         expect(await _audioFiles(cacheDirectory), hasLength(1));
+        expect(
+          await cacheDirectory
+              .list()
+              .where((entity) => entity.path.endsWith('.part'))
+              .toList(),
+          isEmpty,
+        );
       } finally {
         await secondCache.dispose();
       }
+    },
+  );
+
+  test(
+    'desktop maintenance preserves its persistent publication lock',
+    () async {
+      await cache.dispose();
+      cache = RemotePlaybackCache(
+        policy: RemotePlaybackCachePolicy.desktop,
+        cacheDirectoryProvider: () async => cacheDirectory,
+      );
+      final track = _track(server, 'persistent-lock');
+      await cache.retainOnlyTracks([track]);
+
+      expect(await cache.warmResolved(track), isNotNull);
+      final lockFiles = await cacheDirectory
+          .list()
+          .where((entity) => entity.path.endsWith('.publish.lock'))
+          .cast<File>()
+          .toList();
+      expect(lockFiles, hasLength(1));
+      await lockFiles.single.setLastModified(DateTime.utc(2000));
+
+      await cache.prepareSession();
+
+      expect(await lockFiles.single.exists(), isTrue);
     },
   );
 

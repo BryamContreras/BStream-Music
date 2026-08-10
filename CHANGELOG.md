@@ -48,6 +48,9 @@
 
 ### Fixed
 
+- Desktop cache publication is now serialized both within the app process and
+  across separate processes, preventing concurrent formats for one source from
+  creating inconsistent cache results on Linux and macOS.
 - Player, search/list, playlist, and library content text now receives a very
   subtle accent tint in both themes. Tab headings share the standard themed
   foreground, while lyrics remain unchanged.

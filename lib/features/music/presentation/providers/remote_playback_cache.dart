@@ -106,6 +106,9 @@ class RemotePlaybackCache {
            (policy ?? RemotePlaybackCachePolicy.current()).maximumEntryBytes;
 
   static const _cacheFolderName = 'remote-playback-cache';
+  static const _publicationLockFileName = '.publish.lock';
+  static const _publicationLockRetryDelay = Duration(milliseconds: 25);
+  static const _publicationLockTimeout = Duration(seconds: 2);
   static const _downloadIdleTimeout = Duration(seconds: 20);
   static const _downloadTotalTimeout = Duration(minutes: 30);
   static const _userAgent =
@@ -129,6 +132,11 @@ class RemotePlaybackCache {
     '.webm',
     '.wma',
   };
+  // POSIX advisory file locks are process-scoped, so cache objects in the same
+  // isolate share one directory gate first. The persistent file lock below
+  // then coordinates publication with separate app processes.
+  static final Map<String, Future<void>> _publicationTails =
+      <String, Future<void>>{};
 
   final RemotePlaybackCachePolicy _policy;
   final Future<Directory> Function()? cacheDirectoryProvider;
@@ -439,6 +447,7 @@ class RemotePlaybackCache {
         tempFile: tempFile,
         finalFile: finalFile,
         replacingInvalidEntry: replacingInvalidEntry,
+        job: job,
       );
       if (published == null) {
         await _deleteIfExists(tempFile);
@@ -517,7 +526,60 @@ class RemotePlaybackCache {
     required File tempFile,
     required File finalFile,
     required bool replacingInvalidEntry,
+    required _RemoteCacheWarmup job,
   }) async {
+    final publicationKey = await _publicationKey(directory);
+    final previous = _publicationTails[publicationKey] ?? Future<void>.value();
+    final operation = previous.catchError((_) {}).then((_) async {
+      if (job.cancelled) {
+        return null;
+      }
+      return _publishDownloadedFileAcrossProcesses(
+        directory: directory,
+        baseName: baseName,
+        tempFile: tempFile,
+        finalFile: finalFile,
+        replacingInvalidEntry: replacingInvalidEntry,
+        job: job,
+      );
+    });
+    final tail = operation.then<void>((_) {}, onError: (_, _) {});
+    _publicationTails[publicationKey] = tail;
+    unawaited(
+      tail.then((_) {
+        if (identical(_publicationTails[publicationKey], tail)) {
+          _publicationTails.remove(publicationKey);
+        }
+      }),
+    );
+    return operation;
+  }
+
+  Future<String> _publicationKey(Directory directory) async {
+    String directoryPath;
+    try {
+      directoryPath = await directory.resolveSymbolicLinks();
+    } catch (_) {
+      directoryPath = directory.absolute.path;
+    }
+    var key = p.canonicalize(directoryPath);
+    if (Platform.isWindows) {
+      key = key.toLowerCase();
+    }
+    return key;
+  }
+
+  Future<File?> _publishDownloadedFileAcrossProcesses({
+    required Directory directory,
+    required String baseName,
+    required File tempFile,
+    required File finalFile,
+    required bool replacingInvalidEntry,
+    required _RemoteCacheWarmup job,
+  }) async {
+    if (job.cancelled) {
+      return null;
+    }
     if (!_policy.useApplicationCacheDirectory) {
       return _publishDownloadedFileUnlocked(
         directory: directory,
@@ -525,40 +587,37 @@ class RemotePlaybackCache {
         tempFile: tempFile,
         finalFile: finalFile,
         replacingInvalidEntry: replacingInvalidEntry,
+        job: job,
       );
     }
 
-    final lockFile = File(p.join(directory.path, '$baseName.publish.lock'));
+    final lockFile = File(p.join(directory.path, _publicationLockFileName));
     RandomAccessFile? lockHandle;
     try {
       lockHandle = await lockFile.open(mode: FileMode.append);
-      try {
-        await lockFile.setLastModified(_clock());
-      } catch (_) {
-        // The lock itself still works if its maintenance timestamp cannot be
-        // updated.
+      final acquired = await _acquirePublicationFileLock(lockHandle, job);
+      if (!acquired) {
+        await lockHandle.close();
+        return null;
       }
-      await lockHandle.lock(FileLock.blockingExclusive);
     } catch (_) {
       await lockHandle?.close();
-      // A cache directory that does not support advisory locks can still use
-      // the existing atomic rename/winner check.
-      return _publishDownloadedFileUnlocked(
-        directory: directory,
-        baseName: baseName,
-        tempFile: tempFile,
-        finalFile: finalFile,
-        replacingInvalidEntry: replacingInvalidEntry,
-      );
+      // The cache is best effort. If cross-process coordination is unavailable,
+      // fall back to streaming instead of publishing an ambiguous entry.
+      return null;
     }
 
     try {
+      if (job.cancelled) {
+        return null;
+      }
       return await _publishDownloadedFileUnlocked(
         directory: directory,
         baseName: baseName,
         tempFile: tempFile,
         finalFile: finalFile,
         replacingInvalidEntry: replacingInvalidEntry,
+        job: job,
       );
     } finally {
       try {
@@ -570,15 +629,41 @@ class RemotePlaybackCache {
     }
   }
 
+  Future<bool> _acquirePublicationFileLock(
+    RandomAccessFile lockHandle,
+    _RemoteCacheWarmup job,
+  ) async {
+    final stopwatch = Stopwatch()..start();
+    while (!job.cancelled && !_disposed) {
+      try {
+        await lockHandle.lock(FileLock.exclusive);
+        return true;
+      } catch (_) {
+        if (stopwatch.elapsed >= _publicationLockTimeout) {
+          return false;
+        }
+        await Future<void>.delayed(_publicationLockRetryDelay);
+      }
+    }
+    return false;
+  }
+
   Future<File?> _publishDownloadedFileUnlocked({
     required Directory directory,
     required String baseName,
     required File tempFile,
     required File finalFile,
     required bool replacingInvalidEntry,
+    required _RemoteCacheWarmup job,
   }) async {
+    if (job.cancelled) {
+      return null;
+    }
     if (!replacingInvalidEntry) {
       final concurrentlyCached = await _findCachedFile(directory, baseName);
+      if (job.cancelled) {
+        return null;
+      }
       if (concurrentlyCached != null) {
         await _deleteIfExists(tempFile);
         return concurrentlyCached;
@@ -589,9 +674,15 @@ class RemotePlaybackCache {
       // invalidation pass.
       await _deleteCachedVariants(directory, baseName);
     }
+    if (job.cancelled) {
+      return null;
+    }
     try {
       return await tempFile.rename(finalFile.path);
     } catch (_) {
+      if (job.cancelled) {
+        return null;
+      }
       final winner = replacingInvalidEntry
           ? null
           : await _findCachedFile(directory, baseName);
@@ -650,6 +741,9 @@ class RemotePlaybackCache {
       try {
         final modified = await entity.lastModified();
         final extension = p.extension(entity.path).toLowerCase();
+        if (p.basename(entity.path) == _publicationLockFileName) {
+          continue;
+        }
         if (extension == '.part' || extension == '.lock') {
           final partialExpired =
               _policy.partialMaximumAge == Duration.zero ||
