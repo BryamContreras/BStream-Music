@@ -105,13 +105,16 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     return LayoutBuilder(
       builder: (context, outer) {
         final wide = outer.maxWidth >= 840;
+        final mobile = Theme.of(context).platform == TargetPlatform.android;
         final stackedDesktop = AppPlatform.isDesktop && wide;
         final showSideQueue = AppPlatform.isDesktop && _showPlaybackQueue;
         final heightCompactness = AppPlatform.isDesktop
             ? ((680.0 - outer.maxHeight) / 140.0).clamp(0.0, 1.0)
             : 0.0;
         final regularTopPadding = wide ? (showSideQueue ? 12.0 : 20.0) : 10.0;
-        final regularBottomPadding = wide
+        final regularBottomPadding = mobile
+            ? 8.0
+            : wide
             ? (showSideQueue ? 12.0 : 24.0)
             : 20.0;
 
@@ -174,9 +177,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 constraints,
                                 stackedDesktop: stackedDesktop,
                                 wide: wide,
-                                mobile:
-                                    Theme.of(context).platform ==
-                                    TargetPlatform.android,
+                                mobile: mobile,
                                 compactness: verticalCompactness,
                               );
                               final artwork = Center(
@@ -186,9 +187,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   isFavorite: isFavorite,
                                 ),
                               );
-                              final gap =
-                                  Theme.of(context).platform ==
-                                      TargetPlatform.android
+                              final gap = mobile
                                   ? 14.0
                                   : lerpDouble(26, 12, verticalCompactness)!;
                               final maxContentWidth = stackedDesktop
@@ -223,7 +222,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   constraints: BoxConstraints(
                                     minHeight: constraints.maxHeight,
                                   ),
-                                  child: Center(
+                                  child: Align(
+                                    alignment: mobile
+                                        ? Alignment.bottomCenter
+                                        : Alignment.center,
                                     child: ConstrainedBox(
                                       constraints: BoxConstraints(
                                         maxWidth: maxContentWidth,
@@ -338,10 +340,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     } else {
       regularExtent = math
           .min(
-            constraints.maxWidth - 16,
-            constraints.maxHeight * (mobile ? 0.4 : 0.56),
+            constraints.maxWidth - (mobile ? 8 : 16),
+            constraints.maxHeight * (mobile ? 0.46 : 0.56),
           )
-          .clamp(mobile ? 170.0 : 210.0, 400.0)
+          .clamp(mobile ? 180.0 : 210.0, 400.0)
           .toDouble();
     }
 
@@ -407,6 +409,7 @@ class _PlayerHeader extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final controlColor = AppColors.playbackControlForegroundFor(context);
     return ConstrainedBox(
+      key: const ValueKey('player-header'),
       constraints: const BoxConstraints(minHeight: 58),
       child: Row(
         children: [
@@ -1117,6 +1120,7 @@ class _PlaybackButtons extends ConsumerWidget {
             : MediaQuery.sizeOf(context).width;
         final mobile = Theme.of(context).platform == TargetPlatform.android;
         final narrow = width < 360;
+        final veryNarrow = width < 300;
         final roomy = width >= 420 || !compact;
         final regularSmallButtonSize = (width * 0.105).clamp(
           48.0,
@@ -1156,13 +1160,25 @@ class _PlaybackButtons extends ConsumerWidget {
           28.0,
           50.0,
         );
-        final secondaryControlSize = narrow
+        final secondaryControlSize = mobile && !veryNarrow
+            ? narrow
+                  ? 50.0
+                  : (secondarySideButtonSize + 2.0).clamp(50.0, 68.0)
+            : narrow
             ? smallButtonSize.clamp(48.0, 50.0)
             : secondarySideButtonSize;
-        final secondaryControlIconSize = narrow
+        final secondaryControlIconSize = mobile && !veryNarrow
+            ? narrow
+                  ? 34.0
+                  : (secondarySideIconSize + 2.0).clamp(30.0, 52.0)
+            : narrow
             ? (secondaryControlSize * 0.68).clamp(28.0, 34.0)
             : secondarySideIconSize;
-        final largerSideButtonSize = (sideButtonSize + 4.0).clamp(52.0, 76.0);
+        final sideButtonGrowth = mobile && !veryNarrow ? 6.0 : 4.0;
+        final largerSideButtonSize = (sideButtonSize + sideButtonGrowth).clamp(
+          52.0,
+          76.0,
+        );
         final largerSideIconSize = (largerSideButtonSize * 0.84).clamp(
           38.0,
           58.0,
@@ -1175,12 +1191,23 @@ class _PlaybackButtons extends ConsumerWidget {
           42.0,
           68.0,
         );
-        final centerGap = narrow ? 2.0 : (width * 0.034).clamp(9.0, 32.0);
+        final centerGap = veryNarrow
+            ? 2.0
+            : narrow
+            ? 6.0
+            : (width * 0.04).clamp(12.0, 34.0);
         final outerGap = narrow ? 6.0 : (width * 0.075).clamp(16.0, 60.0);
-        final edgeGap = narrow ? 0.0 : (width * 0.018).clamp(8.0, 16.0);
-        final mobileLabelWidth = (width - edgeGap) / 2;
-        const mobileLabelHeight = 48.0;
-        final mobileSecondaryGap = narrow ? 8.0 : 12.0;
+        final edgeGap = veryNarrow
+            ? 0.0
+            : narrow
+            ? 6.0
+            : (width * 0.025).clamp(10.0, 18.0);
+        final mobileLabelWidth = (width * (narrow ? 0.4 : 0.36)).clamp(
+          128.0,
+          148.0,
+        );
+        const mobileLabelHeight = 52.0;
+        final mobileSecondaryGap = narrow ? 8.0 : 10.0;
         final lyricsButton = mobile
             ? _LabeledControlButton(
                 key: const ValueKey('player-lyrics-control'),
@@ -1188,7 +1215,7 @@ class _PlaybackButtons extends ConsumerWidget {
                 height: mobileLabelHeight,
                 tooltip: strings.lyrics,
                 label: strings.lyrics,
-                iconSize: 20,
+                iconSize: 24,
                 color: controlColor,
                 icon: Icons.lyrics_rounded,
                 onPressed: hasTrack ? onOpenLyrics : null,
@@ -1244,10 +1271,11 @@ class _PlaybackButtons extends ConsumerWidget {
           width: mobile ? mobileLabelWidth : null,
           label: mobile ? strings.volume : null,
           tooltip: strings.volume,
-          iconSize: mobile ? 20 : secondaryControlIconSize,
+          iconSize: mobile ? 24 : secondaryControlIconSize,
           color: controlColor,
         );
         final previousButton = _ControlButton(
+          key: const ValueKey('player-previous-control'),
           size: largerSideButtonSize,
           tooltip: strings.previous,
           iconSize: largerSideIconSize,
@@ -1285,6 +1313,7 @@ class _PlaybackButtons extends ConsumerWidget {
           ),
         );
         final nextButton = _ControlButton(
+          key: const ValueKey('player-next-control'),
           size: largerSideButtonSize,
           tooltip: strings.next,
           iconSize: largerSideIconSize,
@@ -1323,11 +1352,8 @@ class _PlaybackButtons extends ConsumerWidget {
                   ),
                   SizedBox(height: mobileSecondaryGap),
                   Row(
-                    children: [
-                      Expanded(child: lyricsButton),
-                      SizedBox(width: edgeGap),
-                      Expanded(child: volumeButton),
-                    ],
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [lyricsButton, volumeButton],
                   ),
                 ],
               )
@@ -1652,8 +1678,10 @@ class _LabeledControlButton extends StatelessWidget {
             disabledForegroundColor: color.withValues(alpha: 0.38),
             backgroundColor: color.withValues(alpha: 0.1),
             disabledBackgroundColor: color.withValues(alpha: 0.05),
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            shape: const StadiumBorder(),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
           onPressed: onPressed,
           icon: Icon(icon, size: iconSize),
@@ -1661,7 +1689,7 @@ class _LabeledControlButton extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
           ),
         ),
       ),

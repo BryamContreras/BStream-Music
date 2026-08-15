@@ -33,6 +33,10 @@ void main() {
         find.byKey(ValueKey('search-category-${category.name}')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(ValueKey('search-category-icon-${category.name}')),
+        findsOneWidget,
+      );
     }
   });
 
@@ -102,7 +106,9 @@ void main() {
     expect(find.text('otra búsqueda'), findsNothing);
   });
 
-  testWidgets('hides the search page heading on mobile only', (tester) async {
+  testWidgets('mobile heading hides only while a search is active', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(360, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -116,8 +122,21 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
+    expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'radiohead');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
+    expect(find.byKey(const ValueKey('search-category-songs')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('search-clear-button')));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
+    expect(find.byKey(const ValueKey('search-category-songs')), findsNothing);
 
     await tester.pumpWidget(
       _searchApp(controller: controller, platform: TargetPlatform.windows),
@@ -125,6 +144,23 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
+  });
+
+  testWidgets('desktop keeps its heading during an active search', (
+    tester,
+  ) async {
+    final controller = _RecordingSearchController(
+      SearchState(query: 'radiohead', loadingCategory: SearchCategory.songs),
+    );
+
+    await tester.pumpWidget(
+      _searchApp(controller: controller, platform: TargetPlatform.windows),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
+    expect(find.byKey(const ValueKey('search-category-songs')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('fallback exposes only Videos and explains yt-dlp', (

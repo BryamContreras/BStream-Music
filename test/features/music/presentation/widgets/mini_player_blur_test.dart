@@ -38,6 +38,72 @@ void main() {
     final provider = image.image as ResizeImage;
     expect(provider.width, 320);
   });
+
+  for (final size in const [Size(320, 640), Size(360, 800)]) {
+    testWidgets(
+      'Android ${size.width.toInt()} px mini-player keeps an inset rounded frame',
+      (tester) async {
+        _configureView(tester, size, textScaleFactor: 3);
+        await tester.pumpWidget(_miniPlayerHarness());
+        await tester.pump();
+
+        final frame = find.byKey(const ValueKey('mini-player-frame'));
+        final containerFinder = find.byKey(
+          const ValueKey('mini-player-container'),
+        );
+        final surface = find.byKey(const ValueKey('mini-player-surface'));
+        final play = find.byKey(const ValueKey('mini-player-primary-control'));
+        final frameRect = tester.getRect(frame);
+        final surfaceRect = tester.getRect(surface);
+
+        expect(frameRect.left, closeTo(8, 0.1));
+        expect(frameRect.right, closeTo(size.width - 8, 0.1));
+        expect(surfaceRect, frameRect);
+        expect(tester.getSize(play), const Size.square(48));
+        expect(tester.getSize(surface).height, greaterThanOrEqualTo(62));
+        final container = tester.widget<Container>(containerFinder);
+        final decoration = container.decoration! as BoxDecoration;
+        expect(container.clipBehavior, Clip.antiAlias);
+        expect(decoration.borderRadius, BorderRadius.circular(10));
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+}
+
+Widget _miniPlayerHarness() {
+  return ProviderScope(
+    overrides: [
+      playerControllerProvider.overrideWith(_TestPlayerController.new),
+      favoriteTrackIdsProvider.overrideWithValue(const <String>{}),
+      appStringsProvider.overrideWithValue(
+        const AppStrings(AppLanguage.spanish),
+      ),
+    ],
+    child: MaterialApp(
+      theme: ThemeData(platform: TargetPlatform.android),
+      home: const Scaffold(
+        body: Align(alignment: Alignment.topCenter, child: MiniPlayer()),
+      ),
+    ),
+  );
+}
+
+void _configureView(
+  WidgetTester tester,
+  Size size, {
+  double textScaleFactor = 1,
+}) {
+  tester.view
+    ..physicalSize = size
+    ..devicePixelRatio = 1;
+  tester.platformDispatcher.textScaleFactorTestValue = textScaleFactor;
+  addTearDown(() {
+    tester.view
+      ..resetPhysicalSize()
+      ..resetDevicePixelRatio();
+    tester.platformDispatcher.clearTextScaleFactorTestValue();
+  });
 }
 
 class _TestPlayerController extends PlayerController {

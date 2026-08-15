@@ -141,9 +141,16 @@ class MiniPlayer extends ConsumerWidget {
       ),
     );
 
-    return Material(
-      color: Colors.transparent,
-      child: ClipRect(
+    return Container(
+      key: const ValueKey('mini-player-container'),
+      margin: EdgeInsets.symmetric(horizontal: compactAndroid ? 8 : 0),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(compactAndroid ? 10 : 0),
+      ),
+      child: Material(
+        key: const ValueKey('mini-player-frame'),
+        color: Colors.transparent,
         child: Stack(
           children: [
             Positioned.fill(

@@ -32,7 +32,7 @@ class SearchView extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (!isMobile) ...[
+                if (!isMobile || !searchState.hasQuery) ...[
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Text(
@@ -45,6 +45,7 @@ class SearchView extends ConsumerWidget {
                   const SizedBox(height: 16),
                 ],
                 Padding(
+                  key: const ValueKey('search-input-container'),
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: SearchInput(
                     hintText: strings.searchHint,
@@ -236,6 +237,7 @@ class _SearchCategoryTabs extends StatelessWidget {
           Expanded(
             child: _SearchCategoryTab(
               category: categories[index],
+              icon: _categoryIcon(categories[index]),
               label: _categoryLabel(strings, categories[index]),
               selected: categories[index] == selectedCategory,
               selectedColor: colors.primaryContainer,
@@ -251,6 +253,7 @@ class _SearchCategoryTabs extends StatelessWidget {
 class _SearchCategoryTab extends StatelessWidget {
   const _SearchCategoryTab({
     required this.category,
+    required this.icon,
     required this.label,
     required this.selected,
     required this.selectedColor,
@@ -258,6 +261,7 @@ class _SearchCategoryTab extends StatelessWidget {
   });
 
   final SearchCategory category;
+  final IconData icon;
   final String label;
   final bool selected;
   final Color selectedColor;
@@ -267,6 +271,9 @@ class _SearchCategoryTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final radius = BorderRadius.circular(8);
+    final tabHeight = (MediaQuery.textScalerOf(context).scale(14) + 20)
+        .clamp(48.0, 80.0)
+        .toDouble();
 
     return Semantics(
       selected: selected,
@@ -284,20 +291,38 @@ class _SearchCategoryTab extends StatelessWidget {
           key: ValueKey('search-category-${category.name}'),
           onTap: selected ? null : () => onSelected(category),
           child: SizedBox(
-            height: 48,
+            height: tabHeight,
             child: Center(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: selected
-                        ? colors.onPrimaryContainer
-                        : AppColors.contentTitleFor(context),
-                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      icon,
+                      key: ValueKey('search-category-icon-${category.name}'),
+                      size: 18,
+                      color: selected
+                          ? colors.onPrimaryContainer
+                          : AppColors.contentTitleFor(context),
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: selected
+                              ? colors.onPrimaryContainer
+                              : AppColors.contentTitleFor(context),
+                          fontWeight: selected
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -527,6 +552,12 @@ String _categoryLabel(AppStrings strings, SearchCategory category) =>
       SearchCategory.videos => strings.searchVideos,
       SearchCategory.albums => strings.searchAlbums,
     };
+
+IconData _categoryIcon(SearchCategory category) => switch (category) {
+  SearchCategory.songs => Icons.music_note_rounded,
+  SearchCategory.videos => Icons.smart_display_rounded,
+  SearchCategory.albums => Icons.album_rounded,
+};
 
 class _SearchEmptyState extends StatelessWidget {
   const _SearchEmptyState({

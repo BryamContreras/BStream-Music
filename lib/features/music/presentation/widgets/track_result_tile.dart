@@ -22,12 +22,14 @@ class TrackResultTile extends ConsumerStatefulWidget {
     required this.track,
     required this.onOpenPlayer,
     this.queue,
+    this.queueSourceId,
     super.key,
   });
 
   final TrackInfo track;
   final VoidCallback onOpenPlayer;
   final List<TrackInfo>? queue;
+  final String? queueSourceId;
 
   @override
   ConsumerState<TrackResultTile> createState() => _TrackResultTileState();
@@ -63,6 +65,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
             playback.status == PlayerStatus.playing ||
             playback.status == PlayerStatus.paused);
     final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
+    final identity = track.id.trim().isNotEmpty ? track.id : track.url;
     final colors = Theme.of(context).colorScheme;
     final borderRadius = BorderRadius.circular(8);
     final baseColor = AppColors.cardSurfaceFor(context);
@@ -158,11 +161,16 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                   ),
                   const SizedBox(width: 8),
                   TrackPlayButton(
+                    key: ValueKey('track-result-play-$identity'),
                     tooltip: isPlaying ? strings.pause : strings.play,
                     isPlaying: isPlaying,
                     onPressed: () => _togglePlayback(ref),
                   ),
-                  _TrackResultMenu(track: track, strings: strings),
+                  _TrackResultMenu(
+                    key: ValueKey('track-result-menu-$identity'),
+                    track: track,
+                    strings: strings,
+                  ),
                 ],
               ),
             ),
@@ -176,7 +184,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
     final queue = widget.queue ?? [track];
     final playFuture = ref
         .read(playerControllerProvider.notifier)
-        .playRemote(track, queue: queue);
+        .playRemote(track, queue: queue, queueSourceId: widget.queueSourceId);
     if (openPlayer) {
       onOpenPlayer();
     }
@@ -232,7 +240,11 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
 }
 
 class _TrackResultMenu extends ConsumerWidget {
-  const _TrackResultMenu({required this.track, required this.strings});
+  const _TrackResultMenu({
+    required this.track,
+    required this.strings,
+    super.key,
+  });
 
   final TrackInfo track;
   final AppStrings strings;

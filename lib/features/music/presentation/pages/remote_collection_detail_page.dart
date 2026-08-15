@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/duration_formatter.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../widgets/source_image.dart';
+import '../widgets/track_result_tile.dart';
 
 class RemoteCollectionDetailPage extends ConsumerWidget {
   const RemoteCollectionDetailPage({
@@ -89,10 +89,22 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
                 separatorBuilder: (_, _) => const SizedBox(height: 6),
                 itemBuilder: (context, index) {
                   final track = value[index];
-                  return _CollectionTrackTile(
-                    track: track,
-                    index: index,
-                    onTap: () => _play(context, ref, track, value),
+                  final identity = track.id.trim().isEmpty
+                      ? track.url
+                      : track.id;
+                  return KeyedSubtree(
+                    key: ValueKey('remote-collection-track-$identity'),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1080),
+                        child: TrackResultTile(
+                          track: track,
+                          queue: value,
+                          queueSourceId: queueSourceId,
+                          onOpenPlayer: () => _openPlayer(context),
+                        ),
+                      ),
+                    ),
                   );
                 },
               ),
@@ -146,6 +158,13 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
           ..showSnackBar(SnackBar(content: Text(playbackError)));
       }),
     );
+  }
+
+  void _openPlayer(BuildContext context) {
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    onOpenPlayer();
   }
 }
 
@@ -286,115 +305,6 @@ class _CollectionHeader extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _CollectionTrackTile extends StatelessWidget {
-  const _CollectionTrackTile({
-    required this.track,
-    required this.index,
-    required this.onTap,
-  });
-
-  final TrackInfo track;
-  final int index;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final identity = track.id.trim().isEmpty ? track.url : track.id;
-    final radius = BorderRadius.circular(8);
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1080),
-        child: Material(
-          color: AppColors.cardSurfaceFor(context),
-          shape: RoundedRectangleBorder(
-            borderRadius: radius,
-            side: BorderSide(color: AppColors.cardBorderFor(context)),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            key: ValueKey('remote-collection-track-$identity'),
-            borderRadius: radius,
-            onTap: onTap,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 66),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 7,
-                ),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 34,
-                      child: Text(
-                        '${index + 1}',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: AppColors.contentSubtitleFor(context),
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                    ),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: SizedBox.square(
-                        dimension: 48,
-                        child: ProportionalArtwork(
-                          source:
-                              track.thumbnailUrl ?? track.catalogThumbnailUrl,
-                          cacheWidth: 192,
-                          fallback: const ColoredBox(
-                            color: Color(0xFF202520),
-                            child: Icon(Icons.music_note_rounded),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 11),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            track.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                                  color: AppColors.contentTitleFor(context),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${track.artist}  \u2022  ${formatDuration(track.duration)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(
-                                  color: AppColors.contentSubtitleFor(context),
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.play_arrow_rounded,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

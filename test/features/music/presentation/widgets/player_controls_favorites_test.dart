@@ -49,6 +49,10 @@ void main() {
         final volume = find.byKey(const ValueKey('player-volume-control'));
         final repeat = find.byKey(const ValueKey('player-repeat-control'));
         final primary = find.byKey(const ValueKey('player-primary-control'));
+        final previous = find.byKey(const ValueKey('player-previous-control'));
+        final next = find.byKey(const ValueKey('player-next-control'));
+        final artwork = find.byKey(const ValueKey('player-large-artwork'));
+        final header = find.byKey(const ValueKey('player-header'));
 
         expect(
           find.descendant(of: lyrics, matching: find.text('Letras')),
@@ -104,6 +108,64 @@ void main() {
           tester.getSize(volume).width,
           greaterThan(tester.getSize(repeat).width),
         );
+        expect(tester.getSize(lyrics), const Size(128, 52));
+        expect(tester.getSize(volume), const Size(128, 52));
+        expect(tester.getRect(lyrics).left, closeTo(20, 0.1));
+        expect(tester.getRect(volume).right, closeTo(size.width - 20, 0.1));
+        expect(tester.getSize(artwork), Size.square(size.width - 48));
+        final artworkTopGap =
+            tester.getRect(artwork).top - tester.getRect(header).bottom;
+        expect(artworkTopGap, lessThanOrEqualTo(size.width == 320 ? 100 : 112));
+        final lyricsIcon = tester.widget<Icon>(
+          find.descendant(
+            of: lyrics,
+            matching: find.byIcon(Icons.lyrics_rounded),
+          ),
+        );
+        final lyricsLabel = tester.widget<Text>(
+          find.descendant(of: lyrics, matching: find.text('Letras')),
+        );
+        final lyricsButton = tester.widget<TextButton>(
+          find.descendant(of: lyrics, matching: find.byType(TextButton)),
+        );
+        expect(lyricsIcon.size, 24);
+        expect(lyricsLabel.style?.fontSize, 14);
+        expect(
+          lyricsButton.style?.shape?.resolve(<WidgetState>{}),
+          isA<RoundedRectangleBorder>(),
+        );
+
+        final contentWidth = size.width - 40;
+        final originalRegularPlaySize = (contentWidth * 0.22).clamp(64.0, 88.0);
+        final originalPlaySize = (originalRegularPlaySize + 6).clamp(
+          76.0,
+          94.0,
+        );
+        expect(
+          tester.getSize(primary),
+          Size.square(originalPlaySize.toDouble()),
+        );
+        expect(tester.getSize(previous).shortestSide, greaterThanOrEqualTo(52));
+        expect(tester.getSize(next).shortestSide, greaterThanOrEqualTo(52));
+
+        if (size.width == 360) {
+          final shuffleRect = tester.getRect(shuffle);
+          final previousRect = tester.getRect(previous);
+          final primaryRect = tester.getRect(primary);
+          final nextRect = tester.getRect(next);
+          final repeatRect = tester.getRect(repeat);
+          expect(
+            previousRect.left - shuffleRect.right,
+            greaterThanOrEqualTo(6),
+          );
+          expect(
+            primaryRect.left - previousRect.right,
+            greaterThanOrEqualTo(6),
+          );
+          expect(nextRect.left - primaryRect.right, greaterThanOrEqualTo(6));
+          expect(repeatRect.left - nextRect.right, greaterThanOrEqualTo(6));
+        }
+        expect(size.height - tester.getRect(volume).bottom, closeTo(8, 0.1));
         expect(tester.takeException(), isNull);
       },
     );
@@ -178,6 +240,14 @@ void main() {
       expect(rect.width, greaterThanOrEqualTo(48), reason: key);
       expect(rect.height, greaterThanOrEqualTo(48), reason: key);
     }
+    expect(
+      tester.getSize(find.byKey(const ValueKey('player-primary-control'))),
+      const Size.square(76),
+    );
+    final volume = find.byKey(const ValueKey('player-volume-control'));
+    await tester.ensureVisible(volume);
+    await tester.pump();
+    expect(tester.getRect(volume).bottom, lessThanOrEqualTo(568));
     expect(tester.takeException(), isNull);
   });
 

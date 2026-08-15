@@ -50,8 +50,32 @@ void main() {
       expect(find.textContaining('2 canciones'), findsOneWidget);
       expect(find.text('Primera cancion'), findsOneWidget);
       expect(find.text('Segunda cancion'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('track-result-play-song-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('track-result-play-song-2')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('track-result-menu-song-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('track-result-menu-song-2')),
+        findsOneWidget,
+      );
       expect(player.playCalls, 0);
       expect(playerOpens, 0);
+
+      await tester.tap(find.byKey(const ValueKey('track-result-menu-song-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.download_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.playlist_add_rounded), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const ValueKey('remote-collection-play')));
       await tester.pump();
@@ -63,6 +87,35 @@ void main() {
       expect(playerOpens, 1);
     },
   );
+
+  testWidgets('the row Play button uses the owned collection queue', (
+    tester,
+  ) async {
+    final player = _RecordingPlayerController();
+    var playerOpens = 0;
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => _tracks,
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      _detailApp(
+        player: player,
+        tracksProvider: tracksProvider,
+        onOpenPlayer: () => playerOpens++,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('track-result-play-song-2')));
+    await tester.pump();
+
+    expect(player.playCalls, 1);
+    expect(player.lastTrack, same(_tracks[1]));
+    expect(player.lastQueue, _tracks);
+    expect(player.lastQueueSourceId, 'album:MPRE-contract');
+    expect(playerOpens, 0);
+  });
 
   testWidgets(
     'tapping one track starts at it with the complete displayed queue',
@@ -206,6 +259,12 @@ void main() {
     );
     expect(trackTile, findsOneWidget);
     expect(tester.getRect(trackTile).height, greaterThanOrEqualTo(48));
+    final playButton = find.byKey(const ValueKey('track-result-play-song-1'));
+    final menuButton = find.byKey(const ValueKey('track-result-menu-song-1'));
+    expect(playButton, findsOneWidget);
+    expect(menuButton, findsOneWidget);
+    expect(tester.getRect(playButton).shortestSide, greaterThanOrEqualTo(48));
+    expect(tester.getRect(menuButton).shortestSide, greaterThanOrEqualTo(48));
     expect(tester.takeException(), isNull);
   });
 }

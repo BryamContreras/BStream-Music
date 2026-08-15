@@ -2268,6 +2268,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         TrackPlayButton(
+                          key: ValueKey('library-track-play-${track.id}'),
                           tooltip: isPlaying ? strings.pause : strings.play,
                           isPlaying: isPlaying,
                           onPressed: () => _togglePlayback(ref),
@@ -2276,6 +2277,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                           width: menuButtonSize,
                           height: menuButtonSize,
                           child: PopupMenuButton<_TrackMenuAction>(
+                            key: ValueKey('library-track-menu-${track.id}'),
                             tooltip: strings.moreOptions,
                             padding: EdgeInsets.zero,
                             splashRadius: menuButtonSize / 2,

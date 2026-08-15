@@ -893,7 +893,10 @@ void main() {
 
     await tester.tap(find.text('Buscar').last);
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
+    final searchColor = tester
+        .widget<Text>(find.byKey(const ValueKey('search-tab-title')))
+        .style
+        ?.color;
 
     await tester.tap(find.text('Biblioteca').last);
     await tester.pump(const Duration(milliseconds: 300));
@@ -910,6 +913,7 @@ void main() {
         ?.color;
 
     expect(homeColor, isNotNull);
+    expect(searchColor, homeColor);
     expect(libraryColor, homeColor);
     expect(settingsColor, homeColor);
   });
@@ -1353,7 +1357,7 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.byType(TextField), findsOneWidget);
-    expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
+    expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
 
     await tester.binding.handlePopRoute();
     await tester.pump(const Duration(milliseconds: 200));
@@ -1843,6 +1847,14 @@ void main() {
 
     expect(find.text('Filtrar canciones'), findsOneWidget);
     expect(find.text('Cancion de playlist'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('library-track-play-playlist-route-track')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('library-track-menu-playlist-route-track')),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
