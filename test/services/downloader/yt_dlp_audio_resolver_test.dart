@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -5,6 +7,7 @@ import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/downloader/yt_dlp_audio_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   const track = TrackInfo(
@@ -16,8 +19,8 @@ void main() {
 
   test('uses managed playback when the downloader supports it', () async {
     final downloader = _ManagedFakeDownloader(
-      const ManagedPlaybackResource(
-        filePath: r'C:\cache\video-id.140.m4a',
+      ManagedPlaybackResource(
+        filePath: p.join(Directory.systemTemp.path, 'video-id.140.m4a'),
         extension: 'm4a',
         mimeType: 'audio/mp4',
         formatId: '140',
