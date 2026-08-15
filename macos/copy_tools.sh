@@ -70,3 +70,10 @@ if [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] && \
       "${deno_tool}"
   fi
 fi
+
+# Copy third-party notices to the Resources directory
+notices_source="${PROJECT_DIR}/../THIRD_PARTY_NOTICES.md"
+notices_destination="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/THIRD_PARTY_NOTICES.md"
+if [ -f "${notices_source}" ]; then
+  cp "${notices_source}" "${notices_destination}"
+fi

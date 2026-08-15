@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -14,6 +15,7 @@ import '../../../../core/platform/app_platform.dart';
 import '../../../../platform_channels/android_external_audio_channel.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
+import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../widgets/bstream_logo.dart';
 import '../widgets/favorite_star_badge.dart';
@@ -23,6 +25,7 @@ import '../widgets/playback_gradient_background.dart';
 import '../widgets/player_panel.dart';
 import '../widgets/settings_panel.dart';
 import '../widgets/source_image.dart';
+import 'remote_collection_detail_page.dart';
 import 'search_view.dart';
 
 class HomePage extends ConsumerStatefulWidget {
@@ -39,6 +42,8 @@ class _HomePageState extends ConsumerState<HomePage> {
   final List<int> _viewHistory = [];
   final LibraryNavigationController _libraryNavigationController =
       LibraryNavigationController();
+  final SettingsNavigationController _settingsNavigationController =
+      SettingsNavigationController();
   int _rootBackCount = 0;
   DateTime? _lastRootBackAt;
   StreamSubscription<ExternalAudioRequest>? _externalAudioSubscription;
@@ -187,6 +192,10 @@ class _HomePageState extends ConsumerState<HomePage> {
         _libraryNavigationController.maybePop()) {
       return;
     }
+    if (_selectedIndex == _settingsIndex &&
+        _settingsNavigationController.maybePop()) {
+      return;
+    }
     // The player can be opened directly by a media notification, without a
     // previous in-app tab. Keep Back inside the app in that case.
     if (_selectedIndex == _playerIndex &&
@@ -228,6 +237,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   void dispose() {
     unawaited(_externalAudioSubscription?.cancel());
     _libraryNavigationController.dispose();
+    _settingsNavigationController.dispose();
     super.dispose();
   }
 
@@ -257,6 +267,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     ref.watch(desktopMediaSessionProvider);
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesAndroidNavigation;
+    final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
     final strings = ref.watch(appStringsProvider);
     final destinations = _usesAndroidNavigation
         ? [
@@ -317,7 +328,9 @@ class _HomePageState extends ConsumerState<HomePage> {
         }
       },
       child: Scaffold(
+        extendBody: showBottomNavigation && _usesAndroidNavigation,
         body: SafeArea(
+          bottom: false,
           child: DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -343,54 +356,58 @@ class _HomePageState extends ConsumerState<HomePage> {
                   const PlayerPlaybackGradientBackground()
                 else if (_usesPlaybackGradient)
                   const PlaybackGradientBackground(),
-                Row(
-                  children: [
-                    if (useSideNavigation)
-                      _SideNavigation(
-                        selectedIndex: _selectedIndex,
-                        dimPlaybackBackground: _isPlayerSelected,
-                        onSelected: _selectIndex,
-                        destinations: destinations,
-                      ),
-                    Expanded(
-                      child: ClipRect(
-                        child: Column(
-                          children: [
-                            Expanded(
-                              child: _PersistentCurrentViews(
-                                selectedIndex: _selectedIndex,
-                                homeIndex: _homeIndex,
-                                searchIndex: _searchIndex,
-                                playerIndex: _playerIndex,
-                                libraryIndex: _libraryIndex,
-                                settingsIndex: _settingsIndex,
-                                libraryNavigationController:
-                                    _libraryNavigationController,
-                                onOpenPlayer: _openPlayer,
-                                onOpenSearch: _openSearch,
-                                onOpenPlaylist: _openPlaylistFromHome,
+                SafeArea(
+                  top: false,
+                  child: Row(
+                    children: [
+                      if (useSideNavigation)
+                        _SideNavigation(
+                          selectedIndex: _selectedIndex,
+                          dimPlaybackBackground: _isPlayerSelected,
+                          onSelected: _selectIndex,
+                          destinations: destinations,
+                        ),
+                      Expanded(
+                        child: ClipRect(
+                          child: Column(
+                            children: [
+                              Expanded(
+                                child: _PersistentCurrentViews(
+                                  selectedIndex: _selectedIndex,
+                                  homeIndex: _homeIndex,
+                                  searchIndex: _searchIndex,
+                                  playerIndex: _playerIndex,
+                                  libraryIndex: _libraryIndex,
+                                  settingsIndex: _settingsIndex,
+                                  libraryNavigationController:
+                                      _libraryNavigationController,
+                                  settingsNavigationController:
+                                      _settingsNavigationController,
+                                  onOpenPlayer: _openPlayer,
+                                  onOpenSearch: _openSearch,
+                                  onOpenPlaylist: _openPlaylistFromHome,
+                                ),
                               ),
-                            ),
-                            if (!_isPlayerSelected)
-                              MiniPlayer(onOpenPlayer: _openPlayer),
-                          ],
+                              if (!_isPlayerSelected)
+                                MiniPlayer(onOpenPlayer: _openPlayer),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
         ),
-        bottomNavigationBar: useSideNavigation
-            ? null
-            : _isPlayerSelected
+        bottomNavigationBar: !showBottomNavigation
             ? null
             : _BottomNavigation(
                 selectedIndex: _selectedIndex,
                 onDestinationSelected: _selectIndex,
                 destinations: destinations,
+                glassyCompact: _usesAndroidNavigation,
               ),
       ),
     );
@@ -414,39 +431,61 @@ class _BottomNavigation extends StatelessWidget {
     required this.selectedIndex,
     required this.onDestinationSelected,
     required this.destinations,
+    required this.glassyCompact,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onDestinationSelected;
   final List<_AppDestination> destinations;
+  final bool glassyCompact;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(
-          top: BorderSide(color: theme.colorScheme.outlineVariant),
+    final content = SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        key: const ValueKey('bottom-navigation-content'),
+        constraints: BoxConstraints(minHeight: glassyCompact ? 76.0 : 82.0),
+        child: Row(
+          children: [
+            for (final destination in destinations)
+              Expanded(
+                child: _BottomNavigationItem(
+                  icon: destination.icon,
+                  label: destination.label,
+                  selected: selectedIndex == destination.index,
+                  onTap: () => onDestinationSelected(destination.index),
+                ),
+              ),
+          ],
         ),
       ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 82,
-          child: Row(
-            children: [
-              for (final destination in destinations)
-                Expanded(
-                  child: _BottomNavigationItem(
-                    icon: destination.icon,
-                    label: destination.label,
-                    selected: selectedIndex == destination.index,
-                    onTap: () => onDestinationSelected(destination.index),
-                  ),
-                ),
-            ],
+    );
+    if (!glassyCompact) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          border: Border(
+            top: BorderSide(color: theme.colorScheme.outlineVariant),
           ),
+        ),
+        child: content,
+      );
+    }
+
+    return ClipRect(
+      key: const ValueKey('bottom-navigation-glass'),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface.withValues(alpha: 0.9),
+            border: Border(
+              top: BorderSide(color: theme.colorScheme.outlineVariant),
+            ),
+          ),
+          child: content,
         ),
       ),
     );
@@ -480,6 +519,7 @@ class _BottomNavigationItem extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
         decoration: BoxDecoration(borderRadius: BorderRadius.circular(22)),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             AnimatedScale(
@@ -699,6 +739,7 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.libraryIndex,
     required this.settingsIndex,
     required this.libraryNavigationController,
+    required this.settingsNavigationController,
     required this.onOpenPlayer,
     required this.onOpenSearch,
     required this.onOpenPlaylist,
@@ -711,6 +752,7 @@ class _PersistentCurrentViews extends StatefulWidget {
   final int libraryIndex;
   final int settingsIndex;
   final LibraryNavigationController libraryNavigationController;
+  final SettingsNavigationController settingsNavigationController;
   final VoidCallback onOpenPlayer;
   final VoidCallback onOpenSearch;
   final ValueChanged<String> onOpenPlaylist;
@@ -773,6 +815,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             selected: widget.selectedIndex == widget.settingsIndex,
             child: SettingsPanel(
               active: widget.selectedIndex == widget.settingsIndex,
+              navigationController: widget.settingsNavigationController,
             ),
           ),
       ],
@@ -861,6 +904,11 @@ class _HomeView extends ConsumerWidget {
     final strings = ref.watch(appStringsProvider);
     final history = ref.watch(historyProvider);
     final playlists = ref.watch(playlistsControllerProvider);
+    final hasHistory = history.value?.isNotEmpty ?? false;
+    final hasPlaylists = playlists.value?.isNotEmpty ?? false;
+    final recommendationsState = ref.watch(homeRecommendationsProvider);
+    final recommendations =
+        recommendationsState.value ?? const <HomeRecommendationSection>[];
     final libraryTracks =
         ref.watch(libraryTracksProvider).value ?? const <LocalTrack>[];
 
@@ -869,39 +917,140 @@ class _HomeView extends ConsumerWidget {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 22, 16, 8),
-            child: Text(
-              key: const ValueKey('home-tab-title'),
-              strings.home,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    key: const ValueKey('home-tab-title'),
+                    strings.home,
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                SizedBox.square(
+                  dimension: 48,
+                  child: IconButton(
+                    key: const ValueKey('home-recommendations-refresh'),
+                    tooltip: strings.refreshHomeRecommendations,
+                    onPressed: recommendationsState.isLoading
+                        ? null
+                        : () => ref.invalidate(homeRecommendationsProvider),
+                    icon: recommendationsState.isLoading
+                        ? SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              semanticsLabel:
+                                  strings.refreshingHomeRecommendations,
+                            ),
+                          )
+                        : const Icon(Icons.refresh_rounded),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
-        SliverToBoxAdapter(
-          child: _HomeRecentSection(
-            history: history,
-            strings: strings,
-            onTrackSelected: (track, queue) {
-              final playFuture = ref
-                  .read(playerControllerProvider.notifier)
-                  .playFromHistory(track, fallbackQueue: queue);
-              onOpenPlayer();
-              unawaited(playFuture);
-            },
+        if (hasHistory)
+          SliverToBoxAdapter(
+            child: _HomeRecentSection(
+              history: history,
+              strings: strings,
+              onTrackSelected: (track, queue) {
+                final playFuture = ref
+                    .read(playerControllerProvider.notifier)
+                    .playFromHistory(track, fallbackQueue: queue);
+                onOpenPlayer();
+                unawaited(playFuture);
+              },
+            ),
           ),
-        ),
-        const SliverToBoxAdapter(child: SizedBox(height: 12)),
-        SliverToBoxAdapter(
-          child: _HomePlaylistSection(
-            playlists: playlists,
-            libraryTracks: libraryTracks,
-            strings: strings,
-            onPlaylistSelected: onOpenPlaylist,
+        if (hasPlaylists) ...[
+          if (hasHistory) const SliverToBoxAdapter(child: SizedBox(height: 12)),
+          SliverToBoxAdapter(
+            child: _HomePlaylistSection(
+              playlists: playlists,
+              libraryTracks: libraryTracks,
+              strings: strings,
+              onPlaylistSelected: onOpenPlaylist,
+            ),
           ),
-        ),
+        ],
+        if (recommendations.isNotEmpty && (hasHistory || hasPlaylists))
+          const SliverToBoxAdapter(child: SizedBox(height: 12)),
+        for (final section in recommendations)
+          SliverToBoxAdapter(
+            child: _HomeRemoteRecommendationSection(
+              section: section,
+              onOpenPlayer: onOpenPlayer,
+              onTrackSelected: (track, queue) {
+                final playFuture = ref
+                    .read(playerControllerProvider.notifier)
+                    .playRemote(track, queue: queue);
+                onOpenPlayer();
+                unawaited(playFuture);
+              },
+            ),
+          ),
         const SliverToBoxAdapter(child: SizedBox(height: 96)),
       ],
+    );
+  }
+}
+
+class _HomeRemoteRecommendationSection extends ConsumerWidget {
+  const _HomeRemoteRecommendationSection({
+    required this.section,
+    required this.onOpenPlayer,
+    required this.onTrackSelected,
+  });
+
+  final HomeRecommendationSection section;
+  final VoidCallback onOpenPlayer;
+  final void Function(TrackInfo track, List<TrackInfo> queue) onTrackSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final expandedCards = MediaQuery.sizeOf(context).width >= 700;
+    final strings = ref.watch(appStringsProvider);
+    final trackQueue = section.tracks;
+    final cardWidth = expandedCards ? 176.0 : 148.0;
+    return _HomeSection(
+      key: ValueKey('home-recommendations-section-${section.title}'),
+      title: section.title,
+      child: SizedBox(
+        key: ValueKey('home-recommendations-shelf-${section.title}'),
+        height: _homeShelfHeight(
+          context,
+          cardWidth: cardWidth,
+          minimumHeight: expandedCards ? 228 : 200,
+        ),
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          scrollDirection: Axis.horizontal,
+          itemCount: section.items.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          itemBuilder: (context, index) {
+            final item = section.items[index];
+            return switch (item) {
+              HomeRecommendationTrackItem(:final track) =>
+                _RecommendedTrackCard(
+                  track: track,
+                  width: cardWidth,
+                  onTap: () => onTrackSelected(track, trackQueue),
+                ),
+              HomeRecommendationCollectionItem(:final collection) =>
+                _RecommendedCollectionCard(
+                  collection: collection,
+                  strings: strings,
+                  width: cardWidth,
+                  onOpenPlayer: onOpenPlayer,
+                ),
+            };
+          },
+        ),
+      ),
     );
   }
 }
@@ -919,6 +1068,8 @@ class _HomeRecentSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final expandedCards = MediaQuery.sizeOf(context).width >= 700;
+    final cardWidth = expandedCards ? 176.0 : 148.0;
     return _HomeSection(
       title: strings.recentlyPlayed,
       child: history.when(
@@ -928,7 +1079,12 @@ class _HomeRecentSection extends StatelessWidget {
             return _HomeEmptyText(strings.noRecentSongs);
           }
           return SizedBox(
-            height: 184,
+            key: const ValueKey('home-recent-shelf'),
+            height: _homeShelfHeight(
+              context,
+              cardWidth: cardWidth,
+              minimumHeight: expandedCards ? 228 : 200,
+            ),
             child: ListView.separated(
               padding: const EdgeInsets.symmetric(horizontal: 6),
               scrollDirection: Axis.horizontal,
@@ -938,6 +1094,7 @@ class _HomeRecentSection extends StatelessWidget {
                 final track = tracks[index];
                 return _RecentTrackCard(
                   track: track,
+                  width: cardWidth,
                   onTap: () => onTrackSelected(track, tracks),
                 );
               },
@@ -966,6 +1123,8 @@ class _HomePlaylistSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final expandedCards = MediaQuery.sizeOf(context).width >= 700;
+    final cardWidth = expandedCards ? 188.0 : 160.0;
     final tracksById = {for (final track in libraryTracks) track.id: track};
     return _HomeSection(
       title: strings.myPlaylists,
@@ -976,7 +1135,12 @@ class _HomePlaylistSection extends StatelessWidget {
             return _HomeEmptyText(strings.noLocalPlaylists);
           }
           return SizedBox(
-            height: 196,
+            key: const ValueKey('home-playlist-shelf'),
+            height: _homeShelfHeight(
+              context,
+              cardWidth: cardWidth,
+              minimumHeight: expandedCards ? 240 : 212,
+            ),
             child: ListView.separated(
               padding: const EdgeInsets.symmetric(horizontal: 6),
               scrollDirection: Axis.horizontal,
@@ -1001,6 +1165,7 @@ class _HomePlaylistSection extends StatelessWidget {
                     playlist,
                     tracksById,
                   ),
+                  width: cardWidth,
                   onTap: () => onPlaylistSelected(playlist.id),
                 );
               },
@@ -1015,7 +1180,7 @@ class _HomePlaylistSection extends StatelessWidget {
 }
 
 class _HomeSection extends StatelessWidget {
-  const _HomeSection({required this.title, required this.child});
+  const _HomeSection({super.key, required this.title, required this.child});
 
   final String title;
   final Widget child;
@@ -1044,19 +1209,191 @@ class _HomeSection extends StatelessWidget {
   }
 }
 
+class _RecommendedTrackCard extends StatelessWidget {
+  const _RecommendedTrackCard({
+    required this.track,
+    required this.width,
+    required this.onTap,
+  });
+
+  final TrackInfo track;
+  final double width;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      key: ValueKey('home-recommendation-${track.id}'),
+      width: width,
+      child: Material(
+        color: AppColors.cardSurfaceFor(context),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _HomeArtwork(
+                  source: track.thumbnailUrl ?? track.catalogThumbnailUrl,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  track.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  track.artist,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RecommendedCollectionCard extends StatelessWidget {
+  const _RecommendedCollectionCard({
+    required this.collection,
+    required this.strings,
+    required this.width,
+    required this.onOpenPlayer,
+  });
+
+  final HomeRecommendationCollection collection;
+  final AppStrings strings;
+  final double width;
+  final VoidCallback onOpenPlayer;
+
+  @override
+  Widget build(BuildContext context) {
+    final collection = this.collection;
+    final theme = Theme.of(context);
+    final rawSubtitle = collection.subtitle?.trim();
+    final subtitle = rawSubtitle == null || rawSubtitle.isEmpty
+        ? (collection.isMix ? strings.mix : strings.playlist)
+        : rawSubtitle;
+    return SizedBox(
+      key: ValueKey('home-collection-${collection.browseId}'),
+      width: width,
+      child: Material(
+        color: AppColors.cardSurfaceFor(context),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        child: Semantics(
+          button: true,
+          label: strings.openCollection(collection.title),
+          child: InkWell(
+            key: ValueKey('home-collection-open-${collection.browseId}'),
+            onTap: () => _openCollection(context, subtitle),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Stack(
+                    children: [
+                      _HomeArtwork(source: collection.thumbnailUrl),
+                      Positioned(
+                        right: 7,
+                        bottom: 7,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surface.withValues(alpha: 0.88),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Padding(
+                            padding: EdgeInsets.all(7),
+                            child: Icon(Icons.chevron_right_rounded, size: 20),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    collection.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openCollection(BuildContext context, String subtitle) {
+    final kind = collection.isMix ? strings.mix : strings.playlist;
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => RemoteCollectionDetailPage(
+          title: collection.title,
+          subtitle: subtitle,
+          artworkSource: collection.thumbnailUrl,
+          metadata: subtitle == kind ? const [] : [kind],
+          queueSourceId: 'home-collection:${collection.browseId}',
+          tracksProvider: homeCollectionTracksProvider(collection.browseId),
+          emptyMessage: strings.homeCollectionEmpty,
+          errorMessage: strings.homeCollectionLoadError,
+          onOpenPlayer: onOpenPlayer,
+        ),
+      ),
+    );
+  }
+}
+
 class _RecentTrackCard extends ConsumerWidget {
-  const _RecentTrackCard({required this.track, required this.onTap});
+  const _RecentTrackCard({
+    required this.track,
+    required this.width,
+    required this.onTap,
+  });
 
   final LocalTrack track;
+  final double width;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
     final isFavorite = ref.watch(
       favoriteTrackIdsProvider.select((ids) => ids.contains(track.id)),
     );
     return SizedBox(
-      width: 132,
+      key: const ValueKey('home-recent-card'),
+      width: width,
       child: Material(
         color: AppColors.cardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
@@ -1086,15 +1423,17 @@ class _RecentTrackCard extends ConsumerWidget {
                   track.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   track.artist,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -1112,6 +1451,7 @@ class _HomePlaylistCard extends StatelessWidget {
     required this.thumbnailSources,
     required this.subtitle,
     required this.strings,
+    required this.width,
     required this.onTap,
   });
 
@@ -1119,12 +1459,15 @@ class _HomePlaylistCard extends StatelessWidget {
   final List<String> thumbnailSources;
   final String subtitle;
   final AppStrings strings;
+  final double width;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return SizedBox(
-      width: 144,
+      key: const ValueKey('home-playlist-card'),
+      width: width,
       child: Material(
         color: AppColors.cardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
@@ -1152,15 +1495,17 @@ class _HomePlaylistCard extends StatelessWidget {
                   playlist.isFavorites ? strings.favorites : playlist.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -1185,6 +1530,7 @@ class _HomeArtwork extends StatelessWidget {
         aspectRatio: 1,
         child: ProportionalArtwork(
           source: source,
+          cacheWidth: 640,
           fallback: const _HomeImageFallback(icon: Icons.music_note_rounded),
         ),
       ),
@@ -1219,6 +1565,7 @@ class _HomePlaylistCover extends StatelessWidget {
           children: [
             SourceImage(
               source: sources.first,
+              cacheWidth: 640,
               fallback: const _HomeImageFallback(
                 icon: Icons.queue_music_rounded,
               ),
@@ -1241,6 +1588,7 @@ class _HomePlaylistCover extends StatelessWidget {
                               borderRadius: BorderRadius.circular(3),
                               child: SourceImage(
                                 source: source,
+                                cacheWidth: 256,
                                 fallback: const _HomeImageFallback(
                                   icon: Icons.music_note_rounded,
                                   iconSize: 16,
@@ -1343,8 +1691,37 @@ String? _homeTrackThumbnailSource(LocalTrack track) {
   }
 
   final file = imageFileFromSource(normalized);
-  if (file == null || !file.existsSync()) {
+  if (file == null) {
     return null;
   }
   return file.path;
+}
+
+double _homeShelfHeight(
+  BuildContext context, {
+  required double cardWidth,
+  required double minimumHeight,
+}) {
+  final theme = Theme.of(context);
+  final textHeight =
+      _singleLineTextHeight(
+        context,
+        theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w800),
+      ) +
+      _singleLineTextHeight(context, theme.textTheme.bodySmall);
+  final artworkExtent = cardWidth - 16;
+  final requiredHeight = 16 + artworkExtent + 8 + 2 + textHeight;
+  return math.max(minimumHeight, requiredHeight.ceilToDouble());
+}
+
+double _singleLineTextHeight(BuildContext context, TextStyle? style) {
+  final painter = TextPainter(
+    text: TextSpan(text: 'Ag', style: style),
+    maxLines: 1,
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+  )..layout();
+  final height = painter.height;
+  painter.dispose();
+  return height;
 }

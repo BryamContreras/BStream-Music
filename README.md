@@ -2,7 +2,7 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, Windows, Linux, and macOS.
 
-Current version: **1.2.3+123**.
+Current version: **1.2.4+124**.
 
 > The repository does not store media content or third-party binaries. Android
 > and desktop builds download and bundle a checksum-verified `yt-dlp`; desktop
@@ -11,38 +11,45 @@ Current version: **1.2.3+123**.
 
 <img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
 
-## What's new in 1.2.3
+## What's new in 1.2.4
 
-- Open local Android audio with BStream and populate the queue from the
-  selected file's folder when Android grants media-library access.
-- Choose System, Light, or Dark appearance and one of twelve persistent accent
-  palettes applied across gradients, tabs, progress, controls, lyrics, cards,
-  and menus.
-- Reorder the active queue with a long press without restarting the current
-  track, and warm only the next remote track for faster transitions.
-- Use consistent, higher-quality artwork across search, playback, playlists,
-  and downloads, including proportional cropping and older-video fallbacks.
-- Keep search text until it is explicitly cleared, and show total duration
-  beside song counts in playlists and downloaded songs.
-- Get up to 20 results per search and optionally support continued development
-  from the contribution link below the version in Settings.
-- Improve Android playback recovery for expired URLs, HTTP errors, extractor
-  changes, and format mismatches. Android APKs now include the same pinned
-  stable yt-dlp version as desktop builds.
-- Bound artwork, thumbnail, remote-audio, and LRCLIB resource usage for longer
-  listening sessions.
-- Validate and stage backup restores transactionally, with rollback if database
-  or media activation fails.
-- Fix custom sleep-timer cancellation, recent-playlist context, light-theme
-  controls and popups, and assorted player layout issues.
+- Resolve and download YouTube audio with `youtube_explode_dart` first, validate
+  the exact selected stream, and fall back visibly to yt-dlp only when needed.
+- Search YouTube Music through InnerTube tabs for Songs, Videos, and Albums;
+  open albums, mixes, and playlists as details before creating their queues.
+- Show refreshable YouTube Music shelves on Home while hiding empty local
+  Recently played and Playlists sections.
+- Import and export library metadata through robust CSV profiles compatible
+  with BStream, MetroList, Harmony/RiMusic, Soundiiz, and common layouts.
+- Run TikTok LIVE queues natively in Dart on Android, Windows, Linux, and macOS,
+  with optional saving to the Library and bounded request processing.
+- Use generation-aware, time-bounded playback opens and latest-request-wins
+  managed fallback downloads so stale sources cannot block a new song or Stop.
+- Preserve native M4A/AAC, WebM/Opus, and other supported YouTube audio formats,
+  with bounded temporary caches and validated partial downloads.
+- Improve Settings navigation, compact card styling, language selection,
+  transfer actions, lyrics animation choices, and persistent appearance options.
+- Improve small-device and accessibility behavior with lazy library lists,
+  bounded artwork decoding, 48 dp controls, and layouts tested at 300% text.
+- Include release APKs for ARMv7, ARMv8, and x86_64, and remove the obsolete
+  external Python TikTok LIVE bridge from desktop packages.
 
 ## Main features
 
 ### Search, downloads, and library
 
-- Up to 20 search results with thumbnail, title, artist/channel, and duration.
+- InnerTube search tabs for Songs, Videos, and Albums, with up to 20 results,
+  artwork, metadata, and album queues loaded only when selected.
+- If InnerTube fails, yt-dlp keeps discovery available as generic YouTube
+  Videos without mislabeling them as Songs or Albums.
 - Search text remains available between searches and has an inline clear action.
 - Remote playback and audio downloads with real-time progress.
+- Direct YouTube playback falls back to a short-lived, chunked yt-dlp cache
+  when GoogleVideo rejects the player's HTTP range requests; native M4A/AAC,
+  WebM/Opus, and other available audio containers remain unconverted. Stale
+  A -> B -> C preparations are cancelled, stalled transfers time out, and the
+  managed fallback cache is bounded to 12 files (128 MiB total/64 MiB per file
+  on Android; 256 MiB total/128 MiB per file on desktop).
 - High-quality artwork uses one proportional crop policy from search through
   playback and downloaded-library storage.
 - SQLite-backed local library.
@@ -50,12 +57,22 @@ Current version: **1.2.3+123**.
 - Filtering, renaming, and deletion of saved tracks.
 - Playlist creation, renaming, and deletion.
 - Playlist and downloaded-song headers show both song count and total duration.
-- Dedicated **Favorites** playlist with a visible star on favorited tracks.
+- Dedicated **Favorites** playlist with accent-colored hearts on favorited
+  tracks.
 - ZIP backup and restore for the database, audio files, and thumbnails.
+- CSV import/export for BStream, MetroList, Harmony/RiMusic, Soundiiz,
+  Exportify, and common title/artist/album/ISRC layouts. CSV imports show a
+  preview, reuse existing local tracks, and download missing songs one at a
+  time only after confirmation; CSV exports contain metadata, not audio.
 
 ### Player
 
 - Play, pause, previous, next, repeat, and shuffle controls.
+- Mobile Lyrics and Volume controls use labeled buttons beneath Shuffle and
+  Repeat, while an accent-colored heart beside the title toggles Favorites on
+  every platform.
+- Lyrics offer four persistent animation styles, Normal/Centered alignment,
+  and a live preview in Appearance settings.
 - Playback queue synchronized with playlists and the library.
 - Queue side panel on Windows and a dedicated queue view on Android.
 - Change tracks directly from the queue and reorder them with a long press.
@@ -79,14 +96,18 @@ Current version: **1.2.3+123**.
 - Sleep timer with quick durations and a custom duration.
 - Native system media integration: Android media notifications, Windows
   SMTC, Linux MPRIS, and macOS Now Playing.
+- Source opens use bounded deadlines and generation/epoch isolation. A broken
+  decoder or network source cannot hold a newer selection, Stop, or shutdown
+  indefinitely, and late events from the retired source are ignored.
 - Windows registers a stable application identity so SMTC shows the BStream
   Music name and icon in system media controls.
 - Failed-track handling: a track that cannot be downloaded or played does not leave the queue stuck on the previous track.
 
 ### Interface
 
-- Responsive layouts for Android and Windows.
-- System, Light, and Dark themes with twelve persistent accent palettes.
+- Responsive mobile and desktop layouts with bounded artwork decoding,
+  lazy library lists, 48 dp touch targets, and large-text adaptation.
+- System, Light, and Dark themes with eighteen persistent accent palettes.
 - Navigation remembers only the two most recent views.
 - Returning from the player restores the previously opened playlist or section.
 - Home displays up to 10 recently played items and 10 playlists. Recent items
@@ -99,9 +120,11 @@ Current version: **1.2.3+123**.
 - Windows window minimum size of `960 × 600`; the player progressively adapts artwork, text, spacing, and controls to the available height.
 - Icons generated from one source asset for Android, Windows, macOS, and Flutter resources.
 
-## TikTok LIVE on Windows
+## TikTok LIVE on Android, Windows, Linux, and macOS
 
-The Windows version can connect to a LIVE through a bridge based on `TikTokLive` and turn chat commands into a temporary music queue.
+Every supported BStream platform connects to TikTok LIVE through a client
+implemented directly in Dart and turns chat commands into a temporary music
+queue. The integration does not launch an external bridge.
 
 Available features:
 
@@ -110,6 +133,8 @@ Available features:
 - Identify moderators.
 - Configure command permissions for **Everyone** or **Moderators only**.
 - LIVE queue states for searching, downloading, ready, and failed requests.
+- A bounded 50-request queue that rejects additional commands explicitly
+  instead of allowing an unbounded search/download backlog.
 - Reuse tracks that already exist in the library.
 - Dynamic synchronization: new requests are added without replacing the current playback.
 - Automatically skip requests that fail during download.
@@ -127,16 +152,23 @@ revoke!
 
 `!play` searches for the first result, prepares it, and adds it to the queue. `!skip`/`!next` advance playback, while `!revoke`/`!stop` clear the LIVE queue.
 
-This integration uses an unofficial library. If TikTok changes its protocol, the bridge may need to be updated.
+On Android, the connection can continue while the app is normally in the
+background as long as its Flutter process remains alive. Force-stopping the app
+or Android reclaiming that process also ends the LIVE connection; it is not an
+independent background service.
+
+This integration uses an unofficial, reverse-engineered protocol. If TikTok
+changes it, the Dart client may need to be updated. BStream Music is not
+affiliated with or endorsed by TikTok or ByteDance.
 
 ## Platforms and engines
 
 | Platform | Player | Downloads | Notes |
 | --- | --- | --- | --- |
-| Android | `just_audio` + `audio_service` | `youtubedl-android` + QuickJS | `minSdk 24`; open local audio from Android; release APKs support `arm64-v8a` and `x86_64` |
+| Android | `just_audio` + `audio_service` | `youtubedl-android` + QuickJS | `minSdk 24`; TikTok LIVE; open local audio from Android; release APKs support `armeabi-v7a`, `arm64-v8a`, and `x86_64` |
 | Windows | `media_kit` | Bundled `yt-dlp` + Deno | SMTC controls, TikTok LIVE, queue side panel, and external tools |
-| Linux | `media_kit` | Bundled `yt-dlp` + Deno | MPRIS controls; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
-| macOS | `media_kit` | Bundled `yt-dlp` + Deno | Now Playing controls; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
+| Linux | `media_kit` | Bundled `yt-dlp` + Deno | MPRIS controls; TikTok LIVE; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
+| macOS | `media_kit` | Bundled `yt-dlp` + Deno | Now Playing controls; TikTok LIVE; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
 
 Downloads and remote playback use the same native-audio selection policy on
 every platform: prefer the best available M4A/AAC stream, otherwise use the
@@ -203,7 +235,6 @@ output asynchronously.
 - A stable Rust toolchain with the MSVC x64 target for Windows SMTC builds.
 - Clang, CMake, Ninja, GTK 3, and libmpv for Linux.
 - A Mac with Xcode to build, sign, and test macOS.
-- Python 3.11–3.13 only when developing or rebuilding the TikTok bridge.
 - `yt-dlp` and Deno 2.3 or newer for complete YouTube support on desktop.
   Node.js 22 or newer can be used as a development fallback.
 
@@ -237,9 +268,6 @@ Third-party binaries are **not committed to Git**. `yt-dlp` may be available on 
 windows/tools/
   yt-dlp.exe
   deno.exe
-  tiktok-live-bridge/
-    tiktok_live_bridge.exe
-    ...generated runtime...
 ```
 
 Install `yt-dlp` with `winget`:
@@ -274,7 +302,7 @@ explicitly if `yt-dlp` or Deno is missing, preventing a package with incomplete
 YouTube support. BStream prioritizes the bundled tools and keeps `PATH` as a
 development fallback.
 
-The application is distributed outside the Mac App Store. App Sandbox is disabled because BStream needs to launch `yt-dlp`, access the selected download folder, and make network connections. Hardened Runtime remains enabled for Developer ID signing and notarization. TikTok LIVE remains limited to Windows.
+The application is distributed outside the Mac App Store. App Sandbox is disabled because BStream needs to launch `yt-dlp`, access the selected download folder, and make network connections. Hardened Runtime remains enabled for Developer ID signing and notarization. TikTok LIVE uses the same in-process Dart transport on macOS as on Android, Windows, and Linux.
 
 The native macOS window uses the same `960 × 600` minimum as Windows.
 
@@ -292,28 +320,15 @@ CMake copies both executables into `tools/` inside the bundle. The target system
 must provide GTK 3, libmpv, and SQLite runtime libraries for the application
 and its `media_kit` player.
 
-## TikTok LIVE bridge
+## TikTok LIVE client
 
-During development, BStream can run the bridge directly:
+TikTok LIVE networking, reconnection, Protobuf decoding, command parsing, and
+WebSocket keepalive handling run inside the Dart application. Builds do not
+bundle or start a companion runtime for this integration.
 
-```text
-scripts/tiktok_live_bridge.py
-```
-
-The application creates a virtual environment automatically when the packaged bridge is unavailable. You can also prepare it manually:
-
-```powershell
-py -3 -m venv .venv-tiktok
-.\.venv-tiktok\Scripts\python.exe -m pip install -r scripts\requirements-tiktok.txt
-```
-
-Build the portable runtime used by a Windows Release build with:
-
-```powershell
-.\scripts\build_tiktok_bridge.ps1 -Jobs 28
-```
-
-The result is written to `windows/tools/tiktok-live-bridge/`. This directory contains Python, DLLs, and compiled dependencies, so it is excluded from Git and must be regenerated locally. The bridge watches the BStream process ID and exits when the application closes, preventing orphan processes and locked DLLs.
+The transport uses an audited in-tree fork of the 0BSD-licensed
+`piratetok_live` 0.1.5 project. See
+[Third-party notices](THIRD_PARTY_NOTICES.md) for attribution.
 
 ## Android
 
@@ -342,8 +357,9 @@ version but preserves an updater-downloaded copy when it is the same version or
 newer. Recoverable extractor failures can still trigger one stable-channel
 update and retry at runtime.
 
-Release builds intentionally support only the 64-bit `arm64-v8a` (ARMv8) and
-`x86_64` ABIs. `armeabi-v7a` is no longer generated or supported.
+Release builds support the 32-bit `armeabi-v7a` (ARMv7), 64-bit `arm64-v8a`
+(ARMv8), and emulator/device `x86_64` ABIs. All require Android 7.0 or newer
+through the shared `minSdk 24` baseline.
 
 ### Release signing
 
@@ -376,7 +392,7 @@ BSTREAM_ANDROID_KEY_ALIAS
 BSTREAM_ANDROID_KEY_PASSWORD
 ```
 
-The workflow verifies both APK signatures before uploading the artifacts.
+The workflow verifies all three APK signatures before uploading the artifacts.
 
 ## Database, favorites, and backups
 
@@ -384,6 +400,9 @@ The workflow verifies both APK signatures before uploading the artifacts.
 - Incremental migrations preserve existing libraries.
 - Favorites are implemented as a reserved playlist (`bstream:favorites`), so no separate table is required.
 - ZIP backups contain the database, `audio/`, `thumbnails/`, and a manifest.
+- The Storage page separates local ZIP backup transfer from portable CSV
+  transfer. BStream CSV preserves playlist membership and order; compatibility
+  profiles can be selected when exporting to other music-library apps.
 - Restore validates the manifest, archive paths and limits, SQLite integrity,
   schema, and version before touching local data. Database and media changes
   are staged on their destination filesystems and rolled back if activation
@@ -403,7 +422,7 @@ The script generates Android mipmaps, the Windows `.ico`, the macOS AppIcon, and
 
 ```powershell
 flutter build windows --release
-flutter build apk --release --split-per-abi --target-platform android-arm64,android-x64
+flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64,android-x64
 flutter build linux --release
 ```
 
@@ -417,6 +436,7 @@ Typical artifacts:
 
 ```text
 build/windows/x64/runner/Release/bstream_music.exe
+build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
 build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 build/app/outputs/flutter-apk/app-x86_64-release.apk
 build/linux/x64/release/bundle/bstream_music
@@ -431,13 +451,15 @@ run manually from the **Actions** tab and also runs for pull requests, pushes to
 `main`, and `v*` tags.
 
 Android and desktop jobs download `yt-dlp` from its official release and verify
-the pinned checksum. The Android job additionally opens both completed APKs and
-checks the embedded extractor's hash and reported version. Desktop jobs also
-bundle Deno, while Windows builds and verifies the portable TikTok LIVE bridge
-runtime. Binaries are included in the installers but are not stored in the
-repository. Artifacts are retained for 30 days:
+the pinned checksum. The Android job additionally opens all three completed
+APKs and checks each ABI plus the embedded extractor's hash and reported
+version. Desktop jobs also
+bundle Deno. The TikTok LIVE client is part of the Dart application and needs
+no additional runtime. Binaries are included in the installers but are not
+stored in the repository. Artifacts are retained for 30 days:
 
 ```text
+BStream-Music-<version>-Android-armeabi-v7a.apk
 BStream-Music-<version>-Android-arm64-v8a.apk
 BStream-Music-<version>-Android-x86_64.apk
 BStream-Music-<version>-Windows-x64-Setup.exe
@@ -450,6 +472,7 @@ BStream-Music-<version>-macOS-x64.pkg
 ### Which file should I install?
 
 - **Most Android phones and tablets:** install `BStream-Music-<version>-Android-arm64-v8a.apk`.
+- **Older 32-bit ARM Android devices:** install `BStream-Music-<version>-Android-armeabi-v7a.apk`.
 - **Android x86_64 devices and emulators:** install `BStream-Music-<version>-Android-x86_64.apk`.
 - **Windows 64-bit:** open `Setup.exe`. The installer shows a language selector, creates a Start Menu shortcut, and lets you choose whether to create a desktop shortcut. The uninstaller entry is displayed as `BStream Music` without the version number.
 - **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-<version>-linux-amd64.deb`.
@@ -486,7 +509,5 @@ The repository deliberately excludes:
 
 - Builds, APKs, EXEs, and distribution packages.
 - `yt-dlp`, Deno, and their auxiliary directories.
-- The compiled TikTok bridge runtime.
-- Python virtual environments and caches.
 - Signing keys, passwords, and local Android configuration files.
 - Databases, downloaded music, thumbnails, and user backups.

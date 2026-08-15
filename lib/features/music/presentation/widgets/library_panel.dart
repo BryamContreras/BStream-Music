@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -14,6 +15,7 @@ import '../../domain/entities/playlist.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'now_playing_equalizer.dart';
+import 'playlist_picker_dialog.dart';
 import 'source_image.dart';
 import 'track_play_button.dart';
 
@@ -115,8 +117,10 @@ class LibraryNavigationController extends ChangeNotifier {
 
 class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   final _filterController = TextEditingController();
+  final Set<String> _selectedTrackIds = <String>{};
   late _LibraryRoute _route;
   String _filter = '';
+  bool _selectionActionInProgress = false;
 
   @override
   void initState() {
@@ -124,7 +128,10 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     _route = widget.navigationController?._route ?? const _LibraryRoute.root();
     widget.navigationController?._attach(this);
     _filterController.addListener(() {
-      setState(() => _filter = _filterController.text);
+      setState(() {
+        _filter = _filterController.text;
+        _selectedTrackIds.clear();
+      });
     });
   }
 
@@ -149,10 +156,12 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   Widget build(BuildContext context) {
     final tracks = ref.watch(libraryTracksProvider);
     final playlists = ref.watch(playlistsControllerProvider);
-    final liveQueue = AppPlatform.isWindows
+    final liveQueue = _supportsTikTokLive
         ? ref.watch(tiktokLiveControllerProvider)
         : null;
     final strings = ref.watch(appStringsProvider);
+    final enablesTrackSelection =
+        Theme.of(context).platform == TargetPlatform.android;
 
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 260),
@@ -194,6 +203,16 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
               onBack: _goRoot,
               onOpenPlayer: widget.onOpenPlayer,
               mode: _TrackListMode.downloads,
+              selectionEnabled: enablesTrackSelection,
+              selectionBusy: _selectionActionInProgress,
+              selectedTrackIds: _selectedTrackIds,
+              onSelectTrack: _selectTrack,
+              onToggleTrack: _toggleTrackSelection,
+              onClearSelection: _clearTrackSelection,
+              onAddSelected: (context) =>
+                  _addSelectedTracksToPlaylist(context, allTracks: items),
+              onDeleteSelected: (context) =>
+                  _deleteSelectedLibraryTracks(context, items),
             ),
             loading: () => const _PanelLoading(key: ValueKey('downloads-load')),
             error: (error, _) => _PanelError(
@@ -263,6 +282,23 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                     mode: _TrackListMode.playlist,
                     playlist: playlist,
                     playlistId: playlist.id,
+                    selectionEnabled: enablesTrackSelection,
+                    selectionBusy: _selectionActionInProgress,
+                    selectedTrackIds: _selectedTrackIds,
+                    onSelectTrack: _selectTrack,
+                    onToggleTrack: _toggleTrackSelection,
+                    onClearSelection: _clearTrackSelection,
+                    onAddSelected: (context) => _addSelectedTracksToPlaylist(
+                      context,
+                      allTracks: libraryTracks,
+                      currentPlaylistId: playlist.id,
+                    ),
+                    onDeleteSelected: (context) =>
+                        _removeSelectedTracksFromPlaylist(
+                          context,
+                          playlist,
+                          playlistTracks,
+                        ),
                   );
                 },
                 loading: () =>
@@ -289,13 +325,14 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   }
 
   void _openDownloads() {
+    _selectedTrackIds.clear();
     _filterController.clear();
     setState(() => _route = const _LibraryRoute.downloads());
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
   void _openLive() {
-    if (!AppPlatform.isWindows) {
+    if (!_supportsTikTokLive) {
       return;
     }
     _filterController.clear();
@@ -303,26 +340,303 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
+  bool get _supportsTikTokLive =>
+      AppPlatform.supportsTikTokLive ||
+      Theme.of(context).platform == TargetPlatform.android;
+
   void _openPlaylist(String playlistId) {
+    _selectedTrackIds.clear();
     _filterController.clear();
     setState(() => _route = _LibraryRoute.playlist(playlistId));
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
   void _goRoot() {
+    _selectedTrackIds.clear();
     _filterController.clear();
     setState(() => _route = const _LibraryRoute.root());
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
-  bool get _canPop => _route.type != _LibraryRouteType.root;
+  bool get _canPop =>
+      _selectedTrackIds.isNotEmpty || _route.type != _LibraryRouteType.root;
 
   bool _popRoute() {
+    if (_selectedTrackIds.isNotEmpty) {
+      _clearTrackSelection();
+      return true;
+    }
     if (!_canPop) {
       return false;
     }
     _goRoot();
     return true;
+  }
+
+  void _selectTrack(String trackId) {
+    if (trackId.trim().isEmpty || _selectedTrackIds.contains(trackId)) {
+      return;
+    }
+    setState(() => _selectedTrackIds.add(trackId));
+  }
+
+  void _toggleTrackSelection(String trackId) {
+    setState(() {
+      if (!_selectedTrackIds.remove(trackId)) {
+        _selectedTrackIds.add(trackId);
+      }
+    });
+  }
+
+  void _clearTrackSelection() {
+    if (_selectedTrackIds.isEmpty) {
+      return;
+    }
+    setState(_selectedTrackIds.clear);
+  }
+
+  List<LocalTrack> _selectedTracks(Iterable<LocalTrack> tracks) {
+    return tracks
+        .where((track) => _selectedTrackIds.contains(track.id))
+        .toList(growable: false);
+  }
+
+  Future<void> _addSelectedTracksToPlaylist(
+    BuildContext context, {
+    required List<LocalTrack> allTracks,
+    String? currentPlaylistId,
+  }) async {
+    if (_selectionActionInProgress) {
+      return;
+    }
+    setState(() => _selectionActionInProgress = true);
+    try {
+      await _addSelectedTracksToPlaylistUnlocked(
+        context,
+        allTracks: allTracks,
+        currentPlaylistId: currentPlaylistId,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _selectionActionInProgress = false);
+      }
+    }
+  }
+
+  Future<void> _addSelectedTracksToPlaylistUnlocked(
+    BuildContext context, {
+    required List<LocalTrack> allTracks,
+    String? currentPlaylistId,
+  }) async {
+    final selectedTracks = _selectedTracks(allTracks);
+    if (selectedTracks.isEmpty) {
+      _clearTrackSelection();
+      return;
+    }
+
+    final playlists = (await ref.read(playlistsControllerProvider.future))
+        .where(
+          (playlist) =>
+              !playlist.isFavorites && playlist.id != currentPlaylistId,
+        )
+        .toList(growable: false);
+    if (!mounted) {
+      return;
+    }
+    if (playlists.isEmpty) {
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(
+          content: Text(ref.read(appStringsProvider).createPlaylistFirst),
+        ),
+      );
+      return;
+    }
+
+    final playlistId = await showDialog<String>(
+      context: this.context,
+      builder: (_) => PlaylistPickerDialog(
+        title: ref.read(appStringsProvider).choosePlaylist,
+        playlists: playlists,
+        tracks: allTracks,
+      ),
+    );
+    if (playlistId == null || !mounted) {
+      return;
+    }
+
+    final added = await ref
+        .read(playlistsControllerProvider.notifier)
+        .addTracksToPlaylist(
+          playlistId,
+          selectedTracks.map((track) => track.id),
+        );
+    if (!mounted) {
+      return;
+    }
+    _clearTrackSelection();
+    final strings = ref.read(appStringsProvider);
+    ScaffoldMessenger.of(this.context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            added == 0
+                ? strings.songsAlreadyInPlaylist
+                : strings.songsAddedToPlaylist(added),
+          ),
+        ),
+      );
+  }
+
+  Future<void> _removeSelectedTracksFromPlaylist(
+    BuildContext context,
+    Playlist playlist,
+    List<LocalTrack> playlistTracks,
+  ) async {
+    if (_selectionActionInProgress) {
+      return;
+    }
+    setState(() => _selectionActionInProgress = true);
+    try {
+      await _removeSelectedTracksFromPlaylistUnlocked(
+        context,
+        playlist,
+        playlistTracks,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _selectionActionInProgress = false);
+      }
+    }
+  }
+
+  Future<void> _removeSelectedTracksFromPlaylistUnlocked(
+    BuildContext context,
+    Playlist playlist,
+    List<LocalTrack> playlistTracks,
+  ) async {
+    final selectedTracks = _selectedTracks(playlistTracks);
+    if (selectedTracks.isEmpty) {
+      _clearTrackSelection();
+      return;
+    }
+
+    final strings = ref.read(appStringsProvider);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          playlist.isFavorites
+              ? strings.removeFromFavorites
+              : strings.removeFromPlaylist,
+        ),
+        content: Text(
+          strings.removeSelectedSongs(
+            selectedTracks.length,
+            favorites: playlist.isFavorites,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.cancel),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.playlist_remove_rounded),
+            label: Text(
+              playlist.isFavorites
+                  ? strings.removeFromFavorites
+                  : strings.removeFromPlaylist,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    final removed = await ref
+        .read(playlistsControllerProvider.notifier)
+        .removeTracksFromPlaylist(
+          playlist.id,
+          selectedTracks.map((track) => track.id),
+        );
+    if (!mounted) {
+      return;
+    }
+    _clearTrackSelection();
+    ScaffoldMessenger.of(this.context).showSnackBar(
+      SnackBar(
+        content: Text(
+          strings.songsRemovedFromPlaylist(
+            removed,
+            favorites: playlist.isFavorites,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteSelectedLibraryTracks(
+    BuildContext context,
+    List<LocalTrack> allTracks,
+  ) async {
+    if (_selectionActionInProgress) {
+      return;
+    }
+    setState(() => _selectionActionInProgress = true);
+    try {
+      await _deleteSelectedLibraryTracksUnlocked(context, allTracks);
+    } finally {
+      if (mounted) {
+        setState(() => _selectionActionInProgress = false);
+      }
+    }
+  }
+
+  Future<void> _deleteSelectedLibraryTracksUnlocked(
+    BuildContext context,
+    List<LocalTrack> allTracks,
+  ) async {
+    final selectedTracks = _selectedTracks(allTracks);
+    if (selectedTracks.isEmpty) {
+      _clearTrackSelection();
+      return;
+    }
+
+    final strings = ref.read(appStringsProvider);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(strings.deleteSelectedSongs),
+        content: Text(strings.confirmDeleteSongs(selectedTracks.length)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.cancel),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: Text(strings.delete),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    final deleted = await _deleteLibraryTracks(ref, selectedTracks);
+    if (!mounted) {
+      return;
+    }
+    _clearTrackSelection();
+    ScaffoldMessenger.of(
+      this.context,
+    ).showSnackBar(SnackBar(content: Text(strings.songsDeleted(deleted))));
   }
 
   List<LocalTrack> _filteredTracks(List<LocalTrack> tracks) {
@@ -426,83 +740,97 @@ class _LibraryRootView extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.only(top: 20),
-      child: ListView(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              key: const ValueKey('library-tab-title'),
-              strings.library,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _SectionTitle(strings.library),
-          ),
-          const SizedBox(height: 10),
-          tracks.when(
-            data: (items) => Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: _LibraryEntry(
-                icon: Icons.library_music_rounded,
-                title: strings.downloadedSongs,
-                subtitle: strings.songCountWithDuration(
-                  items.length,
-                  sumKnownDurations(items.map((track) => track.duration)),
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                key: const ValueKey('library-tab-title'),
+                strings.library,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
                 ),
-                onTap: onOpenDownloads,
               ),
             ),
-            loading: () => const _LoadingRow(),
-            error: (error, _) => _ErrorRow(error: error),
           ),
-          if (liveQueue != null) ...[
-            const SizedBox(height: 8),
-            liveQueue!.when(
-              data: (state) => Padding(
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _SectionTitle(strings.library),
+            ),
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: 10)),
+          SliverToBoxAdapter(
+            child: tracks.when(
+              data: (items) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: _LibraryEntry(
-                  icon: Icons.sensors_rounded,
-                  title: strings.liveQueue,
-                  subtitle: strings.liveQueueSummary(
-                    state.liveQueue.length,
-                    state.readyPlayCommands,
-                    state.pendingPlayCommands,
+                  key: const ValueKey('library-downloads-entry'),
+                  icon: Icons.library_music_rounded,
+                  title: strings.downloadedSongs,
+                  subtitle: strings.songCountWithDuration(
+                    items.length,
+                    sumKnownDurations(items.map((track) => track.duration)),
                   ),
-                  onTap: onOpenLive,
+                  onTap: onOpenDownloads,
                 ),
               ),
               loading: () => const _LoadingRow(),
               error: (error, _) => _ErrorRow(error: error),
             ),
-          ],
-          const SizedBox(height: 28),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(child: _SectionTitle(strings.playlist)),
-                _NeutralLibraryIconButton(
-                  tooltip: strings.newPlaylist,
-                  icon: Icons.add_rounded,
-                  onPressed: onCreatePlaylist,
+          ),
+          if (liveQueue != null) ...[
+            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            SliverToBoxAdapter(
+              child: liveQueue!.when(
+                data: (state) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: _LibraryEntry(
+                    key: const ValueKey('library-live-entry'),
+                    icon: Icons.sensors_rounded,
+                    title: strings.liveQueue,
+                    subtitle: strings.liveQueueSummary(
+                      state.liveQueue.length,
+                      state.readyPlayCommands,
+                      state.pendingPlayCommands,
+                    ),
+                    onTap: onOpenLive,
+                  ),
                 ),
-              ],
+                loading: () => const _LoadingRow(),
+                error: (error, _) => _ErrorRow(error: error),
+              ),
+            ),
+          ],
+          const SliverToBoxAdapter(child: SizedBox(height: 28)),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(child: _SectionTitle(strings.playlist)),
+                  _NeutralLibraryIconButton(
+                    tooltip: strings.newPlaylist,
+                    icon: Icons.add_rounded,
+                    onPressed: onCreatePlaylist,
+                  ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _CreatePlaylistRow(
-              label: strings.createPlaylist,
-              onPressed: onCreatePlaylist,
+          const SliverToBoxAdapter(child: SizedBox(height: 10)),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _CreatePlaylistRow(
+                label: strings.createPlaylist,
+                onPressed: onCreatePlaylist,
+              ),
             ),
           ),
-          const SizedBox(height: 10),
+          const SliverToBoxAdapter(child: SizedBox(height: 10)),
           playlists.when(
             data: (items) => _PlaylistList(
               playlists: items,
@@ -510,10 +838,11 @@ class _LibraryRootView extends StatelessWidget {
               strings: strings,
               onOpenPlaylist: onOpenPlaylist,
             ),
-            loading: () => const _LoadingRow(),
-            error: (error, _) => _ErrorRow(error: error),
+            loading: () => const SliverToBoxAdapter(child: _LoadingRow()),
+            error: (error, _) =>
+                SliverToBoxAdapter(child: _ErrorRow(error: error)),
           ),
-          const SizedBox(height: 24),
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
     );
@@ -578,7 +907,6 @@ class _LiveQueueView extends ConsumerWidget {
                 : ListView.builder(
                     padding: const EdgeInsets.only(bottom: 12),
                     itemCount: items.length,
-                    itemExtent: 94,
                     itemBuilder: (context, index) {
                       return Padding(
                         padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
@@ -605,13 +933,20 @@ class _LiveQueueTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final activeTrackId = ref.watch(
-      playerControllerProvider.select((player) => player.value?.trackId),
+    final activeTrack = ref.watch(
+      playerControllerProvider.select(
+        (player) => (
+          trackId: player.value?.trackId,
+          sourceUrl: player.value?.sourceUrl,
+        ),
+      ),
     );
-    final isCurrent =
-        item.localTrack != null && item.localTrack!.id == activeTrackId;
+    final isCurrent = _matchesActiveTrack(
+      trackId: activeTrack.trackId,
+      sourceUrl: activeTrack.sourceUrl,
+    );
     final statusColor = _statusColor(context, isCurrent: isCurrent);
-    final playButtonSize = AppPlatform.isAndroid ? 38.0 : 52.0;
+    final playButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final playIconSize = AppPlatform.isAndroid ? 30.0 : 26.0;
 
     final shape = RoundedRectangleBorder(
@@ -748,9 +1083,33 @@ class _LiveQueueTile extends ConsumerWidget {
       LiveQueueItemStatus.resolving => item.message ?? strings.search,
       LiveQueueItemStatus.downloading => item.message ?? strings.downloading,
       LiveQueueItemStatus.ready =>
-        item.reusedExisting ? strings.reusedDownload : strings.completed,
+        item.localTrack == null
+            ? strings.readyForRemotePlayback
+            : item.reusedExisting
+            ? strings.reusedDownload
+            : strings.completed,
       LiveQueueItemStatus.failed => item.message ?? strings.error,
     };
+  }
+
+  bool _matchesActiveTrack({String? trackId, String? sourceUrl}) {
+    final localTrack = item.localTrack;
+    if (localTrack != null && localTrack.id == trackId) {
+      return true;
+    }
+    final remoteTrack = item.remoteTrack;
+    if (remoteTrack == null) {
+      return false;
+    }
+    final remoteId = remoteTrack.id.trim();
+    if (remoteId.isNotEmpty && remoteId == trackId) {
+      return true;
+    }
+    final activeSource = sourceUrl?.trim();
+    return activeSource != null &&
+        activeSource.isNotEmpty &&
+        (activeSource == remoteTrack.url ||
+            activeSource == remoteTrack.streamUrl);
   }
 }
 
@@ -794,6 +1153,14 @@ class _TrackListView extends ConsumerWidget {
     required this.onBack,
     required this.onOpenPlayer,
     required this.mode,
+    required this.selectionEnabled,
+    required this.selectionBusy,
+    required this.selectedTrackIds,
+    required this.onSelectTrack,
+    required this.onToggleTrack,
+    required this.onClearSelection,
+    required this.onAddSelected,
+    required this.onDeleteSelected,
     this.playlist,
     this.playlistId,
   });
@@ -806,12 +1173,21 @@ class _TrackListView extends ConsumerWidget {
   final VoidCallback onBack;
   final VoidCallback onOpenPlayer;
   final _TrackListMode mode;
+  final bool selectionEnabled;
+  final bool selectionBusy;
+  final Set<String> selectedTrackIds;
+  final ValueChanged<String> onSelectTrack;
+  final ValueChanged<String> onToggleTrack;
+  final VoidCallback onClearSelection;
+  final Future<void> Function(BuildContext context) onAddSelected;
+  final Future<void> Function(BuildContext context) onDeleteSelected;
   final Playlist? playlist;
   final String? playlistId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
+    final selectionActive = selectionEnabled && selectedTrackIds.isNotEmpty;
     return Padding(
       padding: const EdgeInsets.only(top: 14),
       child: Column(
@@ -819,13 +1195,28 @@ class _TrackListView extends ConsumerWidget {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: _DetailHeader(
-              title: title,
-              subtitle: subtitle,
-              onBack: onBack,
-              trailing: playlist == null || playlist!.isFavorites
-                  ? null
-                  : _PlaylistMenu(playlist: playlist!, onBack: onBack),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: selectionActive
+                  ? _TrackSelectionToolbar(
+                      key: const ValueKey('library-selection-toolbar'),
+                      count: selectedTrackIds.length,
+                      removesFromPlaylist: mode == _TrackListMode.playlist,
+                      favorites: playlist?.isFavorites ?? false,
+                      busy: selectionBusy,
+                      onClose: onClearSelection,
+                      onAddToPlaylist: () => onAddSelected(context),
+                      onDelete: () => onDeleteSelected(context),
+                    )
+                  : _DetailHeader(
+                      key: const ValueKey('library-detail-header'),
+                      title: title,
+                      subtitle: subtitle,
+                      onBack: onBack,
+                      trailing: playlist == null || playlist!.isFavorites
+                          ? null
+                          : _PlaylistMenu(playlist: playlist!, onBack: onBack),
+                    ),
             ),
           ),
           const SizedBox(height: 14),
@@ -853,20 +1244,109 @@ class _TrackListView extends ConsumerWidget {
                 : ListView.builder(
                     padding: const EdgeInsets.only(bottom: 12),
                     itemCount: tracks.length,
-                    itemExtent: 76,
                     itemBuilder: (context, index) {
                       return Padding(
                         padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
                         child: _LocalTrackTile(
+                          key: ValueKey('library-track-${tracks[index].id}'),
                           track: tracks[index],
                           mode: mode,
                           playlistId: playlistId,
                           queueTracks: queueTracks,
                           onOpenPlayer: onOpenPlayer,
+                          selectionActive: selectionActive,
+                          selected: selectedTrackIds.contains(tracks[index].id),
+                          onLongPress: selectionEnabled
+                              ? () => onSelectTrack(tracks[index].id)
+                              : null,
+                          onSelectionTap: selectionActive
+                              ? () => onToggleTrack(tracks[index].id)
+                              : null,
                         ),
                       );
                     },
                   ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TrackSelectionToolbar extends ConsumerWidget {
+  const _TrackSelectionToolbar({
+    required this.count,
+    required this.removesFromPlaylist,
+    required this.favorites,
+    required this.busy,
+    required this.onClose,
+    required this.onAddToPlaylist,
+    required this.onDelete,
+    super.key,
+  });
+
+  final int count;
+  final bool removesFromPlaylist;
+  final bool favorites;
+  final bool busy;
+  final VoidCallback onClose;
+  final VoidCallback onAddToPlaylist;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final strings = ref.watch(appStringsProvider);
+    final colors = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          IconButton(
+            key: const ValueKey('library-selection-close'),
+            tooltip: strings.close,
+            onPressed: onClose,
+            icon: const Icon(Icons.close_rounded),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              strings.selectedSongs(count),
+              key: const ValueKey('library-selection-count'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: AppColors.contentHeadingFor(context),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          IconButton(
+            key: const ValueKey('library-selection-add-to-playlist'),
+            tooltip: strings.addToPlaylist,
+            onPressed: busy ? null : onAddToPlaylist,
+            color: colors.primary,
+            icon: const Icon(Icons.playlist_add_rounded),
+          ),
+          IconButton(
+            key: ValueKey(
+              removesFromPlaylist
+                  ? 'library-selection-remove-from-playlist'
+                  : 'library-selection-delete',
+            ),
+            tooltip: removesFromPlaylist
+                ? (favorites
+                      ? strings.removeFromFavorites
+                      : strings.removeFromPlaylist)
+                : strings.deleteSelectedSongs,
+            onPressed: busy ? null : onDelete,
+            color: removesFromPlaylist ? colors.primary : colors.error,
+            icon: Icon(
+              removesFromPlaylist
+                  ? (favorites
+                        ? Icons.favorite_border_rounded
+                        : Icons.playlist_remove_rounded)
+                  : Icons.delete_outline_rounded,
+            ),
           ),
         ],
       ),
@@ -882,6 +1362,7 @@ class _DetailHeader extends StatelessWidget {
     required this.subtitle,
     required this.onBack,
     this.trailing,
+    super.key,
   });
 
   final String title;
@@ -897,7 +1378,7 @@ class _DetailHeader extends StatelessWidget {
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,
           icon: Icons.arrow_back_rounded,
           iconSize: 28,
-          buttonSize: 42,
+          buttonSize: 48,
           onPressed: onBack,
         ),
         const SizedBox(width: 10),
@@ -982,7 +1463,7 @@ class _PlaylistMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final buttonSize = AppPlatform.isAndroid ? 42.0 : 52.0;
+    final buttonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final iconSize = AppPlatform.isAndroid ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
     return SizedBox.square(
@@ -1237,43 +1718,42 @@ class _PlaylistList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (playlists.isEmpty) {
-      return Text(
-        strings.noLocalPlaylists,
-        style: TextStyle(color: AppColors.contentSubtitleFor(context)),
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            strings.noLocalPlaylists,
+            style: TextStyle(color: AppColors.contentSubtitleFor(context)),
+          ),
+        ),
       );
     }
 
     final tracksById = {for (final track in libraryTracks) track.id: track};
 
-    return Column(
-      children: playlists
-          .map(
-            (playlist) => Padding(
-              padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
-              child: _PlaylistRow(
-                playlist: playlist,
-                thumbnailSources: _playlistThumbnailSources(
-                  playlist,
-                  tracksById,
-                ),
-                subtitle: strings.songCountWithDuration(
-                  playlist.trackIds
-                      .map((id) => tracksById[id])
-                      .whereType<LocalTrack>()
-                      .length,
-                  sumKnownDurations(
-                    playlist.trackIds
-                        .map((id) => tracksById[id])
-                        .whereType<LocalTrack>()
-                        .map((track) => track.duration),
-                  ),
-                ),
-                strings: strings,
-                onTap: () => onOpenPlaylist(playlist.id),
-              ),
+    return SliverList.builder(
+      itemCount: playlists.length,
+      itemBuilder: (context, index) {
+        final playlist = playlists[index];
+        final playlistTracks = playlist.trackIds
+            .map((id) => tracksById[id])
+            .whereType<LocalTrack>()
+            .toList(growable: false);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+          child: _PlaylistRow(
+            key: ValueKey('library-playlist-${playlist.id}'),
+            playlist: playlist,
+            thumbnailSources: _playlistThumbnailSources(playlist, tracksById),
+            subtitle: strings.songCountWithDuration(
+              playlistTracks.length,
+              sumKnownDurations(playlistTracks.map((track) => track.duration)),
             ),
-          )
-          .toList(growable: false),
+            strings: strings,
+            onTap: () => onOpenPlaylist(playlist.id),
+          ),
+        );
+      },
     );
   }
 }
@@ -1285,6 +1765,7 @@ class _PlaylistRow extends StatelessWidget {
     required this.subtitle,
     required this.strings,
     required this.onTap,
+    super.key,
   });
 
   final Playlist playlist;
@@ -1297,7 +1778,7 @@ class _PlaylistRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return _LibraryEntry(
       icon: playlist.isFavorites
-          ? Icons.star_rounded
+          ? Icons.favorite_rounded
           : Icons.queue_music_rounded,
       leading: thumbnailSources.isEmpty
           ? null
@@ -1355,7 +1836,7 @@ String? _trackThumbnailSource(LocalTrack track) {
   }
 
   final file = imageFileFromSource(normalized);
-  if (file == null || !file.existsSync()) {
+  if (file == null) {
     return null;
   }
   return file.path;
@@ -1419,6 +1900,7 @@ class _LibraryEntry extends StatelessWidget {
     required this.onTap,
     this.leading,
     this.trailing,
+    super.key,
   });
 
   final IconData icon;
@@ -1478,6 +1960,7 @@ class _PlaylistCover extends StatelessWidget {
           children: [
             SourceImage(
               source: sources.first,
+              cacheWidth: 256,
               fallback: const _PlaylistCoverFallback(),
             ),
             if (underlay.isNotEmpty)
@@ -1503,6 +1986,7 @@ class _PlaylistCover extends StatelessWidget {
                               borderRadius: BorderRadius.circular(1.5),
                               child: SourceImage(
                                 source: source,
+                                cacheWidth: 256,
                                 fallback: const _PlaylistCoverFallback(),
                               ),
                             ),
@@ -1613,13 +2097,22 @@ class _LocalTrackTile extends ConsumerStatefulWidget {
     required this.mode,
     required this.onOpenPlayer,
     required this.queueTracks,
+    required this.selectionActive,
+    required this.selected,
+    required this.onLongPress,
+    required this.onSelectionTap,
     this.playlistId,
+    super.key,
   });
 
   final LocalTrack track;
   final _TrackListMode mode;
   final VoidCallback onOpenPlayer;
   final List<LocalTrack> queueTracks;
+  final bool selectionActive;
+  final bool selected;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onSelectionTap;
   final String? playlistId;
 
   @override
@@ -1634,6 +2127,8 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
   VoidCallback get onOpenPlayer => widget.onOpenPlayer;
   List<LocalTrack> get queueTracks => widget.queueTracks;
   String? get playlistId => widget.playlistId;
+  bool get selectionActive => widget.selectionActive;
+  bool get selected => widget.selected;
 
   @override
   Widget build(BuildContext context) {
@@ -1654,224 +2149,270 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
             playback.status == PlayerStatus.paused);
     final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
     final colors = Theme.of(context).colorScheme;
-    final menuButtonSize = AppPlatform.isAndroid ? 42.0 : 52.0;
+    final menuButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
     final menuItemIconColor = AppColors.menuIconFor(context);
     final borderRadius = BorderRadius.circular(8);
     final baseColor = AppColors.cardSurfaceFor(context);
-    final borderColor = isCurrent
+    final borderColor = selected
+        ? colors.primary
+        : isCurrent
         ? colors.primary
         : _hovered
         ? colors.primary
         : AppColors.cardBorderFor(context);
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: isCurrent
-              ? Color.alphaBlend(
-                  colors.onSurface.withValues(alpha: 0.075),
-                  baseColor,
-                )
-              : baseColor,
-          borderRadius: borderRadius,
-          border: Border.all(color: borderColor, width: _hovered ? 1.4 : 1),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: ListTile(
-            dense: false,
-            minTileHeight: 70,
-            minVerticalPadding: 7,
-            contentPadding: const EdgeInsets.only(left: 12, right: 4),
-            horizontalTitleGap: 10,
-            shape: RoundedRectangleBorder(borderRadius: borderRadius),
-            tileColor: Colors.transparent,
-            leading: Stack(
-              children: [
-                _LocalArtwork(
-                  source: track.thumbnailPath ?? track.thumbnailUrl,
-                ),
-                if (isFavorite)
-                  const Positioned(
-                    top: 1,
-                    right: 1,
-                    child: FavoriteStarBadge(iconSize: 15),
+    return Semantics(
+      selected: selectionActive ? selected : null,
+      container: true,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: selected
+                ? Color.alphaBlend(
+                    colors.primary.withValues(alpha: 0.14),
+                    baseColor,
+                  )
+                : isCurrent
+                ? Color.alphaBlend(
+                    colors.onSurface.withValues(alpha: 0.075),
+                    baseColor,
+                  )
+                : baseColor,
+            borderRadius: borderRadius,
+            border: Border.all(
+              color: borderColor,
+              width: selected || _hovered ? 1.4 : 1,
+            ),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: ListTile(
+              dense: false,
+              minTileHeight: 70,
+              minVerticalPadding: 7,
+              contentPadding: const EdgeInsets.only(left: 12, right: 4),
+              horizontalTitleGap: 10,
+              shape: RoundedRectangleBorder(borderRadius: borderRadius),
+              tileColor: Colors.transparent,
+              leading: Stack(
+                children: [
+                  _LocalArtwork(
+                    source: track.thumbnailPath ?? track.thumbnailUrl,
                   ),
-                if (isCurrent)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: Center(
-                      child: NowPlayingEqualizer(
-                        key: ValueKey('now-playing-${track.id}'),
-                        isPlaying: isPlaying,
+                  if (isFavorite)
+                    const Positioned(
+                      top: 1,
+                      right: 1,
+                      child: FavoriteStarBadge(iconSize: 15),
+                    ),
+                  if (isCurrent)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Center(
+                        child: NowPlayingEqualizer(
+                          key: ValueKey('now-playing-${track.id}'),
+                          isPlaying: isPlaying,
+                        ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-            title: Text(
-              track.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
-                color: AppColors.contentTitleFor(context),
+                ],
               ),
-            ),
-            subtitle: Text(
-              '${track.artist}  -  ${formatDuration(track.duration)}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppColors.contentSubtitleFor(context),
-              ),
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TrackPlayButton(
-                  tooltip: isPlaying ? strings.pause : strings.play,
-                  isPlaying: isPlaying,
-                  onPressed: () => _togglePlayback(ref),
+              title: Text(
+                track.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
+                  color: AppColors.contentTitleFor(context),
                 ),
-                SizedBox(
-                  width: menuButtonSize,
-                  height: menuButtonSize,
-                  child: PopupMenuButton<_TrackMenuAction>(
-                    tooltip: strings.moreOptions,
-                    padding: EdgeInsets.zero,
-                    splashRadius: menuButtonSize / 2,
-                    iconSize: menuIconSize,
-                    child: Center(
-                      child: Icon(Icons.more_vert_rounded, size: menuIconSize),
-                    ),
-                    onSelected: (action) => _handleAction(context, ref, action),
-                    itemBuilder: (context) => switch (mode) {
-                      _TrackListMode.downloads => [
-                        PopupMenuItem(
-                          value: _TrackMenuAction.renameTrack,
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.drive_file_rename_outline_rounded,
-                                color: menuItemIconColor,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(strings.rename),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: _TrackMenuAction.addToPlaylist,
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.playlist_add_rounded,
-                                color: menuItemIconColor,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(strings.addToPlaylist),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: _TrackMenuAction.toggleFavorite,
-                          child: Row(
-                            children: [
-                              Icon(
-                                isFavorite
-                                    ? Icons.star_rounded
-                                    : Icons.star_border_rounded,
-                                color: isFavorite
-                                    ? const Color(0xFFFFD54F)
-                                    : menuItemIconColor,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                isFavorite
-                                    ? strings.removeFromFavorites
-                                    : strings.addToFavorites,
-                              ),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: _TrackMenuAction.deleteTrack,
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.delete_outline_rounded,
-                                color: menuItemIconColor,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(strings.deleteSong),
-                            ],
-                          ),
-                        ),
-                      ],
-                      _TrackListMode.playlist => [
-                        PopupMenuItem(
-                          value: _TrackMenuAction.renameTrack,
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.drive_file_rename_outline_rounded,
-                                color: menuItemIconColor,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(strings.rename),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: _TrackMenuAction.toggleFavorite,
-                          child: Row(
-                            children: [
-                              Icon(
-                                isFavorite
-                                    ? Icons.star_rounded
-                                    : Icons.star_border_rounded,
-                                color: isFavorite
-                                    ? const Color(0xFFFFD54F)
-                                    : menuItemIconColor,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                isFavorite
-                                    ? strings.removeFromFavorites
-                                    : strings.addToFavorites,
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (playlistId != Playlist.favoritesId)
-                          PopupMenuItem(
-                            value: _TrackMenuAction.removeFromPlaylist,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.playlist_remove_rounded,
-                                  color: menuItemIconColor,
-                                ),
-                                const SizedBox(width: 12),
-                                Text(strings.removeFromPlaylist),
-                              ],
+              ),
+              subtitle: Text(
+                '${track.artist}  -  ${formatDuration(track.duration)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppColors.contentSubtitleFor(context),
+                ),
+              ),
+              trailing: selectionActive
+                  ? SizedBox.square(
+                      dimension: 48,
+                      child: Center(
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 160),
+                          child: Icon(
+                            selected
+                                ? Icons.check_circle_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            key: ValueKey(
+                              selected
+                                  ? 'selection-check-${track.id}'
+                                  : 'selection-empty-${track.id}',
                             ),
+                            color: selected
+                                ? colors.primary
+                                : colors.onSurfaceVariant,
+                            size: 28,
                           ),
+                        ),
+                      ),
+                    )
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TrackPlayButton(
+                          tooltip: isPlaying ? strings.pause : strings.play,
+                          isPlaying: isPlaying,
+                          onPressed: () => _togglePlayback(ref),
+                        ),
+                        SizedBox(
+                          width: menuButtonSize,
+                          height: menuButtonSize,
+                          child: PopupMenuButton<_TrackMenuAction>(
+                            tooltip: strings.moreOptions,
+                            padding: EdgeInsets.zero,
+                            splashRadius: menuButtonSize / 2,
+                            iconSize: menuIconSize,
+                            child: Center(
+                              child: Icon(
+                                Icons.more_vert_rounded,
+                                size: menuIconSize,
+                              ),
+                            ),
+                            onSelected: (action) =>
+                                _handleAction(context, ref, action),
+                            itemBuilder: (context) => switch (mode) {
+                              _TrackListMode.downloads => [
+                                PopupMenuItem(
+                                  value: _TrackMenuAction.renameTrack,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.drive_file_rename_outline_rounded,
+                                        color: menuItemIconColor,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(strings.rename),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: _TrackMenuAction.addToPlaylist,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.playlist_add_rounded,
+                                        color: menuItemIconColor,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(strings.addToPlaylist),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: _TrackMenuAction.toggleFavorite,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        isFavorite
+                                            ? Icons.favorite_rounded
+                                            : Icons.favorite_border_rounded,
+                                        color: isFavorite
+                                            ? Theme.of(
+                                                context,
+                                              ).colorScheme.primary
+                                            : menuItemIconColor,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        isFavorite
+                                            ? strings.removeFromFavorites
+                                            : strings.addToFavorites,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: _TrackMenuAction.deleteTrack,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.delete_outline_rounded,
+                                        color: menuItemIconColor,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(strings.deleteSong),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              _TrackListMode.playlist => [
+                                PopupMenuItem(
+                                  value: _TrackMenuAction.renameTrack,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.drive_file_rename_outline_rounded,
+                                        color: menuItemIconColor,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(strings.rename),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: _TrackMenuAction.toggleFavorite,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        isFavorite
+                                            ? Icons.favorite_rounded
+                                            : Icons.favorite_border_rounded,
+                                        color: isFavorite
+                                            ? Theme.of(
+                                                context,
+                                              ).colorScheme.primary
+                                            : menuItemIconColor,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        isFavorite
+                                            ? strings.removeFromFavorites
+                                            : strings.addToFavorites,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (playlistId != Playlist.favoritesId)
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.removeFromPlaylist,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.playlist_remove_rounded,
+                                          color: menuItemIconColor,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Text(strings.removeFromPlaylist),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            },
+                          ),
+                        ),
                       ],
-                    },
-                  ),
-                ),
-              ],
+                    ),
+              onLongPress: widget.onLongPress,
+              onTap: widget.onSelectionTap ?? () => _openOrPlay(ref),
             ),
-            onTap: () => _openOrPlay(ref),
           ),
         ),
       ),
@@ -2075,15 +2616,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
       return;
     }
 
-    await ref.read(libraryRepositoryProvider).deleteLocalTrack(track.id);
-    await ref
-        .read(playlistsControllerProvider.notifier)
-        .removeTrackFromAllPlaylists(track.id);
-    await _deleteFile(track.filePath);
-    await _deleteFile(track.thumbnailPath);
-    ref
-      ..invalidate(libraryTracksProvider)
-      ..invalidate(historyProvider);
+    await _deleteLibraryTracks(ref, [track]);
 
     if (!context.mounted) {
       return;
@@ -2092,14 +2625,101 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
       SnackBar(content: Text(ref.read(appStringsProvider).songDeleted)),
     );
   }
+}
 
-  Future<void> _deleteFile(String? path) async {
-    if (path == null || path.trim().isEmpty) {
-      return;
+Future<int> _deleteLibraryTracks(
+  WidgetRef ref,
+  Iterable<LocalTrack> requestedTracks,
+) async {
+  final requestedIds = requestedTracks.map((track) => track.id).toSet();
+  if (requestedIds.isEmpty) {
+    return 0;
+  }
+
+  final repository = ref.read(libraryRepositoryProvider);
+  final currentTracks = await repository.getLocalTracks();
+  final targets = currentTracks
+      .where((track) => requestedIds.contains(track.id))
+      .toList(growable: false);
+  if (targets.isEmpty) {
+    return 0;
+  }
+
+  // The repository implementation performs this ID + file-path guarded delete
+  // and playlist pruning in one database transaction. Reusing the same
+  // primitive as reconciliation also protects against a stale UI selection.
+  final deletedIds = await repository.purgeMissingLocalTracks(targets);
+  if (deletedIds.isEmpty) {
+    return 0;
+  }
+
+  final deletedTracks = targets
+      .where((track) => deletedIds.contains(track.id))
+      .toList(growable: false);
+  await ref
+      .read(playerControllerProvider.notifier)
+      .removeDeletedLocalTracks(deletedIds);
+  await ref.read(playlistsControllerProvider.notifier).reloadFromRepository();
+  ref
+    ..invalidate(libraryTracksProvider)
+    ..invalidate(historyProvider);
+
+  // Re-read after the transaction and queue replacement so a concurrently
+  // restored/downloaded record sharing a legacy path keeps its file.
+  final survivors = await repository.getLocalTracks();
+  final survivorPaths = survivors
+      .expand((track) => [track.filePath, track.thumbnailPath])
+      .map(_normalizedLocalPath)
+      .whereType<String>()
+      .toSet();
+  final filesToDelete = <String, String>{};
+  for (final target in deletedTracks) {
+    for (final path in [target.filePath, target.thumbnailPath]) {
+      final normalized = _normalizedLocalPath(path);
+      if (normalized != null && !survivorPaths.contains(normalized)) {
+        filesToDelete.putIfAbsent(normalized, () => path!);
+      }
     }
-    final file = File(path);
-    if (await file.exists()) {
+  }
+  // Let the list release FileImage listeners before unlinking thumbnails. This
+  // matters on Windows tests and keeps the same code safe if desktop selection
+  // is enabled later; Android itself permits unlinking open files.
+  await WidgetsBinding.instance.endOfFrame;
+  for (final path in filesToDelete.values) {
+    await _deleteFileBestEffort(path);
+  }
+  return deletedIds.length;
+}
+
+String? _normalizedLocalPath(String? path) {
+  final trimmed = path?.trim();
+  if (trimmed == null || trimmed.isEmpty) {
+    return null;
+  }
+  try {
+    final normalized = p.normalize(p.absolute(trimmed));
+    return Platform.isWindows ? normalized.toLowerCase() : normalized;
+  } on FileSystemException {
+    return Platform.isWindows ? trimmed.toLowerCase() : trimmed;
+  }
+}
+
+Future<void> _deleteFileBestEffort(String path) async {
+  final file = File(path);
+  await FileImage(file).evict();
+  await ResizeImage(FileImage(file), width: 256).evict();
+  await ResizeImage(FileImage(file), width: 640).evict();
+  for (var attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (!await file.exists()) {
+        return;
+      }
       await file.delete();
+      return;
+    } on FileSystemException {
+      if (attempt < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
     }
   }
 }
@@ -2122,6 +2742,7 @@ class _LocalArtwork extends StatelessWidget {
           ),
           child: ProportionalArtwork(
             source: source,
+            cacheWidth: 256,
             fallback: Icon(
               Icons.audiotrack_rounded,
               color: Theme.of(context).colorScheme.onSurfaceVariant,

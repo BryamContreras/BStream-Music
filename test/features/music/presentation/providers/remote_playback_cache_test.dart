@@ -57,6 +57,8 @@ void main() {
         }
         request.response.headers.contentType = request.uri.path.contains('webm')
             ? ContentType('audio', 'webm')
+            : request.uri.path.contains('3gpp')
+            ? ContentType('audio', '3gpp')
             : ContentType('audio', 'mp4');
         request.response.add(List<int>.generate(2048, (index) => index % 251));
       }
@@ -109,6 +111,20 @@ void main() {
       expect(await _audioFiles(cacheDirectory), hasLength(5));
     },
   );
+
+  test('keeps a 3GPP cache entry in its native container', () async {
+    final track = _track(
+      server,
+      'legacy-3gpp',
+    ).copyWith(streamExtension: '3gp', streamMimeType: 'audio/3gpp');
+
+    await cache.retainOnlyTracks([track]);
+    final file = await cache.warmResolved(track);
+
+    expect(file, isNotNull);
+    expect(file!.path, endsWith('.3gp'));
+    expect(await file.length(), greaterThan(0));
+  });
 
   test(
     'protected tracks still obey file and byte quotas by priority',

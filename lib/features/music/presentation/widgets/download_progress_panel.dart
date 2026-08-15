@@ -24,7 +24,8 @@ class DownloadProgressPanel extends ConsumerWidget {
     final label = switch (active.status) {
       DownloadProgressStatus.queued => strings.queued,
       DownloadProgressStatus.running => strings.downloading,
-      DownloadProgressStatus.completed => strings.completed,
+      DownloadProgressStatus.completed =>
+        active.reusedExisting ? strings.reusedDownload : strings.completed,
       DownloadProgressStatus.failed => strings.error,
     };
     final progressLabel =

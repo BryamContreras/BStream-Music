@@ -21,11 +21,13 @@ class TrackResultTile extends ConsumerStatefulWidget {
   const TrackResultTile({
     required this.track,
     required this.onOpenPlayer,
+    this.queue,
     super.key,
   });
 
   final TrackInfo track;
   final VoidCallback onOpenPlayer;
+  final List<TrackInfo>? queue;
 
   @override
   ConsumerState<TrackResultTile> createState() => _TrackResultTileState();
@@ -137,6 +139,19 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                               downloadState.status,
                             ),
                           ),
+                          if (downloadState.errorMessage?.trim().isNotEmpty ==
+                              true) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              downloadState.errorMessage!.trim(),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(context).colorScheme.error,
+                                  ),
+                            ),
+                          ],
                         ],
                       ],
                     ),
@@ -158,7 +173,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
   }
 
   Future<void> _play(WidgetRef ref, {bool openPlayer = false}) async {
-    final queue = ref.read(searchControllerProvider).value ?? [track];
+    final queue = widget.queue ?? [track];
     final playFuture = ref
         .read(playerControllerProvider.notifier)
         .playRemote(track, queue: queue);
@@ -225,7 +240,7 @@ class _TrackResultMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final compactAndroid = AppPlatform.isAndroid;
-    final buttonSize = compactAndroid ? 42.0 : 52.0;
+    final buttonSize = compactAndroid ? 48.0 : 52.0;
     final iconSize = compactAndroid ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
 
@@ -321,13 +336,20 @@ class _TrackResultMenu extends ConsumerWidget {
       return;
     }
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(strings.downloading)));
     try {
       final localTrack = await ref
           .read(downloadControllerProvider.notifier)
-          .downloadAudioForLibrary(track);
+          .downloadAudioForLibrary(
+            track,
+            onDownloadStarted: () {
+              if (!context.mounted) {
+                return;
+              }
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(content: Text(strings.downloading)));
+            },
+          );
       await ref
           .read(playlistsControllerProvider.notifier)
           .addTrackToPlaylist(playlistId, localTrack.id);
@@ -362,7 +384,7 @@ class _Thumbnail extends StatelessWidget {
         height: 56,
         child: ProportionalArtwork(
           source: url,
-          cacheWidth: 512,
+          cacheWidth: 256,
           fallback: const ColoredBox(
             color: Color(0xFF202520),
             child: Icon(Icons.music_note_rounded),

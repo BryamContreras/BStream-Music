@@ -101,20 +101,31 @@ if(EXISTS "${BSTREAM_TOOLS_DIR}")
     PATTERN "FFprobe*" EXCLUDE)
 endif()
 
-set(BSTREAM_SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../scripts")
-if(EXISTS "${BSTREAM_TOOLS_DIR}/tiktok-live-bridge/tiktok_live_bridge.exe")
-  message(STATUS "Using bundled TikTok LIVE bridge from windows/tools.")
-  install(CODE "file(REMOVE_RECURSE \"${CMAKE_INSTALL_PREFIX}/scripts\")"
-    CONFIGURATIONS Release Profile
-    COMPONENT Runtime)
-elseif(EXISTS "${BSTREAM_SCRIPTS_DIR}/tiktok_live_bridge.py")
-  install(FILES
-    "${BSTREAM_SCRIPTS_DIR}/tiktok_live_bridge.py"
-    "${BSTREAM_SCRIPTS_DIR}/requirements-tiktok.txt"
-    DESTINATION "${CMAKE_INSTALL_PREFIX}/scripts"
-    CONFIGURATIONS Release Profile
-    COMPONENT Runtime)
-endif()
+# Remove TikTok LIVE Python artifacts left by older incremental builds. The
+# current client is implemented directly in Dart and ships no external bridge.
+install(CODE "
+  file(REMOVE
+    \"${CMAKE_INSTALL_PREFIX}/scripts/tiktok_live_bridge.py\"
+    \"${CMAKE_INSTALL_PREFIX}/scripts/requirements-tiktok.txt\")
+  file(GLOB BSTREAM_LEGACY_SCRIPT_ENTRIES
+    \"${CMAKE_INSTALL_PREFIX}/scripts/*\")
+  if(NOT BSTREAM_LEGACY_SCRIPT_ENTRIES)
+    file(REMOVE_RECURSE \"${CMAKE_INSTALL_PREFIX}/scripts\")
+  endif()
+  file(REMOVE_RECURSE
+    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok-live-bridge\"
+    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok_live_bridge\")
+  file(REMOVE
+    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok_live_bridge.exe\"
+    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok-live-bridge.exe\")
+  "
+  CONFIGURATIONS Release Profile
+  COMPONENT Runtime)
+
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../THIRD_PARTY_NOTICES.md"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  CONFIGURATIONS Release Profile
+  COMPONENT Runtime)
 
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")

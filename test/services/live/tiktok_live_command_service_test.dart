@@ -20,15 +20,17 @@ void main() {
     expect(normalizeCreatorInput(' @co.ssette_123 '), 'co.ssette_123');
   });
 
-  test('parses command bridge events', () {
-    final event = TikTokLiveBridgeEvent.fromJson({
-      'type': 'command',
-      'action': 'play',
-      'query': 'La pareja del año',
-      'user': 'viewer',
-      'is_moderator': true,
-      'text': '!play La pareja del año',
-    });
+  test('parses command events', () {
+    const event = TikTokLiveEvent(
+      type: 'command',
+      command: TikTokLiveChatCommand(
+        action: 'play',
+        query: 'La pareja del año',
+        user: 'viewer',
+        isModerator: true,
+        text: '!play La pareja del año',
+      ),
+    );
 
     expect(event.status, isNull);
     expect(event.command?.action, 'play');
@@ -38,13 +40,15 @@ void main() {
   });
 
   test('defaults command requester to a regular viewer', () {
-    final event = TikTokLiveBridgeEvent.fromJson({
-      'type': 'command',
-      'action': 'play',
-      'query': 'Song',
-      'user': 'viewer',
-      'text': '!play Song',
-    });
+    const event = TikTokLiveEvent(
+      type: 'command',
+      command: TikTokLiveChatCommand(
+        action: 'play',
+        query: 'Song',
+        user: 'viewer',
+        text: '!play Song',
+      ),
+    );
 
     expect(event.command?.isModerator, isFalse);
   });
@@ -89,14 +93,16 @@ void main() {
         .read(tiktokLiveControllerProvider.notifier)
         .setCommandAccess(TikTokCommandAccess.moderators);
     service.emit(
-      TikTokLiveBridgeEvent.fromJson({
-        'type': 'command',
-        'action': 'play',
-        'query': 'Blocked song',
-        'user': 'viewer',
-        'is_moderator': false,
-        'text': '!play Blocked song',
-      }),
+      const TikTokLiveEvent(
+        type: 'command',
+        command: TikTokLiveChatCommand(
+          action: 'play',
+          query: 'Blocked song',
+          user: 'viewer',
+          isModerator: false,
+          text: '!play Blocked song',
+        ),
+      ),
     );
     await Future<void>.delayed(Duration.zero);
 
@@ -109,27 +115,28 @@ void main() {
     expect(prefs.getString('tiktokLive.commandAccess'), 'moderators');
   });
 
-  test('maps bridge status events', () {
-    final event = TikTokLiveBridgeEvent.fromJson({
-      'type': 'connected',
-      'user': 'cossette',
-      'room_id': '123',
-      'message': 'Conectado',
-    });
+  test('maps status events', () {
+    const event = TikTokLiveEvent(
+      type: 'status',
+      status: TikTokLiveStatus.connected,
+      user: 'cossette',
+      roomId: '123',
+      message: 'Conectado',
+    );
 
-    expect(event.status, TikTokLiveBridgeStatus.connected);
+    expect(event.status, TikTokLiveStatus.connected);
     expect(event.user, 'cossette');
     expect(event.roomId, '123');
   });
 }
 
 class _FakeTikTokLiveCommandService extends TikTokLiveCommandService {
-  final _controller = StreamController<TikTokLiveBridgeEvent>.broadcast();
+  final _controller = StreamController<TikTokLiveEvent>.broadcast();
 
   @override
-  Stream<TikTokLiveBridgeEvent> get events => _controller.stream;
+  Stream<TikTokLiveEvent> get events => _controller.stream;
 
-  void emit(TikTokLiveBridgeEvent event) => _controller.add(event);
+  void emit(TikTokLiveEvent event) => _controller.add(event);
 
   Future<void> close() => _controller.close();
 }

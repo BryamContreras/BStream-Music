@@ -1,13 +1,11 @@
 import 'dart:async';
 
-import 'package:bstream_music/features/music/domain/entities/download_options.dart';
-import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
-import 'package:bstream_music/features/music/domain/repositories/music_repository.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -165,11 +163,11 @@ void main() {
 
   test('failure storms perform one recovery per remote play request', () async {
     final player = _LifecyclePlayerService();
-    final music = _LifecycleMusicRepository();
+    final audioResolver = _LifecycleAudioResolver();
     final container = _container(
       player,
       library: _LifecycleLibraryRepository(),
-      music: music,
+      audioResolver: audioResolver,
     );
     addTearDown(() async {
       container.dispose();
@@ -200,11 +198,11 @@ void main() {
         );
       }
       await _waitUntil(
-        () => music.infoCalls == index + 1,
+        () => audioResolver.infoCalls == index + 1,
         reason: 'Recovery for ${track.id} did not run.',
       );
       await _drainEvents();
-      expect(music.infoCalls, index + 1);
+      expect(audioResolver.infoCalls, index + 1);
     }
 
     expect(player.playedRemote, hasLength(tracks.length * 2));
@@ -217,13 +215,14 @@ void main() {
 ProviderContainer _container(
   _LifecyclePlayerService player, {
   required _LifecycleLibraryRepository library,
-  MusicRepository? music,
+  AudioStreamResolver? audioResolver,
 }) {
   return ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
       libraryRepositoryProvider.overrideWithValue(library),
-      if (music != null) musicRepositoryProvider.overrideWithValue(music),
+      if (audioResolver != null)
+        audioStreamResolverProvider.overrideWithValue(audioResolver),
       localTrackFileProbeProvider.overrideWithValue(
         (_) async => LocalTrackFileAvailability.present,
       ),
@@ -454,32 +453,22 @@ class _LifecycleLibraryRepository implements LibraryRepository {
   Future<void> savePlaylist(Playlist playlist) async {}
 }
 
-class _LifecycleMusicRepository implements MusicRepository {
+class _LifecycleAudioResolver implements AudioStreamResolver {
   int infoCalls = 0;
 
   @override
-  Future<TrackInfo> getInfo(String url) => getPlaybackInfo(url);
-
-  @override
-  Future<TrackInfo> getPlaybackInfo(String url) async {
+  Future<AudioStreamResolution> resolve(TrackInfo track) async {
     infoCalls++;
-    final uri = Uri.parse(url);
+    final uri = Uri.parse(track.url);
     final id = uri.queryParameters['v'] ?? 'unknown';
-    return TrackInfo(
-      id: id,
-      title: id,
-      artist: 'BStream Music',
-      url: url,
-      thumbnailUrl: 'https://i.ytimg.com/vi/$id/hqdefault.jpg',
+    return AudioStreamResolution(
+      source: AudioStreamSource.ytDlp,
       streamUrl: 'https://media.example/$id-refreshed.m4a',
+      streamExtension: 'm4a',
+      streamMimeType: 'audio/mp4',
     );
   }
 
   @override
-  Future<List<TrackInfo>> search(String query) async => const [];
-
-  @override
-  Future<DownloadResult> downloadAudio(String url, DownloadOptions options) {
-    throw UnimplementedError();
-  }
+  Future<void> dispose() async {}
 }

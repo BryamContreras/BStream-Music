@@ -141,7 +141,9 @@ class WindowsSmtcMediaSession implements DesktopMediaSession {
           MusicMetadata(
             title: snapshot.title?.trim(),
             artist: snapshot.artist?.trim(),
-            album: 'BStream Music',
+            album: snapshot.album?.trim().isNotEmpty == true
+                ? snapshot.album!.trim()
+                : 'BStream Music',
             albumArtist: snapshot.artist?.trim(),
             thumbnail: _thumbnailUri(snapshot.thumbnailUrl),
           ),
@@ -246,7 +248,7 @@ class WindowsSmtcMediaSession implements DesktopMediaSession {
   }
 
   String _trackKey(PlayerSnapshot snapshot) =>
-      '${snapshot.trackId}|${snapshot.title}|${snapshot.artist}|'
+      '${snapshot.trackId}|${snapshot.title}|${snapshot.artist}|${snapshot.album}|'
       '${snapshot.thumbnailUrl}|${snapshot.duration?.inMilliseconds}';
 
   bool _hasTrack(PlayerSnapshot snapshot) =>

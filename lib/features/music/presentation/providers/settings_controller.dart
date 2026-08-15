@@ -21,6 +21,7 @@ class SettingsState {
     this.themeMode = AppThemeMode.system,
     this.accent = AppAccent.white,
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
+    this.lyricsAnimationStyle = LyricsAnimationStyle.smooth,
     this.ytDlpPath,
     this.hasYtDlp,
   });
@@ -30,6 +31,7 @@ class SettingsState {
   final AppThemeMode themeMode;
   final AppAccent accent;
   final LyricsTextAlignment lyricsTextAlignment;
+  final LyricsAnimationStyle lyricsAnimationStyle;
   final String? ytDlpPath;
   final bool? hasYtDlp;
 
@@ -39,6 +41,7 @@ class SettingsState {
     AppThemeMode? themeMode,
     AppAccent? accent,
     LyricsTextAlignment? lyricsTextAlignment,
+    LyricsAnimationStyle? lyricsAnimationStyle,
     String? ytDlpPath,
     bool? hasYtDlp,
   }) {
@@ -48,6 +51,7 @@ class SettingsState {
       themeMode: themeMode ?? this.themeMode,
       accent: accent ?? this.accent,
       lyricsTextAlignment: lyricsTextAlignment ?? this.lyricsTextAlignment,
+      lyricsAnimationStyle: lyricsAnimationStyle ?? this.lyricsAnimationStyle,
       ytDlpPath: ytDlpPath ?? this.ytDlpPath,
       hasYtDlp: hasYtDlp ?? this.hasYtDlp,
     );
@@ -60,8 +64,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _themeModeKey = 'settings.themeMode';
   static const _accentKey = 'settings.accent';
   static const _lyricsTextAlignmentKey = 'settings.lyricsAlignment';
+  static const _lyricsAnimationStyleKey = 'settings.lyricsAnimation';
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
+  Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
 
   @override
   Future<SettingsState> build() async {
@@ -69,9 +75,16 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final defaultDirectory = await _defaultDownloadDirectory();
     final language = AppLanguageLabel.fromCode(prefs.getString(_languageKey));
     final themeMode = AppThemeMode.fromCode(prefs.getString(_themeModeKey));
-    final accent = AppAccent.fromCode(prefs.getString(_accentKey));
+    final storedAccentCode = prefs.getString(_accentKey);
+    final accent = AppAccent.fromCode(storedAccentCode);
+    if (storedAccentCode == 'amber') {
+      await prefs.setString(_accentKey, accent.code);
+    }
     final lyricsTextAlignment = LyricsTextAlignment.fromCode(
       prefs.getString(_lyricsTextAlignmentKey),
+    );
+    final lyricsAnimationStyle = LyricsAnimationStyle.fromCode(
+      prefs.getString(_lyricsAnimationStyleKey),
     );
     final storedDirectory = prefs.getString(_downloadDirectoryKey);
     var downloadDirectory = _migrateLegacyDownloadDirectory(
@@ -95,7 +108,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     }
     await _ensureMediaDirectories(downloadDirectory);
     await prefs.setString(_downloadDirectoryKey, downloadDirectory);
-    final downloader = ref.read(downloaderServiceProvider);
+    final downloader = ref.read(ytDlpDownloaderServiceProvider);
 
     if (downloader is DesktopDownloaderService) {
       return SettingsState(
@@ -104,6 +117,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         themeMode: themeMode,
         accent: accent,
         lyricsTextAlignment: lyricsTextAlignment,
+        lyricsAnimationStyle: lyricsAnimationStyle,
         ytDlpPath: await downloader.getYtDlpPath(),
         hasYtDlp: await downloader.hasYtDlp(),
       );
@@ -115,10 +129,19 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       themeMode: themeMode,
       accent: accent,
       lyricsTextAlignment: lyricsTextAlignment,
+      lyricsAnimationStyle: lyricsAnimationStyle,
     );
   }
 
   Future<void> setDownloadDirectory(String path) async {
+    final coordinator = ref.read(libraryOperationCoordinatorProvider);
+    return coordinator.runExclusive(
+      LibraryMaintenancePhase.migratingDirectory,
+      () => _setDownloadDirectoryInternal(path),
+    );
+  }
+
+  Future<void> _setDownloadDirectoryInternal(String path) async {
     final prefs = await SharedPreferences.getInstance();
     final defaultDirectory = await _defaultDownloadDirectory();
     var normalized = _migrateLegacyDownloadDirectory(
@@ -129,10 +152,113 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         !await _isAndroidWritableDownloadDirectory(normalized)) {
       normalized = defaultDirectory;
     }
-    await _ensureMediaDirectories(normalized);
-    await prefs.setString(_downloadDirectoryKey, normalized);
+
     final current = await future;
+    final oldDirectory = current.downloadDirectory.trim();
+    if (oldDirectory.isEmpty || oldDirectory == normalized) {
+      await _ensureMediaDirectories(normalized);
+      await prefs.setString(_downloadDirectoryKey, normalized);
+      state = AsyncData(current.copyWith(downloadDirectory: normalized));
+      return;
+    }
+
+    final oldAudioDir = Directory(p.join(oldDirectory, 'audio'));
+    final oldThumbDir = Directory(p.join(oldDirectory, 'thumbnails'));
+    final newAudioDir = Directory(p.join(normalized, 'audio'));
+    final newThumbDir = Directory(p.join(normalized, 'thumbnails'));
+
+    await _ensureMediaDirectories(normalized);
+
+    final hasOldAudio = await oldAudioDir.exists();
+    final hasOldThumbs = await oldThumbDir.exists();
+
+    if (hasOldAudio || hasOldThumbs) {
+      final player = ref.read(playerControllerProvider.notifier);
+      await player.stop();
+
+      final stagingRoot = Directory(
+        p.join(
+          (await getTemporaryDirectory()).path,
+          'bstream_migrate_${DateTime.now().millisecondsSinceEpoch}',
+        ),
+      );
+      await stagingRoot.create(recursive: true);
+
+      try {
+        if (hasOldAudio) {
+          await _copyDirectoryContents(
+            source: oldAudioDir,
+            target: Directory(p.join(stagingRoot.path, 'audio')),
+          );
+        }
+        if (hasOldThumbs) {
+          await _copyDirectoryContents(
+            source: oldThumbDir,
+            target: Directory(p.join(stagingRoot.path, 'thumbnails')),
+          );
+        }
+
+        final db = ref.read(databaseServiceProvider);
+        await db.withDatabase((database) async {
+          if (hasOldAudio) {
+            final stagingAudio = Directory(p.join(stagingRoot.path, 'audio'));
+            await _verifyCopiedFiles(oldAudioDir, stagingAudio);
+            await stagingAudio.rename(newAudioDir.path);
+          }
+          if (hasOldThumbs) {
+            final stagingThumbs = Directory(
+              p.join(stagingRoot.path, 'thumbnails'),
+            );
+            await _verifyCopiedFiles(oldThumbDir, stagingThumbs);
+            await stagingThumbs.rename(newThumbDir.path);
+          }
+
+          await db.rewriteLocalTrackMediaRoot(
+            mediaRoot: normalized,
+            oldMediaRoot: oldDirectory,
+          );
+        });
+
+        if (hasOldAudio && await oldAudioDir.exists()) {
+          await oldAudioDir.delete(recursive: true);
+        }
+        if (hasOldThumbs && await oldThumbDir.exists()) {
+          await oldThumbDir.delete(recursive: true);
+        }
+      } catch (error) {
+        if (await stagingRoot.exists()) {
+          await stagingRoot.delete(recursive: true);
+        }
+        rethrow;
+      }
+    }
+
+    await prefs.setString(_downloadDirectoryKey, normalized);
+    ref
+      ..invalidate(libraryTracksProvider)
+      ..invalidate(historyProvider)
+      ..invalidate(playlistsControllerProvider);
     state = AsyncData(current.copyWith(downloadDirectory: normalized));
+  }
+
+  Future<void> _verifyCopiedFiles(
+    Directory source,
+    Directory destination,
+  ) async {
+    final sourceFiles = <String>{};
+    await for (final entity in source.list(recursive: true)) {
+      if (entity is File) {
+        sourceFiles.add(p.relative(entity.path, from: source.path));
+      }
+    }
+    for (final relative in sourceFiles) {
+      final destFile = File(p.join(destination.path, relative));
+      if (!await destFile.exists()) {
+        throw StateError(
+          'La migración falló: falta el archivo $relative en el destino.',
+        );
+      }
+    }
   }
 
   Future<void> setLanguage(AppLanguage language) async {
@@ -184,6 +310,29 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await setLyricsTextAlignment(next);
   }
 
+  Future<void> setLyricsAnimationStyle(
+    LyricsAnimationStyle lyricsAnimationStyle,
+  ) async {
+    final current = state.asData?.value ?? await future;
+    if (current.lyricsAnimationStyle == lyricsAnimationStyle) {
+      return;
+    }
+    state = AsyncData(
+      current.copyWith(lyricsAnimationStyle: lyricsAnimationStyle),
+    );
+    final write = _lyricsAnimationStyleWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _lyricsAnimationStyleKey,
+        lyricsAnimationStyle.code,
+      );
+    });
+    _lyricsAnimationStyleWriteTail = write.catchError((_) {});
+    await write;
+  }
+
   Future<File> createBackupFile() async {
     final current = await future;
     return ref
@@ -206,7 +355,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   }
 
   Future<void> setYtDlpPath(String path) async {
-    final downloader = ref.read(downloaderServiceProvider);
+    final downloader = ref.read(ytDlpDownloaderServiceProvider);
     if (downloader is! DesktopDownloaderService) {
       return;
     }
@@ -221,7 +370,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   }
 
   Future<void> refreshToolStatus() async {
-    final downloader = ref.read(downloaderServiceProvider);
+    final downloader = ref.read(ytDlpDownloaderServiceProvider);
     if (downloader is! DesktopDownloaderService) {
       return;
     }

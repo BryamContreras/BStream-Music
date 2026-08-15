@@ -8,14 +8,42 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_constants.dart';
 import 'backup_restore_transaction.dart';
+import 'library_operation_coordinator.dart';
 import 'local_database_service.dart';
 
 class BackupService {
-  const BackupService(this._databaseService);
+  const BackupService(this._databaseService, this._coordinator);
 
   final LocalDatabaseService _databaseService;
+  final LibraryOperationCoordinator _coordinator;
 
   Future<File> createBackupFile({
+    required String mediaRoot,
+    String? outputPath,
+  }) {
+    return _coordinator.runExclusive(
+      LibraryMaintenancePhase.preparingBackup,
+      () => _createBackupFileInternal(
+        mediaRoot: mediaRoot,
+        outputPath: outputPath,
+      ),
+    );
+  }
+
+  Future<void> restoreBackupFile({
+    required String backupPath,
+    required String mediaRoot,
+  }) {
+    return _coordinator.runExclusive(
+      LibraryMaintenancePhase.preparingRestore,
+      () => _restoreBackupFileInternal(
+        backupPath: backupPath,
+        mediaRoot: mediaRoot,
+      ),
+    );
+  }
+
+  Future<File> _createBackupFileInternal({
     required String mediaRoot,
     String? outputPath,
   }) async {
@@ -35,23 +63,122 @@ class BackupService {
       await destination.delete();
     }
 
-    await _databaseService.close();
+    final snapshotRoot = Directory(
+      p.join(
+        (await getTemporaryDirectory()).path,
+        'bstream_backup_snapshot_${DateTime.now().millisecondsSinceEpoch}',
+      ),
+    );
     try {
+      await snapshotRoot.create(recursive: true);
       final databasePath = await _databaseService.databasePath();
-      await Isolate.run(
-        () => _createBackupArchive(
-          outputPath: destination.path,
-          databasePath: databasePath,
-          mediaRoot: mediaRoot,
-        ),
+
+      _coordinator.updatePhase(LibraryMaintenancePhase.snapshotting);
+
+      // Best-effort WAL checkpoint to flush data before closing.
+      // If the database is not open or the checkpoint fails, we still
+      // proceed with the snapshot from the closed files.
+      try {
+        await _databaseService.withDatabase((db) async {
+          await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+        });
+      } catch (_) {
+        // Database may not be open yet, or checkpoint may fail.
+        // Continue with the snapshot from closed files.
+      }
+
+      await _databaseService.close();
+      try {
+        final databaseSnapshotDir = Directory(
+          p.join(snapshotRoot.path, 'database'),
+        );
+        await databaseSnapshotDir.create(recursive: true);
+        final databaseFile = File(databasePath);
+        if (await databaseFile.exists()) {
+          await databaseFile.copy(
+            p.join(snapshotRoot.path, 'database', AppConstants.databaseName),
+          );
+        }
+        for (final suffix in const ['-wal', '-shm', '-journal']) {
+          final sidecar = File('$databasePath$suffix');
+          if (await sidecar.exists()) {
+            await sidecar.copy(
+              p.join(
+                snapshotRoot.path,
+                'database',
+                '${AppConstants.databaseName}$suffix',
+              ),
+            );
+          }
+        }
+        for (final folder in const ['audio', 'thumbnails']) {
+          final sourceDir = Directory(p.join(mediaRoot, folder));
+          if (await sourceDir.exists()) {
+            await _copyDirectory(
+              source: sourceDir,
+              destination: Directory(p.join(snapshotRoot.path, folder)),
+            );
+          }
+        }
+      } finally {
+        await _databaseService.initialize();
+      }
+
+      final databaseSnapshot = File(
+        p.join(snapshotRoot.path, 'database', AppConstants.databaseName),
       );
+      final encoder = ZipFileEncoder();
+      encoder.create(destination.path, level: ZipFileEncoder.gzip);
+      var closed = false;
+      try {
+        encoder.addArchiveFile(
+          ArchiveFile.string(
+            'manifest.json',
+            jsonEncode({
+              'app': AppConstants.appName,
+              'schema': 1,
+              'database': AppConstants.databaseName,
+              'exportedAt': DateTime.now().toIso8601String(),
+            }),
+          ),
+        );
+        if (await databaseSnapshot.exists()) {
+          await encoder.addFile(
+            databaseSnapshot,
+            'database/${AppConstants.databaseName}',
+            ZipFileEncoder.gzip,
+          );
+        }
+        for (final folder in const ['audio', 'thumbnails']) {
+          final directory = Directory(p.join(snapshotRoot.path, folder));
+          if (await directory.exists()) {
+            await encoder.addDirectory(
+              directory,
+              includeDirName: true,
+              level: ZipFileEncoder.store,
+            );
+          }
+        }
+        await encoder.close();
+        closed = true;
+      } finally {
+        if (!closed) {
+          try {
+            await encoder.close();
+          } catch (_) {
+            // Preserve the original export error.
+          }
+        }
+      }
     } finally {
-      await _databaseService.initialize();
+      if (await snapshotRoot.exists()) {
+        await snapshotRoot.delete(recursive: true);
+      }
     }
     return destination;
   }
 
-  Future<void> restoreBackupFile({
+  Future<void> _restoreBackupFileInternal({
     required String backupPath,
     required String mediaRoot,
   }) async {
@@ -71,6 +198,7 @@ class BackupService {
     await temporaryRoot.create(recursive: true);
 
     try {
+      _coordinator.updatePhase(LibraryMaintenancePhase.preparingRestore);
       await Isolate.run(
         () => _extractBackupArchive(
           backupPath: backup.path,
@@ -90,6 +218,7 @@ class BackupService {
       await _validateBackupManifest(temporaryRoot);
       await _databaseService.validateBackupDatabase(extractedDatabase.path);
 
+      _coordinator.updatePhase(LibraryMaintenancePhase.committingRestore);
       final mediaDirectory = Directory(mediaRoot);
       await mediaDirectory.create(recursive: true);
       final databasePath = await _databaseService.databasePath();
@@ -145,6 +274,30 @@ class BackupService {
       }
     }
   }
+
+  static Future<void> _copyDirectory({
+    required Directory source,
+    required Directory destination,
+  }) async {
+    await destination.create(recursive: true);
+    if (!await source.exists()) {
+      return;
+    }
+    await for (final entity in source.list(
+      recursive: true,
+      followLinks: false,
+    )) {
+      final relative = p.relative(entity.path, from: source.path);
+      final targetPath = p.join(destination.path, relative);
+      if (entity is Directory) {
+        await Directory(targetPath).create(recursive: true);
+      } else if (entity is File) {
+        final target = File(targetPath);
+        await target.parent.create(recursive: true);
+        await entity.copy(target.path);
+      }
+    }
+  }
 }
 
 class BackupRestoreException implements Exception {
@@ -161,59 +314,6 @@ class BackupRestoreException implements Exception {
     return 'La restauracion fallo y no se pudo recuperar completamente la '
         'biblioteca anterior. Restauracion: $restoreError. '
         'Recuperacion: $rollbackError';
-  }
-}
-
-Future<void> _createBackupArchive({
-  required String outputPath,
-  required String databasePath,
-  required String mediaRoot,
-}) async {
-  final encoder = ZipFileEncoder();
-  encoder.create(outputPath, level: ZipFileEncoder.gzip);
-  var closed = false;
-  try {
-    encoder.addArchiveFile(
-      ArchiveFile.string(
-        'manifest.json',
-        jsonEncode({
-          'app': AppConstants.appName,
-          'schema': 1,
-          'database': AppConstants.databaseName,
-          'exportedAt': DateTime.now().toIso8601String(),
-        }),
-      ),
-    );
-
-    final databaseFile = File(databasePath);
-    if (await databaseFile.exists()) {
-      await encoder.addFile(
-        databaseFile,
-        'database/${AppConstants.databaseName}',
-        ZipFileEncoder.gzip,
-      );
-    }
-
-    for (final folder in const ['audio', 'thumbnails']) {
-      final directory = Directory(p.join(mediaRoot, folder));
-      if (await directory.exists()) {
-        await encoder.addDirectory(
-          directory,
-          includeDirName: true,
-          level: ZipFileEncoder.store,
-        );
-      }
-    }
-    await encoder.close();
-    closed = true;
-  } finally {
-    if (!closed) {
-      try {
-        await encoder.close();
-      } catch (_) {
-        // Preserve the original export error.
-      }
-    }
   }
 }
 

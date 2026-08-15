@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/duration_formatter.dart';
+import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
@@ -22,14 +23,20 @@ class MiniPlayer extends ConsumerWidget {
     final presentation = ref.watch(
       playerControllerProvider.select((player) {
         final snapshot = player.value;
+        final rawError = player.error ?? snapshot?.errorMessage;
         return (
           status: snapshot?.status,
           title: snapshot?.title,
           artist: snapshot?.artist,
           trackId: snapshot?.trackId,
           thumbnailUrl: snapshot?.thumbnailUrl,
-          hasError: player.hasError || snapshot?.status == PlayerStatus.failed,
-          errorText: player.error?.toString() ?? snapshot?.errorMessage,
+          hasError:
+              player.hasError ||
+              snapshot?.status == PlayerStatus.failed ||
+              snapshot?.errorMessage?.trim().isNotEmpty == true,
+          errorText: rawError == null
+              ? null
+              : readableAudioStreamError(rawError),
         );
       }),
     );
@@ -39,13 +46,100 @@ class MiniPlayer extends ConsumerWidget {
         (ids) => ids.contains(presentation.trackId),
       ),
     );
-    final compactAndroid = AppPlatform.isAndroid;
-    final height = compactAndroid ? 66.0 : 76.0;
-    final horizontalPadding = compactAndroid ? 14.0 : 20.0;
-    final artworkSize = compactAndroid ? 44.0 : 48.0;
-    final playButtonSize = compactAndroid ? 48.0 : 54.0;
     final theme = Theme.of(context);
+    final compactAndroid = theme.platform == TargetPlatform.android;
+    final windowsLayout =
+        AppPlatform.isWindows &&
+        !compactAndroid &&
+        MediaQuery.sizeOf(context).width >= 360;
+    final horizontalPadding = compactAndroid ? 12.0 : 20.0;
+    final artworkSize = compactAndroid ? 40.0 : 48.0;
+    final playButtonSize = compactAndroid ? 48.0 : 54.0;
+    final minimumHeight = compactAndroid ? 62.0 : 76.0;
     final isDark = theme.brightness == Brightness.dark;
+    final metadata = Row(
+      key: const ValueKey('mini-player-metadata'),
+      children: [
+        _MiniArtwork(
+          url: presentation.thumbnailUrl,
+          size: artworkSize,
+          isFavorite: isFavorite,
+        ),
+        SizedBox(width: compactAndroid ? 8 : 12),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                presentation.title ?? strings.noPlayback,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.playbackTitleFor(context),
+                  shadows: isDark
+                      ? const [Shadow(color: Color(0xAA000000), blurRadius: 8)]
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                presentation.artist ?? 'BStream Music',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppColors.contentSubtitleFor(context),
+                  shadows: isDark
+                      ? const [Shadow(color: Color(0x99000000), blurRadius: 7)]
+                      : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final primaryControl = SizedBox.square(
+      dimension: playButtonSize,
+      child: DecoratedBox(
+        key: const ValueKey('mini-player-primary-gradient'),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: AppColors.downloadGradientFor(context),
+          ),
+        ),
+        child: IconButton(
+          key: const ValueKey('mini-player-primary-control'),
+          tooltip: presentation.status == PlayerStatus.playing
+              ? strings.pause
+              : strings.play,
+          style: IconButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            foregroundColor: AppColors.playIconForegroundFor(context),
+            disabledBackgroundColor: Colors.transparent,
+            disabledForegroundColor: AppColors.playIconDisabledForegroundFor(
+              context,
+            ),
+            shape: const CircleBorder(),
+          ),
+          iconSize: compactAndroid ? 24 : null,
+          padding: EdgeInsets.zero,
+          constraints: BoxConstraints.tight(Size.square(playButtonSize)),
+          icon: Icon(
+            presentation.status == PlayerStatus.playing
+                ? Icons.pause_rounded
+                : Icons.play_arrow_rounded,
+          ),
+          onPressed: () =>
+              ref.read(playerControllerProvider.notifier).togglePlayPause(),
+        ),
+      ),
+    );
 
     return Material(
       color: Colors.transparent,
@@ -79,129 +173,134 @@ class MiniPlayer extends ConsumerWidget {
             Positioned(top: 0, left: 0, right: 0, child: const _MiniProgress()),
             InkWell(
               onTap: onOpenPlayer,
-              child: SizedBox(
-                height: height,
+              child: ConstrainedBox(
+                key: const ValueKey('mini-player-surface'),
+                constraints: BoxConstraints(minHeight: minimumHeight),
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
-                  child: Row(
-                    children: [
-                      _MiniArtwork(
-                        url: presentation.thumbnailUrl,
-                        size: artworkSize,
-                        isFavorite: isFavorite,
-                      ),
-                      SizedBox(width: compactAndroid ? 10 : 12),
-                      Expanded(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: horizontalPadding,
+                    vertical: 4,
+                  ),
+                  child: windowsLayout
+                      ? Row(
                           children: [
-                            Text(
-                              presentation.title ?? strings.noPlayback,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.playbackTitleFor(context),
-                                shadows: isDark
-                                    ? const [
-                                        Shadow(
-                                          color: Color(0xAA000000),
-                                          blurRadius: 8,
-                                        ),
-                                      ]
-                                    : null,
+                            Expanded(child: metadata),
+                            SizedBox(
+                              width: 160,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  _MiniTransportButton(
+                                    key: const ValueKey(
+                                      'mini-player-previous-control',
+                                    ),
+                                    tooltip: strings.previous,
+                                    icon: Icons.skip_previous_rounded,
+                                    onPressed: () => ref
+                                        .read(playerControllerProvider.notifier)
+                                        .playPrevious(),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  primaryControl,
+                                  const SizedBox(width: 5),
+                                  _MiniTransportButton(
+                                    key: const ValueKey(
+                                      'mini-player-next-control',
+                                    ),
+                                    tooltip: strings.next,
+                                    icon: Icons.skip_next_rounded,
+                                    onPressed: () => ref
+                                        .read(playerControllerProvider.notifier)
+                                        .playNext(),
+                                  ),
+                                ],
                               ),
                             ),
-                            const SizedBox(height: 3),
-                            Text(
-                              presentation.artist ?? 'BStream Music',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: AppColors.contentSubtitleFor(context),
-                                shadows: isDark
-                                    ? const [
-                                        Shadow(
-                                          color: Color(0x99000000),
-                                          blurRadius: 7,
+                            Expanded(
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  if (presentation.hasError)
+                                    Flexible(
+                                      child: Text(
+                                        presentation.errorText ??
+                                            strings.playbackError,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.right,
+                                        style: TextStyle(
+                                          color: theme.colorScheme.error,
                                         ),
-                                      ]
-                                    : null,
+                                      ),
+                                    ),
+                                  if (presentation.hasError)
+                                    const SizedBox(width: 12),
+                                  const SizedBox(
+                                    width: 54,
+                                    child: _MiniPositionText(),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                      if (presentation.hasError)
-                        Flexible(
-                          child: Text(
-                            presentation.errorText ?? strings.playbackError,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.error,
-                            ),
-                          ),
-                        ),
-                      SizedBox(width: compactAndroid ? 10 : 14),
-                      SizedBox(
-                        width: compactAndroid ? 46 : 54,
-                        child: const _MiniPositionText(),
-                      ),
-                      SizedBox(width: compactAndroid ? 8 : 12),
-                      SizedBox.square(
-                        dimension: playButtonSize,
-                        child: DecoratedBox(
-                          key: const ValueKey('mini-player-primary-gradient'),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: AppColors.downloadGradientFor(context),
-                            ),
-                          ),
-                          child: IconButton(
-                            key: const ValueKey('mini-player-primary-control'),
-                            tooltip: presentation.status == PlayerStatus.playing
-                                ? strings.pause
-                                : strings.play,
-                            style: IconButton.styleFrom(
-                              backgroundColor: Colors.transparent,
-                              foregroundColor: AppColors.playIconForegroundFor(
-                                context,
-                              ),
-                              disabledBackgroundColor: Colors.transparent,
-                              disabledForegroundColor:
-                                  AppColors.playIconDisabledForegroundFor(
-                                    context,
+                        )
+                      : Row(
+                          children: [
+                            Expanded(child: metadata),
+                            if (presentation.hasError)
+                              Flexible(
+                                child: Text(
+                                  presentation.errorText ??
+                                      strings.playbackError,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.error,
                                   ),
-                              shape: const CircleBorder(),
+                                ),
+                              ),
+                            SizedBox(width: compactAndroid ? 8 : 14),
+                            SizedBox(
+                              width: compactAndroid ? 46 : 54,
+                              child: const _MiniPositionText(),
                             ),
-                            iconSize: compactAndroid ? 24 : null,
-                            padding: EdgeInsets.zero,
-                            constraints: BoxConstraints.tight(
-                              Size.square(playButtonSize),
-                            ),
-                            icon: Icon(
-                              presentation.status == PlayerStatus.playing
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
-                            ),
-                            onPressed: () => ref
-                                .read(playerControllerProvider.notifier)
-                                .togglePlayPause(),
-                          ),
+                            SizedBox(width: compactAndroid ? 8 : 12),
+                            primaryControl,
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _MiniTransportButton extends StatelessWidget {
+  const _MiniTransportButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    super.key,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: 48,
+      child: IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon),
+        color: AppColors.playbackControlForegroundFor(context),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+        onPressed: onPressed,
       ),
     );
   }
@@ -226,6 +325,7 @@ class _MiniBlurBackground extends StatelessWidget {
         child: SourceImage(
           source: source,
           fit: BoxFit.cover,
+          cacheWidth: 320,
           fallback: const _MiniFallbackBackground(),
         ),
       ),
@@ -280,11 +380,17 @@ class _MiniPositionText extends ConsumerWidget {
         (player) => player.value?.position.inSeconds ?? 0,
       ),
     );
-    return Text(
-      formatDuration(Duration(seconds: seconds)),
-      textAlign: TextAlign.right,
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-        color: AppColors.contentSubtitleFor(context),
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerRight,
+      child: Text(
+        formatDuration(Duration(seconds: seconds)),
+        maxLines: 1,
+        softWrap: false,
+        textAlign: TextAlign.right,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: AppColors.contentSubtitleFor(context),
+        ),
       ),
     );
   }
@@ -339,6 +445,7 @@ class _MiniArtwork extends StatelessWidget {
                   ? const Icon(Icons.graphic_eq_rounded)
                   : ProportionalArtwork(
                       source: url,
+                      cacheWidth: 256,
                       fallback: const Icon(Icons.graphic_eq_rounded),
                     ),
             ),

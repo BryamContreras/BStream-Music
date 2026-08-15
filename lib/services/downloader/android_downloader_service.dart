@@ -4,7 +4,8 @@ import '../../features/music/domain/entities/track_info.dart';
 import '../../platform_channels/android_ytdl_channel.dart';
 import 'downloader_service.dart';
 
-class AndroidDownloaderService implements DownloaderService {
+class AndroidDownloaderService
+    implements DownloaderService, ManagedPlaybackDownloader {
   AndroidDownloaderService(this._channel);
 
   final AndroidYtdlChannel _channel;
@@ -32,6 +33,12 @@ class AndroidDownloaderService implements DownloaderService {
   Future<TrackInfo> getPlaybackInfo(String url) async {
     await initialize();
     return _channel.getPlaybackInfo(url);
+  }
+
+  @override
+  Future<ManagedPlaybackResource> prepareManagedPlayback(String url) async {
+    await initialize();
+    return _channel.prepareManagedPlayback(url);
   }
 
   @override

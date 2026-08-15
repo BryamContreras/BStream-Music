@@ -6,6 +6,7 @@ import 'package:bstream_music/features/music/domain/entities/lyrics.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/lyrics_animation_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_page.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
@@ -78,6 +79,32 @@ void main() {
     );
   });
 
+  test('lyrics animation style persists the last rapid selection', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settingsController = _PersistingLyricsSettingsController();
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(() => settingsController),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(settingsControllerProvider.future);
+    final notifier = container.read(settingsControllerProvider.notifier);
+
+    await Future.wait([
+      notifier.setLyricsAnimationStyle(LyricsAnimationStyle.slide),
+      notifier.setLyricsAnimationStyle(LyricsAnimationStyle.highlight),
+      notifier.setLyricsAnimationStyle(LyricsAnimationStyle.none),
+    ]);
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('settings.lyricsAnimation'), 'none');
+    expect(
+      container.read(settingsControllerProvider).value?.lyricsAnimationStyle,
+      LyricsAnimationStyle.none,
+    );
+  });
+
   testWidgets('synced lyrics follow the current playback position', (
     tester,
   ) async {
@@ -99,91 +126,345 @@ void main() {
     expect(_activeLine('First line'), findsNothing);
   });
 
-  testWidgets('one toggle centers and restores synchronized lyrics', (
+  testWidgets('slide animation interpolates when the active line changes', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(320, 720);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
     final player = _FakePlayerService(lookupSnapshot);
-    final container = await _pumpLyricsPage(
+    await _pumpLyricsPage(
       tester,
       player: player,
       lyrics: _FakeLyricsService(syncedDocument),
-      platform: TargetPlatform.android,
+      lyricsAnimationStyle: LyricsAnimationStyle.slide,
     );
-    final toggle = find.byKey(const ValueKey('lyrics-alignment-toggle'));
-
-    expect(toggle, findsOneWidget);
-    for (final line in const ['First line', 'Second line', 'Third line']) {
-      expect(tester.widget<Text>(find.text(line)).textAlign, TextAlign.start);
-    }
-    expect(
-      find.descendant(
-        of: toggle,
-        matching: find.byIcon(Icons.format_align_left_rounded),
-      ),
-      findsOneWidget,
-    );
-
-    await tester.tap(toggle);
-    await tester.pumpAndSettle();
-
-    for (final line in const ['First line', 'Second line', 'Third line']) {
-      expect(tester.widget<Text>(find.text(line)).textAlign, TextAlign.center);
-    }
-    final pageRect = tester.getRect(find.byType(Scaffold));
-    final activeLineRect = tester.getRect(
-      find.byKey(const ValueKey('active-lyric-line')),
-    );
-    expect(
-      activeLineRect.left - pageRect.left,
-      closeTo(pageRect.right - activeLineRect.right, 0.01),
-    );
-    for (final line in const ['First line', 'Second line', 'Third line']) {
-      expect(
-        tester.getRect(find.text(line)).center.dx,
-        closeTo(pageRect.center.dx, 0.01),
-      );
-    }
-    expect(_activeLine('First line'), findsOneWidget);
-    expect(
-      container.read(settingsControllerProvider).value?.lyricsTextAlignment,
-      LyricsTextAlignment.centered,
-    );
-    expect(
-      find.descendant(
-        of: toggle,
-        matching: find.byIcon(Icons.format_align_center_rounded),
-      ),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.text('Second line'));
-    await tester.pump();
-    expect(player.seekPositions.last, const Duration(seconds: 2));
 
     player.emit(
-      lookupSnapshot.copyWith(
-        trackId: 'next-track',
-        sourceUrl: 'https://example.com/next-track',
-        title: 'Next song',
-      ),
+      lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
     );
+    await tester.pump();
+
+    expect(_activeLine('Second line'), findsOneWidget);
+    final start = _activeSlidePixelOffset(tester);
+    expect(start, closeTo(34.0, 0.5));
+    expect(_lineSlidePixelOffset(tester, 'lyric-line-0'), closeTo(0.0, 0.01));
+
+    await tester.pump(const Duration(milliseconds: 120));
+
+    final middle = _activeSlidePixelOffset(tester);
+    expect(middle, greaterThan(0));
+    expect(middle, lessThan(start));
+    expect(_lineSlidePixelOffset(tester, 'lyric-line-0'), closeTo(0.0, 0.01));
+
     await tester.pumpAndSettle();
-    expect(
-      tester.widget<Text>(find.text('First line')).textAlign,
-      TextAlign.center,
+    expect(_activeSlidePixelOffset(tester), closeTo(0.0, 0.01));
+    expect(_lineSlidePixelOffset(tester, 'lyric-line-0'), closeTo(0.0, 0.01));
+  });
+
+  testWidgets('smooth animation fades the active line in from dimmer state', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+      lyricsAnimationStyle: LyricsAnimationStyle.smooth,
     );
 
-    await tester.tap(toggle);
+    player.emit(
+      lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
+    );
+    await tester.pump();
+
+    final transitions = tester
+        .widgetList<LyricsAnimationTransition>(
+          find.byType(LyricsAnimationTransition),
+        )
+        .toList(growable: false);
+    final activeTransition = transitions.firstWhere(
+      (t) => t.active,
+      orElse: () => transitions.first,
+    );
+    final builder = tester
+        .widgetList<AnimatedBuilder>(
+          find.descendant(
+            of: find.byWidget(activeTransition),
+            matching: find.byType(AnimatedBuilder),
+          ),
+        )
+        .toList(growable: false);
+    expect(builder, isNotEmpty);
+
+    await tester.pumpAndSettle();
+    final opacityWidgets = tester
+        .widgetList<Opacity>(
+          find.descendant(
+            of: find.byWidget(activeTransition),
+            matching: find.byType(Opacity),
+          ),
+        )
+        .toList(growable: false);
+    expect(opacityWidgets, isNotEmpty);
+    expect(opacityWidgets.first.opacity, closeTo(1.0, 0.01));
+  });
+
+  testWidgets(
+    'highlight animation shows a visible accent background while active',
+    (tester) async {
+      final player = _FakePlayerService(lookupSnapshot);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(syncedDocument),
+        lyricsAnimationStyle: LyricsAnimationStyle.highlight,
+      );
+
+      player.emit(
+        lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
+      );
+      await tester.pumpAndSettle();
+
+      final transitions = tester
+          .widgetList<LyricsAnimationTransition>(
+            find.byType(LyricsAnimationTransition),
+          )
+          .toList(growable: false);
+      final activeTransition = transitions.firstWhere(
+        (t) => t.active,
+        orElse: () => transitions.first,
+      );
+      final builder = tester
+          .widgetList<AnimatedBuilder>(
+            find.descendant(
+              of: find.byWidget(activeTransition),
+              matching: find.byType(AnimatedBuilder),
+            ),
+          )
+          .toList(growable: false);
+      expect(builder, isNotEmpty);
+
+      final decorated = tester
+          .widgetList<DecoratedBox>(
+            find.descendant(
+              of: find.byWidget(activeTransition),
+              matching: find.byType(DecoratedBox),
+            ),
+          )
+          .toList(growable: false);
+      expect(decorated, isNotEmpty);
+      final hasAccent = decorated.any((box) {
+        final decoration = box.decoration;
+        if (decoration is! BoxDecoration) return false;
+        final color = decoration.color;
+        if (color == null) return false;
+        return (color.a * 255).round() > 8;
+      });
+      expect(hasAccent, isTrue);
+    },
+  );
+
+  testWidgets('none animation skips any animation builder', (tester) async {
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+      lyricsAnimationStyle: LyricsAnimationStyle.none,
+    );
+
+    player.emit(
+      lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
+    );
     await tester.pumpAndSettle();
 
-    for (final line in const ['First line', 'Second line', 'Third line']) {
-      expect(tester.widget<Text>(find.text(line)).textAlign, TextAlign.start);
+    final transitions = tester
+        .widgetList<LyricsAnimationTransition>(
+          find.byType(LyricsAnimationTransition),
+        )
+        .toList(growable: false);
+    expect(transitions, isNotEmpty);
+    for (final t in transitions) {
+      if (t.style == LyricsAnimationStyle.none && t.active) {
+        final builder = tester
+            .widgetList<AnimatedBuilder>(
+              find.descendant(
+                of: find.byWidget(t),
+                matching: find.byType(AnimatedBuilder),
+              ),
+            )
+            .toList(growable: false);
+        expect(builder, isEmpty);
+      }
     }
   });
+
+  testWidgets(
+    'changing the animation style triggers a replay for the active line',
+    (tester) async {
+      final player = _FakePlayerService(lookupSnapshot);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(syncedDocument),
+        lyricsAnimationStyle: LyricsAnimationStyle.smooth,
+      );
+
+      player.emit(
+        lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
+      );
+      await tester.pumpAndSettle();
+
+      final container = tester.element(
+        find.byKey(const ValueKey('synced-lyrics-scroll')),
+      );
+      final provider = ProviderScope.containerOf(container);
+
+      await provider
+          .read(settingsControllerProvider.notifier)
+          .setLyricsAnimationStyle(LyricsAnimationStyle.slide);
+
+      await tester.pump();
+
+      final slideTransforms = tester
+          .widgetList<Transform>(
+            find
+                .ancestor(
+                  of: find.byKey(const ValueKey('active-lyric-line')),
+                  matching: find.byType(Transform),
+                )
+                .first,
+          )
+          .toList(growable: false);
+      final hasSlide = slideTransforms
+          .map((t) => t.transform.getTranslation().y)
+          .any((dy) => dy.abs() > 0.5);
+      expect(hasSlide, isTrue);
+
+      await tester.pumpAndSettle();
+      final settled = tester
+          .widgetList<Transform>(
+            find
+                .ancestor(
+                  of: find.byKey(const ValueKey('active-lyric-line')),
+                  matching: find.byType(Transform),
+                )
+                .first,
+          )
+          .toList(growable: false);
+      final settledSlide = settled
+          .map((t) => t.transform.getTranslation().y)
+          .any((dy) => dy.abs() > 0.5);
+      expect(settledSlide, isFalse);
+    },
+  );
+
+  testWidgets(
+    'changing the animation style mid playback replays the upcoming line',
+    (tester) async {
+      final player = _FakePlayerService(lookupSnapshot);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(syncedDocument),
+        lyricsAnimationStyle: LyricsAnimationStyle.slide,
+      );
+
+      await tester.pumpAndSettle();
+
+      final container = tester.element(
+        find.byKey(const ValueKey('synced-lyrics-scroll')),
+      );
+      final provider = ProviderScope.containerOf(container);
+      await provider
+          .read(settingsControllerProvider.notifier)
+          .setLyricsAnimationStyle(LyricsAnimationStyle.highlight);
+      await tester.pumpAndSettle();
+
+      player.emit(
+        lookupSnapshot.copyWith(position: const Duration(milliseconds: 4250)),
+      );
+      await tester.pump();
+
+      final transitions = tester
+          .widgetList<LyricsAnimationTransition>(
+            find.byType(LyricsAnimationTransition),
+          )
+          .toList(growable: false);
+      final activeTransition = transitions.firstWhere(
+        (t) => t.active,
+        orElse: () => transitions.first,
+      );
+      final builder = tester
+          .widgetList<AnimatedBuilder>(
+            find.descendant(
+              of: find.byWidget(activeTransition),
+              matching: find.byType(AnimatedBuilder),
+            ),
+          )
+          .toList(growable: false);
+      expect(builder, isNotEmpty);
+    },
+  );
+
+  testWidgets(
+    'stored preference centers synchronized lyrics without a toggle',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final player = _FakePlayerService(lookupSnapshot);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(syncedDocument),
+        lyricsTextAlignment: LyricsTextAlignment.centered,
+        platform: TargetPlatform.android,
+      );
+
+      for (final line in const ['First line', 'Second line', 'Third line']) {
+        expect(
+          tester.widget<Text>(find.text(line)).textAlign,
+          TextAlign.center,
+        );
+      }
+      final pageRect = tester.getRect(find.byType(Scaffold));
+      final activeLineRect = tester.getRect(
+        find.byKey(const ValueKey('active-lyric-line')),
+      );
+      expect(
+        activeLineRect.left - pageRect.left,
+        closeTo(pageRect.right - activeLineRect.right, 0.01),
+      );
+      for (final line in const ['First line', 'Second line', 'Third line']) {
+        expect(
+          tester.getRect(find.text(line)).center.dx,
+          closeTo(pageRect.center.dx, 0.01),
+        );
+      }
+      expect(_activeLine('First line'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('lyrics-alignment-toggle')),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('Second line'));
+      await tester.pump();
+      expect(player.seekPositions.last, const Duration(seconds: 2));
+
+      player.emit(
+        lookupSnapshot.copyWith(
+          trackId: 'next-track',
+          sourceUrl: 'https://example.com/next-track',
+          title: 'Next song',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.text('First line')).textAlign,
+        TextAlign.center,
+      );
+    },
+  );
 
   testWidgets('Android lyrics use reduced horizontal content margins', (
     tester,
@@ -341,10 +622,12 @@ void main() {
     final accent = AppColors.downloadAccentFor(controlsContext);
     final activeLineStyle = tester
         .widget<AnimatedDefaultTextStyle>(
-          find.descendant(
-            of: find.byKey(const ValueKey('active-lyric-line')),
-            matching: find.byType(AnimatedDefaultTextStyle),
-          ),
+          find
+              .ancestor(
+                of: find.byKey(const ValueKey('active-lyric-line')),
+                matching: find.byType(AnimatedDefaultTextStyle),
+              )
+              .first,
         )
         .style;
     expect(
@@ -519,7 +802,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final player = _FakePlayerService(lookupSnapshot);
-    await _pumpLyricsPage(
+    final container = await _pumpLyricsPage(
       tester,
       player: player,
       lyrics: _FakeLyricsService(plainDocument),
@@ -542,7 +825,9 @@ void main() {
       'Plain first line\n   Plain second line',
     );
 
-    await tester.tap(find.byKey(const ValueKey('lyrics-alignment-toggle')));
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setLyricsTextAlignment(LyricsTextAlignment.centered);
     await tester.pumpAndSettle();
 
     expect(tester.widget<Text>(plainText).textAlign, TextAlign.center);
@@ -565,6 +850,7 @@ void main() {
           .textAlign,
       isNot(TextAlign.center),
     );
+    expect(find.byKey(const ValueKey('lyrics-alignment-toggle')), findsNothing);
   });
 
   testWidgets('wide desktop plain lyrics use the available space', (
@@ -588,10 +874,7 @@ void main() {
     );
     expect(plainText.style?.fontSize, 33);
     expect(plainText.textAlign, TextAlign.center);
-    expect(
-      find.byKey(const ValueKey('lyrics-alignment-toggle')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('lyrics-alignment-toggle')), findsNothing);
   });
 
   testWidgets('connection failures show a centered offline message', (
@@ -867,12 +1150,38 @@ void main() {
 
 double _lyricLineFontSize(WidgetTester tester, String key) {
   final style = tester.widget<AnimatedDefaultTextStyle>(
-    find.descendant(
-      of: find.byKey(ValueKey(key)),
-      matching: find.byType(AnimatedDefaultTextStyle),
-    ),
+    find
+        .ancestor(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byType(AnimatedDefaultTextStyle),
+        )
+        .first,
   );
   return style.style.fontSize!;
+}
+
+double _activeSlidePixelOffset(WidgetTester tester) {
+  return _lineSlidePixelOffset(tester, 'active-lyric-line');
+}
+
+double _lineSlidePixelOffset(WidgetTester tester, String key) {
+  final transforms = tester
+      .widgetList<Transform>(
+        find
+            .ancestor(
+              of: find.byKey(ValueKey(key)),
+              matching: find.byType(Transform),
+            )
+            .first,
+      )
+      .toList(growable: false);
+  for (final transform in transforms) {
+    final offset = transform.transform.getTranslation();
+    if (offset.y.abs() > 0.5) {
+      return offset.y;
+    }
+  }
+  return 0.0;
 }
 
 Finder _activeLine(String text) {
@@ -895,9 +1204,13 @@ Future<ProviderContainer> _pumpLyricsPage(
   ArtworkProgressColorService? artworkProgressColorService,
   AppLanguage language = AppLanguage.english,
   LyricsTextAlignment lyricsTextAlignment = LyricsTextAlignment.normal,
+  LyricsAnimationStyle lyricsAnimationStyle = LyricsAnimationStyle.smooth,
   TargetPlatform? platform,
 }) async {
-  final settingsController = _FakeLyricsSettingsController(lyricsTextAlignment);
+  final settingsController = _FakeLyricsSettingsController(
+    lyricsTextAlignment,
+    lyricsAnimationStyle,
+  );
   final container = ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
@@ -943,15 +1256,20 @@ class _FakeArtworkProgressColorService extends ArtworkProgressColorService {
 }
 
 class _FakeLyricsSettingsController extends SettingsController {
-  _FakeLyricsSettingsController(this.initialLyricsTextAlignment);
+  _FakeLyricsSettingsController(
+    this.initialLyricsTextAlignment,
+    this.initialLyricsAnimationStyle,
+  );
 
   final LyricsTextAlignment initialLyricsTextAlignment;
+  final LyricsAnimationStyle initialLyricsAnimationStyle;
 
   @override
   Future<SettingsState> build() async => SettingsState(
     downloadDirectory: '/tmp/bstream-lyrics-test',
     language: AppLanguage.english,
     lyricsTextAlignment: initialLyricsTextAlignment,
+    lyricsAnimationStyle: initialLyricsAnimationStyle,
   );
 
   @override

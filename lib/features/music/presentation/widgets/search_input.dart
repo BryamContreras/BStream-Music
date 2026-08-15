@@ -6,6 +6,7 @@ class SearchInput extends StatefulWidget {
     required this.hintText,
     required this.tooltip,
     required this.clearTooltip,
+    this.onCleared,
     super.key,
   });
 
@@ -13,6 +14,7 @@ class SearchInput extends StatefulWidget {
   final String hintText;
   final String tooltip;
   final String clearTooltip;
+  final VoidCallback? onCleared;
 
   @override
   State<SearchInput> createState() => _SearchInputState();
@@ -20,6 +22,7 @@ class SearchInput extends StatefulWidget {
 
 class _SearchInputState extends State<SearchInput> {
   final _controller = TextEditingController();
+  bool _hadText = false;
 
   @override
   void initState() {
@@ -28,6 +31,11 @@ class _SearchInputState extends State<SearchInput> {
   }
 
   void _handleTextChanged() {
+    final hasText = _controller.text.isNotEmpty;
+    if (_hadText && !hasText) {
+      widget.onCleared?.call();
+    }
+    _hadText = hasText;
     setState(() {});
   }
 
@@ -41,6 +49,10 @@ class _SearchInputState extends State<SearchInput> {
   @override
   Widget build(BuildContext context) {
     void submit() => widget.onSubmitted(_controller.text);
+
+    void clear() {
+      _controller.clear();
+    }
 
     final hasText = _controller.text.isNotEmpty;
 
@@ -61,7 +73,7 @@ class _SearchInputState extends State<SearchInput> {
                   key: const ValueKey('search-clear-button'),
                   tooltip: widget.clearTooltip,
                   icon: const Icon(Icons.close_rounded),
-                  onPressed: _controller.clear,
+                  onPressed: clear,
                 ),
               IconButton(
                 tooltip: widget.tooltip,

@@ -9,10 +9,29 @@ import '../../core/errors/app_exception.dart' as app_errors;
 import '../../core/utils/image_source.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
+import 'notification_artwork_service.dart';
 import 'player_service.dart';
 
+typedef JustAudioOperationDeadline = Future<void> Function(Duration duration);
+
 class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
-  JustAudioPlayerService() {
+  JustAudioPlayerService({
+    NotificationArtworkService? notificationArtworkService,
+    AudioPlayer? audioPlayer,
+    Duration operationTimeout = const Duration(seconds: 45),
+    JustAudioOperationDeadline? operationDeadline,
+  }) : _notificationArtworkService =
+           notificationArtworkService ?? NotificationArtworkService.instance,
+       _player = audioPlayer ?? _createAudioPlayer(),
+       _operationTimeout = operationTimeout,
+       // Public injection name is intentional; the stored hook stays private.
+       // ignore: prefer_initializing_formals
+       _operationDeadline = operationDeadline,
+       assert(operationTimeout > Duration.zero) {
+    // main() starts this before the Android UI is shown. Keep this best-effort
+    // warmup for tests and alternate entry points that construct the service
+    // directly; image generation itself is deferred to Android's request.
+    unawaited(_notificationArtworkService.initialize());
     // The stock stream can publish five timeline snapshots per second for the
     // whole lifetime of the foreground service. Four updates per second keeps
     // short tracks smooth, while the 500 ms ceiling bounds background work for
@@ -65,8 +84,28 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       _emit(_snapshot.copyWith(status: status));
     });
     _playbackErrorSubscription = _player.errorStream.listen((error) {
+      final sequenceTags = _player.sequence
+          .map((source) => source.tag)
+          .toList(growable: false);
+      if (!justAudioErrorBelongsToSnapshot(
+        error,
+        sequenceTags: sequenceTags,
+        currentIndex: _player.currentIndex,
+        snapshot: _snapshot,
+      )) {
+        developer.log(
+          'ignored stale playback error for source index ${error.index}',
+          name: 'BStreamPlayback',
+          error: error,
+        );
+        return;
+      }
       unawaited(
-        _reportPlaybackFailure(error, _playbackGeneration, _activeRemoteTrack),
+        _reportPlaybackFailure(
+          error,
+          _playbackGeneration,
+          _remoteTrackForError(error, sequenceTags) ?? _activeRemoteTrack,
+        ),
       );
     });
     _sequenceStateSubscription = _player.sequenceStateStream.listen((state) {
@@ -93,10 +132,11 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         _snapshot.copyWith(
           title: tag.title,
           artist: tag.artist,
+          album: tag.album,
           trackId: tag.id,
           queueEntryId: queueEntryId,
           sourceUrl: tag.extras?['sourceUrl']?.toString(),
-          thumbnailUrl: tag.artUri?.toString(),
+          thumbnailUrl: displayArtworkSourceForMediaItem(tag),
           duration: tag.duration,
           isRemote: isRemote,
           isExternal: tag.extras?['isExternal'] == true,
@@ -105,7 +145,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     });
   }
 
-  final AudioPlayer _player = AudioPlayer(
+  static AudioPlayer _createAudioPlayer() => AudioPlayer(
     // Let yt-dlp's per-stream User-Agent pass through unchanged. A player-wide
     // User-Agent overrides that header in just_audio and can invalidate signed
     // YouTube media URLs on Android.
@@ -121,6 +161,11 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       ),
     ),
   );
+
+  final AudioPlayer _player;
+  final NotificationArtworkService _notificationArtworkService;
+  final Duration _operationTimeout;
+  final JustAudioOperationDeadline? _operationDeadline;
   final _snapshotController = StreamController<PlayerSnapshot>.broadcast();
 
   late final StreamSubscription<Duration> _positionSubscription;
@@ -142,9 +187,11 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   List<RemotePlaybackSource> _remoteQueueSources = const [];
   bool _remoteHasSingleLogicalItem = false;
   Future<void> _remoteQueueMutationTail = Future<void>.value();
+  _JustAudioOperationLease? _activeQueueOperation;
   int _remoteQueueRevision = 0;
   Stopwatch? _remoteStartupWatch;
   bool _loggedRemoteDuration = false;
+  bool _disposed = false;
 
   @override
   Stream<PlayerSnapshot> get snapshotStream => _snapshotController.stream;
@@ -186,6 +233,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   Future<void> playRemoteSource(RemotePlaybackSource source) {
     final generation = ++_playbackGeneration;
     _remoteQueueRevision++;
+    _cancelActiveSourceLoad();
     final track = source.track;
 
     _activeRemoteTrack = track;
@@ -216,53 +264,61 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       'format=${track.streamExtension ?? 'unknown'}',
       name: 'BStreamPlayback',
     );
-    return _enqueueQueueMutation(() async {
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      _remoteQueueSources = [source];
-      _remoteHasSingleLogicalItem = source.isOnlyLogicalQueueItem;
-      try {
-        await _player.setAudioSources(
-          [_remoteAudioSource(source)],
-          initialIndex: 0,
-          initialPosition: Duration.zero,
-          // Validate the signed URL before reporting that playback has
-          // started. This turns HTTP/format failures into a catchable error
-          // instead of a later, easily lost background event.
-          preload: true,
-        );
-      } catch (error) {
-        if (generation == _playbackGeneration) {
-          final baseMessage = _playerErrorMessage(error);
-          final message = await _diagnosticMessage(error, generation, track);
-          if (message != baseMessage) {
-            throw app_errors.PlayerException(
-              message,
-              code: 'playback_source_error',
-              details: error,
-            );
-          }
+    return _enqueueQueueMutation(
+      () async {
+        if (generation != _playbackGeneration) {
+          return;
         }
-        rethrow;
-      }
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      developer.log(
-        'setAudioSources returned after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
-        name: 'BStreamPlayback',
-      );
-      await _applyPlaybackOptions();
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      _startPlayback(generation);
-      developer.log(
-        'play requested after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
-        name: 'BStreamPlayback',
-      );
-    });
+        _localQueueIds = const [];
+        _remoteQueueSources = [source];
+        _remoteHasSingleLogicalItem = source.isOnlyLogicalQueueItem;
+        try {
+          await _player.setAudioSources(
+            [_remoteAudioSource(source)],
+            initialIndex: 0,
+            initialPosition: Duration.zero,
+            // Validate the signed URL before reporting that playback has
+            // started. This turns HTTP/format failures into a catchable error
+            // instead of a later, easily lost background event.
+            preload: true,
+          );
+        } catch (error) {
+          if (generation == _playbackGeneration) {
+            final baseMessage = _playerErrorMessage(error);
+            final message = await _diagnosticMessage(error, generation, track);
+            if (message != baseMessage) {
+              throw app_errors.PlayerException(
+                message,
+                code: 'playback_source_error',
+                details: error,
+              );
+            }
+          }
+          rethrow;
+        }
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        developer.log(
+          'setAudioSources returned after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
+          name: 'BStreamPlayback',
+        );
+        await _applyPlaybackOptions();
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        _startPlayback(generation);
+        developer.log(
+          'play requested after ${_remoteStartupWatch?.elapsedMilliseconds ?? 0}ms',
+          name: 'BStreamPlayback',
+        );
+      },
+      isSourceLoad: true,
+      label: 'setAudioSources',
+      onTimeout: () {
+        _handleSourceLoadTimeout(generation);
+      },
+    );
   }
 
   @override
@@ -273,19 +329,28 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     final generation = _playbackGeneration;
     final revision = ++_remoteQueueRevision;
     final desired = List<RemotePlaybackSource>.unmodifiable(upcoming);
-    return _enqueueQueueMutation(() async {
-      if (generation != _playbackGeneration ||
-          revision != _remoteQueueRevision ||
-          _remoteQueueSources.isEmpty) {
-        return;
-      }
-      await _reconcileRemoteQueue(
-        desired,
-        generation,
-        revision,
-        finalize: finalize,
-      );
-    });
+    return _enqueueQueueMutation(
+      () async {
+        if (generation != _playbackGeneration ||
+            revision != _remoteQueueRevision ||
+            _remoteQueueSources.isEmpty) {
+          return;
+        }
+        await _reconcileRemoteQueue(
+          desired,
+          generation,
+          revision,
+          finalize: finalize,
+        );
+      },
+      label: 'updateRemoteQueue',
+      onTimeout: () {
+        if (generation == _playbackGeneration &&
+            revision == _remoteQueueRevision) {
+          _remoteQueueRevision++;
+        }
+      },
+    );
   }
 
   Future<void> _reconcileRemoteQueue(
@@ -302,15 +367,9 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     }
     final currentEntryId = _remoteQueueSources[currentIndex].queueEntryId;
 
-    if (currentIndex > 1) {
-      final removeCount = currentIndex - 1;
-      await _player.removeAudioSourceRange(0, removeCount);
-      _remoteQueueSources.removeRange(0, removeCount);
-      currentIndex = 1;
-    }
-
     bool isCurrent() {
-      if (generation != _playbackGeneration ||
+      if (_disposed ||
+          generation != _playbackGeneration ||
           revision != _remoteQueueRevision) {
         return false;
       }
@@ -319,6 +378,16 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
           index >= 0 &&
           index < _remoteQueueSources.length &&
           _remoteQueueSources[index].queueEntryId == currentEntryId;
+    }
+
+    if (currentIndex > 1) {
+      final removeCount = currentIndex - 1;
+      await _player.removeAudioSourceRange(0, removeCount);
+      if (!isCurrent()) {
+        return;
+      }
+      _remoteQueueSources.removeRange(0, removeCount);
+      currentIndex = 1;
     }
 
     for (var offset = 0; offset < upcoming.length; offset++) {
@@ -345,6 +414,9 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       }
       if (existingIndex >= 0) {
         await _player.moveAudioSource(existingIndex, targetIndex);
+        if (!isCurrent()) {
+          return;
+        }
         final moved = _remoteQueueSources.removeAt(existingIndex);
         _remoteQueueSources.insert(targetIndex, moved);
       } else {
@@ -352,6 +424,9 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
           targetIndex,
           _remoteAudioSource(desired),
         );
+        if (!isCurrent()) {
+          return;
+        }
         _remoteQueueSources.insert(targetIndex, desired);
       }
     }
@@ -363,12 +438,38 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       }
       final removeIndex = _remoteQueueSources.length - 1;
       await _player.removeAudioSourceAt(removeIndex);
+      if (!isCurrent()) {
+        return;
+      }
       _remoteQueueSources.removeAt(removeIndex);
     }
   }
 
-  Future<void> _enqueueQueueMutation(Future<void> Function() mutation) {
-    final operation = _remoteQueueMutationTail.then((_) => mutation());
+  Future<void> _enqueueQueueMutation(
+    Future<void> Function() mutation, {
+    bool isSourceLoad = false,
+    required String label,
+    void Function()? onTimeout,
+  }) {
+    final operation = _remoteQueueMutationTail.then((_) async {
+      if (_disposed) {
+        return;
+      }
+      final lease = _JustAudioOperationLease(isSourceLoad: isSourceLoad);
+      _activeQueueOperation = lease;
+      try {
+        await _runWithDeadline(
+          mutation,
+          lease,
+          label: label,
+          onTimeout: onTimeout,
+        );
+      } finally {
+        if (identical(_activeQueueOperation, lease)) {
+          _activeQueueOperation = null;
+        }
+      }
+    });
     _remoteQueueMutationTail = operation.then<void>(
       (_) {},
       onError: (Object _, StackTrace _) {},
@@ -376,17 +477,126 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     return operation;
   }
 
+  Future<void> _runWithDeadline(
+    Future<void> Function() operation,
+    _JustAudioOperationLease lease, {
+    required String label,
+    void Function()? onTimeout,
+  }) {
+    final result = Completer<void>();
+    Future<void>.sync(operation).then(
+      (_) {
+        if (!result.isCompleted) {
+          result.complete();
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!result.isCompleted) {
+          result.completeError(error, stackTrace);
+        }
+      },
+    );
+    lease.cancelled.then((_) {
+      if (!result.isCompleted) {
+        result.complete();
+      }
+    });
+    void completeTimeout() {
+      if (result.isCompleted || lease.isCancelled) {
+        return;
+      }
+      try {
+        onTimeout?.call();
+        result.completeError(
+          TimeoutException(
+            'just_audio $label exceeded $_operationTimeout',
+            _operationTimeout,
+          ),
+        );
+      } catch (error, stackTrace) {
+        result.completeError(error, stackTrace);
+      }
+    }
+
+    Timer? timer;
+    final injectedDeadline = _operationDeadline;
+    if (injectedDeadline == null) {
+      timer = Timer(_operationTimeout, completeTimeout);
+    } else {
+      injectedDeadline(_operationTimeout).then(
+        (_) => completeTimeout(),
+        onError: (Object error, StackTrace stackTrace) {
+          if (!result.isCompleted) {
+            result.completeError(error, stackTrace);
+          }
+        },
+      );
+    }
+    return result.future.whenComplete(() => timer?.cancel());
+  }
+
+  Future<void> _runStandaloneWithDeadline(
+    Future<void> Function() operation, {
+    required String label,
+  }) {
+    return _runWithDeadline(
+      operation,
+      _JustAudioOperationLease(isSourceLoad: false),
+      label: label,
+    );
+  }
+
+  void _cancelActiveSourceLoad() {
+    final operation = _activeQueueOperation;
+    if (operation?.isSourceLoad == true) {
+      operation!.cancel();
+    }
+  }
+
+  void _cancelActiveQueueOperation() {
+    _activeQueueOperation?.cancel();
+  }
+
+  void _handleSourceLoadTimeout(int generation) {
+    if (_disposed || generation != _playbackGeneration) {
+      return;
+    }
+    _playbackGeneration++;
+    _remoteQueueRevision++;
+    // stop() switches just_audio's platform activation synchronously. That
+    // interrupts the still-alive native load before its Future can complete
+    // and publish a source after this timeout.
+    unawaited(
+      _player.stop().catchError((Object error, StackTrace stackTrace) {
+        developer.log(
+          'failed to interrupt timed-out source load',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }),
+    );
+    _emit(
+      _snapshot.copyWith(
+        status: PlayerStatus.failed,
+        errorMessage: 'El reproductor tardo demasiado en abrir el audio.',
+      ),
+    );
+  }
+
   @override
   Future<void> playLocal(LocalTrack track) async {
     final generation = ++_playbackGeneration;
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
+    _cancelActiveSourceLoad();
     _localQueueIds = const [];
     _emit(
       PlayerSnapshot(
         status: PlayerStatus.loading,
         title: track.title,
         artist: track.artist,
+        album: track.album,
         trackId: track.id,
         sourceUrl: track.sourceUrl,
         thumbnailUrl: track.thumbnailPath ?? track.thumbnailUrl,
@@ -396,22 +606,29 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         isExternal: track.isExternal,
       ),
     );
-    await _enqueueQueueMutation(() async {
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      _remoteQueueSources = const [];
-      _remoteHasSingleLogicalItem = false;
-      await _player.setAudioSource(_localAudioSource(track));
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      await _applyPlaybackOptions();
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      _startPlayback(generation);
-    });
+    await _enqueueQueueMutation(
+      () async {
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        _remoteQueueSources = const [];
+        _remoteHasSingleLogicalItem = false;
+        await _player.setAudioSource(_localAudioSource(track));
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        await _applyPlaybackOptions();
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        _startPlayback(generation);
+      },
+      isSourceLoad: true,
+      label: 'setAudioSource',
+      onTimeout: () {
+        _handleSourceLoadTimeout(generation);
+      },
+    );
   }
 
   @override
@@ -422,6 +639,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     final generation = ++_playbackGeneration;
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
+    _cancelActiveSourceLoad();
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
     final current = tracks[safeIndex];
     _emit(
@@ -429,6 +647,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         status: PlayerStatus.loading,
         title: current.title,
         artist: current.artist,
+        album: current.album,
         trackId: current.id,
         sourceUrl: current.sourceUrl,
         thumbnailUrl: current.thumbnailPath ?? current.thumbnailUrl,
@@ -439,121 +658,185 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       ),
     );
     final queueIds = tracks.map((track) => track.id).toList(growable: false);
-    await _enqueueQueueMutation(() async {
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      _remoteQueueSources = const [];
-      _remoteHasSingleLogicalItem = false;
-      if (_sameQueue(queueIds, _localQueueIds) &&
-          _player.sequence.length == tracks.length) {
-        await _player.seek(Duration.zero, index: safeIndex);
-      } else {
-        await _player.setAudioSources(
-          tracks.map(_localAudioSource).toList(growable: false),
-          initialIndex: safeIndex,
-          initialPosition: Duration.zero,
-        );
-        _localQueueIds = queueIds;
-      }
-      await _applyPlaybackOptions();
-      if (generation != _playbackGeneration) {
-        return;
-      }
-      _startPlayback(generation);
-    });
+    await _enqueueQueueMutation(
+      () async {
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        _remoteQueueSources = const [];
+        _remoteHasSingleLogicalItem = false;
+        if (_sameQueue(queueIds, _localQueueIds) &&
+            _player.sequence.length == tracks.length) {
+          await _player.seek(Duration.zero, index: safeIndex);
+        } else {
+          await _player.setAudioSources(
+            tracks.map(_localAudioSource).toList(growable: false),
+            initialIndex: safeIndex,
+            initialPosition: Duration.zero,
+          );
+          _localQueueIds = queueIds;
+        }
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        await _applyPlaybackOptions();
+        if (generation != _playbackGeneration) {
+          return;
+        }
+        _startPlayback(generation);
+      },
+      isSourceLoad: true,
+      label: 'setAudioSources',
+      onTimeout: () {
+        _handleSourceLoadTimeout(generation);
+      },
+    );
   }
 
   @override
-  Future<void> replaceLocalQueue(
-    List<LocalTrack> tracks,
-    int preferredIndex,
-  ) async {
-    if (tracks.isEmpty) {
-      _localQueueIds = const [];
-      await _player.stop();
-      await _player.clearAudioSources();
-      _emit(
-        PlayerSnapshot(
-          status: PlayerStatus.stopped,
-          volume: _snapshot.volume,
-          shuffleEnabled: _shuffleEnabled,
-          repeatMode: _repeatMode,
-        ),
-      );
-      return;
-    }
-
-    final nextIds = tracks.map((track) => track.id).toList(growable: false);
-    if (_sameQueue(nextIds, _localQueueIds) &&
-        _player.sequence.length == tracks.length) {
-      return;
-    }
-
-    final shouldKeepPlaying =
-        _snapshot.status == PlayerStatus.playing ||
-        (_snapshot.status == PlayerStatus.loading && _player.playing);
-    final currentTrackId = _snapshot.trackId;
-    final currentPosition = _player.position;
-    final canUpdateIncrementally =
-        _localQueueIds.isNotEmpty &&
-        _player.sequence.length == _localQueueIds.length;
-
-    if (canUpdateIncrementally) {
-      final workingIds = List<String>.of(_localQueueIds);
-      for (var index = 0; index < nextIds.length; index++) {
-        final desiredId = nextIds[index];
-        if (index < workingIds.length && workingIds[index] == desiredId) {
-          continue;
+  Future<void> replaceLocalQueue(List<LocalTrack> tracks, int preferredIndex) {
+    final generation = _playbackGeneration;
+    final revision = ++_remoteQueueRevision;
+    final desired = List<LocalTrack>.unmodifiable(tracks);
+    bool isCurrent() =>
+        !_disposed &&
+        generation == _playbackGeneration &&
+        revision == _remoteQueueRevision &&
+        _activeRemoteTrack == null;
+    return _enqueueQueueMutation(
+      () async {
+        // Queue replacement shares the same native mutation lane as remote
+        // playback and stop. A request that was superseded before it reached the
+        // lane must never overwrite the newer source.
+        if (!isCurrent()) {
+          return;
         }
 
-        final existingIndex = workingIds.indexOf(desiredId, index + 1);
-        if (existingIndex >= 0) {
-          await _player.moveAudioSource(existingIndex, index);
-          final moved = workingIds.removeAt(existingIndex);
-          workingIds.insert(index, moved);
-        } else {
-          await _player.insertAudioSource(
-            index,
-            _localAudioSource(tracks[index]),
+        if (desired.isEmpty) {
+          await _player.stop();
+          if (!isCurrent()) {
+            return;
+          }
+          await _player.clearAudioSources();
+          if (!isCurrent()) {
+            return;
+          }
+          _localQueueIds = const [];
+          _emit(
+            PlayerSnapshot(
+              status: PlayerStatus.stopped,
+              volume: _snapshot.volume,
+              shuffleEnabled: _shuffleEnabled,
+              repeatMode: _repeatMode,
+            ),
           );
-          workingIds.insert(index, desiredId);
+          return;
         }
-      }
-      while (workingIds.length > nextIds.length) {
-        await _player.removeAudioSourceAt(workingIds.length - 1);
-        workingIds.removeLast();
-      }
-    } else {
-      final retainedIndex = currentTrackId == null
-          ? -1
-          : nextIds.indexOf(currentTrackId);
-      final safeIndex = retainedIndex >= 0
-          ? retainedIndex
-          : preferredIndex.clamp(0, tracks.length - 1).toInt();
-      await _player.setAudioSources(
-        tracks.map(_localAudioSource).toList(growable: false),
-        initialIndex: safeIndex,
-        initialPosition: retainedIndex >= 0 ? currentPosition : Duration.zero,
-      );
-    }
 
-    _localQueueIds = nextIds;
-    final retainedIndex = currentTrackId == null
-        ? -1
-        : nextIds.indexOf(currentTrackId);
-    if (retainedIndex >= 0) {
-      await _player.seek(currentPosition, index: retainedIndex);
-    } else {
-      final safeIndex = preferredIndex.clamp(0, tracks.length - 1).toInt();
-      await _player.seek(Duration.zero, index: safeIndex);
-    }
-    await _applyPlaybackOptions();
-    if (shouldKeepPlaying && !_player.playing) {
-      _startPlayback(_playbackGeneration);
-    } else if (!shouldKeepPlaying && _player.playing) {
-      await _player.pause();
-    }
+        final nextIds = desired
+            .map((track) => track.id)
+            .toList(growable: false);
+        if (_sameQueue(nextIds, _localQueueIds) &&
+            _player.sequence.length == desired.length) {
+          return;
+        }
+
+        final shouldKeepPlaying =
+            _snapshot.status == PlayerStatus.playing ||
+            (_snapshot.status == PlayerStatus.loading && _player.playing);
+        final currentTrackId = _snapshot.trackId;
+        final currentPosition = _player.position;
+        final canUpdateIncrementally =
+            _localQueueIds.isNotEmpty &&
+            _player.sequence.length == _localQueueIds.length;
+
+        if (canUpdateIncrementally) {
+          final workingIds = List<String>.of(_localQueueIds);
+          for (var index = 0; index < nextIds.length; index++) {
+            final desiredId = nextIds[index];
+            if (index < workingIds.length && workingIds[index] == desiredId) {
+              continue;
+            }
+
+            final existingIndex = workingIds.indexOf(desiredId, index + 1);
+            if (existingIndex >= 0) {
+              await _player.moveAudioSource(existingIndex, index);
+              if (!isCurrent()) {
+                return;
+              }
+              final moved = workingIds.removeAt(existingIndex);
+              workingIds.insert(index, moved);
+            } else {
+              await _player.insertAudioSource(
+                index,
+                _localAudioSource(desired[index]),
+              );
+              if (!isCurrent()) {
+                return;
+              }
+              workingIds.insert(index, desiredId);
+            }
+          }
+          while (workingIds.length > nextIds.length) {
+            await _player.removeAudioSourceAt(workingIds.length - 1);
+            if (!isCurrent()) {
+              return;
+            }
+            workingIds.removeLast();
+          }
+        } else {
+          final retainedIndex = currentTrackId == null
+              ? -1
+              : nextIds.indexOf(currentTrackId);
+          final safeIndex = retainedIndex >= 0
+              ? retainedIndex
+              : preferredIndex.clamp(0, desired.length - 1).toInt();
+          await _player.setAudioSources(
+            desired.map(_localAudioSource).toList(growable: false),
+            initialIndex: safeIndex,
+            initialPosition: retainedIndex >= 0
+                ? currentPosition
+                : Duration.zero,
+          );
+          if (!isCurrent()) {
+            return;
+          }
+        }
+
+        if (!isCurrent()) {
+          return;
+        }
+        _localQueueIds = nextIds;
+
+        final retainedIndex = currentTrackId == null
+            ? -1
+            : nextIds.indexOf(currentTrackId);
+        if (retainedIndex >= 0) {
+          await _player.seek(currentPosition, index: retainedIndex);
+        } else {
+          final safeIndex = preferredIndex.clamp(0, desired.length - 1).toInt();
+          await _player.seek(Duration.zero, index: safeIndex);
+        }
+        if (!isCurrent()) {
+          return;
+        }
+        await _applyPlaybackOptions();
+        if (!isCurrent()) {
+          return;
+        }
+        if (shouldKeepPlaying && !_player.playing) {
+          _startPlayback(generation);
+        } else if (!shouldKeepPlaying && _player.playing) {
+          await _player.pause();
+        }
+      },
+      label: 'replaceLocalQueue',
+      onTimeout: () {
+        if (isCurrent()) {
+          _remoteQueueRevision++;
+        }
+      },
+    );
   }
 
   @override
@@ -577,6 +860,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     final generation = ++_playbackGeneration;
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
+    _cancelActiveQueueOperation();
     await _enqueueQueueMutation(() async {
       if (generation != _playbackGeneration) {
         return;
@@ -584,7 +868,14 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       _remoteQueueSources = const [];
       _remoteHasSingleLogicalItem = false;
       await _player.stop();
-    });
+      if (generation == _playbackGeneration) {
+        // An already-dispatched incremental playlist command may finish after
+        // stop on some backends. Forget the optimistic queue identity so the
+        // next local request performs a full, authoritative replacement.
+        _localQueueIds = const [];
+        _emit(_snapshot.copyWith(status: PlayerStatus.stopped));
+      }
+    }, label: 'stop');
   }
 
   @override
@@ -615,17 +906,27 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
 
   @override
   Future<void> dispose() async {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
     _playbackGeneration++;
     _remoteQueueRevision++;
-    await _remoteQueueMutationTail;
+    _cancelActiveQueueOperation();
     await _positionSubscription.cancel();
     await _durationSubscription.cancel();
     await _volumeSubscription.cancel();
     await _stateSubscription.cancel();
     await _playbackErrorSubscription.cancel();
     await _sequenceStateSubscription.cancel();
-    await _player.dispose();
-    await _snapshotController.close();
+    try {
+      await _runStandaloneWithDeadline(_player.dispose, label: 'dispose');
+    } on TimeoutException {
+      // A native load can wedge during teardown on a broken media stack. The
+      // Dart service still has to release its streams and let shutdown finish.
+    } finally {
+      await _snapshotController.close();
+    }
   }
 
   AudioSource _localAudioSource(LocalTrack track) {
@@ -672,6 +973,12 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       'audio/mpeg' => 'mp3',
       'audio/webm' => 'webm',
       'audio/ogg' => 'ogg',
+      'audio/opus' => 'opus',
+      'audio/flac' || 'audio/x-flac' => 'flac',
+      'audio/3gpp' || 'video/3gpp' => '3gp',
+      'application/vnd.apple.mpegurl' ||
+      'application/x-mpegurl' ||
+      'audio/mpegurl' => 'm3u8',
       'audio/wav' || 'audio/x-wav' => 'wav',
       _ => null,
     };
@@ -679,42 +986,52 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
 
   bool _hasKnownAudioExtension(String path) {
     return RegExp(
-      r'\.(?:m4a|mp4|aac|mp3|webm|weba|ogg|oga|opus|wav)$',
+      r'\.(?:m4a|mp4|aac|mp3|webm|weba|ogg|oga|opus|wav|flac|mka|3gp|m3u8)$',
       caseSensitive: false,
     ).hasMatch(path);
   }
 
   MediaItem _remoteMediaItem(RemotePlaybackSource source) {
     final track = source.track;
+    final artworkSource = track.thumbnailUrl?.trim();
     return MediaItem(
       id: track.id.isEmpty ? track.url : track.id,
-      album: 'BStream Music',
+      album: track.album ?? 'BStream Music',
       title: track.title,
       artist: track.artist,
-      artUri: _artUri(track.thumbnailUrl),
+      artUri: _notificationArtUri(artworkSource),
       duration: track.duration,
       extras: {
         'sourceUrl': track.url,
         'isRemote': true,
         'queueEntryId': source.queueEntryId,
+        if (artworkSource != null && artworkSource.isNotEmpty)
+          'displayArtwork': artworkSource,
       },
     );
   }
 
   MediaItem _localMediaItem(LocalTrack track) {
+    final artworkSource = (track.thumbnailPath ?? track.thumbnailUrl)?.trim();
     return MediaItem(
       id: track.id,
-      album: 'BStream Music',
+      album: track.album ?? 'BStream Music',
       title: track.title,
       artist: track.artist,
-      artUri: _artUri(track.thumbnailPath ?? track.thumbnailUrl),
+      artUri: _notificationArtUri(artworkSource),
       duration: track.duration,
       extras: {
         'sourceUrl': track.sourceUrl,
         'isRemote': false,
         'isExternal': track.isExternal,
+        if (artworkSource != null && artworkSource.isNotEmpty)
+          'displayArtwork': artworkSource,
       },
     );
+  }
+
+  Uri? _notificationArtUri(String? source) {
+    return _notificationArtworkService.uriFor(source) ?? _artUri(source);
   }
 
   Uri? _artUri(String? source) {
@@ -794,6 +1111,29 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     _emit(
       _snapshot.copyWith(status: PlayerStatus.failed, errorMessage: message),
     );
+  }
+
+  TrackInfo? _remoteTrackForError(
+    PlayerException error,
+    List<Object?> sequenceTags,
+  ) {
+    final index = error.index;
+    if (index == null || index < 0 || index >= sequenceTags.length) {
+      return null;
+    }
+    final tag = sequenceTags[index];
+    if (tag is! MediaItem || tag.extras?['isRemote'] != true) {
+      return null;
+    }
+    final queueEntryId = tag.extras?['queueEntryId']?.toString();
+    final sourceUrl = tag.extras?['sourceUrl']?.toString();
+    for (final source in _remoteQueueSources) {
+      if ((queueEntryId != null && source.queueEntryId == queueEntryId) ||
+          (sourceUrl != null && source.track.url == sourceUrl)) {
+        return source.track;
+      }
+    }
+    return null;
   }
 
   Future<String> _diagnosticMessage(
@@ -936,6 +1276,9 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   }
 
   void _emit(PlayerSnapshot snapshot) {
+    if (_disposed) {
+      return;
+    }
     _snapshot = snapshot;
     if (!_snapshotController.isClosed) {
       _snapshotController.add(snapshot);
@@ -953,4 +1296,87 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     }
     return true;
   }
+}
+
+/// Returns whether a just_audio failure still belongs to the source represented
+/// by [snapshot]. Errors for a removed or preloaded queue item must not fail the
+/// current song.
+bool justAudioErrorBelongsToSnapshot(
+  PlayerException error, {
+  required List<Object?> sequenceTags,
+  required int? currentIndex,
+  required PlayerSnapshot snapshot,
+}) {
+  final errorIndex = error.index;
+  if (errorIndex == null) {
+    // There is no source identity to distinguish a current failure from a
+    // delayed event emitted by a replaced native source. Never relabel it as
+    // the current song. Current load and play failures remain observable from
+    // their generation-bound setAudioSources/play Futures.
+    return false;
+  }
+  if (errorIndex < 0 || errorIndex >= sequenceTags.length) {
+    return false;
+  }
+
+  final tag = sequenceTags[errorIndex];
+  if (tag is! MediaItem) {
+    return currentIndex == errorIndex;
+  }
+
+  final snapshotQueueEntryId = snapshot.queueEntryId?.trim();
+  final sourceQueueEntryId = tag.extras?['queueEntryId']?.toString().trim();
+  if (snapshotQueueEntryId != null &&
+      snapshotQueueEntryId.isNotEmpty &&
+      sourceQueueEntryId != null &&
+      sourceQueueEntryId.isNotEmpty) {
+    return snapshotQueueEntryId == sourceQueueEntryId;
+  }
+
+  final snapshotSourceUrl = snapshot.sourceUrl?.trim();
+  final sourceUrl = tag.extras?['sourceUrl']?.toString().trim();
+  if (snapshotSourceUrl != null &&
+      snapshotSourceUrl.isNotEmpty &&
+      sourceUrl != null &&
+      sourceUrl.isNotEmpty) {
+    return snapshotSourceUrl == sourceUrl;
+  }
+
+  final snapshotTrackId = snapshot.trackId?.trim();
+  final sourceTrackId = tag.id.trim();
+  if (snapshotTrackId != null &&
+      snapshotTrackId.isNotEmpty &&
+      sourceTrackId.isNotEmpty) {
+    return snapshotTrackId == sourceTrackId;
+  }
+  return currentIndex == errorIndex;
+}
+
+class _JustAudioOperationLease {
+  _JustAudioOperationLease({required this.isSourceLoad});
+
+  final bool isSourceLoad;
+  final Completer<void> _cancellation = Completer<void>();
+  bool _isCancelled = false;
+
+  Future<void> get cancelled => _cancellation.future;
+  bool get isCancelled => _isCancelled;
+
+  void cancel() {
+    if (!_cancellation.isCompleted) {
+      _isCancelled = true;
+      _cancellation.complete();
+    }
+  }
+}
+
+/// Keeps Flutter player surfaces on the original artwork while Android uses a
+/// square derivative in [MediaItem.artUri]. Old queue items without the extra
+/// retain the legacy fallback.
+String? displayArtworkSourceForMediaItem(MediaItem item) {
+  final displaySource = item.extras?['displayArtwork']?.toString().trim();
+  if (displaySource != null && displaySource.isNotEmpty) {
+    return displaySource;
+  }
+  return item.artUri?.toString();
 }

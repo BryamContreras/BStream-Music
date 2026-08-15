@@ -10,6 +10,7 @@ import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
+import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
@@ -40,6 +41,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       playerControllerProvider.select((player) {
         final snapshot =
             player.value ?? const PlayerSnapshot(status: PlayerStatus.idle);
+        final rawError = player.error ?? snapshot.errorMessage;
         return (
           status: snapshot.status,
           title: snapshot.title,
@@ -55,8 +57,13 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           isExternal: snapshot.isExternal,
           shuffleEnabled: snapshot.shuffleEnabled,
           repeatMode: snapshot.repeatMode,
-          hasError: player.hasError || snapshot.status == PlayerStatus.failed,
-          errorText: player.error?.toString() ?? snapshot.errorMessage,
+          hasError:
+              player.hasError ||
+              snapshot.status == PlayerStatus.failed ||
+              snapshot.errorMessage?.trim().isNotEmpty == true,
+          errorText: rawError == null
+              ? null
+              : readableAudioStreamError(rawError),
         );
       }),
     );
@@ -167,6 +174,9 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 constraints,
                                 stackedDesktop: stackedDesktop,
                                 wide: wide,
+                                mobile:
+                                    Theme.of(context).platform ==
+                                    TargetPlatform.android,
                                 compactness: verticalCompactness,
                               );
                               final artwork = Center(
@@ -176,11 +186,11 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   isFavorite: isFavorite,
                                 ),
                               );
-                              final gap = lerpDouble(
-                                26,
-                                12,
-                                verticalCompactness,
-                              )!;
+                              final gap =
+                                  Theme.of(context).platform ==
+                                      TargetPlatform.android
+                                  ? 14.0
+                                  : lerpDouble(26, 12, verticalCompactness)!;
                               final maxContentWidth = stackedDesktop
                                   ? showSideQueue
                                         ? constraints.maxWidth
@@ -195,6 +205,8 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                               final controls = _PlayerControls(
                                 snapshot: snapshot,
                                 hasTrack: hasTrack,
+                                isFavorite: isFavorite,
+                                savedTrackId: savedTrackId,
                                 hasError: presentation.hasError,
                                 errorText: presentation.errorText,
                                 compact: !wide || stackedDesktop,
@@ -309,6 +321,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     BoxConstraints constraints, {
     required bool stackedDesktop,
     required bool wide,
+    required bool mobile,
     required double compactness,
   }) {
     late final double regularExtent;
@@ -324,8 +337,11 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           .toDouble();
     } else {
       regularExtent = math
-          .min(constraints.maxWidth - 16, constraints.maxHeight * 0.56)
-          .clamp(210.0, 400.0)
+          .min(
+            constraints.maxWidth - 16,
+            constraints.maxHeight * (mobile ? 0.4 : 0.56),
+          )
+          .clamp(mobile ? 170.0 : 210.0, 400.0)
           .toDouble();
     }
 
@@ -390,8 +406,8 @@ class _PlayerHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final controlColor = AppColors.playbackControlForegroundFor(context);
-    return SizedBox(
-      height: 58,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 58),
       child: Row(
         children: [
           _HeaderIconSlot(
@@ -411,6 +427,7 @@ class _PlayerHeader extends StatelessWidget {
           ),
           Expanded(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
@@ -516,15 +533,15 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                     ),
                     const SizedBox(width: 6),
                     SizedBox.square(
-                      dimension: 24,
+                      dimension: 48,
                       child: IconButton(
                         tooltip: strings.close,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints.tightFor(
-                          width: 24,
-                          height: 24,
+                          width: 48,
+                          height: 48,
                         ),
-                        icon: const Icon(Icons.close_rounded, size: 17),
+                        icon: const Icon(Icons.close_rounded, size: 20),
                         onPressed: onClose,
                       ),
                     ),
@@ -643,6 +660,7 @@ class _PlaybackQueueTile extends StatelessWidget {
                               : SourceImage(
                                   source: entry.thumbnailUrl,
                                   fit: BoxFit.cover,
+                                  cacheWidth: 256,
                                   fallback: const Icon(
                                     Icons.music_note_rounded,
                                     size: 22,
@@ -893,6 +911,8 @@ class _PlayerControls extends ConsumerWidget {
   const _PlayerControls({
     required this.snapshot,
     required this.hasTrack,
+    required this.isFavorite,
+    required this.savedTrackId,
     required this.hasError,
     required this.errorText,
     required this.compact,
@@ -904,6 +924,8 @@ class _PlayerControls extends ConsumerWidget {
 
   final PlayerSnapshot snapshot;
   final bool hasTrack;
+  final bool isFavorite;
+  final String? savedTrackId;
   final bool hasError;
   final String? errorText;
   final bool compact;
@@ -922,20 +944,34 @@ class _PlayerControls extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            key: const ValueKey('player-track-title'),
-            snapshot.title ?? strings.noPlayback,
-            maxLines: compact ? 2 : 3,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              fontSize: lerpDouble(
-                compact ? 28 : 42,
-                compact ? 24 : 34,
-                compactness,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  key: const ValueKey('player-track-title'),
+                  snapshot.title ?? strings.noPlayback,
+                  maxLines: compact ? 2 : 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontSize: lerpDouble(
+                      compact ? 28 : 42,
+                      compact ? 24 : 34,
+                      compactness,
+                    ),
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.playbackTitleFor(context),
+                  ),
+                ),
               ),
-              fontWeight: FontWeight.w900,
-              color: AppColors.playbackTitleFor(context),
-            ),
+              const SizedBox(width: 8),
+              _PlayerFavoriteButton(
+                snapshot: snapshot,
+                isFavorite: isFavorite,
+                savedTrackId: savedTrackId,
+                strings: strings,
+              ),
+            ],
           ),
           SizedBox(height: lerpDouble(6, 4, compactness)),
           Text(
@@ -967,18 +1003,83 @@ class _PlayerControls extends ConsumerWidget {
           ),
           if (hasError) ...[
             SizedBox(height: lerpDouble(18, 10, compactness)),
-            Text(
-              errorText ?? strings.playbackError,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            PlayerErrorMessage(message: errorText ?? strings.playbackError),
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Compact error surface used by the full player.
+///
+/// Keeping it separate also makes the three-line Android error contract easy
+/// to verify without constructing the complete player and its animations.
+class PlayerErrorMessage extends StatelessWidget {
+  const PlayerErrorMessage({required this.message, super.key});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      message,
+      maxLines: 3,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: Theme.of(context).colorScheme.error,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+  }
+}
+
+class _PlayerFavoriteButton extends ConsumerWidget {
+  const _PlayerFavoriteButton({
+    required this.snapshot,
+    required this.isFavorite,
+    required this.savedTrackId,
+    required this.strings,
+  });
+
+  final PlayerSnapshot snapshot;
+  final bool isFavorite;
+  final String? savedTrackId;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final hasIdentity =
+        (snapshot.trackId?.trim().isNotEmpty ?? false) ||
+        (snapshot.sourceUrl?.trim().isNotEmpty ?? false);
+    final activeColor = Theme.of(context).colorScheme.primary;
+    final inactiveColor = AppColors.playbackSecondaryControlForegroundFor(
+      context,
+    );
+
+    return IconButton(
+      key: const ValueKey('player-favorite-control'),
+      tooltip: isFavorite
+          ? strings.removeFromFavorites
+          : strings.addToFavorites,
+      color: isFavorite ? activeColor : inactiveColor,
+      disabledColor: inactiveColor.withValues(alpha: 0.38),
+      iconSize: 30,
+      icon: Icon(
+        isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+      ),
+      onPressed: !snapshot.isExternal && hasIdentity
+          ? () => unawaited(
+              _toggleFavoriteForSnapshot(
+                context: context,
+                ref: ref,
+                snapshot: snapshot,
+                isFavorite: isFavorite,
+                savedTrackId: savedTrackId,
+                strings: strings,
+              ),
+            )
+          : null,
     );
   }
 }
@@ -1014,12 +1115,14 @@ class _PlaybackButtons extends ConsumerWidget {
         final width = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : MediaQuery.sizeOf(context).width;
+        final mobile = Theme.of(context).platform == TargetPlatform.android;
         final narrow = width < 360;
         final roomy = width >= 420 || !compact;
-        final regularSmallButtonSize = roomy
-            ? (width * 0.105).clamp(48.0, compact ? 52.0 : 56.0)
-            : (width * 0.105).clamp(34.0, 40.0);
-        final compactSmallButtonSize = (width * 0.09).clamp(42.0, 46.0);
+        final regularSmallButtonSize = (width * 0.105).clamp(
+          48.0,
+          compact ? 52.0 : 56.0,
+        );
+        final compactSmallButtonSize = (width * 0.09).clamp(48.0, 50.0);
         final smallButtonSize = lerpDouble(
           regularSmallButtonSize,
           compactSmallButtonSize,
@@ -1029,7 +1132,7 @@ class _PlaybackButtons extends ConsumerWidget {
           roomy ? 56.0 : 44.0,
           compact ? 62.0 : 72.0,
         );
-        final compactSideButtonSize = (width * 0.115).clamp(46.0, 54.0);
+        final compactSideButtonSize = (width * 0.115).clamp(48.0, 54.0);
         final sideButtonSize = lerpDouble(
           regularSideButtonSize,
           compactSideButtonSize,
@@ -1046,18 +1149,18 @@ class _PlaybackButtons extends ConsumerWidget {
           compactness,
         )!;
         final secondarySideButtonSize = (sideButtonSize - 4.0).clamp(
-          42.0,
+          48.0,
           66.0,
         );
-        final secondarySideIconSize = (secondarySideButtonSize * 0.84).clamp(
-          30.0,
+        final secondarySideIconSize = (secondarySideButtonSize * 0.72).clamp(
+          28.0,
           50.0,
         );
         final secondaryControlSize = narrow
-            ? (smallButtonSize - 4.0).clamp(30.0, 40.0)
+            ? smallButtonSize.clamp(48.0, 50.0)
             : secondarySideButtonSize;
         final secondaryControlIconSize = narrow
-            ? (secondaryControlSize * 0.82).clamp(24.0, 34.0)
+            ? (secondaryControlSize * 0.68).clamp(28.0, 34.0)
             : secondarySideIconSize;
         final largerSideButtonSize = (sideButtonSize + 4.0).clamp(52.0, 76.0);
         final largerSideIconSize = (largerSideButtonSize * 0.84).clamp(
@@ -1072,18 +1175,33 @@ class _PlaybackButtons extends ConsumerWidget {
           42.0,
           68.0,
         );
-        final centerGap = narrow ? 4.0 : (width * 0.034).clamp(9.0, 32.0);
+        final centerGap = narrow ? 2.0 : (width * 0.034).clamp(9.0, 32.0);
         final outerGap = narrow ? 6.0 : (width * 0.075).clamp(16.0, 60.0);
-        final edgeGap = narrow ? 3.0 : (width * 0.018).clamp(8.0, 16.0);
-        final lyricsButton = _ControlButton(
-          key: const ValueKey('player-lyrics-control'),
-          size: secondaryControlSize,
-          tooltip: strings.lyrics,
-          iconSize: secondaryControlIconSize,
-          color: controlColor,
-          icon: Icons.lyrics_rounded,
-          onPressed: hasTrack ? onOpenLyrics : null,
-        );
+        final edgeGap = narrow ? 0.0 : (width * 0.018).clamp(8.0, 16.0);
+        final mobileLabelWidth = (width - edgeGap) / 2;
+        const mobileLabelHeight = 48.0;
+        final mobileSecondaryGap = narrow ? 8.0 : 12.0;
+        final lyricsButton = mobile
+            ? _LabeledControlButton(
+                key: const ValueKey('player-lyrics-control'),
+                width: mobileLabelWidth,
+                height: mobileLabelHeight,
+                tooltip: strings.lyrics,
+                label: strings.lyrics,
+                iconSize: 20,
+                color: controlColor,
+                icon: Icons.lyrics_rounded,
+                onPressed: hasTrack ? onOpenLyrics : null,
+              )
+            : _ControlButton(
+                key: const ValueKey('player-lyrics-control'),
+                size: secondaryControlSize,
+                tooltip: strings.lyrics,
+                iconSize: secondaryControlIconSize,
+                color: controlColor,
+                icon: Icons.lyrics_rounded,
+                onPressed: hasTrack ? onOpenLyrics : null,
+              );
         final shuffleButton = _ControlButton(
           key: const ValueKey('player-shuffle-control'),
           size: secondaryControlSize,
@@ -1122,94 +1240,117 @@ class _PlaybackButtons extends ConsumerWidget {
         final volumeButton = _VolumeButton(
           key: const ValueKey('player-volume-control'),
           snapshot: snapshot,
-          size: secondaryControlSize,
+          size: mobile ? mobileLabelHeight : secondaryControlSize,
+          width: mobile ? mobileLabelWidth : null,
+          label: mobile ? strings.volume : null,
           tooltip: strings.volume,
-          iconSize: secondaryControlIconSize,
+          iconSize: mobile ? 20 : secondaryControlIconSize,
           color: controlColor,
         );
-
-        return Center(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                lyricsButton,
-                SizedBox(width: edgeGap),
-                shuffleButton,
-                SizedBox(width: outerGap),
-                _ControlButton(
-                  size: largerSideButtonSize,
-                  tooltip: strings.previous,
-                  iconSize: largerSideIconSize,
-                  color: controlColor,
-                  icon: Icons.skip_previous_rounded,
-                  onPressed: hasTrack
-                      ? () => ref
-                            .read(playerControllerProvider.notifier)
-                            .playPrevious()
-                      : null,
-                ),
-                SizedBox(width: centerGap),
-                SizedBox(
-                  width: enlargedPlaySize,
-                  height: enlargedPlaySize,
-                  child: IconButton.filled(
-                    key: const ValueKey('player-primary-control'),
-                    tooltip: isPlaying ? strings.pause : strings.play,
-                    style: IconButton.styleFrom(
-                      backgroundColor: AppColors.playbackPrimaryBackgroundFor(
-                        context,
-                      ),
-                      foregroundColor: AppColors.playbackPrimaryForegroundFor(
-                        context,
-                      ),
-                      disabledBackgroundColor:
-                          AppColors.playbackPrimaryDisabledBackgroundFor(
-                            context,
-                          ),
-                      disabledForegroundColor:
-                          AppColors.playbackPrimaryDisabledForegroundFor(
-                            context,
-                          ),
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: BoxConstraints.tight(
-                      Size.square(enlargedPlaySize),
-                    ),
-                    iconSize: enlargedPlayIconSize,
-                    icon: Icon(
-                      isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                    ),
-                    onPressed: hasTrack
-                        ? () => ref
-                              .read(playerControllerProvider.notifier)
-                              .togglePlayPause()
-                        : null,
-                  ),
-                ),
-                SizedBox(width: centerGap),
-                _ControlButton(
-                  size: largerSideButtonSize,
-                  tooltip: strings.next,
-                  iconSize: largerSideIconSize,
-                  color: controlColor,
-                  icon: Icons.skip_next_rounded,
-                  onPressed: hasTrack
-                      ? () => ref
-                            .read(playerControllerProvider.notifier)
-                            .playNext()
-                      : null,
-                ),
-                SizedBox(width: outerGap),
-                repeatButton,
-                SizedBox(width: edgeGap),
-                volumeButton,
-              ],
+        final previousButton = _ControlButton(
+          size: largerSideButtonSize,
+          tooltip: strings.previous,
+          iconSize: largerSideIconSize,
+          color: controlColor,
+          icon: Icons.skip_previous_rounded,
+          onPressed: hasTrack
+              ? () => ref.read(playerControllerProvider.notifier).playPrevious()
+              : null,
+        );
+        final primaryButton = SizedBox(
+          width: enlargedPlaySize,
+          height: enlargedPlaySize,
+          child: IconButton.filled(
+            key: const ValueKey('player-primary-control'),
+            tooltip: isPlaying ? strings.pause : strings.play,
+            style: IconButton.styleFrom(
+              backgroundColor: AppColors.playbackPrimaryBackgroundFor(context),
+              foregroundColor: AppColors.playbackPrimaryForegroundFor(context),
+              disabledBackgroundColor:
+                  AppColors.playbackPrimaryDisabledBackgroundFor(context),
+              disabledForegroundColor:
+                  AppColors.playbackPrimaryDisabledForegroundFor(context),
             ),
+            padding: EdgeInsets.zero,
+            constraints: BoxConstraints.tight(Size.square(enlargedPlaySize)),
+            iconSize: enlargedPlayIconSize,
+            icon: Icon(
+              isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            ),
+            onPressed: hasTrack
+                ? () => ref
+                      .read(playerControllerProvider.notifier)
+                      .togglePlayPause()
+                : null,
           ),
+        );
+        final nextButton = _ControlButton(
+          size: largerSideButtonSize,
+          tooltip: strings.next,
+          iconSize: largerSideIconSize,
+          color: controlColor,
+          icon: Icons.skip_next_rounded,
+          onPressed: hasTrack
+              ? () => ref.read(playerControllerProvider.notifier).playNext()
+              : null,
+        );
+        final centerButtons = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            previousButton,
+            SizedBox(width: centerGap),
+            primaryButton,
+            SizedBox(width: centerGap),
+            nextButton,
+          ],
+        );
+        final controls = mobile
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        shuffleButton,
+                        SizedBox(width: edgeGap),
+                        centerButtons,
+                        SizedBox(width: edgeGap),
+                        repeatButton,
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: mobileSecondaryGap),
+                  Row(
+                    children: [
+                      Expanded(child: lyricsButton),
+                      SizedBox(width: edgeGap),
+                      Expanded(child: volumeButton),
+                    ],
+                  ),
+                ],
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  lyricsButton,
+                  SizedBox(width: edgeGap),
+                  shuffleButton,
+                  SizedBox(width: outerGap),
+                  centerButtons,
+                  SizedBox(width: outerGap),
+                  repeatButton,
+                  SizedBox(width: edgeGap),
+                  volumeButton,
+                ],
+              );
+
+        if (mobile) {
+          return controls;
+        }
+        return Center(
+          child: FittedBox(fit: BoxFit.scaleDown, child: controls),
         );
       },
     );
@@ -1223,6 +1364,8 @@ class _VolumeButton extends ConsumerStatefulWidget {
     required this.tooltip,
     required this.iconSize,
     required this.color,
+    this.width,
+    this.label,
     super.key,
   });
 
@@ -1231,6 +1374,8 @@ class _VolumeButton extends ConsumerStatefulWidget {
   final String tooltip;
   final double iconSize;
   final Color color;
+  final double? width;
+  final String? label;
 
   @override
   ConsumerState<_VolumeButton> createState() => _VolumeButtonState();
@@ -1276,14 +1421,25 @@ class _VolumeButtonState extends ConsumerState<_VolumeButton> {
       },
       child: CompositedTransformTarget(
         link: _layerLink,
-        child: _ControlButton(
-          size: widget.size,
-          tooltip: widget.tooltip,
-          iconSize: widget.iconSize,
-          color: widget.color,
-          icon: _volumeIcon(widget.snapshot.volume),
-          onPressed: _togglePopover,
-        ),
+        child: widget.label == null
+            ? _ControlButton(
+                size: widget.size,
+                tooltip: widget.tooltip,
+                iconSize: widget.iconSize,
+                color: widget.color,
+                icon: _volumeIcon(widget.snapshot.volume),
+                onPressed: _togglePopover,
+              )
+            : _LabeledControlButton(
+                width: widget.width ?? widget.size,
+                height: widget.size,
+                tooltip: widget.tooltip,
+                label: widget.label!,
+                iconSize: widget.iconSize,
+                color: widget.color,
+                icon: _volumeIcon(widget.snapshot.volume),
+                onPressed: _togglePopover,
+              ),
       ),
     );
   }
@@ -1345,15 +1501,15 @@ class _VolumePopover extends ConsumerWidget {
                   label: strings.close,
                   button: true,
                   child: SizedBox.square(
-                    dimension: 28,
+                    dimension: 48,
                     child: IconButton(
                       color: menuIcon,
                       icon: const Icon(Icons.close_rounded),
                       iconSize: 18,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints.tightFor(
-                        width: 28,
-                        height: 28,
+                        width: 48,
+                        height: 48,
                       ),
                       onPressed: onClose,
                     ),
@@ -1461,6 +1617,58 @@ class _ControlButton extends StatelessWidget {
   }
 }
 
+class _LabeledControlButton extends StatelessWidget {
+  const _LabeledControlButton({
+    required this.width,
+    required this.height,
+    required this.tooltip,
+    required this.label,
+    required this.iconSize,
+    required this.color,
+    required this.icon,
+    required this.onPressed,
+    super.key,
+  });
+
+  final double width;
+  final double height;
+  final String tooltip;
+  final String label;
+  final double iconSize;
+  final Color color;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Tooltip(
+        message: tooltip,
+        child: TextButton.icon(
+          style: TextButton.styleFrom(
+            foregroundColor: color,
+            disabledForegroundColor: color.withValues(alpha: 0.38),
+            backgroundColor: color.withValues(alpha: 0.1),
+            disabledBackgroundColor: color.withValues(alpha: 0.05),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            shape: const StadiumBorder(),
+          ),
+          onPressed: onPressed,
+          icon: Icon(icon, size: iconSize),
+          label: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PlayerMenu extends ConsumerWidget {
   const _PlayerMenu({
     required this.snapshot,
@@ -1492,7 +1700,16 @@ class _PlayerMenu extends ConsumerWidget {
           case 'playlist':
             unawaited(_showPlaylistPicker(context, ref));
           case 'favorite':
-            unawaited(_toggleFavorite(context, ref));
+            unawaited(
+              _toggleFavoriteForSnapshot(
+                context: context,
+                ref: ref,
+                snapshot: snapshot,
+                isFavorite: isFavorite,
+                savedTrackId: savedTrackId,
+                strings: strings,
+              ),
+            );
         }
       },
       itemBuilder: (context) => [
@@ -1534,8 +1751,12 @@ class _PlayerMenu extends ConsumerWidget {
           child: Row(
             children: [
               Icon(
-                isFavorite ? Icons.star_rounded : Icons.star_border_rounded,
-                color: isFavorite ? const Color(0xFFFFD54F) : menuIconColor,
+                isFavorite
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                color: isFavorite
+                    ? Theme.of(context).colorScheme.primary
+                    : menuIconColor,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1562,63 +1783,8 @@ class _PlayerMenu extends ConsumerWidget {
 
     ref
         .read(downloadControllerProvider.notifier)
-        .downloadAudio(_trackInfoFromSnapshot(sourceUrl));
+        .downloadAudio(_trackInfoFromSnapshot(sourceUrl, ref));
     onOpenSearch?.call();
-  }
-
-  Future<void> _toggleFavorite(BuildContext context, WidgetRef ref) async {
-    var trackId = savedTrackId;
-    final currentTrackId = snapshot.trackId?.trim();
-
-    if (trackId == null && !snapshot.isRemote) {
-      trackId = currentTrackId;
-    }
-    if (trackId == null && isFavorite) {
-      trackId = currentTrackId;
-    }
-
-    if (trackId == null || trackId.isEmpty) {
-      final sourceUrl = snapshot.sourceUrl?.trim();
-      if (sourceUrl == null || sourceUrl.isEmpty) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(strings.downloading)));
-      try {
-        final localTrack = await ref
-            .read(downloadControllerProvider.notifier)
-            .downloadAudioForLibrary(_trackInfoFromSnapshot(sourceUrl));
-        trackId = localTrack.id;
-      } catch (error) {
-        if (!context.mounted) {
-          return;
-        }
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text(error.toString())));
-        return;
-      }
-    }
-
-    final isNowFavorite = await ref
-        .read(playlistsControllerProvider.notifier)
-        .toggleFavorite(trackId);
-    if (!context.mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            isNowFavorite
-                ? strings.addedToFavorites
-                : strings.removedFromFavorites,
-          ),
-        ),
-      );
   }
 
   Future<void> _showPlaylistPicker(BuildContext context, WidgetRef ref) async {
@@ -1667,13 +1833,13 @@ class _PlayerMenu extends ConsumerWidget {
       if (sourceUrl == null || sourceUrl.trim().isEmpty) {
         return;
       }
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(strings.downloading)));
       try {
         final localTrack = await ref
             .read(downloadControllerProvider.notifier)
-            .downloadAudioForLibrary(_trackInfoFromSnapshot(sourceUrl));
+            .downloadAudioForLibrary(
+              _trackInfoFromSnapshot(sourceUrl, ref),
+              onDownloadStarted: () => _showDownloadingMessage(context),
+            );
         trackId = localTrack.id;
       } catch (error) {
         if (!context.mounted) {
@@ -1700,7 +1866,22 @@ class _PlayerMenu extends ConsumerWidget {
     ).showSnackBar(SnackBar(content: Text(strings.songAddedToPlaylist)));
   }
 
-  TrackInfo _trackInfoFromSnapshot(String sourceUrl) {
+  void _showDownloadingMessage(BuildContext context) {
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(strings.downloading)));
+  }
+
+  TrackInfo _trackInfoFromSnapshot(String sourceUrl, WidgetRef ref) {
+    final canonical = ref
+        .read(playerControllerProvider.notifier)
+        .currentRemoteTrackFor(sourceUrl);
+    if (canonical != null) {
+      return canonical;
+    }
     return TrackInfo(
       id: snapshot.trackId ?? sourceUrl,
       title: snapshot.title ?? strings.noTitle,
@@ -1708,8 +1889,90 @@ class _PlayerMenu extends ConsumerWidget {
       url: sourceUrl,
       thumbnailUrl: snapshot.thumbnailUrl,
       duration: snapshot.duration,
+      album: snapshot.album,
     );
   }
+}
+
+Future<void> _toggleFavoriteForSnapshot({
+  required BuildContext context,
+  required WidgetRef ref,
+  required PlayerSnapshot snapshot,
+  required bool isFavorite,
+  required String? savedTrackId,
+  required AppStrings strings,
+}) async {
+  var trackId = savedTrackId;
+  final currentTrackId = snapshot.trackId?.trim();
+
+  if (trackId == null && !snapshot.isRemote) {
+    trackId = currentTrackId;
+  }
+  if (trackId == null && isFavorite) {
+    trackId = currentTrackId;
+  }
+
+  if (trackId == null || trackId.isEmpty) {
+    final sourceUrl = snapshot.sourceUrl?.trim();
+    if (sourceUrl == null || sourceUrl.isEmpty) {
+      return;
+    }
+
+    try {
+      final canonical = ref
+          .read(playerControllerProvider.notifier)
+          .currentRemoteTrackFor(sourceUrl);
+      final localTrack = await ref
+          .read(downloadControllerProvider.notifier)
+          .downloadAudioForLibrary(
+            canonical ??
+                TrackInfo(
+                  id: snapshot.trackId ?? sourceUrl,
+                  title: snapshot.title ?? strings.noTitle,
+                  artist: snapshot.artist ?? strings.unknownArtist,
+                  url: sourceUrl,
+                  thumbnailUrl: snapshot.thumbnailUrl,
+                  duration: snapshot.duration,
+                  album: snapshot.album,
+                ),
+            onDownloadStarted: () {
+              if (!context.mounted) {
+                return;
+              }
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(content: Text(strings.downloading)));
+            },
+          );
+      trackId = localTrack.id;
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(error.toString())));
+      return;
+    }
+  }
+
+  final isNowFavorite = await ref
+      .read(playlistsControllerProvider.notifier)
+      .toggleFavorite(trackId);
+  if (!context.mounted) {
+    return;
+  }
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(
+          isNowFavorite
+              ? strings.addedToFavorites
+              : strings.removedFromFavorites,
+        ),
+      ),
+    );
 }
 
 String? _savedTrackIdForSnapshot(
@@ -1756,37 +2019,69 @@ class _Timeline extends ConsumerWidget {
     final position = timeline.position;
     final duration = timeline.duration;
     final progressColor = AppColors.downloadAccentFor(context);
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final positionLabel = formatDuration(position);
+    final durationLabel = formatDuration(duration);
+    final labelStyle = DefaultTextStyle.of(context).style.merge(
+      TextStyle(
+        fontWeight: FontWeight.w900,
+        color: AppColors.contentSubtitleFor(context),
+      ),
+    );
+    final textDirection = Directionality.of(context);
+    final textScaler = MediaQuery.textScalerOf(context);
+
+    double labelWidth(String label) {
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: labelStyle),
+        textDirection: textDirection,
+        textScaler: textScaler,
+        maxLines: 1,
+      )..layout();
+      return painter.width;
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stackLabels =
+            labelWidth(positionLabel) + labelWidth(durationLabel) + 16 >
+            constraints.maxWidth;
+        final labels = stackLabels
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(positionLabel, style: labelStyle),
+                  ),
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: Text(durationLabel, style: labelStyle),
+                  ),
+                ],
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(positionLabel, style: labelStyle),
+                  Text(durationLabel, style: labelStyle),
+                ],
+              );
+
+        return Column(
           children: [
-            Text(
-              formatDuration(position),
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: AppColors.contentSubtitleFor(context),
-              ),
-            ),
-            Text(
-              formatDuration(duration),
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: AppColors.contentSubtitleFor(context),
-              ),
+            labels,
+            const SizedBox(height: 6),
+            _WavySeekBar(
+              position: position,
+              duration: duration,
+              isPlaying: timeline.isPlaying,
+              waveColor: progressColor,
+              onSeek: (next) =>
+                  ref.read(playerControllerProvider.notifier).seek(next),
             ),
           ],
-        ),
-        const SizedBox(height: 6),
-        _WavySeekBar(
-          position: position,
-          duration: duration,
-          isPlaying: timeline.isPlaying,
-          waveColor: progressColor,
-          onSeek: (next) =>
-              ref.read(playerControllerProvider.notifier).seek(next),
-        ),
-      ],
+        );
+      },
     );
   }
 }
@@ -1919,7 +2214,7 @@ class _WavySeekBarState extends State<_WavySeekBar>
                 seekFromDx(details.localPosition.dx),
             child: SizedBox(
               width: double.infinity,
-              height: 38,
+              height: 48,
               child: TweenAnimationBuilder<Color?>(
                 key: const ValueKey('player-progress-color-animation'),
                 tween: ColorTween(end: widget.waveColor),

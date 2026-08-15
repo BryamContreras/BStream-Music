@@ -9,6 +9,7 @@ import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
 import 'features/music/presentation/pages/home_page.dart';
 import 'features/music/presentation/providers/music_providers.dart';
+import 'services/player/notification_artwork_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +20,10 @@ Future<void> main() async {
   imageCache.maximumSize = 100;
   imageCache.maximumSizeBytes = 48 * 1024 * 1024;
   if (AppPlatform.isAndroid) {
+    // Bind the lightweight loopback endpoint before the first queue is built.
+    // Artwork download/cropping remains deferred until Android requests it,
+    // so playback preparation never waits for image work.
+    await NotificationArtworkService.instance.initialize();
     await JustAudioBackground.init(
       androidNotificationChannelId: 'com.bstream.bstream_music.audio',
       androidNotificationChannelName: 'BStream Music',

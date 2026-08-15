@@ -40,12 +40,14 @@ class DesktopMediaQueueItem {
     required this.id,
     required this.title,
     required this.artist,
+    this.album,
     this.thumbnailUrl,
   });
 
   final String id;
   final String title;
   final String artist;
+  final String? album;
   final String? thumbnailUrl;
 }
 
@@ -61,7 +63,7 @@ class DesktopMediaSessionState {
   final int currentIndex;
 
   String get queueKey =>
-      '$currentIndex:${Object.hashAll(queue.map((item) => Object.hash(item.id, item.title, item.artist, item.thumbnailUrl)))}';
+      '$currentIndex:${Object.hashAll(queue.map((item) => Object.hash(item.id, item.title, item.artist, item.album, item.thumbnailUrl)))}';
 
   bool get hasPrevious => queue.length > 1 && currentIndex >= 0;
 

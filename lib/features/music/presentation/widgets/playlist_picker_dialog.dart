@@ -1,9 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
+import 'source_image.dart';
 
 class PlaylistPickerDialog extends StatelessWidget {
   const PlaylistPickerDialog({
@@ -24,14 +27,23 @@ class PlaylistPickerDialog extends StatelessWidget {
         .where((playlist) => !playlist.isFavorites)
         .toList(growable: false);
 
-    return SimpleDialog(
+    return AlertDialog(
       title: Text(
         title,
         style: TextStyle(color: AppColors.contentHeadingFor(context)),
       ),
-      children: selectablePlaylists
-          .map(
-            (playlist) => SimpleDialogOption(
+      contentPadding: const EdgeInsets.fromLTRB(4, 8, 4, 16),
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 420,
+          maxHeight: math.min(480, MediaQuery.sizeOf(context).height * 0.65),
+        ),
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: selectablePlaylists.length,
+          itemBuilder: (context, index) {
+            final playlist = selectablePlaylists[index];
+            return SimpleDialogOption(
               onPressed: () => Navigator.of(context).pop(playlist.id),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
               child: _PlaylistOption(
@@ -41,9 +53,10 @@ class PlaylistPickerDialog extends StatelessWidget {
                   tracksById,
                 ),
               ),
-            ),
-          )
-          .toList(growable: false),
+            );
+          },
+        ),
+      ),
     );
   }
 }
@@ -139,23 +152,10 @@ class _PlaylistOptionImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (isNetworkImageSource(source)) {
-      return Image.network(
-        source,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => const _PlaylistOptionFallback(),
-      );
-    }
-
-    final file = imageFileFromSource(source);
-    if (file == null || !file.existsSync()) {
-      return const _PlaylistOptionFallback();
-    }
-
-    return Image.file(
-      file,
-      fit: BoxFit.cover,
-      errorBuilder: (_, _, _) => const _PlaylistOptionFallback(),
+    return SourceImage(
+      source: source,
+      cacheWidth: 256,
+      fallback: const _PlaylistOptionFallback(),
     );
   }
 }
@@ -211,7 +211,7 @@ String? _trackThumbnailSource(LocalTrack track) {
   }
 
   final file = imageFileFromSource(normalized);
-  if (file == null || !file.existsSync()) {
+  if (file == null) {
     return null;
   }
   return file.path;

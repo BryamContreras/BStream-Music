@@ -1,5 +1,6 @@
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/features/music/presentation/providers/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,11 +15,53 @@ void main() {
     expect(AppAccent.fromCode('green'), AppAccent.green);
   });
 
-  test('expanded palette exposes twelve persistent accent codes', () {
-    expect(AppAccent.values, hasLength(12));
+  test('expanded palette exposes eighteen persistent accent codes', () {
+    expect(AppAccent.values, hasLength(18));
     expect(AppAccent.fromCode('cyan'), AppAccent.cyan);
     expect(AppAccent.fromCode('indigo'), AppAccent.indigo);
     expect(AppAccent.fromCode('lime'), AppAccent.lime);
+    expect(AppAccent.fromCode('mint'), AppAccent.mint);
+    expect(AppAccent.fromCode('magenta'), AppAccent.magenta);
+    expect(AppAccent.fromCode('coral'), AppAccent.coral);
+    expect(AppAccent.fromCode('brown'), AppAccent.brown);
+    expect(AppAccent.fromCode('amber'), AppAccent.brown);
+    expect(AppAccent.fromCode('lavender'), AppAccent.lavender);
+    expect(AppAccent.fromCode('ocean'), AppAccent.ocean);
+    expect(
+      AppAccent.values.map((accent) => accent.code).toSet(),
+      hasLength(AppAccent.values.length),
+    );
+    expect(
+      AppAccent.values.map((accent) => accent.code),
+      isNot(contains('amber')),
+    );
+  });
+
+  test('new accent palettes keep their curated colors and localized names', () {
+    expect(AppAccent.mint.seedColor, const Color(0xFF6EE7B7));
+    expect(AppAccent.mint.darkColor, const Color(0xFF047857));
+    expect(AppAccent.magenta.seedColor, const Color(0xFFD946EF));
+    expect(AppAccent.magenta.darkColor, const Color(0xFF86198F));
+    expect(AppAccent.coral.seedColor, const Color(0xFFFF6F61));
+    expect(AppAccent.coral.darkColor, const Color(0xFFB8322A));
+    expect(AppAccent.brown.seedColor, const Color(0xFF8D6E63));
+    expect(AppAccent.brown.darkColor, const Color(0xFF4E342E));
+    expect(AppAccent.lavender.seedColor, const Color(0xFFC4B5FD));
+    expect(AppAccent.lavender.darkColor, const Color(0xFF6D28D9));
+    expect(AppAccent.ocean.seedColor, const Color(0xFF38BDF8));
+    expect(AppAccent.ocean.darkColor, const Color(0xFF0369A1));
+
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+    expect(spanish.accentLabel(AppAccent.mint), 'Menta');
+    expect(english.accentLabel(AppAccent.mint), 'Mint');
+    expect(spanish.accentLabel(AppAccent.magenta), 'Magenta');
+    expect(english.accentLabel(AppAccent.coral), 'Coral');
+    expect(spanish.accentLabel(AppAccent.brown), 'Marrón');
+    expect(english.accentLabel(AppAccent.brown), 'Brown');
+    expect(english.accentLabel(AppAccent.lavender), 'Lavender');
+    expect(spanish.accentLabel(AppAccent.ocean), 'Océano');
+    expect(english.accentLabel(AppAccent.ocean), 'Ocean');
   });
 
   testWidgets('dark full-player control uses the selected accent', (

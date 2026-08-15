@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.3"
+  #define MyAppVersion "1.2.4"
 #endif
 
 #define MyAppName "BStream Music"
@@ -13,7 +13,8 @@
 [Setup]
 AppId={{8C7C6ED1-4C2B-4BBC-B4EA-7BF40D4A99B7}
 AppName={#MyAppName}
-AppVerName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
@@ -58,6 +59,16 @@ spanish.CreateDesktopShortcut=Crear un acceso directo en el &escritorio
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopShortcut}"; GroupDescription: "{cm:AdditionalShortcuts}"; Flags: unchecked
+
+[InstallDelete]
+; Remove TikTok LIVE Python bridge files left by versions before the Dart client.
+Type: filesandordirs; Name: "{app}\tools\tiktok-live-bridge"
+Type: filesandordirs; Name: "{app}\tools\tiktok_live_bridge"
+Type: files; Name: "{app}\tools\tiktok_live_bridge.exe"
+Type: files; Name: "{app}\tools\tiktok-live-bridge.exe"
+Type: files; Name: "{app}\scripts\tiktok_live_bridge.py"
+Type: files; Name: "{app}\scripts\requirements-tiktok.txt"
+Type: dirifempty; Name: "{app}\scripts"
 
 [Files]
 Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

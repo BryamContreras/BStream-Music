@@ -1,3 +1,5 @@
+import 'track_info.dart';
+
 class LocalTrack {
   const LocalTrack({
     required this.id,
@@ -7,8 +9,13 @@ class LocalTrack {
     required this.addedAt,
     this.sourceUrl,
     this.thumbnailUrl,
+    this.catalogThumbnailUrl,
     this.thumbnailPath,
     this.duration,
+    this.album,
+    this.artists = const [],
+    this.metadataSource = TrackMetadataSource.youtube,
+    this.sourceId,
     this.lastPlayedAt,
     this.lastPlayedPlaylistId,
     this.isExternal = false,
@@ -21,8 +28,13 @@ class LocalTrack {
   final DateTime addedAt;
   final String? sourceUrl;
   final String? thumbnailUrl;
+  final String? catalogThumbnailUrl;
   final String? thumbnailPath;
   final Duration? duration;
+  final String? album;
+  final List<String> artists;
+  final TrackMetadataSource metadataSource;
+  final String? sourceId;
   final DateTime? lastPlayedAt;
   final String? lastPlayedPlaylistId;
 
@@ -37,8 +49,13 @@ class LocalTrack {
     DateTime? addedAt,
     String? sourceUrl,
     String? thumbnailUrl,
+    String? catalogThumbnailUrl,
     String? thumbnailPath,
     Duration? duration,
+    String? album,
+    List<String>? artists,
+    TrackMetadataSource? metadataSource,
+    String? sourceId,
     DateTime? lastPlayedAt,
     String? lastPlayedPlaylistId,
     bool? isExternal,
@@ -51,8 +68,13 @@ class LocalTrack {
       addedAt: addedAt ?? this.addedAt,
       sourceUrl: sourceUrl ?? this.sourceUrl,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      catalogThumbnailUrl: catalogThumbnailUrl ?? this.catalogThumbnailUrl,
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
       duration: duration ?? this.duration,
+      album: album ?? this.album,
+      artists: artists ?? this.artists,
+      metadataSource: metadataSource ?? this.metadataSource,
+      sourceId: sourceId ?? this.sourceId,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
       lastPlayedPlaylistId: lastPlayedPlaylistId ?? this.lastPlayedPlaylistId,
       isExternal: isExternal ?? this.isExternal,

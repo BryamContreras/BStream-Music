@@ -1,4 +1,5 @@
 import 'package:bstream_music/features/music/data/models/track_info_model.dart';
+import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -26,6 +27,33 @@ void main() {
     });
 
     expect(track.artist, 'First Artist, Second Artist');
+  });
+
+  test('round-trips canonical YouTube Music metadata and artist order', () {
+    final encoded = TrackInfoModel(
+      id: 'DlFXDl_ROAM',
+      title: 'Die With A Smile',
+      artist: 'stale scalar value',
+      artists: const ['Lady Gaga', 'Bruno Mars'],
+      album: 'MAYHEM',
+      duration: const Duration(minutes: 4, seconds: 12),
+      thumbnailUrl: 'https://i.ytimg.com/vi/DlFXDl_ROAM/hq720.jpg',
+      catalogThumbnailUrl: 'https://music.example/catalog-artwork.jpg',
+      url: 'https://www.youtube.com/watch?v=DlFXDl_ROAM',
+      metadataSource: TrackMetadataSource.youtubeMusic,
+    ).toJson();
+
+    final track = TrackInfoModel.fromJson(encoded);
+
+    expect(track.artist, 'Lady Gaga, Bruno Mars');
+    expect(track.artists, const ['Lady Gaga', 'Bruno Mars']);
+    expect(track.album, 'MAYHEM');
+    expect(track.duration, const Duration(minutes: 4, seconds: 12));
+    expect(
+      track.catalogThumbnailUrl,
+      'https://music.example/catalog-artwork.jpg',
+    );
+    expect(track.metadataSource, TrackMetadataSource.youtubeMusic);
   });
 
   test('keeps search result webpage URLs out of streamUrl', () {

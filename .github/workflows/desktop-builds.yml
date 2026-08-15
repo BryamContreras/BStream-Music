@@ -140,30 +140,48 @@ jobs:
           flutter clean
           flutter pub get
 
-      - name: Build ARMv8 and x86_64 APKs
+      - name: Build ARMv7, ARMv8, and x86_64 APKs
         run: >-
           flutter build apk
           --release
           --split-per-abi
-          --target-platform android-arm64,android-x64
+          --target-platform android-arm,android-arm64,android-x64
 
       - name: Verify and name Android APKs
         shell: bash
         run: |
           set -euo pipefail
           output="$PWD/build/app/outputs/flutter-apk"
+          arm32="$output/app-armeabi-v7a-release.apk"
           arm64="$output/app-arm64-v8a-release.apk"
           x64="$output/app-x86_64-release.apk"
+          test -f "$arm32"
           test -f "$arm64"
           test -f "$x64"
-          test ! -e "$output/app-armeabi-v7a-release.apk"
 
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           aapt2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
           test -x "$apksigner"
           test -x "$aapt2"
+          "$apksigner" verify --verbose "$arm32"
           "$apksigner" verify --verbose "$arm64"
           "$apksigner" verify --verbose "$x64"
+
+          verify_abi() {
+            apk="$1"
+            abi="$2"
+            entries="$(unzip -Z1 "$apk")"
+            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libflutter.so"
+            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libpython.so"
+            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libpython.zip.so"
+            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libqjs.so"
+            if printf '%s\n' "$entries" |
+              awk -F/ -v expected="$abi" '$1 == "lib" && $2 != expected { print; found=1 } END { exit !found }'
+            then
+              echo "APK contains native libraries for an unexpected ABI: $apk" >&2
+              exit 1
+            fi
+          }
 
           verify_ytdlp() {
             apk="$1"
@@ -181,12 +199,26 @@ jobs:
             test "$actual_version" = "$YT_DLP_VERSION"
             rm -r "$verify_dir"
           }
+          verify_abi "$arm32" "armeabi-v7a"
+          verify_abi "$arm64" "arm64-v8a"
+          verify_abi "$x64" "x86_64"
+          verify_ytdlp "$arm32"
           verify_ytdlp "$arm64"
           verify_ytdlp "$x64"
 
           mkdir -p dist
+          cp "$arm32" "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk"
           cp "$arm64" "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk"
           cp "$x64" "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk"
+
+      - name: Upload Android ARMv7 APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-Android-armeabi-v7a
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-Android-armeabi-v7a.apk
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
 
       - name: Upload Android ARMv8 APK
         uses: actions/upload-artifact@v7
@@ -217,11 +249,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Set up Python for TikTok LIVE bridge
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -282,15 +309,6 @@ jobs:
             --version
           if ($LASTEXITCODE -ne 0) { throw "yt-dlp rejected Deno: $LASTEXITCODE" }
 
-      - name: Build portable TikTok LIVE bridge
-        shell: pwsh
-        run: |
-          $python = (Get-Command python).Source
-          ./scripts/build_tiktok_bridge.ps1 `
-            -Python $python `
-            -Jobs 4 `
-            -Clean
-
       - name: Build Windows release
         run: flutter build windows --release
 
@@ -327,9 +345,9 @@ jobs:
           $bundle = Join-Path $PWD "build/windows/x64/runner/Release"
           $required = @(
             (Join-Path $bundle "bstream_music.exe"),
+            (Join-Path $bundle "THIRD_PARTY_NOTICES.md"),
             (Join-Path $bundle "tools/yt-dlp.exe"),
             (Join-Path $bundle "tools/deno.exe"),
-            (Join-Path $bundle "tools/tiktok-live-bridge/tiktok_live_bridge.exe"),
             (Join-Path $bundle "msvcp140.dll"),
             (Join-Path $bundle "vcruntime140.dll"),
             (Join-Path $bundle "vcruntime140_1.dll")
@@ -337,6 +355,20 @@ jobs:
           foreach ($path in $required) {
             if (!(Test-Path -LiteralPath $path)) {
               throw "Required Windows bundle file is missing: $path"
+            }
+          }
+
+          $obsolete = @(
+            (Join-Path $bundle "tools/tiktok-live-bridge"),
+            (Join-Path $bundle "tools/tiktok_live_bridge"),
+            (Join-Path $bundle "tools/tiktok_live_bridge.exe"),
+            (Join-Path $bundle "tools/tiktok-live-bridge.exe"),
+            (Join-Path $bundle "scripts/tiktok_live_bridge.py"),
+            (Join-Path $bundle "scripts/requirements-tiktok.txt")
+          )
+          foreach ($path in $obsolete) {
+            if (Test-Path -LiteralPath $path) {
+              throw "Obsolete TikTok LIVE Python artifact remains in bundle: $path"
             }
           }
 
@@ -384,9 +416,9 @@ jobs:
 
           $required = @(
             (Join-Path $installDir "bstream_music.exe"),
+            (Join-Path $installDir "THIRD_PARTY_NOTICES.md"),
             (Join-Path $installDir "tools/yt-dlp.exe"),
             (Join-Path $installDir "tools/deno.exe"),
-            (Join-Path $installDir "tools/tiktok-live-bridge/tiktok_live_bridge.exe"),
             (Join-Path $installDir "msvcp140.dll"),
             (Join-Path $installDir "vcruntime140.dll"),
             (Join-Path $installDir "vcruntime140_1.dll")
@@ -394,6 +426,20 @@ jobs:
           foreach ($path in $required) {
             if (!(Test-Path -LiteralPath $path)) {
               throw "Installed file is missing: $path"
+            }
+          }
+
+          $obsolete = @(
+            (Join-Path $installDir "tools/tiktok-live-bridge"),
+            (Join-Path $installDir "tools/tiktok_live_bridge"),
+            (Join-Path $installDir "tools/tiktok_live_bridge.exe"),
+            (Join-Path $installDir "tools/tiktok-live-bridge.exe"),
+            (Join-Path $installDir "scripts/tiktok_live_bridge.py"),
+            (Join-Path $installDir "scripts/requirements-tiktok.txt")
+          )
+          foreach ($path in $obsolete) {
+            if (Test-Path -LiteralPath $path) {
+              throw "Obsolete TikTok LIVE Python artifact remains installed: $path"
             }
           }
 

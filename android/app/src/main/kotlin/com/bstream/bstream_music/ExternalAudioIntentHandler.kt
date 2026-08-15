@@ -414,7 +414,7 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
             "application/x-ogg",
         )
         private val AUDIO_EXTENSIONS = setOf(
-            "aac", "aiff", "alac", "flac", "m4a", "m4b", "mka", "mp3",
+            "3gp", "3gpp", "aac", "aiff", "alac", "flac", "m4a", "m4b", "mka", "mp3",
             "mp4", "oga", "ogg", "opus", "vorbis", "wav", "weba", "webm", "wma",
         )
         private val audioRowComparator = compareBy<AudioRow>(

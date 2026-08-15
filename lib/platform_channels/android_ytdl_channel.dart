@@ -7,6 +7,7 @@ import '../features/music/data/models/track_info_model.dart';
 import '../features/music/domain/entities/download_options.dart';
 import '../features/music/domain/entities/download_result.dart';
 import '../features/music/domain/entities/track_info.dart';
+import '../services/downloader/downloader_service.dart';
 
 class AndroidYtdlChannel {
   AndroidYtdlChannel({
@@ -64,6 +65,27 @@ class AndroidYtdlChannel {
       'url': url,
     });
     return TrackInfoModel.fromMethodChannel(result);
+  }
+
+  Future<ManagedPlaybackResource> prepareManagedPlayback(String url) async {
+    final result = await _invoke<Map<Object?, Object?>>(
+      'prepareManagedPlayback',
+      {'url': url},
+    );
+    final filePath = result['filePath']?.toString().trim() ?? '';
+    if (filePath.isEmpty) {
+      throw const DownloaderException(
+        'Android no preparo un archivo reproducible.',
+        code: 'yt_dlp_managed_playback_missing',
+      );
+    }
+    return ManagedPlaybackResource(
+      filePath: filePath,
+      extension: _optionalString(result['extension']),
+      mimeType: _optionalString(result['mimeType']),
+      formatId: _optionalString(result['formatId']),
+      codec: _optionalString(result['codec']),
+    );
   }
 
   Future<List<TrackInfo>> search(String query) async {
@@ -138,5 +160,10 @@ class AndroidYtdlChannel {
         ? value.toInt()
         : int.tryParse(value.toString());
     return seconds == null ? null : Duration(seconds: seconds);
+  }
+
+  String? _optionalString(Object? value) {
+    final normalized = value?.toString().trim();
+    return normalized == null || normalized.isEmpty ? null : normalized;
   }
 }

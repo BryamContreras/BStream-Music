@@ -13,7 +13,7 @@ class FavoriteStarBadge extends StatelessWidget {
         alignment: Alignment.center,
         children: [
           Icon(
-            Icons.star_rounded,
+            Icons.favorite_rounded,
             size: iconSize + 5,
             color: const Color(0xF0000000),
             shadows: const [
@@ -22,9 +22,9 @@ class FavoriteStarBadge extends StatelessWidget {
             ],
           ),
           Icon(
-            Icons.star_rounded,
+            Icons.favorite_rounded,
             size: iconSize,
-            color: const Color(0xFFFFD54F),
+            color: Theme.of(context).colorScheme.primary,
           ),
         ],
       ),

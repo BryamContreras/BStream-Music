@@ -30,6 +30,17 @@ import org.json.JSONObject
 class MainActivity : AudioServiceActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val updateLock = Object()
+    private val managedPlaybackExecutionLock = Object()
+    private val managedPlaybackStateLock = Object()
+    @Volatile
+    private var managedPlaybackGeneration = 0L
+    @Volatile
+    private var activeManagedPlaybackProcessId: String? = null
+    // The player switches to a prepared file after this MethodChannel call
+    // returns. Preserve both sides of that hand-off so cache pruning cannot
+    // unlink the source that is still playing while the new one opens.
+    @Volatile
+    private var protectedManagedPlaybackPaths: List<String> = emptyList()
     private var progressSink: EventChannel.EventSink? = null
     private var youtubeDlInitialized = false
     private var updateRunning = false
@@ -64,6 +75,7 @@ class MainActivity : AudioServiceActivity() {
                 "initYtdl" -> initYtdl(result)
                 "getInfo" -> getInfo(call, result)
                 "getPlaybackInfo" -> getPlaybackInfo(call, result)
+                "prepareManagedPlayback" -> prepareManagedPlayback(call, result)
                 "search" -> search(call, result)
                 "downloadAudio" -> downloadAudio(call, result)
                 else -> result.notImplemented()
@@ -160,6 +172,15 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun onDestroy() {
+        val managedProcessId = synchronized(managedPlaybackStateLock) {
+            managedPlaybackGeneration++
+            activeManagedPlaybackProcessId.also {
+                activeManagedPlaybackProcessId = null
+            }
+        }
+        managedProcessId?.let {
+            runCatching { YoutubeDL.getInstance().destroyProcessById(it) }
+        }
         externalAudioExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -271,6 +292,26 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    private fun prepareManagedPlayback(call: MethodCall, result: MethodChannel.Result) {
+        val url = call.requiredString("url")
+        val generation: Long
+        val processToCancel: String?
+        synchronized(managedPlaybackStateLock) {
+            generation = ++managedPlaybackGeneration
+            processToCancel = activeManagedPlaybackProcessId
+        }
+        processToCancel?.let {
+            runCatching { YoutubeDL.getInstance().destroyProcessById(it) }
+        }
+        runAsync(result) {
+            ensureYoutubeDlInitialized()
+            synchronized(managedPlaybackExecutionLock) {
+                ensureManagedPlaybackCurrent(generation)
+                executeManagedPlaybackRequest(url, generation)
+            }
+        }
+    }
+
     private fun search(call: MethodCall, result: MethodChannel.Result) {
         val query = call.requiredString("query")
         val limit = (call.argument<Int>("limit") ?: DEFAULT_SEARCH_RESULT_LIMIT)
@@ -299,7 +340,6 @@ class MainActivity : AudioServiceActivity() {
             Log.i(TAG, "getPlaybackInfo started urlLength=${url.length}")
             val request = YoutubeDLRequest(url)
             addBaseNetworkOptions(request)
-            addYoutubePlaybackOptions(request)
             request.addOption("--dump-single-json")
             request.addOption("--skip-download")
             request.addOption("--no-playlist")
@@ -354,6 +394,226 @@ class MainActivity : AudioServiceActivity() {
                 "view_count" to info.opt("view_count").takeUnless { it == JSONObject.NULL },
                 "http_headers" to httpHeaders,
             )
+        }
+    }
+
+    private fun executeManagedPlaybackRequest(
+        url: String,
+        generation: Long,
+    ): Map<String, Any?> {
+        return executeWithExtractorRetry("prepareManagedPlayback") {
+            ensureManagedPlaybackCurrent(generation)
+            val root = File(applicationContext.cacheDir, MANAGED_PLAYBACK_DIRECTORY)
+            if (!root.exists() && !root.mkdirs()) {
+                throw IllegalStateException("No se pudo crear el cache de reproduccion.")
+            }
+            trimManagedPlaybackCache(root, protectedManagedPlaybackPaths)
+
+            try {
+                executeManagedPlaybackAttempt(url, root, "web_embedded", generation)
+            } catch (embeddedError: Exception) {
+                ensureManagedPlaybackCurrent(generation)
+                Log.w(
+                    TAG,
+                    "Managed playback with web_embedded failed; trying yt-dlp defaults",
+                    embeddedError,
+                )
+                executeManagedPlaybackAttempt(url, root, null, generation)
+            }
+        }
+    }
+
+    private fun executeManagedPlaybackAttempt(
+        url: String,
+        root: File,
+        playerClient: String?,
+        generation: Long,
+    ): Map<String, Any?> {
+        ensureManagedPlaybackCurrent(generation)
+        val request = YoutubeDLRequest(url)
+        addBaseNetworkOptions(request)
+        request.addOption("--no-playlist")
+        request.addOption("--no-progress")
+        request.addOption("--fixup", "never")
+        request.addOption("--downloader", "native")
+        request.addOption("--http-chunk-size", "1M")
+        request.addOption("--max-filesize", MANAGED_PLAYBACK_MAX_ENTRY_BYTES.toString())
+        request.addOption("-f", AUDIO_FORMAT_SELECTOR)
+        if (playerClient != null) {
+            request.addOption("--extractor-args", "youtube:player_client=$playerClient")
+        }
+        request.addOption("--print", "after_move:$MANAGED_FILE_PREFIX%(filepath)j")
+        request.addOption("--print", "after_move:$MANAGED_EXTENSION_PREFIX%(ext)j")
+        request.addOption("--print", "after_move:$MANAGED_FORMAT_PREFIX%(format_id)j")
+        request.addOption("--print", "after_move:$MANAGED_CODEC_PREFIX%(acodec)j")
+        request.addOption(
+            "-o",
+            File(root, "%(id)s.%(format_id)s.%(ext)s").absolutePath,
+        )
+
+        val processId = UUID.randomUUID().toString()
+        synchronized(managedPlaybackStateLock) {
+            ensureManagedPlaybackCurrent(generation)
+            activeManagedPlaybackProcessId = processId
+        }
+        val response = try {
+            YoutubeDL.getInstance().execute(request, processId)
+        } finally {
+            synchronized(managedPlaybackStateLock) {
+                if (activeManagedPlaybackProcessId == processId) {
+                    activeManagedPlaybackProcessId = null
+                }
+            }
+        }
+        ensureManagedPlaybackCurrent(generation)
+        val printedPath = printedJsonValue(response.out, MANAGED_FILE_PREFIX)
+            ?: throw IllegalStateException(
+                "yt-dlp finalizo sin indicar el archivo de reproduccion.",
+            )
+        val canonicalRoot = root.canonicalFile
+        val file = File(printedPath).canonicalFile
+        val rootPrefix = canonicalRoot.path.trimEnd(File.separatorChar) + File.separator
+        if (!file.path.startsWith(rootPrefix) ||
+            !file.exists() ||
+            !file.isFile ||
+            file.length() <= 0L ||
+            !isAudioExtension(file.extension)
+        ) {
+            throw IllegalStateException(
+                "yt-dlp no preparo un archivo de audio valido.",
+            )
+        }
+        if (file.length() > MANAGED_PLAYBACK_MAX_ENTRY_BYTES) {
+            runCatching { file.delete() }
+            throw IllegalStateException(
+                "El audio preparado excede el limite de cache de " +
+                    "$MANAGED_PLAYBACK_MAX_ENTRY_BYTES bytes.",
+            )
+        }
+        // Treat cache hits as recently used so pruning remains LRU-like.
+        file.setLastModified(System.currentTimeMillis())
+        ensureManagedPlaybackCurrent(generation)
+        val protectedPaths = managedPlaybackProtectionWindow(file.absolutePath)
+        protectedManagedPlaybackPaths = protectedPaths
+        trimManagedPlaybackCache(root, protectedPaths)
+        ensureManagedPlaybackCurrent(generation)
+        val extension = printedJsonValue(response.out, MANAGED_EXTENSION_PREFIX)
+            ?.lowercase()
+            ?.takeIf(::isAudioExtension)
+            ?: file.extension.lowercase().takeIf(::isAudioExtension)
+
+        return mapOf(
+            "filePath" to file.absolutePath,
+            "extension" to extension,
+            "mimeType" to extension?.let(::audioMimeType),
+            "formatId" to printedJsonValue(response.out, MANAGED_FORMAT_PREFIX),
+            "codec" to printedJsonValue(response.out, MANAGED_CODEC_PREFIX),
+        )
+    }
+
+    private fun ensureManagedPlaybackCurrent(generation: Long) {
+        if (generation != managedPlaybackGeneration) {
+            throw ManagedPlaybackSupersededException()
+        }
+    }
+
+    private fun printedJsonValue(output: String, prefix: String): String? {
+        val encoded = output
+            .lineSequence()
+            .map(String::trim)
+            .lastOrNull { it.startsWith(prefix) }
+            ?.removePrefix(prefix)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?: return null
+        return try {
+            val value = JSONArray("[$encoded]").opt(0)
+            if (value == null || value == JSONObject.NULL) {
+                null
+            } else {
+                value.toString().trim().takeIf(String::isNotEmpty)
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun trimManagedPlaybackCache(root: File, protectedPaths: Collection<String>) {
+        val cutoff = System.currentTimeMillis() - MANAGED_PLAYBACK_MAX_AGE_MS
+        val normalizedProtectedPaths = protectedPaths.mapTo(mutableSetOf()) { path ->
+            runCatching { File(path).canonicalPath }
+                .getOrElse { _ -> File(path).absolutePath }
+        }
+        fun isProtected(file: File): Boolean {
+            if (normalizedProtectedPaths.isEmpty()) {
+                return false
+            }
+            val candidate = runCatching { file.canonicalPath }.getOrElse { file.absolutePath }
+            return candidate in normalizedProtectedPaths
+        }
+        root.listFiles()?.forEach { file ->
+            if (file.isFile && !isProtected(file) &&
+                (file.name.endsWith(".part") ||
+                    file.name.endsWith(".ytdl") ||
+                    file.lastModified() < cutoff)
+            ) {
+                runCatching { file.delete() }
+            }
+        }
+
+        val completed = root.listFiles()
+            ?.filter { it.isFile && isAudioExtension(it.extension) }
+            ?.sortedWith(
+                compareByDescending<File> { isProtected(it) }
+                    .thenByDescending(File::lastModified),
+            )
+            .orEmpty()
+        var retainedFiles = 0
+        var retainedBytes = 0L
+        completed.forEach { file ->
+            val protected = isProtected(file)
+            val length = file.length().coerceAtLeast(0L)
+            val exceedsLimits =
+                retainedFiles >= MANAGED_PLAYBACK_MAX_FILES ||
+                    length > MANAGED_PLAYBACK_MAX_BYTES - retainedBytes
+            if (!protected && exceedsLimits) {
+                runCatching { file.delete() }
+            } else {
+                retainedFiles++
+                retainedBytes += length
+            }
+        }
+    }
+
+    private fun managedPlaybackProtectionWindow(newestPath: String): List<String> {
+        val newest = runCatching { File(newestPath).canonicalPath }
+            .getOrElse { File(newestPath).absolutePath }
+        val protected = mutableListOf(newest)
+        for (existing in protectedManagedPlaybackPaths) {
+            val normalized = runCatching { File(existing).canonicalPath }
+                .getOrElse { File(existing).absolutePath }
+            if (normalized !in protected) {
+                protected += normalized
+            }
+            if (protected.size == MANAGED_PLAYBACK_PROTECTION_WINDOW) {
+                break
+            }
+        }
+        return protected.take(MANAGED_PLAYBACK_PROTECTION_WINDOW)
+    }
+
+    private fun audioMimeType(extension: String): String? {
+        return when (extension.lowercase()) {
+            "m4a", "m4b", "mp4" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "mp3" -> "audio/mpeg"
+            "webm", "weba" -> "audio/webm"
+            "ogg", "oga" -> "audio/ogg"
+            "opus" -> "audio/opus"
+            "flac" -> "audio/flac"
+            "wav" -> "audio/wav"
+            "3gp", "3gpp" -> "audio/3gpp"
+            else -> null
         }
     }
 
@@ -723,7 +983,7 @@ class MainActivity : AudioServiceActivity() {
 
         return try {
             val status = YoutubeDL.getInstance()
-                .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
+                .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
             Log.i(
                 TAG,
                 "yt-dlp update status: $status, " +
@@ -774,10 +1034,6 @@ class MainActivity : AudioServiceActivity() {
         request.addOption("--ignore-config")
         request.addOption("--no-warnings")
         request.addOption("--socket-timeout", "20")
-    }
-
-    private fun addYoutubePlaybackOptions(request: YoutubeDLRequest) {
-        request.addOption("--extractor-args", YOUTUBE_EXTRACTOR_ARGS)
     }
 
     private fun <T> executeWithExtractorRetry(
@@ -1041,19 +1297,17 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun Throwable.describeForFlutter(): String {
-        val causes = generateSequence(this) { it.cause }
+        val messages = generateSequence(this) { it.cause }
             .take(6)
-            .map { throwable ->
-                val className = throwable.javaClass.name
-                val message = throwable.message?.trim()
-                if (message.isNullOrEmpty() || message == className.substringAfterLast('.')) {
-                    className
-                } else {
-                    "$className: $message"
-                }
-            }
+            .mapNotNull { it.message?.trim()?.takeIf(String::isNotEmpty) }
+            .distinct()
             .toList()
-        return causes.joinToString(" -> ").ifBlank { "Fallo youtubedl-android" }
+        // youtubedl-android stores yt-dlp stderr in YoutubeDLException.message.
+        // Prefer the deepest cause and keep class names/stack traces in
+        // Logcat and MethodChannel details instead of placing them before the
+        // useful extractor error on the small player surface. Picking by
+        // length can select Exception(Throwable)'s `cause.toString()` wrapper.
+        return messages.lastOrNull() ?: "Fallo youtubedl-android"
     }
 
     private fun JSONObject.toMap(): Map<String, Any?> {
@@ -1104,8 +1358,16 @@ class MainActivity : AudioServiceActivity() {
             "download:BSTREAM_PROGRESS|%(progress._percent_str)s|%(progress.eta)s"
         private const val AUDIO_FORMAT_SELECTOR =
             "bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[acodec^=mp4a]/bestaudio[acodec^=aac]/bestaudio"
-        private const val YOUTUBE_EXTRACTOR_ARGS =
-            "youtube:player_client=android_vr"
+        private const val MANAGED_PLAYBACK_DIRECTORY = "bstream_managed_playback"
+        private const val MANAGED_PLAYBACK_MAX_FILES = 12
+        private const val MANAGED_PLAYBACK_MAX_BYTES = 128L * 1024L * 1024L
+        private const val MANAGED_PLAYBACK_MAX_ENTRY_BYTES = 64L * 1024L * 1024L
+        private const val MANAGED_PLAYBACK_MAX_AGE_MS = 12L * 60L * 60L * 1000L
+        private const val MANAGED_PLAYBACK_PROTECTION_WINDOW = 2
+        private const val MANAGED_FILE_PREFIX = "BSTREAM_MANAGED_FILE="
+        private const val MANAGED_EXTENSION_PREFIX = "BSTREAM_MANAGED_EXTENSION="
+        private const val MANAGED_FORMAT_PREFIX = "BSTREAM_MANAGED_FORMAT="
+        private const val MANAGED_CODEC_PREFIX = "BSTREAM_MANAGED_CODEC="
         private val STRUCTURED_PROGRESS_REGEX =
             Regex("""BSTREAM_PROGRESS\|\s*~?\s*([0-9]+(?:\.[0-9]+)?)%\|([^|\r\n]*)""")
         private val STANDARD_PROGRESS_REGEX =
@@ -1148,6 +1410,8 @@ class MainActivity : AudioServiceActivity() {
             "forbidden",
         )
         private val AUDIO_EXTENSIONS = setOf(
+            "3gp",
+            "3gpp",
             "aiff",
             "alac",
             "oga",
@@ -1182,5 +1446,9 @@ class MainActivity : AudioServiceActivity() {
     private data class ExternalAudioRequest(
         val id: String,
         val intent: Intent,
+    )
+
+    private class ManagedPlaybackSupersededException : IllegalStateException(
+        "La preparacion fue reemplazada por una pista mas reciente.",
     )
 }

@@ -7,36 +7,58 @@ class TrackInfoModel extends TrackInfo {
     required super.artist,
     required super.url,
     super.thumbnailUrl,
+    super.catalogThumbnailUrl,
     super.duration,
     super.streamUrl,
     super.streamExtension,
     super.streamMimeType,
+    super.streamSource,
+    super.streamFormatId,
+    super.streamCodec,
     super.extractor,
     super.album,
     super.viewCount,
     super.httpHeaders,
+    super.artists,
+    super.metadataSource,
   });
 
   factory TrackInfoModel.fromJson(Map<String, dynamic> json) {
+    final artistNames = _stringListValues(json['artists']);
+    final metadataSource = _metadataSource(json['metadata_source']);
+    final artist =
+        (metadataSource == TrackMetadataSource.youtubeMusic &&
+                artistNames.isNotEmpty
+            ? artistNames.join(', ')
+            : _stringValue(json['artist'])) ??
+        (artistNames.isEmpty ? null : artistNames.join(', ')) ??
+        _stringValue(json['creator']) ??
+        _stringValue(json['uploader']) ??
+        _stringValue(json['channel']) ??
+        'Desconocido';
     return TrackInfoModel(
       id: _stringValue(json['id']) ?? _stringValue(json['display_id']) ?? '',
       title:
           _stringValue(json['track']) ??
           _stringValue(json['title']) ??
           'Sin titulo',
-      artist:
-          _stringValue(json['artist']) ??
-          _stringListValue(json['artists']) ??
-          _stringValue(json['creator']) ??
-          _stringValue(json['uploader']) ??
-          _stringValue(json['channel']) ??
-          'Desconocido',
+      artist: artist,
       url: _sourceUrl(json),
       thumbnailUrl: _thumbnailUrl(json),
+      catalogThumbnailUrl: _stringValue(json['catalog_thumbnail']),
       duration: _durationValue(json['duration']),
       streamUrl: _stringValue(json['streamUrl']) ?? _streamUrl(json),
       streamExtension: _streamExtension(json),
       streamMimeType: _streamMimeType(json),
+      streamSource: _stringValue(json['stream_source']),
+      streamFormatId:
+          _stringValue(json['stream_format_id']) ??
+          _stringValue(_selectedStreamFormat(json)?['format_id']) ??
+          _stringValue(json['format_id']),
+      streamCodec:
+          _stringValue(json['stream_codec']) ??
+          _stringValue(_selectedStreamFormat(json)?['acodec']) ??
+          _stringValue(json['acodec']),
       extractor:
           _stringValue(json['extractor']) ??
           _stringValue(json['extractor_key']) ??
@@ -44,6 +66,12 @@ class TrackInfoModel extends TrackInfo {
       album: _stringValue(json['album']),
       viewCount: _intValue(json['view_count']),
       httpHeaders: _httpHeaders(json),
+      artists: artistNames.isNotEmpty
+          ? List.unmodifiable(artistNames)
+          : artist == 'Desconocido'
+          ? const []
+          : [artist],
+      metadataSource: metadataSource,
     );
   }
 
@@ -60,14 +88,20 @@ class TrackInfoModel extends TrackInfo {
       'artist': artist,
       'url': url,
       'thumbnail': thumbnailUrl,
+      'catalog_thumbnail': catalogThumbnailUrl,
       'duration': duration?.inSeconds,
       'streamUrl': streamUrl,
       'stream_extension': streamExtension,
       'stream_mime_type': streamMimeType,
+      'stream_source': streamSource,
+      'stream_format_id': streamFormatId,
+      'stream_codec': streamCodec,
       'extractor': extractor,
       'album': album,
       'view_count': viewCount,
       'http_headers': httpHeaders,
+      'artists': artists,
+      'metadata_source': metadataSource.name,
     };
   }
 
@@ -228,7 +262,11 @@ class TrackInfoModel extends TrackInfo {
       'aac' => 'audio/aac',
       'mp3' => 'audio/mpeg',
       'webm' || 'weba' => 'audio/webm',
-      'ogg' || 'oga' || 'opus' => 'audio/ogg',
+      'ogg' || 'oga' => 'audio/ogg',
+      'opus' => 'audio/opus',
+      'flac' => 'audio/flac',
+      '3gp' || '3gpp' => 'audio/3gpp',
+      'm3u8' => 'application/vnd.apple.mpegurl',
       'wav' => 'audio/wav',
       _ => null,
     };
@@ -367,15 +405,18 @@ class TrackInfoModel extends TrackInfo {
     return text.isEmpty ? null : text;
   }
 
-  static String? _stringListValue(Object? value) {
+  static List<String> _stringListValues(Object? value) {
     if (value is! List) {
-      return null;
+      return const [];
     }
-    final entries = value
-        .map(_stringValue)
-        .whereType<String>()
-        .toList(growable: false);
-    return entries.isEmpty ? null : entries.join(', ');
+    return value.map(_stringValue).whereType<String>().toList(growable: false);
+  }
+
+  static TrackMetadataSource _metadataSource(Object? value) {
+    return switch (_stringValue(value)) {
+      'youtubeMusic' || 'youtube_music' => TrackMetadataSource.youtubeMusic,
+      _ => TrackMetadataSource.youtube,
+    };
   }
 
   static Duration? _durationValue(Object? value) {

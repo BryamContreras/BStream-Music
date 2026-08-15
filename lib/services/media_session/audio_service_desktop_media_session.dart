@@ -116,7 +116,9 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
                 ? snapshot.title!.trim()
                 : 'BStream Music',
             artist: snapshot.artist?.trim(),
-            album: 'BStream Music',
+            album: snapshot.album?.trim().isNotEmpty == true
+                ? snapshot.album!.trim()
+                : 'BStream Music',
             duration: snapshot.duration,
             artUri: _artUri(snapshot.thumbnailUrl),
           ),
@@ -132,7 +134,9 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
                   id: item.id,
                   title: item.title,
                   artist: item.artist,
-                  album: 'BStream Music',
+                  album: item.album?.trim().isNotEmpty == true
+                      ? item.album!.trim()
+                      : 'BStream Music',
                   artUri: _artUri(item.thumbnailUrl),
                 ),
               )
@@ -195,7 +199,7 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
       (snapshot.title?.isNotEmpty ?? false);
 
   String _trackKey(PlayerSnapshot snapshot) =>
-      '${snapshot.trackId}|${snapshot.title}|${snapshot.artist}|'
+      '${snapshot.trackId}|${snapshot.title}|${snapshot.artist}|${snapshot.album}|'
       '${snapshot.thumbnailUrl}|${snapshot.duration?.inMilliseconds}';
 
   Uri? _artUri(String? source) {

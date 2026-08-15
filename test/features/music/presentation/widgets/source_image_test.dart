@@ -14,6 +14,7 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
 
     expect(find.text('fallback'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
@@ -30,4 +31,28 @@ void main() {
 
     expect(find.text('fallback'), findsOneWidget);
   });
+
+  testWidgets(
+    'ProportionalArtwork decodes one bounded image without a blur copy',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SizedBox.square(
+            dimension: 56,
+            child: ProportionalArtwork(
+              source: 'https://example.invalid/artwork.jpg',
+              cacheWidth: 256,
+              fallback: Text('fallback'),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.byType(ImageFiltered), findsNothing);
+      final image = tester.widget<Image>(find.byType(Image));
+      final provider = image.image as ResizeImage;
+      expect(provider.width, 256);
+    },
+  );
 }

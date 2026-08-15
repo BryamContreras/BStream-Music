@@ -33,7 +33,6 @@ migrate_working_dir/
 /build/
 /coverage/
 /dist/
-/.venv-tiktok/
 **/__pycache__/
 *.py[cod]
 
@@ -45,6 +44,7 @@ app.*.map.json
 
 # Generated Flutter platform files
 /android/build/
+/android/.kotlin/
 /android/local.properties
 /macos/Flutter/ephemeral/
 /windows/flutter/ephemeral/
@@ -65,8 +65,6 @@ app.*.map.json
 # Optional bundled desktop tools. Keep each platform README tracked.
 /windows/tools/*.exe
 /windows/tools/ffmpeg/
-/windows/tools/tiktok-live-bridge/
-/windows/tools/tiktok_live_bridge/
 /windows/tools/*.dll
 /windows/tools/*.pyd
 /linux/tools/*

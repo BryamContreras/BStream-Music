@@ -41,6 +41,11 @@ class LocalDatabaseService {
     await database;
   }
 
+  Future<T> withDatabase<T>(Future<T> Function(Database) operation) async {
+    final db = await database;
+    return operation(db);
+  }
+
   Future<String> databasePath() async {
     final supportDirectory = await getApplicationSupportDirectory();
     await supportDirectory.create(recursive: true);
@@ -342,8 +347,13 @@ class LocalDatabaseService {
             file_path TEXT NOT NULL,
             source_url TEXT,
             thumbnail_url TEXT,
+            catalog_thumbnail_url TEXT,
             thumbnail_path TEXT,
             duration_seconds INTEGER,
+            album TEXT,
+            artists_json TEXT NOT NULL DEFAULT '[]',
+            metadata_source TEXT NOT NULL DEFAULT 'youtube',
+            source_id TEXT,
             added_at TEXT NOT NULL,
             last_played_at TEXT,
             last_played_playlist_id TEXT
@@ -366,14 +376,37 @@ class LocalDatabaseService {
             'ALTER TABLE local_tracks ADD COLUMN thumbnail_path TEXT',
           );
         }
-        if (oldVersion < 3) {
-          await _createIndexes(db);
-        }
         if (oldVersion < 4) {
           await db.execute(
             'ALTER TABLE local_tracks '
             'ADD COLUMN last_played_playlist_id TEXT',
           );
+        }
+        if (oldVersion < 5) {
+          await db.execute('ALTER TABLE local_tracks ADD COLUMN album TEXT');
+          await db.execute(
+            "ALTER TABLE local_tracks ADD COLUMN artists_json TEXT "
+            "NOT NULL DEFAULT '[]'",
+          );
+          await db.execute(
+            "ALTER TABLE local_tracks ADD COLUMN metadata_source TEXT "
+            "NOT NULL DEFAULT 'youtube'",
+          );
+          await db.execute(
+            'ALTER TABLE local_tracks ADD COLUMN source_id TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE local_tracks ADD COLUMN catalog_thumbnail_url TEXT',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_local_tracks_source_id '
+            'ON local_tracks(source_id)',
+          );
+        }
+        // Older databases must receive the v5 columns before the shared
+        // index builder references source_id.
+        if (oldVersion < 3) {
+          await _createIndexes(db);
         }
       },
     );
@@ -398,6 +431,10 @@ class LocalDatabaseService {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_local_tracks_source_url '
       'ON local_tracks(source_url)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_local_tracks_source_id '
+      'ON local_tracks(source_id)',
     );
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_playlists_updated_at '

@@ -1,29 +1,127 @@
 part of 'music_providers.dart';
 
 TrackInfo _mergeTrackInfo(TrackInfo base, TrackInfo resolved) {
+  final hasResolvedTransport =
+      resolved.streamUrl != null && resolved.streamUrl!.trim().isNotEmpty;
+  final preserveMusicMetadata =
+      base.metadataSource == TrackMetadataSource.youtubeMusic;
+  final baseArtists = _meaningfulArtists(base.artists);
+  final resolvedArtists = _meaningfulArtists(resolved.artists);
+  final artists = preserveMusicMetadata
+      ? (baseArtists.isNotEmpty ? baseArtists : resolvedArtists)
+      : (resolvedArtists.isNotEmpty ? resolvedArtists : baseArtists);
   return TrackInfo(
-    id: resolved.id.isNotEmpty ? resolved.id : base.id,
-    title: _preferredText(resolved.title, base.title, 'Sin titulo'),
-    artist: _preferredText(resolved.artist, base.artist, 'Desconocido'),
-    url: resolved.url.isNotEmpty ? resolved.url : base.url,
-    thumbnailUrl: resolved.thumbnailUrl ?? base.thumbnailUrl,
-    duration: resolved.duration ?? base.duration,
+    id: preserveMusicMetadata
+        ? _preferredIdentifier(base.id, resolved.id)
+        : (resolved.id.isNotEmpty ? resolved.id : base.id),
+    title: preserveMusicMetadata
+        ? _preferredText(base.title, resolved.title, 'Sin titulo')
+        : _preferredText(resolved.title, base.title, 'Sin titulo'),
+    artist: preserveMusicMetadata
+        ? (artists.isNotEmpty
+              ? artists.join(', ')
+              : _preferredText(base.artist, resolved.artist, 'Desconocido'))
+        : _preferredText(resolved.artist, base.artist, 'Desconocido'),
+    url: preserveMusicMetadata
+        ? _preferredIdentifier(base.url, resolved.url)
+        : (resolved.url.isNotEmpty ? resolved.url : base.url),
+    thumbnailUrl: preserveMusicMetadata
+        ? _preferredOptionalText(base.thumbnailUrl, resolved.thumbnailUrl)
+        : _preferredOptionalText(resolved.thumbnailUrl, base.thumbnailUrl),
+    catalogThumbnailUrl: preserveMusicMetadata
+        ? _preferredOptionalText(
+            base.catalogThumbnailUrl,
+            resolved.catalogThumbnailUrl,
+          )
+        : _preferredOptionalText(
+            resolved.catalogThumbnailUrl,
+            base.catalogThumbnailUrl,
+          ),
+    duration: preserveMusicMetadata
+        ? base.duration ?? resolved.duration
+        : resolved.duration ?? base.duration,
     streamUrl: resolved.streamUrl ?? base.streamUrl,
-    streamExtension: resolved.streamExtension ?? base.streamExtension,
-    streamMimeType: resolved.streamMimeType ?? base.streamMimeType,
+    streamExtension: hasResolvedTransport
+        ? resolved.streamExtension
+        : resolved.streamExtension ?? base.streamExtension,
+    streamMimeType: hasResolvedTransport
+        ? resolved.streamMimeType
+        : resolved.streamMimeType ?? base.streamMimeType,
+    streamSource: hasResolvedTransport
+        ? resolved.streamSource
+        : base.streamSource,
+    streamFormatId: hasResolvedTransport
+        ? resolved.streamFormatId
+        : base.streamFormatId,
+    streamCodec: hasResolvedTransport ? resolved.streamCodec : base.streamCodec,
     extractor: resolved.extractor ?? base.extractor,
-    album: resolved.album ?? base.album,
+    album: preserveMusicMetadata
+        ? _preferredOptionalText(base.album, resolved.album)
+        : _preferredOptionalText(resolved.album, base.album),
     viewCount: resolved.viewCount ?? base.viewCount,
-    httpHeaders: resolved.httpHeaders ?? base.httpHeaders,
+    httpHeaders: hasResolvedTransport
+        ? resolved.httpHeaders
+        : resolved.httpHeaders ?? base.httpHeaders,
+    artists: artists,
+    metadataSource: preserveMusicMetadata
+        ? base.metadataSource
+        : resolved.metadataSource,
   );
+}
+
+String _preferredIdentifier(String preferred, String fallback) {
+  return preferred.trim().isNotEmpty ? preferred : fallback;
+}
+
+String? _preferredOptionalText(String? preferred, String? fallback) {
+  final normalized = preferred?.trim();
+  if (normalized != null && normalized.isNotEmpty) {
+    return preferred;
+  }
+  final fallbackNormalized = fallback?.trim();
+  return fallbackNormalized == null || fallbackNormalized.isEmpty
+      ? null
+      : fallback;
+}
+
+List<String> _meaningfulArtists(List<String> artists) {
+  final result = <String>[];
+  for (final artist in artists) {
+    final normalized = artist.trim();
+    if (normalized.isEmpty || _isPlaceholderText(normalized)) {
+      continue;
+    }
+    if (!result.contains(normalized)) {
+      result.add(normalized);
+    }
+  }
+  return List.unmodifiable(result);
 }
 
 String _preferredText(String preferred, String fallback, String placeholder) {
   final normalized = preferred.trim();
-  if (normalized.isEmpty || normalized == placeholder) {
+  final fallbackNormalized = fallback.trim();
+  if (normalized.isEmpty ||
+      normalized.toLowerCase() == placeholder.toLowerCase() ||
+      _isPlaceholderText(normalized)) {
+    if (fallbackNormalized.isEmpty) {
+      return preferred;
+    }
     return fallback;
   }
   return preferred;
+}
+
+bool _isPlaceholderText(String value) {
+  return const {
+    'desconocido',
+    'unknown',
+    'unknown artist',
+    'sin artista',
+    'sin titulo',
+    'sin título',
+    'untitled',
+  }.contains(value.trim().toLowerCase());
 }
 
 final remoteTrackResolverProvider = Provider<RemoteTrackResolver>((ref) {
@@ -37,7 +135,11 @@ class RemoteTrackResolver {
     : _isAndroid = isAndroid ?? AppPlatform.isAndroid;
 
   static const _ttl = Duration(minutes: 20);
-  static const _prefsKey = 'remote_track_resolution_cache_v2';
+  static const _prefsKey = 'remote_track_resolution_cache_v4';
+  static const _legacyPrefsKeys = [
+    'remote_track_resolution_cache_v2',
+    'remote_track_resolution_cache_v3',
+  ];
   static const _maxPersistentEntries = 24;
   static const _maxMemoryEntries = 32;
 
@@ -50,6 +152,9 @@ class RemoteTrackResolver {
     TrackInfo track, {
     bool forceRefresh = false,
     bool allowStaleStreamFallback = true,
+    AudioResolutionMode mode = AudioResolutionMode.primaryThenFallback,
+    AudioResolverFailureCallback? onResolverFailure,
+    AudioResolverContinuationCallback? shouldContinue,
   }) async {
     final key = _cacheKey(track);
     if (key.isEmpty) {
@@ -60,7 +165,10 @@ class RemoteTrackResolver {
     _trimMemoryEntries();
 
     final cached = _entries[key];
-    if (!forceRefresh && cached != null && !cached.isExpired) {
+    if (!forceRefresh &&
+        mode == AudioResolutionMode.primaryThenFallback &&
+        cached != null &&
+        !cached.isExpired) {
       return cached.future.then((resolved) => _mergeTrackInfo(track, resolved));
     }
 
@@ -69,6 +177,9 @@ class RemoteTrackResolver {
       key,
       forceRefresh: forceRefresh,
       allowStaleStreamFallback: allowStaleStreamFallback,
+      mode: mode,
+      onResolverFailure: onResolverFailure,
+      shouldContinue: shouldContinue,
     );
 
     _entries[key] = _TrackResolutionEntry(future);
@@ -92,16 +203,31 @@ class RemoteTrackResolver {
     String key, {
     required bool forceRefresh,
     required bool allowStaleStreamFallback,
+    required AudioResolutionMode mode,
+    required AudioResolverFailureCallback? onResolverFailure,
+    required AudioResolverContinuationCallback? shouldContinue,
   }) async {
     try {
-      final resolver = _isAndroid
-          ? _ref.read(getPlaybackInfoProvider).call
-          : _ref.read(getTrackInfoProvider).call;
-      final resolved = _mergeTrackInfo(track, await resolver(track.url));
-      if (_hasPlayableStream(resolved)) {
-        unawaited(_persistResolvedEntry(key, resolved));
+      final resolver = _ref.read(audioStreamResolverProvider);
+      final resolved = resolver is FallbackAwareAudioStreamResolver
+          ? await (resolver as FallbackAwareAudioStreamResolver)
+                .resolveWithMode(
+                  track,
+                  mode: mode,
+                  onResolverFailure: onResolverFailure,
+                  shouldContinue: shouldContinue,
+                )
+          : await resolver.resolve(track);
+      if (shouldContinue != null && !shouldContinue()) {
+        throw const AudioStreamResolverException(
+          'Audio stream resolution was superseded.',
+        );
       }
-      return resolved;
+      final merged = _mergeTrackInfo(track, _trackFromResolution(resolved));
+      if (_hasPlayableStream(merged)) {
+        unawaited(_persistResolvedEntry(key, merged));
+      }
+      return merged;
     } catch (_) {
       _entries.remove(key);
       if (forceRefresh) {
@@ -114,21 +240,40 @@ class RemoteTrackResolver {
     }
   }
 
+  TrackInfo _trackFromResolution(AudioStreamResolution resolution) {
+    return TrackInfo(
+      id: '',
+      title: '',
+      artist: '',
+      url: '',
+      streamUrl: resolution.streamUrl,
+      streamExtension: resolution.streamExtension,
+      streamMimeType: resolution.streamMimeType,
+      streamSource: resolution.source.name,
+      streamFormatId: resolution.formatId,
+      streamCodec: resolution.codec,
+      httpHeaders: resolution.httpHeaders,
+    );
+  }
+
   Future<void> _loadPersistentCache() async {
     if (_loadedPersistentCache) {
       return;
     }
     _loadedPersistentCache = true;
 
+    final prefs = await SharedPreferences.getInstance();
+    for (final legacyKey in _legacyPrefsKeys) {
+      await prefs.remove(legacyKey);
+    }
+
     // Stream URLs and their headers are signed and short-lived. They must not
     // survive an Android process restart or be reused after a download.
     if (_isAndroid) {
-      final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_prefsKey);
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
     final cache = _readPersistentCache(prefs.getString(_prefsKey));
     var removedExpired = false;
 
@@ -159,7 +304,15 @@ class RemoteTrackResolver {
   }
 
   Future<void> _persistResolvedEntry(String key, TrackInfo track) async {
+    // Managed playback files live in an OS cache directory. Keep them in the
+    // in-memory resolver cache for this session, but never persist paths that
+    // the OS may remove between launches.
+    final streamUri = Uri.tryParse(track.streamUrl ?? '');
     if (_isAndroid || !_hasPlayableStream(track)) {
+      return;
+    }
+    if (streamUri?.scheme == 'file') {
+      await _removePersistentEntry(key);
       return;
     }
 
@@ -298,14 +451,20 @@ class RemoteTrackResolver {
       artist: track.artist,
       url: track.url,
       thumbnailUrl: track.thumbnailUrl,
+      catalogThumbnailUrl: track.catalogThumbnailUrl,
       duration: track.duration,
       streamUrl: track.streamUrl,
       streamExtension: track.streamExtension,
       streamMimeType: track.streamMimeType,
+      streamSource: track.streamSource,
+      streamFormatId: track.streamFormatId,
+      streamCodec: track.streamCodec,
       extractor: track.extractor,
       album: track.album,
       viewCount: track.viewCount,
       httpHeaders: track.httpHeaders,
+      artists: track.artists,
+      metadataSource: track.metadataSource,
     );
   }
 }

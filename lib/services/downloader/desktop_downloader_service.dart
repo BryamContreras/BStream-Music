@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -17,17 +18,49 @@ import '../../features/music/domain/entities/download_result.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import 'downloader_service.dart';
 
-class DesktopDownloaderService implements DownloaderService {
+typedef DesktopProcessStarter =
+    Future<Process> Function(String executable, List<String> arguments);
+typedef DesktopProcessTerminator = void Function(Process process);
+
+class DesktopDownloaderService
+    implements DownloaderService, ManagedPlaybackDownloader {
   DesktopDownloaderService({
     SharedPreferences? initialPreferences,
     List<Directory>? toolDirectories,
+    Future<Directory> Function()? managedPlaybackDirectory,
+    int managedPlaybackMaximumFiles = 12,
+    int managedPlaybackMaximumBytes = 256 * 1024 * 1024,
+    int managedPlaybackMaximumEntryBytes = 128 * 1024 * 1024,
+    DesktopProcessStarter? processStarter,
+    DesktopProcessTerminator? processTerminator,
+    Duration processResolutionTimeout = const Duration(minutes: 2),
+    Duration processIdleTimeout = const Duration(seconds: 45),
+    Duration processDownloadTotalTimeout = const Duration(hours: 6),
   }) : _preferences = initialPreferences,
-       _toolDirectoryOverrides = toolDirectories;
+       _toolDirectoryOverrides = toolDirectories,
+       _managedPlaybackDirectoryOverride = managedPlaybackDirectory,
+       _managedPlaybackMaximumFiles = managedPlaybackMaximumFiles,
+       _managedPlaybackMaximumBytes = managedPlaybackMaximumBytes,
+       _managedPlaybackMaximumEntryBytes = managedPlaybackMaximumEntryBytes,
+       _processStarterOverride = processStarter,
+       _processTerminatorOverride = processTerminator,
+       _processResolutionTimeout = processResolutionTimeout,
+       _processIdleTimeout = processIdleTimeout,
+       _processDownloadTotalTimeout = processDownloadTotalTimeout,
+       assert(managedPlaybackMaximumFiles > 0),
+       assert(managedPlaybackMaximumBytes > 0),
+       assert(managedPlaybackMaximumEntryBytes > 0),
+       assert(managedPlaybackMaximumEntryBytes <= managedPlaybackMaximumBytes),
+       assert(processResolutionTimeout > Duration.zero),
+       assert(processIdleTimeout > Duration.zero),
+       assert(processDownloadTotalTimeout > Duration.zero);
 
   static const _ytDlpPathKey = 'desktop.ytDlpPath';
   static const _progressTemplate =
       'download:BSTREAM_PROGRESS|%(progress._percent_str)s|%(progress.eta)s';
   static const _audioFileExtensions = {
+    '.3gp',
+    '.3gpp',
     '.aac',
     '.aiff',
     '.alac',
@@ -49,11 +82,28 @@ class DesktopDownloaderService implements DownloaderService {
 
   final SharedPreferences? _preferences;
   final List<Directory>? _toolDirectoryOverrides;
+  final Future<Directory> Function()? _managedPlaybackDirectoryOverride;
+  final int _managedPlaybackMaximumFiles;
+  final int _managedPlaybackMaximumBytes;
+  final int _managedPlaybackMaximumEntryBytes;
+  final DesktopProcessStarter? _processStarterOverride;
+  final DesktopProcessTerminator? _processTerminatorOverride;
+  final Duration _processResolutionTimeout;
+  final Duration _processIdleTimeout;
+  final Duration _processDownloadTotalTimeout;
   final _uuid = const Uuid();
   final _progressController = StreamController<DownloadProgress>.broadcast();
   final _activeProcesses = <int, Process>{};
 
   SharedPreferences? _resolvedPreferences;
+  Future<void> _managedPlaybackTail = Future<void>.value();
+  int _managedPlaybackGeneration = 0;
+  Process? _activeManagedPlaybackProcess;
+  // The downloader cannot know the exact instant at which the player has
+  // switched from the previously returned file to the newest one. Keep a
+  // bounded hand-off window so post-download pruning cannot unlink the source
+  // that is still playing while its replacement is being opened.
+  List<String> _protectedManagedPlaybackPaths = const [];
   bool _disposed = false;
 
   @override
@@ -118,6 +168,160 @@ class DesktopDownloaderService implements DownloaderService {
   @override
   Future<TrackInfo> getPlaybackInfo(String url) {
     return getInfo(url);
+  }
+
+  @override
+  Future<ManagedPlaybackResource> prepareManagedPlayback(String url) {
+    final generation = ++_managedPlaybackGeneration;
+    final activeProcess = _activeManagedPlaybackProcess;
+    if (activeProcess != null) {
+      _terminateProcessTree(activeProcess);
+    }
+    final next = _managedPlaybackTail.then((_) {
+      _ensureManagedPlaybackCurrent(generation);
+      return _prepareManagedPlayback(url, generation);
+    });
+    _managedPlaybackTail = next.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return next;
+  }
+
+  Future<ManagedPlaybackResource> _prepareManagedPlayback(
+    String url,
+    int generation,
+  ) async {
+    _ensureManagedPlaybackCurrent(generation);
+    final root = await _managedPlaybackDirectory();
+    _ensureManagedPlaybackCurrent(generation);
+    await root.create(recursive: true);
+    await _trimManagedPlaybackCache(
+      root,
+      protectedPaths: _protectedManagedPlaybackPaths,
+    );
+
+    Object? embeddedError;
+    for (final client in const <String?>['web_embedded', null]) {
+      _ensureManagedPlaybackCurrent(generation);
+      try {
+        final output = await _runYtDlp(
+          buildManagedPlaybackArguments(url, root.path, playerClient: client),
+          managedPlaybackGeneration: generation,
+        );
+        _ensureManagedPlaybackCurrent(generation);
+        final file = _managedPlaybackFileFromOutput(output, root);
+        if (file == null || !await file.exists() || await file.length() == 0) {
+          throw const DownloaderException(
+            'yt-dlp finalizo sin preparar un archivo reproducible.',
+            code: 'yt_dlp_managed_playback_missing',
+          );
+        }
+        final fileLength = await file.length();
+        if (fileLength > _managedPlaybackMaximumEntryBytes) {
+          try {
+            await file.delete();
+          } catch (_) {
+            // The explicit size failure below remains the useful result.
+          }
+          throw DownloaderException(
+            'El audio preparado excede el limite de cache de '
+            '$_managedPlaybackMaximumEntryBytes bytes.',
+            code: 'yt_dlp_managed_playback_too_large',
+          );
+        }
+        await file.setLastModified(DateTime.now());
+        _ensureManagedPlaybackCurrent(generation);
+        final protectedPaths = _managedPlaybackProtectionWindow(file.path);
+        _protectedManagedPlaybackPaths = protectedPaths;
+        await _trimManagedPlaybackCache(root, protectedPaths: protectedPaths);
+        _ensureManagedPlaybackCurrent(generation);
+        final extension = p
+            .extension(file.path)
+            .replaceFirst('.', '')
+            .toLowerCase();
+        final baseSegments = p.basenameWithoutExtension(file.path).split('.');
+        return ManagedPlaybackResource(
+          filePath: file.path,
+          extension: extension.isEmpty ? null : extension,
+          mimeType: _audioMimeType(extension),
+          formatId: baseSegments.length > 1 ? baseSegments.last : null,
+        );
+      } catch (error) {
+        _ensureManagedPlaybackCurrent(generation);
+        if (error is DownloaderException &&
+            const {
+              'yt_dlp_process_idle_timeout',
+              'yt_dlp_process_total_timeout',
+            }.contains(error.code)) {
+          rethrow;
+        }
+        if (client == null) {
+          if (embeddedError == null) {
+            rethrow;
+          }
+          throw DownloaderException(
+            '${_cleanManagedPlaybackError(error)}\n'
+            'Primer intento (web_embedded): '
+            '${_cleanManagedPlaybackError(embeddedError)}',
+            code: 'yt_dlp_managed_playback_failed',
+          );
+        }
+        embeddedError = error;
+      }
+    }
+
+    throw const DownloaderException(
+      'yt-dlp no pudo preparar el audio para reproducirlo.',
+      code: 'yt_dlp_managed_playback_failed',
+    );
+  }
+
+  void _ensureManagedPlaybackCurrent(int generation) {
+    if (_disposed || generation != _managedPlaybackGeneration) {
+      throw const DownloaderException(
+        'La preparacion fue reemplazada por una pista mas reciente.',
+        code: 'yt_dlp_managed_playback_superseded',
+      );
+    }
+  }
+
+  @visibleForTesting
+  List<String> buildManagedPlaybackArguments(
+    String url,
+    String outputDirectory, {
+    String? playerClient,
+  }) {
+    return [
+      '--ignore-config',
+      '--no-playlist',
+      '--no-warnings',
+      '--newline',
+      '--progress',
+      '--progress-template',
+      _progressTemplate,
+      '--progress-delta',
+      '1',
+      '--fixup',
+      'never',
+      '--downloader',
+      'native',
+      '--http-chunk-size',
+      '1M',
+      '--max-filesize',
+      _managedPlaybackMaximumEntryBytes.toString(),
+      '--print',
+      'after_move:filepath',
+      '-f',
+      AppConstants.preferredNativeAudioFormat,
+      if (playerClient != null) ...[
+        '--extractor-args',
+        'youtube:player_client=$playerClient',
+      ],
+      '-o',
+      p.join(outputDirectory, '%(id)s.%(format_id)s.%(ext)s'),
+      url,
+    ];
   }
 
   @override
@@ -195,8 +399,17 @@ class DesktopDownloaderService implements DownloaderService {
     return _audioFileExtensions.contains(p.extension(filePath).toLowerCase());
   }
 
-  Future<String> _runYtDlp(List<String> args) async {
+  Future<String> _runYtDlp(
+    List<String> args, {
+    int? managedPlaybackGeneration,
+  }) async {
+    if (managedPlaybackGeneration != null) {
+      _ensureManagedPlaybackCurrent(managedPlaybackGeneration);
+    }
     final executable = await getYtDlpPath();
+    if (managedPlaybackGeneration != null) {
+      _ensureManagedPlaybackCurrent(managedPlaybackGeneration);
+    }
     late final Process process;
     try {
       process = await _startProcess(executable, args);
@@ -208,20 +421,66 @@ class DesktopDownloaderService implements DownloaderService {
       );
     }
 
+    if (managedPlaybackGeneration != null) {
+      if (managedPlaybackGeneration != _managedPlaybackGeneration ||
+          _disposed) {
+        _terminateProcessTree(process);
+        _forgetProcess(process);
+        _ensureManagedPlaybackCurrent(managedPlaybackGeneration);
+      }
+      _activeManagedPlaybackProcess = process;
+    }
+
     final stdoutBuffer = StringBuffer();
     final stderrBuffer = StringBuffer();
+    final managedPlayback = managedPlaybackGeneration != null;
+    final watchdog = _YtDlpProcessWatchdog(
+      process: process,
+      terminate: _terminateProcessTree,
+      totalTimeout: managedPlayback
+          ? _processDownloadTotalTimeout
+          : _processResolutionTimeout,
+      totalError: DownloaderException(
+        managedPlayback
+            ? 'yt-dlp excedio el limite total de preparacion de audio '
+                  '(${_durationLabel(_processDownloadTotalTimeout)}).'
+            : 'yt-dlp no resolvio la solicitud en '
+                  '${_durationLabel(_processResolutionTimeout)}.',
+        code: managedPlayback
+            ? 'yt_dlp_process_total_timeout'
+            : 'yt_dlp_process_resolution_timeout',
+      ),
+      idleTimeout: managedPlayback ? _processIdleTimeout : null,
+      idleError: managedPlayback
+          ? DownloaderException(
+              'yt-dlp dejo de reportar actividad durante '
+              '${_durationLabel(_processIdleTimeout)}.',
+              code: 'yt_dlp_process_idle_timeout',
+            )
+          : null,
+    );
     try {
       final stdoutDone = process.stdout
           .transform(const Utf8Decoder(allowMalformed: true))
-          .listen(stdoutBuffer.write)
+          .listen((chunk) {
+            watchdog.touch();
+            stdoutBuffer.write(chunk);
+          })
           .asFuture<void>();
       final stderrDone = process.stderr
           .transform(const Utf8Decoder(allowMalformed: true))
-          .listen(stderrBuffer.write)
+          .listen((chunk) {
+            watchdog.touch();
+            stderrBuffer.write(chunk);
+          })
           .asFuture<void>();
 
-      final exitCode = await process.exitCode;
+      final exitCode = await watchdog.waitForExit();
       await Future.wait([stdoutDone, stderrDone]);
+
+      if (managedPlaybackGeneration != null) {
+        _ensureManagedPlaybackCurrent(managedPlaybackGeneration);
+      }
 
       if (exitCode != 0) {
         throw DownloaderException(
@@ -231,6 +490,9 @@ class DesktopDownloaderService implements DownloaderService {
       }
       return stdoutBuffer.toString();
     } finally {
+      if (identical(_activeManagedPlaybackProcess, process)) {
+        _activeManagedPlaybackProcess = null;
+      }
       _forgetProcess(process);
     }
   }
@@ -262,6 +524,22 @@ class DesktopDownloaderService implements DownloaderService {
     final process = await _startProcess(executable, args);
     final errorBuffer = StringBuffer();
     String? printedFilePath;
+    final watchdog = _YtDlpProcessWatchdog(
+      process: process,
+      terminate: _terminateProcessTree,
+      totalTimeout: _processDownloadTotalTimeout,
+      totalError: DownloaderException(
+        'yt-dlp excedio el limite total de descarga '
+        '(${_durationLabel(_processDownloadTotalTimeout)}).',
+        code: 'yt_dlp_process_total_timeout',
+      ),
+      idleTimeout: _processIdleTimeout,
+      idleError: DownloaderException(
+        'yt-dlp dejo de reportar actividad durante '
+        '${_durationLabel(_processIdleTimeout)}.',
+        code: 'yt_dlp_process_idle_timeout',
+      ),
+    );
 
     _emitProgress(
       DownloadProgress(
@@ -278,6 +556,7 @@ class DesktopDownloaderService implements DownloaderService {
           .transform(const Utf8Decoder(allowMalformed: true))
           .transform(const LineSplitter())
           .listen((line) {
+            watchdog.touch();
             final path = _pathFromOutput(line);
             if (path != null) {
               printedFilePath = path;
@@ -290,13 +569,14 @@ class DesktopDownloaderService implements DownloaderService {
           .transform(const Utf8Decoder(allowMalformed: true))
           .transform(const LineSplitter())
           .listen((line) {
+            watchdog.touch();
             if (!_handleProgressLine(taskId, url, line)) {
               errorBuffer.writeln(line);
             }
           })
           .asFuture<void>();
 
-      final exitCode = await process.exitCode;
+      final exitCode = await watchdog.waitForExit();
       await Future.wait([stdoutDone, stderrDone]);
 
       if (exitCode != 0) {
@@ -366,11 +646,15 @@ class DesktopDownloaderService implements DownloaderService {
           if (existingPath != null && existingPath.isNotEmpty) existingPath,
         ].join(separator);
       }
-      final process = await Process.start(
-        executable,
-        buildYtDlpProcessArguments(executable, args),
-        environment: environment,
-      );
+      final processArguments = buildYtDlpProcessArguments(executable, args);
+      final starter = _processStarterOverride;
+      final process = starter == null
+          ? await Process.start(
+              executable,
+              processArguments,
+              environment: environment,
+            )
+          : await starter(executable, processArguments);
       _activeProcesses[process.pid] = process;
       return process;
     } on ProcessException catch (error) {
@@ -387,6 +671,11 @@ class DesktopDownloaderService implements DownloaderService {
   }
 
   void _terminateProcessTree(Process process) {
+    final terminator = _processTerminatorOverride;
+    if (terminator != null) {
+      terminator(process);
+      return;
+    }
     if (Platform.isWindows) {
       unawaited(
         Process.run('taskkill', ['/PID', process.pid.toString(), '/T', '/F'])
@@ -495,17 +784,198 @@ class DesktopDownloaderService implements DownloaderService {
     return files.isEmpty ? null : files.first.path;
   }
 
-  Future<bool> _checkExecutable(String executable, List<String> args) async {
-    try {
-      final result = await Process.run(
-        executable,
-        buildYtDlpProcessArguments(executable, args),
-        stdoutEncoding: const Utf8Codec(allowMalformed: true),
-        stderrEncoding: const Utf8Codec(allowMalformed: true),
+  Future<Directory> _managedPlaybackDirectory() async {
+    final override = _managedPlaybackDirectoryOverride;
+    if (override != null) {
+      return override();
+    }
+    final temporary = await getTemporaryDirectory();
+    return Directory(p.join(temporary.path, 'bstream_managed_playback'));
+  }
+
+  File? _managedPlaybackFileFromOutput(String output, Directory root) {
+    for (final line in const LineSplitter().convert(output).reversed) {
+      final value = line.trim();
+      if (value.isEmpty) {
+        continue;
+      }
+      final file = File(value);
+      if (!file.isAbsolute || !p.isWithin(root.path, file.path)) {
+        continue;
+      }
+      if (file.existsSync() && isSupportedAudioFilePath(file.path)) {
+        return file;
+      }
+    }
+    return null;
+  }
+
+  @visibleForTesting
+  Future<void> trimManagedPlaybackCacheForTesting(
+    Directory root, {
+    String? protectedPath,
+    Iterable<String> protectedPaths = const [],
+  }) {
+    return _trimManagedPlaybackCache(
+      root,
+      protectedPaths: [...protectedPaths, ?protectedPath],
+    );
+  }
+
+  Future<void> _trimManagedPlaybackCache(
+    Directory root, {
+    required Iterable<String> protectedPaths,
+  }) async {
+    const maximumAge = Duration(hours: 12);
+    final cutoff = DateTime.now().subtract(maximumAge);
+    final normalizedProtectedPaths = protectedPaths
+        .map((path) => p.canonicalize(p.absolute(path)))
+        .toSet();
+    final files = await root
+        .list(followLinks: false)
+        .where((entity) => entity is File)
+        .cast<File>()
+        .toList();
+
+    for (final file in files.where(
+      (file) =>
+          !_isProtectedManagedPlaybackFile(file, normalizedProtectedPaths) &&
+          (file.path.endsWith('.part') ||
+              file.path.endsWith('.ytdl') ||
+              file.lastModifiedSync().isBefore(cutoff)),
+    )) {
+      try {
+        await file.delete();
+      } catch (_) {
+        // Cache cleanup must never prevent playback.
+      }
+    }
+
+    final completed = await root
+        .list(followLinks: false)
+        .where(
+          (entity) => entity is File && isSupportedAudioFilePath(entity.path),
+        )
+        .cast<File>()
+        .toList();
+    completed.sort((left, right) {
+      final leftProtected = _isProtectedManagedPlaybackFile(
+        left,
+        normalizedProtectedPaths,
       );
-      return result.exitCode == 0;
-    } on ProcessException {
+      final rightProtected = _isProtectedManagedPlaybackFile(
+        right,
+        normalizedProtectedPaths,
+      );
+      if (leftProtected != rightProtected) {
+        return leftProtected ? -1 : 1;
+      }
+      return right.lastModifiedSync().compareTo(left.lastModifiedSync());
+    });
+
+    var retainedFiles = 0;
+    var retainedBytes = 0;
+    for (final file in completed) {
+      final protected = _isProtectedManagedPlaybackFile(
+        file,
+        normalizedProtectedPaths,
+      );
+      int length;
+      try {
+        length = await file.length();
+      } catch (_) {
+        continue;
+      }
+      final exceedsLimits =
+          retainedFiles >= _managedPlaybackMaximumFiles ||
+          length > _managedPlaybackMaximumBytes - retainedBytes;
+      if (!protected && exceedsLimits) {
+        try {
+          await file.delete();
+        } catch (_) {
+          // Cache cleanup must never prevent playback.
+        }
+        continue;
+      }
+      retainedFiles++;
+      retainedBytes += length;
+    }
+  }
+
+  bool _isProtectedManagedPlaybackFile(File file, Set<String> protectedPaths) {
+    if (protectedPaths.isEmpty) {
       return false;
+    }
+    final candidate = p.canonicalize(p.absolute(file.path));
+    return protectedPaths.any((path) => p.equals(candidate, path));
+  }
+
+  List<String> _managedPlaybackProtectionWindow(String newestPath) {
+    final newest = p.canonicalize(p.absolute(newestPath));
+    final paths = <String>[newest];
+    for (final existing in _protectedManagedPlaybackPaths) {
+      final normalized = p.canonicalize(p.absolute(existing));
+      if (!paths.any((path) => p.equals(path, normalized))) {
+        paths.add(normalized);
+      }
+      if (paths.length == 2) {
+        break;
+      }
+    }
+    return List<String>.unmodifiable(paths);
+  }
+
+  @visibleForTesting
+  int get managedPlaybackMaximumEntryBytesForTesting =>
+      _managedPlaybackMaximumEntryBytes;
+
+  String? _audioMimeType(String extension) {
+    return switch (extension) {
+      'm4a' || 'm4b' || 'mp4' => 'audio/mp4',
+      'aac' => 'audio/aac',
+      'mp3' => 'audio/mpeg',
+      'webm' || 'weba' => 'audio/webm',
+      'ogg' || 'oga' => 'audio/ogg',
+      'opus' => 'audio/opus',
+      'flac' => 'audio/flac',
+      'wav' => 'audio/wav',
+      '3gp' || '3gpp' => 'audio/3gpp',
+      _ => null,
+    };
+  }
+
+  String _cleanManagedPlaybackError(Object error) {
+    if (error is DownloaderException) {
+      return error.message.trim();
+    }
+    return error.toString().trim();
+  }
+
+  Future<bool> _checkExecutable(String executable, List<String> args) async {
+    Process? process;
+    try {
+      process = await _startProcess(executable, args);
+      final watchdog = _YtDlpProcessWatchdog(
+        process: process,
+        terminate: _terminateProcessTree,
+        totalTimeout: _processResolutionTimeout,
+        totalError: DownloaderException(
+          'yt-dlp no respondio a la comprobacion en '
+          '${_durationLabel(_processResolutionTimeout)}.',
+          code: 'yt_dlp_process_resolution_timeout',
+        ),
+      );
+      final stdoutDone = process.stdout.drain<void>();
+      final stderrDone = process.stderr.drain<void>();
+      final exitCode = await watchdog.waitForExit();
+      await Future.wait([stdoutDone, stderrDone]);
+      return exitCode == 0;
+    } catch (_) {
+      return false;
+    } finally {
+      if (process != null) {
+        _forgetProcess(process);
+      }
     }
   }
 
@@ -519,6 +989,10 @@ class DesktopDownloaderService implements DownloaderService {
       arguments.insert(0, '--ignore-config');
     }
     var insertionIndex = arguments.indexOf('--ignore-config') + 1;
+    if (!_hasOption(arguments, '--socket-timeout')) {
+      arguments.insertAll(insertionIndex, const ['--socket-timeout', '20']);
+      insertionIndex += 2;
+    }
 
     final deno = _findBundledDeno(ytDlpExecutable);
     if (deno != null && !_hasJavaScriptRuntime(arguments, 'deno')) {
@@ -536,6 +1010,12 @@ class DesktopDownloaderService implements DownloaderService {
       arguments.insertAll(insertionIndex, const ['--js-runtimes', 'node']);
     }
     return arguments;
+  }
+
+  bool _hasOption(List<String> arguments, String option) {
+    return arguments.any(
+      (argument) => argument == option || argument.startsWith('$option='),
+    );
   }
 
   bool _hasJavaScriptRuntime(List<String> args, String runtime) {
@@ -689,6 +1169,20 @@ class DesktopDownloaderService implements DownloaderService {
     return null;
   }
 
+  String _durationLabel(Duration duration) {
+    if (duration.inHours > 0 && duration == Duration(hours: duration.inHours)) {
+      return '${duration.inHours} h';
+    }
+    if (duration.inMinutes > 0 &&
+        duration == Duration(minutes: duration.inMinutes)) {
+      return '${duration.inMinutes} min';
+    }
+    if (duration.inSeconds > 0) {
+      return '${duration.inSeconds} s';
+    }
+    return '${duration.inMilliseconds} ms';
+  }
+
   String _cleanProcessError(Object? stderr, Object? stdout) {
     final error = stderr?.toString().trim() ?? '';
     if (error.isNotEmpty) {
@@ -706,6 +1200,8 @@ class DesktopDownloaderService implements DownloaderService {
 
   Future<void> dispose() async {
     _disposed = true;
+    _managedPlaybackGeneration++;
+    _activeManagedPlaybackProcess = null;
     final processes = _activeProcesses.values.toList(growable: false);
     _activeProcesses.clear();
     for (final process in processes) {
@@ -713,4 +1209,94 @@ class DesktopDownloaderService implements DownloaderService {
     }
     await _progressController.close();
   }
+}
+
+class _YtDlpProcessWatchdog {
+  _YtDlpProcessWatchdog({
+    required this.process,
+    required this.terminate,
+    required this.totalTimeout,
+    required this.totalError,
+    this.idleTimeout,
+    this.idleError,
+  }) : assert(totalTimeout > Duration.zero),
+       assert(idleTimeout == null || idleTimeout > Duration.zero),
+       assert((idleTimeout == null) == (idleError == null)) {
+    _totalTimer = Timer(totalTimeout, () => _expire(totalError));
+    _resetIdleTimer();
+  }
+
+  final Process process;
+  final void Function(Process process) terminate;
+  final Duration totalTimeout;
+  final DownloaderException totalError;
+  final Duration? idleTimeout;
+  final DownloaderException? idleError;
+  final Completer<_YtDlpProcessTimeout> _deadline =
+      Completer<_YtDlpProcessTimeout>();
+
+  late final Timer _totalTimer;
+  Timer? _idleTimer;
+
+  void touch() {
+    if (_deadline.isCompleted) {
+      return;
+    }
+    _resetIdleTimer();
+  }
+
+  Future<int> waitForExit() async {
+    final outcome = await Future.any<Object>([
+      process.exitCode.then<Object>(_YtDlpProcessExit.new),
+      _deadline.future,
+    ]);
+    _totalTimer.cancel();
+    _idleTimer?.cancel();
+    if (outcome is _YtDlpProcessExit) {
+      return outcome.code;
+    }
+
+    final timeout = outcome as _YtDlpProcessTimeout;
+    try {
+      terminate(process);
+    } catch (_) {
+      process.kill();
+    }
+    try {
+      await process.exitCode.timeout(const Duration(seconds: 5));
+    } on TimeoutException {
+      process.kill(ProcessSignal.sigkill);
+    } catch (_) {
+      // The watchdog error below is the useful failure for the caller.
+    }
+    throw timeout.error;
+  }
+
+  void _resetIdleTimer() {
+    _idleTimer?.cancel();
+    final timeout = idleTimeout;
+    final error = idleError;
+    if (timeout == null || error == null || _deadline.isCompleted) {
+      return;
+    }
+    _idleTimer = Timer(timeout, () => _expire(error));
+  }
+
+  void _expire(DownloaderException error) {
+    if (!_deadline.isCompleted) {
+      _deadline.complete(_YtDlpProcessTimeout(error));
+    }
+  }
+}
+
+class _YtDlpProcessExit {
+  const _YtDlpProcessExit(this.code);
+
+  final int code;
+}
+
+class _YtDlpProcessTimeout {
+  const _YtDlpProcessTimeout(this.error);
+
+  final DownloaderException error;
 }

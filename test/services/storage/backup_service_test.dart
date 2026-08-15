@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/services/storage/backup_service.dart';
+import 'package:bstream_music/services/storage/library_operation_coordinator.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   const pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
@@ -14,6 +16,7 @@ void main() {
   late Directory mediaRoot;
   late File databaseFile;
   late _FakeDatabaseService databaseService;
+  late LibraryOperationCoordinator coordinator;
 
   setUp(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +25,7 @@ void main() {
     databaseFile = File(p.join(sandbox.path, AppConstants.databaseName));
     await databaseFile.writeAsString('database-v1');
     databaseService = _FakeDatabaseService(databaseFile.path);
+    coordinator = LibraryOperationCoordinator();
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(pathProviderChannel, (call) async {
@@ -36,6 +40,7 @@ void main() {
   tearDown(() async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(pathProviderChannel, null);
+    await coordinator.dispose();
     if (await sandbox.exists()) {
       await sandbox.delete(recursive: true);
     }
@@ -55,10 +60,11 @@ void main() {
       p.join(mediaRoot.path, 'thumbnails', 'song.jpg'),
     ).writeAsString('thumbnail-bytes');
 
-    final backup = await BackupService(databaseService).createBackupFile(
-      mediaRoot: mediaRoot.path,
-      outputPath: p.join(sandbox.path, 'backup.zip'),
-    );
+    final backup = await BackupService(databaseService, coordinator)
+        .createBackupFile(
+          mediaRoot: mediaRoot.path,
+          outputPath: p.join(sandbox.path, 'backup.zip'),
+        );
     final archive = ZipDecoder().decodeBytes(await backup.readAsBytes());
 
     expect(archive.find('manifest.json'), isNotNull);
@@ -93,6 +99,7 @@ void main() {
     await backup.writeAsBytes(ZipEncoder().encodeBytes(archive));
     await BackupService(
       databaseService,
+      coordinator,
     ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path);
 
     expect(await databaseFile.readAsString(), 'database-v2');
@@ -133,6 +140,7 @@ void main() {
     await expectLater(
       BackupService(
         databaseService,
+        coordinator,
       ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path),
       throwsFormatException,
     );
@@ -168,6 +176,7 @@ void main() {
     await expectLater(
       BackupService(
         databaseService,
+        coordinator,
       ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path),
       throwsFormatException,
     );
@@ -203,6 +212,7 @@ void main() {
     await expectLater(
       BackupService(
         databaseService,
+        coordinator,
       ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path),
       throwsA(isA<StateError>()),
     );
@@ -272,6 +282,12 @@ class _FakeDatabaseService extends LocalDatabaseService {
 
   @override
   Future<String> databasePath() async => path;
+
+  @override
+  Future<T> withDatabase<T>(Future<T> Function(Database) operation) async {
+    // No-op in tests: the fake database file is not a real SQLite database.
+    throw StateError('withDatabase is not supported in fake database service');
+  }
 
   @override
   Future<void> close() async {

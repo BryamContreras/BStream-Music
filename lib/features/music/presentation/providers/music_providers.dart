@@ -21,8 +21,13 @@ import '../../../../core/utils/image_source.dart';
 import '../../../../core/utils/safe_file_name.dart';
 import '../../../../platform_channels/android_ytdl_channel.dart';
 import '../../../../services/downloader/android_downloader_service.dart';
+import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/downloader/desktop_downloader_service.dart';
 import '../../../../services/downloader/downloader_service.dart';
+import '../../../../services/downloader/fallback_audio_resolver.dart';
+import '../../../../services/downloader/yt_dlp_audio_resolver.dart';
+import '../../../../services/downloader/youtube_explode_audio_resolver.dart';
+import '../../../../services/downloader/youtube_explode_download_service.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
 import '../../../../services/media_session/desktop_media_session.dart';
@@ -31,8 +36,12 @@ import '../../../../services/player/just_audio_player_service.dart';
 import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
 import '../../../../services/storage/backup_service.dart';
+import '../../../../services/storage/library_csv_import_service.dart';
+import '../../../../services/storage/library_csv_service.dart';
+import '../../../../services/storage/library_operation_coordinator.dart';
 import '../../../../services/storage/local_database_service.dart';
 import '../../../../services/storage/local_library_reconciler.dart';
+import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/local_music_datasource.dart';
 import '../../data/datasources/remote_music_datasource.dart';
 import '../../data/models/track_info_model.dart';
@@ -44,6 +53,7 @@ import '../../domain/entities/local_track.dart';
 import '../../domain/entities/lyrics.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/track_info.dart';
+import '../../domain/entities/search_result.dart';
 import '../../domain/repositories/library_repository.dart';
 import '../../domain/repositories/music_repository.dart';
 import '../../domain/usecases/download_audio.dart';
@@ -54,12 +64,15 @@ import '../../domain/usecases/get_playlists.dart';
 import '../../domain/usecases/get_track_info.dart';
 import '../../domain/usecases/search_tracks.dart';
 import 'app_strings.dart';
+import 'lyrics_animation_style.dart';
 
 export 'app_strings.dart';
+export 'lyrics_animation_style.dart';
 
 part 'app_strings_provider.dart';
 part 'download_controller.dart';
 part 'local_track_download_helper.dart';
+part 'library_csv_transfer_controller.dart';
 part 'lyrics_offset_controller.dart';
 part 'player_controller.dart';
 part 'playlists_controller.dart';
@@ -71,19 +84,30 @@ part 'sleep_timer_controller.dart';
 part 'tiktok_live_controller.dart';
 
 final downloaderServiceProvider = Provider<DownloaderService>((ref) {
+  late final DownloaderService fallback;
   if (AppPlatform.isAndroid) {
-    return AndroidDownloaderService(AndroidYtdlChannel());
-  }
-
-  if (AppPlatform.isDesktop) {
+    fallback = AndroidDownloaderService(AndroidYtdlChannel());
+  } else if (AppPlatform.isDesktop) {
     final service = DesktopDownloaderService();
     ref.onDispose(service.dispose);
-    return service;
+    fallback = service;
+  } else {
+    throw const UnsupportedPlatformException(
+      'BStream Music soporta Android, Windows, Linux y macOS.',
+    );
   }
 
-  throw const UnsupportedPlatformException(
-    'BStream Music soporta Android, Windows, Linux y macOS.',
-  );
+  final service = YoutubeExplodeDownloadService(fallback: fallback);
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// The yt-dlp implementation behind the primary download decorator.
+/// Tests and alternate integrations that override [downloaderServiceProvider]
+/// continue to work without knowing about the production wrapper.
+final ytDlpDownloaderServiceProvider = Provider<DownloaderService>((ref) {
+  final service = ref.watch(downloaderServiceProvider);
+  return service is YoutubeExplodeDownloadService ? service.fallback : service;
 });
 
 final downloaderWarmupProvider = FutureProvider<void>((ref) async {
@@ -260,6 +284,7 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
                     id: entry.id,
                     title: entry.title,
                     artist: entry.artist,
+                    album: entry.album,
                     thumbnailUrl: entry.thumbnailUrl,
                   ),
                 )
@@ -334,12 +359,191 @@ final databaseServiceProvider = Provider<LocalDatabaseService>((ref) {
 });
 
 final backupServiceProvider = Provider<BackupService>((ref) {
-  return BackupService(ref.watch(databaseServiceProvider));
+  return BackupService(
+    ref.watch(databaseServiceProvider),
+    ref.watch(libraryOperationCoordinatorProvider),
+  );
 });
 
-final remoteMusicDataSourceProvider = Provider<RemoteMusicDataSource>((ref) {
-  return RemoteMusicDataSource(ref.watch(downloaderServiceProvider));
+final libraryOperationCoordinatorProvider =
+    Provider<LibraryOperationCoordinator>((ref) {
+      final coordinator = LibraryOperationCoordinator();
+      ref.onDispose(coordinator.dispose);
+      return coordinator;
+    });
+
+final youtubeMusicSearchProvider = Provider<YouTubeMusicSearch>((ref) {
+  final service = InnerTubeSearchService();
+  ref.onDispose(service.dispose);
+  return service;
 });
+
+sealed class HomeRecommendationItem {
+  const HomeRecommendationItem();
+}
+
+final class HomeRecommendationTrackItem extends HomeRecommendationItem {
+  const HomeRecommendationTrackItem(this.track);
+
+  final TrackInfo track;
+}
+
+enum HomeRecommendationCollectionKind { mix, playlist }
+
+class HomeRecommendationCollection {
+  const HomeRecommendationCollection({
+    required this.title,
+    required this.browseId,
+    required this.kind,
+    this.subtitle,
+    this.thumbnailUrl,
+    this.playlistId,
+  });
+
+  final String title;
+  final String? subtitle;
+  final String? thumbnailUrl;
+  final String browseId;
+  final String? playlistId;
+  final HomeRecommendationCollectionKind kind;
+
+  bool get isMix => kind == HomeRecommendationCollectionKind.mix;
+}
+
+final class HomeRecommendationCollectionItem extends HomeRecommendationItem {
+  const HomeRecommendationCollectionItem(this.collection);
+
+  final HomeRecommendationCollection collection;
+}
+
+class HomeRecommendationSection {
+  HomeRecommendationSection({
+    required String title,
+    required List<TrackInfo> tracks,
+  }) : this.items(
+         title: title,
+         items: tracks
+             .map<HomeRecommendationItem>(HomeRecommendationTrackItem.new)
+             .toList(growable: false),
+       );
+
+  HomeRecommendationSection.items({
+    required this.title,
+    required List<HomeRecommendationItem> items,
+  }) : items = List.unmodifiable(items);
+
+  final String title;
+  final List<HomeRecommendationItem> items;
+
+  List<TrackInfo> get tracks => List.unmodifiable(
+    items.whereType<HomeRecommendationTrackItem>().map((item) => item.track),
+  );
+}
+
+final homeRecommendationsProvider =
+    FutureProvider<List<HomeRecommendationSection>>(
+      (ref) async {
+        final search = ref.watch(youtubeMusicSearchProvider);
+        if (search is! YouTubeMusicHome) {
+          return const <HomeRecommendationSection>[];
+        }
+        final home = search as YouTubeMusicHome;
+        final sections = await home.getHome(
+          maxSections: 5,
+          maxItemsPerSection: 12,
+        );
+        return List.unmodifiable(
+          sections
+              .map(
+                (section) => HomeRecommendationSection.items(
+                  title: section.title,
+                  items: section.items
+                      .map(_homeRecommendationItemFromInnerTube)
+                      .whereType<HomeRecommendationItem>()
+                      .toList(growable: false),
+                ),
+              )
+              .where((section) => section.items.isNotEmpty),
+        );
+      },
+      // Home deliberately renders errors as local-only. Avoid Riverpod's
+      // automatic retries so a manual refresh remains predictable.
+      retry: (_, _) => null,
+    );
+
+final homeCollectionTracksProvider =
+    FutureProvider.family<List<TrackInfo>, String>((ref, browseId) async {
+      final normalizedBrowseId = browseId.trim();
+      if (normalizedBrowseId.isEmpty) {
+        throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');
+      }
+      final search = ref.watch(youtubeMusicSearchProvider);
+      if (search is! YouTubeMusicCollectionLookup) {
+        throw UnsupportedError(
+          'The configured YouTube Music service cannot resolve collections.',
+        );
+      }
+      final lookup = search as YouTubeMusicCollectionLookup;
+      final songs = await lookup.getCollectionSongs(
+        normalizedBrowseId,
+        limit: innerTubeDetailResultLimit,
+      );
+      return List.unmodifiable(songs.map(trackInfoFromInnerTubeSong));
+    });
+
+HomeRecommendationItem? _homeRecommendationItemFromInnerTube(
+  InnerTubeHomeItem item,
+) {
+  if (item is InnerTubeHomeSongItem) {
+    return HomeRecommendationTrackItem(trackInfoFromInnerTubeSong(item.song));
+  }
+  if (item is InnerTubeHomeCollection) {
+    return HomeRecommendationCollectionItem(
+      HomeRecommendationCollection(
+        title: item.title,
+        subtitle: item.subtitle,
+        thumbnailUrl: item.thumbnailUrl,
+        browseId: item.browseId,
+        playlistId: item.playlistId,
+        kind: switch (item.kind) {
+          InnerTubeHomeCollectionKind.mix =>
+            HomeRecommendationCollectionKind.mix,
+          InnerTubeHomeCollectionKind.playlist =>
+            HomeRecommendationCollectionKind.playlist,
+        },
+      ),
+    );
+  }
+  return null;
+}
+
+final remoteMusicDataSourceProvider = Provider<RemoteMusicDataSource>((ref) {
+  return RemoteMusicDataSource(
+    ref.watch(downloaderServiceProvider),
+    youtubeMusicSearch: ref.watch(youtubeMusicSearchProvider),
+  );
+});
+
+final searchAlbumTracksProvider =
+    FutureProvider.family<List<TrackInfo>, String>((ref, browseId) async {
+      final normalizedBrowseId = browseId.trim();
+      if (normalizedBrowseId.isEmpty) {
+        throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');
+      }
+      final search = ref
+          .watch(remoteMusicDataSourceProvider)
+          .youtubeMusicSearch;
+      if (search is! YouTubeMusicAlbumLookup) {
+        throw UnsupportedError(
+          'The configured YouTube Music service cannot resolve albums.',
+        );
+      }
+      final songs = await (search as YouTubeMusicAlbumLookup).getAlbumSongs(
+        normalizedBrowseId,
+        limit: innerTubeDetailResultLimit,
+      );
+      return List.unmodifiable(songs.map(trackInfoFromInnerTubeSong));
+    });
 
 final localMusicDataSourceProvider = Provider<LocalMusicDataSource>((ref) {
   return LocalMusicDataSource(ref.watch(databaseServiceProvider));
@@ -393,6 +597,16 @@ final searchTracksProvider = Provider<SearchTracks>((ref) {
 
 final downloadAudioProvider = Provider<DownloadAudio>((ref) {
   return DownloadAudio(ref.watch(musicRepositoryProvider));
+});
+
+final audioStreamResolverProvider = Provider<AudioStreamResolver>((ref) {
+  final primary = YoutubeExplodeAudioResolver();
+  final fallback = YtDlpAudioResolver(
+    ref.watch(ytDlpDownloaderServiceProvider),
+  );
+  final resolver = FallbackAudioResolver([primary, fallback]);
+  ref.onDispose(resolver.dispose);
+  return resolver;
 });
 
 final getLibraryTracksProvider = Provider<GetLibraryTracks>((ref) {

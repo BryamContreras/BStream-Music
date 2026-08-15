@@ -116,6 +116,8 @@ class RemotePlaybackCache {
   static const _audioExtensions = {
     '.aiff',
     '.alac',
+    '.3gp',
+    '.3gpp',
     '.flac',
     '.m4a',
     '.m4b',
@@ -417,6 +419,7 @@ class RemotePlaybackCache {
       }
 
       final extension = _audioExtension(
+        track,
         uri,
         response.headers.contentType?.mimeType,
       );
@@ -941,8 +944,10 @@ class RemotePlaybackCache {
     return encoded.substring(0, 72);
   }
 
-  String _audioExtension(Uri uri, String? mimeType) {
-    final mime = (mimeType ?? uri.queryParameters['mime'] ?? '').toLowerCase();
+  String _audioExtension(TrackInfo track, Uri uri, String? mimeType) {
+    final mime =
+        (mimeType ?? track.streamMimeType ?? uri.queryParameters['mime'] ?? '')
+            .toLowerCase();
     if (mime.contains('audio/mp4') || mime.contains('mp4a')) {
       return '.m4a';
     }
@@ -960,6 +965,17 @@ class RemotePlaybackCache {
     }
     if (mime.contains('aac')) {
       return '.aac';
+    }
+    if (mime.contains('3gpp') || mime.contains('3gp')) {
+      return '.3gp';
+    }
+    final declaredExtension = track.streamExtension
+        ?.trim()
+        .toLowerCase()
+        .replaceFirst('.', '');
+    if (declaredExtension != null &&
+        _audioExtensions.contains('.$declaredExtension')) {
+      return '.$declaredExtension';
     }
     final pathExtension = p.extension(uri.path).toLowerCase();
     if (_audioExtensions.contains(pathExtension)) {

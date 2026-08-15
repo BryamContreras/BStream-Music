@@ -9,6 +9,10 @@ enum LiveQueueItemStatus { resolving, downloading, ready, failed }
 
 enum TikTokCommandAccess { everyone, moderators }
 
+class _LiveQueueOperationCancelled implements Exception {
+  const _LiveQueueOperationCancelled();
+}
+
 bool canUseTikTokCommand(
   TikTokCommandAccess access,
   TikTokLiveChatCommand command,
@@ -29,9 +33,13 @@ class LiveQueueItem {
     this.remoteTrack,
     this.localTrack,
     this.reusedExisting = false,
+    this.saveToLibrary = false,
   });
 
-  factory LiveQueueItem.fromCommand(TikTokLiveChatCommand command) {
+  factory LiveQueueItem.fromCommand(
+    TikTokLiveChatCommand command, {
+    required bool saveToLibrary,
+  }) {
     return LiveQueueItem(
       id: const Uuid().v4(),
       requestedBy: command.user,
@@ -41,6 +49,7 @@ class LiveQueueItem {
       status: LiveQueueItemStatus.resolving,
       requestedByModerator: command.isModerator,
       message: 'Buscando...',
+      saveToLibrary: saveToLibrary,
     );
   }
 
@@ -55,12 +64,15 @@ class LiveQueueItem {
   final TrackInfo? remoteTrack;
   final LocalTrack? localTrack;
   final bool reusedExisting;
+  final bool saveToLibrary;
 
   bool get isPending =>
       status == LiveQueueItemStatus.resolving ||
       status == LiveQueueItemStatus.downloading;
 
-  bool get isReady => status == LiveQueueItemStatus.ready && localTrack != null;
+  bool get isReady =>
+      status == LiveQueueItemStatus.ready &&
+      (localTrack != null || remoteTrack != null);
 
   String get displayTitle =>
       localTrack?.title ??
@@ -98,6 +110,7 @@ class LiveQueueItem {
       remoteTrack: remoteTrack ?? this.remoteTrack,
       localTrack: localTrack ?? this.localTrack,
       reusedExisting: reusedExisting ?? this.reusedExisting,
+      saveToLibrary: saveToLibrary,
     );
   }
 }
@@ -111,38 +124,55 @@ class TikTokLiveState {
     this.roomId,
     this.lastCommand,
     this.commandAccess = TikTokCommandAccess.everyone,
+    this.saveRequestsToLibrary = false,
     this.commandsHandled = 0,
     this.liveQueue = const [],
   });
 
   final String creatorInput;
-  final TikTokLiveBridgeStatus status;
+  final TikTokLiveStatus status;
   final String message;
   final String? normalizedCreator;
   final String? roomId;
   final TikTokLiveChatCommand? lastCommand;
   final TikTokCommandAccess commandAccess;
+  final bool saveRequestsToLibrary;
   final int commandsHandled;
   final List<LiveQueueItem> liveQueue;
 
-  bool get isConnected => status == TikTokLiveBridgeStatus.connected;
-  bool get isBusy => status == TikTokLiveBridgeStatus.connecting;
+  bool get isConnected => status == TikTokLiveStatus.connected;
+  bool get isBusy => status == TikTokLiveStatus.connecting;
   int get pendingPlayCommands =>
       liveQueue.where((item) => item.isPending).length;
   int get readyPlayCommands => liveQueue.where((item) => item.isReady).length;
-  List<LocalTrack> get readyTracks => liveQueue
-      .map((item) => item.localTrack)
-      .whereType<LocalTrack>()
-      .toList(growable: false);
+  List<LocalTrack> get readyTracks {
+    final seen = <String>{};
+    return [
+      for (final item in liveQueue)
+        if (item.localTrack case final track?)
+          if (seen.add(track.id)) track,
+    ];
+  }
+
+  List<TrackInfo> get readyRemoteTracks {
+    final seen = <String>{};
+    return [
+      for (final item in liveQueue)
+        if (!item.saveToLibrary)
+          if (item.remoteTrack case final track?)
+            if (seen.add(track.id.trim().isEmpty ? track.url : track.id)) track,
+    ];
+  }
 
   TikTokLiveState copyWith({
     String? creatorInput,
-    TikTokLiveBridgeStatus? status,
+    TikTokLiveStatus? status,
     String? message,
     String? normalizedCreator,
     String? roomId,
     TikTokLiveChatCommand? lastCommand,
     TikTokCommandAccess? commandAccess,
+    bool? saveRequestsToLibrary,
     int? commandsHandled,
     List<LiveQueueItem>? liveQueue,
   }) {
@@ -154,6 +184,8 @@ class TikTokLiveState {
       roomId: roomId ?? this.roomId,
       lastCommand: lastCommand ?? this.lastCommand,
       commandAccess: commandAccess ?? this.commandAccess,
+      saveRequestsToLibrary:
+          saveRequestsToLibrary ?? this.saveRequestsToLibrary,
       commandsHandled: commandsHandled ?? this.commandsHandled,
       liveQueue: liveQueue ?? this.liveQueue,
     );
@@ -161,12 +193,20 @@ class TikTokLiveState {
 }
 
 class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
+  /// Bounds both the visible LIVE queue and its serial search/download backlog.
+  ///
+  /// Keeping the value public makes the product limit explicit to UI and
+  /// regression tests instead of relying on an unbounded in-memory queue.
+  static const int maxQueueItems = 50;
+
   static const _creatorInputKey = 'tiktokLive.creatorInput';
   static const _commandAccessKey = 'tiktokLive.commandAccess';
+  static const _saveRequestsToLibraryKey = 'tiktokLive.saveRequestsToLibrary';
 
   final _musicQueue = Queue<LiveQueueItem>();
   bool _processingMusicQueue = false;
   bool _liveQueueActivated = false;
+  int _liveQueueGeneration = 0;
 
   @override
   Future<TikTokLiveState> build() async {
@@ -181,11 +221,14 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       (value) => value.name == storedCommandAccess,
       orElse: () => TikTokCommandAccess.everyone,
     );
+    final saveRequestsToLibrary =
+        prefs.getBool(_saveRequestsToLibraryKey) ?? false;
     return TikTokLiveState(
       creatorInput: creatorInput,
       normalizedCreator: normalizeCreatorInput(creatorInput),
-      status: TikTokLiveBridgeStatus.idle,
+      status: TikTokLiveStatus.idle,
       commandAccess: commandAccess,
+      saveRequestsToLibrary: saveRequestsToLibrary,
       message: creatorInput.trim().isEmpty
           ? 'Ingresa un usuario o link de TikTok LIVE.'
           : 'Listo para conectar.',
@@ -211,6 +254,25 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     state = AsyncData(current.copyWith(commandAccess: access));
   }
 
+  Future<void> setSaveRequestsToLibrary(bool value) async {
+    final current = state.value ?? await future;
+    if (current.saveRequestsToLibrary == value) {
+      return;
+    }
+    if (current.liveQueue.isNotEmpty) {
+      state = AsyncData(
+        current.copyWith(
+          message: 'Limpia la cola LIVE antes de cambiar el modo.',
+        ),
+      );
+      return;
+    }
+
+    state = AsyncData(current.copyWith(saveRequestsToLibrary: value));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_saveRequestsToLibraryKey, value);
+  }
+
   Future<void> connect([String? value]) async {
     final current = await future;
     final input = (value ?? current.creatorInput).trim();
@@ -220,7 +282,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       state = AsyncData(
         current.copyWith(
           creatorInput: input,
-          status: TikTokLiveBridgeStatus.error,
+          status: TikTokLiveStatus.error,
           message: 'Ingresa @usuario o el link del live.',
         ),
       );
@@ -231,7 +293,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       current.copyWith(
         creatorInput: input,
         normalizedCreator: normalized,
-        status: TikTokLiveBridgeStatus.connecting,
+        status: TikTokLiveStatus.connecting,
         message: 'Conectando a @$normalized...',
       ),
     );
@@ -242,7 +304,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       final latest = await future;
       state = AsyncData(
         latest.copyWith(
-          status: TikTokLiveBridgeStatus.error,
+          status: TikTokLiveStatus.error,
           message: error.toString(),
         ),
       );
@@ -250,13 +312,19 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   }
 
   Future<void> disconnect() async {
-    await ref.read(tiktokLiveCommandServiceProvider).disconnect();
-    final current = await future;
+    _liveQueueGeneration++;
     _musicQueue.clear();
     _liveQueueActivated = false;
+    await ref.read(tiktokLiveCommandServiceProvider).disconnect();
+    final current = await future;
+    final player = ref.read(playerControllerProvider.notifier);
+    if (player.isLiveQueueActive) {
+      await player.clearQueueSource(PlayerController.liveQueueSourceId);
+      await player.stop();
+    }
     state = AsyncData(
       current.copyWith(
-        status: TikTokLiveBridgeStatus.disconnected,
+        status: TikTokLiveStatus.disconnected,
         message: 'Desconectado.',
         liveQueue: const [],
       ),
@@ -264,40 +332,64 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   }
 
   Future<void> clearLiveQueue({bool stopPlayback = true}) async {
+    final player = ref.read(playerControllerProvider.notifier);
+    final liveWasActive = player.isLiveQueueActive;
+    _liveQueueGeneration++;
     _musicQueue.clear();
     _liveQueueActivated = false;
     final current = await future;
     state = AsyncData(
       current.copyWith(liveQueue: const [], message: 'Cola LIVE limpia.'),
     );
-    ref.read(playerControllerProvider.notifier).replaceLocalQueue(const []);
-    if (stopPlayback) {
-      await ref.read(playerControllerProvider.notifier).stop();
+    if (liveWasActive) {
+      await player.clearQueueSource(PlayerController.liveQueueSourceId);
+      if (stopPlayback) {
+        await player.stop();
+      }
     }
   }
 
   Future<void> playLiveQueueItem(String itemId) async {
     final current = await future;
-    final readyTracks = current.readyTracks;
-    if (readyTracks.isEmpty) {
-      return;
-    }
     final item = current.liveQueue
-        .where((entry) => entry.id == itemId && entry.localTrack != null)
+        .where((entry) => entry.id == itemId && entry.isReady)
         .firstOrNull;
-    final track = item?.localTrack;
-    if (track == null) {
+    if (item == null) {
       return;
     }
 
     _liveQueueActivated = true;
-    await ref
-        .read(playerControllerProvider.notifier)
-        .playLocal(track, queue: readyTracks, useNativeQueue: false);
+    final player = ref.read(playerControllerProvider.notifier);
+    if (item.saveToLibrary) {
+      final track = item.localTrack;
+      final readyTracks = current.readyTracks;
+      if (track == null || readyTracks.isEmpty) {
+        return;
+      }
+      await player.playLocal(
+        track,
+        queue: readyTracks,
+        useNativeQueue: false,
+        queueSourceId: PlayerController.liveQueueSourceId,
+      );
+      _setMessage('Reproduciendo cola LIVE: ${track.title}');
+      return;
+    }
+
+    final track = item.remoteTrack;
+    final readyTracks = current.readyRemoteTracks;
+    if (track == null || readyTracks.isEmpty) {
+      return;
+    }
+    await player.playRemote(
+      track,
+      queue: readyTracks,
+      queueSourceId: PlayerController.liveQueueSourceId,
+    );
     _setMessage('Reproduciendo cola LIVE: ${track.title}');
   }
 
-  void _handleBridgeEvent(TikTokLiveBridgeEvent event) {
+  void _handleBridgeEvent(TikTokLiveEvent event) {
     final current = state.value;
     if (current == null) {
       return;
@@ -336,8 +428,22 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       return;
     }
 
+    if (command.action == 'play' && current.liveQueue.length >= maxQueueItems) {
+      state = AsyncData(
+        current.copyWith(
+          lastCommand: command,
+          message:
+              'Cola LIVE llena (maximo $maxQueueItems). Limpiala antes de agregar mas pedidos.',
+        ),
+      );
+      return;
+    }
+
     final liveItem = command.action == 'play'
-        ? LiveQueueItem.fromCommand(command)
+        ? LiveQueueItem.fromCommand(
+            command,
+            saveToLibrary: current.saveRequestsToLibrary,
+          )
         : null;
     state = AsyncData(
       current.copyWith(
@@ -372,7 +478,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     try {
       switch (command.action) {
         case 'skip':
-          await ref.read(playerControllerProvider.notifier).playNext();
+          if (ref.read(playerControllerProvider.notifier).isLiveQueueActive) {
+            await ref.read(playerControllerProvider.notifier).playNext();
+          }
         case 'revoke':
           await clearLiveQueue();
       }
@@ -390,16 +498,17 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     try {
       while (_musicQueue.isNotEmpty) {
         final item = _musicQueue.removeFirst();
-        await _handlePlayCommand(item);
+        final generation = _liveQueueGeneration;
+        await _handlePlayCommand(item, generation);
       }
     } finally {
       _processingMusicQueue = false;
     }
   }
 
-  Future<void> _handlePlayCommand(LiveQueueItem item) async {
+  Future<void> _handlePlayCommand(LiveQueueItem item, int generation) async {
     final query = item.query.trim();
-    if (query.isEmpty) {
+    if (query.isEmpty || !_isLiveQueueOperationCurrent(item.id, generation)) {
       return;
     }
 
@@ -413,6 +522,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       );
       _setMessage('Buscando pedido de ${item.requestedBy}: $query');
       final tracks = await ref.read(searchTracksProvider).call(query);
+      if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+        return;
+      }
       if (tracks.isEmpty) {
         _updateLiveQueueItem(
           item.id,
@@ -425,12 +537,33 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         return;
       }
 
+      if (!item.saveToLibrary) {
+        final remoteTrack = tracks.first;
+        _updateLiveQueueItem(
+          item.id,
+          (entry) => entry.copyWith(
+            status: LiveQueueItemStatus.ready,
+            remoteTrack: remoteTrack,
+            message: 'Lista para reproducir en streaming',
+          ),
+        );
+        await _syncLiveQueuePlayback(saveToLibrary: false);
+        if (_isLiveQueueOperationCurrent(item.id, generation)) {
+          _setMessage(
+            'Agregado para reproduccion remota: ${remoteTrack.title}',
+          );
+        }
+        return;
+      }
+
       final result = await ref
           .read(localTrackDownloadHelperProvider)
           .resolveForLibrary(
             tracks.first,
-            reuseExisting: true,
             onResolved: (track) {
+              if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+                throw const _LiveQueueOperationCancelled();
+              }
               _updateLiveQueueItem(
                 item.id,
                 (entry) => entry.copyWith(
@@ -441,6 +574,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
               _setMessage('Preparando pedido: ${track.title}');
             },
             onDownloadStarted: () {
+              if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+                throw const _LiveQueueOperationCancelled();
+              }
               _updateLiveQueueItem(
                 item.id,
                 (entry) => entry.copyWith(
@@ -451,6 +587,10 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
               _setMessage('Descargando pedido de ${item.requestedBy}...');
             },
           );
+
+      if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+        return;
+      }
 
       _updateLiveQueueItem(
         item.id,
@@ -464,13 +604,18 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
               : 'Descargada',
         ),
       );
-      await _syncLiveQueuePlayback();
-      _setMessage(
-        result.reusedExisting
-            ? 'Agregado desde Biblioteca: ${result.track.title}'
-            : 'Descargado y agregado: ${result.track.title}',
-      );
+      await _syncLiveQueuePlayback(saveToLibrary: true);
+      if (_isLiveQueueOperationCurrent(item.id, generation)) {
+        _setMessage(
+          result.reusedExisting
+              ? 'Agregado desde Biblioteca: ${result.track.title}'
+              : 'Descargado y agregado: ${result.track.title}',
+        );
+      }
     } catch (error) {
+      if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+        return;
+      }
       _updateLiveQueueItem(
         item.id,
         (entry) => entry.copyWith(
@@ -482,9 +627,14 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     }
   }
 
-  Future<void> _syncLiveQueuePlayback() async {
+  Future<void> _syncLiveQueuePlayback({required bool saveToLibrary}) async {
     final current = state.value;
     if (current == null) {
+      return;
+    }
+
+    if (!saveToLibrary) {
+      await _syncRemoteLiveQueuePlayback(current);
       return;
     }
 
@@ -506,6 +656,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         readyTracks.first,
         queue: readyTracks,
         useNativeQueue: false,
+        queueSourceId: PlayerController.liveQueueSourceId,
       );
       return;
     }
@@ -518,6 +669,64 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     if (playbackFinished && readyTracks.length > 1) {
       await player.playNext();
     }
+  }
+
+  Future<void> _syncRemoteLiveQueuePlayback(TikTokLiveState current) async {
+    final readyTracks = current.readyRemoteTracks;
+    if (readyTracks.isEmpty) {
+      return;
+    }
+
+    final playerState = ref.read(playerControllerProvider).value;
+    final currentIsLiveTrack = readyTracks.any(
+      (track) => _snapshotMatchesRemoteTrack(playerState, track),
+    );
+    final player = ref.read(playerControllerProvider.notifier);
+
+    if (!_liveQueueActivated || !currentIsLiveTrack) {
+      _liveQueueActivated = true;
+      await player.playRemote(
+        readyTracks.first,
+        queue: readyTracks,
+        queueSourceId: PlayerController.liveQueueSourceId,
+      );
+      return;
+    }
+
+    await player.syncRemoteQueueSource(
+      PlayerController.liveQueueSourceId,
+      readyTracks,
+    );
+    final playbackFinished =
+        playerState?.status == PlayerStatus.stopped ||
+        playerState?.status == PlayerStatus.failed ||
+        _isPausedAtEnd(playerState);
+    if (playbackFinished && readyTracks.length > 1) {
+      await player.playNext();
+    }
+  }
+
+  bool _snapshotMatchesRemoteTrack(PlayerSnapshot? snapshot, TrackInfo track) {
+    if (snapshot == null) {
+      return false;
+    }
+    final trackId = track.id.trim();
+    if (trackId.isNotEmpty && snapshot.trackId == trackId) {
+      return true;
+    }
+    final sourceUrl = snapshot.sourceUrl?.trim();
+    return sourceUrl != null &&
+        sourceUrl.isNotEmpty &&
+        (sourceUrl == track.url || sourceUrl == track.streamUrl);
+  }
+
+  bool _isLiveQueueOperationCurrent(String itemId, int generation) {
+    if (generation != _liveQueueGeneration) {
+      return false;
+    }
+    final current = state.value;
+    return current != null &&
+        current.liveQueue.any((item) => item.id == itemId);
   }
 
   bool _isPausedAtEnd(PlayerSnapshot? snapshot) {

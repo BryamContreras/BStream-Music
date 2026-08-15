@@ -9,9 +9,13 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
 import 'package:bstream_music/features/music/domain/repositories/music_repository.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
+import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
+import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:bstream_music/services/media_session/desktop_media_session.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -71,7 +75,10 @@ void main() {
         _remoteTrack(streamUrl: 'https://media.example/first.m4a'),
         _remoteTrack(streamUrl: 'https://media.example/refreshed.m4a'),
       ]);
-      final container = _container(player, musicRepository: repository);
+      final container = _container(
+        player,
+        audioResolver: _FakeAudioResolverFromRepository(repository),
+      );
       addTearDown(container.dispose);
       const searchTrack = TrackInfo(
         id: 'q8j3zwNhLNo',
@@ -150,7 +157,7 @@ void main() {
       final second = _queuedRemoteTrack('second');
       final container = _container(
         player,
-        musicRepository: repository,
+        audioResolver: _FakeAudioResolverFromRepository(repository),
         remoteCache: cache,
       );
       addTearDown(container.dispose);
@@ -191,6 +198,211 @@ void main() {
   );
 
   test(
+    'a rejected youtube_explode stream shows its error and switches to yt-dlp once',
+    () async {
+      final player = _RejectYoutubeExplodePlayerService();
+      final resolver = _ModeAwareFallbackAudioResolver();
+      final container = _container(player, audioResolver: resolver);
+      addTearDown(container.dispose);
+      final observed = <AsyncValue<PlayerSnapshot>>[];
+      final subscription = container.listen<AsyncValue<PlayerSnapshot>>(
+        playerControllerProvider,
+        (_, next) => observed.add(next),
+        fireImmediately: true,
+      );
+      addTearDown(subscription.close);
+      const track = TrackInfo(
+        id: 'q8j3zwNhLNo',
+        title: 'Fallback test',
+        artist: 'Artist',
+        url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+      );
+
+      await container.read(playerControllerProvider.future);
+      await container.read(playerControllerProvider.notifier).playRemote(track);
+      await _waitUntil(
+        () => resolver.modes.length == 2 && player.attemptedRemote.length == 2,
+      );
+
+      expect(resolver.modes, [
+        AudioResolutionMode.primaryThenFallback,
+        AudioResolutionMode.fallbackOnly,
+      ]);
+      expect(player.attemptedRemote.map((entry) => entry.streamSource), [
+        AudioStreamSource.youtubeExplode.name,
+        AudioStreamSource.ytDlp.name,
+      ]);
+      expect(
+        observed.any(
+          (value) =>
+              value.value?.errorMessage?.contains(
+                'youtube_explode_dart fallo',
+              ) ==
+              true,
+        ),
+        isTrue,
+      );
+      final playing = container.read(playerControllerProvider).requireValue;
+      expect(playing.status, PlayerStatus.playing);
+      expect(playing.errorMessage, isNull);
+
+      player.emit(
+        player.currentSnapshot.copyWith(
+          status: PlayerStatus.failed,
+          errorMessage: 'HTTP 403 from yt-dlp fallback',
+        ),
+      );
+      await _flushCompletion();
+
+      expect(resolver.modes, hasLength(2));
+      expect(
+        container.read(playerControllerProvider).requireValue.errorMessage,
+        contains('yt-dlp fallback'),
+      );
+    },
+  );
+
+  test(
+    'a prepared yt-dlp fallback clears the primary error before playback starts',
+    () async {
+      final player = _ReadyYtDlpFallbackPlayerService();
+      final resolver = _ModeAwareFallbackAudioResolver();
+      final container = _container(player, audioResolver: resolver);
+      addTearDown(container.dispose);
+      const track = TrackInfo(
+        id: 'ready-fallback',
+        title: 'Prepared fallback',
+        artist: 'Artist',
+        url: 'https://www.youtube.com/watch?v=readyFallback',
+      );
+
+      await container.read(playerControllerProvider.future);
+      await container.read(playerControllerProvider.notifier).playRemote(track);
+      await _waitUntil(
+        () => resolver.modes.length == 2 && player.attemptedRemote.length == 2,
+      );
+
+      final snapshot = container.read(playerControllerProvider).requireValue;
+      expect(snapshot.status, PlayerStatus.stopped);
+      expect(snapshot.duration, const Duration(minutes: 3));
+      expect(snapshot.errorMessage, isNull);
+      expect(resolver.modes, [
+        AudioResolutionMode.primaryThenFallback,
+        AudioResolutionMode.fallbackOnly,
+      ]);
+    },
+  );
+
+  testWidgets('the mini player paints the primary error until yt-dlp starts', (
+    tester,
+  ) async {
+    final fallbackGate = Completer<void>();
+    final player = _RejectYoutubeExplodePlayerService();
+    final resolver = _ModeAwareFallbackAudioResolver(
+      fallbackGate: fallbackGate.future,
+    );
+    final container = _container(player, audioResolver: resolver);
+    addTearDown(container.dispose);
+    const track = TrackInfo(
+      id: 'visible-fallback-error',
+      title: 'Visible fallback error',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=visible-error',
+    );
+
+    await container.read(playerControllerProvider.future);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(width: 720, child: MiniPlayer()),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final playFuture = container
+        .read(playerControllerProvider.notifier)
+        .playRemote(track);
+    await tester.pump();
+
+    expect(find.textContaining('youtube_explode_dart fallo'), findsOneWidget);
+
+    fallbackGate.complete();
+    await playFuture;
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('youtube_explode_dart fallo'), findsNothing);
+    expect(
+      container.read(playerControllerProvider).requireValue.status,
+      PlayerStatus.playing,
+    );
+  });
+
+  testWidgets('the full player shows three lines of the final yt-dlp error', (
+    tester,
+  ) async {
+    const message =
+        'ERROR: [youtube] Video unavailable\n'
+        'The account must have access\n'
+        'Check cookies and try again';
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: PlayerErrorMessage(message: message)),
+      ),
+    );
+
+    final errorText = tester.widget<Text>(find.text(message));
+    expect(errorText.maxLines, 3);
+    expect(errorText.overflow, TextOverflow.ellipsis);
+  });
+
+  test(
+    'a late primary Future error cannot replace a successful yt-dlp fallback',
+    () async {
+      final player = _LatePrimaryFailurePlayerService();
+      final resolver = _ModeAwareFallbackAudioResolver();
+      final container = _container(player, audioResolver: resolver);
+      addTearDown(container.dispose);
+      const track = TrackInfo(
+        id: 'late-primary-error',
+        title: 'Late primary error',
+        artist: 'Artist',
+        url: 'https://www.youtube.com/watch?v=late-primary-error',
+      );
+
+      await container.read(playerControllerProvider.future);
+      final playFuture = container
+          .read(playerControllerProvider.notifier)
+          .playRemote(track);
+      await _waitUntil(
+        () => resolver.modes.length == 2 && player.attemptedRemote.length == 2,
+      );
+      expect(
+        container.read(playerControllerProvider).requireValue.status,
+        PlayerStatus.playing,
+      );
+
+      player.completePrimaryWithError();
+      await playFuture;
+      await _flushCompletion();
+
+      final snapshot = container.read(playerControllerProvider).requireValue;
+      expect(snapshot.status, PlayerStatus.playing);
+      expect(snapshot.errorMessage, isNull);
+      expect(resolver.modes, [
+        AudioResolutionMode.primaryThenFallback,
+        AudioResolutionMode.fallbackOnly,
+      ]);
+    },
+  );
+
+  test(
     'keeps the search artwork when the player backend reports another crop',
     () async {
       final player = _FakePlayerService();
@@ -200,7 +412,10 @@ void main() {
           thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/maxresdefault.jpg',
         ),
       ]);
-      final container = _container(player, musicRepository: repository);
+      final container = _container(
+        player,
+        audioResolver: _FakeAudioResolverFromRepository(repository),
+      );
       addTearDown(container.dispose);
       const searchTrack = TrackInfo(
         id: 'q8j3zwNhLNo',
@@ -241,7 +456,10 @@ void main() {
         _remoteTrack(streamUrl: 'https://media.example/first.m4a'),
         _remoteTrack(streamUrl: 'https://media.example/unexpected.m4a'),
       ]);
-      final container = _container(player, musicRepository: repository);
+      final container = _container(
+        player,
+        audioResolver: _FakeAudioResolverFromRepository(repository),
+      );
       addTearDown(container.dispose);
       const searchTrack = TrackInfo(
         id: 'q8j3zwNhLNo',
@@ -293,7 +511,10 @@ void main() {
         _remoteTrack(streamUrl: 'https://media.example/first.m4a'),
         _remoteTrack(streamUrl: 'https://media.example/unexpected.m4a'),
       ]);
-      final container = _container(player, musicRepository: repository);
+      final container = _container(
+        player,
+        audioResolver: _FakeAudioResolverFromRepository(repository),
+      );
       addTearDown(container.dispose);
       const searchTrack = TrackInfo(
         id: 'q8j3zwNhLNo',
@@ -329,7 +550,10 @@ void main() {
         streamUrl: 'https://media.example/unexpected.m4a',
       ),
     ]);
-    final container = _container(player, musicRepository: repository);
+    final container = _container(
+      player,
+      audioResolver: _FakeAudioResolverFromRepository(repository),
+    );
     addTearDown(container.dispose);
     const first = TrackInfo(
       id: 'remote-a',
@@ -392,7 +616,7 @@ void main() {
       final remoteCache = _FakeRemotePlaybackCache(cachedFile);
       final container = _container(
         player,
-        musicRepository: repository,
+        audioResolver: _FakeAudioResolverFromRepository(repository),
         remoteCache: remoteCache,
       );
       addTearDown(container.dispose);
@@ -1025,6 +1249,27 @@ void main() {
     },
   );
 
+  test('a superseded local request is not written to history', () async {
+    final player = _DelayedLocalPlayerService();
+    final repository = _FakeLibraryRepository();
+    final container = _container(player, repository: repository);
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    final controller = container.read(playerControllerProvider.notifier);
+    final first = controller.playLocal(_track(1), queue: [_track(1)]);
+    await _waitUntil(() => player.started.contains('track-1'));
+    final second = controller.playLocal(_track(2), queue: [_track(2)]);
+    await _waitUntil(() => player.started.contains('track-2'));
+
+    player.complete('track-2');
+    await second;
+    player.complete('track-1');
+    await first;
+
+    expect(repository.playMarks, [(trackId: 'track-2', playlistId: null)]);
+  });
+
   test(
     'a missing local track is purged instead of being sent to the player',
     () async {
@@ -1178,6 +1423,94 @@ void main() {
     },
   );
 
+  test('remote LIVE queue source is reported as active', () async {
+    final player = _FakePlayerService();
+    final container = _container(player);
+    addTearDown(container.dispose);
+    final tracks = [_queuedRemoteTrack('live-1'), _queuedRemoteTrack('live-2')];
+
+    await container.read(playerControllerProvider.future);
+    final controller = container.read(playerControllerProvider.notifier);
+    await controller.playRemote(
+      tracks.first,
+      queue: tracks,
+      queueSourceId: PlayerController.liveQueueSourceId,
+    );
+
+    expect(controller.isLiveQueueActive, isTrue);
+    expect(
+      container.read(playbackQueueProvider).entries.map((entry) => entry.id),
+      ['live-1', 'live-2'],
+    );
+    expect(
+      container
+          .read(playbackQueueProvider)
+          .entries
+          .every((entry) => entry.isRemote),
+      isTrue,
+    );
+    expect(container.read(playbackQueueProvider).currentIndex, 0);
+  });
+
+  test(
+    'syncing an active remote LIVE queue appends tracks without restarting',
+    () async {
+      final player = _FakePlayerService();
+      final container = _container(player);
+      addTearDown(container.dispose);
+      final first = _queuedRemoteTrack('live-1');
+      final expanded = [first, _queuedRemoteTrack('live-2')];
+
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playRemote(
+        first,
+        queue: [first],
+        queueSourceId: PlayerController.liveQueueSourceId,
+      );
+      final startsBeforeSync = player.playedRemote.length;
+
+      final updated = await controller.syncRemoteQueueSource(
+        PlayerController.liveQueueSourceId,
+        expanded,
+      );
+
+      expect(updated, isTrue);
+      expect(player.playedRemote, hasLength(startsBeforeSync));
+      expect(player.currentSnapshot.trackId, 'live-1');
+      expect(
+        container.read(playbackQueueProvider).entries.map((entry) => entry.id),
+        ['live-1', 'live-2'],
+      );
+      expect(container.read(playbackQueueProvider).currentIndex, 0);
+      expect(controller.isLiveQueueActive, isTrue);
+    },
+  );
+
+  test('clearing the active LIVE queue releases its source', () async {
+    final player = _FakePlayerService();
+    final container = _container(player);
+    addTearDown(container.dispose);
+    final track = _queuedRemoteTrack('live-1');
+
+    await container.read(playerControllerProvider.future);
+    final controller = container.read(playerControllerProvider.notifier);
+    await controller.playRemote(
+      track,
+      queue: [track],
+      queueSourceId: PlayerController.liveQueueSourceId,
+    );
+
+    final cleared = await controller.clearQueueSource(
+      PlayerController.liveQueueSourceId,
+    );
+
+    expect(cleared, isTrue);
+    expect(controller.isLiveQueueActive, isFalse);
+    expect(container.read(playbackQueueProvider).entries, isEmpty);
+    expect(container.read(playbackQueueProvider).currentIndex, -1);
+  });
+
   test(
     'shuffle with repeat off stops after every queued track has played',
     () async {
@@ -1262,6 +1595,153 @@ void main() {
     },
   );
 
+  test(
+    'deleting the current local track stops before replacing the native queue',
+    () async {
+      final player = _FakePlayerService(supportsLocalQueueReplacement: true);
+      final container = _container(player);
+      addTearDown(container.dispose);
+      final tracks = [_track(1), _track(2), _track(3)];
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(tracks[1], queue: tracks);
+
+      await container
+          .read(playerControllerProvider.notifier)
+          .removeDeletedLocalTracks({'track-2'});
+
+      expect(player.stopCalls, 1);
+      expect(player.replaceLocalQueueCalls, 1);
+      expect(player.nativeQueueMutationCalls, [
+        'stop',
+        'replace:track-1,track-3',
+      ]);
+      expect(player.lastLocalQueue?.map((track) => track.id), [
+        'track-1',
+        'track-3',
+      ]);
+      expect(player.lastLocalQueueIndex, 0);
+      expect(player.currentSnapshot.status, PlayerStatus.stopped);
+      expect(
+        container.read(playbackQueueProvider).entries.map((entry) => entry.id),
+        ['track-1', 'track-3'],
+      );
+      expect(container.read(playbackQueueProvider).currentIndex, -1);
+    },
+  );
+
+  test(
+    'deleting a non-current local track keeps playback and replaces the native queue',
+    () async {
+      final player = _FakePlayerService(supportsLocalQueueReplacement: true);
+      final container = _container(player);
+      addTearDown(container.dispose);
+      final tracks = [_track(1), _track(2), _track(3)];
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(tracks[1], queue: tracks);
+
+      await container
+          .read(playerControllerProvider.notifier)
+          .removeDeletedLocalTracks({'track-3'});
+
+      expect(player.stopCalls, 0);
+      expect(player.replaceLocalQueueCalls, 1);
+      expect(player.nativeQueueMutationCalls, ['replace:track-1,track-2']);
+      expect(player.lastLocalQueue?.map((track) => track.id), [
+        'track-1',
+        'track-2',
+      ]);
+      expect(player.lastLocalQueueIndex, 1);
+      expect(player.currentSnapshot.status, PlayerStatus.playing);
+      expect(player.currentSnapshot.trackId, 'track-2');
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+    },
+  );
+
+  test('deleting the only local track clears the native queue', () async {
+    final player = _FakePlayerService(supportsLocalQueueReplacement: true);
+    final container = _container(player);
+    addTearDown(container.dispose);
+    final track = _track(1);
+
+    await container.read(playerControllerProvider.future);
+    await container
+        .read(playerControllerProvider.notifier)
+        .playLocal(track, queue: [track]);
+
+    await container
+        .read(playerControllerProvider.notifier)
+        .removeDeletedLocalTracks({'track-1'});
+
+    expect(player.stopCalls, 1);
+    expect(player.replaceLocalQueueCalls, 1);
+    expect(player.nativeQueueMutationCalls, ['stop', 'replace:']);
+    expect(player.lastLocalQueue, isEmpty);
+    expect(player.lastLocalQueueIndex, 0);
+    expect(container.read(playbackQueueProvider).entries, isEmpty);
+    expect(container.read(playbackQueueProvider).currentIndex, -1);
+  });
+
+  test(
+    'deleting an unrelated local id leaves the active remote queue untouched',
+    () async {
+      final player = _FakePlayerService(supportsLocalQueueReplacement: true);
+      player.emit(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'previous-remote',
+          isRemote: true,
+        ),
+      );
+      final container = _container(player);
+      addTearDown(container.dispose);
+      final remoteTracks = [
+        _queuedRemoteTrack('track-1'),
+        _queuedRemoteTrack('remote-2'),
+      ];
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(remoteTracks.first, queue: remoteTracks);
+      await _flushCompletion();
+      final snapshotBeforeDelete = container
+          .read(playerControllerProvider)
+          .value!;
+      final queueBeforeDelete = container.read(playbackQueueProvider);
+
+      // The library id intentionally collides with the current remote id. Its
+      // media type, not the string alone, determines whether playback is local.
+      await container
+          .read(playerControllerProvider.notifier)
+          .removeDeletedLocalTracks({'track-1'});
+
+      final snapshotAfterDelete = container
+          .read(playerControllerProvider)
+          .value!;
+      final queueAfterDelete = container.read(playbackQueueProvider);
+      expect(player.stopCalls, 0);
+      expect(player.replaceLocalQueueCalls, 0);
+      expect(player.nativeQueueMutationCalls, isEmpty);
+      expect(snapshotAfterDelete, same(snapshotBeforeDelete));
+      expect(snapshotAfterDelete.status, PlayerStatus.playing);
+      expect(snapshotAfterDelete.trackId, 'track-1');
+      expect(snapshotAfterDelete.isRemote, isTrue);
+      expect(queueAfterDelete, same(queueBeforeDelete));
+      expect(queueAfterDelete.entries.map((entry) => entry.id), [
+        'track-1',
+        'remote-2',
+      ]);
+      expect(queueAfterDelete.entries.every((entry) => entry.isRemote), isTrue);
+      expect(queueAfterDelete.currentIndex, 0);
+    },
+  );
+
   test('reordering the playback queue keeps the current item active', () async {
     final player = _FakePlayerService(supportsLocalQueueReplacement: true);
     final container = _container(player);
@@ -1283,6 +1763,28 @@ void main() {
     expect(queue.currentIndex, 0);
     expect(player.replaceLocalQueueCalls, 1);
     expect(player.lastLocalQueueIndex, 0);
+  });
+
+  test('local playback exposes persisted album metadata to lyrics', () async {
+    final player = _FakePlayerService();
+    final container = _container(player);
+    addTearDown(container.dispose);
+    final track = _track(1).copyWith(
+      album: 'InnerTube album',
+      artists: const ['First Artist', 'Second Artist'],
+      metadataSource: TrackMetadataSource.youtubeMusic,
+      sourceId: 'youtube-video-id',
+    );
+
+    await container.read(playerControllerProvider.future);
+    await container.read(playerControllerProvider.notifier).playLocal(track);
+
+    expect(container.read(playerControllerProvider).value?.album, track.album);
+    expect(
+      container.read(playbackQueueProvider).entries.single.album,
+      track.album,
+    );
+    expect(container.read(currentLyricsLookupProvider)?.album, track.album);
   });
 
   test(
@@ -1726,7 +2228,7 @@ void main() {
 ProviderContainer _container(
   _FakePlayerService player, {
   _FakeLibraryRepository? repository,
-  MusicRepository? musicRepository,
+  AudioStreamResolver? audioResolver,
   DesktopMediaSession? desktopSession,
   LocalTrackFileProbe? fileProbe,
   RemotePlaybackCache? remoteCache,
@@ -1734,8 +2236,8 @@ ProviderContainer _container(
   return ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
-      if (musicRepository != null)
-        musicRepositoryProvider.overrideWithValue(musicRepository),
+      if (audioResolver != null)
+        audioStreamResolverProvider.overrideWithValue(audioResolver),
       if (desktopSession != null)
         desktopMediaSessionFactoryProvider.overrideWithValue(
           () => desktopSession,
@@ -1836,6 +2338,7 @@ class _FakePlayerService implements PlayerService {
   List<LocalTrack>? lastLocalQueue;
   int? lastLocalQueueIndex;
   int replaceLocalQueueCalls = 0;
+  final List<String> nativeQueueMutationCalls = [];
 
   @override
   final bool supportsLocalQueueReplacement;
@@ -1876,6 +2379,7 @@ class _FakePlayerService implements PlayerService {
         status: PlayerStatus.playing,
         title: track.title,
         artist: track.artist,
+        album: track.album,
         trackId: track.id,
         sourceUrl: track.sourceUrl,
         isRemote: false,
@@ -1904,6 +2408,7 @@ class _FakePlayerService implements PlayerService {
         status: PlayerStatus.playing,
         title: track.title,
         artist: track.artist,
+        album: track.album,
         trackId: track.id.isEmpty ? track.url : track.id,
         sourceUrl: track.url,
         isRemote: true,
@@ -1919,6 +2424,9 @@ class _FakePlayerService implements PlayerService {
     replaceLocalQueueCalls++;
     lastLocalQueue = List.unmodifiable(tracks);
     lastLocalQueueIndex = preferredIndex;
+    nativeQueueMutationCalls.add(
+      'replace:${tracks.map((track) => track.id).join(',')}',
+    );
   }
 
   @override
@@ -1951,11 +2459,154 @@ class _FakePlayerService implements PlayerService {
   @override
   Future<void> stop() async {
     stopCalls++;
+    nativeQueueMutationCalls.add('stop');
     emit(_snapshot.copyWith(status: PlayerStatus.stopped));
   }
 
   @override
   Future<void> togglePlayPause() async {}
+}
+
+class _DelayedLocalPlayerService extends _FakePlayerService {
+  final Map<String, Completer<void>> _gates = {};
+  final List<String> started = [];
+  int _generation = 0;
+
+  void complete(String trackId) => _gates[trackId]!.complete();
+
+  @override
+  Future<void> playLocal(LocalTrack track) async {
+    final generation = ++_generation;
+    started.add(track.id);
+    final gate = Completer<void>();
+    _gates[track.id] = gate;
+    await gate.future;
+    if (generation != _generation) {
+      return;
+    }
+    await super.playLocal(track);
+  }
+}
+
+class _RejectYoutubeExplodePlayerService extends _FakePlayerService {
+  final List<TrackInfo> attemptedRemote = [];
+
+  @override
+  Future<void> playRemote(TrackInfo track) async {
+    attemptedRemote.add(track);
+    if (track.streamSource == AudioStreamSource.youtubeExplode.name) {
+      emit(
+        PlayerSnapshot(
+          status: PlayerStatus.failed,
+          trackId: track.id,
+          sourceUrl: track.url,
+          isRemote: true,
+          errorMessage: 'Source error: format is not supported',
+        ),
+      );
+      throw Exception('Source error: format is not supported');
+    }
+    await super.playRemote(track);
+  }
+}
+
+class _ReadyYtDlpFallbackPlayerService
+    extends _RejectYoutubeExplodePlayerService {
+  @override
+  Future<void> playRemote(TrackInfo track) async {
+    if (track.streamSource == AudioStreamSource.youtubeExplode.name) {
+      return super.playRemote(track);
+    }
+    attemptedRemote.add(track);
+    playedRemote.add(track);
+    emit(
+      PlayerSnapshot(
+        status: PlayerStatus.stopped,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        trackId: track.id,
+        sourceUrl: track.url,
+        duration: const Duration(minutes: 3),
+        isRemote: true,
+      ),
+    );
+  }
+}
+
+class _LatePrimaryFailurePlayerService extends _FakePlayerService {
+  final List<TrackInfo> attemptedRemote = [];
+  final Completer<void> _primaryCompletion = Completer<void>();
+
+  @override
+  Future<void> playRemote(TrackInfo track) async {
+    attemptedRemote.add(track);
+    if (track.streamSource == AudioStreamSource.youtubeExplode.name) {
+      emit(
+        PlayerSnapshot(
+          status: PlayerStatus.failed,
+          trackId: track.id,
+          sourceUrl: track.url,
+          isRemote: true,
+          errorMessage: 'HTTP 403 from primary stream',
+        ),
+      );
+      await _primaryCompletion.future;
+      return;
+    }
+    await super.playRemote(track);
+  }
+
+  void completePrimaryWithError() {
+    _primaryCompletion.completeError(Exception('Late HTTP 403'));
+  }
+}
+
+class _ModeAwareFallbackAudioResolver
+    implements AudioStreamResolver, FallbackAwareAudioStreamResolver {
+  _ModeAwareFallbackAudioResolver({this.fallbackGate});
+
+  final Future<void>? fallbackGate;
+  final List<AudioResolutionMode> modes = [];
+
+  @override
+  Future<AudioStreamResolution> resolve(TrackInfo track) {
+    return resolveWithMode(track);
+  }
+
+  @override
+  Future<AudioStreamResolution> resolveWithMode(
+    TrackInfo track, {
+    AudioResolutionMode mode = AudioResolutionMode.primaryThenFallback,
+    AudioResolverFailureCallback? onResolverFailure,
+    AudioResolverContinuationCallback? shouldContinue,
+  }) async {
+    modes.add(mode);
+    if (mode == AudioResolutionMode.fallbackOnly && fallbackGate != null) {
+      await fallbackGate;
+    }
+    return switch (mode) {
+      AudioResolutionMode.primaryThenFallback => const AudioStreamResolution(
+        source: AudioStreamSource.youtubeExplode,
+        streamUrl: 'https://media.example/primary.webm',
+        streamExtension: 'webm',
+        streamMimeType: 'audio/webm',
+        formatId: '251',
+        codec: 'opus',
+      ),
+      AudioResolutionMode.fallbackOnly => const AudioStreamResolution(
+        source: AudioStreamSource.ytDlp,
+        streamUrl: 'https://media.example/fallback.m4a',
+        streamExtension: 'm4a',
+        streamMimeType: 'audio/mp4',
+        formatId: '140',
+        codec: 'mp4a.40.2',
+      ),
+    };
+  }
+
+  @override
+  Future<void> dispose() async {}
 }
 
 class _NativeRemoteQueuePlayerService extends _FakePlayerService
@@ -2150,6 +2801,34 @@ class _DelayedRefreshMusicRepository extends _FakeMusicRepository {
       _refresh.complete(track);
     }
   }
+}
+
+/// Wraps a [_FakeMusicRepository] as an [AudioStreamResolver] for the
+/// player tests. It reuses the same response pool and call counter so the
+/// existing assertions on `infoCalls` keep working.
+class _FakeAudioResolverFromRepository implements AudioStreamResolver {
+  _FakeAudioResolverFromRepository(this._repository);
+
+  final _FakeMusicRepository _repository;
+
+  @override
+  Future<AudioStreamResolution> resolve(TrackInfo track) async {
+    final response = await _repository.getPlaybackInfo(track.url);
+    return AudioStreamResolution(
+      source: AudioStreamSource.ytDlp,
+      streamUrl: response.streamUrl ?? '',
+      streamExtension: response.streamExtension,
+      streamMimeType: response.streamMimeType,
+      httpHeaders: response.httpHeaders == null
+          ? null
+          : Map<String, String>.unmodifiable(response.httpHeaders!),
+      videoId: track.id.isEmpty ? null : track.id,
+      formatId: response.extractor,
+    );
+  }
+
+  @override
+  Future<void> dispose() async {}
 }
 
 class _FakeLibraryRepository implements LibraryRepository {

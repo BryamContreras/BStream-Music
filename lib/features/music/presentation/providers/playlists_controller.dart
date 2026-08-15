@@ -85,22 +85,38 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
   }
 
   Future<void> addTrackToPlaylist(String playlistId, String trackId) async {
+    await addTracksToPlaylist(playlistId, [trackId]);
+  }
+
+  Future<int> addTracksToPlaylist(
+    String playlistId,
+    Iterable<String> trackIds,
+  ) async {
+    final requestedIds = trackIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (requestedIds.isEmpty) {
+      return 0;
+    }
+
     final playlists = await future;
     final index = playlists.indexWhere((playlist) => playlist.id == playlistId);
-    if (index < 0 || trackId.trim().isEmpty) {
-      return;
+    if (index < 0) {
+      return 0;
     }
 
     final playlist = playlists[index];
-    if (playlist.trackIds.contains(trackId)) {
-      return;
+    final existingIds = playlist.trackIds.toSet();
+    final additions = requestedIds
+        .where((id) => existingIds.add(id))
+        .toList(growable: false);
+    if (additions.isEmpty) {
+      return 0;
     }
 
-    final updated = Playlist(
-      id: playlist.id,
-      name: playlist.name,
-      trackIds: [...playlist.trackIds, trackId],
-      createdAt: playlist.createdAt,
+    final updated = playlist.copyWith(
+      trackIds: [...playlist.trackIds, ...additions],
       updatedAt: DateTime.now(),
     );
     await ref.read(libraryRepositoryProvider).savePlaylist(updated);
@@ -109,30 +125,45 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     next[index] = updated;
     state = AsyncData(_sorted(next));
     await _syncActivePlaybackQueue(updated);
+    return additions.length;
   }
 
   Future<void> removeTrackFromPlaylist(
     String playlistId,
     String trackId,
   ) async {
+    await removeTracksFromPlaylist(playlistId, [trackId]);
+  }
+
+  Future<int> removeTracksFromPlaylist(
+    String playlistId,
+    Iterable<String> trackIds,
+  ) async {
+    final requestedIds = trackIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (requestedIds.isEmpty) {
+      return 0;
+    }
+
     final playlists = await future;
     final index = playlists.indexWhere((playlist) => playlist.id == playlistId);
-    if (index < 0 || trackId.trim().isEmpty) {
-      return;
+    if (index < 0) {
+      return 0;
     }
 
     final playlist = playlists[index];
-    if (!playlist.trackIds.contains(trackId)) {
-      return;
+    final remainingIds = playlist.trackIds
+        .where((id) => !requestedIds.contains(id))
+        .toList(growable: false);
+    final removedCount = playlist.trackIds.length - remainingIds.length;
+    if (removedCount == 0) {
+      return 0;
     }
 
-    final updated = Playlist(
-      id: playlist.id,
-      name: playlist.name,
-      trackIds: playlist.trackIds
-          .where((id) => id != trackId)
-          .toList(growable: false),
-      createdAt: playlist.createdAt,
+    final updated = playlist.copyWith(
+      trackIds: remainingIds,
       updatedAt: DateTime.now(),
     );
     await ref.read(libraryRepositoryProvider).savePlaylist(updated);
@@ -141,6 +172,7 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     next[index] = updated;
     state = AsyncData(_sorted(next));
     await _syncActivePlaybackQueue(updated);
+    return removedCount;
   }
 
   Future<bool> toggleFavorite(String trackId) async {
@@ -186,13 +218,25 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
   }
 
   Future<void> removeTrackFromAllPlaylists(String trackId) async {
+    await removeTracksFromAllPlaylists([trackId]);
+  }
+
+  Future<void> removeTracksFromAllPlaylists(Iterable<String> trackIds) async {
+    final requestedIds = trackIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (requestedIds.isEmpty) {
+      return;
+    }
+
     final playlists = await future;
     final next = <Playlist>[];
     final updatedPlaylists = <Playlist>[];
     var changed = false;
 
     for (final playlist in playlists) {
-      if (!playlist.trackIds.contains(trackId)) {
+      if (!playlist.trackIds.any(requestedIds.contains)) {
         next.add(playlist);
         continue;
       }
@@ -202,7 +246,7 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
         id: playlist.id,
         name: playlist.name,
         trackIds: playlist.trackIds
-            .where((id) => id != trackId)
+            .where((id) => !requestedIds.contains(id))
             .toList(growable: false),
         createdAt: playlist.createdAt,
         updatedAt: DateTime.now(),
@@ -218,6 +262,19 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
 
     state = AsyncData(_sorted(next));
     for (final playlist in updatedPlaylists) {
+      await _syncActivePlaybackQueue(playlist);
+    }
+  }
+
+  Future<void> reloadFromRepository({bool syncActiveQueue = true}) async {
+    final playlists = _sorted(
+      await ref.read(libraryRepositoryProvider).getPlaylists(),
+    );
+    state = AsyncData(playlists);
+    if (!syncActiveQueue) {
+      return;
+    }
+    for (final playlist in playlists) {
       await _syncActivePlaybackQueue(playlist);
     }
   }

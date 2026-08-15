@@ -34,4 +34,30 @@ void main() {
     expect(find.text('camilo'), findsNothing);
     expect(find.byKey(const ValueKey('search-clear-button')), findsNothing);
   });
+
+  testWidgets('clears the active search when text is deleted manually', (
+    tester,
+  ) async {
+    var clearCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SearchInput(
+            hintText: 'Buscar',
+            tooltip: 'Buscar',
+            clearTooltip: 'Limpiar búsqueda',
+            onSubmitted: (_) {},
+            onCleared: () => clearCalls++,
+          ),
+        ),
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField), 'camilo');
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pump();
+
+    expect(clearCalls, 1);
+    expect(find.byKey(const ValueKey('search-clear-button')), findsNothing);
+  });
 }
