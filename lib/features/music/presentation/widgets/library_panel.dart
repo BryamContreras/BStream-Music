@@ -767,17 +767,14 @@ class _LibraryRootView extends StatelessWidget {
 
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('library-tab-header-surface'),
-      header: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
-        child: Text(
-          key: const ValueKey('library-tab-title'),
-          strings.library,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(
-            context,
-          ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
-        ),
+      header: Text(
+        key: const ValueKey('library-tab-title'),
+        strings.library,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(
+          context,
+        ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
       ),
       body: CustomScrollView(
         key: const ValueKey('library-root-scroll'),

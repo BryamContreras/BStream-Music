@@ -330,6 +330,17 @@ class _HomePageState extends ConsumerState<HomePage> {
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesAndroidNavigation;
     final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
+    final systemBottomInset = math.max(
+      MediaQuery.viewPaddingOf(context).bottom,
+      MediaQuery.paddingOf(context).bottom,
+    );
+    final miniPlayerHeight = miniPlayerHeightFor(context);
+    final bottomNavigationHeight = useSideNavigation
+        ? 0.0
+        : _BottomNavigation.baseHeight(glassyCompact: _usesAndroidNavigation) +
+              systemBottomInset;
+    final browsingContentBottomPadding =
+        miniPlayerHeight + bottomNavigationHeight;
     final shellTransitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : _shellTransitionDuration;
@@ -393,9 +404,8 @@ class _HomePageState extends ConsumerState<HomePage> {
         }
       },
       child: Scaffold(
-        // Keep this property stable while the bottom navigation collapses.
-        // Toggling it at the start of the player transition makes the whole
-        // body jump before the visible chrome has moved.
+        // Keep the body edge-to-edge on Android. The bottom chrome is hosted
+        // inside the body so its animation cannot resize the Scaffold.
         extendBody: !useSideNavigation && _usesAndroidNavigation,
         body: SafeArea(
           bottom: false,
@@ -438,11 +448,12 @@ class _HomePageState extends ConsumerState<HomePage> {
                     ),
                     child: _isPlayerSelected
                         ? const PlayerPlaybackGradientBackground()
-                        : const PlaybackGradientBackground(),
+                        : const BrowsingTabBackground(),
                   ),
                 ),
                 SafeArea(
                   top: false,
+                  bottom: false,
                   child: Row(
                     children: [
                       if (useSideNavigation)
@@ -455,9 +466,10 @@ class _HomePageState extends ConsumerState<HomePage> {
                         ),
                       Expanded(
                         child: ClipRect(
-                          child: Column(
+                          child: Stack(
+                            fit: StackFit.expand,
                             children: [
-                              Expanded(
+                              Positioned.fill(
                                 child: _PersistentCurrentViews(
                                   selectedIndex: _selectedIndex,
                                   homeIndex: _homeIndex,
@@ -465,6 +477,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                                   playerIndex: _playerIndex,
                                   libraryIndex: _libraryIndex,
                                   settingsIndex: _settingsIndex,
+                                  contentBottomPadding:
+                                      browsingContentBottomPadding,
                                   libraryNavigationController:
                                       _libraryNavigationController,
                                   settingsNavigationController:
@@ -474,21 +488,55 @@ class _HomePageState extends ConsumerState<HomePage> {
                                   onOpenPlaylist: _openPlaylistFromHome,
                                 ),
                               ),
-                              _ShellVisibilityTransition(
-                                key: const ValueKey(
-                                  'mini-player-shell-transition',
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: bottomNavigationHeight,
+                                child: _ShellVisibilityTransition(
+                                  key: const ValueKey(
+                                    'mini-player-shell-transition',
+                                  ),
+                                  clipKey: const ValueKey(
+                                    'mini-player-shell-clip',
+                                  ),
+                                  opacityKey: const ValueKey(
+                                    'mini-player-shell-opacity',
+                                  ),
+                                  visible: !_isPlayerSelected,
+                                  duration: shellTransitionDuration,
+                                  child: SizedBox(
+                                    height: miniPlayerHeight,
+                                    child: MiniPlayer(
+                                      onOpenPlayer: _openPlayer,
+                                    ),
+                                  ),
                                 ),
-                                clipKey: const ValueKey(
-                                  'mini-player-shell-clip',
-                                ),
-                                opacityKey: const ValueKey(
-                                  'mini-player-shell-opacity',
-                                ),
-                                visible: !_isPlayerSelected,
-                                duration: shellTransitionDuration,
-                                alignment: Alignment.bottomCenter,
-                                child: MiniPlayer(onOpenPlayer: _openPlayer),
                               ),
+                              if (!useSideNavigation)
+                                Positioned(
+                                  left: 0,
+                                  right: 0,
+                                  bottom: 0,
+                                  child: _ShellVisibilityTransition(
+                                    key: const ValueKey(
+                                      'bottom-navigation-shell-transition',
+                                    ),
+                                    clipKey: const ValueKey(
+                                      'bottom-navigation-shell-clip',
+                                    ),
+                                    opacityKey: const ValueKey(
+                                      'bottom-navigation-shell-opacity',
+                                    ),
+                                    visible: showBottomNavigation,
+                                    duration: shellTransitionDuration,
+                                    child: _BottomNavigation(
+                                      selectedIndex: _selectedIndex,
+                                      onDestinationSelected: _selectIndex,
+                                      destinations: destinations,
+                                      glassyCompact: _usesAndroidNavigation,
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
@@ -500,22 +548,6 @@ class _HomePageState extends ConsumerState<HomePage> {
             ),
           ),
         ),
-        bottomNavigationBar: useSideNavigation
-            ? null
-            : _ShellVisibilityTransition(
-                key: const ValueKey('bottom-navigation-shell-transition'),
-                clipKey: const ValueKey('bottom-navigation-shell-clip'),
-                opacityKey: const ValueKey('bottom-navigation-shell-opacity'),
-                visible: showBottomNavigation,
-                duration: shellTransitionDuration,
-                alignment: Alignment.bottomCenter,
-                child: _BottomNavigation(
-                  selectedIndex: _selectedIndex,
-                  onDestinationSelected: _selectIndex,
-                  destinations: destinations,
-                  glassyCompact: _usesAndroidNavigation,
-                ),
-              ),
       ),
     );
   }
@@ -525,7 +557,6 @@ class _ShellVisibilityTransition extends StatelessWidget {
   const _ShellVisibilityTransition({
     required this.visible,
     required this.duration,
-    required this.alignment,
     required this.child,
     this.clipKey,
     this.opacityKey,
@@ -534,7 +565,6 @@ class _ShellVisibilityTransition extends StatelessWidget {
 
   final bool visible;
   final Duration duration;
-  final Alignment alignment;
   final Widget child;
   final Key? clipKey;
   final Key? opacityKey;
@@ -552,10 +582,13 @@ class _ShellVisibilityTransition extends StatelessWidget {
           builder: (context, value, child) {
             return ClipRect(
               key: clipKey,
-              child: Align(
-                alignment: alignment,
-                heightFactor: value,
-                child: Opacity(key: opacityKey, opacity: value, child: child),
+              child: Opacity(
+                key: opacityKey,
+                opacity: value,
+                child: FractionalTranslation(
+                  translation: Offset(0, (1 - value) * 0.08),
+                  child: child,
+                ),
               ),
             );
           },
@@ -591,27 +624,40 @@ class _BottomNavigation extends StatelessWidget {
   final List<_AppDestination> destinations;
   final bool glassyCompact;
 
+  static double baseHeight({required bool glassyCompact}) =>
+      glassyCompact ? 76.0 : 82.0;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final systemBottomInset = math.max(
+      MediaQuery.viewPaddingOf(context).bottom,
+      MediaQuery.paddingOf(context).bottom,
+    );
     final content = SafeArea(
       top: false,
-      child: ConstrainedBox(
-        key: const ValueKey('bottom-navigation-content'),
-        constraints: BoxConstraints(minHeight: glassyCompact ? 76.0 : 82.0),
-        child: Row(
-          children: [
-            for (final destination in destinations)
-              Expanded(
-                child: _BottomNavigationItem(
-                  destinationIndex: destination.index,
-                  icon: destination.icon,
-                  label: destination.label,
-                  selected: selectedIndex == destination.index,
-                  onTap: () => onDestinationSelected(destination.index),
+      bottom: false,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: systemBottomInset),
+        child: ConstrainedBox(
+          key: const ValueKey('bottom-navigation-content'),
+          constraints: BoxConstraints(
+            minHeight: baseHeight(glassyCompact: glassyCompact),
+          ),
+          child: Row(
+            children: [
+              for (final destination in destinations)
+                Expanded(
+                  child: _BottomNavigationItem(
+                    destinationIndex: destination.index,
+                    icon: destination.icon,
+                    label: destination.label,
+                    selected: selectedIndex == destination.index,
+                    onTap: () => onDestinationSelected(destination.index),
+                  ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -917,6 +963,7 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.playerIndex,
     required this.libraryIndex,
     required this.settingsIndex,
+    required this.contentBottomPadding,
     required this.libraryNavigationController,
     required this.settingsNavigationController,
     required this.onOpenPlayer,
@@ -930,6 +977,7 @@ class _PersistentCurrentViews extends StatefulWidget {
   final int playerIndex;
   final int libraryIndex;
   final int settingsIndex;
+  final double contentBottomPadding;
   final LibraryNavigationController libraryNavigationController;
   final SettingsNavigationController settingsNavigationController;
   final VoidCallback onOpenPlayer;
@@ -959,6 +1007,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('home-view'),
             selected: widget.selectedIndex == widget.homeIndex,
+            bottomPadding: widget.contentBottomPadding,
             child: _HomeView(
               onOpenPlayer: widget.onOpenPlayer,
               onOpenPlaylist: widget.onOpenPlaylist,
@@ -968,12 +1017,14 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('search-view'),
             selected: widget.selectedIndex == widget.searchIndex,
+            bottomPadding: widget.contentBottomPadding,
             child: SearchView(onOpenPlayer: widget.onOpenPlayer),
           ),
         if (_visitedIndexes.contains(widget.playerIndex))
           _PersistentViewSlot(
             key: const ValueKey('player-view'),
             selected: widget.selectedIndex == widget.playerIndex,
+            bottomPadding: 0,
             child: PlayerPanel(
               onOpenSearch: widget.onOpenSearch,
               drawBackground: false,
@@ -983,6 +1034,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('library-view'),
             selected: widget.selectedIndex == widget.libraryIndex,
+            bottomPadding: widget.contentBottomPadding,
             child: LibraryPanel(
               onOpenPlayer: widget.onOpenPlayer,
               navigationController: widget.libraryNavigationController,
@@ -992,6 +1044,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('settings-view'),
             selected: widget.selectedIndex == widget.settingsIndex,
+            bottomPadding: widget.contentBottomPadding,
             child: SettingsPanel(
               active: widget.selectedIndex == widget.settingsIndex,
               navigationController: widget.settingsNavigationController,
@@ -1005,11 +1058,13 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
 class _PersistentViewSlot extends StatefulWidget {
   const _PersistentViewSlot({
     required this.selected,
+    required this.bottomPadding,
     required this.child,
     super.key,
   });
 
   final bool selected;
+  final double bottomPadding;
   final Widget child;
 
   @override
@@ -1055,23 +1110,31 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
     final entered = widget.selected && (_hasEntered || disableAnimations);
 
     return Positioned.fill(
-      child: IgnorePointer(
-        ignoring: !widget.selected,
-        child: ExcludeSemantics(
-          excluding: !widget.selected,
-          child: AnimatedOpacity(
-            opacity: entered ? 1 : 0,
-            duration: duration,
-            // A symmetric fade keeps the outgoing view visible while a newly
-            // visited, data-heavy tab completes its first frame. An ease-out
-            // here made both slots nearly transparent at once and produced a
-            // brief dark flash on slower Android devices.
-            curve: Curves.easeInOutCubic,
-            child: AnimatedSlide(
-              offset: entered ? Offset.zero : const Offset(0.018, 0),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: widget.bottomPadding),
+        child: IgnorePointer(
+          ignoring: !widget.selected,
+          child: ExcludeSemantics(
+            excluding: !widget.selected,
+            child: AnimatedOpacity(
+              opacity: entered ? 1 : 0,
               duration: duration,
-              curve: Curves.easeOutCubic,
-              child: TickerMode(enabled: widget.selected, child: widget.child),
+              // A symmetric fade keeps the outgoing view visible while a newly
+              // visited, data-heavy tab completes its first frame. An ease-out
+              // here made both slots nearly transparent at once and produced a
+              // brief dark flash on slower Android devices.
+              curve: Curves.easeInOutCubic,
+              child: AnimatedSlide(
+                offset: entered ? Offset.zero : const Offset(0.018, 0),
+                duration: duration,
+                curve: Curves.easeOutCubic,
+                child: RepaintBoundary(
+                  child: TickerMode(
+                    enabled: widget.selected,
+                    child: widget.child,
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -1101,42 +1164,39 @@ class _HomeView extends ConsumerWidget {
 
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('home-tab-header-surface'),
-      header: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 22, 16, 8),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                key: const ValueKey('home-tab-title'),
-                strings.home,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
+      header: Row(
+        children: [
+          Expanded(
+            child: Text(
+              key: const ValueKey('home-tab-title'),
+              strings.home,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
             ),
-            SizedBox.square(
-              dimension: 48,
-              child: IconButton(
-                key: const ValueKey('home-recommendations-refresh'),
-                tooltip: strings.refreshHomeRecommendations,
-                onPressed: recommendationsState.isLoading
-                    ? null
-                    : () => ref.invalidate(homeRecommendationsProvider),
-                icon: recommendationsState.isLoading
-                    ? SizedBox.square(
-                        dimension: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          semanticsLabel: strings.refreshingHomeRecommendations,
-                        ),
-                      )
-                    : const Icon(Icons.refresh_rounded),
-              ),
+          ),
+          SizedBox.square(
+            dimension: 48,
+            child: IconButton(
+              key: const ValueKey('home-recommendations-refresh'),
+              tooltip: strings.refreshHomeRecommendations,
+              onPressed: recommendationsState.isLoading
+                  ? null
+                  : () => ref.invalidate(homeRecommendationsProvider),
+              icon: recommendationsState.isLoading
+                  ? SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        semanticsLabel: strings.refreshingHomeRecommendations,
+                      ),
+                    )
+                  : const Icon(Icons.refresh_rounded),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
       body: CustomScrollView(
         slivers: [
@@ -1417,7 +1477,7 @@ class _RecommendedTrackCard extends StatelessWidget {
       key: ValueKey('home-recommendation-${track.id}'),
       width: width,
       child: Material(
-        color: AppColors.cardSurfaceFor(context),
+        color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: InkWell(
@@ -1482,7 +1542,7 @@ class _RecommendedCollectionCard extends StatelessWidget {
       key: ValueKey('home-collection-${collection.browseId}'),
       width: width,
       child: Material(
-        color: AppColors.cardSurfaceFor(context),
+        color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: Semantics(
@@ -1585,7 +1645,7 @@ class _RecentTrackCard extends ConsumerWidget {
       key: const ValueKey('home-recent-card'),
       width: width,
       child: Material(
-        color: AppColors.cardSurfaceFor(context),
+        color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: InkWell(
@@ -1659,7 +1719,7 @@ class _HomePlaylistCard extends StatelessWidget {
       key: const ValueKey('home-playlist-card'),
       width: width,
       child: Material(
-        color: AppColors.cardSurfaceFor(context),
+        color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: InkWell(

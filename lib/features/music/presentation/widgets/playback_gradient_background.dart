@@ -4,53 +4,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../providers/music_providers.dart';
 import 'source_image.dart';
 
-class PlaybackGradientBackground extends ConsumerWidget {
-  const PlaybackGradientBackground({super.key});
+/// Neutral background used by the browsing tabs. Artwork belongs to the player
+/// surface and should not tint navigation screens behind their content cards.
+class BrowsingTabBackground extends StatelessWidget {
+  const BrowsingTabBackground({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final source = ref.watch(
-      playerControllerProvider.select(
-        (player) => player.value?.thumbnailUrl?.trim(),
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      key: const ValueKey('browsing-tab-background-surface'),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [colors.surface, colors.surfaceContainerLowest],
+        ),
       ),
-    );
-    return RepaintBoundary(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _AnimatedPlaybackArtwork(
-            source: source,
-            scale: 1.24,
-            fallback: const _PlaybackBackgroundFallback(),
-          ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: isDark
-                    ? const [
-                        Color(0xDC080B09),
-                        Color(0xE2040604),
-                        Color(0xE8020403),
-                        Color(0xEC020403),
-                      ]
-                    : const [
-                        Color(0xB8FFFFFF),
-                        Color(0xDDF5F8F6),
-                        Color(0xEEF5F8F6),
-                        Color(0xF5F5F8F6),
-                      ],
-                stops: [0, 0.38, 0.72, 1],
-              ),
-            ),
-          ),
-        ],
-      ),
+      child: ColoredBox(color: AppColors.tabBackgroundOverlayFor(context)),
     );
   }
 }
@@ -225,26 +200,6 @@ class _PlayerBackgroundFallback extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: isDark
               ? const [Color(0xFF111611), Color(0xFF070907), Color(0xFF030403)]
-              : const [Color(0xFFE5F2E9), Color(0xFFF5F8F6), Colors.white],
-        ),
-      ),
-    );
-  }
-}
-
-class _PlaybackBackgroundFallback extends StatelessWidget {
-  const _PlaybackBackgroundFallback();
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? const [Color(0xFF0D2115), Color(0xFF050805), Color(0xFF020302)]
               : const [Color(0xFFE5F2E9), Color(0xFFF5F8F6), Colors.white],
         ),
       ),

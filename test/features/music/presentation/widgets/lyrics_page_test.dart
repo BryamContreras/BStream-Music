@@ -488,6 +488,39 @@ void main() {
     expect(_lyricLineFontSize(tester, 'lyric-line-1'), 27);
   });
 
+  testWidgets('Android lyrics keep offset controls above system navigation', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(320, 720)
+      ..devicePixelRatio = 1
+      ..padding = const FakeViewPadding(bottom: 24);
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio()
+        ..resetPadding();
+    });
+
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+
+    final offsetControls = find.byKey(const ValueKey('lyrics-offset-control'));
+    expect(
+      tester.getRect(offsetControls).bottom,
+      lessThanOrEqualTo(720 - 24.0 + 0.1),
+    );
+    expect(
+      tester.getRect(find.byKey(const ValueKey('synced-lyrics-scroll'))).bottom,
+      lessThanOrEqualTo(720 - 24.0 + 0.1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('desktop lyrics retain their existing horizontal margins', (
     tester,
   ) async {

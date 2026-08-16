@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -82,6 +83,10 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     final lyricsCentered = lyricsTextAlignment == LyricsTextAlignment.centered;
     final lyricsAnimationStyle =
         settings?.lyricsAnimationStyle ?? LyricsAnimationStyle.smooth;
+    final systemBottomInset = math.max(
+      MediaQuery.viewPaddingOf(context).bottom,
+      MediaQuery.paddingOf(context).bottom,
+    );
     _syncLookup(lookup);
 
     return Scaffold(
@@ -94,56 +99,60 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
             decoration: BoxDecoration(color: Color(0x52000000)),
           ),
           SafeArea(
-            child: Column(
-              children: [
-                _LyricsHeader(lookup: lookup),
-                Expanded(
-                  child: lookup == null
-                      ? _LyricsMessage(
-                          icon: Icons.lyrics_outlined,
-                          message: strings.noPlayback,
-                        )
-                      : _showSimilarLyrics
-                      ? _buildSimilarLyrics(lookup)
-                      : selectedLyrics != null
-                      ? _buildLyrics(
-                          selectedLyrics,
-                          offset,
-                          lyricsCentered,
-                          lyricsAnimationStyle,
-                        )
-                      : ref
-                            .watch(lyricsProvider(lookup))
-                            .when(
-                              loading: () => _LyricsMessage(
-                                icon: Icons.manage_search_rounded,
-                                message: strings.lyricsLoading,
-                                loading: true,
+            bottom: false,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: systemBottomInset),
+              child: Column(
+                children: [
+                  _LyricsHeader(lookup: lookup),
+                  Expanded(
+                    child: lookup == null
+                        ? _LyricsMessage(
+                            icon: Icons.lyrics_outlined,
+                            message: strings.noPlayback,
+                          )
+                        : _showSimilarLyrics
+                        ? _buildSimilarLyrics(lookup)
+                        : selectedLyrics != null
+                        ? _buildLyrics(
+                            selectedLyrics,
+                            offset,
+                            lyricsCentered,
+                            lyricsAnimationStyle,
+                          )
+                        : ref
+                              .watch(lyricsProvider(lookup))
+                              .when(
+                                loading: () => _LyricsMessage(
+                                  icon: Icons.manage_search_rounded,
+                                  message: strings.lyricsLoading,
+                                  loading: true,
+                                ),
+                                error: (error, _) {
+                                  final noInternet =
+                                      error is LyricsConnectionException;
+                                  return _LyricsMessage(
+                                    icon: noInternet
+                                        ? Icons.wifi_off_rounded
+                                        : Icons.cloud_off_rounded,
+                                    message: noInternet
+                                        ? strings.lyricsNoInternet
+                                        : strings.lyricsLoadError,
+                                    actionLabel: strings.retry,
+                                    onAction: () =>
+                                        ref.invalidate(lyricsProvider(lookup)),
+                                  );
+                                },
+                                data: (lyrics) => _buildLyrics(
+                                  lyrics,
+                                  offset,
+                                  lyricsCentered,
+                                  lyricsAnimationStyle,
+                                ),
                               ),
-                              error: (error, _) {
-                                final noInternet =
-                                    error is LyricsConnectionException;
-                                return _LyricsMessage(
-                                  icon: noInternet
-                                      ? Icons.wifi_off_rounded
-                                      : Icons.cloud_off_rounded,
-                                  message: noInternet
-                                      ? strings.lyricsNoInternet
-                                      : strings.lyricsLoadError,
-                                  actionLabel: strings.retry,
-                                  onAction: () =>
-                                      ref.invalidate(lyricsProvider(lookup)),
-                                );
-                              },
-                              data: (lyrics) => _buildLyrics(
-                                lyrics,
-                                offset,
-                                lyricsCentered,
-                                lyricsAnimationStyle,
-                              ),
-                            ),
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -986,9 +995,8 @@ class _LyricsOffsetControls extends ConsumerWidget {
     final formatted =
         '${seconds >= 0 ? '+' : ''}${seconds.toStringAsFixed(2)} s';
 
-    return SafeArea(
-      top: false,
-      minimum: const EdgeInsets.only(bottom: 8),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
       child: Semantics(
         container: true,
         label: strings.lyricsOffset,

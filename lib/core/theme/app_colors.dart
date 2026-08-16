@@ -81,10 +81,10 @@ abstract final class AppColors {
     final colors = theme.colorScheme;
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
     final tintedSurface = Color.alphaBlend(
-      accent.withValues(alpha: 0.045),
+      accent.withValues(alpha: 0.055),
       colors.surface,
     );
-    return tintedSurface.withValues(alpha: 0.66);
+    return tintedSurface.withValues(alpha: 0.72);
   }
 
   static Color cardBorderFor(BuildContext context) {
@@ -96,6 +96,44 @@ abstract final class AppColors {
       colors.outlineVariant,
     );
     return tintedBorder.withValues(alpha: 0.78);
+  }
+
+  static Color homeCardSurfaceFor(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+    final tintedSurface = Color.alphaBlend(
+      accent.withValues(alpha: 0.07),
+      colors.surface,
+    );
+    return tintedSurface.withValues(alpha: 0.78);
+  }
+
+  /// Very light wash used by tab surfaces without turning the whole page into
+  /// another card. The content underneath remains the dominant surface.
+  static Color tabBackgroundOverlayFor(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+    return accent.withValues(alpha: 0.025);
+  }
+
+  /// Distinct surface for fixed tab headers. It is slightly more accent-aware
+  /// than [cardSurfaceFor], but remains neutral enough to sit above content.
+  static Color tabHeaderSurfaceFor(
+    BuildContext context, {
+    required bool scrolledUnder,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+    final tintedSurface = Color.alphaBlend(
+      accent.withValues(alpha: 0.06),
+      colors.surface,
+    );
+    return scrolledUnder
+        ? tintedSurface.withValues(alpha: 0.84)
+        : tintedSurface;
   }
 
   static Color playbackPrimaryBackgroundFor(BuildContext context) {

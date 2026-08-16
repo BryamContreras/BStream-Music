@@ -191,10 +191,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       }
       return ScrolledUnderTabFrame(
         surfaceKey: const ValueKey('settings-tab-header-surface'),
-        header: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 18, 12, 16),
-          child: header,
-        ),
+        headerHorizontalPadding: 12,
+        header: header,
         body: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: body,

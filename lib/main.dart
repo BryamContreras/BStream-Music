@@ -131,9 +131,9 @@ ThemeData _buildDarkTheme({
     ),
     cardTheme: CardThemeData(
       color: Color.alphaBlend(
-        accent.seedColor.withValues(alpha: 0.045),
+        accent.seedColor.withValues(alpha: 0.055),
         scheme.surface,
-      ).withValues(alpha: 0.66),
+      ).withValues(alpha: 0.72),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
@@ -218,9 +218,9 @@ ThemeData _buildLightTheme({
     ),
     cardTheme: CardThemeData(
       color: Color.alphaBlend(
-        accent.seedColor.withValues(alpha: 0.045),
+        accent.seedColor.withValues(alpha: 0.055),
         scheme.surface,
-      ).withValues(alpha: 0.66),
+      ).withValues(alpha: 0.72),
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),

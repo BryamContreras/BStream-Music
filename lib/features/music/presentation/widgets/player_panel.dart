@@ -112,15 +112,19 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         final queueTransitionDuration = disableAnimations
             ? Duration.zero
             : const Duration(milliseconds: 320);
+        final systemBottomInset = math.max(
+          MediaQuery.viewPaddingOf(context).bottom,
+          MediaQuery.paddingOf(context).bottom,
+        );
         final heightCompactness = AppPlatform.isDesktop
             ? ((680.0 - outer.maxHeight) / 140.0).clamp(0.0, 1.0)
             : 0.0;
         final regularTopPadding = wide ? (showSideQueue ? 12.0 : 20.0) : 10.0;
         final regularBottomPadding = mobile
-            ? 8.0
+            ? 16.0 + systemBottomInset
             : wide
             ? (showSideQueue ? 12.0 : 24.0)
-            : 20.0;
+            : 20.0 + systemBottomInset;
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1091,7 +1095,10 @@ class _PlayerControls extends ConsumerWidget {
           ),
           if (hasError) ...[
             SizedBox(height: lerpDouble(18, 10, compactness)),
-            PlayerErrorMessage(message: errorText ?? strings.playbackError),
+            PlayerErrorMessage(
+              key: const ValueKey('player-error-message'),
+              message: errorText ?? strings.playbackError,
+            ),
           ],
         ],
       ),

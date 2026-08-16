@@ -74,6 +74,57 @@ void main() {
     expect(find.text('Reproductor'), findsNothing);
   });
 
+  testWidgets('browsing tabs keep playback artwork out of their background', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      _testApp(
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Portada activa',
+            artist: 'BStream Music',
+            trackId: 'browsing-background-track',
+            thumbnailUrl: 'https://example.com/cover.jpg',
+            duration: Duration(minutes: 3),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    final background = find.byKey(
+      const ValueKey('browsing-tab-background-surface'),
+    );
+    expect(background, findsOneWidget);
+    expect(
+      find.descendant(of: background, matching: find.byType(ImageFiltered)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: background, matching: find.byType(SourceImage)),
+      findsNothing,
+    );
+    expect(
+      (tester.widget<DecoratedBox>(background).decoration as BoxDecoration)
+          .gradient,
+      isNotNull,
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets(
     'windows mini player fills content and centers transport controls',
     (tester) async {
@@ -267,10 +318,12 @@ void main() {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       tester.view.physicalSize = const Size(320, 568);
       tester.view.devicePixelRatio = 1;
+      tester.view.padding = const FakeViewPadding(bottom: 24);
       addTearDown(() {
         debugDefaultTargetPlatformOverride = null;
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();
+        tester.view.resetPadding();
       });
 
       await tester.pumpWidget(
@@ -342,13 +395,10 @@ void main() {
       );
       expect(slotOpacity(home), inExclusiveRange(0, 1));
       expect(slotOpacity(player), inExclusiveRange(0, 1));
-      expect(
-        tester.getSize(miniClip).height,
-        inExclusiveRange(0, initialMiniHeight),
-      );
+      expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
       expect(
         tester.getSize(bottomClip).height,
-        inExclusiveRange(0, initialBottomHeight),
+        closeTo(initialBottomHeight, 0.1),
       );
       expect(
         tester.getBottomLeft(miniClip).dy,
@@ -360,8 +410,11 @@ void main() {
 
       expect(shellOpacity('mini-player-shell-opacity'), 0);
       expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
-      expect(tester.getSize(miniClip).height, 0);
-      expect(tester.getSize(bottomClip).height, 0);
+      expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
+      expect(
+        tester.getSize(bottomClip).height,
+        closeTo(initialBottomHeight, 0.1),
+      );
       expect(slotOpacity(home), 0);
       expect(slotOpacity(player), 1);
       expect(
@@ -413,6 +466,53 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     },
   );
+
+  testWidgets('android player content stays above three-button navigation', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1
+      ..padding = const FakeViewPadding(bottom: 24);
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio()
+        ..resetPadding();
+    });
+
+    await tester.pumpWidget(
+      _testApp(
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.failed,
+            title: 'Pista con error',
+            artist: 'BStream Music',
+            trackId: 'navigation-inset-error-track',
+            duration: Duration(minutes: 3),
+            errorMessage: 'No se pudo abrir la pista.',
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tapAt(
+      tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    final error = find.byKey(const ValueKey('player-error-message'));
+    final control = find.byKey(const ValueKey('player-volume-control'));
+    expect(error, findsOneWidget);
+    expect(control, findsOneWidget);
+    await tester.ensureVisible(error);
+    expect(tester.getRect(error).bottom, lessThanOrEqualTo(800 - 24.0 + 0.1));
+    expect(tester.getRect(control).bottom, lessThanOrEqualTo(800 - 24.0 + 0.1));
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   testWidgets('bottom navigation selection interpolates without layout snap', (
     tester,
@@ -649,6 +749,14 @@ void main() {
       tester.getSize(find.byKey(const ValueKey('home-playlist-shelf'))).height,
       212,
     );
+    final recentCard = find.byKey(const ValueKey('home-recent-card'));
+    final recentMaterial = find
+        .descendant(of: recentCard, matching: find.byType(Material))
+        .first;
+    expect(
+      tester.widget<Material>(recentMaterial).color,
+      AppColors.homeCardSurfaceFor(tester.element(recentCard)),
+    );
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
@@ -798,12 +906,15 @@ void main() {
     final homeHeaderSurface = find.byKey(
       const ValueKey('home-tab-header-surface'),
     );
-    final homeColors = Theme.of(tester.element(homeHeaderSurface)).colorScheme;
     expect(
       tester.widget<Material>(homeHeaderSurface).color,
-      homeColors.surface,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(homeHeaderSurface),
+        scrolledUnder: false,
+      ),
     );
     expect(tester.widget<Material>(homeHeaderSurface).elevation, 0);
+    expect(tester.getSize(homeHeaderSurface).height, greaterThanOrEqualTo(64));
     // At a 3x text scale, the accessible title can legitimately move the
     // lazily-built shelves below the first viewport. Scroll to the shelf
     // before inspecting its adaptive height.
@@ -812,9 +923,16 @@ void main() {
     expect(tester.getTopLeft(homeHeading).dy, closeTo(homeHeadingTop, 0.01));
     expect(
       tester.widget<Material>(homeHeaderSurface).color,
-      homeColors.surfaceContainer,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(homeHeaderSurface),
+        scrolledUnder: true,
+      ),
     );
-    expect(tester.widget<Material>(homeHeaderSurface).elevation, 3);
+    expect(tester.widget<Material>(homeHeaderSurface).elevation, 1);
+    expect(
+      tester.widget<Material>(homeHeaderSurface).surfaceTintColor,
+      Colors.transparent,
+    );
 
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
@@ -1418,12 +1536,12 @@ void main() {
     final settingsHeaderSurface = find.byKey(
       const ValueKey('settings-tab-header-surface'),
     );
-    final settingsColors = Theme.of(
-      tester.element(settingsHeaderSurface),
-    ).colorScheme;
     expect(
       tester.widget<Material>(settingsHeaderSurface).color,
-      settingsColors.surface,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(settingsHeaderSurface),
+        scrolledUnder: false,
+      ),
     );
     final settingsRoot = find.byKey(const ValueKey('settings-root'));
     await tester.drag(settingsRoot, const Offset(0, -420));
@@ -1436,9 +1554,16 @@ void main() {
     expect(tester.getTopLeft(heading).dy, closeTo(headingTop, 0.01));
     expect(
       tester.widget<Material>(settingsHeaderSurface).color,
-      settingsColors.surfaceContainer,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(settingsHeaderSurface),
+        scrolledUnder: true,
+      ),
     );
-    expect(tester.widget<Material>(settingsHeaderSurface).elevation, 3);
+    expect(tester.widget<Material>(settingsHeaderSurface).elevation, 1);
+    expect(
+      tester.widget<Material>(settingsHeaderSurface).surfaceTintColor,
+      Colors.transparent,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -2139,12 +2264,12 @@ void main() {
     final libraryHeaderSurface = find.byKey(
       const ValueKey('library-tab-header-surface'),
     );
-    final libraryColors = Theme.of(
-      tester.element(libraryHeaderSurface),
-    ).colorScheme;
     expect(
       tester.widget<Material>(libraryHeaderSurface).color,
-      libraryColors.surface,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(libraryHeaderSurface),
+        scrolledUnder: false,
+      ),
     );
     final libraryScroll = find.byKey(const ValueKey('library-root-scroll'));
     await tester.drag(libraryScroll, const Offset(0, -420));
@@ -2160,9 +2285,16 @@ void main() {
     );
     expect(
       tester.widget<Material>(libraryHeaderSurface).color,
-      libraryColors.surfaceContainer,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(libraryHeaderSurface),
+        scrolledUnder: true,
+      ),
     );
-    expect(tester.widget<Material>(libraryHeaderSurface).elevation, 3);
+    expect(tester.widget<Material>(libraryHeaderSurface).elevation, 1);
+    expect(
+      tester.widget<Material>(libraryHeaderSurface).surfaceTintColor,
+      Colors.transparent,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -3153,6 +3285,10 @@ void main() {
     expect(
       find.descendant(of: volumeControl, matching: find.text('Volumen')),
       findsOneWidget,
+    );
+    expect(
+      tester.getRect(volumeControl).bottom,
+      lessThanOrEqualTo(tester.view.physicalSize.height + 0.1),
     );
 
     await tester.tap(find.byTooltip('Volumen'));

@@ -1,3 +1,4 @@
+import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/features/music/domain/entities/search_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
@@ -237,8 +238,14 @@ void main() {
       final headerSurface = find.byKey(
         const ValueKey('search-tab-header-surface'),
       );
-      final colors = Theme.of(tester.element(headerSurface)).colorScheme;
-      expect(tester.widget<Material>(headerSurface).color, colors.surface);
+      expect(
+        tester.widget<Material>(headerSurface).color,
+        AppColors.tabHeaderSurfaceFor(
+          tester.element(headerSurface),
+          scrolledUnder: false,
+        ),
+      );
+      expect(tester.getSize(headerSurface).height, closeTo(64, 0.1));
 
       await tester.drag(
         find.byKey(const ValueKey('search-results-scroll')),
@@ -253,9 +260,16 @@ void main() {
       expect(tester.getTopLeft(heading).dy, closeTo(headingTop, 0.01));
       expect(
         tester.widget<Material>(headerSurface).color,
-        colors.surfaceContainer,
+        AppColors.tabHeaderSurfaceFor(
+          tester.element(headerSurface),
+          scrolledUnder: true,
+        ),
       );
-      expect(tester.widget<Material>(headerSurface).elevation, 3);
+      expect(tester.widget<Material>(headerSurface).elevation, 1);
+      expect(
+        tester.widget<Material>(headerSurface).surfaceTintColor,
+        Colors.transparent,
+      );
 
       await controller.selectCategory(SearchCategory.videos);
       await tester.pump();

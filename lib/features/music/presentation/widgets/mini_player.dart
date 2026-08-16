@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,13 @@ import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'playback_progress_line.dart';
 import 'source_image.dart';
+
+double miniPlayerHeightFor(BuildContext context) {
+  final compactAndroid = Theme.of(context).platform == TargetPlatform.android;
+  final baseHeight = compactAndroid ? 62.0 : 76.0;
+  final textScale = MediaQuery.textScalerOf(context).scale(1.0);
+  return baseHeight + math.max(0.0, (textScale - 1.0) * 35.0);
+}
 
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({this.onOpenPlayer, super.key});
@@ -55,7 +63,7 @@ class MiniPlayer extends ConsumerWidget {
     final horizontalPadding = compactAndroid ? 12.0 : 20.0;
     final artworkSize = compactAndroid ? 40.0 : 48.0;
     final playButtonSize = compactAndroid ? 48.0 : 54.0;
-    final minimumHeight = compactAndroid ? 62.0 : 76.0;
+    final minimumHeight = miniPlayerHeightFor(context);
     final isDark = theme.brightness == Brightness.dark;
     final metadata = Row(
       key: const ValueKey('mini-player-metadata'),

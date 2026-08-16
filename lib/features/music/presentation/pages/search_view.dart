@@ -29,18 +29,15 @@ class SearchView extends ConsumerWidget {
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('search-tab-header-surface'),
       header: showHeading
-          ? Padding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  key: const ValueKey('search-tab-title'),
-                  strings.searchTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
+          ? Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                key: const ValueKey('search-tab-title'),
+                strings.searchTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
                 ),
               ),
             )

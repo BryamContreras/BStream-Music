@@ -172,7 +172,8 @@ void main() {
           expect(nextRect.left - primaryRect.right, greaterThanOrEqualTo(6));
           expect(repeatRect.left - nextRect.right, greaterThanOrEqualTo(6));
         }
-        expect(size.height - tester.getRect(volume).bottom, closeTo(8, 0.1));
+        await tester.ensureVisible(volume);
+        expect(size.height - tester.getRect(volume).bottom, closeTo(16, 0.1));
         expect(tester.takeException(), isNull);
       },
     );

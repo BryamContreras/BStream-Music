@@ -1,10 +1,11 @@
+import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/features/music/presentation/widgets/scrolled_under_tab_frame.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets(
-    'matches the Material 3 scrolled-under surface and returns to top',
+    'uses a translucent neutral scrolled-under surface and returns to top',
     (tester) async {
       tester.view.physicalSize = const Size(360, 640);
       tester.view.devicePixelRatio = 1;
@@ -19,12 +20,19 @@ void main() {
         const ValueKey('test-tab-header-surface'),
       );
       final titleFinder = find.byKey(const ValueKey('test-tab-title'));
-      final colors = Theme.of(tester.element(surfaceFinder)).colorScheme;
       Material surface() => tester.widget<Material>(surfaceFinder);
 
       final initialTitleRect = tester.getRect(titleFinder);
-      expect(surface().color, colors.surface);
+      expect(
+        surface().color,
+        AppColors.tabHeaderSurfaceFor(
+          tester.element(surfaceFinder),
+          scrolledUnder: false,
+        ),
+      );
       expect(surface().elevation, 0);
+      expect(surface().surfaceTintColor, Colors.transparent);
+      expect(tester.getSize(surfaceFinder).height, 64);
 
       await tester.drag(
         find.byKey(const ValueKey('test-tab-scroll')),
@@ -32,15 +40,30 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(surface().color, colors.surfaceContainer);
-      expect(surface().elevation, 3);
+      expect(
+        surface().color,
+        AppColors.tabHeaderSurfaceFor(
+          tester.element(surfaceFinder),
+          scrolledUnder: true,
+        ),
+      );
+      expect(surface().color!.a, closeTo(0.84, 0.001));
+      expect(surface().elevation, 1);
+      expect(surface().surfaceTintColor, Colors.transparent);
       expect(tester.getRect(titleFinder), initialTitleRect);
 
       tester.state<ScrollableState>(find.byType(Scrollable)).position.jumpTo(0);
       await tester.pumpAndSettle();
 
-      expect(surface().color, colors.surface);
+      expect(
+        surface().color,
+        AppColors.tabHeaderSurfaceFor(
+          tester.element(surfaceFinder),
+          scrolledUnder: false,
+        ),
+      );
       expect(surface().elevation, 0);
+      expect(surface().surfaceTintColor, Colors.transparent);
       expect(tester.getRect(titleFinder), initialTitleRect);
     },
   );
@@ -96,10 +119,7 @@ class _FrameHarness extends StatelessWidget {
         body: ScrolledUnderTabFrame(
           surfaceKey: const ValueKey('test-tab-header-surface'),
           header: showHeader
-              ? const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('Pestaña', key: ValueKey('test-tab-title')),
-                )
+              ? const Text('Pestaña', key: ValueKey('test-tab-title'))
               : null,
           body: ListView.builder(
             key: const ValueKey('test-tab-scroll'),
