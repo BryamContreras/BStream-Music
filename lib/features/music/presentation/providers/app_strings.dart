@@ -206,6 +206,18 @@ class AppStrings {
   );
   String get close => choose('Cerrar', 'Close');
   String get moreOptions => choose('Mas opciones', 'More options');
+  String get shareSong => choose('Compartir canción', 'Share song');
+  String get shareSongTitle =>
+      choose('Compartir con BStream Music', 'Share with BStream Music');
+  String shareSongMessage(String title, String artist) => choose(
+    'Escucha "$title" de $artist en BStream Music.',
+    'Listen to "$title" by $artist on BStream Music.',
+  );
+  String get shareFailed => choose(
+    'No se pudo compartir la canción.',
+    'The song could not be shared.',
+  );
+  String get sharedSong => choose('Canción compartida', 'Shared song');
   String get addToPlaylist => choose('Anadir a playlist', 'Add to playlist');
   String get favorites => choose('Favoritos', 'Favorites');
   String get addToFavorites => choose('Anadir a favoritos', 'Add to favorites');

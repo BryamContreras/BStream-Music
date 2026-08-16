@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -212,6 +213,89 @@ void main() {
     expect(player.playCalls, 0);
   });
 
+  testWidgets(
+    'reuses the bounded artwork decode for the blurred header background',
+    (tester) async {
+      final tracksProvider = FutureProvider<List<TrackInfo>>(
+        (ref) async => _tracks,
+        retry: (_, _) => null,
+      );
+
+      await tester.pumpWidget(
+        _detailApp(
+          player: _RecordingPlayerController(),
+          tracksProvider: tracksProvider,
+          artworkSource: 'https://i.ytimg.com/vi/firstsong01/hqdefault.jpg',
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('remote-collection-background-blur')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('remote-collection-background-overlay')),
+        findsOneWidget,
+      );
+      expect(
+        find.ancestor(
+          of: find.byKey(const ValueKey('remote-collection-background-blur')),
+          matching: find.byType(ExcludeSemantics),
+        ),
+        findsOneWidget,
+      );
+      final overlay = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('remote-collection-background-overlay')),
+      );
+      final overlayGradient =
+          (overlay.decoration as BoxDecoration).gradient! as LinearGradient;
+      expect(overlayGradient.colors.last.a, greaterThan(0.9));
+      final background = tester.widget<SourceImage>(
+        find.byKey(const ValueKey('remote-collection-background-image')),
+      );
+      final foreground = tester.widget<ProportionalArtwork>(
+        find.descendant(
+          of: find.byKey(const ValueKey('remote-collection-artwork')),
+          matching: find.byType(ProportionalArtwork),
+        ),
+      );
+      expect(background.cacheWidth, foreground.cacheWidth);
+      expect(background.cacheWidth, lessThanOrEqualTo(640));
+    },
+  );
+
+  testWidgets('uses the lightweight gradient fallback without artwork', (
+    tester,
+  ) async {
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => _tracks,
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: tracksProvider,
+        artworkSource: '   ',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('remote-collection-background-fallback')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('remote-collection-background-blur')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('remote-collection-background-image')),
+      findsNothing,
+    );
+  });
+
   testWidgets('stays usable at 320x568 with text scale 3', (tester) async {
     tester.view.physicalSize = const Size(320, 568);
     tester.view.devicePixelRatio = 1;
@@ -234,6 +318,8 @@ void main() {
             'Un titulo de album deliberadamente largo para una pantalla pequena',
         subtitle: 'Artista principal con invitados y un nombre extenso',
         metadata: const ['Album de estudio', '2026', 'Alta resolucion'],
+        artworkSource: 'https://i.ytimg.com/vi/firstsong01/hqdefault.jpg',
+        disableAnimations: true,
       ),
     );
     await tester.pumpAndSettle();
@@ -241,6 +327,17 @@ void main() {
     expect(
       find.byKey(const ValueKey('remote-collection-detail')),
       findsOneWidget,
+    );
+    final background = tester.widget<SourceImage>(
+      find.byKey(const ValueKey('remote-collection-background-image')),
+    );
+    expect(background.cacheWidth, 512);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('remote-collection-header')),
+        matching: find.byType(AnimatedSwitcher),
+      ),
+      findsNothing,
     );
     expect(tester.takeException(), isNull);
     expect(
@@ -276,6 +373,8 @@ Widget _detailApp({
   String title = 'Album de contrato',
   String subtitle = 'Artista principal',
   List<String> metadata = const ['Album', '2026'],
+  String? artworkSource,
+  bool disableAnimations = false,
 }) {
   return ProviderScope(
     overrides: [
@@ -285,10 +384,17 @@ Widget _detailApp({
       ),
     ],
     child: MaterialApp(
+      builder: (context, child) {
+        if (!disableAnimations) return child!;
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(disableAnimations: true),
+          child: child!,
+        );
+      },
       home: RemoteCollectionDetailPage(
         title: title,
         subtitle: subtitle,
-        artworkSource: null,
+        artworkSource: artworkSource,
         queueSourceId: 'album:MPRE-contract',
         tracksProvider: tracksProvider,
         emptyMessage: 'La coleccion esta vacia.',

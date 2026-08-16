@@ -16,9 +16,12 @@ Current version: **1.2.4+124**.
 - Resolve and download YouTube audio with `youtube_explode_dart` first, validate
   the exact selected stream, and fall back visibly to yt-dlp only when needed.
 - Search YouTube Music through InnerTube tabs for Songs, Videos, and Albums;
-  open albums, mixes, and playlists as details before creating their queues.
+  switch categories with an accessible cross-fade, and open albums, mixes, and
+  playlists in bounded, contrast-safe blurred artwork detail pages before
+  creating their queues.
 - Show refreshable YouTube Music shelves on Home while hiding empty local
-  Recently played and Playlists sections.
+  Recently played and Playlists sections, and preserve engine-detected
+  duration and seeking when recommendation metadata omits the track length.
 - Import and export library metadata through robust CSV profiles compatible
   with BStream, MetroList, Harmony/RiMusic, Soundiiz, and common layouts.
 - Run TikTok LIVE queues natively in Dart on Android, Windows, Linux, and macOS,
@@ -33,6 +36,8 @@ Current version: **1.2.4+124**.
   bounded artwork decoding, 48 dp controls, and layouts tested at 300% text.
 - Include release APKs for ARMv7, ARMv8, and x86_64, and remove the obsolete
   external Python TikTok LIVE bridge from desktop packages.
+- Share a YouTube-backed song with a BStream Music link that opens the player
+  on Android, Windows, Linux, or macOS, while retaining a YouTube fallback.
 
 ## Main features
 
@@ -43,6 +48,9 @@ Current version: **1.2.4+124**.
 - If InnerTube fails, yt-dlp keeps discovery available as generic YouTube
   Videos without mislabeling them as Songs or Albums.
 - Search text remains available between searches and has an inline clear action.
+- Remote song rows in Search and album, playlist, and mix details provide a
+  dedicated Play/Pause control and a More menu for Download and Add to
+  playlist; tapping the row still opens the full player.
 - Remote playback and audio downloads with real-time progress.
 - Direct YouTube playback falls back to a short-lived, chunked yt-dlp cache
   when GoogleVideo rejects the player's HTTP range requests; native M4A/AAC,
@@ -71,6 +79,12 @@ Current version: **1.2.4+124**.
 - Mobile Lyrics and Volume controls use labeled buttons beneath Shuffle and
   Repeat, while an accent-colored heart beside the title toggles Favorites on
   every platform.
+- The Share button beside Favorites sends both a compact
+  `bstreammusic://track/<videoId>` app link and the canonical YouTube watch
+  URL. Installed packages on Android, Windows, Linux, and macOS register the
+  BStream scheme; the YouTube URL remains available when that scheme cannot be
+  opened. Local-only files without a YouTube identity are intentionally not
+  shared.
 - Lyrics offer four persistent animation styles, Normal/Centered alignment,
   and a live preview in Appearance settings.
 - Playback queue synchronized with playlists and the library.
@@ -81,6 +95,8 @@ Current version: **1.2.4+124**.
   depend on reopening the app. The bounded disk window prioritizes the current
   track, those three upcoming tracks, and the previous track; interrupted-
   session leftovers expire after 30 minutes.
+- On Android, Quick picks that omit catalog duration adopt ExoPlayer's detected
+  duration after loading, keeping the timeline and seeking available.
 - Desktop also prepares up to three upcoming remote tracks as complete local
   files. Its 12-hour LRU cache keeps at most 24 files, 256 MiB total, and
   128 MiB per track; changing queues or stopping playback releases protection

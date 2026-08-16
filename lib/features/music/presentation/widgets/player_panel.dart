@@ -968,6 +968,11 @@ class _PlayerControls extends ConsumerWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              _PlayerShareButton(
+                snapshot: snapshot,
+                savedTrackId: savedTrackId,
+                strings: strings,
+              ),
               _PlayerFavoriteButton(
                 snapshot: snapshot,
                 isFavorite: isFavorite,
@@ -1037,6 +1042,58 @@ class PlayerErrorMessage extends StatelessWidget {
   }
 }
 
+class _PlayerShareButton extends ConsumerWidget {
+  const _PlayerShareButton({
+    required this.snapshot,
+    required this.savedTrackId,
+    required this.strings,
+  });
+
+  final PlayerSnapshot snapshot;
+  final String? savedTrackId;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final track = snapshot.isExternal
+        ? null
+        : _shareTrackForSnapshot(
+            snapshot,
+            ref,
+            strings,
+            savedTrackId: savedTrackId,
+          );
+    final shareService = ref.read(trackShareServiceProvider);
+    final canShare = track != null && shareService.canShare(track);
+    final color = AppColors.playbackSecondaryControlForegroundFor(context);
+
+    return Builder(
+      builder: (buttonContext) {
+        return IconButton(
+          key: const ValueKey('player-share-control'),
+          tooltip: strings.shareSong,
+          constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+          padding: const EdgeInsets.all(9),
+          color: color,
+          disabledColor: color.withValues(alpha: 0.38),
+          iconSize: 30,
+          icon: const Icon(Icons.share_rounded),
+          onPressed: canShare
+              ? () => unawaited(
+                  _shareTrack(
+                    context: buttonContext,
+                    ref: ref,
+                    track: track,
+                    strings: strings,
+                  ),
+                )
+              : null,
+        );
+      },
+    );
+  }
+}
+
 class _PlayerFavoriteButton extends ConsumerWidget {
   const _PlayerFavoriteButton({
     required this.snapshot,
@@ -1084,6 +1141,91 @@ class _PlayerFavoriteButton extends ConsumerWidget {
             )
           : null,
     );
+  }
+}
+
+TrackInfo _shareTrackForSnapshot(
+  PlayerSnapshot snapshot,
+  WidgetRef ref,
+  AppStrings strings, {
+  required String? savedTrackId,
+}) {
+  final sourceUrl = snapshot.sourceUrl?.trim() ?? '';
+  if (sourceUrl.isNotEmpty) {
+    final canonical = ref
+        .read(playerControllerProvider.notifier)
+        .currentRemoteTrackFor(sourceUrl);
+    if (canonical != null) {
+      return canonical;
+    }
+  }
+
+  final normalizedSavedTrackId = savedTrackId?.trim();
+  if (normalizedSavedTrackId != null && normalizedSavedTrackId.isNotEmpty) {
+    final localTracks =
+        ref.read(libraryTracksProvider).value ?? const <LocalTrack>[];
+    for (final localTrack in localTracks) {
+      if (localTrack.id != normalizedSavedTrackId) {
+        continue;
+      }
+      final sourceId = localTrack.sourceId?.trim();
+      return TrackInfo(
+        id: sourceId != null && sourceId.isNotEmpty ? sourceId : localTrack.id,
+        title: localTrack.title,
+        artist: localTrack.artist,
+        url: localTrack.sourceUrl?.trim() ?? '',
+        thumbnailUrl: localTrack.thumbnailUrl,
+        catalogThumbnailUrl: localTrack.catalogThumbnailUrl,
+        duration: localTrack.duration,
+        album: localTrack.album,
+        artists: localTrack.artists,
+        metadataSource: localTrack.metadataSource,
+      );
+    }
+  }
+
+  return TrackInfo(
+    id: snapshot.trackId?.trim() ?? '',
+    title: snapshot.title?.trim().isNotEmpty == true
+        ? snapshot.title!.trim()
+        : strings.noTitle,
+    artist: snapshot.artist?.trim().isNotEmpty == true
+        ? snapshot.artist!.trim()
+        : strings.unknownArtist,
+    url: sourceUrl,
+    thumbnailUrl: snapshot.thumbnailUrl,
+    duration: snapshot.duration,
+    album: snapshot.album,
+  );
+}
+
+Future<void> _shareTrack({
+  required BuildContext context,
+  required WidgetRef ref,
+  required TrackInfo track,
+  required AppStrings strings,
+}) async {
+  final renderObject = context.findRenderObject();
+  final origin = renderObject is RenderBox && renderObject.hasSize
+      ? renderObject.localToGlobal(Offset.zero) & renderObject.size
+      : null;
+
+  try {
+    await ref
+        .read(trackShareServiceProvider)
+        .shareTrack(
+          track,
+          message: strings.shareSongMessage(track.title, track.artist),
+          title: strings.shareSongTitle,
+          sharePositionOrigin: origin,
+        );
+  } catch (_) {
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(strings.shareFailed)));
   }
 }
 

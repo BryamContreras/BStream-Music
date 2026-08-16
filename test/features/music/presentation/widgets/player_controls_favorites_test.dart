@@ -1,9 +1,11 @@
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
+import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/sharing/track_share_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -230,6 +232,8 @@ void main() {
     await tester.pump();
 
     for (final key in const [
+      'player-share-control',
+      'player-favorite-control',
       'player-lyrics-control',
       'player-shuffle-control',
       'player-primary-control',
@@ -240,6 +244,13 @@ void main() {
       expect(rect.width, greaterThanOrEqualTo(48), reason: key);
       expect(rect.height, greaterThanOrEqualTo(48), reason: key);
     }
+    final share = tester.getRect(
+      find.byKey(const ValueKey('player-share-control')),
+    );
+    final favorite = tester.getRect(
+      find.byKey(const ValueKey('player-favorite-control')),
+    );
+    expect(share.right, closeTo(favorite.left, 0.1));
     expect(
       tester.getSize(find.byKey(const ValueKey('player-primary-control'))),
       const Size.square(76),
@@ -273,6 +284,194 @@ void main() {
       find.byKey(const ValueKey('player-progress-color-animation')),
       findsOneWidget,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('title share control sits before favorite and shares snapshot', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    final shareService = _TestTrackShareService();
+    const shareSnapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Titulo resumido del reproductor',
+      artist: 'Artista resumido',
+      trackId: 'dQw4w9WgXcQ',
+      sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      duration: Duration(minutes: 3),
+    );
+    const canonicalTrack = TrackInfo(
+      id: 'dQw4w9WgXcQ',
+      title: 'Cancion para compartir',
+      artist: 'Artista de prueba',
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      album: 'Album canonico',
+    );
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: shareSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        shareService: shareService,
+        canonicalRemoteTrack: canonicalTrack,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    final share = find.byKey(const ValueKey('player-share-control'));
+    final favorite = find.byKey(const ValueKey('player-favorite-control'));
+    expect(tester.getSize(share), const Size.square(48));
+    expect(
+      tester.getRect(share).right,
+      closeTo(tester.getRect(favorite).left, 0.1),
+    );
+    expect(
+      find.descendant(of: share, matching: find.byIcon(Icons.share_rounded)),
+      findsOneWidget,
+    );
+
+    final expectedOrigin = tester.getRect(share);
+    await tester.tap(share);
+    await tester.pump();
+
+    expect(shareService.shareCalls, 1);
+    expect(shareService.sharedTrack, isNotNull);
+    expect(shareService.sharedTrack, canonicalTrack);
+    expect(shareService.sharedTrack!.album, 'Album canonico');
+    expect(shareService.title, 'Compartir con BStream Music');
+    expect(
+      shareService.message,
+      'Escucha "Cancion para compartir" de Artista de prueba en BStream Music.',
+    );
+    expect(shareService.sharePositionOrigin, expectedOrigin);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'downloaded track shares its YouTube origin, not its local path',
+    (tester) async {
+      _configureView(tester, const Size(360, 800));
+      final shareService = _TestTrackShareService();
+      final downloadedTrack = LocalTrack(
+        id: 'local-download',
+        title: 'Cancion descargada',
+        artist: 'Artista local',
+        filePath: r'C:\music\private-track.m4a',
+        sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        sourceId: 'dQw4w9WgXcQ',
+        addedAt: DateTime(2026),
+      );
+      const localSnapshot = PlayerSnapshot(
+        status: PlayerStatus.paused,
+        title: 'Cancion descargada',
+        artist: 'Artista local',
+        trackId: 'local-download',
+        sourceUrl: r'C:\music\private-track.m4a',
+      );
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: localSnapshot,
+          localTrack: downloadedTrack,
+          playlists: _TestPlaylistsController(),
+          shareService: shareService,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      await tester.tap(find.byKey(const ValueKey('player-share-control')));
+      await tester.pump();
+
+      expect(shareService.shareCalls, 1);
+      expect(shareService.sharedTrack?.id, 'dQw4w9WgXcQ');
+      expect(
+        shareService.sharedTrack?.url,
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      );
+      expect(shareService.sharedTrack?.url, isNot(contains('private-track')));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('external playback keeps the title share control disabled', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    final shareService = _TestTrackShareService();
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot.copyWith(
+          sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          isExternal: true,
+        ),
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        shareService: shareService,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    final share = find.byKey(const ValueKey('player-share-control'));
+    expect(tester.widget<IconButton>(share).onPressed, isNull);
+    await tester.tap(share);
+    await tester.pump();
+    expect(shareService.shareCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unshareable playback keeps the title share control disabled', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    final shareService = _TestTrackShareService(canShareResult: false);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        shareService: shareService,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    final share = find.byKey(const ValueKey('player-share-control'));
+    expect(tester.widget<IconButton>(share).onPressed, isNull);
+    await tester.tap(share);
+    await tester.pump();
+    expect(shareService.shareCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('share failure is reported with the localized message', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    final shareService = _TestTrackShareService(throwsOnShare: true);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        shareService: shareService,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.byKey(const ValueKey('player-share-control')));
+    await tester.pump();
+
+    expect(find.text('No se pudo compartir la canción.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -354,6 +553,8 @@ Widget _playerHarness({
   required PlayerSnapshot snapshot,
   required LocalTrack localTrack,
   required _TestPlaylistsController playlists,
+  TrackShareService? shareService,
+  TrackInfo? canonicalRemoteTrack,
 }) {
   const accent = AppAccent.blue;
   final scheme = ColorScheme.fromSeed(
@@ -364,10 +565,16 @@ Widget _playerHarness({
   return ProviderScope(
     overrides: [
       playerControllerProvider.overrideWith(
-        () => _TestPlayerController(snapshot),
+        () => _TestPlayerController(
+          snapshot,
+          canonicalRemoteTrack: canonicalRemoteTrack,
+        ),
       ),
       playlistsControllerProvider.overrideWith(() => playlists),
       libraryTracksProvider.overrideWith((ref) async => [localTrack]),
+      trackShareServiceProvider.overrideWithValue(
+        shareService ?? _TestTrackShareService(),
+      ),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),
@@ -383,13 +590,58 @@ Widget _playerHarness({
   );
 }
 
+class _TestTrackShareService implements TrackShareService {
+  _TestTrackShareService({
+    this.canShareResult = true,
+    this.throwsOnShare = false,
+  });
+
+  final bool canShareResult;
+  final bool throwsOnShare;
+  int shareCalls = 0;
+  TrackInfo? sharedTrack;
+  String? message;
+  String? title;
+  String? subject;
+  Rect? sharePositionOrigin;
+
+  @override
+  bool canShare(TrackInfo track) => canShareResult;
+
+  @override
+  Future<void> shareTrack(
+    TrackInfo track, {
+    required String message,
+    required String title,
+    String? subject,
+    Rect? sharePositionOrigin,
+  }) async {
+    shareCalls += 1;
+    sharedTrack = track;
+    this.message = message;
+    this.title = title;
+    this.subject = subject;
+    this.sharePositionOrigin = sharePositionOrigin;
+    if (throwsOnShare) {
+      throw StateError('share failed');
+    }
+  }
+}
+
 class _TestPlayerController extends PlayerController {
-  _TestPlayerController(this.snapshot);
+  _TestPlayerController(this.snapshot, {this.canonicalRemoteTrack});
 
   final PlayerSnapshot snapshot;
+  final TrackInfo? canonicalRemoteTrack;
 
   @override
   Future<PlayerSnapshot> build() async => snapshot;
+
+  @override
+  TrackInfo? currentRemoteTrackFor(String sourceUrl) {
+    final track = canonicalRemoteTrack;
+    return track?.url == sourceUrl ? track : null;
+  }
 }
 
 class _TestPlaylistsController extends PlaylistsController {

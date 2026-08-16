@@ -163,6 +163,147 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'uses a subtle category transition without resetting the search scroll',
+    (tester) async {
+      final songs = _searchTracks('Canción', 'song');
+      final videos = _searchTracks('Video', 'video');
+      final controller = _RecordingSearchController(
+        SearchState(
+          query: 'radiohead',
+          pages: <SearchCategory, SearchPage>{
+            SearchCategory.songs: SearchPage(
+              category: SearchCategory.songs,
+              backend: SearchBackend.innerTube,
+              tracks: songs,
+            ),
+            SearchCategory.videos: SearchPage(
+              category: SearchCategory.videos,
+              backend: SearchBackend.innerTube,
+              tracks: videos,
+            ),
+          },
+        ),
+      );
+
+      await tester.pumpWidget(
+        _searchApp(
+          controller: controller,
+          extraOverrides: [
+            playerControllerProvider.overrideWith(
+              () => _RecordingPlayerController(),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final switcher = tester.widget<AnimatedSwitcher>(
+        find.byKey(const ValueKey('search-results-switcher')),
+      );
+      expect(switcher.duration, const Duration(milliseconds: 180));
+
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -90));
+      await tester.pumpAndSettle();
+      final scrollable = tester.state<ScrollableState>(
+        find.byType(Scrollable).first,
+      );
+      final offsetBeforeSelection = scrollable.position.pixels;
+      expect(offsetBeforeSelection, greaterThan(0));
+
+      await controller.selectCategory(SearchCategory.videos);
+      await tester.pump();
+
+      expect(find.text('Canción 0'), findsOneWidget);
+      expect(find.text('Video 0'), findsOneWidget);
+      expect(scrollable.position.pixels, closeTo(offsetBeforeSelection, 0.01));
+
+      await tester.pumpAndSettle();
+
+      expect(find.text('Canción 0'), findsNothing);
+      expect(find.text('Video 0'), findsOneWidget);
+      expect(scrollable.position.pixels, closeTo(offsetBeforeSelection, 0.01));
+
+      controller.replaceState(
+        SearchState(
+          query: 'radiohead',
+          selectedCategory: SearchCategory.videos,
+          pages: <SearchCategory, SearchPage>{
+            SearchCategory.videos: SearchPage(
+              category: SearchCategory.videos,
+              backend: SearchBackend.innerTube,
+              tracks: _searchTracks('Video actualizado', 'updated'),
+            ),
+          },
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Video 0'), findsNothing);
+      expect(find.text('Video actualizado 0'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('disables search category motion when reduced motion is active', (
+    tester,
+  ) async {
+    final controller = _RecordingSearchController(
+      SearchState(
+        query: 'radiohead',
+        pages: <SearchCategory, SearchPage>{
+          SearchCategory.songs: SearchPage(
+            category: SearchCategory.songs,
+            backend: SearchBackend.innerTube,
+            tracks: _searchTracks('Canción', 'song', count: 1),
+          ),
+          SearchCategory.videos: SearchPage(
+            category: SearchCategory.videos,
+            backend: SearchBackend.innerTube,
+            tracks: _searchTracks('Video', 'video', count: 1),
+          ),
+        },
+      ),
+    );
+
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        disableAnimations: true,
+        extraOverrides: [
+          playerControllerProvider.overrideWith(
+            () => _RecordingPlayerController(),
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<AnimatedSwitcher>(
+            find.byKey(const ValueKey('search-results-switcher')),
+          )
+          .duration,
+      Duration.zero,
+    );
+    expect(
+      tester
+          .widget<AnimatedContainer>(
+            find.byKey(const ValueKey('search-category-surface-songs')),
+          )
+          .duration,
+      Duration.zero,
+    );
+
+    await controller.selectCategory(SearchCategory.videos);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Canción 0'), findsNothing);
+    expect(find.text('Video 0'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('fallback exposes only Videos and explains yt-dlp', (
     tester,
   ) async {
@@ -377,6 +518,7 @@ Widget _searchApp({
   VoidCallback? onOpenPlayer,
   List<Override> extraOverrides = const [],
   TargetPlatform? platform,
+  bool disableAnimations = false,
 }) {
   return ProviderScope(
     overrides: [
@@ -388,10 +530,34 @@ Widget _searchApp({
     ],
     child: MaterialApp(
       theme: platform == null ? null : ThemeData(platform: platform),
+      builder: disableAnimations
+          ? (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(disableAnimations: disableAnimations),
+              child: child!,
+            )
+          : null,
       home: Scaffold(body: SearchView(onOpenPlayer: onOpenPlayer ?? () {})),
     ),
   );
 }
+
+List<TrackInfo> _searchTracks(
+  String titlePrefix,
+  String idPrefix, {
+  int count = 12,
+}) => List<TrackInfo>.generate(
+  count,
+  (index) => TrackInfo(
+    id: '$idPrefix-$index',
+    title: '$titlePrefix $index',
+    artist: 'Artista',
+    duration: const Duration(minutes: 3),
+    url: 'https://music.youtube.com/watch?v=$idPrefix-$index',
+  ),
+  growable: false,
+);
 
 class _RecordingSearchController extends SearchController {
   _RecordingSearchController(this.initialState);
@@ -425,6 +591,10 @@ class _RecordingSearchController extends SearchController {
     state = AsyncData(
       current.copyWith(selectedCategory: category, loadingCategory: null),
     );
+  }
+
+  void replaceState(SearchState value) {
+    state = AsyncData(value);
   }
 
   @override

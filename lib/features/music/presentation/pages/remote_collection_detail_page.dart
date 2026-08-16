@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -208,13 +209,15 @@ class _CollectionHeader extends StatelessWidget {
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 720;
         final artworkSize = wide ? 224.0 : 196.0;
+        final artworkCacheWidth = wide ? 640 : 512;
         final artwork = ClipRRect(
+          key: const ValueKey('remote-collection-artwork'),
           borderRadius: BorderRadius.circular(12),
           child: SizedBox.square(
             dimension: artworkSize,
             child: ProportionalArtwork(
               source: artworkSource,
-              cacheWidth: wide ? 640 : 512,
+              cacheWidth: artworkCacheWidth,
               fallback: ColoredBox(
                 color: const Color(0xFF202520),
                 child: Icon(fallbackIcon, size: 64),
@@ -275,36 +278,138 @@ class _CollectionHeader extends StatelessWidget {
           ],
         );
 
-        return Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1080),
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                wide ? 28 : 20,
-                wide ? 24 : 12,
-                wide ? 28 : 20,
-                20,
+        return RepaintBoundary(
+          key: const ValueKey('remote-collection-header'),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: _CollectionHeaderBackground(
+                  artworkSource: artworkSource,
+                  cacheWidth: artworkCacheWidth,
+                ),
               ),
-              child: wide
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        artwork,
-                        const SizedBox(width: 28),
-                        Expanded(child: description),
-                      ],
-                    )
-                  : Column(
-                      children: [
-                        artwork,
-                        const SizedBox(height: 18),
-                        description,
-                      ],
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1080),
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      wide ? 28 : 20,
+                      wide ? 24 : 12,
+                      wide ? 28 : 20,
+                      20,
                     ),
-            ),
+                    child: wide
+                        ? Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              artwork,
+                              const SizedBox(width: 28),
+                              Expanded(child: description),
+                            ],
+                          )
+                        : Column(
+                            children: [
+                              artwork,
+                              const SizedBox(height: 18),
+                              description,
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
+    );
+  }
+}
+
+class _CollectionHeaderBackground extends StatelessWidget {
+  const _CollectionHeaderBackground({
+    required this.artworkSource,
+    required this.cacheWidth,
+  });
+
+  final String? artworkSource;
+  final int cacheWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final source = artworkSource?.trim();
+    final colors = Theme.of(context).colorScheme;
+    final isDark = colors.brightness == Brightness.dark;
+    final fallback = _CollectionHeaderBackgroundFallback(
+      key: const ValueKey('remote-collection-background-fallback'),
+    );
+
+    return ClipRect(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          fallback,
+          if (source != null && source.isNotEmpty)
+            ExcludeSemantics(
+              child: ImageFiltered(
+                key: const ValueKey('remote-collection-background-blur'),
+                imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                child: Transform.scale(
+                  scale: 1.16,
+                  child: SourceImage(
+                    key: const ValueKey('remote-collection-background-image'),
+                    source: source,
+                    fit: BoxFit.cover,
+                    // Match the foreground provider key so Flutter's image
+                    // cache can share one bounded decode between both paints.
+                    cacheWidth: cacheWidth,
+                    // The gradient immediately underneath remains visible
+                    // when loading fails, without another decorated copy.
+                    fallback: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+            ),
+          DecoratedBox(
+            key: const ValueKey('remote-collection-background-overlay'),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  colors.surface.withValues(alpha: isDark ? 0.58 : 0.64),
+                  colors.surface.withValues(alpha: isDark ? 0.76 : 0.82),
+                  colors.surface.withValues(alpha: 0.96),
+                ],
+                stops: const [0, 0.54, 1],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CollectionHeaderBackgroundFallback extends StatelessWidget {
+  const _CollectionHeaderBackgroundFallback({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color.alphaBlend(
+              colors.primary.withValues(alpha: 0.10),
+              colors.surface,
+            ),
+            colors.surface,
+          ],
+        ),
+      ),
     );
   }
 }

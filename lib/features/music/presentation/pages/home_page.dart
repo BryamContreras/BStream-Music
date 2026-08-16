@@ -13,6 +13,9 @@ import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../platform_channels/android_external_audio_channel.dart';
+import '../../../../services/sharing/bstream_track_link.dart';
+import '../../../../services/youtube_music/innertube_search_service.dart';
+import '../../data/datasources/remote_music_datasource.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/track_info.dart';
@@ -47,7 +50,10 @@ class _HomePageState extends ConsumerState<HomePage> {
   int _rootBackCount = 0;
   DateTime? _lastRootBackAt;
   StreamSubscription<ExternalAudioRequest>? _externalAudioSubscription;
+  ProviderSubscription<AsyncValue<BStreamTrackLink>>?
+  _incomingTrackLinkSubscription;
   Future<void> _externalAudioWork = Future<void>.value();
+  Future<void> _incomingTrackLinkWork = Future<void>.value();
   final Set<String> _startedExternalAudioRequests = <String>{};
   final Set<String> _reportedIncompleteExternalFolders = <String>{};
 
@@ -75,6 +81,64 @@ class _HomePageState extends ConsumerState<HomePage> {
             },
           );
     }
+    _incomingTrackLinkSubscription = ref
+        .listenManual<AsyncValue<BStreamTrackLink>>(
+          incomingTrackLinkProvider,
+          (_, next) => next.whenData(_queueIncomingTrackLink),
+          fireImmediately: true,
+        );
+  }
+
+  void _queueIncomingTrackLink(BStreamTrackLink link) {
+    _incomingTrackLinkWork = _incomingTrackLinkWork
+        .then((_) => _handleIncomingTrackLink(link))
+        .catchError((Object error, StackTrace stackTrace) {
+          debugPrint('Could not open shared BStream track: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        });
+  }
+
+  Future<void> _handleIncomingTrackLink(BStreamTrackLink link) async {
+    if (!mounted) {
+      return;
+    }
+    _openPlayer();
+
+    final watchUrl = link.youtubeFallbackUri.toString();
+    TrackInfo? track;
+    try {
+      final search = ref.read(youtubeMusicSearchProvider);
+      if (search is YouTubeMusicTrackLookup) {
+        final song = await (search as YouTubeMusicTrackLookup)
+            .getSong(link.videoId)
+            .timeout(const Duration(seconds: 3));
+        if (song != null) {
+          track = trackInfoFromInnerTubeSong(song);
+        }
+      }
+    } catch (error) {
+      // Metadata is best effort and must never delay playback indefinitely.
+      // The normal player path below still performs Explode -> yt-dlp audio
+      // fallback with the canonical YouTube URL.
+      debugPrint('Shared track InnerTube lookup failed: $error');
+    }
+
+    final strings = ref.read(appStringsProvider);
+    track ??= TrackInfo(
+      id: link.videoId,
+      title: strings.sharedSong,
+      artist: 'YouTube',
+      url: watchUrl,
+      thumbnailUrl: youtubeThumbnailSourceForVideoId(link.videoId),
+    );
+
+    if (!mounted) {
+      return;
+    }
+    await ref.read(playerControllerProvider.future);
+    await ref
+        .read(playerControllerProvider.notifier)
+        .playRemote(track, queueSourceId: 'shared-link:${link.videoId}');
   }
 
   void _queueExternalAudioRequest(ExternalAudioRequest request) {
@@ -236,6 +300,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void dispose() {
     unawaited(_externalAudioSubscription?.cancel());
+    _incomingTrackLinkSubscription?.close();
     _libraryNavigationController.dispose();
     _settingsNavigationController.dispose();
     super.dispose();

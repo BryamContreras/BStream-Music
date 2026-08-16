@@ -58,6 +58,11 @@ dependencies:
   archive: ^4.0.9
   csv: ^8.0.0
   url_launcher: ^6.3.2
+  app_links: ^7.2.1
+  # 13.1+ requires win32 6, while file_picker 11 is still on win32 5.
+  # 12.0.2 keeps the current picker stack compatible and includes the modern
+  # SharePlus/ShareParams API on all four supported platforms.
+  share_plus: ^12.0.2
   youtube_explode_dart: ^3.1.0
   piratetok_live:
     path: third_party/piratetok_live

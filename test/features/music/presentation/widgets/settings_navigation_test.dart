@@ -5,6 +5,7 @@ import 'package:bstream_music/features/music/presentation/providers/music_provid
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
 import 'package:bstream_music/services/storage/library_csv_import_service.dart';
 import 'package:bstream_music/services/storage/library_csv_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
@@ -608,9 +609,19 @@ Widget _homeHarness() {
       playlistsControllerProvider.overrideWith(_EmptyPlaylistsController.new),
       playerControllerProvider.overrideWith(_IdlePlayerController.new),
       desktopMediaSessionProvider.overrideWithValue(null),
+      incomingTrackLinkServiceProvider.overrideWithValue(
+        const _EmptyIncomingTrackLinkService(),
+      ),
     ],
     child: const MaterialApp(home: HomePage()),
   );
+}
+
+final class _EmptyIncomingTrackLinkService implements IncomingTrackLinkService {
+  const _EmptyIncomingTrackLinkService();
+
+  @override
+  Stream<Uri> get links => const Stream<Uri>.empty();
 }
 
 List<Override> _providerOverrides() {

@@ -67,6 +67,23 @@ Description: Reproductor y gestor musical multiplataforma
  BStream Music permite buscar, reproducir, descargar y organizar musica,
  playlists y favoritos desde una interfaz construida con Flutter.
 EOF
+cat >"$deb_root/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+exit 0
+EOF
+cat >"$deb_root/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+exit 0
+EOF
+chmod 0755 "$deb_root/DEBIAN/postinst" "$deb_root/DEBIAN/postrm"
 
 deb_path="$output_dir/BStream-Music-$version-linux-amd64.deb"
 dpkg-deb --root-owner-group --build "$deb_root" "$deb_path"

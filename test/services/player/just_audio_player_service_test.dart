@@ -190,6 +190,93 @@ void main() {
   );
 
   test(
+    'uses the loaded media duration when remote catalog metadata omits it',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend
+        ..nextSourceLoadDuration = const Duration(minutes: 3, seconds: 47);
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('quick-pick'));
+
+        expect(
+          fixture.service.currentSnapshot.duration,
+          const Duration(minutes: 3, seconds: 47),
+        );
+
+        await fixture.service.seek(const Duration(seconds: 42));
+        expect(backend.seekCalls, 1);
+        expect(backend.position, const Duration(seconds: 42));
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'same-item sequence metadata cannot erase a detected remote duration',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('quick-pick'));
+        backend.emitDuration(const Duration(minutes: 4, seconds: 5));
+        await _drainEvents();
+
+        expect(
+          fixture.service.currentSnapshot.duration,
+          const Duration(minutes: 4, seconds: 5),
+        );
+
+        // Quick-pick MediaItems have no catalog duration. just_audio can
+        // publish their sequence tag after ExoPlayer has detected the real
+        // duration; that late tag must not disable the seek bar again.
+        backend.emitSequenceState();
+        await _drainEvents();
+
+        expect(
+          fixture.service.currentSnapshot.duration,
+          const Duration(minutes: 4, seconds: 5),
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'a native queue transition never reuses the previous duration',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('quick-pick-a'));
+        await fixture.service.updateRemoteQueue([
+          _remoteSource('quick-pick-b'),
+        ]);
+        backend.emitDuration(const Duration(minutes: 3));
+        expect(
+          fixture.service.currentSnapshot.duration,
+          const Duration(minutes: 3),
+        );
+
+        backend.emitSequenceState(currentIndex: 1);
+        await _drainEvents();
+
+        expect(fixture.service.currentSnapshot.trackId, 'quick-pick-b');
+        expect(fixture.service.currentSnapshot.duration, isNull);
+
+        backend.emitDuration(const Duration(minutes: 4, seconds: 11));
+        expect(
+          fixture.service.currentSnapshot.duration,
+          const Duration(minutes: 4, seconds: 11),
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
     'source deadline interrupts the native load before late completion',
     () async {
       final deadline = Completer<void>();
@@ -397,6 +484,8 @@ LocalTrack _localTrack(String id) {
 class _BlockingAudioPlayer extends AudioPlayer {
   final _errors = StreamController<PlayerException>.broadcast(sync: true);
   final _states = StreamController<PlayerState>.broadcast(sync: true);
+  final _durations = StreamController<Duration?>.broadcast(sync: true);
+  final _sequenceStates = StreamController<SequenceState>.broadcast(sync: true);
   final List<AudioSource> _sources = [];
   final List<_SourceLoadCall> sourceLoadCalls = [];
 
@@ -405,6 +494,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   bool blockMoves = false;
   bool blockNextSourceLoad = false;
   PlayerException? failNextSourceLoad;
+  Duration? nextSourceLoadDuration;
   bool _playing = false;
   int? _currentIndex;
   Duration _position = Duration.zero;
@@ -422,7 +512,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   }) => const Stream<Duration>.empty();
 
   @override
-  Stream<Duration?> get durationStream => const Stream<Duration?>.empty();
+  Stream<Duration?> get durationStream => _durations.stream;
 
   @override
   Stream<double> get volumeStream => const Stream<double>.empty();
@@ -434,8 +524,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   Stream<PlayerException> get errorStream => _errors.stream;
 
   @override
-  Stream<SequenceState> get sequenceStateStream =>
-      const Stream<SequenceState>.empty();
+  Stream<SequenceState> get sequenceStateStream => _sequenceStates.stream;
 
   @override
   List<IndexedAudioSource> get sequence =>
@@ -493,7 +582,9 @@ class _BlockingAudioPlayer extends AudioPlayer {
         ..addAll(call.sources);
       _currentIndex = _sources.isEmpty ? null : (call.initialIndex ?? 0);
       _position = call.initialPosition ?? Duration.zero;
-      return null;
+      final duration = nextSourceLoadDuration;
+      nextSourceLoadDuration = null;
+      return duration;
     });
   }
 
@@ -501,6 +592,27 @@ class _BlockingAudioPlayer extends AudioPlayer {
       sourceLoadCalls[index].completer.complete();
 
   void emitError(PlayerException error) => _errors.add(error);
+
+  void emitDuration(Duration? duration) => _durations.add(duration);
+
+  void emitSequenceState({int? currentIndex}) {
+    if (currentIndex != null) {
+      _currentIndex = currentIndex;
+    }
+    final currentSequence = sequence;
+    _sequenceStates.add(
+      SequenceState(
+        sequence: currentSequence,
+        currentIndex: _currentIndex,
+        shuffleIndices: List<int>.generate(
+          currentSequence.length,
+          (index) => index,
+        ),
+        shuffleModeEnabled: false,
+        loopMode: LoopMode.off,
+      ),
+    );
+  }
 
   @override
   Future<void> moveAudioSource(int currentIndex, int newIndex) {
@@ -578,6 +690,10 @@ class _BlockingAudioPlayer extends AudioPlayer {
 
   @override
   Future<void> dispose() async {
+    // AudioPlayer derives internal subjects from these streams. End them
+    // before the base class closes those subjects.
+    await _durations.close();
+    await _sequenceStates.close();
     await super.dispose();
     await _errors.close();
     await _states.close();

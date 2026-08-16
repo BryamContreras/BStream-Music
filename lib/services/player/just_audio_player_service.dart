@@ -53,7 +53,15 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
           name: 'BStreamPlayback',
         );
       }
-      _emit(_snapshot.copyWith(duration: duration));
+      // A source whose catalog row did not include a duration (notably
+      // YouTube Music's Quick picks shelf) is still seekable once ExoPlayer
+      // inspects the media. Keep that authoritative value if just_audio later
+      // emits a transient null while refreshing the current sequence.
+      if (_usableDuration(duration) == null &&
+          _usableDuration(_snapshot.duration) != null) {
+        return;
+      }
+      _emit(_snapshot.copyWith(duration: _usableDuration(duration)));
     });
     _volumeSubscription = _player.volumeStream.listen((volume) {
       _emit(_snapshot.copyWith(volume: volume.clamp(0, 1).toDouble()));
@@ -115,6 +123,11 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       }
       final queueEntryId = tag.extras?['queueEntryId']?.toString();
       final isRemote = tag.extras?['isRemote'] == true;
+      final sameLogicalItem = _isSameLogicalMediaItem(
+        snapshot: _snapshot,
+        tag: tag,
+        queueEntryId: queueEntryId,
+      );
       if (isRemote && queueEntryId != null) {
         for (final source in _remoteQueueSources) {
           if (source.queueEntryId == queueEntryId) {
@@ -137,7 +150,13 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
           queueEntryId: queueEntryId,
           sourceUrl: tag.extras?['sourceUrl']?.toString(),
           thumbnailUrl: displayArtworkSourceForMediaItem(tag),
-          duration: tag.duration,
+          // MediaItem only contains catalog metadata. Do not let a null
+          // catalog duration erase the duration detected from the media for
+          // the same logical item. A real queue transition must still clear
+          // it so the previous song's timeline is never reused.
+          duration:
+              _usableDuration(tag.duration) ??
+              (sameLogicalItem ? _usableDuration(_snapshot.duration) : null),
           isRemote: isRemote,
           isExternal: tag.extras?['isExternal'] == true,
         ),
@@ -273,7 +292,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         _remoteQueueSources = [source];
         _remoteHasSingleLogicalItem = source.isOnlyLogicalQueueItem;
         try {
-          await _player.setAudioSources(
+          final loadedDuration = await _player.setAudioSources(
             [_remoteAudioSource(source)],
             initialIndex: 0,
             initialPosition: Duration.zero,
@@ -282,6 +301,10 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
             // instead of a later, easily lost background event.
             preload: true,
           );
+          if (generation == _playbackGeneration &&
+              _usableDuration(loadedDuration) != null) {
+            _emit(_snapshot.copyWith(duration: loadedDuration));
+          }
         } catch (error) {
           if (generation == _playbackGeneration) {
             final baseMessage = _playerErrorMessage(error);
@@ -1296,6 +1319,39 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     }
     return true;
   }
+}
+
+Duration? _usableDuration(Duration? duration) {
+  return duration != null && duration > Duration.zero ? duration : null;
+}
+
+bool _isSameLogicalMediaItem({
+  required PlayerSnapshot snapshot,
+  required MediaItem tag,
+  required String? queueEntryId,
+}) {
+  final snapshotQueueEntryId = snapshot.queueEntryId?.trim();
+  final normalizedQueueEntryId = queueEntryId?.trim();
+  if (snapshotQueueEntryId != null && snapshotQueueEntryId.isNotEmpty) {
+    return normalizedQueueEntryId != null &&
+        normalizedQueueEntryId.isNotEmpty &&
+        snapshotQueueEntryId == normalizedQueueEntryId;
+  }
+
+  final snapshotSourceUrl = snapshot.sourceUrl?.trim();
+  final sourceUrl = tag.extras?['sourceUrl']?.toString().trim();
+  if (snapshotSourceUrl != null && snapshotSourceUrl.isNotEmpty) {
+    return sourceUrl != null &&
+        sourceUrl.isNotEmpty &&
+        snapshotSourceUrl == sourceUrl;
+  }
+
+  final snapshotTrackId = snapshot.trackId?.trim();
+  final sourceTrackId = tag.id.trim();
+  return snapshotTrackId != null &&
+      snapshotTrackId.isNotEmpty &&
+      sourceTrackId.isNotEmpty &&
+      snapshotTrackId == sourceTrackId;
 }
 
 /// Returns whether a just_audio failure still belongs to the source represented

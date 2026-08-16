@@ -122,66 +122,10 @@ class _SearchResultsSliver extends StatelessWidget {
             ),
           );
         }
-        if (state.isSelectedCategoryLoading || !state.hasSelectedPage) {
-          return const SliverFillRemaining(
-            hasScrollBody: false,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        final page = state.selectedPage!;
-        if (page.isEmpty) {
-          return SliverFillRemaining(
-            hasScrollBody: false,
-            child: _SearchEmptyState(
-              icon: _emptyIcon(state.selectedCategory),
-              title: _categoryLabel(strings, state.selectedCategory),
-              subtitle: _emptyMessage(strings, state.selectedCategory),
-            ),
-          );
-        }
-
-        if (state.selectedCategory == SearchCategory.albums) {
-          return SliverPadding(
-            padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
-            sliver: SliverList.separated(
-              itemCount: page.albums.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 6),
-              itemBuilder: (context, index) {
-                final album = page.albums[index];
-                return _AlbumResultTile(
-                  key: ValueKey('search-album-${album.browseId}'),
-                  album: album,
-                  strings: strings,
-                  onOpenPlayer: onOpenPlayer,
-                );
-              },
-            ),
-          );
-        }
-
-        final tracks = page.tracks;
-        return SliverPadding(
-          padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
-          // Search is capped at a small result set. Keeping its rows mounted
-          // avoids repeatedly decoding the same thumbnails while scrolling.
-          sliver: SliverToBoxAdapter(
-            child: Column(
-              children: [
-                for (var index = 0; index < tracks.length; index++) ...[
-                  TrackResultTile(
-                    key: ValueKey(
-                      'search-result-${tracks[index].id.isNotEmpty ? tracks[index].id : tracks[index].url}',
-                    ),
-                    track: tracks[index],
-                    queue: tracks,
-                    onOpenPlayer: onOpenPlayer,
-                  ),
-                  if (index < tracks.length - 1) const SizedBox(height: 6),
-                ],
-              ],
-            ),
-          ),
+        return _SearchCategoryResultsSliver(
+          state: state,
+          strings: strings,
+          onOpenPlayer: onOpenPlayer,
         );
       },
       loading: () => const SliverFillRemaining(
@@ -211,6 +155,142 @@ class _SearchResultsSliver extends StatelessWidget {
         SearchCategory.videos => strings.searchVideosEmpty,
         SearchCategory.albums => strings.searchAlbumsEmpty,
       };
+}
+
+class _SearchCategoryResultsSliver extends StatelessWidget {
+  const _SearchCategoryResultsSliver({
+    required this.state,
+    required this.strings,
+    required this.onOpenPlayer,
+  });
+
+  static const _transitionDuration = Duration(milliseconds: 180);
+
+  final SearchState state;
+  final AppStrings strings;
+  final VoidCallback onOpenPlayer;
+
+  @override
+  Widget build(BuildContext context) {
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
+      sliver: SliverToBoxAdapter(
+        child: AnimatedSwitcher(
+          key: const ValueKey('search-results-switcher'),
+          duration: disableAnimations ? Duration.zero : _transitionDuration,
+          reverseDuration: disableAnimations
+              ? Duration.zero
+              : _transitionDuration,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            alignment: Alignment.topCenter,
+            children: <Widget>[...previousChildren, ?currentChild],
+          ),
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0.018, 0),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
+            ),
+          ),
+          // The key changes only with the selected category. Loading a page,
+          // refreshing it, or updating its bounded results therefore does not
+          // replay the tab transition or disturb the outer scroll position.
+          child: KeyedSubtree(
+            key: ValueKey(
+              'search-category-results-${state.selectedCategory.name}',
+            ),
+            child: _SearchCategoryResultsBody(
+              state: state,
+              strings: strings,
+              onOpenPlayer: onOpenPlayer,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchCategoryResultsBody extends StatelessWidget {
+  const _SearchCategoryResultsBody({
+    required this.state,
+    required this.strings,
+    required this.onOpenPlayer,
+  });
+
+  final SearchState state;
+  final AppStrings strings;
+  final VoidCallback onOpenPlayer;
+
+  @override
+  Widget build(BuildContext context) {
+    if (state.isSelectedCategoryLoading || !state.hasSelectedPage) {
+      return SizedBox(
+        height: _minimumBodyHeight(context),
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final page = state.selectedPage!;
+    if (page.isEmpty) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(minHeight: _minimumBodyHeight(context)),
+        child: _SearchEmptyState(
+          icon: _SearchResultsSliver._emptyIcon(state.selectedCategory),
+          title: _categoryLabel(strings, state.selectedCategory),
+          subtitle: _SearchResultsSliver._emptyMessage(
+            strings,
+            state.selectedCategory,
+          ),
+        ),
+      );
+    }
+
+    if (state.selectedCategory == SearchCategory.albums) {
+      return Column(
+        children: [
+          for (var index = 0; index < page.albums.length; index++) ...[
+            _AlbumResultTile(
+              key: ValueKey('search-album-${page.albums[index].browseId}'),
+              album: page.albums[index],
+              strings: strings,
+              onOpenPlayer: onOpenPlayer,
+            ),
+            if (index < page.albums.length - 1) const SizedBox(height: 6),
+          ],
+        ],
+      );
+    }
+
+    final tracks = page.tracks;
+    // Search pages are deliberately bounded, so keeping their rows mounted
+    // makes the cross-fade stable and avoids decoding thumbnails repeatedly.
+    return Column(
+      children: [
+        for (var index = 0; index < tracks.length; index++) ...[
+          TrackResultTile(
+            key: ValueKey(
+              'search-result-${tracks[index].id.isNotEmpty ? tracks[index].id : tracks[index].url}',
+            ),
+            track: tracks[index],
+            queue: tracks,
+            onOpenPlayer: onOpenPlayer,
+          ),
+          if (index < tracks.length - 1) const SizedBox(height: 6),
+        ],
+      ],
+    );
+  }
+
+  double _minimumBodyHeight(BuildContext context) =>
+      (MediaQuery.sizeOf(context).height * 0.48).clamp(220.0, 480.0);
 }
 
 class _SearchCategoryTabs extends StatelessWidget {
@@ -271,6 +351,7 @@ class _SearchCategoryTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final radius = BorderRadius.circular(8);
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final tabHeight = (MediaQuery.textScalerOf(context).scale(14) + 20)
         .clamp(48.0, 80.0)
         .toDouble();
@@ -278,51 +359,60 @@ class _SearchCategoryTab extends StatelessWidget {
     return Semantics(
       selected: selected,
       button: true,
-      child: Material(
-        color: selected ? selectedColor : AppColors.cardSurfaceFor(context),
-        shape: RoundedRectangleBorder(
+      child: AnimatedContainer(
+        key: ValueKey('search-category-surface-${category.name}'),
+        duration: disableAnimations
+            ? Duration.zero
+            : const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        decoration: BoxDecoration(
+          color: selected ? selectedColor : AppColors.cardSurfaceFor(context),
           borderRadius: radius,
-          side: BorderSide(
+          border: Border.all(
             color: selected ? colors.primary : AppColors.cardBorderFor(context),
           ),
         ),
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          key: ValueKey('search-category-${category.name}'),
-          onTap: selected ? null : () => onSelected(category),
-          child: SizedBox(
-            height: tabHeight,
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      icon,
-                      key: ValueKey('search-category-icon-${category.name}'),
-                      size: 18,
-                      color: selected
-                          ? colors.onPrimaryContainer
-                          : AppColors.contentTitleFor(context),
-                    ),
-                    const SizedBox(width: 4),
-                    Flexible(
-                      child: Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: selected
-                              ? colors.onPrimaryContainer
-                              : AppColors.contentTitleFor(context),
-                          fontWeight: selected
-                              ? FontWeight.w800
-                              : FontWeight.w600,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: ValueKey('search-category-${category.name}'),
+            onTap: selected ? null : () => onSelected(category),
+            child: SizedBox(
+              height: tabHeight,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        icon,
+                        key: ValueKey('search-category-icon-${category.name}'),
+                        size: 18,
+                        color: selected
+                            ? colors.onPrimaryContainer
+                            : AppColors.contentTitleFor(context),
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.labelLarge
+                              ?.copyWith(
+                                color: selected
+                                    ? colors.onPrimaryContainer
+                                    : AppColors.contentTitleFor(context),
+                                fontWeight: selected
+                                    ? FontWeight.w800
+                                    : FontWeight.w600,
+                              ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

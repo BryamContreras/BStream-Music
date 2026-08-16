@@ -25,6 +25,16 @@ playlists y favoritos desde una interfaz construida con Flutter.
 mkdir -p "%{buildroot}"
 cp -a "%{staging_root}/." "%{buildroot}/"
 
+%post
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+
+%postun
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+
 %files
 /opt/bstream-music
 /usr/bin/bstream-music

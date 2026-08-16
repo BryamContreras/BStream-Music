@@ -110,6 +110,29 @@ void main() {
     expect(mixed.tracks, [first, second]);
   });
 
+  test('does not invent a duration omitted by a Home recommendation', () async {
+    final source = _FakeHomeSearch([
+      InnerTubeHomeSection(
+        title: 'Seleccion rapida',
+        songs: [
+          InnerTubeSong(
+            videoId: 'AbCdEfGhIj1',
+            title: 'Sin duracion en el feed',
+            artists: const ['Artista'],
+          ),
+        ],
+      ),
+    ]);
+    final container = _containerFor(source);
+
+    final sections = await container.read(homeRecommendationsProvider.future);
+
+    expect(sections.single.tracks.single.duration, isNull);
+    expect(source.homeCalls, 1);
+    expect(source.searchCalls, 0);
+    expect(source.collectionCalls, 0);
+  });
+
   test('resolves and caches collection tracks by browse ID', () async {
     final source = _FakeHomeSearch(const [])
       ..collectionSongs['VLPL_collection'] = [

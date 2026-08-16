@@ -28,7 +28,9 @@ import 'package:bstream_music/main.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
+import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide SearchController;
@@ -545,6 +547,85 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'shared app link opens the player once with resolved InnerTube metadata',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final incomingLinks = _FakeIncomingTrackLinkService();
+      final lookup = _FakeYouTubeMusicTrackLookup();
+      final player = _RecordingHomePlayerController();
+      addTearDown(incomingLinks.close);
+
+      await tester.pumpWidget(
+        _testApp(
+          playerController: player,
+          incomingTrackLinkService: incomingLinks,
+          youtubeMusicSearch: lookup,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final uri = Uri.parse('bstreammusic://track/dQw4w9WgXcQ');
+      incomingLinks.add(uri);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.byKey(const ValueKey('player-tab-title')), findsOneWidget);
+      expect(player.remotePlayCalls, 1);
+      expect(player.lastRemoteTrack?.id, 'dQw4w9WgXcQ');
+      expect(player.lastRemoteTrack?.title, 'Cancion compartida');
+      expect(player.lastRemoteTrack?.artist, 'Artista compartido');
+      expect(
+        player.lastRemoteTrack?.url,
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      );
+      expect(player.lastRemoteQueueSourceId, 'shared-link:dQw4w9WgXcQ');
+      expect(lookup.requestedVideoIds, ['dQw4w9WgXcQ']);
+
+      incomingLinks.add(uri);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(player.remotePlayCalls, 1);
+      expect(lookup.requestedVideoIds, ['dQw4w9WgXcQ']);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('shared app link does not wait indefinitely for metadata', (
+    tester,
+  ) async {
+    _configureMobileHomeViewport(tester);
+    final incomingLinks = _FakeIncomingTrackLinkService();
+    final lookup = _StalledYouTubeMusicTrackLookup();
+    final player = _RecordingHomePlayerController();
+    addTearDown(incomingLinks.close);
+
+    await tester.pumpWidget(
+      _testApp(
+        playerController: player,
+        incomingTrackLinkService: incomingLinks,
+        youtubeMusicSearch: lookup,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    incomingLinks.add(Uri.parse('bstreammusic://track/M7lc1UVf-VE'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 3100));
+    await tester.pump();
+
+    expect(player.remotePlayCalls, 1);
+    expect(player.lastRemoteTrack?.id, 'M7lc1UVf-VE');
+    expect(player.lastRemoteTrack?.title, 'Canción compartida');
+    expect(
+      player.lastRemoteTrack?.url,
+      'https://www.youtube.com/watch?v=M7lc1UVf-VE',
+    );
+    expect(player.lastRemoteQueueSourceId, 'shared-link:M7lc1UVf-VE');
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('home opens a mix detail and Play starts the complete queue', (
     tester,
@@ -3037,6 +3118,8 @@ Widget _testApp({
   FutureOr<List<HomeRecommendationSection>> Function()?
   homeRecommendationsLoader,
   Future<List<TrackInfo>> Function(String browseId)? homeCollectionLoader,
+  IncomingTrackLinkService? incomingTrackLinkService,
+  YouTubeMusicSearch? youtubeMusicSearch,
 }) {
   return ProviderScope(
     overrides: [
@@ -3072,6 +3155,11 @@ Widget _testApp({
         ),
       if (directoryPicker != null)
         downloadDirectoryPickerProvider.overrideWithValue(directoryPicker),
+      incomingTrackLinkServiceProvider.overrideWithValue(
+        incomingTrackLinkService ?? const _EmptyIncomingTrackLinkService(),
+      ),
+      if (youtubeMusicSearch != null)
+        youtubeMusicSearchProvider.overrideWithValue(youtubeMusicSearch),
       libraryRepositoryProvider.overrideWithValue(
         libraryRepository ?? _FakeLibraryRepository(),
       ),
@@ -3469,6 +3557,61 @@ class _RecordingHomePlayerController extends PlayerController {
       ),
     );
   }
+}
+
+final class _FakeIncomingTrackLinkService implements IncomingTrackLinkService {
+  final StreamController<Uri> _controller = StreamController<Uri>();
+
+  @override
+  Stream<Uri> get links => _controller.stream;
+
+  void add(Uri uri) => _controller.add(uri);
+
+  Future<void> close() => _controller.close();
+}
+
+final class _EmptyIncomingTrackLinkService implements IncomingTrackLinkService {
+  const _EmptyIncomingTrackLinkService();
+
+  @override
+  Stream<Uri> get links => const Stream<Uri>.empty();
+}
+
+final class _FakeYouTubeMusicTrackLookup
+    implements YouTubeMusicSearch, YouTubeMusicTrackLookup {
+  final List<String> requestedVideoIds = <String>[];
+
+  @override
+  Future<InnerTubeSong?> getSong(String videoId) async {
+    requestedVideoIds.add(videoId);
+    return InnerTubeSong(
+      videoId: videoId,
+      title: 'Cancion compartida',
+      artists: const ['Artista compartido'],
+      album: 'Album compartido',
+      duration: const Duration(minutes: 3),
+      thumbnailUrl: '',
+    );
+  }
+
+  @override
+  Future<List<InnerTubeSong>> searchSongs(
+    String query, {
+    int limit = 20,
+  }) async => const <InnerTubeSong>[];
+}
+
+final class _StalledYouTubeMusicTrackLookup
+    implements YouTubeMusicSearch, YouTubeMusicTrackLookup {
+  @override
+  Future<InnerTubeSong?> getSong(String videoId) =>
+      Completer<InnerTubeSong?>().future;
+
+  @override
+  Future<List<InnerTubeSong>> searchSongs(
+    String query, {
+    int limit = 20,
+  }) async => const <InnerTubeSong>[];
 }
 
 class _FakeLibraryRepository implements LibraryRepository {

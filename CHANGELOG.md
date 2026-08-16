@@ -24,6 +24,9 @@
   batch add, remove, and delete actions.
 - Android ARMv7 release artifacts alongside ARMv8 and x86_64 on the existing
   Android 7.0 baseline.
+- Song sharing from the full player with a stable `bstreammusic://track/...`
+  link that opens BStream Music on Android, Windows, Linux, and macOS, and
+  always includes a canonical YouTube URL as a manual fallback.
 
 ### Improved
 
@@ -42,6 +45,12 @@
 - Search categories load on demand; yt-dlp discovery fallback is represented as
   Videos only. Search returns up to 20 results, and empty tabs disappear when
   the query is cleared.
+- Song, Video, and Album search categories now use a short accessible
+  cross-fade, while album, playlist, and mix details reuse their artwork as a
+  bounded, contrast-safe blurred header background.
+- Remote track rows in Search and album, playlist, and mix details now expose
+  Play/Pause plus More actions for Download and Add to playlist without
+  forcing the full player open.
 - Home hides empty Recently played and local Playlist sections and can refresh
   remote recommendations without hiding existing local content.
 - Settings uses denser shared cards, a language selection dialog, grouped
@@ -72,6 +81,8 @@
 
 - Fixed an iOS Explode attempt that always failed when the package tried to add
   `visitorData` to an immutable nested payload.
+- Fixed Quick picks without catalog duration losing the duration detected by
+  ExoPlayer, which left the timeline at `--:--` and disabled seeking.
 - Fixed manifests being accepted after validating a different stream than the
   AAC/WebM URL actually selected for playback.
 - Fixed late backend errors, reversed asynchronous opens, and queue updates

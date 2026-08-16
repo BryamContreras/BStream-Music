@@ -35,6 +35,9 @@ import '../../../../services/media_session/desktop_media_session_factory.dart';
 import '../../../../services/player/just_audio_player_service.dart';
 import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
+import '../../../../services/sharing/bstream_track_link.dart';
+import '../../../../services/sharing/incoming_track_link_service.dart';
+import '../../../../services/sharing/track_share_service.dart';
 import '../../../../services/storage/backup_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
@@ -120,6 +123,47 @@ final playerServiceProvider = Provider<PlayerService>((ref) {
       : JustAudioPlayerService();
   ref.onDispose(service.dispose);
   return service;
+});
+
+final trackShareServiceProvider = Provider<TrackShareService>((ref) {
+  return const SharePlusTrackShareService();
+});
+
+final incomingTrackLinkServiceProvider = Provider<IncomingTrackLinkService>((
+  ref,
+) {
+  return AppLinksIncomingTrackLinkService();
+});
+
+final bstreamTrackLinkCodecProvider = Provider<BStreamTrackLinkCodec>((ref) {
+  return const BStreamTrackLinkCodec();
+});
+
+/// Valid BStream activations, with the occasional cold/warm duplicate removed.
+final incomingTrackLinkProvider = StreamProvider<BStreamTrackLink>((
+  ref,
+) async* {
+  final source = ref.watch(incomingTrackLinkServiceProvider);
+  final codec = ref.watch(bstreamTrackLinkCodecProvider);
+  String? previousIdentity;
+  DateTime? previousAt;
+
+  await for (final uri in source.links) {
+    final link = codec.tryDecode(uri);
+    if (link == null) {
+      continue;
+    }
+    final now = DateTime.now();
+    final identity = link.videoId;
+    if (identity == previousIdentity &&
+        previousAt != null &&
+        now.difference(previousAt) <= const Duration(seconds: 2)) {
+      continue;
+    }
+    previousIdentity = identity;
+    previousAt = now;
+    yield link;
+  }
 });
 
 final lyricsServiceProvider = Provider<LyricsService>((ref) {
