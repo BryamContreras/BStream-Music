@@ -333,7 +333,7 @@ void main() {
           events.any(
             (event) =>
                 event.status == DownloadProgressStatus.failed &&
-                event.message?.contains('dejo de recibir datos') == true,
+                event.message?.contains('dejó de recibir datos') == true,
           ),
           isTrue,
         );
@@ -410,7 +410,7 @@ void main() {
           events.any(
             (event) =>
                 event.status == DownloadProgressStatus.failed &&
-                event.message?.contains('limite total') == true,
+                event.message?.contains('límite total') == true,
           ),
           isTrue,
         );

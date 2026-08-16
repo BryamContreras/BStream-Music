@@ -138,7 +138,7 @@ class LibraryOperationCoordinator {
 
   void _releaseExclusiveOperation() {
     if (_pendingExclusiveOperations <= 0) {
-      throw StateError('No hay una operacion exclusiva pendiente.');
+      throw StateError('No hay una operación exclusiva pendiente.');
     }
     _pendingExclusiveOperations--;
     if (_pendingExclusiveOperations != 0) {

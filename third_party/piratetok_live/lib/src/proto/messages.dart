@@ -526,15 +526,12 @@ DecodedMessage decodeGeneric(String method, ProtoMap m) {
   return (type: method, data: data);
 }
 
-/// Decode a raw protobuf payload by method name.
-DecodedMessage? decodePayload(String method, Uint8List payload) {
-  final ProtoMap m;
-  try {
-    m = protoRead(payload);
-  } on FormatException {
-    return null;
-  }
-
+/// Decode an already parsed protobuf payload by method name.
+///
+/// Keeping this separate from [decodePayload] lets callers inspect cheap
+/// top-level fields before constructing expensive nested objects such as the
+/// full user attached to every chat message.
+DecodedMessage decodeParsedPayload(String method, ProtoMap m) {
   return switch (method) {
     'WebcastChatMessage' => decodeChat(m),
     'WebcastGiftMessage' => decodeGift(m),
@@ -552,4 +549,16 @@ DecodedMessage? decodePayload(String method, Uint8List payload) {
     'WebcastSubNotifyMessage' => decodeSubNotify(m),
     _ => decodeGeneric(method, m),
   };
+}
+
+/// Decode a raw protobuf payload by method name.
+DecodedMessage? decodePayload(String method, Uint8List payload) {
+  final ProtoMap m;
+  try {
+    m = protoRead(payload);
+  } on FormatException {
+    return null;
+  }
+
+  return decodeParsedPayload(method, m);
 }

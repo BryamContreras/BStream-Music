@@ -33,6 +33,7 @@ Future<void> connectWss({
   String? language,
   String? region,
   Set<String>? decodedMethods,
+  bool Function(String message)? chatMessageFilter,
 }) async {
   final ua = userAgent ?? randomUa();
   final lang = language ?? systemLanguage();
@@ -105,6 +106,7 @@ Future<void> connectWss({
           onEvent,
           onTraffic: onTraffic,
           decodedMethods: decodedMethods,
+          chatMessageFilter: chatMessageFilter,
         );
       } on Object catch (err) {
         onError(err);
@@ -134,6 +136,7 @@ void _processFrame(
   void Function(TikTokEvent) onEvent, {
   void Function()? onTraffic,
   Set<String>? decodedMethods,
+  bool Function(String message)? chatMessageFilter,
 }) {
   final frame = parsePushFrame(raw);
 
@@ -141,12 +144,11 @@ void _processFrame(
   onTraffic?.call();
 
   final decompressed = decompressIfGzipped(frame.payload);
-  final response = decodeTikTokResponse(
-    decompressed,
-    roomId,
-    decodedMethods: decodedMethods,
-  );
+  final response = parseResponse(decompressed);
 
+  // ACK the response envelope before decoding and routing its event payloads.
+  // Busy rooms can contain large chat batches; acknowledging first prevents
+  // that CPU work (or one malformed event) from delaying protocol progress.
   if (response.needsAck && response.internalExt.isNotEmpty) {
     try {
       ws.send(buildAck(frame.logId, response.internalExt));
@@ -155,8 +157,19 @@ void _processFrame(
     }
   }
 
-  for (final event in response.events) {
-    onEvent(event);
+  for (final message in response.messages) {
+    if (decodedMethods != null && !decodedMethods.contains(message.method)) {
+      continue;
+    }
+    final events = router.decode(
+      message.method,
+      message.payload,
+      roomId,
+      chatMessageFilter: chatMessageFilter,
+    );
+    for (final event in events) {
+      onEvent(event);
+    }
   }
 }
 
@@ -165,6 +178,7 @@ decodeTikTokResponse(
   Uint8List raw,
   String roomId, {
   Set<String>? decodedMethods,
+  bool Function(String message)? chatMessageFilter,
 }) {
   final response = parseResponse(raw);
   final events = <TikTokEvent>[];
@@ -172,7 +186,14 @@ decodeTikTokResponse(
     if (decodedMethods != null && !decodedMethods.contains(message.method)) {
       continue;
     }
-    events.addAll(router.decode(message.method, message.payload, roomId));
+    events.addAll(
+      router.decode(
+        message.method,
+        message.payload,
+        roomId,
+        chatMessageFilter: chatMessageFilter,
+      ),
+    );
   }
   return (
     events: events,

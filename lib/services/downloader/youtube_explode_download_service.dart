@@ -438,7 +438,7 @@ class YoutubeExplodeDownloadService implements DownloaderService {
         final remaining = downloadTotalTimeout - stopwatch.elapsed;
         if (remaining <= Duration.zero) {
           throw DownloaderException(
-            'La descarga de youtube_explode_dart excedio el limite total de '
+            'La descarga de youtube_explode_dart excedió el límite total de '
             '${downloadTotalTimeout.inMinutes} minutos.',
             code: 'youtube_explode_download_total_timeout',
           );
@@ -449,9 +449,9 @@ class YoutubeExplodeDownloadService implements DownloaderService {
           nextTimeout,
           onTimeout: () => throw DownloaderException(
             waitingForTotal
-                ? 'La descarga de youtube_explode_dart excedio el limite '
+                ? 'La descarga de youtube_explode_dart excedió el límite '
                       'total de ${downloadTotalTimeout.inMinutes} minutos.'
-                : 'La descarga de youtube_explode_dart dejo de recibir datos '
+                : 'La descarga de youtube_explode_dart dejó de recibir datos '
                       'durante ${downloadIdleTimeout.inSeconds} segundos.',
             code: waitingForTotal
                 ? 'youtube_explode_download_total_timeout'

@@ -13,6 +13,8 @@ small and covered by its LIVE adapter and protocol tests:
 - cancel HTTP setup, WebSocket listeners, and retry delays when a session is
   replaced or stopped;
 - revalidate the room after repeated handshakes without decoded traffic;
+- acknowledge response envelopes before routing large event batches and allow
+  cheap chat-text filtering before nested user profiles are decoded;
 - validate the WebSocket upgrade cryptographically and bound headers, frames,
   connect/body reads, and shutdown waits;
 - surface socket errors without losing ACK, heartbeat, gzip, or stale-timeout

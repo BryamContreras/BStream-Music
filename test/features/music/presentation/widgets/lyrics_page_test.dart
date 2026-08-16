@@ -897,7 +897,7 @@ void main() {
     );
     expect(find.byIcon(Icons.wifi_off_rounded), findsOneWidget);
     expect(
-      find.text('No encontramos una letra para esta cancion.'),
+      find.text('No encontramos una letra para esta canción.'),
       findsNothing,
     );
   });
@@ -913,7 +913,7 @@ void main() {
       language: AppLanguage.spanish,
     );
 
-    const notFoundMessage = 'No encontramos una letra para esta cancion.';
+    const notFoundMessage = 'No encontramos una letra para esta canción.';
     final message = find.text(notFoundMessage);
     expect(message, findsOneWidget);
     expect(

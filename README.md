@@ -36,8 +36,8 @@ Current version: **1.2.4+124**.
   bounded artwork decoding, 48 dp controls, and layouts tested at 300% text.
 - Include release APKs for ARMv7, ARMv8, and x86_64, and remove the obsolete
   external Python TikTok LIVE bridge from desktop packages.
-- Share a YouTube-backed song with a BStream Music link that opens the player
-  on Android, Windows, Linux, or macOS, while retaining a YouTube fallback.
+- Share a song with one recognized HTTPS link, preferring YouTube Music for
+  InnerTube catalog tracks and regular YouTube for generic video results.
 
 ## Main features
 
@@ -79,12 +79,10 @@ Current version: **1.2.4+124**.
 - Mobile Lyrics and Volume controls use labeled buttons beneath Shuffle and
   Repeat, while an accent-colored heart beside the title toggles Favorites on
   every platform.
-- The Share button beside Favorites sends both a compact
-  `bstreammusic://track/<videoId>` app link and the canonical YouTube watch
-  URL. Installed packages on Android, Windows, Linux, and macOS register the
-  BStream scheme; the YouTube URL remains available when that scheme cannot be
-  opened. Local-only files without a YouTube identity are intentionally not
-  shared.
+- The Share button beside Favorites sends one canonical HTTPS URL that chat
+  applications can recognize: YouTube Music when the track came from the
+  InnerTube catalog, otherwise the regular YouTube watch URL. Local-only files
+  without a YouTube identity are intentionally not shared.
 - Lyrics offer four persistent animation styles, Normal/Centered alignment,
   and a live preview in Appearance settings.
 - Playback queue synchronized with playlists and the library.
@@ -131,8 +129,9 @@ Current version: **1.2.4+124**.
   playlist no longer exists.
 - Subtle gradients, translucent cards, and shared visual controls.
 - Spanish and English selectable from Settings.
-- Optional Ko-fi development support link below the app version in Settings;
-  BStream Music remains free.
+- An Application information section in Settings opens an organized About the
+  app detail with the current version, optional Ko-fi development support, and
+  the official GitHub repository; BStream Music remains free.
 - Windows window minimum size of `960 × 600`; the player progressively adapts artwork, text, spacing, and controls to the available height.
 - Icons generated from one source asset for Android, Windows, macOS, and Flutter resources.
 
@@ -151,6 +150,12 @@ Available features:
 - LIVE queue states for searching, downloading, ready, and failed requests.
 - A bounded 50-request queue that rejects additional commands explicitly
   instead of allowing an unbounded search/download backlog.
+- Up to three requests are resolved concurrently, while completed tracks are
+  committed to playback in the same order in which their commands arrived.
+- A 30-second search deadline lets later requests continue past a stalled
+  lookup; an active library download is allowed to finish normally.
+- Command-first chat filtering and early WebSocket acknowledgements avoid
+  building full viewer profiles for ordinary comments in busy rooms.
 - Reuse tracks that already exist in the library.
 - Dynamic synchronization: new requests are added without replacing the current playback.
 - Automatically skip requests that fail during download.
@@ -175,7 +180,9 @@ independent background service.
 
 This integration uses an unofficial, reverse-engineered protocol. If TikTok
 changes it, the Dart client may need to be updated. BStream Music is not
-affiliated with or endorsed by TikTok or ByteDance.
+affiliated with or endorsed by TikTok or ByteDance. BStream can keep its local
+processing responsive, but it can only act on chat messages that TikTok
+actually delivers to the WebSocket client.
 
 ## Platforms and engines
 

@@ -11,6 +11,7 @@ void main() {
     String id = videoId,
     String url = 'https://www.youtube.com/watch?v=$videoId',
     String? streamUrl,
+    TrackMetadataSource metadataSource = TrackMetadataSource.youtube,
   }) {
     return TrackInfo(
       id: id,
@@ -18,6 +19,7 @@ void main() {
       artist: 'Rick Astley',
       url: url,
       streamUrl: streamUrl,
+      metadataSource: metadataSource,
     );
   }
 
@@ -35,8 +37,8 @@ void main() {
     });
 
     for (final message in <String>[
-      'Escucha “Never Gonna Give You Up” de Rick Astley en BStream Music:',
-      'Listen to “Never Gonna Give You Up” by Rick Astley on BStream Music:',
+      'Escucha “Never Gonna Give You Up” de Rick Astley:',
+      'Listen to “Never Gonna Give You Up” by Rick Astley:',
     ]) {
       test('uses the localized message supplied by the UI: $message', () async {
         final gateway = _RecordingGateway();
@@ -49,14 +51,57 @@ void main() {
         );
 
         expect(gateway.callCount, 1);
-        expect(gateway.text, contains(message));
-        expect(gateway.text, contains('bstreammusic://track/$videoId'));
         expect(
           gateway.text,
-          contains('https://www.youtube.com/watch?v=$videoId'),
+          '$message\n\nhttps://www.youtube.com/watch?v=$videoId',
         );
       });
     }
+
+    test('uses YouTube Music for YouTube Music catalog metadata', () async {
+      final gateway = _RecordingGateway();
+      final service = SharePlusTrackShareService(gateway: gateway);
+
+      await service.shareTrack(
+        track(metadataSource: TrackMetadataSource.youtubeMusic),
+        message: 'Listen to this song:',
+        title: 'Share song',
+      );
+
+      expect(
+        gateway.text,
+        'Listen to this song:\n\n'
+        'https://music.youtube.com/watch?v=$videoId',
+      );
+      expect(gateway.text, isNot(contains('bstreammusic://track/')));
+      expect(gateway.text, isNot(contains('https://www.youtube.com/')));
+    });
+
+    test('uses and canonicalizes an existing YouTube Music URL', () async {
+      const urlVideoId = 'M7lc1UVf-VE';
+      final gateway = _RecordingGateway();
+      final service = SharePlusTrackShareService(gateway: gateway);
+
+      await service.shareTrack(
+        track(
+          id: videoId,
+          url:
+              'https://music.youtube.com/watch?feature=share&v=$urlVideoId'
+              '&list=RDAMVM$urlVideoId&index=4&si=tracking',
+        ),
+        message: 'Listen to this song:',
+        title: 'Share song',
+      );
+
+      expect(
+        gateway.text,
+        'Listen to this song:\n\n'
+        'https://music.youtube.com/watch?v=$urlVideoId',
+      );
+      expect(gateway.text, isNot(contains('list=')));
+      expect(gateway.text, isNot(contains('si=')));
+      expect(gateway.text, isNot(contains('YouTube:')));
+    });
 
     test('never shares the temporary stream URL', () async {
       const temporaryStreamUrl =
@@ -66,12 +111,17 @@ void main() {
 
       await service.shareTrack(
         track(streamUrl: temporaryStreamUrl),
-        message: 'Listen in BStream Music:',
+        message: 'Listen to this song:',
         title: 'Share song',
       );
 
       expect(gateway.text, isNot(contains(temporaryStreamUrl)));
       expect(gateway.text, isNot(contains('googlevideo.com')));
+      expect(
+        gateway.text,
+        'Listen to this song:\n\n'
+        'https://www.youtube.com/watch?v=$videoId',
+      );
     });
 
     test('forwards title, subject, and share sheet origin', () async {
@@ -81,7 +131,7 @@ void main() {
 
       await service.shareTrack(
         track(),
-        message: 'Listen in BStream Music:',
+        message: 'Listen to this song:',
         title: 'Share Never Gonna Give You Up',
         subject: 'A song for you',
         sharePositionOrigin: origin,
@@ -104,7 +154,7 @@ void main() {
       expect(
         () => service.shareTrack(
           unsupported,
-          message: 'Listen in BStream Music:',
+          message: 'Listen to this song:',
           title: 'Share song',
         ),
         throwsFormatException,
@@ -120,7 +170,7 @@ void main() {
       await expectLater(
         service.shareTrack(
           track(),
-          message: 'Listen in BStream Music:',
+          message: 'Listen to this song:',
           title: 'Share song',
         ),
         throwsStateError,

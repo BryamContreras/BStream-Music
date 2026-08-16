@@ -178,6 +178,75 @@ void main() {
       expect(decoded.internalExt, [7, 8, 9]);
     },
   );
+
+  test(
+    'chat message filter skips ordinary profiles and preserves commands and ACK',
+    () {
+      Uint8List chatPayload(String content, {bool malformedUser = false}) {
+        return protoWrite((writer) {
+          writer.writeBytesField(
+            2,
+            malformedUser
+                ? Uint8List.fromList([0x80])
+                : protoWrite((user) {
+                    user.writeStringField(3, 'Viewer');
+                    user.writeStringField(38, 'viewer.one');
+                  }),
+          );
+          writer.writeStringField(3, content);
+        });
+      }
+
+      final envelope = protoWrite((writer) {
+        for (final entry in <(String, Uint8List)>[
+          (
+            'WebcastChatMessage',
+            chatPayload('ordinary comment', malformedUser: true),
+          ),
+          ('WebcastChatMessage', chatPayload('  !play Hello  ')),
+          (
+            'WebcastControlMessage',
+            protoWrite((control) => control.writeVarintField(2, 1)),
+          ),
+        ]) {
+          writer.writeMessageField(
+            1,
+            protoWrite((message) {
+              message.writeStringField(1, entry.$1);
+              message.writeBytesField(2, entry.$2);
+            }),
+          );
+        }
+        writer.writeBytesField(5, Uint8List.fromList([3, 2, 1]));
+        writer.writeBoolField(9, true);
+      });
+      final inspectedMessages = <String>[];
+
+      final decoded = decodeTikTokResponse(
+        envelope,
+        'busy-room',
+        decodedMethods: const {'WebcastChatMessage', 'WebcastControlMessage'},
+        chatMessageFilter: (message) {
+          inspectedMessages.add(message);
+          return message.trimLeft().startsWith('!');
+        },
+      );
+
+      expect(inspectedMessages, ['ordinary comment', '  !play Hello  ']);
+      expect(decoded.events.map((event) => event.type), [
+        EventType.chat,
+        EventType.control,
+      ]);
+      expect(decoded.events.first.data?['content'], '  !play Hello  ');
+      expect(
+        (decoded.events.first.data?['user']
+            as Map<String, dynamic>)['uniqueId'],
+        'viewer.one',
+      );
+      expect(decoded.needsAck, isTrue);
+      expect(decoded.internalExt, [3, 2, 1]);
+    },
+  );
 }
 
 int readTikTokRoomId(Uint8List payload) => protoRead(payload).getVarint(1);

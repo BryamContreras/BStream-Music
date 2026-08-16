@@ -185,7 +185,7 @@ class BackupService {
     final backup = File(backupPath);
     if (!await backup.exists() || await backup.length() == 0) {
       throw const FormatException(
-        'El archivo de respaldo no existe o esta vacio.',
+        'El archivo de respaldo no existe o está vacío.',
       );
     }
 
@@ -311,9 +311,9 @@ class BackupRestoreException implements Exception {
 
   @override
   String toString() {
-    return 'La restauracion fallo y no se pudo recuperar completamente la '
-        'biblioteca anterior. Restauracion: $restoreError. '
-        'Recuperacion: $rollbackError';
+    return 'La restauración falló y no se pudo recuperar completamente la '
+        'biblioteca anterior. Restauración: $restoreError. '
+        'Recuperación: $rollbackError';
   }
 }
 
@@ -337,7 +337,7 @@ Future<void> _extractBackupArchive({
       expandedBytes += entry.size;
       if (entryCount > maxEntries || expandedBytes > maxExpandedBytes) {
         throw const FormatException(
-          'El respaldo excede los limites permitidos.',
+          'El respaldo excede los límites permitidos.',
         );
       }
 
@@ -370,7 +370,7 @@ Future<void> _validateBackupManifest(Directory extractedRoot) async {
   }
   if (await manifest.length() > maximumManifestBytes) {
     throw const FormatException(
-      'El manifiesto del respaldo excede el limite permitido.',
+      'El manifiesto del respaldo excede el límite permitido.',
     );
   }
 
@@ -387,7 +387,7 @@ Future<void> _validateBackupManifest(Directory extractedRoot) async {
   } on FormatException {
     rethrow;
   } catch (error) {
-    throw FormatException('El manifiesto del respaldo no es valido.', error);
+    throw FormatException('El manifiesto del respaldo no es válido.', error);
   }
 }
 

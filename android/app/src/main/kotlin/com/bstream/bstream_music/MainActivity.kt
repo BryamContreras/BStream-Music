@@ -187,14 +187,14 @@ class MainActivity : AudioServiceActivity() {
 
     private fun saveFile(call: MethodCall, result: MethodChannel.Result) {
         if (pendingFileExportResult != null) {
-            result.error("export_busy", "Ya hay una exportacion en curso.", null)
+            result.error("export_busy", "Ya hay una exportación en curso.", null)
             return
         }
 
         val sourcePath = call.requiredString("sourcePath")
         val source = File(sourcePath)
         if (!source.exists() || !source.isFile) {
-            result.error("export_missing", "No se encontro el archivo para exportar.", null)
+            result.error("export_missing", "No se encontró el archivo para exportar.", null)
             return
         }
 
@@ -352,7 +352,7 @@ class MainActivity : AudioServiceActivity() {
             val info = JSONObject(response.out)
             val selectedFormat = selectedPlaybackFormat(info)
             val streamUrl = selectedFormat.nonBlankString("url")
-                ?: throw IllegalStateException("No se encontro una URL reproducible.")
+                ?: throw IllegalStateException("No se encontró una URL reproducible.")
             Log.i(
                 TAG,
                 "getPlaybackInfo URL extracted in " +
@@ -405,7 +405,7 @@ class MainActivity : AudioServiceActivity() {
             ensureManagedPlaybackCurrent(generation)
             val root = File(applicationContext.cacheDir, MANAGED_PLAYBACK_DIRECTORY)
             if (!root.exists() && !root.mkdirs()) {
-                throw IllegalStateException("No se pudo crear el cache de reproduccion.")
+                throw IllegalStateException("No se pudo crear la caché de reproducción.")
             }
             trimManagedPlaybackCache(root, protectedManagedPlaybackPaths)
 
@@ -468,7 +468,7 @@ class MainActivity : AudioServiceActivity() {
         ensureManagedPlaybackCurrent(generation)
         val printedPath = printedJsonValue(response.out, MANAGED_FILE_PREFIX)
             ?: throw IllegalStateException(
-                "yt-dlp finalizo sin indicar el archivo de reproduccion.",
+                "yt-dlp finalizó sin indicar el archivo de reproducción.",
             )
         val canonicalRoot = root.canonicalFile
         val file = File(printedPath).canonicalFile
@@ -480,13 +480,13 @@ class MainActivity : AudioServiceActivity() {
             !isAudioExtension(file.extension)
         ) {
             throw IllegalStateException(
-                "yt-dlp no preparo un archivo de audio valido.",
+                "yt-dlp no preparó un archivo de audio válido.",
             )
         }
         if (file.length() > MANAGED_PLAYBACK_MAX_ENTRY_BYTES) {
             runCatching { file.delete() }
             throw IllegalStateException(
-                "El audio preparado excede el limite de cache de " +
+                "El audio preparado excede el límite de caché de " +
                     "$MANAGED_PLAYBACK_MAX_ENTRY_BYTES bytes.",
             )
         }
@@ -793,7 +793,7 @@ class MainActivity : AudioServiceActivity() {
             .map { it.trim() }
             .lastOrNull { isExistingDownloadedFile(it) }
             ?: newestAudioFile(path)
-            ?: throw IllegalStateException("La descarga termino sin un archivo de audio valido.")
+            ?: throw IllegalStateException("La descarga terminó sin un archivo de audio válido.")
 
         emitProgress(eventTaskId, url, "completed", 1f, "Descarga completada", null)
         return mapOf("filePath" to filePath)
@@ -1396,6 +1396,7 @@ class MainActivity : AudioServiceActivity() {
             "requested format is not available",
             "format is not supported",
             "no video formats",
+            "no se encontró una url reproducible",
             "no se encontro una url reproducible",
         )
         private val RECOVERABLE_EXTRACTOR_ERRORS = listOf(
@@ -1449,6 +1450,6 @@ class MainActivity : AudioServiceActivity() {
     )
 
     private class ManagedPlaybackSupersededException : IllegalStateException(
-        "La preparacion fue reemplazada por una pista mas reciente.",
+        "La preparación fue reemplazada por una pista más reciente.",
     )
 }

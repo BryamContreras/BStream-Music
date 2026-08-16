@@ -49,6 +49,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
       key: const ValueKey('remote-collection-detail'),
       backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
+        key: const ValueKey('remote-collection-app-bar'),
         leading: IconButton(
           key: const ValueKey('remote-collection-back'),
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,

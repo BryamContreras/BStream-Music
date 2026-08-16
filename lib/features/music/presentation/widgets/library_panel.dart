@@ -16,6 +16,7 @@ import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'now_playing_equalizer.dart';
 import 'playlist_picker_dialog.dart';
+import 'scrolled_under_tab_frame.dart';
 import 'source_image.dart';
 import 'track_play_button.dart';
 
@@ -121,6 +122,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   late _LibraryRoute _route;
   String _filter = '';
   bool _selectionActionInProgress = false;
+  int _routeDirection = 1;
 
   @override
   void initState() {
@@ -162,23 +164,36 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     final strings = ref.watch(appStringsProvider);
     final enablesTrackSelection =
         Theme.of(context).platform == TargetPlatform.android;
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final transitionDuration = disableAnimations
+        ? Duration.zero
+        : const Duration(milliseconds: 260);
+    final currentRouteKey = ValueKey(_route.key);
 
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 260),
+      key: const ValueKey('library-route-switcher'),
+      duration: transitionDuration,
+      reverseDuration: transitionDuration,
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
       transitionBuilder: (child, animation) {
+        final incoming = child.key == currentRouteKey;
+        final horizontalOffset = incoming
+            ? 0.04 * _routeDirection
+            : -0.03 * _routeDirection;
         final offset = Tween<Offset>(
-          begin: const Offset(0.025, 0),
+          begin: Offset(horizontalOffset, 0),
           end: Offset.zero,
         ).animate(animation);
-        return FadeTransition(
-          opacity: animation,
-          child: SlideTransition(position: offset, child: child),
+        return ClipRect(
+          child: FadeTransition(
+            opacity: animation,
+            child: SlideTransition(position: offset, child: child),
+          ),
         );
       },
       child: KeyedSubtree(
-        key: ValueKey(_route.key),
+        key: currentRouteKey,
         child: switch (_route.type) {
           _LibraryRouteType.root => _LibraryRootView(
             tracks: tracks,
@@ -327,7 +342,10 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   void _openDownloads() {
     _selectedTrackIds.clear();
     _filterController.clear();
-    setState(() => _route = const _LibraryRoute.downloads());
+    setState(() {
+      _routeDirection = 1;
+      _route = const _LibraryRoute.downloads();
+    });
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
@@ -336,7 +354,10 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
       return;
     }
     _filterController.clear();
-    setState(() => _route = const _LibraryRoute.live());
+    setState(() {
+      _routeDirection = 1;
+      _route = const _LibraryRoute.live();
+    });
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
@@ -347,14 +368,20 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   void _openPlaylist(String playlistId) {
     _selectedTrackIds.clear();
     _filterController.clear();
-    setState(() => _route = _LibraryRoute.playlist(playlistId));
+    setState(() {
+      _routeDirection = 1;
+      _route = _LibraryRoute.playlist(playlistId);
+    });
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
   void _goRoot() {
     _selectedTrackIds.clear();
     _filterController.clear();
-    setState(() => _route = const _LibraryRoute.root());
+    setState(() {
+      _routeDirection = -1;
+      _route = const _LibraryRoute.root();
+    });
     widget.navigationController?._notifyRouteChanged(_route);
   }
 
@@ -738,23 +765,23 @@ class _LibraryRootView extends StatelessWidget {
   Widget build(BuildContext context) {
     final localTracks = tracks.value ?? const <LocalTrack>[];
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 20),
-      child: CustomScrollView(
+    return ScrolledUnderTabFrame(
+      surfaceKey: const ValueKey('library-tab-header-surface'),
+      header: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+        child: Text(
+          key: const ValueKey('library-tab-title'),
+          strings.library,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(
+            context,
+          ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+        ),
+      ),
+      body: CustomScrollView(
+        key: const ValueKey('library-root-scroll'),
         slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                key: const ValueKey('library-tab-title'),
-                strings.library,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -873,6 +900,7 @@ class _LiveQueueView extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: _DetailHeader(
+              key: const ValueKey('library-detail-header'),
               title: strings.liveQueueTitle,
               subtitle: strings.liveQueueSummary(
                 items.length,

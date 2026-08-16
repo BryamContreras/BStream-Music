@@ -226,14 +226,14 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     final source = track.streamUrl;
     if (source == null || source.isEmpty) {
       throw const app_errors.PlayerException(
-        'No hay una URL reproducible. Obtén la informacion del track primero.',
+        'No hay una URL reproducible. Obtén la información del track primero.',
         code: 'missing_stream_url',
       );
     }
     final uri = Uri.tryParse(source);
     if (uri == null || !uri.hasScheme) {
       throw const app_errors.PlayerException(
-        'La URL reproducible no es valida.',
+        'La URL reproducible no es válida.',
         code: 'invalid_stream_url',
       );
     }
@@ -602,7 +602,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     _emit(
       _snapshot.copyWith(
         status: PlayerStatus.failed,
-        errorMessage: 'El reproductor tardo demasiado en abrir el audio.',
+        errorMessage: 'El reproductor tardó demasiado en abrir el audio.',
       ),
     );
   }
@@ -1248,7 +1248,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     } on HttpException {
       return 'error HTTP';
     } catch (_) {
-      return 'fallo al verificar la URL';
+      return 'falló al verificar la URL';
     } finally {
       client.close(force: true);
     }
@@ -1287,7 +1287,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       return 'ExoPlayer error code ${error.code}';
     }
     final message = error.toString().trim();
-    return message.isEmpty ? 'Error desconocido de reproduccion.' : message;
+    return message.isEmpty ? 'Error desconocido de reproducción.' : message;
   }
 
   LoopMode get _loopMode {

@@ -6,26 +6,82 @@ void main() {
   const codec = BStreamTrackLinkCodec();
   const videoId = 'dQw4w9WgXcQ';
 
-  TrackInfo track({required String id, required String url}) {
+  TrackInfo track({
+    required String id,
+    required String url,
+    TrackMetadataSource metadataSource = TrackMetadataSource.youtube,
+  }) {
     return TrackInfo(
       id: id,
       title: 'Never Gonna Give You Up',
       artist: 'Rick Astley',
       url: url,
+      metadataSource: metadataSource,
     );
   }
 
   group('BStreamTrackLink', () {
-    test('builds metadata-free app URI and canonical YouTube fallback', () {
+    test('builds legacy app and canonical YouTube URIs', () {
       const link = BStreamTrackLink(videoId: videoId);
 
       expect(link.appUri.toString(), 'bstreammusic://track/$videoId');
       expect(
-        link.youtubeFallbackUri.toString(),
+        link.youtubeUri.toString(),
         'https://www.youtube.com/watch?v=$videoId',
+      );
+      expect(
+        link.youtubeMusicUri.toString(),
+        'https://music.youtube.com/watch?v=$videoId',
       );
       expect(link.appUri.hasQuery, isFalse);
       expect(link.appUri.hasFragment, isFalse);
+    });
+  });
+
+  group('BStreamTrackLinkCodec.shareUriForTrack', () {
+    test('uses standard YouTube for a generic YouTube track', () {
+      final uri = codec.shareUriForTrack(
+        track(id: videoId, url: 'https://www.youtube.com/watch?v=$videoId'),
+      );
+
+      expect(uri.toString(), 'https://www.youtube.com/watch?v=$videoId');
+    });
+
+    test('uses YouTube Music when the metadata source is YouTube Music', () {
+      final uri = codec.shareUriForTrack(
+        track(
+          id: videoId,
+          url: 'https://www.youtube.com/watch?v=$videoId',
+          metadataSource: TrackMetadataSource.youtubeMusic,
+        ),
+      );
+
+      expect(uri.toString(), 'https://music.youtube.com/watch?v=$videoId');
+    });
+
+    test('uses YouTube Music when the catalog URL has its host', () {
+      const urlVideoId = 'M7lc1UVf-VE';
+      final uri = codec.shareUriForTrack(
+        track(
+          id: videoId,
+          url:
+              'https://music.youtube.com/watch?feature=share&v=$urlVideoId'
+              '&list=RDAMVM$urlVideoId&index=4&si=tracking',
+        ),
+      );
+
+      expect(uri.toString(), 'https://music.youtube.com/watch?v=$urlVideoId');
+      expect(uri.queryParameters, <String, String>{'v': urlVideoId});
+    });
+
+    test('throws when the track has no shareable YouTube identity', () {
+      final unsupported = track(
+        id: 'invalid',
+        url: 'https://music.youtube.com/watch?list=playlist-only',
+        metadataSource: TrackMetadataSource.youtubeMusic,
+      );
+
+      expect(() => codec.shareUriForTrack(unsupported), throwsFormatException);
     });
   });
 

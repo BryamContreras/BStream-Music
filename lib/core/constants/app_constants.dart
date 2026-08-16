@@ -14,4 +14,6 @@ class AppConstants {
       'bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[acodec^=mp4a]/bestaudio[acodec^=aac]/bestaudio';
   static const defaultSearchLimit = 20;
   static const supportDevelopmentUrl = 'https://ko-fi.com/soybryam06c/donate';
+  static const githubRepositoryUrl =
+      'https://github.com/BryamContreras/BStream-Music';
 }

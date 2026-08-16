@@ -17,6 +17,7 @@ import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
 import '../providers/music_providers.dart';
 import 'lyrics_animation_transition.dart';
+import 'scrolled_under_tab_frame.dart';
 
 typedef DownloadDirectoryPicker =
     Future<String?> Function({String? dialogTitle, String? initialDirectory});
@@ -52,9 +53,9 @@ final storageImportFilePickerProvider = Provider<StorageImportFilePicker>((
   );
 });
 
-typedef SupportDevelopmentLauncher = Future<bool> Function(Uri url);
+typedef SettingsExternalLauncher = Future<bool> Function(Uri url);
 
-final supportDevelopmentLauncherProvider = Provider<SupportDevelopmentLauncher>(
+final settingsExternalLauncherProvider = Provider<SettingsExternalLauncher>(
   (ref) =>
       (url) => launchUrl(url, mode: LaunchMode.externalApplication),
 );
@@ -65,7 +66,7 @@ const _settingsCardGap = 8.0;
 const _settingsGroupGap = 20.0;
 const _settingsGroupHeadingGap = 12.0;
 
-enum _SettingsRoute { root, appearance, lyrics, storage, live }
+enum _SettingsRoute { root, appearance, lyrics, storage, live, about }
 
 class SettingsNavigationController extends ChangeNotifier {
   _SettingsPanelState? _state;
@@ -136,7 +137,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       oldWidget.navigationController?._detach(this);
       widget.navigationController?._attach(this);
     }
-    if (oldWidget.active && !widget.active) {
+    if (!oldWidget.active && widget.active) {
       _route = _SettingsRoute.root;
     }
   }
@@ -163,49 +164,79 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         : null;
     final strings = ref.watch(appStringsProvider);
     final sleepTimer = ref.watch(sleepTimerControllerProvider);
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final transitionDuration = disableAnimations
+        ? Duration.zero
+        : const Duration(milliseconds: 220);
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _SettingsHeader(
-            route: _route,
-            title: _routeTitle(_route, strings),
-            strings: strings,
-            onBack: _goRoot,
+    Widget routeFrame(Widget body) {
+      final header = _SettingsHeader(
+        route: _route,
+        title: _routeTitle(_route, strings),
+        strings: strings,
+        onBack: _goRoot,
+      );
+      if (_route != _SettingsRoute.root) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              header,
+              const SizedBox(height: 16),
+              Expanded(child: body),
+            ],
           ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: settings.when(
-              data: (state) {
-                _syncControllers(state);
-                final tiktokState = tiktokLive?.value;
-                if (tiktokState != null) {
-                  _syncTikTokController(tiktokState);
-                }
-                return AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  child: KeyedSubtree(
-                    key: ValueKey('settings-detail-${_route.name}'),
-                    child: _buildRoute(
-                      state: state,
-                      sleepTimer: sleepTimer,
-                      tiktokLive: tiktokLive,
-                      csvTransfer: csvTransfer,
-                      strings: strings,
-                    ),
-                  ),
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, _) => Center(child: Text(error.toString())),
+        );
+      }
+      return ScrolledUnderTabFrame(
+        surfaceKey: const ValueKey('settings-tab-header-surface'),
+        header: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 18, 12, 16),
+          child: header,
+        ),
+        body: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: body,
+        ),
+      );
+    }
+
+    return settings.when(
+      data: (state) {
+        _syncControllers(state);
+        final tiktokState = tiktokLive?.value;
+        if (tiktokState != null) {
+          _syncTikTokController(tiktokState);
+        }
+        return AnimatedSwitcher(
+          key: const ValueKey('settings-route-switcher'),
+          duration: transitionDuration,
+          reverseDuration: transitionDuration,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.topLeft,
+            children: <Widget>[...previousChildren, ?currentChild],
+          ),
+          child: KeyedSubtree(
+            key: ValueKey('settings-detail-${_route.name}'),
+            child: routeFrame(
+              _buildRoute(
+                state: state,
+                sleepTimer: sleepTimer,
+                tiktokLive: tiktokLive,
+                csvTransfer: csvTransfer,
+                strings: strings,
+              ),
             ),
           ),
-        ],
-      ),
+        );
+      },
+      loading: () =>
+          routeFrame(const Center(child: CircularProgressIndicator())),
+      error: (error, _) => routeFrame(Center(child: Text(error.toString()))),
     );
   }
 
@@ -242,6 +273,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       _SettingsRoute.lyrics => strings.lyricsAppearance,
       _SettingsRoute.storage => strings.storage,
       _SettingsRoute.live => strings.liveConnection,
+      _SettingsRoute.about => strings.aboutApplication,
     };
   }
 
@@ -318,6 +350,11 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (error, _) => Text(error.toString()),
               ),
+      _SettingsRoute.about => _AboutApplicationSettings(
+        strings: strings,
+        onSupport: _openSupportDevelopment,
+        onGitHub: _openGitHubRepository,
+      ),
       _SettingsRoute.root => const SizedBox.shrink(),
     };
 
@@ -475,9 +512,17 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               ),
             ],
           ),
-        _SupportDevelopmentFooter(
-          strings: strings,
-          onSupport: _openSupportDevelopment,
+        _SettingsGroup(
+          title: strings.applicationInformation,
+          children: [
+            _SettingsEntryCard(
+              key: const ValueKey('settings-card-about'),
+              icon: Icons.info_outline_rounded,
+              title: strings.aboutApplication,
+              subtitle: strings.aboutApplicationSummary,
+              onTap: () => _openRoute(_SettingsRoute.about),
+            ),
+          ],
         ),
       ],
     );
@@ -537,10 +582,26 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   }
 
   Future<void> _openSupportDevelopment() async {
-    final strings = ref.read(appStringsProvider);
+    await _openExternalPage(
+      url: AppConstants.supportDevelopmentUrl,
+      failureMessage: ref.read(appStringsProvider).supportDevelopmentOpenFailed,
+    );
+  }
+
+  Future<void> _openGitHubRepository() async {
+    await _openExternalPage(
+      url: AppConstants.githubRepositoryUrl,
+      failureMessage: ref.read(appStringsProvider).githubRepositoryOpenFailed,
+    );
+  }
+
+  Future<void> _openExternalPage({
+    required String url,
+    required String failureMessage,
+  }) async {
     try {
-      final opened = await ref.read(supportDevelopmentLauncherProvider)(
-        Uri.parse(AppConstants.supportDevelopmentUrl),
+      final opened = await ref.read(settingsExternalLauncherProvider)(
+        Uri.parse(url),
       );
       if (!mounted || opened) {
         return;
@@ -550,7 +611,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         return;
       }
     }
-    _showSnackBar(strings.supportDevelopmentOpenFailed);
+    _showSnackBar(failureMessage);
   }
 
   Future<void> _pickDownloadDirectory() async {
@@ -1260,6 +1321,8 @@ class _SettingsHeader extends StatelessWidget {
       return Text(
         key: const ValueKey('settings-tab-title'),
         title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: style,
       );
     }
@@ -1383,7 +1446,7 @@ class _SettingsEntryCard extends StatelessWidget {
                   if (trailing case final trailing?) ...[
                     const SizedBox(width: 8),
                     trailing,
-                  ] else ...[
+                  ] else if (onTap != null) ...[
                     const SizedBox(width: 4),
                     Icon(
                       Icons.chevron_right_rounded,
@@ -1400,82 +1463,46 @@ class _SettingsEntryCard extends StatelessWidget {
   }
 }
 
-class _SupportDevelopmentFooter extends StatelessWidget {
-  const _SupportDevelopmentFooter({
+class _AboutApplicationSettings extends StatelessWidget {
+  const _AboutApplicationSettings({
     required this.strings,
     required this.onSupport,
+    required this.onGitHub,
   });
 
   final AppStrings strings;
   final VoidCallback onSupport;
+  final VoidCallback onGitHub;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    return Padding(
-      key: const ValueKey('support-development-section'),
-      padding: const EdgeInsets.only(top: 2, bottom: 24),
-      child: Column(
-        children: [
-          Text(
-            strings.appVersion(AppConstants.appVersion),
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colors.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 22),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Column(
-                children: [
-                  Container(
-                    width: 42,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          colors.primary.withValues(alpha: 0.35),
-                          colors.primary,
-                          colors.primary.withValues(alpha: 0.35),
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    strings.supportDevelopmentTitle,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    strings.supportDevelopmentBody,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colors.onSurfaceVariant,
-                      height: 1.45,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  FilledButton.icon(
-                    key: const ValueKey('support-development-button'),
-                    onPressed: onSupport,
-                    icon: const Icon(Icons.favorite_rounded),
-                    label: Text(strings.supportDevelopmentAction),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SettingsEntryCard(
+          key: const ValueKey('settings-about-version'),
+          icon: Icons.sell_outlined,
+          title: strings.versionLabel,
+          subtitle: AppConstants.appVersion,
+          onTap: null,
+        ),
+        const SizedBox(height: _settingsCardGap),
+        _SettingsEntryCard(
+          key: const ValueKey('settings-about-support'),
+          icon: Icons.favorite_outline_rounded,
+          title: strings.supportDevelopmentTitle,
+          subtitle: strings.supportDevelopmentBody,
+          onTap: onSupport,
+        ),
+        const SizedBox(height: _settingsCardGap),
+        _SettingsEntryCard(
+          key: const ValueKey('settings-about-github'),
+          icon: Icons.code_rounded,
+          title: strings.githubRepositoryTitle,
+          subtitle: strings.githubRepositoryBody,
+          onTap: onGitHub,
+        ),
+      ],
     );
   }
 }
@@ -2070,14 +2097,13 @@ class _SleepTimerSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final customSelected = !_presets.contains(state.selectedDuration);
-    final colors = Theme.of(context).colorScheme;
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 520),
       child: Material(
-        color: colors.surfaceContainerHighest.withValues(alpha: 0.82),
+        color: AppColors.cardSurfaceFor(context),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(_settingsSurfaceRadius),
-          side: BorderSide(color: colors.outlineVariant),
+          side: BorderSide(color: AppColors.cardBorderFor(context)),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(

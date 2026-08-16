@@ -31,6 +31,10 @@ void main() {
 
       expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
       expect(
+        find.byKey(const ValueKey('settings-tab-header-surface')),
+        findsOneWidget,
+      );
+      expect(
         find.byKey(const ValueKey('settings-card-appearance')),
         findsOneWidget,
       );
@@ -38,6 +42,49 @@ void main() {
       expect(navigationController.canPop, isFalse);
 
       await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('settings-detail-appearance')),
+        findsOneWidget,
+      );
+      final rootHeaderFade = find
+          .ancestor(
+            of: find.byKey(const ValueKey('settings-tab-title')),
+            matching: find.byType(FadeTransition),
+          )
+          .first;
+      final rootBodyFade = find
+          .ancestor(
+            of: find.byKey(const ValueKey('settings-root')),
+            matching: find.byType(FadeTransition),
+          )
+          .first;
+      final detailHeaderFade = find
+          .ancestor(
+            of: find.byKey(const ValueKey('settings-detail-title')),
+            matching: find.byType(FadeTransition),
+          )
+          .first;
+      final detailBodyFade = find
+          .ancestor(
+            of: find.byKey(const ValueKey('accent-palette-grid')),
+            matching: find.byType(FadeTransition),
+          )
+          .first;
+      expect(tester.element(rootHeaderFade), tester.element(rootBodyFade));
+      expect(tester.element(detailHeaderFade), tester.element(detailBodyFade));
+
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(
+        tester.widget<FadeTransition>(rootHeaderFade).opacity.value,
+        lessThan(1),
+      );
+      expect(
+        tester.widget<FadeTransition>(detailHeaderFade).opacity.value,
+        greaterThan(0),
+      );
       await tester.pumpAndSettle();
 
       expect(
@@ -45,6 +92,18 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('settings-root')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('settings-tab-header-surface')),
+        findsNothing,
+      );
+      expect(
+        find.byWidgetPredicate((widget) {
+          final key = widget.key;
+          return key is ValueKey<String> &&
+              key.value.startsWith('settings-detail-header-surface-');
+        }),
+        findsNothing,
+      );
       expect(find.byKey(const ValueKey('accent-palette-grid')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('settings-detail-back')),
@@ -64,6 +123,83 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('leaving a settings detail resets only when the tab returns', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(760, 1100));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        active: false,
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('settings-detail-appearance')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('settings-root')), findsNothing);
+    expect(navigationController.canPop, isTrue);
+
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-detail-appearance')),
+      findsNothing,
+    );
+    expect(navigationController.canPop, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('settings detail transition respects reduced motion', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(760, 1100));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        disableAnimations: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    AnimatedSwitcher switcher() => tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('settings-route-switcher')),
+    );
+
+    expect(switcher().duration, Duration.zero);
+    expect(switcher().reverseDuration, Duration.zero);
+    await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('settings-detail-appearance')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('settings-tab-title')), findsNothing);
+    expect(find.byKey(const ValueKey('settings-detail-title')), findsOneWidget);
+    expect(switcher().duration, Duration.zero);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'language uses a selected modal option without opening a settings page',
@@ -151,10 +287,15 @@ void main() {
     );
     final timerCard = find.byKey(const ValueKey('settings-inline-timer'));
 
-    final cardShape = _outerMaterialShape(tester, appearanceCard);
-    final timerShape = _outerMaterialShape(tester, timerCard);
+    final cardMaterial = _outerMaterial(tester, appearanceCard);
+    final timerMaterial = _outerMaterial(tester, timerCard);
+    final cardShape = cardMaterial.shape! as RoundedRectangleBorder;
+    final timerShape = timerMaterial.shape! as RoundedRectangleBorder;
     expect(cardShape.borderRadius, BorderRadius.circular(12));
     expect(timerShape.borderRadius, BorderRadius.circular(12));
+    expect(timerMaterial.color, cardMaterial.color);
+    expect(timerShape.side.color, cardShape.side.color);
+    expect(timerShape.side.width, cardShape.side.width);
 
     final cardGap =
         tester.getTopLeft(lyricsCard).dy -
@@ -566,6 +707,28 @@ void main() {
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets('main tab transition respects reduced motion', (tester) async {
+    await tester.pumpWidget(_homeHarness(disableAnimations: true));
+    await tester.pumpAndSettle();
+
+    AnimatedOpacity slotOpacity(Finder slot) => tester.widget<AnimatedOpacity>(
+      find.descendant(of: slot, matching: find.byType(AnimatedOpacity)).first,
+    );
+
+    final home = find.byKey(const ValueKey('home-view'));
+    expect(slotOpacity(home).duration, Duration.zero);
+    expect(slotOpacity(home).opacity, 1);
+
+    await tester.tap(find.text('Ajustes').last);
+    await tester.pump();
+
+    final settings = find.byKey(const ValueKey('settings-view'));
+    expect(settings, findsOneWidget);
+    expect(slotOpacity(settings).duration, Duration.zero);
+    expect(slotOpacity(settings).opacity, 1);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 void _configureView(WidgetTester tester, Size size) {
@@ -582,18 +745,29 @@ void _configureView(WidgetTester tester, Size size) {
 Widget _settingsHarness({
   required SettingsNavigationController navigationController,
   List<Override> overrides = const [],
+  bool disableAnimations = false,
+  bool active = true,
 }) {
   return ProviderScope(
     overrides: [..._providerOverrides(), ...overrides],
     child: MaterialApp(
+      builder: disableAnimations
+          ? (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            )
+          : null,
       home: Scaffold(
-        body: SettingsPanel(navigationController: navigationController),
+        body: SettingsPanel(
+          active: active,
+          navigationController: navigationController,
+        ),
       ),
     ),
   );
 }
 
-Widget _homeHarness() {
+Widget _homeHarness({bool disableAnimations = false}) {
   return ProviderScope(
     overrides: [
       ..._providerOverrides(),
@@ -613,7 +787,15 @@ Widget _homeHarness() {
         const _EmptyIncomingTrackLinkService(),
       ),
     ],
-    child: const MaterialApp(home: HomePage()),
+    child: MaterialApp(
+      builder: disableAnimations
+          ? (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            )
+          : null,
+      home: const HomePage(),
+    ),
   );
 }
 
@@ -646,14 +828,10 @@ Color _activeColor(WidgetTester tester) {
   return Theme.of(context).colorScheme.primary;
 }
 
-RoundedRectangleBorder _outerMaterialShape(
-  WidgetTester tester,
-  Finder surface,
-) {
-  final material = tester.widget<Material>(
+Material _outerMaterial(WidgetTester tester, Finder surface) {
+  return tester.widget<Material>(
     find.descendant(of: surface, matching: find.byType(Material)).first,
   );
-  return material.shape! as RoundedRectangleBorder;
 }
 
 class _FixedSettingsController extends SettingsController {

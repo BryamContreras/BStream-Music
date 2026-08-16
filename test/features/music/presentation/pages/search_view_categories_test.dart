@@ -37,6 +37,20 @@ void main() {
         find.byKey(ValueKey('search-category-icon-${category.name}')),
         findsOneWidget,
       );
+      expect(
+        tester
+            .getSize(find.byKey(ValueKey('search-category-${category.name}')))
+            .height,
+        48,
+      );
+      expect(
+        tester
+            .getSize(
+              find.byKey(ValueKey('search-category-surface-${category.name}')),
+            )
+            .height,
+        44,
+      );
     }
   });
 
@@ -76,12 +90,15 @@ void main() {
       findsOneWidget,
     );
     for (final category in SearchCategory.values) {
-      expect(
-        tester
-            .getRect(find.byKey(ValueKey('search-category-${category.name}')))
-            .height,
-        greaterThanOrEqualTo(48),
+      final tapTarget = tester.getRect(
+        find.byKey(ValueKey('search-category-${category.name}')),
       );
+      final surface = tester.getRect(
+        find.byKey(ValueKey('search-category-surface-${category.name}')),
+      );
+      expect(tapTarget.height, greaterThanOrEqualTo(48));
+      expect(surface.height, greaterThanOrEqualTo(44));
+      expect(surface.height, lessThan(tapTarget.height));
     }
     expect(tester.takeException(), isNull);
 
@@ -123,6 +140,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-tab-header-surface')),
+      findsOneWidget,
+    );
     expect(find.byType(TextField), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'radiohead');
@@ -130,12 +151,20 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('search-tab-header-surface')),
+      findsNothing,
+    );
     expect(find.byKey(const ValueKey('search-category-songs')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('search-clear-button')));
     await tester.pump();
 
     expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-tab-header-surface')),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('search-category-songs')), findsNothing);
 
     await tester.pumpWidget(
@@ -189,6 +218,7 @@ void main() {
       await tester.pumpWidget(
         _searchApp(
           controller: controller,
+          platform: TargetPlatform.windows,
           extraOverrides: [
             playerControllerProvider.overrideWith(
               () => _RecordingPlayerController(),
@@ -201,18 +231,54 @@ void main() {
       final switcher = tester.widget<AnimatedSwitcher>(
         find.byKey(const ValueKey('search-results-switcher')),
       );
-      expect(switcher.duration, const Duration(milliseconds: 180));
+      expect(switcher.duration, const Duration(milliseconds: 240));
+      final heading = find.byKey(const ValueKey('search-tab-title'));
+      final headingTop = tester.getTopLeft(heading).dy;
+      final headerSurface = find.byKey(
+        const ValueKey('search-tab-header-surface'),
+      );
+      final colors = Theme.of(tester.element(headerSurface)).colorScheme;
+      expect(tester.widget<Material>(headerSurface).color, colors.surface);
 
-      await tester.drag(find.byType(CustomScrollView), const Offset(0, -90));
+      await tester.drag(
+        find.byKey(const ValueKey('search-results-scroll')),
+        const Offset(0, -90),
+      );
       await tester.pumpAndSettle();
       final scrollable = tester.state<ScrollableState>(
         find.byType(Scrollable).first,
       );
       final offsetBeforeSelection = scrollable.position.pixels;
       expect(offsetBeforeSelection, greaterThan(0));
+      expect(tester.getTopLeft(heading).dy, closeTo(headingTop, 0.01));
+      expect(
+        tester.widget<Material>(headerSurface).color,
+        colors.surfaceContainer,
+      );
+      expect(tester.widget<Material>(headerSurface).elevation, 3);
 
       await controller.selectCategory(SearchCategory.videos);
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 70));
+
+      final forwardSongTransition = tester.widget<SlideTransition>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey('search-category-results-songs')),
+              matching: find.byType(SlideTransition),
+            )
+            .first,
+      );
+      final forwardVideoTransition = tester.widget<SlideTransition>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey('search-category-results-videos')),
+              matching: find.byType(SlideTransition),
+            )
+            .first,
+      );
+      expect(forwardSongTransition.position.value.dx, lessThan(0));
+      expect(forwardVideoTransition.position.value.dx, greaterThan(0));
 
       expect(find.text('Canción 0'), findsOneWidget);
       expect(find.text('Video 0'), findsOneWidget);
@@ -223,6 +289,34 @@ void main() {
       expect(find.text('Canción 0'), findsNothing);
       expect(find.text('Video 0'), findsOneWidget);
       expect(scrollable.position.pixels, closeTo(offsetBeforeSelection, 0.01));
+
+      await controller.selectCategory(SearchCategory.songs);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 70));
+
+      final backwardVideoTransition = tester.widget<SlideTransition>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey('search-category-results-videos')),
+              matching: find.byType(SlideTransition),
+            )
+            .first,
+      );
+      final backwardSongTransition = tester.widget<SlideTransition>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey('search-category-results-songs')),
+              matching: find.byType(SlideTransition),
+            )
+            .first,
+      );
+      expect(backwardVideoTransition.position.value.dx, greaterThan(0));
+      expect(backwardSongTransition.position.value.dx, lessThan(0));
+      expect(scrollable.position.pixels, closeTo(offsetBeforeSelection, 0.01));
+
+      await tester.pumpAndSettle();
+      await controller.selectCategory(SearchCategory.videos);
+      await tester.pumpAndSettle();
 
       controller.replaceState(
         SearchState(

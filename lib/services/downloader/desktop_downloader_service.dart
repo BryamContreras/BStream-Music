@@ -213,7 +213,7 @@ class DesktopDownloaderService
         final file = _managedPlaybackFileFromOutput(output, root);
         if (file == null || !await file.exists() || await file.length() == 0) {
           throw const DownloaderException(
-            'yt-dlp finalizo sin preparar un archivo reproducible.',
+            'yt-dlp finalizó sin preparar un archivo reproducible.',
             code: 'yt_dlp_managed_playback_missing',
           );
         }
@@ -225,7 +225,7 @@ class DesktopDownloaderService
             // The explicit size failure below remains the useful result.
           }
           throw DownloaderException(
-            'El audio preparado excede el limite de cache de '
+            'El audio preparado excede el límite de caché de '
             '$_managedPlaybackMaximumEntryBytes bytes.',
             code: 'yt_dlp_managed_playback_too_large',
           );
@@ -280,7 +280,7 @@ class DesktopDownloaderService
   void _ensureManagedPlaybackCurrent(int generation) {
     if (_disposed || generation != _managedPlaybackGeneration) {
       throw const DownloaderException(
-        'La preparacion fue reemplazada por una pista mas reciente.',
+        'La preparación fue reemplazada por una pista más reciente.',
         code: 'yt_dlp_managed_playback_superseded',
       );
     }
@@ -415,7 +415,7 @@ class DesktopDownloaderService
       process = await _startProcess(executable, args);
     } on ProcessException catch (error) {
       throw DownloaderException(
-        'No se pudo ejecutar yt-dlp. Configura la ruta o agregalo al PATH.',
+        'No se pudo ejecutar yt-dlp. Configura la ruta o agrégalo al PATH.',
         code: 'yt_dlp_not_found',
         details: error,
       );
@@ -442,7 +442,7 @@ class DesktopDownloaderService
           : _processResolutionTimeout,
       totalError: DownloaderException(
         managedPlayback
-            ? 'yt-dlp excedio el limite total de preparacion de audio '
+            ? 'yt-dlp excedió el límite total de preparación de audio '
                   '(${_durationLabel(_processDownloadTotalTimeout)}).'
             : 'yt-dlp no resolvio la solicitud en '
                   '${_durationLabel(_processResolutionTimeout)}.',
@@ -453,7 +453,7 @@ class DesktopDownloaderService
       idleTimeout: managedPlayback ? _processIdleTimeout : null,
       idleError: managedPlayback
           ? DownloaderException(
-              'yt-dlp dejo de reportar actividad durante '
+              'yt-dlp dejó de reportar actividad durante '
               '${_durationLabel(_processIdleTimeout)}.',
               code: 'yt_dlp_process_idle_timeout',
             )
@@ -529,13 +529,13 @@ class DesktopDownloaderService
       terminate: _terminateProcessTree,
       totalTimeout: _processDownloadTotalTimeout,
       totalError: DownloaderException(
-        'yt-dlp excedio el limite total de descarga '
+        'yt-dlp excedió el límite total de descarga '
         '(${_durationLabel(_processDownloadTotalTimeout)}).',
         code: 'yt_dlp_process_total_timeout',
       ),
       idleTimeout: _processIdleTimeout,
       idleError: DownloaderException(
-        'yt-dlp dejo de reportar actividad durante '
+        'yt-dlp dejó de reportar actividad durante '
         '${_durationLabel(_processIdleTimeout)}.',
         code: 'yt_dlp_process_idle_timeout',
       ),
@@ -590,7 +590,7 @@ class DesktopDownloaderService
         );
         throw DownloaderException(
           errorBuffer.toString().trim().isEmpty
-              ? 'yt-dlp termino con codigo $exitCode.'
+              ? 'yt-dlp terminó con código $exitCode.'
               : errorBuffer.toString().trim(),
           code: 'yt_dlp_download_failed',
         );
@@ -600,7 +600,7 @@ class DesktopDownloaderService
           printedFilePath ?? await _findNewestFile(outputDirectory, mediaType);
       if (filePath == null) {
         throw const DownloaderException(
-          'No se encontro el archivo descargado.',
+          'No se encontró el archivo descargado.',
         );
       }
 
@@ -659,7 +659,7 @@ class DesktopDownloaderService
       return process;
     } on ProcessException catch (error) {
       throw DownloaderException(
-        'No se pudo iniciar yt-dlp. Configura la ruta o agregalo al PATH.',
+        'No se pudo iniciar yt-dlp. Configura la ruta o agrégalo al PATH.',
         code: 'yt_dlp_not_found',
         details: error,
       );

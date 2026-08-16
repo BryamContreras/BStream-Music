@@ -236,7 +236,7 @@ void main() {
         observed.any(
           (value) =>
               value.value?.errorMessage?.contains(
-                'youtube_explode_dart fallo',
+                'youtube_explode_dart falló',
               ) ==
               true,
         ),
@@ -330,13 +330,13 @@ void main() {
         .playRemote(track);
     await tester.pump();
 
-    expect(find.textContaining('youtube_explode_dart fallo'), findsOneWidget);
+    expect(find.textContaining('youtube_explode_dart falló'), findsOneWidget);
 
     fallbackGate.complete();
     await playFuture;
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('youtube_explode_dart fallo'), findsNothing);
+    expect(find.textContaining('youtube_explode_dart falló'), findsNothing);
     expect(
       container.read(playerControllerProvider).requireValue.status,
       PlayerStatus.playing,

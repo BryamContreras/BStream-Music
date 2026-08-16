@@ -110,8 +110,13 @@ void main() {
           tester.getSize(volume).width,
           greaterThan(tester.getSize(repeat).width),
         );
-        expect(tester.getSize(lyrics), const Size(128, 52));
-        expect(tester.getSize(volume), const Size(128, 52));
+        final expectedLabelWidth = ((size.width - 40) * 0.36).clamp(
+          112.0,
+          132.0,
+        );
+        expect(tester.getSize(lyrics), Size(expectedLabelWidth, 48));
+        expect(tester.getSize(volume), Size(expectedLabelWidth, 48));
+        expect(tester.getSize(lyrics).width, lessThan(128));
         expect(tester.getRect(lyrics).left, closeTo(20, 0.1));
         expect(tester.getRect(volume).right, closeTo(size.width - 20, 0.1));
         expect(tester.getSize(artwork), Size.square(size.width - 48));
@@ -287,6 +292,115 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final variant in const [
+    (
+      name: 'Android 320',
+      size: Size(320, 720),
+      platform: TargetPlatform.android,
+      textScale: 1.0,
+    ),
+    (
+      name: 'Android 360',
+      size: Size(360, 800),
+      platform: TargetPlatform.android,
+      textScale: 1.0,
+    ),
+    (
+      name: 'Android 320 text scale 3',
+      size: Size(320, 568),
+      platform: TargetPlatform.android,
+      textScale: 3.0,
+    ),
+    (
+      name: 'Windows desktop text scale 2',
+      size: Size(960, 600),
+      platform: TargetPlatform.windows,
+      textScale: 2.0,
+    ),
+  ]) {
+    testWidgets(
+      '${variant.name} keeps the title-to-artist gap independent of title lines',
+      (tester) async {
+        _configureView(
+          tester,
+          variant.size,
+          textScaleFactor: variant.textScale,
+        );
+
+        Future<
+          ({
+            Rect artwork,
+            double artworkTitleGap,
+            double gap,
+            double titleHeight,
+          })
+        >
+        renderTitle(String title) async {
+          await tester.pumpWidget(
+            _playerHarness(
+              platform: variant.platform,
+              snapshot: snapshot.copyWith(
+                title: title,
+                artist:
+                    'Un nombre de artista deliberadamente largo para validar '
+                    'el espacio reservado a las acciones',
+              ),
+              localTrack: localTrack,
+              playlists: _TestPlaylistsController(),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+
+          final titleFinder = find.byKey(const ValueKey('player-track-title'));
+          final artistFinder = find.byKey(
+            const ValueKey('player-track-artist'),
+          );
+          final titleWidget = tester.widget<Text>(titleFinder);
+          final titleRect = tester.getRect(titleFinder);
+          final artistRect = tester.getRect(artistFinder);
+          final shareRect = tester.getRect(
+            find.byKey(const ValueKey('player-share-control')),
+          );
+
+          expect(titleWidget.maxLines, 2);
+          expect(titleRect.right, lessThanOrEqualTo(shareRect.left));
+          expect(artistRect.right, lessThanOrEqualTo(shareRect.left));
+          expect(tester.takeException(), isNull);
+          final artworkRect = tester.getRect(
+            find.byKey(const ValueKey('player-large-artwork')),
+          );
+          return (
+            artwork: artworkRect,
+            artworkTitleGap: titleRect.top - artworkRect.bottom,
+            gap: artistRect.top - titleRect.bottom,
+            titleHeight: titleRect.height,
+          );
+        }
+
+        final shortTitle = await renderTitle('A');
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        final longTitle = await renderTitle(
+          'Un titulo deliberadamente largo que necesita dos lineas en el '
+          'reproductor sin separar de forma artificial el nombre del artista',
+        );
+
+        expect(longTitle.titleHeight, greaterThan(shortTitle.titleHeight));
+        expect(longTitle.gap, closeTo(shortTitle.gap, 0.1));
+        if (variant.platform == TargetPlatform.android) {
+          expect(longTitle.artwork, shortTitle.artwork);
+          expect(shortTitle.artworkTitleGap, closeTo(22, 0.1));
+          expect(longTitle.artworkTitleGap, closeTo(22, 0.1));
+          expect(
+            longTitle.artworkTitleGap,
+            closeTo(shortTitle.artworkTitleGap, 0.1),
+          );
+        }
+      },
+    );
+  }
+
   testWidgets('title share control sits before favorite and shares snapshot', (
     tester,
   ) async {
@@ -324,6 +438,7 @@ void main() {
     final share = find.byKey(const ValueKey('player-share-control'));
     final favorite = find.byKey(const ValueKey('player-favorite-control'));
     expect(tester.getSize(share), const Size.square(48));
+    expect(tester.getSize(favorite), const Size.square(48));
     expect(
       tester.getRect(share).right,
       closeTo(tester.getRect(favorite).left, 0.1),
@@ -331,6 +446,22 @@ void main() {
     expect(
       find.descendant(of: share, matching: find.byIcon(Icons.share_rounded)),
       findsOneWidget,
+    );
+    expect(
+      tester.getCenter(share).dy,
+      closeTo(tester.getCenter(favorite).dy, 0.1),
+    );
+    final shareIcon = find.descendant(
+      of: share,
+      matching: find.byIcon(Icons.share_rounded),
+    );
+    final favoriteIcon = find.descendant(
+      of: favorite,
+      matching: find.byIcon(Icons.favorite_border_rounded),
+    );
+    expect(
+      tester.getCenter(shareIcon).dy,
+      closeTo(tester.getCenter(favoriteIcon).dy, 0.1),
     );
 
     final expectedOrigin = tester.getRect(share);
@@ -341,10 +472,10 @@ void main() {
     expect(shareService.sharedTrack, isNotNull);
     expect(shareService.sharedTrack, canonicalTrack);
     expect(shareService.sharedTrack!.album, 'Album canonico');
-    expect(shareService.title, 'Compartir con BStream Music');
+    expect(shareService.title, 'Compartir canción');
     expect(
       shareService.message,
-      'Escucha "Cancion para compartir" de Artista de prueba en BStream Music.',
+      'Escucha "Cancion para compartir" de Artista de prueba.',
     );
     expect(shareService.sharePositionOrigin, expectedOrigin);
     expect(tester.takeException(), isNull);

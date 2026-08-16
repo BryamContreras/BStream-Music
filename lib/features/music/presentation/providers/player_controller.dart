@@ -512,8 +512,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         : 'yt-dlp';
     final detail = readableAudioStreamError(error);
     final message = detail.isEmpty
-        ? '$provider fallo. Probando con yt-dlp...'
-        : '$provider fallo: $detail. Probando con yt-dlp...';
+        ? '$provider falló. Probando con yt-dlp...'
+        : '$provider falló: $detail. Probando con yt-dlp...';
     _remoteFallbackNoticeRequestId = requestId;
     _remoteFallbackNotice = message;
     final pending = _remoteLoadingSnapshot(
@@ -604,7 +604,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (rejectedPrimary) {
       _showRemoteFallbackNotice(
         AudioStreamSource.youtubeExplode,
-        snapshot.errorMessage ?? 'Error de reproduccion.',
+        snapshot.errorMessage ?? 'Error de reproducción.',
         track,
         requestId,
         expectedQueueEntryId,

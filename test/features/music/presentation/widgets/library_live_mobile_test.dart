@@ -131,6 +131,121 @@ void main() {
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets(
+    'Library uses directional push and pop and respects reduced motion',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(430, 800);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(_libraryHarness());
+      await tester.pumpAndSettle();
+      final switcher = find.byKey(const ValueKey('library-route-switcher'));
+      expect(
+        tester.widget<AnimatedSwitcher>(switcher).duration,
+        const Duration(milliseconds: 260),
+      );
+
+      final liveEntry = find.byKey(const ValueKey('library-live-entry'));
+      await tester.scrollUntilVisible(
+        liveEntry,
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(liveEntry);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+
+      SlideTransition routeTransition(String key) =>
+          tester.widget<SlideTransition>(
+            find
+                .ancestor(
+                  of: find.descendant(
+                    of: switcher,
+                    matching: find.byKey(ValueKey(key)),
+                  ),
+                  matching: find.byType(SlideTransition),
+                )
+                .first,
+          );
+
+      expect(routeTransition('root').position.value.dx, lessThan(0));
+      expect(routeTransition('live').position.value.dx, greaterThan(0));
+      expect(find.byKey(const ValueKey('library-tab-title')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('library-detail-header')),
+        findsOneWidget,
+      );
+
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+
+      expect(routeTransition('root').position.value.dx, lessThan(0));
+      expect(routeTransition('live').position.value.dx, greaterThan(0));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('library-tab-title')), findsOneWidget);
+      expect(find.byKey(const ValueKey('library-detail-header')), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await tester.pumpWidget(_libraryHarness(disableAnimations: true));
+      await tester.pumpAndSettle();
+      final reducedSwitcher = find.byKey(
+        const ValueKey('library-route-switcher'),
+      );
+      expect(
+        tester.widget<AnimatedSwitcher>(reducedSwitcher).duration,
+        Duration.zero,
+      );
+      final reducedLiveEntry = find.byKey(const ValueKey('library-live-entry'));
+      await tester.scrollUntilVisible(
+        reducedLiveEntry,
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(reducedLiveEntry);
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('root')), findsNothing);
+      expect(find.byKey(const ValueKey('live')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+}
+
+Widget _libraryHarness({bool disableAnimations = false}) {
+  return ProviderScope(
+    overrides: [
+      libraryTracksProvider.overrideWith((ref) async => const <LocalTrack>[]),
+      playlistsControllerProvider.overrideWith(_EmptyPlaylistsController.new),
+      tiktokLiveControllerProvider.overrideWith(_IdleTikTokLiveController.new),
+      appStringsProvider.overrideWithValue(
+        const AppStrings(AppLanguage.spanish),
+      ),
+    ],
+    child: MaterialApp(
+      theme: ThemeData(platform: TargetPlatform.android),
+      builder: disableAnimations
+          ? (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            )
+          : null,
+      home: Scaffold(body: LibraryPanel(onOpenPlayer: () {})),
+    ),
+  );
 }
 
 class _EmptyPlaylistsController extends PlaylistsController {

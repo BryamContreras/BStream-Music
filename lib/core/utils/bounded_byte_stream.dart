@@ -13,7 +13,7 @@ class ByteStreamLimitException implements Exception {
 
   @override
   String toString() {
-    return 'La respuesta remota excede el limite de $maximumBytes bytes '
+    return 'La respuesta remota excede el límite de $maximumBytes bytes '
         '(recibidos: $receivedBytes).';
   }
 }
@@ -103,7 +103,7 @@ Future<int> consumeBoundedByteStream(
       final remaining = totalTimeout - watch.elapsed;
       if (remaining <= Duration.zero) {
         throw TimeoutException(
-          'La transferencia excedio su tiempo total.',
+          'La transferencia excedió su tiempo total.',
           totalTimeout,
         );
       }
@@ -112,7 +112,7 @@ Future<int> consumeBoundedByteStream(
         nextTimeout,
         onTimeout: () {
           throw TimeoutException(
-            'La transferencia dejo de recibir datos.',
+            'La transferencia dejó de recibir datos.',
             nextTimeout,
           );
         },

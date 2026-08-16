@@ -41,7 +41,7 @@ class TrackInfoModel extends TrackInfo {
       title:
           _stringValue(json['track']) ??
           _stringValue(json['title']) ??
-          'Sin titulo',
+          'Sin título',
       artist: artist,
       url: _sourceUrl(json),
       thumbnailUrl: _thumbnailUrl(json),

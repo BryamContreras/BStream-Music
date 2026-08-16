@@ -51,6 +51,7 @@ class TikTokLiveClient {
   String? _language;
   String? _region;
   Set<String>? _decodedMethods;
+  bool Function(String message)? _chatMessageFilter;
   CancellationToken? _stop;
   final _listeners = <String, List<void Function(TikTokEvent)>>{};
 
@@ -145,6 +146,15 @@ class TikTokLiveClient {
     return this;
   }
 
+  /// Filters chat messages before their nested user/profile data is decoded.
+  ///
+  /// The predicate receives only the chat text. Omitting this filter preserves
+  /// the package's default behavior and emits every decoded chat event.
+  TikTokLiveClient chatMessageFilter(bool Function(String message) filter) {
+    _chatMessageFilter = filter;
+    return this;
+  }
+
   /// Register an event listener for the given event type.
   void on(String eventType, void Function(TikTokEvent) handler) {
     _listeners.putIfAbsent(eventType, () => []).add(handler);
@@ -216,6 +226,7 @@ class TikTokLiveClient {
             language: _language,
             region: _region,
             decodedMethods: _decodedMethods,
+            chatMessageFilter: _chatMessageFilter,
           );
           deviceBlockCircuit.reset();
         } on DeviceBlockedError {

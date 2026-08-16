@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../proto/codec.dart';
 import '../proto/messages.dart';
 import 'types.dart';
 
@@ -72,7 +73,12 @@ const _methodMap = {
 
 /// Decode a raw protobuf message into TikTok events.
 /// Returns multiple events when sub-routing applies (e.g. Social → Follow).
-List<TikTokEvent> decode(String method, Uint8List payload, String roomId) {
+List<TikTokEvent> decode(
+  String method,
+  Uint8List payload,
+  String roomId, {
+  bool Function(String message)? chatMessageFilter,
+}) {
   final eventName = _methodMap[method];
   if (eventName == null) {
     return [
@@ -80,7 +86,23 @@ List<TikTokEvent> decode(String method, Uint8List payload, String roomId) {
     ];
   }
 
-  final decoded = decodePayload(method, payload);
+  DecodedMessage? decoded;
+  if (method == 'WebcastChatMessage' && chatMessageFilter != null) {
+    final ProtoMap chat;
+    try {
+      chat = protoRead(payload);
+    } on FormatException {
+      return [
+        TikTokEvent(EventType.unknown, {'method': method}, roomId),
+      ];
+    }
+    if (!chatMessageFilter(chat.getString(3))) {
+      return const <TikTokEvent>[];
+    }
+    decoded = decodeParsedPayload(method, chat);
+  } else {
+    decoded = decodePayload(method, payload);
+  }
   if (decoded == null) {
     return [
       TikTokEvent(EventType.unknown, {'method': method}, roomId),

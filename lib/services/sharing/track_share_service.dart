@@ -67,12 +67,11 @@ class SharePlusTrackShareService implements TrackShareService {
     String? subject,
     Rect? sharePositionOrigin,
   }) {
-    final link = codec.fromTrack(track);
+    final shareUri = codec.shareUriForTrack(track);
     final normalizedMessage = message.trim();
     final text = <String>[
       if (normalizedMessage.isNotEmpty) normalizedMessage,
-      link.appUri.toString(),
-      'YouTube: ${link.youtubeFallbackUri}',
+      shareUri.toString(),
     ].join('\n\n');
     return gateway.share(
       text: text,

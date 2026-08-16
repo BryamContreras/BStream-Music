@@ -492,6 +492,7 @@ class PirateTokLiveDartClient implements TikTokLiveDartClient {
   PirateTokLiveDartClient(String user)
     : _client = TikTokLiveClient(user)
           .decodedMethods(const {'WebcastChatMessage', 'WebcastControlMessage'})
+          .chatMessageFilter(isPotentialTikTokLiveCommandText)
           .timeout(const Duration(seconds: 15))
           .maxRetries(5)
           .staleTimeout(const Duration(seconds: 90));
@@ -522,6 +523,15 @@ class PirateTokLiveDartClient implements TikTokLiveDartClient {
       );
     });
   }
+}
+
+/// Cheap pre-filter used before PirateTok decodes a chat user's full profile.
+///
+/// Exact command validation remains in [parseTikTokLiveCommand]. This only
+/// rejects ordinary chat lines that cannot possibly be a BStream command.
+bool isPotentialTikTokLiveCommandText(String text) {
+  final message = text.trim();
+  return message.startsWith('!') || message.toLowerCase() == 'revoke!';
 }
 
 TikTokLiveChatCommand? parseTikTokLiveCommand(

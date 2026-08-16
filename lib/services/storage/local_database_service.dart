@@ -60,7 +60,7 @@ class LocalDatabaseService {
     final file = File(path);
     if (!await file.exists() || await file.length() == 0) {
       throw const FormatException(
-        'El respaldo no contiene una base de datos valida.',
+        'El respaldo no contiene una base de datos válida.',
       );
     }
 
@@ -97,7 +97,7 @@ class LocalDatabaseService {
           version <= 0 ||
           version > AppConstants.databaseVersion) {
         throw const FormatException(
-          'La version de la base de datos del respaldo no es compatible.',
+          'La versión de la base de datos del respaldo no es compatible.',
         );
       }
 

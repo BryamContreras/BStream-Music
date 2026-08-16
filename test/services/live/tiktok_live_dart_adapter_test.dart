@@ -6,6 +6,26 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('parseTikTokLiveCommand', () {
+    test('cheaply identifies only possible command chat lines', () {
+      for (final text in const [
+        '!play Hello',
+        '  !SKIP  ',
+        '!unknown still worth validating',
+        'revoke!',
+        '  ReVoKe! ',
+      ]) {
+        expect(isPotentialTikTokLiveCommandText(text), isTrue, reason: text);
+      }
+      for (final text in const [
+        '',
+        'ordinary comment',
+        'please !play this',
+        'revoke',
+      ]) {
+        expect(isPotentialTikTokLiveCommandText(text), isFalse, reason: text);
+      }
+    });
+
     test('parses play while preserving query and requester metadata', () {
       final command = parseTikTokLiveCommand(
         '  !PlAy   La pareja del año  ',

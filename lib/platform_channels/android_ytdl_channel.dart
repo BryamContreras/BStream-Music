@@ -136,7 +136,7 @@ class AndroidYtdlChannel {
   ) {
     final filePath = result['filePath']?.toString();
     if (filePath == null || filePath.isEmpty) {
-      throw const DownloaderException('La descarga finalizo sin archivo.');
+      throw const DownloaderException('La descarga finalizó sin archivo.');
     }
     return DownloadResultModel.completed(
       sourceUrl: sourceUrl,

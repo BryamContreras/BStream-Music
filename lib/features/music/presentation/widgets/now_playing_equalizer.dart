@@ -109,7 +109,7 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
   Widget build(BuildContext context) {
     final indicatorColor = Theme.of(context).colorScheme.onSurface;
     return Semantics(
-      label: widget.isPlaying ? 'Reproduciendo' : 'Reproduccion pausada',
+      label: widget.isPlaying ? 'Reproduciendo' : 'Reproducción pausada',
       child: SizedBox(
         width: widget.width,
         height: widget.height,

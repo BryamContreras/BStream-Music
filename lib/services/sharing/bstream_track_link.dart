@@ -1,9 +1,11 @@
 import '../../features/music/domain/entities/track_info.dart';
 
-/// A stable BStream link backed by a canonical YouTube video identity.
+/// A legacy BStream link backed by a canonical YouTube video identity.
 ///
 /// Stream URLs are deliberately never represented here: Google Video URLs
 /// are signed, short lived, and may contain request credentials.
+/// New outgoing shares use a recognized HTTPS URL; [appUri] remains available
+/// only so links shared by older versions keep opening in BStream Music.
 final class BStreamTrackLink {
   const BStreamTrackLink({required this.videoId});
 
@@ -15,8 +17,11 @@ final class BStreamTrackLink {
     pathSegments: [videoId],
   );
 
-  Uri get youtubeFallbackUri =>
+  Uri get youtubeUri =>
       Uri.https('www.youtube.com', '/watch', <String, String>{'v': videoId});
+
+  Uri get youtubeMusicUri =>
+      Uri.https('music.youtube.com', '/watch', <String, String>{'v': videoId});
 }
 
 /// Encodes and validates the public link contract used by BStream Music.
@@ -66,6 +71,20 @@ class BStreamTrackLinkCodec {
     // absent or not a recognized YouTube reference.
     final videoId = extractVideoId(track.url) ?? extractVideoId(track.id);
     return videoId == null ? null : BStreamTrackLink(videoId: videoId);
+  }
+
+  /// Returns one canonical HTTPS link suitable for messaging applications.
+  ///
+  /// InnerTube metadata and an existing YouTube Music URL are treated as a
+  /// positive signal that the Music link is available. Generic YouTube search
+  /// results keep the regular watch URL instead of being mislabeled as Music.
+  Uri shareUriForTrack(TrackInfo track) {
+    final link = fromTrack(track);
+    final sourceUri = Uri.tryParse(track.url.trim());
+    final hasYouTubeMusicSource =
+        track.metadataSource == TrackMetadataSource.youtubeMusic ||
+        sourceUri?.host.toLowerCase() == 'music.youtube.com';
+    return hasYouTubeMusicSource ? link.youtubeMusicUri : link.youtubeUri;
   }
 
   String? extractVideoId(String candidate) {

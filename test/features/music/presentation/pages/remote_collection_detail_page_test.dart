@@ -213,6 +213,78 @@ void main() {
     expect(player.playCalls, 0);
   });
 
+  testWidgets('uses the Material 3 scrolled-under app bar while scrolling', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => List.generate(
+        12,
+        (index) => _tracks[index % _tracks.length].copyWith(
+          id: 'scroll-song-$index',
+          title: 'Cancion desplazable $index',
+          url: 'https://www.youtube.com/watch?v=scrollid$index',
+        ),
+      ),
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: tracksProvider,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final appBarFinder = find.byKey(
+      const ValueKey('remote-collection-app-bar'),
+    );
+    Material appBarMaterial() => tester.widget<Material>(
+      find.descendant(of: appBarFinder, matching: find.byType(Material)).first,
+    );
+    final colors = Theme.of(tester.element(appBarFinder)).colorScheme;
+    final titleFinder = find.descendant(
+      of: appBarFinder,
+      matching: find.text('Album de contrato'),
+    );
+
+    final initialMaterial = appBarMaterial();
+    final initialTitleRect = tester.getRect(titleFinder);
+    expect(initialMaterial.color, colors.surface);
+    expect(initialMaterial.elevation, 0);
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.state<ScrollableState>(find.byType(Scrollable)).position.pixels,
+      greaterThan(0),
+    );
+    final scrolledMaterial = appBarMaterial();
+    expect(scrolledMaterial.color, colors.surfaceContainer);
+    expect(scrolledMaterial.elevation, 3);
+    expect(tester.getRect(titleFinder), initialTitleRect);
+    expect(find.text('Album de contrato'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('remote-collection-back')),
+      findsOneWidget,
+    );
+
+    tester.state<ScrollableState>(find.byType(Scrollable)).position.jumpTo(0);
+    await tester.pumpAndSettle();
+
+    final restoredMaterial = appBarMaterial();
+    expect(restoredMaterial.color, colors.surface);
+    expect(restoredMaterial.elevation, 0);
+    expect(tester.getRect(titleFinder), initialTitleRect);
+  });
+
   testWidgets(
     'reuses the bounded artwork decode for the blurred header background',
     (tester) async {

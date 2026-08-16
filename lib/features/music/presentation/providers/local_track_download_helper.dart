@@ -147,7 +147,7 @@ class LocalTrackDownloadHelper {
       identityDigest: identityDigest,
     )) {
       throw const DownloaderException(
-        'La descarga finalizo sin un archivo de audio valido.',
+        'La descarga finalizó sin un archivo de audio válido.',
         code: 'invalid_download_file',
       );
     }

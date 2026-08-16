@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
@@ -183,6 +184,283 @@ void main() {
   });
 
   test(
+    'resolves concurrently but commits and publishes in acceptance order',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final first = Completer<List<TrackInfo>>();
+      final second = Completer<List<TrackInfo>>();
+      final third = Completer<List<TrackInfo>>();
+      final gates = <String, Completer<List<TrackInfo>>>{
+        'Primera': first,
+        'Segunda': second,
+        'Tercera': third,
+      };
+      final harness = _LiveHarness(search: (query) => gates[query]!.future);
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      harness.service.emit(_playEvent('Primera'));
+      harness.service.emit(_playEvent('Segunda'));
+      harness.service.emit(_playEvent('Tercera'));
+      await _waitUntil(
+        () =>
+            harness.repository.searchCalls ==
+            TikTokLiveController.maxConcurrentResolutions,
+      );
+
+      second.complete([_remoteTrack('second')]);
+      third.complete([_remoteTrack('third')]);
+      await _pumpEventQueue();
+
+      expect(
+        harness.liveState.liveQueue.map((item) => item.status),
+        everyElement(LiveQueueItemStatus.resolving),
+      );
+      expect(harness.player.remotePlayCalls, 0);
+
+      first.complete([_remoteTrack('first')]);
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.every((item) => item.isReady) &&
+            harness.player.lastRemoteQueue?.length == 3,
+      );
+
+      expect(harness.liveState.liveQueue.map((item) => item.remoteTrack?.id), [
+        'first',
+        'second',
+        'third',
+      ]);
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'first',
+        'second',
+        'third',
+      ]);
+      expect(harness.player.remotePlayCalls, 1);
+    },
+  );
+
+  test('never exceeds three concurrent LIVE resolutions', () async {
+    SharedPreferences.setMockInitialValues({});
+    final gates = <String, Completer<List<TrackInfo>>>{};
+    var active = 0;
+    var maximumActive = 0;
+    final harness = _LiveHarness(
+      search: (query) async {
+        active++;
+        maximumActive = math.max(maximumActive, active);
+        final gate = Completer<List<TrackInfo>>();
+        gates[query] = gate;
+        try {
+          return await gate.future;
+        } finally {
+          active--;
+        }
+      },
+    );
+    addTearDown(harness.dispose);
+    await harness.initialize();
+
+    for (var index = 0; index < 10; index++) {
+      harness.service.emit(_playEvent('Pedido $index'));
+    }
+    await _waitUntil(
+      () =>
+          harness.repository.searchCalls ==
+          TikTokLiveController.maxConcurrentResolutions,
+    );
+
+    while (harness.repository.searchCalls < 10) {
+      final pending = gates.entries.firstWhere(
+        (entry) => !entry.value.isCompleted,
+      );
+      final previousCalls = harness.repository.searchCalls;
+      pending.value.complete([_remoteTrack(pending.key)]);
+      await _waitUntil(
+        () => harness.repository.searchCalls == previousCalls + 1,
+      );
+    }
+    for (final entry in gates.entries) {
+      if (!entry.value.isCompleted) {
+        entry.value.complete([_remoteTrack(entry.key)]);
+      }
+    }
+    await _waitUntil(
+      () => harness.liveState.liveQueue.every((item) => item.isReady),
+    );
+
+    expect(maximumActive, TikTokLiveController.maxConcurrentResolutions);
+    expect(harness.repository.searchCalls, 10);
+  });
+
+  test(
+    'a silent player failure marks the first item failed and starts the next',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (query) async => [_remoteTrack(query)],
+        silentlyFailRemoteTrackIds: const {'fallara'},
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      harness.service.emit(_playEvent('fallara'));
+      harness.service.emit(_playEvent('funciona'));
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.first.status ==
+                LiveQueueItemStatus.failed &&
+            harness.liveState.liveQueue.last.isReady &&
+            harness.player.lastRemoteTrack?.id == 'funciona',
+      );
+
+      expect(harness.player.remotePlayCalls, 2);
+      expect(harness.liveState.readyRemoteTracks.map((track) => track.id), [
+        'funciona',
+      ]);
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'funciona',
+      ]);
+    },
+  );
+
+  test(
+    'deadline fails FIFO items but retains their non-cancellable worker slots',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final gates = <String, Completer<List<TrackInfo>>>{};
+      final harness = _LiveHarness(
+        searchDeadline: const Duration(milliseconds: 30),
+        search: (query) {
+          final gate = Completer<List<TrackInfo>>();
+          gates[query] = gate;
+          return gate.future;
+        },
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      for (var index = 0; index < 4; index++) {
+        harness.service.emit(_playEvent('Lenta $index'));
+      }
+      await _waitUntil(
+        () =>
+            harness.repository.searchCalls ==
+            TikTokLiveController.maxConcurrentResolutions,
+      );
+      await _waitUntil(
+        () => harness.liveState.liveQueue
+            .take(TikTokLiveController.maxConcurrentResolutions)
+            .every((item) => item.status == LiveQueueItemStatus.failed),
+      );
+
+      expect(
+        harness.repository.searchCalls,
+        TikTokLiveController.maxConcurrentResolutions,
+      );
+      expect(
+        harness.liveState.liveQueue.last.status,
+        LiveQueueItemStatus.resolving,
+      );
+
+      gates['Lenta 0']!.complete([_remoteTrack('late-zero')]);
+      await _waitUntil(
+        () =>
+            harness.repository.searchCalls ==
+            TikTokLiveController.maxConcurrentResolutions + 1,
+      );
+
+      await harness.controller.clearLiveQueue();
+      for (final gate in gates.values) {
+        if (!gate.isCompleted) {
+          gate.complete(const []);
+        }
+      }
+      await _pumpEventQueue();
+      expect(harness.liveState.liveQueue, isEmpty);
+      expect(harness.player.remotePlayCalls, 0);
+    },
+  );
+
+  test('search deadline does not expire an active library download', () async {
+    SharedPreferences.setMockInitialValues({});
+    final downloadGate = Completer<void>();
+    final localTrack = LocalTrack(
+      id: 'slow-download',
+      title: 'Descarga legitima',
+      artist: 'Artista LIVE',
+      filePath: r'C:\music\slow-download.m4a',
+      addedAt: DateTime(2026),
+      sourceUrl: remoteTrack.url,
+      duration: remoteTrack.duration,
+    );
+    final harness = _LiveHarness(
+      searchDeadline: const Duration(milliseconds: 20),
+      search: (_) async => const [remoteTrack],
+      downloadResult: LocalTrackDownloadResult(
+        track: localTrack,
+        remoteTrack: remoteTrack,
+        reusedExisting: false,
+      ),
+      downloadGate: downloadGate.future,
+    );
+    addTearDown(harness.dispose);
+    await harness.initialize();
+    await harness.controller.setSaveRequestsToLibrary(true);
+
+    harness.service.emit(_playEvent('Descarga lenta'));
+    await _waitUntil(
+      () =>
+          harness.liveState.liveQueue.length == 1 &&
+          harness.liveState.liveQueue.single.status ==
+              LiveQueueItemStatus.downloading,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    expect(
+      harness.liveState.liveQueue.single.status,
+      LiveQueueItemStatus.downloading,
+    );
+    expect(harness.player.localPlayCalls, 0);
+
+    downloadGate.complete();
+    await _waitUntil(
+      () =>
+          harness.liveState.liveQueue.single.isReady &&
+          harness.player.localPlayCalls == 1,
+    );
+  });
+
+  test('disconnect invalidates all concurrent in-flight searches', () async {
+    SharedPreferences.setMockInitialValues({});
+    final searchCompletion = Completer<List<TrackInfo>>();
+    final harness = _LiveHarness(search: (_) => searchCompletion.future);
+    addTearDown(harness.dispose);
+    await harness.initialize();
+
+    for (
+      var index = 0;
+      index < TikTokLiveController.maxConcurrentResolutions;
+      index++
+    ) {
+      harness.service.emit(_playEvent('Desconexion $index'));
+    }
+    await _waitUntil(
+      () =>
+          harness.repository.searchCalls ==
+          TikTokLiveController.maxConcurrentResolutions,
+    );
+
+    await harness.controller.disconnect();
+    searchCompletion.complete(const [remoteTrack]);
+    await _pumpEventQueue();
+
+    expect(harness.liveState.status, TikTokLiveStatus.disconnected);
+    expect(harness.liveState.liveQueue, isEmpty);
+    expect(harness.player.remotePlayCalls, 0);
+  });
+
+  test(
     'rejects changing playback mode while the LIVE queue is not empty',
     () async {
       SharedPreferences.setMockInitialValues({});
@@ -240,7 +518,10 @@ void main() {
       harness.liveState.message,
       contains('${TikTokLiveController.maxQueueItems}'),
     );
-    expect(harness.repository.searchCalls, 1);
+    expect(
+      harness.repository.searchCalls,
+      TikTokLiveController.maxConcurrentResolutions,
+    );
 
     await harness.controller.clearLiveQueue();
     searchCompletion.complete(const []);
@@ -257,6 +538,16 @@ TikTokLiveEvent _playEvent(String query) {
       user: 'viewer',
       text: '!play $query',
     ),
+  );
+}
+
+TrackInfo _remoteTrack(String id) {
+  return TrackInfo(
+    id: id,
+    title: 'Cancion $id',
+    artist: 'Artista LIVE',
+    url: 'https://www.youtube.com/watch?v=$id',
+    duration: const Duration(minutes: 3),
   );
 }
 
@@ -283,18 +574,29 @@ class _LiveHarness {
   _LiveHarness({
     required Future<List<TrackInfo>> Function(String) search,
     LocalTrackDownloadResult? downloadResult,
+    Duration searchDeadline = const Duration(seconds: 30),
+    Set<String> silentlyFailRemoteTrackIds = const {},
+    Future<void>? downloadGate,
   }) : repository = _SearchMusicRepository(search),
        service = _FakeTikTokLiveCommandService(),
-       player = _RecordingPlayerController() {
+       player = _RecordingPlayerController(
+         silentlyFailRemoteTrackIds: silentlyFailRemoteTrackIds,
+       ) {
     container = ProviderContainer(
       overrides: [
         tiktokLiveCommandServiceProvider.overrideWithValue(service),
         searchTracksProvider.overrideWithValue(SearchTracks(repository)),
         localTrackDownloadHelperProvider.overrideWith(
-          (ref) =>
-              _CountingLocalTrackDownloadHelper(ref, result: downloadResult),
+          (ref) => _CountingLocalTrackDownloadHelper(
+            ref,
+            result: downloadResult,
+            beforeResult: downloadGate,
+          ),
         ),
         playerControllerProvider.overrideWith(() => player),
+        tiktokLiveControllerProvider.overrideWith(
+          () => TikTokLiveController(searchDeadline: searchDeadline),
+        ),
       ],
     );
   }
@@ -362,9 +664,14 @@ class _SearchMusicRepository implements MusicRepository {
 }
 
 class _CountingLocalTrackDownloadHelper extends LocalTrackDownloadHelper {
-  _CountingLocalTrackDownloadHelper(super.ref, {this.result});
+  _CountingLocalTrackDownloadHelper(
+    super.ref, {
+    this.result,
+    this.beforeResult,
+  });
 
   final LocalTrackDownloadResult? result;
+  final Future<void>? beforeResult;
   int calls = 0;
 
   @override
@@ -377,12 +684,19 @@ class _CountingLocalTrackDownloadHelper extends LocalTrackDownloadHelper {
     calls++;
     onResolved?.call(track);
     onDownloadStarted?.call();
+    final wait = beforeResult;
+    if (wait != null) {
+      await wait;
+    }
     return result ??
         (throw StateError('Remote-only LIVE mode must not download tracks.'));
   }
 }
 
 class _RecordingPlayerController extends PlayerController {
+  _RecordingPlayerController({this.silentlyFailRemoteTrackIds = const {}});
+
+  final Set<String> silentlyFailRemoteTrackIds;
   int remotePlayCalls = 0;
   int localPlayCalls = 0;
   TrackInfo? lastRemoteTrack;
@@ -392,6 +706,7 @@ class _RecordingPlayerController extends PlayerController {
   List<LocalTrack>? lastLocalQueue;
   bool? lastUseNativeQueue;
   String? lastLocalQueueSourceId;
+  int remoteQueueSyncCalls = 0;
 
   @override
   Future<PlayerSnapshot> build() async {
@@ -408,6 +723,13 @@ class _RecordingPlayerController extends PlayerController {
     lastRemoteTrack = track;
     lastRemoteQueue = queue == null ? null : List.unmodifiable(queue);
     lastQueueSourceId = queueSourceId;
+    if (silentlyFailRemoteTrackIds.contains(track.id)) {
+      state = AsyncError(
+        StateError('Fallo silencioso al abrir ${track.id}.'),
+        StackTrace.current,
+      );
+      return;
+    }
     state = AsyncData(
       PlayerSnapshot(
         status: PlayerStatus.playing,
@@ -419,6 +741,17 @@ class _RecordingPlayerController extends PlayerController {
         isRemote: true,
       ),
     );
+  }
+
+  @override
+  Future<bool> syncRemoteQueueSource(
+    String sourceId,
+    List<TrackInfo> tracks,
+  ) async {
+    remoteQueueSyncCalls++;
+    lastRemoteQueue = List.unmodifiable(tracks);
+    lastQueueSourceId = sourceId;
+    return true;
   }
 
   @override

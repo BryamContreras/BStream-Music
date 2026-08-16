@@ -6,7 +6,7 @@ enum AppLanguage { spanish, english }
 
 extension AppLanguageLabel on AppLanguage {
   String get label => switch (this) {
-    AppLanguage.spanish => 'Espanol',
+    AppLanguage.spanish => 'Español',
     AppLanguage.english => 'English',
   };
 
@@ -42,15 +42,15 @@ class AppStrings {
   String get myPlaylists => choose('Mis playlists', 'My playlists');
   String get mix => 'Mix';
   String get homeCollectionLoadError => choose(
-    'No se pudo cargar esta seleccion.',
+    'No se pudo cargar esta selección.',
     'This selection could not be loaded.',
   );
   String get homeCollectionEmpty => choose(
-    'Esta seleccion no tiene canciones disponibles.',
+    'Esta selección no tiene canciones disponibles.',
     'This selection has no available songs.',
   );
   String get noRecentSongs => choose(
-    'Aun no has escuchado canciones.',
+    'Aún no has escuchado canciones.',
     'No recently played songs yet.',
   );
   String get search => choose('Buscar', 'Search');
@@ -66,7 +66,7 @@ class AppStrings {
     'Search songs, artists, or links',
   );
   String get searchEmptySubtitle =>
-      choose('Los resultados apareceran aqui.', 'Results will appear here.');
+      choose('Los resultados aparecerán aquí.', 'Results will appear here.');
   String get searchErrorTitle => choose('No se pudo buscar', 'Search failed');
   String get searchSongs => choose('Canciones', 'Songs');
   String get searchVideos => choose('Videos', 'Videos');
@@ -112,13 +112,13 @@ class AppStrings {
   String get next => choose('Siguiente', 'Next');
   String get download => choose('Descargar', 'Download');
   String get downloadAudio => choose('Descargar audio', 'Download audio');
-  String get noPlayback => choose('Sin reproduccion', 'Nothing playing');
-  String get nowPlaying => choose('En reproduccion', 'Now playing');
-  String get noTitle => choose('Sin titulo', 'Untitled');
+  String get noPlayback => choose('Sin reproducción', 'Nothing playing');
+  String get nowPlaying => choose('En reproducción', 'Now playing');
+  String get noTitle => choose('Sin título', 'Untitled');
   String get unknownArtist => choose('Desconocido', 'Unknown');
-  String get playbackError => choose('Error de reproduccion', 'Playback error');
+  String get playbackError => choose('Error de reproducción', 'Playback error');
   String get externalAudioFolderUnavailable => choose(
-    'Se reproducira el audio elegido, pero Android no permitio cargar el resto de la carpeta.',
+    'Se reproducirá el audio elegido, pero Android no permitió cargar el resto de la carpeta.',
     'The selected audio will play, but Android did not allow the rest of the folder to be loaded.',
   );
   String get volume => choose('Volumen', 'Volume');
@@ -127,7 +127,7 @@ class AppStrings {
   String get lyricsLoading =>
       choose('Buscando la letra...', 'Finding lyrics...');
   String get lyricsNotFound => choose(
-    'No encontramos una letra para esta cancion.',
+    'No encontramos una letra para esta canción.',
     'We could not find lyrics for this song.',
   );
   String get lyricsLoadError =>
@@ -142,7 +142,7 @@ class AppStrings {
   String get chooseSimilarLyrics =>
       choose('Elige la coincidencia correcta', 'Choose the correct match');
   String get manualLyricsSearchHint =>
-      choose('Buscar por otro titulo', 'Search by another title');
+      choose('Buscar por otro título', 'Search by another title');
   String get manualLyricsSearchAction =>
       choose('Buscar letras', 'Search lyrics');
   String get syncedLyricsLabel => choose('Sincronizada', 'Synchronized');
@@ -151,7 +151,7 @@ class AppStrings {
   String get lyricsNoInternet =>
       choose('No hay conexión a Internet.', 'No Internet connection.');
   String get lyricsInstrumental => choose(
-    'Esta cancion aparece como instrumental.',
+    'Esta canción aparece como instrumental.',
     'This track is marked as instrumental.',
   );
   String get lyricsUnsynced => choose(
@@ -160,7 +160,7 @@ class AppStrings {
   );
   String get lyricsOffset => choose('Desfase', 'Offset');
   String get lyricsOffsetHint => choose(
-    'Ajustalo si la letra aparece antes o despues de la voz.',
+    'Ajústalo si la letra aparece antes o después de la voz.',
     'Adjust it if the lyrics appear before or after the vocals.',
   );
   String get resetLyricsOffset => choose('Restablecer desfase', 'Reset offset');
@@ -201,51 +201,48 @@ class AppStrings {
   String get lyricsSource =>
       choose('Letras proporcionadas por LRCLIB', 'Lyrics provided by LRCLIB');
   String get tapLyricsToSeek => choose(
-    'Toca una linea para ir a ese momento.',
+    'Toca una línea para ir a ese momento.',
     'Tap a line to seek to that moment.',
   );
   String get close => choose('Cerrar', 'Close');
-  String get moreOptions => choose('Mas opciones', 'More options');
+  String get moreOptions => choose('Más opciones', 'More options');
   String get shareSong => choose('Compartir canción', 'Share song');
-  String get shareSongTitle =>
-      choose('Compartir con BStream Music', 'Share with BStream Music');
-  String shareSongMessage(String title, String artist) => choose(
-    'Escucha "$title" de $artist en BStream Music.',
-    'Listen to "$title" by $artist on BStream Music.',
-  );
+  String get shareSongTitle => shareSong;
+  String shareSongMessage(String title, String artist) =>
+      choose('Escucha "$title" de $artist.', 'Listen to "$title" by $artist.');
   String get shareFailed => choose(
     'No se pudo compartir la canción.',
     'The song could not be shared.',
   );
   String get sharedSong => choose('Canción compartida', 'Shared song');
-  String get addToPlaylist => choose('Anadir a playlist', 'Add to playlist');
+  String get addToPlaylist => choose('Añadir a playlist', 'Add to playlist');
   String get favorites => choose('Favoritos', 'Favorites');
-  String get addToFavorites => choose('Anadir a favoritos', 'Add to favorites');
+  String get addToFavorites => choose('Añadir a favoritos', 'Add to favorites');
   String get removeFromFavorites =>
       choose('Quitar de favoritos', 'Remove from favorites');
   String get addedToFavorites =>
-      choose('Cancion agregada a favoritos.', 'Song added to favorites.');
+      choose('Canción agregada a favoritos.', 'Song added to favorites.');
   String get removedFromFavorites =>
-      choose('Cancion quitada de favoritos.', 'Song removed from favorites.');
+      choose('Canción quitada de favoritos.', 'Song removed from favorites.');
   String get choosePlaylist => choose('Elegir playlist', 'Choose playlist');
   String selectedSongs(int count) => choose(
-    count == 1 ? '1 cancion seleccionada' : '$count canciones seleccionadas',
+    count == 1 ? '1 canción seleccionada' : '$count canciones seleccionadas',
     count == 1 ? '1 song selected' : '$count songs selected',
   );
   String songsAddedToPlaylist(int count) => choose(
     count == 1
-        ? 'Cancion agregada a la playlist.'
+        ? 'Canción agregada a la playlist.'
         : '$count canciones agregadas a la playlist.',
     count == 1 ? 'Song added to playlist.' : '$count songs added to playlist.',
   );
   String get songsAlreadyInPlaylist => choose(
-    'Las canciones seleccionadas ya estan en esa playlist.',
+    'Las canciones seleccionadas ya están en esa playlist.',
     'The selected songs are already in that playlist.',
   );
   String get createPlaylistFirst =>
       choose('Crea una playlist primero.', 'Create a playlist first.');
   String get songAddedToPlaylist =>
-      choose('Cancion agregada a la playlist.', 'Song added to playlist.');
+      choose('Canción agregada a la playlist.', 'Song added to playlist.');
   String get downloadQueued =>
       choose('Descarga agregada a la cola.', 'Download added to queue.');
   String get back => choose('Volver', 'Back');
@@ -255,20 +252,20 @@ class AppStrings {
       choose('Canciones descargadas', 'Downloaded songs');
   String get liveQueue => choose('LIVE', 'LIVE');
   String get liveQueueTitle => choose('Cola LIVE', 'LIVE queue');
-  String get playbackQueue => choose('Cola de reproduccion', 'Playback queue');
+  String get playbackQueue => choose('Cola de reproducción', 'Playback queue');
   String get playbackQueueEmpty => choose(
     'No hay canciones en la cola actual.',
     'There are no songs in the current queue.',
   );
   String get liveQueueEmpty => choose(
-    'Los pedidos !play apareceran aqui.',
+    'Los pedidos !play aparecerán aquí.',
     'Live !play requests will appear here.',
   );
   String get clearLiveQueue => choose('Limpiar cola LIVE', 'Clear LIVE queue');
   String get requestedBy => choose('Pedido por', 'Requested by');
   String get moderator => choose('Moderador', 'Moderator');
   String get commandPermissions =>
-      choose('Quien puede usar los comandos', 'Who can use commands');
+      choose('Quién puede usar los comandos', 'Who can use commands');
   String get everyone => choose('Todos', 'Everyone');
   String get moderators => choose('Moderadores', 'Moderators');
   String get reusedDownload => choose('Ya descargada', 'Already downloaded');
@@ -282,50 +279,50 @@ class AppStrings {
   String get noSongsToShow =>
       choose('No hay canciones para mostrar.', 'No songs to show.');
   String get noLocalPlaylists => choose(
-    'Todavia no hay playlists locales.',
+    'Todavía no hay playlists locales.',
     'There are no local playlists yet.',
   );
   String get playlistMissing =>
       choose('La playlist ya no existe.', 'This playlist no longer exists.');
-  String get deleteSong => choose('Eliminar cancion', 'Delete song');
+  String get deleteSong => choose('Eliminar canción', 'Delete song');
   String get deleteSelectedSongs =>
       choose('Eliminar canciones', 'Delete songs');
   String confirmDeleteSongs(int count) => choose(
     count == 1
-        ? 'Se eliminara la cancion descargada y su archivo.'
-        : 'Se eliminaran $count canciones descargadas y sus archivos.',
+        ? 'Se eliminará la canción descargada y su archivo.'
+        : 'Se eliminarán $count canciones descargadas y sus archivos.',
     count == 1
         ? 'The downloaded song and its file will be deleted.'
         : '$count downloaded songs and their files will be deleted.',
   );
   String songsDeleted(int count) => choose(
-    count == 1 ? 'Cancion eliminada.' : '$count canciones eliminadas.',
+    count == 1 ? 'Canción eliminada.' : '$count canciones eliminadas.',
     count == 1 ? 'Song deleted.' : '$count songs deleted.',
   );
   String get delete => choose('Eliminar', 'Delete');
   String get rename => choose('Renombrar', 'Rename');
-  String get renameSong => choose('Renombrar cancion', 'Rename song');
+  String get renameSong => choose('Renombrar canción', 'Rename song');
   String get renamePlaylist => choose('Renombrar playlist', 'Rename playlist');
   String get deletePlaylist => choose('Eliminar playlist', 'Delete playlist');
-  String get songRenamed => choose('Cancion renombrada.', 'Song renamed.');
+  String get songRenamed => choose('Canción renombrada.', 'Song renamed.');
   String get playlistRenamed =>
       choose('Playlist renombrada.', 'Playlist renamed.');
   String get playlistDeleted =>
       choose('Playlist eliminada.', 'Playlist deleted.');
   String get confirmDeletePlaylist => choose(
-    'Esta accion no elimina las canciones guardadas.',
+    'Esta acción no elimina las canciones guardadas.',
     'This does not delete downloaded songs.',
   );
-  String get songDeleted => choose('Cancion eliminada.', 'Song deleted.');
+  String get songDeleted => choose('Canción eliminada.', 'Song deleted.');
   String get removeFromPlaylist =>
       choose('Quitar de playlist', 'Remove from playlist');
   String removeSelectedSongs(int count, {required bool favorites}) => choose(
     favorites
         ? (count == 1
-              ? 'Quitar la cancion de Favoritos?'
+              ? 'Quitar la canción de Favoritos?'
               : 'Quitar $count canciones de Favoritos?')
         : (count == 1
-              ? 'Quitar la cancion de esta playlist?'
+              ? 'Quitar la canción de esta playlist?'
               : 'Quitar $count canciones de esta playlist?'),
     favorites
         ? (count == 1
@@ -339,10 +336,10 @@ class AppStrings {
       choose(
         favorites
             ? (count == 1
-                  ? 'Cancion quitada de Favoritos.'
+                  ? 'Canción quitada de Favoritos.'
                   : '$count canciones quitadas de Favoritos.')
             : (count == 1
-                  ? 'Cancion quitada de la playlist.'
+                  ? 'Canción quitada de la playlist.'
                   : '$count canciones quitadas de la playlist.'),
         favorites
             ? (count == 1
@@ -390,10 +387,10 @@ class AppStrings {
     required int duplicates,
   }) => choose(
     'Se encontraron $tracks canciones y $playlists playlists. '
-        'Se omitiran $invalid filas invalidas y se combinaran $duplicates '
+        'Se omitirán $invalid filas inválidas y se combinarán $duplicates '
         'filas repetidas. '
-        'Las canciones existentes se reutilizaran; las faltantes se '
-        'descargaran una por una.',
+        'Las canciones existentes se reutilizarán; las faltantes se '
+        'descargarán una por una.',
     '$tracks songs and $playlists playlists were found. $invalid invalid '
         'rows will be skipped and $duplicates repeated rows will be merged. '
         'Existing songs '
@@ -401,7 +398,7 @@ class AppStrings {
   );
   String get csvImportDataNotice => choose(
     'La descarga puede consumir datos y almacenamiento. Puedes detener la '
-        'importacion despues de la cancion activa.',
+        'importación después de la canción activa.',
     'Downloads may use data and storage. You can stop the import after the '
         'current song.',
   );
@@ -412,13 +409,13 @@ class AppStrings {
   String csvImportProgress(int processed, int total) =>
       choose('$processed de $total canciones', '$processed of $total songs');
   String get stopAfterCurrent =>
-      choose('Detener despues de esta cancion', 'Stop after this song');
+      choose('Detener después de esta canción', 'Stop after this song');
   String get csvStopRequested => choose(
-    'Se detendra al terminar la cancion activa.',
+    'Se detendrá al terminar la canción activa.',
     'The import will stop after the current song.',
   );
   String get csvImportCompleted =>
-      choose('Importacion terminada', 'Import complete');
+      choose('Importación terminada', 'Import complete');
   String csvImportResult({
     required int downloaded,
     required int reused,
@@ -431,7 +428,7 @@ class AppStrings {
         'playlists updated.',
   );
   String get csvImportCancelled => choose(
-    'La importacion se detuvo. Los elementos completados se conservaron.',
+    'La importación se detuvo. Los elementos completados se conservaron.',
     'The import stopped. Completed items were kept.',
   );
   String get csvNoSongs => choose(
@@ -451,7 +448,7 @@ class AppStrings {
   );
   String get csvProfileMetroList => 'MetroList';
   String get csvProfileMetroListSummary => choose(
-    'Titulo, artista, album e ID de YouTube.',
+    'Título, artista, álbum e ID de YouTube.',
     'Title, artist, album, and YouTube ID.',
   );
   String get csvProfileHarmony => 'Harmony / RiMusic';
@@ -461,7 +458,7 @@ class AppStrings {
   );
   String get csvProfileSoundiiz => 'Soundiiz';
   String get csvProfileSoundiizSummary => choose(
-    'Formato sencillo de titulo, artista, album e ISRC.',
+    'Formato sencillo de título, artista, álbum e ISRC.',
     'Simple title, artist, album, and ISRC format.',
   );
   String get csvExported =>
@@ -477,7 +474,7 @@ class AppStrings {
   String get backupImported =>
       choose('Respaldo importado.', 'Backup imported.');
   String get backupCancelled =>
-      choose('Operacion cancelada.', 'Operation cancelled.');
+      choose('Operación cancelada.', 'Operation cancelled.');
   String get backupFailed =>
       choose('No se pudo completar el respaldo.', 'Backup failed.');
   String get replaceLibraryTitle =>
@@ -520,7 +517,7 @@ class AppStrings {
     AppAccent.lavender => choose('Lavanda', 'Lavender'),
     AppAccent.ocean => choose('Océano', 'Ocean'),
   };
-  String get spanish => choose('Espanol', 'Spanish');
+  String get spanish => choose('Español', 'Spanish');
   String get english => 'English';
   String get playback => choose('Reproducción', 'Playback');
   String get sleepTimer => choose('Temporizador', 'Sleep timer');
@@ -533,28 +530,28 @@ class AppStrings {
   );
   String get integrations => choose('Integraciones', 'Integrations');
   String get automaticShutdown =>
-      choose('Apagado automatico', 'Automatic shutdown');
+      choose('Apagado automático', 'Automatic shutdown');
   String get sleepTimerOff => choose('Desactivado', 'Off');
   String get customDuration => choose('Personalizar', 'Custom');
   String get timerDuration =>
-      choose('Duracion del temporizador', 'Timer duration');
+      choose('Duración del temporizador', 'Timer duration');
   String get startTimer => choose('Iniciar', 'Start');
   String get invalidTimerDuration => choose(
-    'Ingresa una duracion entre 1 y 720 minutos.',
+    'Ingresa una duración entre 1 y 720 minutos.',
     'Enter a duration between 1 and 720 minutes.',
   );
   String get desktopTools => choose('Herramientas desktop', 'Desktop tools');
-  String get liveConnection => choose('Conexion LIVE', 'LIVE connection');
+  String get liveConnection => choose('Conexión LIVE', 'LIVE connection');
   String get liveConnectionSummary => choose(
-    'Conecta un LIVE y configura quien puede pedir canciones.',
+    'Conecta un LIVE y configura quién puede pedir canciones.',
     'Connect a LIVE and choose who can request songs.',
   );
   String get liveUnavailable => choose(
-    'Conexion LIVE no disponible en este dispositivo.',
+    'Conexión LIVE no disponible en este dispositivo.',
     'LIVE connection is not available on this device.',
   );
   String get backupSummary => choose(
-    'Exporta o restaura tu biblioteca y configuracion.',
+    'Exporta o restaura tu biblioteca y configuración.',
     'Export or restore your library and settings.',
   );
   String get tiktokLive => choose('TikTok LIVE', 'TikTok LIVE');
@@ -577,12 +574,12 @@ class AppStrings {
     'Clear the LIVE queue to change this option.',
   );
   String get readyForRemotePlayback =>
-      choose('Lista para reproduccion remota', 'Ready for remote playback');
+      choose('Lista para reproducción remota', 'Ready for remote playback');
   String get connect => choose('Conectar', 'Connect');
   String get disconnect => choose('Desconectar', 'Disconnect');
   String get connected => choose('conectado', 'connected');
   String get disconnected => choose('desconectado', 'disconnected');
-  String get lastCommand => choose('Ultimo comando', 'Last command');
+  String get lastCommand => choose('Último comando', 'Last command');
   String get pendingRequests =>
       choose('Pedidos pendientes', 'Pending requests');
   String get roomId => 'room_id';
@@ -624,35 +621,47 @@ class AppStrings {
         : '${minutes.toString().padLeft(2, '0')}:'
               '${seconds.toString().padLeft(2, '0')}';
     return choose(
-      'El reproductor se detendra en $formatted',
+      'El reproductor se detendrá en $formatted',
       'The player will stop in $formatted',
     );
   }
 
   String timerMinutes(int minutes) => choose('$minutes min', '$minutes min');
 
-  String appVersion(String version) =>
-      choose('Versión $version', 'Version $version');
+  String get applicationInformation =>
+      choose('Información de la aplicación', 'Application information');
+  String get aboutApplication =>
+      choose('Acerca de la aplicación', 'About the app');
+  String get aboutApplicationSummary => choose(
+    'Versión, apoyo y repositorio',
+    'Version, support, and repository',
+  );
+  String get versionLabel => choose('Versión', 'Version');
 
-  String get supportDevelopmentTitle => choose(
-    '¿Te gusta la app? Apoya su desarrollo ❤️',
-    'Enjoying the app? Support its development ❤️',
-  );
+  String get supportDevelopmentTitle =>
+      choose('Apoyar el desarrollo', 'Support development');
   String get supportDevelopmentBody => choose(
-    'La app seguirá siendo gratuita. Si te resulta útil, puedes hacer una contribución para ayudarme a mantenerla y seguir agregando funciones.',
-    'The app will remain free. If you find it useful, you can make a contribution to help me maintain it and continue adding features.',
+    'Ayuda a mantener BStream Music y a seguir agregando funciones.',
+    'Help maintain BStream Music and keep adding features.',
   );
-  String get supportDevelopmentAction => choose('Apoyar', 'Support');
   String get supportDevelopmentOpenFailed => choose(
     'No se pudo abrir la página de apoyo.',
     'The support page could not be opened.',
+  );
+  String get githubRepositoryTitle =>
+      choose('Repositorio de GitHub', 'GitHub repository');
+  String get githubRepositoryBody =>
+      choose('Código fuente y contribuciones', 'Source code and contributions');
+  String get githubRepositoryOpenFailed => choose(
+    'No se pudo abrir el repositorio de GitHub.',
+    'The GitHub repository could not be opened.',
   );
 
   String songCount(int count) {
     if (isEnglish) {
       return '$count ${count == 1 ? 'song' : 'songs'}';
     }
-    return '$count ${count == 1 ? 'cancion' : 'canciones'}';
+    return '$count ${count == 1 ? 'canción' : 'canciones'}';
   }
 
   String songCountWithDuration(int count, Duration? duration) {
@@ -682,7 +691,7 @@ class AppStrings {
     if (isEnglish) {
       return 'Press ${remaining == 1 ? 'once' : '$remaining more times'} to exit.';
     }
-    return 'Presiona $remaining ${remaining == 1 ? 'vez' : 'veces'} mas para salir.';
+    return 'Presiona $remaining ${remaining == 1 ? 'vez' : 'veces'} más para salir.';
   }
 
   String downloadLabel(String label, String title, int queuedCount) {

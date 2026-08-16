@@ -39,11 +39,15 @@ void main() {
     );
   });
 
-  test('uses the requested search size and support URL', () {
+  test('uses the requested search size and official project URLs', () {
     expect(AppConstants.defaultSearchLimit, 20);
     expect(
       AppConstants.supportDevelopmentUrl,
       'https://ko-fi.com/soybryam06c/donate',
+    );
+    expect(
+      AppConstants.githubRepositoryUrl,
+      'https://github.com/BryamContreras/BStream-Music',
     );
   });
 }

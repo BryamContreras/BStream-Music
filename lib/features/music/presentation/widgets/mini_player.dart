@@ -143,10 +143,12 @@ class MiniPlayer extends ConsumerWidget {
 
     return Container(
       key: const ValueKey('mini-player-container'),
-      margin: EdgeInsets.symmetric(horizontal: compactAndroid ? 8 : 0),
+      margin: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(compactAndroid ? 10 : 0),
+        borderRadius: compactAndroid
+            ? const BorderRadius.vertical(top: Radius.circular(10))
+            : BorderRadius.zero,
       ),
       child: Material(
         key: const ValueKey('mini-player-frame'),
@@ -177,7 +179,13 @@ class MiniPlayer extends ConsumerWidget {
                 ),
               ),
             ),
-            Positioned(top: 0, left: 0, right: 0, child: const _MiniProgress()),
+            Positioned(
+              key: const ValueKey('mini-player-progress'),
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: const _MiniProgress(),
+            ),
             InkWell(
               onTap: onOpenPlayer,
               child: ConstrainedBox(

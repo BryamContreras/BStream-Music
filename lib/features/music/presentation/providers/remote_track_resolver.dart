@@ -15,8 +15,8 @@ TrackInfo _mergeTrackInfo(TrackInfo base, TrackInfo resolved) {
         ? _preferredIdentifier(base.id, resolved.id)
         : (resolved.id.isNotEmpty ? resolved.id : base.id),
     title: preserveMusicMetadata
-        ? _preferredText(base.title, resolved.title, 'Sin titulo')
-        : _preferredText(resolved.title, base.title, 'Sin titulo'),
+        ? _preferredText(base.title, resolved.title, 'Sin título')
+        : _preferredText(resolved.title, base.title, 'Sin título'),
     artist: preserveMusicMetadata
         ? (artists.isNotEmpty
               ? artists.join(', ')

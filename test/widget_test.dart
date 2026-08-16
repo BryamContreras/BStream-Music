@@ -34,6 +34,7 @@ import 'package:bstream_music/services/youtube_music/innertube_search_service.da
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide SearchController;
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -212,6 +213,9 @@ void main() {
     final glass = find.byKey(const ValueKey('bottom-navigation-glass'));
     final content = find.byKey(const ValueKey('bottom-navigation-content'));
     final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+    final miniPlayerContainer = find.byKey(
+      const ValueKey('mini-player-container'),
+    );
     final glassDecorationFinder = find.descendant(
       of: glass,
       matching: find.byWidgetPredicate(
@@ -234,16 +238,381 @@ void main() {
     );
     expect(
       glassDecoration.color,
-      Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
+      Theme.of(context).colorScheme.surface.withValues(alpha: 0.86),
     );
     expect(
       tester.getBottomLeft(miniPlayer).dy,
       closeTo(tester.getTopLeft(glass).dy, 0.1),
     );
+    expect(tester.getTopLeft(miniPlayerContainer).dx, closeTo(0, 0.1));
+    expect(tester.getTopRight(miniPlayerContainer).dx, closeTo(360, 0.1));
+    final miniContainerWidget = tester.widget<Container>(miniPlayerContainer);
+    final miniDecoration = miniContainerWidget.decoration! as BoxDecoration;
+    expect(
+      miniDecoration.borderRadius,
+      const BorderRadius.vertical(top: Radius.circular(10)),
+    );
     expect(tester.getBottomLeft(glass).dy, closeTo(800, 0.1));
     expect(
       tester.getSize(glass).height,
       closeTo(76 + MediaQuery.paddingOf(context).bottom, 0.1),
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+    'android player shell opens and closes as one continuous transition',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Cancion para transicion coordinada',
+              artist: 'BStream Music',
+              trackId: 'coordinated-shell-track',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      double slotOpacity(Finder slot) {
+        final nearestOpacity = find
+            .descendant(of: slot, matching: find.byType(AnimatedOpacity))
+            .evaluate()
+            .reduce((nearest, candidate) {
+              return candidate.depth < nearest.depth ? candidate : nearest;
+            });
+        return (nearestOpacity.renderObject! as RenderAnimatedOpacity)
+            .opacity
+            .value;
+      }
+
+      double shellOpacity(String key) =>
+          tester.widget<Opacity>(find.byKey(ValueKey(key))).opacity;
+
+      final home = find.byKey(const ValueKey('home-view'));
+      final miniClip = find.byKey(const ValueKey('mini-player-shell-clip'));
+      final bottomClip = find.byKey(
+        const ValueKey('bottom-navigation-shell-clip'),
+      );
+      final initialMiniHeight = tester.getSize(miniClip).height;
+      final initialBottomHeight = tester.getSize(bottomClip).height;
+      expect(initialMiniHeight, greaterThan(0));
+      expect(initialBottomHeight, greaterThan(0));
+      expect(find.byKey(const ValueKey('player-view')), findsNothing);
+
+      await tester.tapAt(
+        tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final player = find.byKey(const ValueKey('player-view'));
+      expect(player, findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('shell-background-browsing')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('shell-background-player')),
+        findsOneWidget,
+      );
+      final retainedPlayerElement = tester.element(find.byType(PlayerPanel));
+
+      await tester.pump(const Duration(milliseconds: 160));
+
+      expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
+      expect(
+        shellOpacity('bottom-navigation-shell-opacity'),
+        inExclusiveRange(0, 1),
+      );
+      expect(slotOpacity(home), inExclusiveRange(0, 1));
+      expect(slotOpacity(player), inExclusiveRange(0, 1));
+      expect(
+        tester.getSize(miniClip).height,
+        inExclusiveRange(0, initialMiniHeight),
+      );
+      expect(
+        tester.getSize(bottomClip).height,
+        inExclusiveRange(0, initialBottomHeight),
+      );
+      expect(
+        tester.getBottomLeft(miniClip).dy,
+        closeTo(tester.getTopLeft(bottomClip).dy, 0.1),
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(shellOpacity('mini-player-shell-opacity'), 0);
+      expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
+      expect(tester.getSize(miniClip).height, 0);
+      expect(tester.getSize(bottomClip).height, 0);
+      expect(slotOpacity(home), 0);
+      expect(slotOpacity(player), 1);
+      expect(
+        find.byKey(const ValueKey('shell-background-browsing')),
+        findsNothing,
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 160));
+
+      expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
+      expect(
+        shellOpacity('bottom-navigation-shell-opacity'),
+        inExclusiveRange(0, 1),
+      );
+      expect(slotOpacity(home), inExclusiveRange(0, 1));
+      expect(slotOpacity(player), inExclusiveRange(0, 1));
+      expect(
+        tester.getBottomLeft(miniClip).dy,
+        closeTo(tester.getTopLeft(bottomClip).dy, 0.1),
+      );
+
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(shellOpacity('mini-player-shell-opacity'), 1);
+      expect(shellOpacity('bottom-navigation-shell-opacity'), 1);
+      expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
+      expect(
+        tester.getSize(bottomClip).height,
+        closeTo(initialBottomHeight, 0.1),
+      );
+      expect(slotOpacity(home), 1);
+      expect(slotOpacity(player), 0);
+      expect(find.byKey(const ValueKey('player-view')), findsOneWidget);
+      expect(
+        identical(
+          retainedPlayerElement,
+          tester.element(find.byType(PlayerPanel)),
+        ),
+        isTrue,
+      );
+      expect(
+        find.byKey(const ValueKey('shell-background-player')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets('bottom navigation selection interpolates without layout snap', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(_testApp());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    double slotOpacity(Finder slot) {
+      final nearestOpacity = find
+          .descendant(of: slot, matching: find.byType(AnimatedOpacity))
+          .evaluate()
+          .reduce((nearest, candidate) {
+            return candidate.depth < nearest.depth ? candidate : nearest;
+          });
+      return (nearestOpacity.renderObject! as RenderAnimatedOpacity)
+          .opacity
+          .value;
+    }
+
+    const searchIndex = 1;
+    final searchItem = find.byKey(
+      const ValueKey('bottom-navigation-item-$searchIndex'),
+    );
+    final searchScale = find.byKey(
+      const ValueKey('bottom-navigation-icon-scale-$searchIndex'),
+    );
+    Finder searchIcon() => find.descendant(
+      of: searchItem,
+      matching: find.byIcon(Icons.search_rounded),
+    );
+    double scale() =>
+        tester.widget<Transform>(searchScale).transform.getMaxScaleOnAxis();
+    final colors = Theme.of(tester.element(searchItem)).colorScheme;
+
+    expect(tester.widget<Icon>(searchIcon()).size, 28);
+    expect(tester.widget<Icon>(searchIcon()).color, colors.onSurfaceVariant);
+    expect(scale(), closeTo(1, 0.001));
+
+    await tester.tap(searchItem);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 130));
+
+    final midColor = tester.widget<Icon>(searchIcon()).color!;
+    expect(tester.widget<Icon>(searchIcon()).size, 28);
+    expect(scale(), inExclusiveRange(1, 1.12));
+    expect(midColor, isNot(colors.onSurfaceVariant));
+    expect(midColor, isNot(colors.primary));
+    expect(
+      slotOpacity(find.byKey(const ValueKey('home-view'))),
+      greaterThan(0.45),
+      reason: 'The outgoing tab must not fade to a dark flash too early.',
+    );
+    expect(find.byKey(const ValueKey('search-view')), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 160));
+
+    expect(tester.widget<Icon>(searchIcon()).size, 28);
+    expect(tester.widget<Icon>(searchIcon()).color, colors.primary);
+    expect(scale(), closeTo(1.12, 0.001));
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('shell and navigation indicators honor reduced motion', (
+    tester,
+  ) async {
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.platformDispatcher.clearAccessibilityFeaturesTestValue();
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      _testApp(
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Movimiento reducido',
+            artist: 'BStream Music',
+            trackId: 'reduced-motion-shell-track',
+            duration: Duration(minutes: 3),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(
+      tester
+          .widget<TweenAnimationBuilder<double>>(
+            find.byKey(const ValueKey('bottom-navigation-selection-1')),
+          )
+          .duration,
+      Duration.zero,
+    );
+    expect(
+      tester
+          .widget<TweenAnimationBuilder<double>>(
+            find
+                .descendant(
+                  of: find.byKey(
+                    const ValueKey('mini-player-shell-transition'),
+                  ),
+                  matching: find.byType(TweenAnimationBuilder<double>),
+                )
+                .first,
+          )
+          .duration,
+      Duration.zero,
+    );
+    expect(
+      tester
+          .widget<AnimatedSwitcher>(
+            find.byKey(const ValueKey('shell-background-transition')),
+          )
+          .duration,
+      Duration.zero,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('bottom-navigation-item-1')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<Transform>(
+            find.byKey(const ValueKey('bottom-navigation-icon-scale-1')),
+          )
+          .transform
+          .getMaxScaleOnAxis(),
+      closeTo(1.12, 0.001),
+    );
+
+    await tester.tapAt(
+      tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(
+      tester
+          .widget<Opacity>(
+            find.byKey(const ValueKey('mini-player-shell-opacity')),
+          )
+          .opacity,
+      0,
+    );
+    expect(
+      tester
+          .widget<Opacity>(
+            find.byKey(const ValueKey('bottom-navigation-shell-opacity')),
+          )
+          .opacity,
+      0,
+    );
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view.physicalSize = const Size(1280, 720);
+    await tester.pumpWidget(_testApp());
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(
+      tester
+          .widget<TweenAnimationBuilder<double>>(
+            find.byKey(const ValueKey('side-navigation-selection-1')),
+          )
+          .duration,
+      Duration.zero,
+    );
+    expect(
+      tester
+          .widget<AnimatedContainer>(
+            find.byKey(const ValueKey('side-navigation-surface')),
+          )
+          .duration,
+      Duration.zero,
+    );
+    await tester.tap(find.byKey(const ValueKey('side-navigation-item-1')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<Transform>(
+            find.byKey(const ValueKey('side-navigation-icon-scale-1')),
+          )
+          .transform
+          .getMaxScaleOnAxis(),
+      closeTo(1.12, 0.001),
     );
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
@@ -298,7 +667,7 @@ void main() {
     expect(find.text('Cancion reciente'), findsOneWidget);
     expect(find.byKey(const ValueKey('home-recent-card')), findsOneWidget);
     expect(find.text('Mis playlists'), findsNothing);
-    expect(find.text('Todavia no hay playlists locales.'), findsNothing);
+    expect(find.text('Todavía no hay playlists locales.'), findsNothing);
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     expect(find.byKey(const ValueKey('home-playlist-card')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -316,7 +685,7 @@ void main() {
 
     expect(find.text('Inicio'), findsWidgets);
     expect(find.text('Escuchado recientemente'), findsNothing);
-    expect(find.text('Aun no has escuchado canciones.'), findsNothing);
+    expect(find.text('Aún no has escuchado canciones.'), findsNothing);
     expect(find.byKey(const ValueKey('home-recent-shelf')), findsNothing);
     expect(find.byKey(const ValueKey('home-recent-card')), findsNothing);
     expect(find.text('Mis playlists'), findsOneWidget);
@@ -424,11 +793,28 @@ void main() {
       of: find.byKey(const ValueKey('home-view')),
       matching: find.byType(CustomScrollView),
     );
+    final homeHeading = find.byKey(const ValueKey('home-tab-title'));
+    final homeHeadingTop = tester.getTopLeft(homeHeading).dy;
+    final homeHeaderSurface = find.byKey(
+      const ValueKey('home-tab-header-surface'),
+    );
+    final homeColors = Theme.of(tester.element(homeHeaderSurface)).colorScheme;
+    expect(
+      tester.widget<Material>(homeHeaderSurface).color,
+      homeColors.surface,
+    );
+    expect(tester.widget<Material>(homeHeaderSurface).elevation, 0);
     // At a 3x text scale, the accessible title can legitimately move the
     // lazily-built shelves below the first viewport. Scroll to the shelf
     // before inspecting its adaptive height.
     await tester.drag(homeScroll, const Offset(0, -360));
     await tester.pump(const Duration(milliseconds: 400));
+    expect(tester.getTopLeft(homeHeading).dy, closeTo(homeHeadingTop, 0.01));
+    expect(
+      tester.widget<Material>(homeHeaderSurface).color,
+      homeColors.surfaceContainer,
+    );
+    expect(tester.widget<Material>(homeHeaderSurface).elevation, 3);
 
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
@@ -438,6 +824,7 @@ void main() {
     await tester.drag(homeScroll, const Offset(0, -900));
     await tester.pump(const Duration(milliseconds: 400));
 
+    expect(tester.getTopLeft(homeHeading).dy, closeTo(homeHeadingTop, 0.01));
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
@@ -999,6 +1386,62 @@ void main() {
     expect(settingsColor, homeColor);
   });
 
+  testWidgets('settings heading stays fixed at text scale 3', (tester) async {
+    tester.view
+      ..physicalSize = const Size(320, 568)
+      ..devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 3;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final heading = find.byKey(const ValueKey('settings-tab-title'));
+    final headingTop = tester.getTopLeft(heading).dy;
+    final settingsHeaderSurface = find.byKey(
+      const ValueKey('settings-tab-header-surface'),
+    );
+    final settingsColors = Theme.of(
+      tester.element(settingsHeaderSurface),
+    ).colorScheme;
+    expect(
+      tester.widget<Material>(settingsHeaderSurface).color,
+      settingsColors.surface,
+    );
+    final settingsRoot = find.byKey(const ValueKey('settings-root'));
+    await tester.drag(settingsRoot, const Offset(0, -420));
+    await tester.pumpAndSettle();
+
+    final settingsScrollable = tester.state<ScrollableState>(
+      find.descendant(of: settingsRoot, matching: find.byType(Scrollable)),
+    );
+    expect(settingsScrollable.position.pixels, greaterThan(0));
+    expect(tester.getTopLeft(heading).dy, closeTo(headingTop, 0.01));
+    expect(
+      tester.widget<Material>(settingsHeaderSurface).color,
+      settingsColors.surfaceContainer,
+    );
+    expect(tester.widget<Material>(settingsHeaderSurface).elevation, 3);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('light popup text and icons follow the selected accent', (
     tester,
   ) async {
@@ -1242,7 +1685,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Personalizar'));
     await tester.pumpAndSettle();
-    expect(find.text('Duracion del temporizador'), findsOneWidget);
+    expect(find.text('Duración del temporizador'), findsOneWidget);
 
     await tester.tap(find.text('Cancelar'));
     await tester.pumpAndSettle();
@@ -1303,7 +1746,8 @@ void main() {
     active.value = false;
     await tester.pump();
     active.value = true;
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(
       find.byKey(const ValueKey('settings-card-appearance')),
@@ -1320,7 +1764,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('support section opens the exact Ko-fi donation page', (
+  testWidgets('about card groups version, support, and GitHub in order', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(700, 1100);
@@ -1335,44 +1779,82 @@ void main() {
         language: AppLanguage.spanish,
       ),
     );
-    Uri? launchedUrl;
+    final launchedUrls = <Uri>[];
     await tester.pumpWidget(
       _settingsTestApp(
         settingsController: settingsController,
         directoryPicker:
             ({String? dialogTitle, String? initialDirectory}) async => null,
-        supportLauncher: (url) async {
-          launchedUrl = url;
+        externalLauncher: (url) async {
+          launchedUrls.add(url);
           return true;
         },
       ),
     );
     await tester.pump(const Duration(milliseconds: 300));
 
-    final button = find.byKey(const ValueKey('support-development-button'));
+    final card = find.byKey(const ValueKey('settings-card-about'));
     await tester.scrollUntilVisible(
-      button,
+      card,
       350,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.ensureVisible(button);
+    await tester.ensureVisible(card);
     await tester.pumpAndSettle();
-    expect(find.text('Versión 1.2.4'), findsOneWidget);
-    expect(
-      find.text('¿Te gusta la app? Apoya su desarrollo ❤️'),
-      findsOneWidget,
-    );
-    expect(
-      find.text(
-        'La app seguirá siendo gratuita. Si te resulta útil, puedes hacer una contribución para ayudarme a mantenerla y seguir agregando funciones.',
-      ),
-      findsOneWidget,
-    );
+    expect(find.text('Información de la aplicación'), findsOneWidget);
+    expect(find.text('Acerca de la aplicación'), findsOneWidget);
+    expect(find.text('Versión, apoyo y repositorio'), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-about-version')), findsNothing);
+    final cardMaterial = find
+        .descendant(of: card, matching: find.byType(Material))
+        .first;
+    final shape =
+        tester.widget<Material>(cardMaterial).shape! as RoundedRectangleBorder;
+    expect(shape.borderRadius, BorderRadius.circular(12));
 
-    await tester.tap(button);
+    await tester.tap(card);
+    await tester.pumpAndSettle();
+
+    final detail = find.byKey(const ValueKey('settings-detail-about'));
+    final version = find.byKey(const ValueKey('settings-about-version'));
+    final support = find.byKey(const ValueKey('settings-about-support'));
+    final github = find.byKey(const ValueKey('settings-about-github'));
+    expect(detail, findsOneWidget);
+    expect(card, findsNothing);
+    expect(find.byKey(const ValueKey('settings-detail-back')), findsOneWidget);
+    expect(find.text('Acerca de la aplicación'), findsOneWidget);
+    expect(find.text('Versión'), findsOneWidget);
+    expect(find.text(AppConstants.appVersion), findsOneWidget);
+    expect(find.text('Apoyar el desarrollo'), findsOneWidget);
+    expect(find.text('Repositorio de GitHub'), findsOneWidget);
+    expect(find.text('Código fuente y contribuciones'), findsOneWidget);
+    for (final row in [version, support, github]) {
+      expect(find.descendant(of: detail, matching: row), findsOneWidget);
+    }
+    expect(
+      tester.getTopLeft(version).dy,
+      lessThan(tester.getTopLeft(support).dy),
+    );
+    expect(
+      tester.getTopLeft(support).dy,
+      lessThan(tester.getTopLeft(github).dy),
+    );
+    await tester.ensureVisible(support);
+    await tester.tap(support);
+    await tester.pump();
+    await tester.ensureVisible(github);
+    await tester.tap(github);
     await tester.pump();
 
-    expect(launchedUrl, Uri.parse(AppConstants.supportDevelopmentUrl));
+    expect(launchedUrls, [
+      Uri.parse(AppConstants.supportDevelopmentUrl),
+      Uri.parse(AppConstants.githubRepositoryUrl),
+    ]);
+    await tester.tap(find.byKey(const ValueKey('settings-detail-back')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-card-about')), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-about-version')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -1396,12 +1878,20 @@ void main() {
         settingsController: settingsController,
         directoryPicker:
             ({String? dialogTitle, String? initialDirectory}) async => null,
-        supportLauncher: (_) async => false,
+        externalLauncher: (_) async => false,
       ),
     );
     await tester.pump(const Duration(milliseconds: 300));
 
-    final button = find.byKey(const ValueKey('support-development-button'));
+    final about = find.byKey(const ValueKey('settings-card-about'));
+    await tester.scrollUntilVisible(
+      about,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(about);
+    await tester.pumpAndSettle();
+    final button = find.byKey(const ValueKey('settings-about-support'));
     await tester.scrollUntilVisible(
       button,
       350,
@@ -1414,6 +1904,126 @@ void main() {
 
     expect(find.text('No se pudo abrir la página de apoyo.'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('about card reports when GitHub cannot be opened', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+        externalLauncher: (_) async => false,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final about = find.byKey(const ValueKey('settings-card-about'));
+    await tester.scrollUntilVisible(
+      about,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(about);
+    await tester.pumpAndSettle();
+    final button = find.byKey(const ValueKey('settings-about-github'));
+    await tester.scrollUntilVisible(
+      button,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pump();
+
+    expect(
+      find.text('No se pudo abrir el repositorio de GitHub.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('about card remains usable on a small phone at text scale 3', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view
+      ..physicalSize = const Size(320, 568)
+      ..devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 3;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+        platform: TargetPlatform.android,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final card = find.byKey(const ValueKey('settings-card-about'));
+    await tester.scrollUntilVisible(
+      card,
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(card);
+    await tester.pumpAndSettle();
+    final cardRect = tester.getRect(card);
+    expect(cardRect.left, closeTo(12, 0.1));
+    expect(cardRect.right, closeTo(308, 0.1));
+    expect(find.text('Información de la aplicación'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(card);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('settings-detail-about')), findsOneWidget);
+    const rowKeys = [
+      'settings-about-version',
+      'settings-about-support',
+      'settings-about-github',
+    ];
+    for (final key in rowKeys) {
+      final row = find.byKey(ValueKey(key));
+      await tester.scrollUntilVisible(
+        row,
+        220,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(row).height, greaterThanOrEqualTo(48));
+      expect(tester.takeException(), isNull, reason: key);
+    }
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('system back remembers only the last two visited tabs', (
@@ -1482,7 +2092,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Descargar'), findsOneWidget);
-    expect(find.text('Anadir a playlist'), findsOneWidget);
+    expect(find.text('Añadir a playlist'), findsOneWidget);
   });
 
   testWidgets('library lazily builds large playlist collections', (
@@ -1524,6 +2134,35 @@ void main() {
       lessThan(40),
       reason: 'Only viewport-adjacent playlist rows should be mounted.',
     );
+    final libraryHeading = find.byKey(const ValueKey('library-tab-title'));
+    final libraryHeadingTop = tester.getTopLeft(libraryHeading).dy;
+    final libraryHeaderSurface = find.byKey(
+      const ValueKey('library-tab-header-surface'),
+    );
+    final libraryColors = Theme.of(
+      tester.element(libraryHeaderSurface),
+    ).colorScheme;
+    expect(
+      tester.widget<Material>(libraryHeaderSurface).color,
+      libraryColors.surface,
+    );
+    final libraryScroll = find.byKey(const ValueKey('library-root-scroll'));
+    await tester.drag(libraryScroll, const Offset(0, -420));
+    await tester.pumpAndSettle();
+
+    final libraryScrollable = tester.state<ScrollableState>(
+      find.descendant(of: libraryScroll, matching: find.byType(Scrollable)),
+    );
+    expect(libraryScrollable.position.pixels, greaterThan(0));
+    expect(
+      tester.getTopLeft(libraryHeading).dy,
+      closeTo(libraryHeadingTop, 0.01),
+    );
+    expect(
+      tester.widget<Material>(libraryHeaderSurface).color,
+      libraryColors.surfaceContainer,
+    );
+    expect(tester.widget<Material>(libraryHeaderSurface).elevation, 3);
     expect(tester.takeException(), isNull);
   });
 
@@ -1871,6 +2510,30 @@ void main() {
     );
     await tester.pump();
     expect(playerService.pauseCalls, 1);
+  });
+
+  testWidgets('library route transition respects reduced motion', (
+    tester,
+  ) async {
+    final repository = _FakeLibraryRepository();
+
+    await tester.pumpWidget(
+      _libraryPanelTestApp(repository: repository, disableAnimations: true),
+    );
+    await tester.pumpAndSettle();
+
+    AnimatedSwitcher switcher() => tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('library-route-switcher')),
+    );
+
+    expect(switcher().duration, Duration.zero);
+    expect(switcher().reverseDuration, Duration.zero);
+    await tester.tap(find.byKey(const ValueKey('library-downloads-entry')));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('library-detail-header')), findsOneWidget);
+    expect(switcher().duration, Duration.zero);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('returning from player keeps the opened playlist', (
@@ -2363,11 +3026,14 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
 
-    expect(find.text('En reproduccion'), findsOneWidget);
+    expect(find.text('En reproducción'), findsOneWidget);
     final largeArtwork = tester.getSize(
       find.byKey(const ValueKey('player-large-artwork')),
     );
-    expect(largeArtwork.width, greaterThan(220));
+    expect(
+      largeArtwork.width,
+      greaterThan(tester.view.physicalSize.width * 0.55),
+    );
     expect(largeArtwork.height, closeTo(largeArtwork.width, 0.1));
     final playerControl = tester.widget<IconButton>(
       find.byKey(const ValueKey('player-primary-control')),
@@ -2718,9 +3384,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
 
       final artwork = find.byIcon(Icons.music_note_rounded);
-      final titleText = find.text(title);
+      final titleText = find.byKey(const ValueKey('player-track-title'));
 
-      expect(find.text('En reproduccion'), findsOneWidget);
+      expect(find.text('En reproducción'), findsOneWidget);
       expect(artwork, findsOneWidget);
       expect(titleText, findsOneWidget);
       expect(
@@ -2729,7 +3395,7 @@ void main() {
       );
       expect(find.byTooltip('Volumen'), findsOneWidget);
       expect(find.byTooltip('Letras'), findsOneWidget);
-      expect(find.byTooltip('Cola de reproduccion'), findsOneWidget);
+      expect(find.byTooltip('Cola de reproducción'), findsOneWidget);
       final lyricsControl = find.byKey(const ValueKey('player-lyrics-control'));
       final shuffleControl = find.byKey(
         const ValueKey('player-shuffle-control'),
@@ -2753,12 +3419,16 @@ void main() {
         closeTo(tester.getCenter(repeatControl).dy, 0.1),
       );
 
-      await tester.tap(find.byTooltip('Cola de reproduccion'));
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byTooltip('Cola de reproducción'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 340));
+      await tester.pump();
       expect(find.text('No hay canciones en la cola actual.'), findsOneWidget);
 
-      await tester.tap(find.byTooltip('Cola de reproduccion'));
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byTooltip('Cola de reproducción'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 340));
+      await tester.pump();
       expect(find.text('No hay canciones en la cola actual.'), findsNothing);
 
       await tester.tap(find.byIcon(Icons.more_vert_rounded));
@@ -2848,8 +3518,10 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 400));
 
-      await tester.tap(find.byTooltip('Cola de reproduccion'));
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byTooltip('Cola de reproducción'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 340));
+      await tester.pump();
       expect(find.text('Cola de Reproducción - 2 Canciones'), findsOneWidget);
       expect(find.text('Primera cancion'), findsWidgets);
       expect(find.text('Segunda cancion'), findsOneWidget);
@@ -3027,6 +3699,7 @@ Widget _libraryPanelTestApp({
   required _FakeLibraryRepository repository,
   LibraryNavigationController? navigationController,
   VoidCallback? onOpenPlayer,
+  bool disableAnimations = false,
 }) {
   final panel = Scaffold(
     body: LibraryPanel(
@@ -3045,6 +3718,12 @@ Widget _libraryPanelTestApp({
     ],
     child: MaterialApp(
       theme: ThemeData(platform: TargetPlatform.android),
+      builder: disableAnimations
+          ? (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            )
+          : null,
       home: navigationController == null
           ? panel
           : PopScope(
@@ -3086,20 +3765,21 @@ _FakeLibraryRepository _homeCardsRepository() {
 Widget _settingsTestApp({
   required _FakeSettingsController settingsController,
   required DownloadDirectoryPicker directoryPicker,
-  SupportDevelopmentLauncher? supportLauncher,
+  SettingsExternalLauncher? externalLauncher,
+  TargetPlatform platform = TargetPlatform.windows,
 }) {
   return ProviderScope(
     overrides: [
       settingsControllerProvider.overrideWith(() => settingsController),
       downloadDirectoryPickerProvider.overrideWithValue(directoryPicker),
-      if (supportLauncher != null)
-        supportDevelopmentLauncherProvider.overrideWithValue(supportLauncher),
+      if (externalLauncher != null)
+        settingsExternalLauncherProvider.overrideWithValue(externalLauncher),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),
     ],
     child: MaterialApp(
-      theme: ThemeData(platform: TargetPlatform.windows),
+      theme: ThemeData(platform: platform),
       home: const Scaffold(body: SettingsPanel()),
     ),
   );

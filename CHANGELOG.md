@@ -24,9 +24,9 @@
   batch add, remove, and delete actions.
 - Android ARMv7 release artifacts alongside ARMv8 and x86_64 on the existing
   Android 7.0 baseline.
-- Song sharing from the full player with a stable `bstreammusic://track/...`
-  link that opens BStream Music on Android, Windows, Linux, and macOS, and
-  always includes a canonical YouTube URL as a manual fallback.
+- Song sharing from the full player with one canonical HTTPS link recognized
+  by chat applications. YouTube Music is preferred for InnerTube catalog
+  tracks, while generic video results retain a regular YouTube watch URL.
 
 ### Improved
 
@@ -54,14 +54,21 @@
 - Home hides empty Recently played and local Playlist sections and can refresh
   remote recommendations without hiding existing local content.
 - Settings uses denser shared cards, a language selection dialog, grouped
-  Import and Export actions, persistent LIVE storage behavior, and eighteen
-  accent palettes including Brown in place of Amber.
+  Import and Export actions, persistent LIVE storage behavior, an Application
+  information entry with an organized About detail for version, support, and
+  the official GitHub repository, and eighteen accent palettes including Brown
+  in place of Amber.
 - Library, Home, Search, mini-player, and full-player layouts now use bounded
   artwork decoding, lazy lists, 48 dp controls, and adaptive measurements for
   320 x 568 displays at up to 300% text scaling.
 - Download identity, coalescing, partial-file publication, progress, and
   rollback now remain consistent across search, playback, playlists,
   favorites, CSV imports, and LIVE requests.
+- TikTok LIVE now filters ordinary chat before decoding full viewer profiles,
+  acknowledges busy WebSocket batches before routing events, and resolves up
+  to three music requests concurrently while committing the queue in original
+  command order. A bounded search deadline prevents one stalled lookup from
+  blocking the entire queue without cutting off an active download.
 - Backup, restore, downloads, and migration share an operation coordinator so
   destructive storage work waits for active library commits.
 - Final Android yt-dlp failures show the useful multiline extractor message

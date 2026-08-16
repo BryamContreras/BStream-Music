@@ -306,7 +306,7 @@ class MediaKitPlayerService implements PlayerService {
     final source = track.streamUrl;
     if (source == null || source.isEmpty) {
       throw const PlayerException(
-        'No hay una URL reproducible. Obten la informacion del track primero.',
+        'No hay una URL reproducible. Obtén la información del track primero.',
         code: 'missing_stream_url',
       );
     }
@@ -586,7 +586,7 @@ class MediaKitPlayerService implements PlayerService {
         _emit(
           _snapshot.copyWith(
             status: PlayerStatus.failed,
-            errorMessage: 'El reproductor tardo demasiado en abrir el audio.',
+            errorMessage: 'El reproductor tardó demasiado en abrir el audio.',
           ),
         );
       },

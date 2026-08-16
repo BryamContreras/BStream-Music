@@ -108,6 +108,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         final mobile = Theme.of(context).platform == TargetPlatform.android;
         final stackedDesktop = AppPlatform.isDesktop && wide;
         final showSideQueue = AppPlatform.isDesktop && _showPlaybackQueue;
+        final disableAnimations = MediaQuery.disableAnimationsOf(context);
+        final queueTransitionDuration = disableAnimations
+            ? Duration.zero
+            : const Duration(milliseconds: 320);
         final heightCompactness = AppPlatform.isDesktop
             ? ((680.0 - outer.maxHeight) / 140.0).clamp(0.0, 1.0)
             : 0.0;
@@ -188,7 +192,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 ),
                               );
                               final gap = mobile
-                                  ? 14.0
+                                  ? 22.0
                                   : lerpDouble(26, 12, verticalCompactness)!;
                               final maxContentWidth = stackedDesktop
                                   ? showSideQueue
@@ -234,7 +238,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           artwork,
-                                          SizedBox(height: gap),
+                                          SizedBox(
+                                            key: const ValueKey(
+                                              'player-artwork-title-gap',
+                                            ),
+                                            height: gap,
+                                          ),
                                           controls,
                                         ],
                                       ),
@@ -252,13 +261,26 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
               ),
             ),
             AnimatedSwitcher(
-              duration: const Duration(milliseconds: 320),
+              key: const ValueKey('desktop-playback-queue-switcher'),
+              duration: queueTransitionDuration,
+              reverseDuration: queueTransitionDuration,
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
-              layoutBuilder: (currentChild, _) =>
-                  currentChild ?? const SizedBox.shrink(),
-              transitionBuilder: (child, animation) =>
-                  FadeTransition(opacity: animation, child: child),
+              layoutBuilder: (currentChild, previousChildren) => Stack(
+                alignment: Alignment.centerRight,
+                children: <Widget>[...previousChildren, ?currentChild],
+              ),
+              transitionBuilder: (child, animation) => ClipRect(
+                child: FadeTransition(
+                  opacity: animation,
+                  child: SizeTransition(
+                    axis: Axis.horizontal,
+                    alignment: Alignment.centerRight,
+                    sizeFactor: animation,
+                    child: child,
+                  ),
+                ),
+              ),
               child: showSideQueue
                   ? SizedBox(
                       key: const ValueKey('desktop-playback-queue-rail'),
@@ -415,6 +437,7 @@ class _PlayerHeader extends StatelessWidget {
         children: [
           _HeaderIconSlot(
             child: IconButton(
+              key: const ValueKey('player-queue-toggle'),
               tooltip: strings.playbackQueue,
               isSelected: queueVisible,
               style: IconButton.styleFrom(
@@ -940,6 +963,112 @@ class _PlayerControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isPlaying = snapshot.status == PlayerStatus.playing;
+    final mobile = Theme.of(context).platform == TargetPlatform.android;
+    final titleStyle = Theme.of(context).textTheme.headlineMedium?.copyWith(
+      fontSize: lerpDouble(compact ? 28 : 42, compact ? 24 : 34, compactness),
+      fontWeight: FontWeight.w900,
+      color: AppColors.playbackTitleFor(context),
+    );
+    final artistStyle = Theme.of(context).textTheme.titleLarge?.copyWith(
+      fontSize: lerpDouble(compact ? 18 : 26, compact ? 16 : 21, compactness),
+      fontWeight: FontWeight.w800,
+      color: AppColors.contentSubtitleFor(context),
+    );
+    final titleArtistGap = lerpDouble(6, 4, compactness)!;
+    final maxTitleLines = compact ? 2 : 3;
+
+    Widget metadata() => SizedBox(
+      width: double.infinity,
+      child: Stack(
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 104),
+                child: Text(
+                  key: const ValueKey('player-track-title'),
+                  snapshot.title ?? strings.noPlayback,
+                  maxLines: maxTitleLines,
+                  overflow: TextOverflow.ellipsis,
+                  style: titleStyle,
+                ),
+              ),
+              SizedBox(
+                key: const ValueKey('player-title-artist-gap'),
+                height: titleArtistGap,
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 104),
+                child: Text(
+                  key: const ValueKey('player-track-artist'),
+                  snapshot.artist ?? 'BStream Music',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: artistStyle,
+                ),
+              ),
+            ],
+          ),
+          Positioned(
+            top: 0,
+            right: 0,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _PlayerShareButton(
+                  snapshot: snapshot,
+                  savedTrackId: savedTrackId,
+                  strings: strings,
+                ),
+                _PlayerFavoriteButton(
+                  snapshot: snapshot,
+                  isFavorite: isFavorite,
+                  savedTrackId: savedTrackId,
+                  strings: strings,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    // The Android body is bottom-aligned so its playback actions stay close to
+    // the system inset. Reserve the tallest metadata height, then bottom-align
+    // the real title and artist at its top. This lets one- and multi-line titles
+    // share the exact same artwork position and artwork-to-title gap without
+    // reintroducing an artificial gap between the title and artist. Any unused
+    // line height remains after the artist, before the timeline.
+    final stableMetadata = mobile
+        ? SizedBox(
+            width: double.infinity,
+            child: Stack(
+              children: [
+                ExcludeSemantics(
+                  child: Opacity(
+                    opacity: 0,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          List<String>.filled(maxTitleLines, 'A').join('\n'),
+                          maxLines: maxTitleLines,
+                          style: titleStyle,
+                        ),
+                        SizedBox(height: titleArtistGap),
+                        Text('A', maxLines: 1, style: artistStyle),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Align(alignment: Alignment.topLeft, child: metadata()),
+                ),
+              ],
+            ),
+          )
+        : metadata();
 
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
@@ -947,56 +1076,7 @@ class _PlayerControls extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  key: const ValueKey('player-track-title'),
-                  snapshot.title ?? strings.noPlayback,
-                  maxLines: compact ? 2 : 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontSize: lerpDouble(
-                      compact ? 28 : 42,
-                      compact ? 24 : 34,
-                      compactness,
-                    ),
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.playbackTitleFor(context),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              _PlayerShareButton(
-                snapshot: snapshot,
-                savedTrackId: savedTrackId,
-                strings: strings,
-              ),
-              _PlayerFavoriteButton(
-                snapshot: snapshot,
-                isFavorite: isFavorite,
-                savedTrackId: savedTrackId,
-                strings: strings,
-              ),
-            ],
-          ),
-          SizedBox(height: lerpDouble(6, 4, compactness)),
-          Text(
-            key: const ValueKey('player-track-artist'),
-            snapshot.artist ?? 'BStream Music',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontSize: lerpDouble(
-                compact ? 18 : 26,
-                compact ? 16 : 21,
-                compactness,
-              ),
-              fontWeight: FontWeight.w800,
-              color: AppColors.contentSubtitleFor(context),
-            ),
-          ),
+          stableMetadata,
           SizedBox(height: lerpDouble(compact ? 22 : 36, 14, compactness)),
           const _Timeline(),
           SizedBox(height: lerpDouble(compact ? 18 : 28, 12, compactness)),
@@ -1124,6 +1204,8 @@ class _PlayerFavoriteButton extends ConsumerWidget {
           : strings.addToFavorites,
       color: isFavorite ? activeColor : inactiveColor,
       disabledColor: inactiveColor.withValues(alpha: 0.38),
+      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+      padding: const EdgeInsets.all(9),
       iconSize: 30,
       icon: Icon(
         isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
@@ -1344,11 +1426,11 @@ class _PlaybackButtons extends ConsumerWidget {
             : narrow
             ? 6.0
             : (width * 0.025).clamp(10.0, 18.0);
-        final mobileLabelWidth = (width * (narrow ? 0.4 : 0.36)).clamp(
-          128.0,
-          148.0,
+        final mobileLabelWidth = (width * (narrow ? 0.36 : 0.33)).clamp(
+          112.0,
+          132.0,
         );
-        const mobileLabelHeight = 52.0;
+        const mobileLabelHeight = 48.0;
         final mobileSecondaryGap = narrow ? 8.0 : 10.0;
         final lyricsButton = mobile
             ? _LabeledControlButton(

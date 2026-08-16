@@ -13,6 +13,43 @@ class _LiveQueueOperationCancelled implements Exception {
   const _LiveQueueOperationCancelled();
 }
 
+class _ScheduledLiveQueueItem {
+  _ScheduledLiveQueueItem({
+    required this.sequence,
+    required this.generation,
+    required this.item,
+  });
+
+  final int sequence;
+  final int generation;
+  final LiveQueueItem item;
+  bool searchDeadlineExceeded = false;
+}
+
+class _LiveQueueResolution {
+  const _LiveQueueResolution.success({
+    required this.scheduled,
+    required this.remoteTrack,
+    this.localTrack,
+    this.reusedExisting = false,
+  }) : errorMessage = null;
+
+  const _LiveQueueResolution.failure({
+    required this.scheduled,
+    required this.errorMessage,
+  }) : remoteTrack = null,
+       localTrack = null,
+       reusedExisting = false;
+
+  final _ScheduledLiveQueueItem scheduled;
+  final TrackInfo? remoteTrack;
+  final LocalTrack? localTrack;
+  final bool reusedExisting;
+  final String? errorMessage;
+
+  bool get isSuccess => remoteTrack != null && errorMessage == null;
+}
+
 bool canUseTikTokCommand(
   TikTokCommandAccess access,
   TikTokLiveChatCommand command,
@@ -149,8 +186,9 @@ class TikTokLiveState {
     final seen = <String>{};
     return [
       for (final item in liveQueue)
-        if (item.localTrack case final track?)
-          if (seen.add(track.id)) track,
+        if (item.isReady)
+          if (item.localTrack case final track?)
+            if (seen.add(track.id)) track,
     ];
   }
 
@@ -158,7 +196,7 @@ class TikTokLiveState {
     final seen = <String>{};
     return [
       for (final item in liveQueue)
-        if (!item.saveToLibrary)
+        if (item.isReady && !item.saveToLibrary)
           if (item.remoteTrack case final track?)
             if (seen.add(track.id.trim().isEmpty ? track.url : track.id)) track,
     ];
@@ -193,18 +231,36 @@ class TikTokLiveState {
 }
 
 class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
-  /// Bounds both the visible LIVE queue and its serial search/download backlog.
+  TikTokLiveController({this.searchDeadline = const Duration(seconds: 30)})
+    : assert(searchDeadline > Duration.zero);
+
+  /// Bounds both the visible LIVE queue and its pending resolution backlog.
   ///
   /// Keeping the value public makes the product limit explicit to UI and
   /// regression tests instead of relying on an unbounded in-memory queue.
   static const int maxQueueItems = 50;
 
+  /// Search/download work may overlap, but completed requests are still
+  /// published to the player in the exact order in which chat accepted them.
+  static const int maxConcurrentResolutions = 3;
+
+  /// A timed-out search is published as failed so it cannot block FIFO commits
+  /// forever. Its underlying non-cancellable operation keeps occupying its
+  /// worker slot until it really settles, preventing runaway processes.
+  /// Downloads begin only after search settles and are not subject to this
+  /// deadline.
+  final Duration searchDeadline;
+
   static const _creatorInputKey = 'tiktokLive.creatorInput';
   static const _commandAccessKey = 'tiktokLive.commandAccess';
   static const _saveRequestsToLibraryKey = 'tiktokLive.saveRequestsToLibrary';
 
-  final _musicQueue = Queue<LiveQueueItem>();
-  bool _processingMusicQueue = false;
+  final _pendingMusicQueue = Queue<_ScheduledLiveQueueItem>();
+  final _completedMusicResolutions = <int, _LiveQueueResolution>{};
+  final _committingMusicQueueGenerations = <int>{};
+  int _activeMusicResolutions = 0;
+  int _nextMusicSequence = 0;
+  int _nextMusicSequenceToCommit = 0;
   bool _liveQueueActivated = false;
   int _liveQueueGeneration = 0;
 
@@ -212,7 +268,10 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   Future<TikTokLiveState> build() async {
     final service = ref.watch(tiktokLiveCommandServiceProvider);
     final subscription = service.events.listen(_handleBridgeEvent);
-    ref.onDispose(subscription.cancel);
+    ref.onDispose(() {
+      _cancelMusicQueueOperations();
+      unawaited(subscription.cancel());
+    });
 
     final prefs = await SharedPreferences.getInstance();
     final creatorInput = prefs.getString(_creatorInputKey) ?? '';
@@ -312,8 +371,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   }
 
   Future<void> disconnect() async {
-    _liveQueueGeneration++;
-    _musicQueue.clear();
+    _cancelMusicQueueOperations();
     _liveQueueActivated = false;
     await ref.read(tiktokLiveCommandServiceProvider).disconnect();
     final current = await future;
@@ -334,8 +392,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   Future<void> clearLiveQueue({bool stopPlayback = true}) async {
     final player = ref.read(playerControllerProvider.notifier);
     final liveWasActive = player.isLiveQueueActive;
-    _liveQueueGeneration++;
-    _musicQueue.clear();
+    _cancelMusicQueueOperations();
     _liveQueueActivated = false;
     final current = await future;
     state = AsyncData(
@@ -433,7 +490,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         current.copyWith(
           lastCommand: command,
           message:
-              'Cola LIVE llena (maximo $maxQueueItems). Limpiala antes de agregar mas pedidos.',
+              'Cola LIVE llena (máximo $maxQueueItems). Límpiala antes de agregar más pedidos.',
         ),
       );
       return;
@@ -457,8 +514,14 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     );
 
     if (liveItem != null) {
-      _musicQueue.add(liveItem);
-      unawaited(_processMusicQueue());
+      _pendingMusicQueue.add(
+        _ScheduledLiveQueueItem(
+          sequence: _nextMusicSequence++,
+          generation: _liveQueueGeneration,
+          item: liveItem,
+        ),
+      );
+      _pumpMusicQueue();
       return;
     }
 
@@ -489,27 +552,78 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     }
   }
 
-  Future<void> _processMusicQueue() async {
-    if (_processingMusicQueue) {
-      return;
-    }
-    _processingMusicQueue = true;
-
-    try {
-      while (_musicQueue.isNotEmpty) {
-        final item = _musicQueue.removeFirst();
-        final generation = _liveQueueGeneration;
-        await _handlePlayCommand(item, generation);
-      }
-    } finally {
-      _processingMusicQueue = false;
+  void _pumpMusicQueue() {
+    while (_activeMusicResolutions < maxConcurrentResolutions &&
+        _pendingMusicQueue.isNotEmpty) {
+      final scheduled = _pendingMusicQueue.removeFirst();
+      _activeMusicResolutions++;
+      unawaited(_runMusicResolution(scheduled));
     }
   }
 
-  Future<void> _handlePlayCommand(LiveQueueItem item, int generation) async {
+  Future<void> _runMusicResolution(_ScheduledLiveQueueItem scheduled) async {
+    final deadline = Completer<_LiveQueueResolution>();
+    Timer? deadlineTimer;
+    final operation = _resolvePlayCommand(
+      scheduled,
+      onSearchStarted: () {
+        deadlineTimer = Timer(searchDeadline, () {
+          scheduled.searchDeadlineExceeded = true;
+          if (!deadline.isCompleted) {
+            deadline.complete(
+              _LiveQueueResolution.failure(
+                scheduled: scheduled,
+                errorMessage:
+                    'La búsqueda excedió ${searchDeadline.inSeconds} segundos.',
+              ),
+            );
+          }
+        });
+      },
+      onSearchSettled: () => deadlineTimer?.cancel(),
+    );
+
+    try {
+      final resolution = await Future.any([operation, deadline.future]);
+      if (_isLiveQueueOperationCurrent(
+        scheduled.item.id,
+        scheduled.generation,
+      )) {
+        _completedMusicResolutions[scheduled.sequence] = resolution;
+        _scheduleMusicQueueCommit(scheduled.generation);
+      }
+
+      if (scheduled.searchDeadlineExceeded) {
+        // Search APIs are not cancellable on every platform. Keep the
+        // slot occupied until the real search Future settles, but ignore its
+        // late result. Download never starts after this deadline.
+        await operation;
+      }
+    } finally {
+      deadlineTimer?.cancel();
+      _activeMusicResolutions--;
+      _pumpMusicQueue();
+    }
+  }
+
+  Future<_LiveQueueResolution> _resolvePlayCommand(
+    _ScheduledLiveQueueItem scheduled, {
+    required void Function() onSearchStarted,
+    required void Function() onSearchSettled,
+  }) async {
+    final item = scheduled.item;
     final query = item.query.trim();
-    if (query.isEmpty || !_isLiveQueueOperationCurrent(item.id, generation)) {
-      return;
+    if (query.isEmpty) {
+      return _LiveQueueResolution.failure(
+        scheduled: scheduled,
+        errorMessage: 'El pedido no contiene una búsqueda.',
+      );
+    }
+    if (!_isLiveQueueResolutionActive(scheduled)) {
+      return _LiveQueueResolution.failure(
+        scheduled: scheduled,
+        errorMessage: 'Pedido cancelado.',
+      );
     }
 
     try {
@@ -520,40 +634,28 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
           message: 'Buscando...',
         ),
       );
-      _setMessage('Buscando pedido de ${item.requestedBy}: $query');
-      final tracks = await ref.read(searchTracksProvider).call(query);
-      if (!_isLiveQueueOperationCurrent(item.id, generation)) {
-        return;
+      onSearchStarted();
+      late final List<TrackInfo> tracks;
+      try {
+        tracks = await ref.read(searchTracksProvider).call(query);
+      } finally {
+        onSearchSettled();
+      }
+      if (!_isLiveQueueResolutionActive(scheduled)) {
+        throw const _LiveQueueOperationCancelled();
       }
       if (tracks.isEmpty) {
-        _updateLiveQueueItem(
-          item.id,
-          (entry) => entry.copyWith(
-            status: LiveQueueItemStatus.failed,
-            message: 'Sin resultados',
-          ),
+        return _LiveQueueResolution.failure(
+          scheduled: scheduled,
+          errorMessage: 'Sin resultados',
         );
-        _setMessage('No encontre resultados para: $query');
-        return;
       }
 
       if (!item.saveToLibrary) {
-        final remoteTrack = tracks.first;
-        _updateLiveQueueItem(
-          item.id,
-          (entry) => entry.copyWith(
-            status: LiveQueueItemStatus.ready,
-            remoteTrack: remoteTrack,
-            message: 'Lista para reproducir en streaming',
-          ),
+        return _LiveQueueResolution.success(
+          scheduled: scheduled,
+          remoteTrack: tracks.first,
         );
-        await _syncLiveQueuePlayback(saveToLibrary: false);
-        if (_isLiveQueueOperationCurrent(item.id, generation)) {
-          _setMessage(
-            'Agregado para reproduccion remota: ${remoteTrack.title}',
-          );
-        }
-        return;
       }
 
       final result = await ref
@@ -561,7 +663,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
           .resolveForLibrary(
             tracks.first,
             onResolved: (track) {
-              if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+              if (!_isLiveQueueResolutionActive(scheduled)) {
                 throw const _LiveQueueOperationCancelled();
               }
               _updateLiveQueueItem(
@@ -571,10 +673,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
                   message: 'Coincidencia: ${track.title}',
                 ),
               );
-              _setMessage('Preparando pedido: ${track.title}');
             },
             onDownloadStarted: () {
-              if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+              if (!_isLiveQueueResolutionActive(scheduled)) {
                 throw const _LiveQueueOperationCancelled();
               }
               _updateLiveQueueItem(
@@ -584,46 +685,108 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
                   message: 'Descargando...',
                 ),
               );
-              _setMessage('Descargando pedido de ${item.requestedBy}...');
             },
           );
 
-      if (!_isLiveQueueOperationCurrent(item.id, generation)) {
-        return;
+      if (!_isLiveQueueResolutionActive(scheduled)) {
+        throw const _LiveQueueOperationCancelled();
       }
-
-      _updateLiveQueueItem(
-        item.id,
-        (entry) => entry.copyWith(
-          status: LiveQueueItemStatus.ready,
-          remoteTrack: result.remoteTrack,
-          localTrack: result.track,
-          reusedExisting: result.reusedExisting,
-          message: result.reusedExisting
-              ? 'Lista desde Biblioteca'
-              : 'Descargada',
-        ),
+      return _LiveQueueResolution.success(
+        scheduled: scheduled,
+        remoteTrack: result.remoteTrack,
+        localTrack: result.track,
+        reusedExisting: result.reusedExisting,
       );
-      await _syncLiveQueuePlayback(saveToLibrary: true);
-      if (_isLiveQueueOperationCurrent(item.id, generation)) {
-        _setMessage(
-          result.reusedExisting
-              ? 'Agregado desde Biblioteca: ${result.track.title}'
-              : 'Descargado y agregado: ${result.track.title}',
-        );
-      }
     } catch (error) {
-      if (!_isLiveQueueOperationCurrent(item.id, generation)) {
-        return;
-      }
-      _updateLiveQueueItem(
-        item.id,
-        (entry) => entry.copyWith(
-          status: LiveQueueItemStatus.failed,
-          message: error.toString(),
-        ),
+      return _LiveQueueResolution.failure(
+        scheduled: scheduled,
+        errorMessage: error.toString(),
       );
-      _setMessage('No se pudo reproducir "$query": $error');
+    }
+  }
+
+  void _scheduleMusicQueueCommit(int generation) {
+    if (generation != _liveQueueGeneration ||
+        !_committingMusicQueueGenerations.add(generation)) {
+      return;
+    }
+    unawaited(_commitCompletedMusicQueue(generation));
+  }
+
+  Future<void> _commitCompletedMusicQueue(int generation) async {
+    try {
+      while (generation == _liveQueueGeneration) {
+        final resolution = _completedMusicResolutions.remove(
+          _nextMusicSequenceToCommit,
+        );
+        if (resolution == null) {
+          return;
+        }
+        _nextMusicSequenceToCommit++;
+
+        final item = resolution.scheduled.item;
+        if (!_isLiveQueueOperationCurrent(item.id, generation)) {
+          continue;
+        }
+        if (!resolution.isSuccess) {
+          final errorMessage = resolution.errorMessage ?? 'Error desconocido';
+          _updateLiveQueueItem(
+            item.id,
+            (entry) => entry.copyWith(
+              status: LiveQueueItemStatus.failed,
+              message: errorMessage,
+            ),
+          );
+          _setMessage('No se pudo reproducir "${item.query}": $errorMessage');
+          continue;
+        }
+
+        final remoteTrack = resolution.remoteTrack!;
+        _updateLiveQueueItem(
+          item.id,
+          (entry) => entry.copyWith(
+            status: LiveQueueItemStatus.ready,
+            remoteTrack: remoteTrack,
+            localTrack: resolution.localTrack,
+            reusedExisting: resolution.reusedExisting,
+            message: item.saveToLibrary
+                ? (resolution.reusedExisting
+                      ? 'Lista desde Biblioteca'
+                      : 'Descargada')
+                : 'Lista para reproducir en streaming',
+          ),
+        );
+
+        try {
+          await _syncLiveQueuePlayback(saveToLibrary: item.saveToLibrary);
+          if (_isLiveQueueOperationCurrent(item.id, generation)) {
+            _setMessage(
+              item.saveToLibrary
+                  ? (resolution.reusedExisting
+                        ? 'Agregado desde Biblioteca: ${resolution.localTrack!.title}'
+                        : 'Descargado y agregado: ${resolution.localTrack!.title}')
+                  : 'Agregado para reproducción remota: ${remoteTrack.title}',
+            );
+          }
+        } catch (error) {
+          if (_isLiveQueueOperationCurrent(item.id, generation)) {
+            _updateLiveQueueItem(
+              item.id,
+              (entry) => entry.copyWith(
+                status: LiveQueueItemStatus.failed,
+                message: error.toString(),
+              ),
+            );
+            _setMessage('No se pudo reproducir "${item.query}": $error');
+          }
+        }
+      }
+    } finally {
+      _committingMusicQueueGenerations.remove(generation);
+      if (generation == _liveQueueGeneration &&
+          _completedMusicResolutions.containsKey(_nextMusicSequenceToCommit)) {
+        _scheduleMusicQueueCommit(generation);
+      }
     }
   }
 
@@ -658,6 +821,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         useNativeQueue: false,
         queueSourceId: PlayerController.liveQueueSourceId,
       );
+      _throwIfLivePlaybackFailed();
       return;
     }
 
@@ -669,6 +833,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     if (playbackFinished && readyTracks.length > 1) {
       await player.playNext();
     }
+    _throwIfLivePlaybackFailed();
   }
 
   Future<void> _syncRemoteLiveQueuePlayback(TikTokLiveState current) async {
@@ -690,6 +855,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         queue: readyTracks,
         queueSourceId: PlayerController.liveQueueSourceId,
       );
+      _throwIfLivePlaybackFailed();
       return;
     }
 
@@ -703,6 +869,20 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         _isPausedAtEnd(playerState);
     if (playbackFinished && readyTracks.length > 1) {
       await player.playNext();
+    }
+    _throwIfLivePlaybackFailed();
+  }
+
+  void _throwIfLivePlaybackFailed() {
+    final playback = ref.read(playerControllerProvider);
+    if (playback.hasError) {
+      throw playback.error ?? StateError('El reproductor falló sin detalle.');
+    }
+    final snapshot = playback.value;
+    if (snapshot?.status == PlayerStatus.failed) {
+      throw StateError(
+        snapshot?.errorMessage ?? 'El reproductor no pudo iniciar la pista.',
+      );
     }
   }
 
@@ -718,6 +898,20 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     return sourceUrl != null &&
         sourceUrl.isNotEmpty &&
         (sourceUrl == track.url || sourceUrl == track.streamUrl);
+  }
+
+  void _cancelMusicQueueOperations() {
+    _liveQueueGeneration++;
+    _pendingMusicQueue.clear();
+    _completedMusicResolutions.clear();
+    // Existing non-cancellable Futures keep their worker slots until they
+    // settle, but their sequence numbers must never block the new generation.
+    _nextMusicSequenceToCommit = _nextMusicSequence;
+  }
+
+  bool _isLiveQueueResolutionActive(_ScheduledLiveQueueItem scheduled) {
+    return !scheduled.searchDeadlineExceeded &&
+        _isLiveQueueOperationCurrent(scheduled.item.id, scheduled.generation);
   }
 
   bool _isLiveQueueOperationCurrent(String itemId, int generation) {

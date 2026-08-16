@@ -5,6 +5,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/search_result.dart';
 import '../providers/music_providers.dart';
 import '../widgets/search_input.dart';
+import '../widgets/scrolled_under_tab_frame.dart';
 import '../widgets/source_image.dart';
 import '../widgets/track_result_tile.dart';
 import 'remote_collection_detail_page.dart';
@@ -23,76 +24,86 @@ class SearchView extends ConsumerWidget {
       TargetPlatform.android || TargetPlatform.iOS => true,
       _ => false,
     };
+    final showHeading = !isMobile || !searchState.hasQuery;
 
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(0, 20, 0, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (!isMobile || !searchState.hasQuery) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      key: const ValueKey('search-tab-title'),
-                      strings.searchTitle,
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(fontWeight: FontWeight.w900),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                Padding(
-                  key: const ValueKey('search-input-container'),
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: SearchInput(
-                    hintText: strings.searchHint,
-                    tooltip: strings.search,
-                    clearTooltip: strings.clearSearch,
-                    onSubmitted: (query) => ref
-                        .read(searchControllerProvider.notifier)
-                        .submit(query),
-                    onCleared: () =>
-                        ref.read(searchControllerProvider.notifier).clear(),
+    return ScrolledUnderTabFrame(
+      surfaceKey: const ValueKey('search-tab-header-surface'),
+      header: showHeading
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  key: const ValueKey('search-tab-title'),
+                  strings.searchTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
-                if (searchState.hasQuery) ...[
-                  const SizedBox(height: 10),
+              ),
+            )
+          : null,
+      body: CustomScrollView(
+        key: const ValueKey('search-results-scroll'),
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(0, showHeading ? 0 : 20, 0, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Padding(
+                    key: const ValueKey('search-input-container'),
                     padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: _SearchCategoryTabs(
-                      categories: searchState.availableCategories,
-                      selectedCategory: searchState.selectedCategory,
-                      strings: strings,
-                      onSelected: (category) => ref
+                    child: SearchInput(
+                      hintText: strings.searchHint,
+                      tooltip: strings.search,
+                      clearTooltip: strings.clearSearch,
+                      onSubmitted: (query) => ref
                           .read(searchControllerProvider.notifier)
-                          .selectCategory(category),
+                          .submit(query),
+                      onCleared: () =>
+                          ref.read(searchControllerProvider.notifier).clear(),
                     ),
                   ),
-                ],
-                if (searchState.fallbackOnly) ...[
-                  const SizedBox(height: 10),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: _FallbackNotice(
-                      message: searchState.primaryError == null
-                          ? strings.searchYtDlpVideoOnly
-                          : strings.searchInnerTubeFallback,
+                  if (searchState.hasQuery) ...[
+                    const SizedBox(height: 10),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _SearchCategoryTabs(
+                        categories: searchState.availableCategories,
+                        selectedCategory: searchState.selectedCategory,
+                        strings: strings,
+                        onSelected: (category) => ref
+                            .read(searchControllerProvider.notifier)
+                            .selectCategory(category),
+                      ),
                     ),
-                  ),
+                  ],
+                  if (searchState.fallbackOnly) ...[
+                    const SizedBox(height: 10),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _FallbackNotice(
+                        message: searchState.primaryError == null
+                            ? strings.searchYtDlpVideoOnly
+                            : strings.searchInnerTubeFallback,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
-        ),
-        _SearchResultsSliver(
-          results: results,
-          strings: strings,
-          onOpenPlayer: onOpenPlayer,
-        ),
-      ],
+          _SearchResultsSliver(
+            results: results,
+            strings: strings,
+            onOpenPlayer: onOpenPlayer,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -157,59 +168,90 @@ class _SearchResultsSliver extends StatelessWidget {
       };
 }
 
-class _SearchCategoryResultsSliver extends StatelessWidget {
+class _SearchCategoryResultsSliver extends StatefulWidget {
   const _SearchCategoryResultsSliver({
     required this.state,
     required this.strings,
     required this.onOpenPlayer,
   });
 
-  static const _transitionDuration = Duration(milliseconds: 180);
+  static const _transitionDuration = Duration(milliseconds: 240);
 
   final SearchState state;
   final AppStrings strings;
   final VoidCallback onOpenPlayer;
 
   @override
+  State<_SearchCategoryResultsSliver> createState() =>
+      _SearchCategoryResultsSliverState();
+}
+
+class _SearchCategoryResultsSliverState
+    extends State<_SearchCategoryResultsSliver> {
+  int _direction = 1;
+
+  @override
+  void didUpdateWidget(covariant _SearchCategoryResultsSliver oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final previous = oldWidget.state.selectedCategory.index;
+    final next = widget.state.selectedCategory.index;
+    if (previous != next) {
+      _direction = next > previous ? 1 : -1;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final selectedCategory = widget.state.selectedCategory;
+    final selectedKey = ValueKey(
+      'search-category-results-${selectedCategory.name}',
+    );
 
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
       sliver: SliverToBoxAdapter(
         child: AnimatedSwitcher(
           key: const ValueKey('search-results-switcher'),
-          duration: disableAnimations ? Duration.zero : _transitionDuration,
+          duration: disableAnimations
+              ? Duration.zero
+              : _SearchCategoryResultsSliver._transitionDuration,
           reverseDuration: disableAnimations
               ? Duration.zero
-              : _transitionDuration,
+              : _SearchCategoryResultsSliver._transitionDuration,
           switchInCurve: Curves.easeOutCubic,
           switchOutCurve: Curves.easeInCubic,
           layoutBuilder: (currentChild, previousChildren) => Stack(
             alignment: Alignment.topCenter,
             children: <Widget>[...previousChildren, ?currentChild],
           ),
-          transitionBuilder: (child, animation) => FadeTransition(
-            opacity: animation,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0.018, 0),
-                end: Offset.zero,
-              ).animate(animation),
-              child: child,
-            ),
-          ),
+          transitionBuilder: (child, animation) {
+            final incoming = child.key == selectedKey;
+            final horizontalOffset = incoming
+                ? 0.045 * _direction
+                : -0.03 * _direction;
+            return ClipRect(
+              child: FadeTransition(
+                opacity: Tween<double>(begin: 0.35, end: 1).animate(animation),
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: Offset(horizontalOffset, 0),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: child,
+                ),
+              ),
+            );
+          },
           // The key changes only with the selected category. Loading a page,
           // refreshing it, or updating its bounded results therefore does not
           // replay the tab transition or disturb the outer scroll position.
           child: KeyedSubtree(
-            key: ValueKey(
-              'search-category-results-${state.selectedCategory.name}',
-            ),
+            key: selectedKey,
             child: _SearchCategoryResultsBody(
-              state: state,
-              strings: strings,
-              onOpenPlayer: onOpenPlayer,
+              state: widget.state,
+              strings: widget.strings,
+              onOpenPlayer: widget.onOpenPlayer,
             ),
           ),
         ),
@@ -352,71 +394,99 @@ class _SearchCategoryTab extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final radius = BorderRadius.circular(8);
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    final tabHeight = (MediaQuery.textScalerOf(context).scale(14) + 20)
+    final motionDuration = disableAnimations
+        ? Duration.zero
+        : const Duration(milliseconds: 200);
+    final scaledLabelHeight = MediaQuery.textScalerOf(context).scale(14);
+    final tapTargetHeight = (scaledLabelHeight + 20)
         .clamp(48.0, 80.0)
         .toDouble();
+    final surfaceHeight = (scaledLabelHeight + 14).clamp(44.0, 74.0).toDouble();
+    final contentColor = selected
+        ? colors.onPrimaryContainer
+        : AppColors.contentTitleFor(context);
 
     return Semantics(
       selected: selected,
       button: true,
-      child: AnimatedContainer(
-        key: ValueKey('search-category-surface-${category.name}'),
-        duration: disableAnimations
-            ? Duration.zero
-            : const Duration(milliseconds: 160),
-        curve: Curves.easeOutCubic,
-        decoration: BoxDecoration(
-          color: selected ? selectedColor : AppColors.cardSurfaceFor(context),
-          borderRadius: radius,
-          border: Border.all(
-            color: selected ? colors.primary : AppColors.cardBorderFor(context),
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            key: ValueKey('search-category-${category.name}'),
-            onTap: selected ? null : () => onSelected(category),
-            child: SizedBox(
-              height: tabHeight,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        icon,
-                        key: ValueKey('search-category-icon-${category.name}'),
-                        size: 18,
-                        color: selected
-                            ? colors.onPrimaryContainer
-                            : AppColors.contentTitleFor(context),
-                      ),
-                      const SizedBox(width: 4),
-                      Flexible(
-                        child: Text(
-                          label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelLarge
-                              ?.copyWith(
-                                color: selected
-                                    ? colors.onPrimaryContainer
-                                    : AppColors.contentTitleFor(context),
-                                fontWeight: selected
-                                    ? FontWeight.w800
-                                    : FontWeight.w600,
-                              ),
-                        ),
-                      ),
-                    ],
+      child: SizedBox(
+        height: tapTargetHeight,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: AnimatedContainer(
+                key: ValueKey('search-category-surface-${category.name}'),
+                width: double.infinity,
+                height: surfaceHeight,
+                duration: motionDuration,
+                curve: Curves.easeOutCubic,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? selectedColor
+                      : AppColors.cardSurfaceFor(context),
+                  borderRadius: radius,
+                  border: Border.all(
+                    color: selected
+                        ? colors.primary
+                        : AppColors.cardBorderFor(context),
                   ),
                 ),
               ),
             ),
-          ),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                key: ValueKey('search-category-${category.name}'),
+                borderRadius: radius,
+                onTap: selected ? null : () => onSelected(category),
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TweenAnimationBuilder<Color?>(
+                          duration: motionDuration,
+                          curve: Curves.easeOutCubic,
+                          tween: ColorTween(end: contentColor),
+                          builder: (context, color, _) => Icon(
+                            icon,
+                            key: ValueKey(
+                              'search-category-icon-${category.name}',
+                            ),
+                            size: 18,
+                            color: color ?? contentColor,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: AnimatedDefaultTextStyle(
+                            duration: motionDuration,
+                            curve: Curves.easeOutCubic,
+                            style:
+                                (Theme.of(context).textTheme.labelLarge ??
+                                        const TextStyle())
+                                    .copyWith(
+                                      color: contentColor,
+                                      fontWeight: selected
+                                          ? FontWeight.w800
+                                          : FontWeight.w600,
+                                    ),
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

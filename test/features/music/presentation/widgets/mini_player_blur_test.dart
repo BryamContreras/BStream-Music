@@ -41,7 +41,7 @@ void main() {
 
   for (final size in const [Size(320, 640), Size(360, 800)]) {
     testWidgets(
-      'Android ${size.width.toInt()} px mini-player keeps an inset rounded frame',
+      'Android ${size.width.toInt()} px mini-player fills width with only top corners rounded',
       (tester) async {
         _configureView(tester, size, textScaleFactor: 3);
         await tester.pumpWidget(_miniPlayerHarness());
@@ -53,25 +53,72 @@ void main() {
         );
         final surface = find.byKey(const ValueKey('mini-player-surface'));
         final play = find.byKey(const ValueKey('mini-player-primary-control'));
+        final metadata = find.byKey(const ValueKey('mini-player-metadata'));
+        final progress = find.byKey(const ValueKey('mini-player-progress'));
         final frameRect = tester.getRect(frame);
         final surfaceRect = tester.getRect(surface);
+        final playRect = tester.getRect(play);
+        final metadataRect = tester.getRect(metadata);
+        final progressRect = tester.getRect(progress);
 
-        expect(frameRect.left, closeTo(8, 0.1));
-        expect(frameRect.right, closeTo(size.width - 8, 0.1));
+        expect(frameRect.left, closeTo(0, 0.1));
+        expect(frameRect.right, closeTo(size.width, 0.1));
         expect(surfaceRect, frameRect);
+        expect(progressRect.left, closeTo(frameRect.left, 0.1));
+        expect(progressRect.right, closeTo(frameRect.right, 0.1));
+        expect(progressRect.bottom, closeTo(frameRect.bottom, 0.1));
+        expect(progressRect.height, 3);
+        expect(progressRect.top, greaterThanOrEqualTo(playRect.bottom));
+        expect(progressRect.top, greaterThanOrEqualTo(metadataRect.bottom));
+        expect(frameRect.intersect(progressRect), progressRect);
         expect(tester.getSize(play), const Size.square(48));
         expect(tester.getSize(surface).height, greaterThanOrEqualTo(62));
         final container = tester.widget<Container>(containerFinder);
         final decoration = container.decoration! as BoxDecoration;
         expect(container.clipBehavior, Clip.antiAlias);
-        expect(decoration.borderRadius, BorderRadius.circular(10));
+        expect(
+          decoration.borderRadius,
+          const BorderRadius.vertical(top: Radius.circular(10)),
+        );
         expect(tester.takeException(), isNull);
       },
     );
   }
+
+  testWidgets('desktop mini-player keeps progress on its lower edge', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(960, 200));
+    await tester.pumpWidget(
+      _miniPlayerHarness(platform: TargetPlatform.windows),
+    );
+    await tester.pump();
+
+    final frameRect = tester.getRect(
+      find.byKey(const ValueKey('mini-player-frame')),
+    );
+    final progressRect = tester.getRect(
+      find.byKey(const ValueKey('mini-player-progress')),
+    );
+    final playRect = tester.getRect(
+      find.byKey(const ValueKey('mini-player-primary-control')),
+    );
+    final metadataRect = tester.getRect(
+      find.byKey(const ValueKey('mini-player-metadata')),
+    );
+
+    expect(progressRect.left, closeTo(frameRect.left, 0.1));
+    expect(progressRect.right, closeTo(frameRect.right, 0.1));
+    expect(progressRect.bottom, closeTo(frameRect.bottom, 0.1));
+    expect(progressRect.height, 3);
+    expect(progressRect.top, greaterThanOrEqualTo(playRect.bottom));
+    expect(progressRect.top, greaterThanOrEqualTo(metadataRect.bottom));
+    expect(frameRect.intersect(progressRect), progressRect);
+    expect(tester.takeException(), isNull);
+  });
 }
 
-Widget _miniPlayerHarness() {
+Widget _miniPlayerHarness({TargetPlatform platform = TargetPlatform.android}) {
   return ProviderScope(
     overrides: [
       playerControllerProvider.overrideWith(_TestPlayerController.new),
@@ -81,7 +128,7 @@ Widget _miniPlayerHarness() {
       ),
     ],
     child: MaterialApp(
-      theme: ThemeData(platform: TargetPlatform.android),
+      theme: ThemeData(platform: platform),
       home: const Scaffold(
         body: Align(alignment: Alignment.topCenter, child: MiniPlayer()),
       ),
