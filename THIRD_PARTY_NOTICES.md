@@ -51,13 +51,15 @@ RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
 NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE
 USE OR PERFORMANCE OF THIS SOFTWARE.
 
-## youtube_explode_dart 3.1.0
+## youtube_explode_dart 3.1.0+1
 
-BStream Music uses `youtube_explode_dart` as the primary resolver for
-playback streams. The library is an unofficial, reverse-engineered client
-that does not require a YouTube API key. When it cannot produce a usable
-stream, BStream falls back to the bundled `yt-dlp` / `youtubedl-android`
-extractors without changing the user experience.
+BStream Music includes a versioned local fork of `youtube_explode_dart` as the
+primary resolver for playback streams. The fork lives under
+`third_party/youtube_explode_dart` and is accessed through
+`lib/services/downloader/adapters/youtube_explode/`. The library is an
+unofficial, reverse-engineered client that does not require a YouTube API key.
+When it cannot produce a usable stream, BStream falls back to the bundled
+`yt-dlp` / `youtubedl-android` extractors without changing the user experience.
 
 Source: <https://github.com/Hexer10/youtube_explode_dart>
 

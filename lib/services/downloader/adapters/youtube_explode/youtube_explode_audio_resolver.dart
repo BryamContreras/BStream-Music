@@ -3,8 +3,8 @@ import 'dart:io';
 
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
-import '../../features/music/domain/entities/track_info.dart';
-import 'audio_stream_resolver.dart';
+import '../../../../features/music/domain/entities/track_info.dart';
+import '../../audio_stream_resolver.dart';
 import 'youtube_audio_stream_selector.dart';
 
 typedef YoutubePlaybackHttpClientFactory = HttpClient Function();

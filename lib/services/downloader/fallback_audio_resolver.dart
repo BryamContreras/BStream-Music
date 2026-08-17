@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 
 import '../../features/music/domain/entities/track_info.dart';
 import 'audio_stream_resolver.dart';
-import 'youtube_explode_audio_resolver.dart';
 
 /// Chains one or more [AudioStreamResolver]s and surfaces the first usable
 /// result.
@@ -107,10 +106,9 @@ List<AudioStreamResolver> startingFrom(
   return resolvers.skip(1).toList(growable: false);
 }
 
-/// Wraps an [YoutubeExplodeAudioResolver] inside a [FallbackAudioResolver]
-/// so the rest of the app can interact with a single contract.
+/// Wraps a primary resolver and its fallbacks behind one application contract.
 AudioStreamResolver withFallbacks({
-  required YoutubeExplodeAudioResolver primary,
+  required AudioStreamResolver primary,
   required List<AudioStreamResolver> others,
 }) {
   return FallbackAudioResolver([primary, ...others]);

@@ -5,13 +5,13 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
-import '../../core/errors/app_exception.dart';
-import '../../core/utils/safe_file_name.dart';
-import '../../features/music/data/models/download_result_model.dart';
-import '../../features/music/domain/entities/download_options.dart';
-import '../../features/music/domain/entities/download_result.dart';
-import '../../features/music/domain/entities/track_info.dart';
-import 'downloader_service.dart';
+import '../../../../core/errors/app_exception.dart';
+import '../../../../core/utils/safe_file_name.dart';
+import '../../../../features/music/data/models/download_result_model.dart';
+import '../../../../features/music/domain/entities/download_options.dart';
+import '../../../../features/music/domain/entities/download_result.dart';
+import '../../../../features/music/domain/entities/track_info.dart';
+import '../../downloader_service.dart';
 import 'youtube_audio_stream_selector.dart';
 
 /// A resolved YouTube audio stream ready to be written to disk.

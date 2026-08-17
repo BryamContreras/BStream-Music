@@ -3,8 +3,8 @@ import 'dart:io';
 
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
-import 'package:bstream_music/services/downloader/youtube_audio_stream_selector.dart';
-import 'package:bstream_music/services/downloader/youtube_explode_audio_resolver.dart';
+import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_audio_stream_selector.dart';
+import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_explode_audio_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 

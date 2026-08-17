@@ -6,8 +6,8 @@ import 'package:bstream_music/features/music/domain/entities/download_options.da
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
-import 'package:bstream_music/services/downloader/youtube_audio_stream_selector.dart';
-import 'package:bstream_music/services/downloader/youtube_explode_download_service.dart';
+import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_audio_stream_selector.dart';
+import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_explode_download_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';

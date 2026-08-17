@@ -238,15 +238,22 @@ lib/
   platform_channels/
   services/
     downloader/
+      adapters/youtube_explode/
     live/
     lyrics/
     media_session/
     player/
     storage/
+third_party/
+  piratetok_live/
+  youtube_explode_dart/
 ```
 
-The main contracts are `DownloaderService`, `PlayerService`, `LyricsService`,
-and `LibraryRepository`. Android uses platform channels for native tasks;
+The main contracts are `DownloaderService`, `AudioStreamResolver`,
+`PlayerService`, `LyricsService`, and `LibraryRepository`. The
+`youtube_explode_dart` fork is versioned under `third_party/` and is accessed
+only through the YouTube Explode adapters; the rest of the app does not depend
+on its package types. Android uses platform channels for native tasks;
 Windows and macOS execute local tools through argument lists and process their
 output asynchronously.
 
