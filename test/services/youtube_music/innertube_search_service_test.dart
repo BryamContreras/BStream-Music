@@ -1741,6 +1741,72 @@ void main() {
       expect(albums.single.thumbnailUrl, 'https://img.test/544.jpg');
     });
 
+    test('normalizes nested legacy artist text and album-header fallbacks', () {
+      final nestedSong = const InnerTubeSearchParser().parseDetailSongs(
+        _searchPayload([
+          _legacyNestedArtistSongRenderer(
+            videoId: 'nested-artist',
+            title: 'Nested artist song',
+            nestedText: 'Nested artist',
+          ),
+        ]),
+        limit: 1,
+      );
+      expect(nestedSong.single.artists, const ['Nested artist']);
+      expect(nestedSong.single.artist, isNot(contains('{runs')));
+
+      final examples = [
+        (
+          title: 'Valor de la Calle',
+          artists: const ['Tiago PZK', 'Emkier'],
+          tracks: const ['Solo Los Dos', 'Gira en el Norte', '3 Am', 'Mañana'],
+        ),
+        (
+          title: 'Residente o Visitante',
+          artists: const ['Calle 13'],
+          tracks: const ['Intro', 'Tango del Pecado', 'La Fokin Moda'],
+        ),
+        (
+          title: 'Calle 13',
+          artists: const ['Calle 13'],
+          tracks: const ['Cabe-c-o', 'Suave', 'La Aguacatona'],
+        ),
+      ];
+
+      for (final example in examples) {
+        final songs = const InnerTubeAlbumParser().parseSongs(
+          _albumDetailPayload(
+            title: example.title,
+            artists: example.artists,
+            tracks: [
+              for (var index = 0; index < example.tracks.length; index++)
+                _legacyNestedArtistSongRenderer(
+                  videoId: 'legacy-${example.title}-$index',
+                  title: example.tracks[index],
+                  nestedText: 'Ir al artista',
+                ),
+            ],
+          ),
+        );
+
+        expect(songs, hasLength(example.tracks.length), reason: example.title);
+        expect(
+          songs.map((song) => song.artists),
+          everyElement(equals(example.artists)),
+          reason: example.title,
+        );
+        expect(
+          songs.every(
+            (song) =>
+                !song.artist.contains('{runs') &&
+                !song.artist.contains('Ir al artista'),
+          ),
+          isTrue,
+          reason: example.title,
+        );
+      }
+    });
+
     test('supports two-row albums and keeps optional metadata absent', () {
       final albums = parser.parse(
         _searchPayload([
@@ -2651,6 +2717,42 @@ Map<String, Object> _songRenderer({
     };
   }
   return {'musicResponsiveListItemRenderer': renderer};
+}
+
+Map<String, Object> _legacyNestedArtistSongRenderer({
+  required String videoId,
+  required String title,
+  required String nestedText,
+}) {
+  final item = _songRenderer(videoId: videoId, title: title, artists: const []);
+  final renderer =
+      item['musicResponsiveListItemRenderer']! as Map<String, Object>;
+  final columns = renderer['flexColumns']! as List<Object>;
+  final metadataColumn = columns[1] as Map<String, Object>;
+  final metadataRenderer =
+      metadataColumn['musicResponsiveListItemFlexColumnRenderer']!
+          as Map<String, Object>;
+  metadataRenderer['text'] = {
+    'runs': [
+      {
+        'text': {
+          'runs': [
+            {'text': nestedText},
+          ],
+        },
+        'navigationEndpoint': {
+          'browseEndpoint': {
+            'browseEndpointContextSupportedConfigs': {
+              'browseEndpointContextMusicConfig': {
+                'pageType': 'MUSIC_PAGE_TYPE_ARTIST',
+              },
+            },
+          },
+        },
+      },
+    ],
+  };
+  return item;
 }
 
 Map<String, Object> _twoRowSongRenderer({

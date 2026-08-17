@@ -999,8 +999,9 @@ class InnerTubeSearchParser {
       }
       final pageType = _browsePageType(run);
       if (pageType == 'MUSIC_PAGE_TYPE_ARTIST') {
-        if (!artists.contains(text)) {
-          artists.add(text);
+        final artistText = _artistText(run['text']);
+        if (artistText != null && !artists.contains(artistText)) {
+          artists.add(artistText);
         }
       } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
         album = text;
@@ -1010,7 +1011,7 @@ class InnerTubeSearchParser {
 
     if (artists.isEmpty && columns.length > 1) {
       for (final run in _columnRuns(columns[1])) {
-        final text = _text(run['text']);
+        final text = _artistText(run['text']);
         if (text == null ||
             _isSeparator(text) ||
             _parseDuration(text) != null) {
@@ -1056,8 +1057,9 @@ class InnerTubeSearchParser {
       }
       final pageType = _browsePageType(run);
       if (pageType == 'MUSIC_PAGE_TYPE_ARTIST') {
-        if (!artists.contains(text)) {
-          artists.add(text);
+        final artistText = _artistText(run['text']);
+        if (artistText != null && !artists.contains(artistText)) {
+          artists.add(artistText);
         }
       } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
         album = text;
@@ -1067,7 +1069,7 @@ class InnerTubeSearchParser {
 
     if (artists.isEmpty) {
       for (final run in metadataRuns) {
-        final text = _text(run['text']);
+        final text = _artistText(run['text']);
         if (text == null ||
             _isSeparator(text) ||
             _parseDuration(text) != null ||
@@ -1279,8 +1281,63 @@ class InnerTubeSearchParser {
     if (value == null) {
       return null;
     }
-    final normalized = value.toString().trim();
-    return normalized.isEmpty ? null : normalized;
+    if (value is String || value is num || value is bool) {
+      final normalized = value.toString().trim();
+      return normalized.isEmpty ? null : normalized;
+    }
+    if (value is Map) {
+      final simpleText = _text(value['simpleText']);
+      if (simpleText != null) {
+        return simpleText;
+      }
+
+      final nestedText = _text(value['text']);
+      if (nestedText != null) {
+        return nestedText;
+      }
+
+      final runs = value['runs'];
+      if (runs is List) {
+        final parts = <String>[];
+        for (final run in runs) {
+          if (run is Map) {
+            final text = _text(run['text']);
+            if (text != null) {
+              parts.add(text);
+            }
+          }
+        }
+        final joined = parts.join();
+        if (joined.trim().isNotEmpty) {
+          return joined.trim();
+        }
+      }
+
+      final accessibilityLabel = _text(
+        (value['accessibilityData'] as Map?)?['label'],
+      );
+      if (accessibilityLabel != null) {
+        return accessibilityLabel;
+      }
+    }
+    return null;
+  }
+
+  String? _artistText(Object? value) {
+    final text = _text(value);
+    if (text == null) {
+      return null;
+    }
+    final normalized = text.trim().toLowerCase();
+    if (normalized == 'ir al artista' || normalized == 'go to artist') {
+      return null;
+    }
+    if (normalized.contains('{runs:') ||
+        normalized.contains('simpletext:') ||
+        normalized.contains('navigationendpoint:')) {
+      return null;
+    }
+    return text.trim();
   }
 
   int? _integer(Object? value) {
@@ -1365,15 +1422,16 @@ class InnerTubeAlbumParser {
       albumArtists: List.unmodifiable(albumArtists),
       songs: List.unmodifiable(
         songs.map((song) {
-          final artists = song.artists.isEmpty ? albumArtists : song.artists;
+          final artists = song.artists
+              .map(_songParser._artistText)
+              .whereType<String>()
+              .toList(growable: false);
+          final resolvedArtists = artists.isEmpty ? albumArtists : artists;
           final songAlbum = song.album ?? albumTitle;
-          if (identical(artists, song.artists) && songAlbum == song.album) {
-            return song;
-          }
           return InnerTubeSong(
             videoId: song.videoId,
             title: song.title,
-            artists: artists,
+            artists: resolvedArtists,
             album: songAlbum,
             duration: song.duration,
             thumbnailUrl: song.thumbnailUrl,
@@ -1441,13 +1499,17 @@ class InnerTubeAlbumParser {
       }
       final pageType = _songParser._browsePageType(run);
       if (pageType == 'MUSIC_PAGE_TYPE_ARTIST') {
-        if (!artists.contains(text)) {
-          artists.add(text);
+        final artistText = _songParser._artistText(run['text']);
+        if (artistText != null && !artists.contains(artistText)) {
+          artists.add(artistText);
         }
       } else if (_yearPattern.hasMatch(text) && year == null) {
         year = text;
       } else if (pageType != 'MUSIC_PAGE_TYPE_ALBUM') {
-        untypedText.add(text);
+        final genericText = _songParser._artistText(run['text']);
+        if (genericText != null) {
+          untypedText.add(genericText);
+        }
       }
     }
 
@@ -1627,7 +1689,7 @@ class InnerTubeAlbumParser {
 
     void visit(Object? node) {
       if (node is Map) {
-        final text = _songParser._text(node['text']);
+        final text = _songParser._artistText(node['text']);
         if (text != null &&
             _songParser._browsePageType(node) == 'MUSIC_PAGE_TYPE_ARTIST' &&
             !artists.contains(text)) {
@@ -1654,7 +1716,7 @@ class InnerTubeAlbumParser {
       'secondSubtitle',
     ]) {
       for (final run in _songParser._runs(header[key])) {
-        final text = _songParser._text(run['text']);
+        final text = _songParser._artistText(run['text']);
         if (text == null ||
             _songParser._isSeparator(text) ||
             _yearPattern.hasMatch(text) ||
