@@ -33,6 +33,9 @@ class PlayerPanel extends ConsumerStatefulWidget {
 }
 
 class _PlayerPanelState extends ConsumerState<PlayerPanel> {
+  static const _mobileArtworkMaxReduction = 20.0;
+  static const _mobileArtworkComfortHeight = 680.0;
+
   bool _showPlaybackQueue = false;
 
   @override
@@ -176,18 +179,26 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                         ),
                         Expanded(
                           child: LayoutBuilder(
+                            key: const ValueKey('player-content-layout'),
                             builder: (context, constraints) {
                               final verticalCompactness = AppPlatform.isDesktop
                                   ? ((620.0 - constraints.maxHeight) / 140.0)
                                         .clamp(0.0, 1.0)
                                   : 0.0;
-                              final artworkExtent = _artworkExtent(
+                              final regularArtworkExtent = _artworkExtent(
                                 constraints,
                                 stackedDesktop: stackedDesktop,
                                 wide: wide,
                                 mobile: mobile,
                                 compactness: verticalCompactness,
                               );
+                              final artworkExtent = mobile
+                                  ? _mobileArtworkExtent(
+                                      constraints: constraints,
+                                      regularExtent: regularArtworkExtent,
+                                      hasError: presentation.hasError,
+                                    )
+                                  : regularArtworkExtent;
                               final artwork = Center(
                                 child: _LargeArtwork(
                                   url: snapshot.thumbnailUrl,
@@ -226,6 +237,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                               );
 
                               return SingleChildScrollView(
+                                key: const ValueKey('player-content-scroll'),
                                 child: ConstrainedBox(
                                   constraints: BoxConstraints(
                                     minHeight: constraints.maxHeight,
@@ -378,6 +390,27 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         .clamp(170.0, 220.0)
         .toDouble();
     return lerpDouble(regularExtent, compactExtent, compactness)!;
+  }
+
+  double _mobileArtworkExtent({
+    required BoxConstraints constraints,
+    required double regularExtent,
+    required bool hasError,
+  }) {
+    if (hasError || !constraints.maxHeight.isFinite) {
+      return regularExtent;
+    }
+
+    // Preserve the normal artwork size whenever the lower controls fit. Only
+    // reclaim the measured shortfall, capped at 20 dp, so small devices do not
+    // get an aggressive reflow. Error content intentionally keeps the normal
+    // artwork size and uses the scroll view as its fallback.
+    final shortfall = math.max(
+      0.0,
+      _mobileArtworkComfortHeight - constraints.maxHeight,
+    );
+    return regularExtent -
+        math.min(_mobileArtworkMaxReduction, shortfall).toDouble();
   }
 }
 

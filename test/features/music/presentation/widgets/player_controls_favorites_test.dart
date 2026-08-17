@@ -119,7 +119,10 @@ void main() {
         expect(tester.getSize(lyrics).width, lessThan(128));
         expect(tester.getRect(lyrics).left, closeTo(20, 0.1));
         expect(tester.getRect(volume).right, closeTo(size.width - 20, 0.1));
-        expect(tester.getSize(artwork), Size.square(size.width - 48));
+        final artworkSize = tester.getSize(artwork);
+        expect(artworkSize.width, lessThanOrEqualTo(size.width - 48));
+        expect(artworkSize.width, greaterThanOrEqualTo(180));
+        expect(artworkSize.height, closeTo(artworkSize.width, 0.1));
         final artworkTopGap =
             tester.getRect(artwork).top - tester.getRect(header).bottom;
         expect(artworkTopGap, lessThanOrEqualTo(size.width == 320 ? 100 : 112));
@@ -265,6 +268,92 @@ void main() {
     await tester.ensureVisible(volume);
     await tester.pump();
     expect(tester.getRect(volume).bottom, lessThanOrEqualTo(568));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'short Android viewports gently reduce artwork without resizing controls',
+    (tester) async {
+      _configureView(tester, const Size(360, 720), bottomPadding: 24);
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          key: const ValueKey('error-artwork-baseline'),
+          snapshot: snapshot.copyWith(
+            status: PlayerStatus.failed,
+            errorMessage: 'No se pudo abrir la pista.',
+          ),
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+      final errorArtworkWidth = tester
+          .getSize(find.byKey(const ValueKey('player-large-artwork')))
+          .width;
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          key: const ValueKey('normal-artwork-short-viewport'),
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      final artwork = find.byKey(const ValueKey('player-large-artwork'));
+      final volume = find.byKey(const ValueKey('player-volume-control'));
+      final scroll = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(const ValueKey('player-content-scroll')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      final artworkWidth = tester.getSize(artwork).width;
+      expect(errorArtworkWidth - artworkWidth, closeTo(20, 0.1));
+      expect(tester.getSize(volume).width, greaterThanOrEqualTo(112));
+      expect(tester.getSize(volume).height, 48);
+      expect(scroll.position.pixels, closeTo(0, 0.1));
+      expect(
+        tester.getRect(volume).bottom,
+        lessThanOrEqualTo(720 - 24.0 + 0.1),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('player errors keep normal artwork and use scroll as fallback', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 720), bottomPadding: 24);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot.copyWith(
+          status: PlayerStatus.failed,
+          errorMessage: 'No se pudo abrir la pista.',
+        ),
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('player-error-message')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('player-content-scroll')),
+        matching: find.byType(Scrollable),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -667,20 +756,24 @@ void _configureView(
   WidgetTester tester,
   Size size, {
   double textScaleFactor = 1,
+  double bottomPadding = 0,
 }) {
   tester.view
     ..physicalSize = size
-    ..devicePixelRatio = 1;
+    ..devicePixelRatio = 1
+    ..padding = FakeViewPadding(bottom: bottomPadding);
   tester.platformDispatcher.textScaleFactorTestValue = textScaleFactor;
   addTearDown(() {
     tester.view
       ..resetPhysicalSize()
-      ..resetDevicePixelRatio();
+      ..resetDevicePixelRatio()
+      ..resetPadding();
     tester.platformDispatcher.clearTextScaleFactorTestValue();
   });
 }
 
 Widget _playerHarness({
+  Key? key,
   required TargetPlatform platform,
   required PlayerSnapshot snapshot,
   required LocalTrack localTrack,
@@ -695,6 +788,7 @@ Widget _playerHarness({
   ).copyWith(primary: accent.seedColor);
 
   return ProviderScope(
+    key: key,
     overrides: [
       playerControllerProvider.overrideWith(
         () => _TestPlayerController(
