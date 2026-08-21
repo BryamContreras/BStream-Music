@@ -40,6 +40,15 @@ void main() {
     await tester.pumpAndSettle();
 
     final liveCard = find.byKey(const ValueKey('settings-card-live'));
+    await tester.scrollUntilVisible(
+      liveCard,
+      240,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('settings-root')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
     expect(liveCard, findsOneWidget);
     final saveRequestsSwitch = find.byKey(
       const ValueKey('tiktok-live-save-requests-to-library'),
@@ -73,6 +82,11 @@ void main() {
     expect(liveController.saveRequestsToLibraryCalls, 1);
     expect(liveController.lastSaveRequestsToLibrary, isTrue);
 
+    await tester.scrollUntilVisible(
+      liveCard,
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.ensureVisible(liveCard);
     await tester.pumpAndSettle();
     await tester.tap(liveCard);
@@ -135,7 +149,13 @@ void main() {
     await tester.pumpAndSettle();
 
     final liveCard = find.byKey(const ValueKey('settings-card-live'));
+    await tester.scrollUntilVisible(
+      liveCard,
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.ensureVisible(liveCard);
+    await tester.pumpAndSettle();
     await tester.tap(liveCard);
     await tester.pumpAndSettle();
 

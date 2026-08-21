@@ -4,11 +4,111 @@ import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../core/platform/app_platform.dart';
+import '../../core/theme/app_colors.dart';
+import '../player/notification_artwork_service.dart';
 import '../player/player_service.dart';
 import 'desktop_media_session.dart';
 
+@visibleForTesting
+PlaybackState buildAudioServicePlaybackState(DesktopMediaSessionState state) {
+  final snapshot = state.snapshot;
+  final controls = <MediaControl>[
+    if (state.hasPrevious) MediaControl.skipToPrevious,
+    snapshot.status == PlayerStatus.playing
+        ? MediaControl.pause
+        : MediaControl.play,
+    if (state.hasNext) MediaControl.skipToNext,
+    MediaControl.stop,
+  ];
+  final compactActions = <int>[
+    for (var index = 0; index < controls.length; index++)
+      if (controls[index].action != MediaAction.stop) index,
+  ].take(3).toList(growable: false);
+
+  return PlaybackState(
+    controls: controls,
+    androidCompactActionIndices: compactActions,
+    systemActions: const {
+      MediaAction.seek,
+      MediaAction.seekForward,
+      MediaAction.seekBackward,
+    },
+    processingState: switch (snapshot.status) {
+      PlayerStatus.idle => AudioProcessingState.idle,
+      PlayerStatus.loading => AudioProcessingState.loading,
+      PlayerStatus.playing || PlayerStatus.paused => AudioProcessingState.ready,
+      PlayerStatus.completed => AudioProcessingState.completed,
+      PlayerStatus.stopped => AudioProcessingState.idle,
+      PlayerStatus.failed => AudioProcessingState.error,
+    },
+    playing: snapshot.status == PlayerStatus.playing,
+    updatePosition: snapshot.position,
+    bufferedPosition: snapshot.position,
+    speed: 1,
+    queueIndex:
+        state.currentIndex >= 0 && state.currentIndex < state.queue.length
+        ? state.currentIndex
+        : null,
+    repeatMode: switch (snapshot.repeatMode) {
+      PlaybackRepeatMode.off => AudioServiceRepeatMode.none,
+      PlaybackRepeatMode.all => AudioServiceRepeatMode.all,
+      PlaybackRepeatMode.one => AudioServiceRepeatMode.one,
+    },
+    shuffleMode: snapshot.shuffleEnabled
+        ? AudioServiceShuffleMode.all
+        : AudioServiceShuffleMode.none,
+    errorCode: snapshot.status == PlayerStatus.failed ? 1 : null,
+    errorMessage: snapshot.status == PlayerStatus.failed
+        ? snapshot.errorMessage
+        : null,
+  );
+}
+
+@visibleForTesting
+class AudioServiceMediaSessionCallbackBridge {
+  DesktopMediaSessionCallbacks? _callbacks;
+
+  void attach(DesktopMediaSessionCallbacks callbacks) {
+    _callbacks = callbacks;
+  }
+
+  bool detach(DesktopMediaSessionCallbacks callbacks) {
+    if (identical(_callbacks, callbacks)) {
+      _callbacks = null;
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> play() => _callbacks?.play() ?? Future<void>.value();
+
+  Future<void> pause() => _callbacks?.pause() ?? Future<void>.value();
+
+  Future<void> stop() => _callbacks?.stop() ?? Future<void>.value();
+
+  Future<void> next() => _callbacks?.next() ?? Future<void>.value();
+
+  Future<void> previous() => _callbacks?.previous() ?? Future<void>.value();
+
+  Future<void> seek(Duration position) =>
+      _callbacks?.seek(position) ?? Future<void>.value();
+
+  Future<void> playQueueIndex(int index) =>
+      _callbacks?.playQueueIndex(index) ?? Future<void>.value();
+
+  Future<void> setShuffleEnabled(bool enabled) =>
+      _callbacks?.setShuffleEnabled(enabled) ?? Future<void>.value();
+
+  Future<void> setRepeatMode(PlaybackRepeatMode mode) =>
+      _callbacks?.setRepeatMode(mode) ?? Future<void>.value();
+}
+
 class AudioServiceDesktopMediaSession implements DesktopMediaSession {
+  static Future<_DesktopAudioHandler>? _handlerInitialization;
+
   _DesktopAudioHandler? _handler;
+  DesktopMediaSessionCallbacks? _callbacks;
   DesktopMediaSessionState? _latestState;
   Timer? _positionTimer;
 
@@ -20,26 +120,44 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
   PlaybackRepeatMode? _lastRepeatMode;
   DateTime? _lastPositionUpdate;
 
-  @override
-  Future<void> initialize(DesktopMediaSessionCallbacks callbacks) async {
-    try {
+  static Future<void> ensureInitialized() async {
+    await _ensureHandler();
+  }
+
+  static Future<_DesktopAudioHandler> _ensureHandler() {
+    return _handlerInitialization ??= () async {
       late final _DesktopAudioHandler handler;
       await AudioService.init(
         builder: () {
-          handler = _DesktopAudioHandler(callbacks);
+          handler = _DesktopAudioHandler();
           return handler;
         },
         config: const AudioServiceConfig(
           androidNotificationChannelId: 'com.bstream.bstream_music.audio',
           androidNotificationChannelName: 'BStream Music',
           androidNotificationChannelDescription: 'BStream Music playback',
+          notificationColor: AppColors.brandGreen,
+          androidNotificationIcon: 'drawable/ic_stat_bstream_music',
+          androidShowNotificationBadge: true,
           androidNotificationOngoing: true,
+          artDownscaleWidth: 320,
+          artDownscaleHeight: 320,
         ),
       );
+      return handler;
+    }();
+  }
+
+  @override
+  Future<void> initialize(DesktopMediaSessionCallbacks callbacks) async {
+    try {
+      final handler = await _ensureHandler();
       if (_disposed) {
         handler.publishIdle();
         return;
       }
+      _callbacks = callbacks;
+      handler.attach(callbacks);
       _handler = handler;
       final latestState = _latestState;
       if (latestState != null) {
@@ -144,40 +262,7 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
         );
       }
 
-      handler.playbackState.add(
-        PlaybackState(
-          controls: [
-            if (state.hasPrevious) MediaControl.skipToPrevious,
-            snapshot.status == PlayerStatus.playing
-                ? MediaControl.pause
-                : MediaControl.play,
-            if (state.hasNext) MediaControl.skipToNext,
-            MediaControl.stop,
-          ],
-          systemActions: const {
-            MediaAction.seek,
-            MediaAction.seekForward,
-            MediaAction.seekBackward,
-          },
-          processingState: _processingState(snapshot.status),
-          playing: snapshot.status == PlayerStatus.playing,
-          updatePosition: snapshot.position,
-          bufferedPosition: snapshot.position,
-          speed: 1,
-          queueIndex:
-              state.currentIndex >= 0 && state.currentIndex < state.queue.length
-              ? state.currentIndex
-              : null,
-          repeatMode: _audioServiceRepeatMode(snapshot.repeatMode),
-          shuffleMode: snapshot.shuffleEnabled
-              ? AudioServiceShuffleMode.all
-              : AudioServiceShuffleMode.none,
-          errorCode: snapshot.status == PlayerStatus.failed ? 1 : null,
-          errorMessage: snapshot.status == PlayerStatus.failed
-              ? snapshot.errorMessage
-              : null,
-        ),
-      );
+      handler.playbackState.add(buildAudioServicePlaybackState(state));
       _lastPositionUpdate = DateTime.now();
       _remember(state);
     } catch (error) {
@@ -207,6 +292,12 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
     if (value == null || value.isEmpty) {
       return null;
     }
+    if (AppPlatform.isAndroid) {
+      final notificationUri = NotificationArtworkService.instance.uriFor(value);
+      if (notificationUri != null) {
+        return notificationUri;
+      }
+    }
     if (RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(value)) {
       return Uri.file(File(value).absolute.path);
     }
@@ -217,36 +308,31 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
     return Uri.file(File(value).absolute.path);
   }
 
-  AudioProcessingState _processingState(PlayerStatus status) =>
-      switch (status) {
-        PlayerStatus.idle => AudioProcessingState.idle,
-        PlayerStatus.loading => AudioProcessingState.loading,
-        PlayerStatus.playing ||
-        PlayerStatus.paused => AudioProcessingState.ready,
-        PlayerStatus.stopped => AudioProcessingState.idle,
-        PlayerStatus.failed => AudioProcessingState.error,
-      };
-
-  AudioServiceRepeatMode _audioServiceRepeatMode(PlaybackRepeatMode mode) =>
-      switch (mode) {
-        PlaybackRepeatMode.off => AudioServiceRepeatMode.none,
-        PlaybackRepeatMode.all => AudioServiceRepeatMode.all,
-        PlaybackRepeatMode.one => AudioServiceRepeatMode.one,
-      };
-
   @override
   Future<void> dispose() async {
     _disposed = true;
     _positionTimer?.cancel();
-    _handler?.publishIdle();
+    final handler = _handler;
+    final callbacks = _callbacks;
+    if (handler != null && callbacks != null) {
+      if (handler.detach(callbacks)) {
+        handler.publishIdle();
+      }
+    }
     _handler = null;
+    _callbacks = null;
   }
 }
 
 class _DesktopAudioHandler extends BaseAudioHandler with SeekHandler {
-  _DesktopAudioHandler(this.callbacks);
+  final _callbacks = AudioServiceMediaSessionCallbackBridge();
 
-  final DesktopMediaSessionCallbacks callbacks;
+  void attach(DesktopMediaSessionCallbacks callbacks) {
+    _callbacks.attach(callbacks);
+  }
+
+  bool detach(DesktopMediaSessionCallbacks callbacks) =>
+      _callbacks.detach(callbacks);
 
   void publishIdle() {
     queue.add(const []);
@@ -257,36 +343,36 @@ class _DesktopAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> play() => callbacks.play();
+  Future<void> play() => _callbacks.play();
 
   @override
-  Future<void> pause() => callbacks.pause();
+  Future<void> pause() => _callbacks.pause();
 
   @override
   Future<void> stop() async {
-    await callbacks.stop();
+    await _callbacks.stop();
     await super.stop();
   }
 
   @override
-  Future<void> skipToNext() => callbacks.next();
+  Future<void> skipToNext() => _callbacks.next();
 
   @override
-  Future<void> skipToPrevious() => callbacks.previous();
+  Future<void> skipToPrevious() => _callbacks.previous();
 
   @override
-  Future<void> seek(Duration position) => callbacks.seek(position);
+  Future<void> seek(Duration position) => _callbacks.seek(position);
 
   @override
-  Future<void> skipToQueueItem(int index) => callbacks.playQueueIndex(index);
+  Future<void> skipToQueueItem(int index) => _callbacks.playQueueIndex(index);
 
   @override
   Future<void> setShuffleMode(AudioServiceShuffleMode mode) =>
-      callbacks.setShuffleEnabled(mode != AudioServiceShuffleMode.none);
+      _callbacks.setShuffleEnabled(mode != AudioServiceShuffleMode.none);
 
   @override
   Future<void> setRepeatMode(AudioServiceRepeatMode mode) =>
-      callbacks.setRepeatMode(switch (mode) {
+      _callbacks.setRepeatMode(switch (mode) {
         AudioServiceRepeatMode.none => PlaybackRepeatMode.off,
         AudioServiceRepeatMode.one => PlaybackRepeatMode.one,
         AudioServiceRepeatMode.all ||

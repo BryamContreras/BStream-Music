@@ -119,7 +119,13 @@ class _FrameHarness extends StatelessWidget {
         body: ScrolledUnderTabFrame(
           surfaceKey: const ValueKey('test-tab-header-surface'),
           header: showHeader
-              ? const Text('Pestaña', key: ValueKey('test-tab-title'))
+              ? const Row(
+                  children: [
+                    Expanded(
+                      child: Text('Pestaña', key: ValueKey('test-tab-title')),
+                    ),
+                  ],
+                )
               : null,
           body: ListView.builder(
             key: const ValueKey('test-tab-scroll'),

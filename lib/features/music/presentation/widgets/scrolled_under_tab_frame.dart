@@ -9,6 +9,8 @@ class ScrolledUnderTabFrame extends StatefulWidget {
     required this.header,
     required this.body,
     this.surfaceKey,
+    this.headerTransitionKey,
+    this.headerTransitionDuration = Duration.zero,
     this.headerHorizontalPadding = 16,
     super.key,
   });
@@ -16,6 +18,8 @@ class ScrolledUnderTabFrame extends StatefulWidget {
   final Widget? header;
   final Widget body;
   final Key? surfaceKey;
+  final Key? headerTransitionKey;
+  final Duration headerTransitionDuration;
   final double headerHorizontalPadding;
 
   @override
@@ -51,9 +55,39 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
 
   @override
   Widget build(BuildContext context) {
-    final animationDuration = MediaQuery.disableAnimationsOf(context)
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final animationDuration = disableAnimations
         ? Duration.zero
         : kThemeChangeDuration;
+    final headerTransitionDuration = disableAnimations
+        ? Duration.zero
+        : widget.headerTransitionDuration;
+    final header = switch (widget.header) {
+      final header? => Material(
+        key: widget.surfaceKey,
+        color: AppColors.tabHeaderSurfaceFor(
+          context,
+          scrolledUnder: _scrolledUnder,
+        ),
+        elevation: _scrolledUnder ? 1 : 0,
+        shadowColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        animationDuration: animationDuration,
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: widget.headerHorizontalPadding,
+            vertical: 8,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Align(alignment: Alignment.centerLeft, child: header),
+          ),
+        ),
+      ),
+      null => const SizedBox.shrink(
+        key: ValueKey('scrolled-under-tab-hidden-header'),
+      ),
+    };
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -66,29 +100,30 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (widget.header case final header?)
-                Material(
-                  key: widget.surfaceKey,
-                  color: AppColors.tabHeaderSurfaceFor(
-                    context,
-                    scrolledUnder: _scrolledUnder,
-                  ),
-                  elevation: _scrolledUnder ? 1 : 0,
-                  shadowColor: Colors.transparent,
-                  surfaceTintColor: Colors.transparent,
-                  animationDuration: animationDuration,
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: widget.headerHorizontalPadding,
-                      vertical: 8,
+              if (widget.headerTransitionKey == null &&
+                  widget.headerTransitionDuration == Duration.zero) ...[
+                if (widget.header != null) header,
+              ] else
+                ClipRect(
+                  child: AnimatedSwitcher(
+                    key: widget.headerTransitionKey,
+                    duration: headerTransitionDuration,
+                    reverseDuration: headerTransitionDuration,
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    layoutBuilder: (currentChild, previousChildren) => Stack(
+                      alignment: Alignment.topCenter,
+                      children: <Widget>[...previousChildren, ?currentChild],
                     ),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 48),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: header,
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: SizeTransition(
+                        sizeFactor: animation,
+                        alignment: AlignmentDirectional.topStart,
+                        child: child,
                       ),
                     ),
+                    child: header,
                   ),
                 ),
               Expanded(child: widget.body),

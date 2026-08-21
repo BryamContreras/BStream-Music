@@ -207,6 +207,8 @@ void main() {
         '0.2',
         '--print',
         'after_move:filepath',
+        '--extractor-args',
+        'youtube:player_client=web_embedded',
       ]),
     );
     expect(

@@ -16,6 +16,7 @@ import '../../features/music/data/models/track_info_model.dart';
 import '../../features/music/domain/entities/download_options.dart';
 import '../../features/music/domain/entities/download_result.dart';
 import '../../features/music/domain/entities/track_info.dart';
+import 'desktop_tool_locator.dart';
 import 'downloader_service.dart';
 
 typedef DesktopProcessStarter =
@@ -376,6 +377,12 @@ class DesktopDownloaderService
       '0.2',
       '--print',
       'after_move:filepath',
+      // YouTube currently returns media URLs from the default client that
+      // answer 403 when yt-dlp starts the actual download. The embedded web
+      // client supplies a compatible signed URL without changing metadata or
+      // search resolution.
+      '--extractor-args',
+      'youtube:player_client=web_embedded',
       '-f',
       AppConstants.preferredNativeAudioFormat,
       if (options.restrictFileNames) '--restrict-filenames',
@@ -1091,65 +1098,7 @@ class DesktopDownloaderService
   }
 
   List<Directory> _toolDirectories() {
-    final overrides = _toolDirectoryOverrides;
-    if (overrides != null) {
-      return List.unmodifiable(overrides);
-    }
-
-    final executableDirectory = File(Platform.resolvedExecutable).parent;
-    final currentDirectory = Directory.current;
-    final directories = <Directory>[
-      Directory(p.join(executableDirectory.path, 'tools')),
-      Directory(p.join(executableDirectory.parent.path, 'Resources', 'tools')),
-      Directory(p.join(currentDirectory.path, 'linux', 'tools')),
-      Directory(p.join(currentDirectory.path, 'macos', 'tools')),
-      Directory(p.join(currentDirectory.path, 'windows', 'tools')),
-      Directory(p.join(currentDirectory.path, 'tools')),
-    ];
-
-    // LaunchServices (Finder/Dock) can start a macOS Flutter executable with
-    // a minimal environment. In that case some Flutter builds expose a
-    // relative `resolvedExecutable`, so the paths derived only from the
-    // executable directory are not sufficient. Keep the standard bundle
-    // locations as deterministic fallbacks; this does not depend on PATH.
-    if (Platform.isMacOS) {
-      final home = Platform.environment['HOME'];
-      directories.add(
-        Directory('/Applications/BStream Music.app/Contents/Resources/tools'),
-      );
-      if (home != null && home.isNotEmpty) {
-        directories.add(
-          Directory(
-            p.join(
-              home,
-              'Applications',
-              'BStream Music.app',
-              'Contents',
-              'Resources',
-              'tools',
-            ),
-          ),
-        );
-      }
-    }
-
-    var cursor = executableDirectory;
-    for (var index = 0; index < 8; index++) {
-      directories.add(Directory(p.join(cursor.path, 'linux', 'tools')));
-      directories.add(Directory(p.join(cursor.path, 'macos', 'tools')));
-      directories.add(Directory(p.join(cursor.path, 'windows', 'tools')));
-      final parent = cursor.parent;
-      if (parent.path == cursor.path) {
-        break;
-      }
-      cursor = parent;
-    }
-
-    final unique = <String, Directory>{};
-    for (final directory in directories) {
-      unique[p.normalize(directory.path)] = directory;
-    }
-    return unique.values.toList(growable: false);
+    return desktopToolDirectories(overrides: _toolDirectoryOverrides);
   }
 
   Duration? _parseEta(String? value) {

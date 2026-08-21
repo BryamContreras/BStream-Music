@@ -1,9 +1,13 @@
+import 'dart:ui';
+
+import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
+import 'package:bstream_music/services/lyrics/lyrics_romanization_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
 import 'package:bstream_music/services/storage/library_csv_import_service.dart';
@@ -14,9 +18,123 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('lyrics romanization preferences persist enabled languages', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(
+          _PersistingCrossfadeSettingsController.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final initial = await container.read(settingsControllerProvider.future);
+    expect(initial.lyricsRomanizationEnabled, isFalse);
+    expect(
+      initial.lyricsRomanizationLanguages,
+      defaultLyricsRomanizationLanguages,
+    );
+
+    final controller = container.read(settingsControllerProvider.notifier);
+    await Future.wait([
+      controller.setLyricsRomanizationEnabled(true),
+      controller.setLyricsRomanizationLanguages(const {
+        LyricsRomanizationLanguage.korean,
+        LyricsRomanizationLanguage.chinese,
+      }),
+    ]);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getBool('settings.lyricsRomanizationEnabled'), isTrue);
+    expect(preferences.getStringList('settings.lyricsRomanizationLanguages'), [
+      'korean',
+      'chinese',
+    ]);
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value
+          ?.lyricsRomanizationLanguages,
+      const {
+        LyricsRomanizationLanguage.korean,
+        LyricsRomanizationLanguage.chinese,
+      },
+    );
+
+    await controller.setLyricsRomanizationLanguages(const {});
+    expect(preferences.getStringList('settings.lyricsRomanizationLanguages'), [
+      'korean',
+      'chinese',
+    ]);
+  });
+
+  test('crossfade preferences accept and persist every whole second', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(
+          _PersistingCrossfadeSettingsController.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final initial = await container.read(settingsControllerProvider.future);
+    expect(initial.crossfadeEnabled, isFalse);
+    expect(initial.crossfadeDuration, const Duration(seconds: 5));
+    expect(
+      supportedCrossfadeDurations.map((duration) => duration.inSeconds),
+      orderedEquals(List<int>.generate(15, (index) => index + 1)),
+    );
+
+    final controller = container.read(settingsControllerProvider.notifier);
+    await Future.wait([
+      controller.setCrossfadeEnabled(true),
+      controller.setCrossfadeDuration(const Duration(seconds: 2)),
+      controller.setCrossfadeDuration(const Duration(seconds: 7)),
+      controller.setCrossfadeDuration(const Duration(seconds: 14)),
+    ]);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getBool('settings.crossfadeEnabled'), isTrue);
+    expect(preferences.getInt('settings.crossfadeSeconds'), 14);
+    expect(
+      container.read(settingsControllerProvider).value?.crossfadeDuration,
+      const Duration(seconds: 14),
+    );
+
+    await controller.setCrossfadeDuration(const Duration(seconds: 1));
+    expect(preferences.getInt('settings.crossfadeSeconds'), 1);
+    await controller.setCrossfadeDuration(const Duration(seconds: 15));
+    expect(preferences.getInt('settings.crossfadeSeconds'), 15);
+
+    expect(
+      () => controller.setCrossfadeDuration(Duration.zero),
+      throwsArgumentError,
+    );
+    expect(
+      () => controller.setCrossfadeDuration(const Duration(seconds: 16)),
+      throwsArgumentError,
+    );
+    expect(
+      () => controller.setCrossfadeDuration(const Duration(milliseconds: 1500)),
+      throwsArgumentError,
+    );
+  });
+
+  test('missing or invalid stored crossfade seconds keep the 5 s default', () {
+    expect(crossfadeDurationFromStoredSeconds(null), defaultCrossfadeDuration);
+    expect(crossfadeDurationFromStoredSeconds(0), defaultCrossfadeDuration);
+    expect(crossfadeDurationFromStoredSeconds(16), defaultCrossfadeDuration);
+    expect(crossfadeDurationFromStoredSeconds(7), const Duration(seconds: 7));
+  });
+
   testWidgets(
     'appearance opens as a detail page and returns to settings root',
     (tester) async {
@@ -286,22 +404,88 @@ void main() {
       const ValueKey('settings-card-lyrics-appearance'),
     );
     final timerCard = find.byKey(const ValueKey('settings-inline-timer'));
+    final crossfadeCard = find.byKey(
+      const ValueKey('settings-inline-crossfade'),
+    );
 
     final cardMaterial = _outerMaterial(tester, appearanceCard);
     final timerMaterial = _outerMaterial(tester, timerCard);
+    final crossfadeMaterial = _outerMaterial(tester, crossfadeCard);
     final cardShape = cardMaterial.shape! as RoundedRectangleBorder;
     final timerShape = timerMaterial.shape! as RoundedRectangleBorder;
-    expect(cardShape.borderRadius, BorderRadius.circular(12));
-    expect(timerShape.borderRadius, BorderRadius.circular(12));
+    final crossfadeShape = crossfadeMaterial.shape! as RoundedRectangleBorder;
+    expect(cardShape.borderRadius, BorderRadius.circular(6));
+    expect(timerShape.borderRadius, BorderRadius.circular(6));
+    expect(crossfadeShape.borderRadius, BorderRadius.circular(6));
     expect(timerMaterial.color, cardMaterial.color);
+    expect(crossfadeMaterial.color, cardMaterial.color);
     expect(timerShape.side.color, cardShape.side.color);
     expect(timerShape.side.width, cardShape.side.width);
+    expect(crossfadeShape.side.color, cardShape.side.color);
+    expect(crossfadeShape.side.width, cardShape.side.width);
 
     final cardGap =
         tester.getTopLeft(lyricsCard).dy -
         tester.getBottomLeft(appearanceCard).dy;
-    expect(cardGap, closeTo(8, 0.1));
+    expect(cardGap, closeTo(6, 0.1));
+    final playbackCardGap =
+        tester.getTopLeft(crossfadeCard).dy -
+        tester.getBottomLeft(timerCard).dy;
+    expect(playbackCardGap, closeTo(6, 0.1));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop crossfade matches the LIVE request storage card width', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    _configureView(tester, const Size(1100, 1600));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+
+    final crossfadeRect = tester.getRect(
+      find.byKey(const ValueKey('settings-inline-crossfade')),
+    );
+    final liveStorageRect = tester.getRect(
+      find.byKey(const ValueKey('settings-card-live-request-storage')),
+    );
+
+    expect(crossfadeRect.width, closeTo(760, 0.1));
+    expect(crossfadeRect.width, closeTo(liveStorageRect.width, 0.1));
+    expect(crossfadeRect.left, closeTo(liveStorageRect.left, 0.1));
+    expect(crossfadeRect.right, closeTo(liveStorageRect.right, 0.1));
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('wide Android keeps the compact crossfade card width', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    _configureView(tester, const Size(760, 1100));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('settings-inline-crossfade')))
+          .width,
+      closeTo(520, 0.1),
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('lyrics appearance offers animation, alignment, and preview', (
@@ -312,7 +496,14 @@ void main() {
     addTearDown(navigationController.dispose);
 
     await tester.pumpWidget(
-      _settingsHarness(navigationController: navigationController),
+      _settingsHarness(
+        navigationController: navigationController,
+        overrides: [
+          lyricsRomanizationServiceProvider.overrideWithValue(
+            _PreviewLyricsRomanizationService(),
+          ),
+        ],
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -337,6 +528,24 @@ void main() {
       find.byKey(const ValueKey('lyrics-animation-preview')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('lyrics-animation-option-none')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('lyrics-romanization-toggle')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('lyrics-romanization-languages')),
+      findsNothing,
+    );
+    for (final slot in const ['previous', 'active', 'next']) {
+      expect(
+        find.byKey(ValueKey('lyrics-preview-$slot-romanized-line')),
+        findsNothing,
+      );
+    }
 
     await tester.tap(
       find.byKey(const ValueKey('lyrics-animation-option-slide')),
@@ -366,6 +575,50 @@ void main() {
       findsOneWidget,
     );
 
+    final romanizationToggle = find.byKey(
+      const ValueKey('lyrics-romanization-toggle'),
+    );
+    await tester.ensureVisible(romanizationToggle);
+    await tester.tap(romanizationToggle);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('lyrics-romanization-languages')),
+      findsOneWidget,
+    );
+    for (final language in LyricsRomanizationLanguage.values) {
+      expect(
+        find.byKey(ValueKey('lyrics-romanization-language-${language.code}')),
+        findsOneWidget,
+      );
+    }
+    final originalPreviewLine = find.byKey(
+      const ValueKey('lyrics-preview-active-line'),
+    );
+    final romanizedPreviewLine = find.byKey(
+      const ValueKey('lyrics-preview-active-romanized-line'),
+    );
+    await tester.ensureVisible(originalPreviewLine);
+    await tester.pumpAndSettle();
+    final originalText = tester.widget<Text>(originalPreviewLine);
+    final romanizedText = tester.widget<Text>(romanizedPreviewLine);
+    expect(originalText.data, isNot(startsWith('Romanized: ')));
+    expect(romanizedText.data, 'Romanized: ${originalText.data}');
+    expect(
+      romanizedText.style!.fontSize,
+      lessThan(originalText.style!.fontSize!),
+    );
+    expect(
+      tester.getTopLeft(romanizedPreviewLine).dy,
+      greaterThanOrEqualTo(tester.getBottomLeft(originalPreviewLine).dy),
+    );
+    for (final slot in const ['previous', 'active', 'next']) {
+      expect(find.byKey(ValueKey('lyrics-preview-$slot-pair')), findsOneWidget);
+      expect(
+        find.byKey(ValueKey('lyrics-preview-$slot-romanized-line')),
+        findsOneWidget,
+      );
+    }
+
     await tester.tap(find.byKey(const ValueKey('lyrics-preview-replay')));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -374,7 +627,92 @@ void main() {
     expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
   });
 
-  testWidgets('timer stays inline while storage opens its detail page', (
+  testWidgets(
+    'romanization preview pairs fit compact and wide settings layouts',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+        debugDefaultTargetPlatformOverride = null;
+      });
+
+      for (final layout in const [
+        (size: Size(320, 720), platform: TargetPlatform.android),
+        (size: Size(760, 1100), platform: TargetPlatform.windows),
+      ]) {
+        tester.view.physicalSize = layout.size;
+        debugDefaultTargetPlatformOverride = layout.platform;
+        final navigationController = SettingsNavigationController();
+        addTearDown(navigationController.dispose);
+
+        await tester.pumpWidget(
+          _settingsHarness(
+            navigationController: navigationController,
+            overrides: [
+              lyricsRomanizationServiceProvider.overrideWithValue(
+                _PreviewLyricsRomanizationService(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final card = find.byKey(
+          const ValueKey('settings-card-lyrics-appearance'),
+        );
+        await tester.ensureVisible(card);
+        await tester.tap(card);
+        await tester.pumpAndSettle();
+
+        final toggle = find.byKey(const ValueKey('lyrics-romanization-toggle'));
+        await tester.ensureVisible(toggle);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+
+        final preview = find.byKey(const ValueKey('lyrics-animation-preview'));
+        await tester.ensureVisible(preview);
+        await tester.pumpAndSettle();
+        final previewRect = tester.getRect(preview);
+        final expectedWidth = layout.size.width == 320 ? 296.0 : 520.0;
+        expect(previewRect.width, closeTo(expectedWidth, 0.1));
+
+        for (final slot in const ['previous', 'active', 'next']) {
+          final original = find.byKey(ValueKey('lyrics-preview-$slot-line'));
+          final romanized = find.byKey(
+            ValueKey('lyrics-preview-$slot-romanized-line'),
+          );
+          expect(original, findsOneWidget);
+          expect(romanized, findsOneWidget);
+
+          final originalText = tester.widget<Text>(original);
+          final romanizedText = tester.widget<Text>(romanized);
+          expect(
+            romanizedText.style!.fontSize,
+            lessThan(originalText.style!.fontSize!),
+          );
+          expect(
+            tester.getTopLeft(romanized).dy,
+            greaterThanOrEqualTo(tester.getBottomLeft(original).dy),
+          );
+
+          final originalRect = tester.getRect(original);
+          final romanizedRect = tester.getRect(romanized);
+          for (final lineRect in [originalRect, romanizedRect]) {
+            expect(lineRect.left, greaterThanOrEqualTo(previewRect.left));
+            expect(lineRect.right, lessThanOrEqualTo(previewRect.right));
+          }
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      }
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets('timer and crossfade stay inline while storage opens detail', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
@@ -396,6 +734,66 @@ void main() {
         matching: find.byType(SwitchListTile),
       ),
       findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-inline-crossfade')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('settings-inline-crossfade')),
+        matching: find.byType(SwitchListTile),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-crossfade-switch')));
+    await tester.pumpAndSettle();
+    final desktopCrossfadeCard = tester.getRect(
+      find.byKey(const ValueKey('settings-inline-crossfade')),
+    );
+    final desktopDurationSlider = find.byKey(
+      const ValueKey('settings-crossfade-duration-slider'),
+    );
+    expect(desktopDurationSlider, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-crossfade-current-5s')),
+      findsOneWidget,
+    );
+    for (var seconds = 1; seconds <= 15; seconds++) {
+      expect(
+        find.byKey(ValueKey('settings-crossfade-tick-${seconds}s')),
+        findsOneWidget,
+      );
+    }
+    for (final seconds in const [1, 5, 10, 15]) {
+      final labelTarget = find.byKey(
+        ValueKey('settings-crossfade-${seconds}s'),
+      );
+      final labelText = find.descendant(
+        of: labelTarget,
+        matching: find.byType(Text),
+      );
+      final tick = find.byKey(ValueKey('settings-crossfade-tick-${seconds}s'));
+      expect(labelTarget, findsOneWidget);
+      expect(tester.getSize(labelTarget).height, greaterThanOrEqualTo(48));
+      expect(
+        tester.getCenter(labelText).dx,
+        closeTo(tester.getCenter(tick).dx, 1.0),
+        reason: '$seconds s label must line up with its actual tick.',
+      );
+    }
+    expect(
+      desktopCrossfadeCard.contains(
+        tester.getRect(desktopDurationSlider).center,
+      ),
+      isTrue,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('settings-inline-crossfade')),
+        matching: find.byType(Slider),
+      ),
+      findsNothing,
     );
     expect(find.byKey(const ValueKey('settings-card-timer')), findsNothing);
     expect(find.byKey(const ValueKey('settings-inline-tools')), findsOneWidget);
@@ -430,7 +828,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('appearance, inline timer, and storage fit a 320 px phone', (
+  testWidgets('playback settings and storage fit a 320 px Android phone', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -459,8 +857,215 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('settings-inline-timer')), findsOneWidget);
-    expect(find.byType(SwitchListTile), findsOneWidget);
+    final timerSwitch = find.descendant(
+      of: find.byKey(const ValueKey('settings-inline-timer')),
+      matching: find.byType(SwitchListTile),
+    );
+    final crossfadeCard = find.byKey(
+      const ValueKey('settings-inline-crossfade'),
+    );
+    final crossfadeSwitch = find.byKey(
+      const ValueKey('settings-crossfade-switch'),
+    );
+    expect(timerSwitch, findsOneWidget);
+    expect(crossfadeCard, findsOneWidget);
+    expect(crossfadeSwitch, findsOneWidget);
+    expect(
+      find.descendant(
+        of: crossfadeCard,
+        matching: find.text(
+          'Superpone suavemente el final de una canción con el inicio de la siguiente.',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: crossfadeCard, matching: find.text('Desactivado')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('settings-crossfade-5s')), findsNothing);
+    expect(find.byKey(const ValueKey('settings-crossfade-10s')), findsNothing);
+    expect(find.byKey(const ValueKey('settings-crossfade-15s')), findsNothing);
+    expect(find.byKey(const ValueKey('settings-crossfade-1s')), findsNothing);
     expect(find.byKey(const ValueKey('settings-card-timer')), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    await tester.ensureVisible(crossfadeSwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(crossfadeSwitch);
+    await tester.pumpAndSettle();
+
+    final durationSlider = find.byKey(
+      const ValueKey('settings-crossfade-duration-slider'),
+    );
+    final optionsTransition = find.byKey(
+      const ValueKey('settings-crossfade-options-transition'),
+    );
+    final fiveSeconds = find.byKey(const ValueKey('settings-crossfade-5s'));
+    final tenSeconds = find.byKey(const ValueKey('settings-crossfade-10s'));
+    final fifteenSeconds = find.byKey(const ValueKey('settings-crossfade-15s'));
+    final oneSecond = find.byKey(const ValueKey('settings-crossfade-1s'));
+    expect(durationSlider, findsOneWidget);
+    expect(optionsTransition, findsOneWidget);
+    expect(oneSecond, findsOneWidget);
+    expect(fiveSeconds, findsOneWidget);
+    expect(tenSeconds, findsOneWidget);
+    expect(fifteenSeconds, findsOneWidget);
+    for (var seconds = 1; seconds <= 15; seconds++) {
+      expect(
+        find.byKey(ValueKey('settings-crossfade-tick-${seconds}s')),
+        findsOneWidget,
+      );
+    }
+    expect(
+      tester.widget<AnimatedSwitcher>(optionsTransition).duration,
+      const Duration(milliseconds: 180),
+    );
+    expect(
+      find.descendant(of: crossfadeCard, matching: find.byType(Slider)),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(of: fiveSeconds, matching: find.byType(Text)),
+          )
+          .style
+          ?.fontWeight,
+      FontWeight.w900,
+    );
+
+    await tester.tap(tenSeconds);
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: crossfadeCard,
+        matching: find.text(
+          'Superpone suavemente el final de una canción con el inicio de la siguiente.',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Duración: 10 s'), findsNothing);
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(of: tenSeconds, matching: find.byType(Text)),
+          )
+          .style
+          ?.fontWeight,
+      FontWeight.w900,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(of: fiveSeconds, matching: find.byType(Text)),
+          )
+          .style
+          ?.fontWeight,
+      FontWeight.w700,
+    );
+
+    final sliderRect = tester.getRect(durationSlider);
+    const thumbDiameter = 18.0;
+    final sevenSecondX =
+        sliderRect.left +
+        thumbDiameter / 2 +
+        (sliderRect.width - thumbDiameter) * (6 / 14);
+    await tester.tapAt(Offset(sevenSecondX, sliderRect.center.dy));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-crossfade-current-7s')),
+      findsOneWidget,
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-crossfade-current-8s')),
+      findsOneWidget,
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-crossfade-current-7s')),
+      findsOneWidget,
+    );
+
+    final providerContainer = ProviderScope.containerOf(
+      tester.element(durationSlider),
+    );
+    expect(
+      providerContainer
+          .read(settingsControllerProvider)
+          .value
+          ?.crossfadeDuration,
+      const Duration(seconds: 7),
+    );
+    final twelveSecondX =
+        sliderRect.left +
+        thumbDiameter / 2 +
+        (sliderRect.width - thumbDiameter) * (11 / 14);
+    final drag = await tester.startGesture(
+      Offset(sevenSecondX, sliderRect.center.dy),
+    );
+    await drag.moveTo(Offset(twelveSecondX, sliderRect.center.dy));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('settings-crossfade-current-12s')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<AnimatedPositioned>(
+            find.byKey(const ValueKey('settings-crossfade-duration-thumb')),
+          )
+          .duration,
+      Duration.zero,
+      reason: 'The thumb must track the pointer without animation lag.',
+    );
+    expect(
+      tester
+          .widget<AnimatedPositioned>(
+            find.byKey(const ValueKey('settings-crossfade-duration-fill')),
+          )
+          .duration,
+      Duration.zero,
+      reason: 'The selected fill must track the pointer without animation lag.',
+    );
+    expect(
+      providerContainer
+          .read(settingsControllerProvider)
+          .value
+          ?.crossfadeDuration,
+      const Duration(seconds: 7),
+      reason: 'Dragging previews locally without reconfiguring playback.',
+    );
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(
+      providerContainer
+          .read(settingsControllerProvider)
+          .value
+          ?.crossfadeDuration,
+      const Duration(seconds: 12),
+    );
+
+    await tester.dragFrom(
+      tester.getRect(durationSlider).center,
+      Offset(tester.getRect(durationSlider).width / 2, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(of: fifteenSeconds, matching: find.byType(Text)),
+          )
+          .style
+          ?.fontWeight,
+      FontWeight.w900,
+    );
     expect(tester.takeException(), isNull);
 
     await tester.ensureVisible(
@@ -472,15 +1077,7 @@ void main() {
 
     expect(
       find.byKey(const ValueKey('download-directory-field')),
-      findsOneWidget,
-    );
-    expect(
-      tester
-          .widget<TextField>(
-            find.byKey(const ValueKey('download-directory-field')),
-          )
-          .readOnly,
-      isTrue,
+      findsNothing,
     );
     expect(
       find.byKey(const ValueKey('download-directory-browse')),
@@ -493,6 +1090,52 @@ void main() {
     expect(find.text('Respaldo'), findsNothing);
     expect(find.byKey(const ValueKey('music-import-start')), findsNothing);
     expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('crossfade slider keeps semantics and honors reduced motion', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    _configureView(tester, const Size(360, 900));
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        disableAnimations: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final crossfadeSwitch = find.byKey(
+      const ValueKey('settings-crossfade-switch'),
+    );
+    await tester.ensureVisible(crossfadeSwitch);
+    await tester.tap(crossfadeSwitch);
+    await tester.pump();
+
+    final transition = find.byKey(
+      const ValueKey('settings-crossfade-options-transition'),
+    );
+    final slider = find.byKey(
+      const ValueKey('settings-crossfade-duration-slider'),
+    );
+    expect(tester.widget<AnimatedSwitcher>(transition).duration, Duration.zero);
+    expect(slider, findsOneWidget);
+    final semanticsData = tester.getSemantics(slider).getSemanticsData();
+    expect(semanticsData.flagsCollection.isSlider, isTrue);
+    expect(semanticsData.label, 'Duración del crossfade');
+    expect(semanticsData.value, '5 s');
+    expect(semanticsData.increasedValue, '6 s');
+    expect(semanticsData.decreasedValue, '4 s');
+    expect(semanticsData.hasAction(SemanticsAction.increase), isTrue);
+    expect(semanticsData.hasAction(SemanticsAction.decrease), isTrue);
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -535,13 +1178,27 @@ void main() {
         find.byKey(const ValueKey('csv-export-profile-dialog')),
         findsOneWidget,
       );
-      for (final profile in const [
-        'bstream',
-        'metroList',
-        'harmony',
-        'soundiiz',
+      for (final profile in const <(String, String)>[
+        ('bstream', 'BStream Music'),
+        ('metroList', 'MetroList'),
+        ('harmony', 'Harmony / RiMusic'),
+        ('soundiiz', 'Soundiiz'),
       ]) {
-        expect(find.byKey(ValueKey('csv-profile-$profile')), findsOneWidget);
+        final tileFinder = find.byKey(ValueKey('csv-profile-${profile.$1}'));
+        expect(tileFinder, findsOneWidget);
+        expect(
+          find.descendant(of: tileFinder, matching: find.text(profile.$2)),
+          findsOneWidget,
+        );
+        expect(tester.widget<ListTile>(tileFinder).subtitle, isNull);
+        expect(
+          tester
+              .widget<Material>(
+                find.byKey(ValueKey('csv-profile-surface-${profile.$1}')),
+              )
+              .color,
+          AppColors.neutralSurfaceFor(tester.element(tileFinder)),
+        );
       }
       await tester.tap(find.byKey(const ValueKey('csv-export-profile-cancel')));
       await tester.pumpAndSettle();
@@ -866,6 +1523,34 @@ class _FixedSettingsController extends SettingsController {
       current.copyWith(lyricsTextAlignment: lyricsTextAlignment),
     );
   }
+
+  @override
+  Future<void> setCrossfadeEnabled(bool enabled) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(crossfadeEnabled: enabled));
+  }
+
+  @override
+  Future<void> setCrossfadeDuration(Duration duration) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(crossfadeDuration: duration));
+  }
+}
+
+class _PersistingCrossfadeSettingsController extends SettingsController {
+  @override
+  Future<SettingsState> build() async => const SettingsState(
+    downloadDirectory: '/tmp/BStream-Music',
+    language: AppLanguage.spanish,
+  );
+}
+
+class _PreviewLyricsRomanizationService extends LyricsRomanizationService {
+  @override
+  Future<List<String>> romanizePreview(
+    List<String> lines,
+    Set<LyricsRomanizationLanguage> languages,
+  ) async => [for (final line in lines) 'Romanized: $line'];
 }
 
 class _IdleTikTokLiveController extends TikTokLiveController {

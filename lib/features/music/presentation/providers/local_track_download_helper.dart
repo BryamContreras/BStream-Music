@@ -26,9 +26,13 @@ class LocalTrackDownloadHelper {
   static const _maxThumbnailBytes = 10 * 1024 * 1024;
   static const _thumbnailIdleTimeout = Duration(seconds: 10);
   static const _thumbnailTotalTimeout = Duration(seconds: 30);
+  static const _maximumParallelDownloads = 3;
 
   final Ref _ref;
   final Map<String, Future<LocalTrackDownloadResult>> _inFlight = {};
+  final Map<String, Future<LocalTrackDownloadResult>> _resolvedInFlight = {};
+  final Queue<Completer<void>> _downloadPermitWaiters = Queue();
+  int _activeDownloads = 0;
   Future<void> _downloadTail = Future<void>.value();
 
   Future<LocalTrackDownloadResult> resolveForLibrary(
@@ -36,6 +40,7 @@ class LocalTrackDownloadHelper {
     String? taskId,
     void Function(TrackInfo track)? onResolved,
     void Function()? onDownloadStarted,
+    bool allowConcurrentDownload = false,
   }) {
     return _ref
         .read(libraryOperationCoordinatorProvider)
@@ -45,6 +50,7 @@ class LocalTrackDownloadHelper {
             taskId: taskId,
             onResolved: onResolved,
             onDownloadStarted: onDownloadStarted,
+            allowConcurrentDownload: allowConcurrentDownload,
           ),
         );
   }
@@ -54,13 +60,14 @@ class LocalTrackDownloadHelper {
     required String? taskId,
     required void Function(TrackInfo track)? onResolved,
     required void Function()? onDownloadStarted,
+    required bool allowConcurrentDownload,
   }) async {
     final identity = _trackIdentity(track);
     final active = _inFlight[identity];
     if (active != null) {
       final result = await active;
       onResolved?.call(result.remoteTrack);
-      return result;
+      return _asCoalescedReuse(result);
     }
 
     late final Future<LocalTrackDownloadResult> operation;
@@ -69,6 +76,7 @@ class LocalTrackDownloadHelper {
       taskId: taskId,
       onResolved: onResolved,
       onDownloadStarted: onDownloadStarted,
+      allowConcurrentDownload: allowConcurrentDownload,
     );
     _inFlight[identity] = operation;
     try {
@@ -85,10 +93,40 @@ class LocalTrackDownloadHelper {
     required String? taskId,
     required void Function(TrackInfo track)? onResolved,
     required void Function()? onDownloadStarted,
+    required bool allowConcurrentDownload,
   }) async {
     final metadataTrack = await _resolveDownloadTrack(track);
     onResolved?.call(metadataTrack);
 
+    final resolvedIdentity = _trackIdentity(metadataTrack);
+    final active = _resolvedInFlight[resolvedIdentity];
+    if (active != null) {
+      return _asCoalescedReuse(await active);
+    }
+
+    late final Future<LocalTrackDownloadResult> operation;
+    operation = _reuseOrDownload(
+      metadataTrack,
+      taskId: taskId,
+      onDownloadStarted: onDownloadStarted,
+      allowConcurrentDownload: allowConcurrentDownload,
+    );
+    _resolvedInFlight[resolvedIdentity] = operation;
+    try {
+      return await operation;
+    } finally {
+      if (identical(_resolvedInFlight[resolvedIdentity], operation)) {
+        _resolvedInFlight.remove(resolvedIdentity);
+      }
+    }
+  }
+
+  Future<LocalTrackDownloadResult> _reuseOrDownload(
+    TrackInfo metadataTrack, {
+    required String? taskId,
+    required void Function()? onDownloadStarted,
+    required bool allowConcurrentDownload,
+  }) async {
     final existing = await findExistingLocalTrack(metadataTrack);
     if (existing != null) {
       final enriched = await _enrichExistingTrack(existing, metadataTrack);
@@ -99,9 +137,9 @@ class LocalTrackDownloadHelper {
       );
     }
 
-    return _serializeDownload(() async {
+    Future<LocalTrackDownloadResult> download() async {
       // A different source may have completed while this request waited for
-      // the downloader. Recheck inside the shared critical section.
+      // the downloader. Recheck immediately before starting the transfer.
       final matching = await _findMatchingLocalTrack(metadataTrack);
       if (matching != null && await _isUsableAudioFile(matching.filePath)) {
         return LocalTrackDownloadResult(
@@ -118,7 +156,21 @@ class LocalTrackDownloadHelper {
         staleMatch: matching,
         taskId: taskId,
       );
-    });
+    }
+
+    Future<LocalTrackDownloadResult> limitedDownload() =>
+        _withDownloadPermit(download);
+    return allowConcurrentDownload
+        ? limitedDownload()
+        : _serializeDownload(limitedDownload);
+  }
+
+  LocalTrackDownloadResult _asCoalescedReuse(LocalTrackDownloadResult result) {
+    return LocalTrackDownloadResult(
+      track: result.track,
+      remoteTrack: result.remoteTrack,
+      reusedExisting: true,
+    );
   }
 
   Future<LocalTrackDownloadResult> _downloadAndSave(
@@ -543,6 +595,25 @@ class LocalTrackDownloadHelper {
       return await operation();
     } finally {
       gate.complete();
+    }
+  }
+
+  Future<T> _withDownloadPermit<T>(Future<T> Function() operation) async {
+    if (_activeDownloads >= _maximumParallelDownloads) {
+      final waiter = Completer<void>();
+      _downloadPermitWaiters.addLast(waiter);
+      await waiter.future;
+    } else {
+      _activeDownloads++;
+    }
+    try {
+      return await operation();
+    } finally {
+      if (_downloadPermitWaiters.isNotEmpty) {
+        _downloadPermitWaiters.removeFirst().complete();
+      } else {
+        _activeDownloads--;
+      }
     }
   }
 

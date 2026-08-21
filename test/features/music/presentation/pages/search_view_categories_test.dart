@@ -124,7 +124,7 @@ void main() {
     expect(find.text('otra búsqueda'), findsNothing);
   });
 
-  testWidgets('mobile heading hides only while a search is active', (
+  testWidgets('mobile heading transitions out and back with the search state', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 800);
@@ -146,17 +146,56 @@ void main() {
       findsOneWidget,
     );
     expect(find.byType(TextField), findsOneWidget);
+    final headingTransition = find.byKey(
+      const ValueKey('search-tab-heading-transition'),
+    );
+    expect(
+      tester.widget<AnimatedSwitcher>(headingTransition).duration,
+      const Duration(milliseconds: 220),
+    );
+    expect(
+      tester
+          .widget<AnimatedPadding>(
+            find.byKey(const ValueKey('search-input-section-padding')),
+          )
+          .duration,
+      const Duration(milliseconds: 220),
+    );
 
     await tester.enterText(find.byType(TextField), 'radiohead');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
+
+    expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-tab-header-surface')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('search-category-songs')), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 80));
+
+    final outgoingFade = tester.widget<FadeTransition>(
+      find
+          .ancestor(
+            of: find.byKey(const ValueKey('search-tab-title')),
+            matching: find.byType(FadeTransition),
+          )
+          .first,
+    );
+    expect(outgoingFade.opacity.value, greaterThan(0));
+    expect(outgoingFade.opacity.value, lessThan(1));
+    expect(tester.takeException(), isNull);
+
+    // The fake controller deliberately remains in a loading state, so use a
+    // bounded pump instead of waiting for its progress indicator to settle.
+    await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
     expect(
       find.byKey(const ValueKey('search-tab-header-surface')),
       findsNothing,
     );
-    expect(find.byKey(const ValueKey('search-category-songs')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('search-clear-button')));
     await tester.pump();
@@ -168,12 +207,79 @@ void main() {
     );
     expect(find.byKey(const ValueKey('search-category-songs')), findsNothing);
 
+    final incomingFade = tester.widget<FadeTransition>(
+      find
+          .ancestor(
+            of: find.byKey(const ValueKey('search-tab-title')),
+            matching: find.byType(FadeTransition),
+          )
+          .first,
+    );
+    expect(incomingFade.opacity.value, 0);
+
+    await tester.pump(const Duration(milliseconds: 80));
+
+    expect(incomingFade.opacity.value, greaterThan(0));
+    expect(incomingFade.opacity.value, lessThan(1));
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpAndSettle();
+
     await tester.pumpWidget(
       _searchApp(controller: controller, platform: TargetPlatform.windows),
     );
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('search-tab-title')), findsOneWidget);
+  });
+
+  testWidgets('mobile heading transition honors reduced motion', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final controller = _RecordingSearchController(SearchState());
+
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        platform: TargetPlatform.android,
+        disableAnimations: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<AnimatedSwitcher>(
+            find.byKey(const ValueKey('search-tab-heading-transition')),
+          )
+          .duration,
+      Duration.zero,
+    );
+    expect(
+      tester
+          .widget<AnimatedPadding>(
+            find.byKey(const ValueKey('search-input-section-padding')),
+          )
+          .duration,
+      Duration.zero,
+    );
+
+    await tester.enterText(find.byType(TextField), 'radiohead');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('search-tab-header-surface')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('desktop keeps its heading during an active search', (

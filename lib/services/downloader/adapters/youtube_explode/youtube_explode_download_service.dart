@@ -13,6 +13,8 @@ import '../../../../features/music/domain/entities/download_result.dart';
 import '../../../../features/music/domain/entities/track_info.dart';
 import '../../downloader_service.dart';
 import 'youtube_audio_stream_selector.dart';
+import 'youtube_explode_audio_resolver.dart';
+import 'youtube_explode_runtime.dart';
 
 /// A resolved YouTube audio stream ready to be written to disk.
 class YoutubeExplodeDownloadStream {
@@ -20,6 +22,7 @@ class YoutubeExplodeDownloadStream {
     required this.bytes,
     required this.extension,
     required this.videoId,
+    this.attemptName,
     this.contentLength,
     this.mimeType,
     this.formatId,
@@ -28,6 +31,7 @@ class YoutubeExplodeDownloadStream {
   final Stream<List<int>> bytes;
   final String extension;
   final String videoId;
+  final String? attemptName;
   final int? contentLength;
   final String? mimeType;
   final String? formatId;
@@ -40,22 +44,97 @@ abstract interface class YoutubeExplodeDownloadClient {
   Future<void> dispose();
 }
 
+/// Optional capability for clients that can continue through multiple
+/// InnerTube profiles before the service falls back to yt-dlp.
+abstract interface class YoutubeExplodeDownloadCandidateClient
+    implements YoutubeExplodeDownloadClient {
+  Stream<YoutubeExplodeDownloadStream> resolveCandidates(String url);
+}
+
 /// Production adapter that downloads through `StreamClient.get(StreamInfo)`.
 ///
 /// Using the managed stream is important: the package handles ranged requests,
 /// fragmented streams, retries, and refreshes an expired media URL when needed.
 class DefaultYoutubeExplodeDownloadClient
-    implements YoutubeExplodeDownloadClient {
-  DefaultYoutubeExplodeDownloadClient({YoutubeExplode? client})
-    : _client = client ?? YoutubeExplode(),
-      _ownsClient = client == null;
+    implements YoutubeExplodeDownloadCandidateClient {
+  DefaultYoutubeExplodeDownloadClient({
+    YoutubeExplode? client,
+    YoutubeExplodeRuntime? runtime,
+    YoutubeSelectedAudioValidator? validateDownloadStream,
+    Iterable<YoutubeManifestAttempt>? manifestAttempts,
+    this.downloadProbeTimeout = const Duration(seconds: 4),
+  }) : _injectedClient = client,
+       _runtime = runtime,
+       _injectedDownloadValidator = validateDownloadStream,
+       _manifestAttempts = manifestAttempts == null
+           ? null
+           : List<YoutubeManifestAttempt>.unmodifiable(manifestAttempts),
+       _ownedClient = client == null && runtime == null
+           ? YoutubeExplode()
+           : null {
+    if (client != null && runtime != null) {
+      throw ArgumentError('Provide either client or runtime, not both.');
+    }
+    if (downloadProbeTimeout <= Duration.zero) {
+      throw ArgumentError.value(
+        downloadProbeTimeout,
+        'downloadProbeTimeout',
+        'Must be positive.',
+      );
+    }
+  }
 
-  final YoutubeExplode _client;
-  final bool _ownsClient;
+  final YoutubeExplode? _injectedClient;
+  final YoutubeExplodeRuntime? _runtime;
+  final YoutubeSelectedAudioValidator? _injectedDownloadValidator;
+  final List<YoutubeManifestAttempt>? _manifestAttempts;
+  final Duration downloadProbeTimeout;
+  YoutubeExplode? _ownedClient;
+  Future<YoutubeExplode>? _clientFuture;
+  YoutubeSelectedAudioValidator? _ownedDownloadValidator;
   bool _disposed = false;
 
+  YoutubeSelectedAudioValidator get _validateDownloadStream {
+    final injected = _injectedDownloadValidator;
+    if (injected != null) {
+      return injected;
+    }
+    return _ownedDownloadValidator ??= YoutubePlaybackStreamValidator(
+      headers: YoutubeHttpClient.defaultHeaders,
+      timeout: downloadProbeTimeout,
+    ).validate;
+  }
+
+  YoutubeExplode get _client {
+    final owned = _ownedClient;
+    if (owned != null) {
+      return owned;
+    }
+    final injected = _injectedClient;
+    if (injected != null) {
+      return injected;
+    }
+    throw StateError('YoutubeExplodeDownloadClient has no client.');
+  }
+
+  Future<YoutubeExplode> _ensureFastClient() {
+    if (_disposed) {
+      throw StateError('YoutubeExplodeDownloadClient was disposed.');
+    }
+    final runtime = _runtime;
+    if (runtime != null) {
+      return runtime.fastClient;
+    }
+    return _clientFuture ??= Future<YoutubeExplode>.value(_client);
+  }
+
   @override
-  Future<YoutubeExplodeDownloadStream> resolve(String url) async {
+  Future<YoutubeExplodeDownloadStream> resolve(String url) {
+    return resolveCandidates(url).first;
+  }
+
+  @override
+  Stream<YoutubeExplodeDownloadStream> resolveCandidates(String url) async* {
     if (_disposed) {
       throw const DownloaderException(
         'El cliente de youtube_explode_dart ya fue cerrado.',
@@ -63,34 +142,80 @@ class DefaultYoutubeExplodeDownloadClient
       );
     }
 
+    final client = await _ensureFastClient();
+    final runtime = _runtime;
     final videoId = VideoId.fromString(url);
-    final stream = await resolvePreferredYoutubeAudioStream(
-      videoId: videoId,
-      loadManifest: (videoId, ytClient, requireWatchPage) {
-        return _client.videos.streams.getManifest(
-          videoId,
-          ytClients: [ytClient],
-          requireWatchPage: requireWatchPage,
-        );
-      },
-    );
+    final attempts = _manifestAttempts ?? defaultYoutubeManifestAttempts;
+    var nextAttemptIndex = 0;
 
-    final extension = youtubeAudioContainerExtension(stream.container);
-    if (extension == null) {
-      throw DownloaderException(
-        'El contenedor ${stream.container.name} no se puede guardar.',
-        code: 'youtube_explode_unsupported_container',
+    while (nextAttemptIndex < attempts.length) {
+      final remainingAttempts = attempts.sublist(nextAttemptIndex);
+      var selectedClient = client;
+      YoutubeManifestAttempt? selectedAttempt;
+      final stream = await resolvePreferredYoutubeAudioStream(
+        videoId: videoId,
+        loadManifest: (videoId, ytClient, requireWatchPage) {
+          return client.videos.streams.getManifest(
+            videoId,
+            ytClients: [ytClient],
+            requireWatchPage: requireWatchPage,
+          );
+        },
+        loadManifestForAttempt: runtime == null
+            ? null
+            : (videoId, attempt) async {
+                selectedClient = await runtime.clientFor(attempt);
+                return selectedClient.videos.streams.getManifest(
+                  videoId,
+                  ytClients: [attempt.client],
+                  requireWatchPage: attempt.requireWatchPage,
+                );
+              },
+        validateSelectedStream: (candidate) {
+          // Fragmented DASH streams are assembled by StreamClient and their
+          // base URL is not independently readable. Direct streams prove that
+          // the exact selected URL returns bytes before a large transfer.
+          if (candidate.fragments.isNotEmpty) {
+            return Future<void>.value();
+          }
+          return _validateDownloadStream(candidate);
+        },
+        jsSolverAvailable: runtime?.supportsSolver ?? false,
+        attempts: remainingAttempts,
+        onAttempt: (attempt, _, error) {
+          if (error == null) {
+            selectedAttempt = attempt;
+          }
+        },
+      );
+
+      final attempt = selectedAttempt;
+      if (attempt == null) {
+        throw const YoutubeAudioManifestException([]);
+      }
+      final selectedIndex = remainingAttempts.indexWhere(
+        (candidate) => identical(candidate, attempt),
+      );
+      if (selectedIndex < 0) {
+        throw StateError('The selected YouTube client was not in the plan.');
+      }
+      nextAttemptIndex += selectedIndex + 1;
+
+      final extension = youtubeAudioContainerExtension(stream.container);
+      if (extension == null) {
+        continue;
+      }
+      final totalBytes = stream.size.totalBytes;
+      yield YoutubeExplodeDownloadStream(
+        bytes: selectedClient.videos.streams.get(stream),
+        extension: extension,
+        videoId: videoId.value,
+        attemptName: attempt.name,
+        contentLength: totalBytes > 0 ? totalBytes : null,
+        mimeType: youtubeAudioContainerMimeType(stream.container),
+        formatId: stream.tag.toString(),
       );
     }
-    final totalBytes = stream.size.totalBytes;
-    return YoutubeExplodeDownloadStream(
-      bytes: _client.videos.streams.get(stream),
-      extension: extension,
-      videoId: videoId.value,
-      contentLength: totalBytes > 0 ? totalBytes : null,
-      mimeType: youtubeAudioContainerMimeType(stream.container),
-      formatId: stream.tag.toString(),
-    );
   }
 
   @override
@@ -99,8 +224,11 @@ class DefaultYoutubeExplodeDownloadClient
       return;
     }
     _disposed = true;
-    if (_ownsClient) {
-      _client.close();
+    final owned = _ownedClient;
+    _ownedClient = null;
+    _clientFuture = null;
+    if (owned != null) {
+      owned.close();
     }
   }
 }
@@ -157,6 +285,7 @@ class YoutubeExplodeDownloadService implements DownloaderService {
   final StreamController<DownloadProgress> _progressController =
       StreamController<DownloadProgress>.broadcast(sync: true);
   late final StreamSubscription<DownloadProgress> _fallbackProgressSubscription;
+  Future<void> _fallbackDownloadTail = Future<void>.value();
   bool _disposed = false;
 
   @override
@@ -233,7 +362,12 @@ class YoutubeExplodeDownloadService implements DownloaderService {
     try {
       // Keep the task id stable so the fallback's queued/running event replaces
       // the transient primary error in the existing UI task.
-      return await fallback.downloadAudio(url, normalizedOptions);
+      // yt-dlp recovery and output discovery mutate shared platform state, so
+      // only this last-resort stage is serialized. youtube_explode candidates
+      // continue downloading in parallel.
+      return await _serializeFallbackDownload(
+        () => fallback.downloadAudio(url, normalizedOptions),
+      );
     } catch (fallbackError, fallbackStackTrace) {
       final message =
           'No se pudo descargar el audio. youtube_explode_dart falló: '
@@ -260,6 +394,20 @@ class YoutubeExplodeDownloadService implements DownloaderService {
     }
   }
 
+  Future<T> _serializeFallbackDownload<T>(
+    Future<T> Function() operation,
+  ) async {
+    final previous = _fallbackDownloadTail;
+    final gate = Completer<void>();
+    _fallbackDownloadTail = gate.future;
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      gate.complete();
+    }
+  }
+
   Future<DownloadResult> _downloadWithYoutubeExplode(
     String url,
     DownloadOptions options,
@@ -275,9 +423,18 @@ class YoutubeExplodeDownloadService implements DownloaderService {
       ),
     );
 
-    final resolved = await _client
-        .resolve(url)
-        .timeout(
+    final candidates = _client is YoutubeExplodeDownloadCandidateClient
+        ? (_client as YoutubeExplodeDownloadCandidateClient).resolveCandidates(
+            url,
+          )
+        : Stream<YoutubeExplodeDownloadStream>.fromFuture(_client.resolve(url));
+    final iterator = StreamIterator<YoutubeExplodeDownloadStream>(candidates);
+    Object? lastTransferError;
+    StackTrace? lastTransferStackTrace;
+
+    try {
+      while (true) {
+        final hasCandidate = await iterator.moveNext().timeout(
           resolveTimeout,
           onTimeout: () => throw DownloaderException(
             'youtube_explode_dart no resolvio el audio en '
@@ -285,6 +442,63 @@ class YoutubeExplodeDownloadService implements DownloaderService {
             code: 'youtube_explode_resolve_timeout',
           ),
         );
+        if (!hasCandidate) {
+          if (lastTransferError != null) {
+            Error.throwWithStackTrace(
+              lastTransferError,
+              lastTransferStackTrace ?? StackTrace.current,
+            );
+          }
+          throw const DownloaderException(
+            'youtube_explode_dart agoto todos los clientes sin encontrar '
+            'un audio descargable.',
+            code: 'youtube_explode_candidates_exhausted',
+          );
+        }
+
+        final resolved = iterator.current;
+        try {
+          return await _downloadResolvedWithYoutubeExplode(
+            url,
+            options,
+            taskId,
+            resolved,
+          );
+        } on FileSystemException {
+          rethrow;
+        } catch (error, stackTrace) {
+          lastTransferError = error;
+          lastTransferStackTrace = stackTrace;
+          final attempt = resolved.attemptName?.trim();
+          _emitProgress(
+            DownloadProgress(
+              taskId: taskId,
+              url: url,
+              status: DownloadProgressStatus.running,
+              progress: 0,
+              message:
+                  'El cliente ${attempt == null || attempt.isEmpty ? 'actual' : attempt} '
+                  'no pudo completar la transferencia. Probando el siguiente '
+                  'cliente de youtube_explode_dart.',
+            ),
+          );
+        }
+      }
+    } finally {
+      try {
+        await iterator.cancel();
+      } catch (_) {
+        // Preserve the completed download or the failure that selected yt-dlp.
+      }
+    }
+  }
+
+  Future<DownloadResult> _downloadResolvedWithYoutubeExplode(
+    String url,
+    DownloadOptions options,
+    String taskId,
+    YoutubeExplodeDownloadStream resolved,
+  ) async {
     final extension = _normalizeExtension(resolved.extension);
     final outputDirectory = Directory(options.outputDirectory);
     await outputDirectory.create(recursive: true);

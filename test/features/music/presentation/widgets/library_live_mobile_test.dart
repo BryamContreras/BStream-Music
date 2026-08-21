@@ -11,6 +11,105 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final layout in <String, Size>{
+    'narrow Android': const Size(320, 568),
+    'wide desktop': const Size(1100, 700),
+  }.entries) {
+    testWidgets(
+      'Library overview artwork matches detail rows on ${layout.key}',
+      (tester) async {
+        tester.view
+          ..devicePixelRatio = 1
+          ..physicalSize = layout.value;
+        tester.platformDispatcher.textScaleFactorTestValue = 1.35;
+        addTearDown(() {
+          tester.view
+            ..resetPhysicalSize()
+            ..resetDevicePixelRatio();
+          tester.platformDispatcher.clearTextScaleFactorTestValue();
+        });
+
+        final track = LocalTrack(
+          id: 'artwork-track',
+          title: 'A deliberately long downloaded song title',
+          artist: 'BStream Music',
+          filePath: r'C:\Music\artwork-track.mp3',
+          thumbnailPath: r'C:\Music\missing-artwork.jpg',
+          addedAt: DateTime(2026),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              libraryTracksProvider.overrideWith((ref) async => [track]),
+              playlistsControllerProvider.overrideWith(
+                _ArtworkPlaylistsController.new,
+              ),
+              tiktokLiveControllerProvider.overrideWith(
+                _IdleTikTokLiveController.new,
+              ),
+              playerControllerProvider.overrideWith(_IdlePlayerController.new),
+            ],
+            child: MaterialApp(
+              theme: ThemeData(
+                platform: layout.key.contains('Android')
+                    ? TargetPlatform.android
+                    : TargetPlatform.windows,
+              ),
+              home: Scaffold(body: LibraryPanel(onOpenPlayer: () {})),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final playlistEntry = find.byKey(
+          const ValueKey('library-playlist-artwork-size'),
+        );
+        await tester.scrollUntilVisible(
+          playlistEntry,
+          120,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.pumpAndSettle();
+
+        final overviewArtwork = find.byKey(
+          const ValueKey('library-playlist-artwork-artwork-size'),
+        );
+        final overviewArtworkSize = tester.getSize(overviewArtwork);
+        expect(overviewArtworkSize.width, 56);
+        if (layout.key.contains('Android')) {
+          expect(overviewArtworkSize.height, 56);
+        }
+        final overviewEntryHeight = tester.getSize(playlistEntry).height;
+        expect(overviewEntryHeight, lessThanOrEqualTo(72));
+        expect(
+          tester.getRect(overviewArtwork).left -
+              tester.getRect(playlistEntry).left,
+          closeTo(12, 1),
+        );
+
+        await tester.tap(playlistEntry);
+        await tester.pumpAndSettle();
+
+        final detailArtwork = find.byKey(
+          const ValueKey('library-track-artwork-artwork-track'),
+        );
+        expect(detailArtwork, findsOneWidget);
+        expect(tester.getSize(detailArtwork), overviewArtworkSize);
+        final detailTile = find
+            .ancestor(of: detailArtwork, matching: find.byType(ListTile))
+            .first;
+        final detailEntryHeight = tester.getSize(detailTile).height;
+        expect(detailEntryHeight, lessThanOrEqualTo(72));
+        expect(
+          (detailEntryHeight - overviewEntryHeight).abs(),
+          lessThanOrEqualTo(4),
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('Android library exposes the TikTok LIVE queue entry', (
     tester,
   ) async {
@@ -251,6 +350,19 @@ Widget _libraryHarness({bool disableAnimations = false}) {
 class _EmptyPlaylistsController extends PlaylistsController {
   @override
   Future<List<Playlist>> build() async => const <Playlist>[];
+}
+
+class _ArtworkPlaylistsController extends PlaylistsController {
+  @override
+  Future<List<Playlist>> build() async => [
+    Playlist(
+      id: 'artwork-size',
+      name: 'A deliberately long playlist name for responsive layout',
+      trackIds: const ['artwork-track'],
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+    ),
+  ];
 }
 
 class _IdleTikTokLiveController extends TikTokLiveController {

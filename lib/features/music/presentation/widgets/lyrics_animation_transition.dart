@@ -88,7 +88,6 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
       LyricsAnimationStyle.smooth => _kLyricsSmoothDuration,
       LyricsAnimationStyle.slide => _kLyricsSlideDuration,
       LyricsAnimationStyle.highlight => _kLyricsHighlightDuration,
-      LyricsAnimationStyle.none => Duration.zero,
     };
   }
 
@@ -104,7 +103,7 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
 
   @override
   Widget build(BuildContext context) {
-    if (widget.style == LyricsAnimationStyle.none) {
+    if (MediaQuery.disableAnimationsOf(context)) {
       return widget.child;
     }
     final alignment = widget.alignment;
@@ -160,7 +159,6 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
               child: child,
             ),
           ),
-          LyricsAnimationStyle.none => child!,
         };
       },
       child: widget.child,
@@ -188,7 +186,7 @@ class LyricsAnimationPreviewTransition extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (style == LyricsAnimationStyle.none) {
+    if (MediaQuery.disableAnimationsOf(context)) {
       return child;
     }
     return TweenAnimationBuilder<double>(
@@ -245,7 +243,6 @@ class LyricsAnimationPreviewTransition extends StatelessWidget {
               child: child,
             ),
           ),
-          LyricsAnimationStyle.none => child!,
         };
       },
       child: child,
@@ -257,7 +254,6 @@ class LyricsAnimationPreviewTransition extends StatelessWidget {
       LyricsAnimationStyle.smooth => _kLyricsSmoothDuration,
       LyricsAnimationStyle.slide => _kLyricsSlideDuration,
       LyricsAnimationStyle.highlight => _kLyricsHighlightDuration,
-      LyricsAnimationStyle.none => Duration.zero,
     };
   }
 }

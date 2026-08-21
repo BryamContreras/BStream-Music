@@ -828,6 +828,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     player.replaceLocalQueue(readyTracks, currentTrackId: currentTrackId);
     final playbackFinished =
         playerState?.status == PlayerStatus.stopped ||
+        playerState?.status == PlayerStatus.completed ||
         playerState?.status == PlayerStatus.failed ||
         _isPausedAtEnd(playerState);
     if (playbackFinished && readyTracks.length > 1) {
@@ -865,6 +866,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     );
     final playbackFinished =
         playerState?.status == PlayerStatus.stopped ||
+        playerState?.status == PlayerStatus.completed ||
         playerState?.status == PlayerStatus.failed ||
         _isPausedAtEnd(playerState);
     if (playbackFinished && readyTracks.length > 1) {

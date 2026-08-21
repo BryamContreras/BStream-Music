@@ -37,6 +37,33 @@ abstract final class AppColors {
         : colors.surfaceContainerHighest.withValues(alpha: 0.97);
   }
 
+  static Color neutralSurfaceFor(BuildContext context) {
+    return Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF141414)
+        : const Color(0xFFF2F2F2);
+  }
+
+  /// Opaque, neutral desktop mini-player background with a restrained wash of
+  /// the selected accent. Keeping this surface independent from artwork means
+  /// the full player's cover-derived backdrop cannot bleed through it.
+  static List<Color> desktopMiniPlayerGradientFor(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final accent = downloadAccentFor(context);
+    final base = isDark ? const Color(0xFF0C0D0D) : const Color(0xFFF4F5F4);
+    final edgeStrength = isDark ? 0.025 : 0.018;
+    final centerStrength = isDark ? 0.055 : 0.038;
+
+    Color tinted(double strength) =>
+        Color.alphaBlend(accent.withValues(alpha: strength), base);
+
+    return <Color>[
+      tinted(edgeStrength),
+      tinted(centerStrength),
+      tinted(edgeStrength),
+    ];
+  }
+
   static Color menuForegroundFor(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -96,6 +123,28 @@ abstract final class AppColors {
       colors.outlineVariant,
     );
     return tintedBorder.withValues(alpha: 0.78);
+  }
+
+  /// Shared surface for dialogs and other modal panels. It follows the same
+  /// restrained accent wash as cards without inheriting Material 3's much
+  /// brighter surface-container colors.
+  static Color dialogSurfaceForTheme(AppAccent accent, ColorScheme colors) {
+    final tintStrength = colors.brightness == Brightness.dark ? 0.08 : 0.06;
+    return Color.alphaBlend(
+      accent.seedColor.withValues(alpha: tintStrength),
+      colors.surface,
+    ).withValues(alpha: 0.97);
+  }
+
+  static Color dialogBorderForTheme(AppAccent accent, ColorScheme colors) {
+    final tintStrength = colors.brightness == Brightness.dark ? 0.24 : 0.18;
+    return Color.alphaBlend(
+      (colors.brightness == Brightness.dark
+              ? accent.seedColor
+              : accent.darkColor)
+          .withValues(alpha: tintStrength),
+      colors.outlineVariant,
+    ).withValues(alpha: 0.9);
   }
 
   static Color homeCardSurfaceFor(BuildContext context) {

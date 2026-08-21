@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
@@ -9,6 +10,7 @@ import 'package:bstream_music/features/music/presentation/providers/music_provid
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_animation_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_page.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
+import 'package:bstream_music/services/lyrics/lyrics_romanization_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -94,15 +96,19 @@ void main() {
     await Future.wait([
       notifier.setLyricsAnimationStyle(LyricsAnimationStyle.slide),
       notifier.setLyricsAnimationStyle(LyricsAnimationStyle.highlight),
-      notifier.setLyricsAnimationStyle(LyricsAnimationStyle.none),
+      notifier.setLyricsAnimationStyle(LyricsAnimationStyle.smooth),
     ]);
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('settings.lyricsAnimation'), 'none');
+    expect(prefs.getString('settings.lyricsAnimation'), 'smooth');
     expect(
       container.read(settingsControllerProvider).value?.lyricsAnimationStyle,
-      LyricsAnimationStyle.none,
+      LyricsAnimationStyle.smooth,
     );
+  });
+
+  test('legacy no-animation setting migrates to smooth', () {
+    expect(LyricsAnimationStyle.fromCode('none'), LyricsAnimationStyle.smooth);
   });
 
   testWidgets('synced lyrics follow the current playback position', (
@@ -116,6 +122,7 @@ void main() {
     );
 
     expect(_activeLine('First line'), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
 
     player.emit(
       lookupSnapshot.copyWith(position: const Duration(milliseconds: 4250)),
@@ -124,6 +131,154 @@ void main() {
 
     expect(_activeLine('Third line'), findsOneWidget);
     expect(_activeLine('First line'), findsNothing);
+  });
+
+  testWidgets(
+    'romanized synced lyrics keep playback timing, seek, and live toggle',
+    (tester) async {
+      final player = _FakePlayerService(lookupSnapshot);
+      final container = await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(syncedDocument),
+        lyricsRomanizationEnabled: true,
+        lyricsRomanizationLanguages: const {LyricsRomanizationLanguage.korean},
+        lyricsRomanizationService: _FakeLyricsRomanizationService(),
+      );
+
+      expect(_activeLine('First line'), findsOneWidget);
+      expect(_activeLine('Romanized: First line'), findsOneWidget);
+      expect(find.text('First line'), findsOneWidget);
+      final originalFontSize = _lyricLineFontSize(tester, 'active-lyric-line');
+      final romanizedStyle = tester.widget<AnimatedDefaultTextStyle>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey('lyrics-line-romanization-0')),
+              matching: find.byType(AnimatedDefaultTextStyle),
+            )
+            .first,
+      );
+      expect(romanizedStyle.style.fontSize, lessThan(originalFontSize));
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('lyrics-line-romanization-0')))
+            .top,
+        greaterThan(tester.getRect(find.text('First line')).bottom),
+      );
+      final semantics = tester.ensureSemantics();
+      final semanticsData = tester
+          .getSemantics(find.byKey(const ValueKey('active-lyric-line')))
+          .getSemanticsData();
+      expect(semanticsData.label, 'First line\nRomanized: First line');
+      expect(semanticsData.hasAction(SemanticsAction.tap), isTrue);
+      expect(semanticsData.flagsCollection.isButton, isTrue);
+      semantics.dispose();
+
+      player.emit(
+        lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
+      );
+      await tester.pumpAndSettle();
+      expect(_activeLine('Second line'), findsOneWidget);
+      expect(_activeLine('Romanized: Second line'), findsOneWidget);
+      final retainedTile = tester.element(
+        find.byKey(const ValueKey('lyrics-line-tile-1')),
+      );
+
+      await tester.ensureVisible(find.text('Romanized: Third line'));
+      await tester.tap(find.text('Romanized: Third line'));
+      await tester.pump();
+      expect(player.seekPositions, [const Duration(seconds: 4)]);
+
+      await container
+          .read(settingsControllerProvider.notifier)
+          .setLyricsRomanizationEnabled(false);
+      await tester.pumpAndSettle();
+      expect(_activeLine('Second line'), findsOneWidget);
+      expect(find.text('Romanized: Second line'), findsNothing);
+
+      await container
+          .read(settingsControllerProvider.notifier)
+          .setLyricsRomanizationEnabled(true);
+      await tester.pumpAndSettle();
+      expect(_activeLine('Second line'), findsOneWidget);
+      expect(_activeLine('Romanized: Second line'), findsOneWidget);
+      expect(
+        identical(
+          retainedTile,
+          tester.element(find.byKey(const ValueKey('lyrics-line-tile-1'))),
+        ),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('unchanged romanization is not rendered twice', (tester) async {
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      lyricsRomanizationEnabled: true,
+      lyricsRomanizationService: _IdentityLyricsRomanizationService(),
+    );
+
+    expect(find.text('First line'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('lyrics-line-romanization-0')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final platform in const [
+    TargetPlatform.android,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets('lyrics header omits playback control on ${platform.name}', (
+      tester,
+    ) async {
+      await _pumpLyricsPage(
+        tester,
+        player: _FakePlayerService(lookupSnapshot),
+        lyrics: _FakeLyricsService(syncedDocument),
+        platform: platform,
+      );
+
+      expect(
+        find.byKey(const ValueKey('lyrics-playback-control')),
+        findsNothing,
+      );
+      expect(find.byKey(const ValueKey('lyrics-back-button')), findsOneWidget);
+      expect(find.text('Lyrics'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('lyrics keep the mini player visible below the content', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(960, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.windows,
+    );
+
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsOneWidget);
+    expect(find.byKey(const ValueKey('mini-player-progress')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
+    expect(
+      tester.getRect(find.byKey(const ValueKey('mini-player-frame'))).bottom,
+      closeTo(800, 0.1),
+    );
   });
 
   testWidgets('slide animation interpolates when the active line changes', (
@@ -262,13 +417,13 @@ void main() {
     },
   );
 
-  testWidgets('none animation skips any animation builder', (tester) async {
+  testWidgets('reduced motion skips lyrics animation builders', (tester) async {
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(
       tester,
       player: player,
       lyrics: _FakeLyricsService(syncedDocument),
-      lyricsAnimationStyle: LyricsAnimationStyle.none,
+      disableAnimations: true,
     );
 
     player.emit(
@@ -282,18 +437,12 @@ void main() {
         )
         .toList(growable: false);
     expect(transitions, isNotEmpty);
-    for (final t in transitions) {
-      if (t.style == LyricsAnimationStyle.none && t.active) {
-        final builder = tester
-            .widgetList<AnimatedBuilder>(
-              find.descendant(
-                of: find.byWidget(t),
-                matching: find.byType(AnimatedBuilder),
-              ),
-            )
-            .toList(growable: false);
-        expect(builder, isEmpty);
-      }
+    for (final transition in transitions) {
+      final builders = find.descendant(
+        of: find.byWidget(transition),
+        matching: find.byType(AnimatedBuilder),
+      );
+      expect(builders, findsNothing);
     }
   });
 
@@ -850,7 +999,7 @@ void main() {
     );
     expect(find.text('Lyrics provided by LRCLIB'), findsOneWidget);
     expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsNothing);
-    final plainText = find.byKey(const ValueKey('plain-lyrics-text'));
+    final plainText = find.byKey(const ValueKey('plain-lyrics-original'));
     expect(tester.widget<Text>(plainText).style?.fontSize, 25);
     expect(tester.widget<Text>(plainText).textAlign, TextAlign.start);
     expect(
@@ -886,6 +1035,85 @@ void main() {
     expect(find.byKey(const ValueKey('lyrics-alignment-toggle')), findsNothing);
   });
 
+  testWidgets('plain lyrics can be romanized without losing line breaks', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(plainDocument),
+      lyricsRomanizationEnabled: true,
+      lyricsRomanizationLanguages: const {LyricsRomanizationLanguage.japanese},
+      lyricsRomanizationService: _FakeLyricsRomanizationService(),
+    );
+
+    final firstOriginal = tester.widget<Text>(
+      find.byKey(const ValueKey('plain-lyrics-original-0')),
+    );
+    final secondOriginal = tester.widget<Text>(
+      find.byKey(const ValueKey('plain-lyrics-original-1')),
+    );
+    final firstRomanization = tester.widget<Text>(
+      find.byKey(const ValueKey('plain-lyrics-romanization-0')),
+    );
+    expect(firstOriginal.data, 'Plain first line');
+    expect(secondOriginal.data, '   Plain second line');
+    expect(firstRomanization.data, 'Romanized: Plain first line');
+    expect(
+      find.byKey(const ValueKey('plain-lyrics-romanization-1')),
+      findsNothing,
+    );
+    expect(
+      firstRomanization.style?.fontSize,
+      lessThan(firstOriginal.style!.fontSize!),
+    );
+    expect(
+      tester
+          .getRect(find.byKey(const ValueKey('plain-lyrics-romanization-0')))
+          .top,
+      greaterThan(
+        tester
+            .getRect(find.byKey(const ValueKey('plain-lyrics-original-0')))
+            .bottom,
+      ),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('romanized lyric pairs remain scrollable at text scale 3', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(320, 568)
+      ..devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 3;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+    });
+
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      lyricsRomanizationEnabled: true,
+      lyricsRomanizationLanguages: const {LyricsRomanizationLanguage.japanese},
+      lyricsRomanizationService: _FakeLyricsRomanizationService(),
+      platform: TargetPlatform.android,
+    );
+
+    expect(_activeLine('First line'), findsOneWidget);
+    expect(_activeLine('Romanized: First line'), findsOneWidget);
+    await tester.ensureVisible(find.text('Romanized: Third line'));
+    await tester.pump();
+    expect(find.text('Third line'), findsOneWidget);
+    expect(find.text('Romanized: Third line'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('wide desktop plain lyrics use the available space', (
     tester,
   ) async {
@@ -903,7 +1131,7 @@ void main() {
     );
 
     final plainText = tester.widget<Text>(
-      find.byKey(const ValueKey('plain-lyrics-text')),
+      find.byKey(const ValueKey('plain-lyrics-original')),
     );
     expect(plainText.style?.fontSize, 33);
     expect(plainText.textAlign, TextAlign.center);
@@ -1238,18 +1466,30 @@ Future<ProviderContainer> _pumpLyricsPage(
   AppLanguage language = AppLanguage.english,
   LyricsTextAlignment lyricsTextAlignment = LyricsTextAlignment.normal,
   LyricsAnimationStyle lyricsAnimationStyle = LyricsAnimationStyle.smooth,
+  bool lyricsRomanizationEnabled = false,
+  Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages =
+      defaultLyricsRomanizationLanguages,
+  LyricsRomanizationService? lyricsRomanizationService,
+  bool disableAnimations = false,
   TargetPlatform? platform,
 }) async {
   final settingsController = _FakeLyricsSettingsController(
     lyricsTextAlignment,
     lyricsAnimationStyle,
+    lyricsRomanizationEnabled: lyricsRomanizationEnabled,
+    lyricsRomanizationLanguages: lyricsRomanizationLanguages,
   );
   final container = ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
+      favoriteTrackIdsProvider.overrideWithValue(const <String>{}),
       lyricsServiceProvider.overrideWithValue(lyrics),
       appStringsProvider.overrideWithValue(AppStrings(language)),
       settingsControllerProvider.overrideWith(() => settingsController),
+      if (lyricsRomanizationService != null)
+        lyricsRomanizationServiceProvider.overrideWithValue(
+          lyricsRomanizationService,
+        ),
       if (artworkProgressColorService != null)
         artworkProgressColorServiceProvider.overrideWithValue(
           artworkProgressColorService,
@@ -1271,6 +1511,12 @@ Future<ProviderContainer> _pumpLyricsPage(
       container: container,
       child: MaterialApp(
         theme: platform == null ? null : ThemeData(platform: platform),
+        builder: disableAnimations
+            ? (context, child) => MediaQuery(
+                data: MediaQuery.of(context).copyWith(disableAnimations: true),
+                child: child!,
+              )
+            : null,
         home: const LyricsPage(),
       ),
     ),
@@ -1291,11 +1537,15 @@ class _FakeArtworkProgressColorService extends ArtworkProgressColorService {
 class _FakeLyricsSettingsController extends SettingsController {
   _FakeLyricsSettingsController(
     this.initialLyricsTextAlignment,
-    this.initialLyricsAnimationStyle,
-  );
+    this.initialLyricsAnimationStyle, {
+    this.lyricsRomanizationEnabled = false,
+    this.lyricsRomanizationLanguages = defaultLyricsRomanizationLanguages,
+  });
 
   final LyricsTextAlignment initialLyricsTextAlignment;
   final LyricsAnimationStyle initialLyricsAnimationStyle;
+  final bool lyricsRomanizationEnabled;
+  final Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages;
 
   @override
   Future<SettingsState> build() async => SettingsState(
@@ -1303,6 +1553,8 @@ class _FakeLyricsSettingsController extends SettingsController {
     language: AppLanguage.english,
     lyricsTextAlignment: initialLyricsTextAlignment,
     lyricsAnimationStyle: initialLyricsAnimationStyle,
+    lyricsRomanizationEnabled: lyricsRomanizationEnabled,
+    lyricsRomanizationLanguages: lyricsRomanizationLanguages,
   );
 
   @override
@@ -1314,6 +1566,24 @@ class _FakeLyricsSettingsController extends SettingsController {
       current.copyWith(lyricsTextAlignment: lyricsTextAlignment),
     );
   }
+
+  @override
+  Future<void> setLyricsRomanizationEnabled(bool enabled) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(lyricsRomanizationEnabled: enabled));
+  }
+
+  @override
+  Future<void> setLyricsRomanizationLanguages(
+    Set<LyricsRomanizationLanguage> languages,
+  ) async {
+    final current = await future;
+    state = AsyncData(
+      current.copyWith(
+        lyricsRomanizationLanguages: Set.unmodifiable(languages),
+      ),
+    );
+  }
 }
 
 class _PersistingLyricsSettingsController extends SettingsController {
@@ -1322,6 +1592,42 @@ class _PersistingLyricsSettingsController extends SettingsController {
     downloadDirectory: '/tmp/bstream-lyrics-test',
     language: AppLanguage.english,
   );
+}
+
+class _FakeLyricsRomanizationService extends LyricsRomanizationService {
+  @override
+  Future<RomanizedLyricsView> romanizeDocument(
+    LyricsDocument document,
+    Set<LyricsRomanizationLanguage> languages,
+  ) async {
+    return RomanizedLyricsView(
+      syncedLines: [
+        for (final line in document.lines) 'Romanized: ${line.text}',
+      ],
+      plainLyrics: document.plainLyrics == null
+          ? null
+          : 'Romanized: ${document.plainLyrics}',
+    );
+  }
+
+  @override
+  Future<List<String>> romanizePreview(
+    List<String> lines,
+    Set<LyricsRomanizationLanguage> languages,
+  ) async => [for (final line in lines) 'Romanized: $line'];
+}
+
+class _IdentityLyricsRomanizationService extends LyricsRomanizationService {
+  @override
+  Future<RomanizedLyricsView> romanizeDocument(
+    LyricsDocument document,
+    Set<LyricsRomanizationLanguage> languages,
+  ) async {
+    return RomanizedLyricsView(
+      syncedLines: [for (final line in document.lines) line.text],
+      plainLyrics: document.plainLyrics,
+    );
+  }
 }
 
 class _FakeLyricsService implements LyricsService {

@@ -157,7 +157,7 @@ class YoutubeHttpClient extends http.BaseClient {
       );
     }
     if (streamInfo is HlsStreamInfo) {
-      return _getHlsStream(streamInfo);
+      return _getHlsStream(streamInfo, headers: headers);
     }
     // Normal stream
     return _getStream(
@@ -179,10 +179,14 @@ class YoutubeHttpClient extends http.BaseClient {
   }) async* {
     // This is the base url.
     final url = streamInfo.url;
+    final poToken = url.queryParameters['pot'];
     for (final fragment in streamInfo.fragments) {
       final req = await retry(
         this,
-        () => get(Uri.parse(url.toString() + fragment.path)),
+        () => get(
+          _resolveFragmentUrl(url, fragment.path, poToken),
+          headers: headers,
+        ),
       );
       yield req.bodyBytes;
     }
@@ -215,6 +219,7 @@ class YoutubeHttpClient extends http.BaseClient {
             request =
                 http.Request('get', url.setQueryParam('range', '$from-$to'));
           }
+          request.headers.addAll(headers);
           return send(request);
         });
         if (validate) {
@@ -322,13 +327,33 @@ class YoutubeHttpClient extends http.BaseClient {
     });
   }
 
-  Stream<List<int>> _getHlsStream(HlsStreamInfo stream) async* {
-    final videoIndex = await getString(stream.url);
+  Stream<List<int>> _getHlsStream(
+    HlsStreamInfo stream, {
+    Map<String, String> headers = const {},
+  }) async* {
+    final videoIndex = await getString(stream.url, headers: headers);
     final video = HlsManifest.parseVideoSegments(videoIndex);
+    final poToken = stream.url.queryParameters['pot'];
     for (final segment in video) {
-      final data = await get(Uri.parse(segment.url));
+      final data = await get(
+        _resolveFragmentUrl(stream.url, segment.url, poToken),
+        headers: headers,
+      );
       yield data.bodyBytes;
     }
+  }
+
+  Uri _resolveFragmentUrl(Uri base, String path, String? poToken) {
+    final resolved = base.resolveUri(Uri.parse(path));
+    if (!resolved.hasScheme || resolved.host.isEmpty) {
+      return resolved;
+    }
+    if (poToken == null || poToken.isEmpty) {
+      return resolved;
+    }
+    return resolved.queryParameters.containsKey('pot')
+        ? resolved
+        : resolved.setQueryParam('pot', poToken);
   }
 
   @override

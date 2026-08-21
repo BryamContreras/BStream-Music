@@ -5,6 +5,7 @@ import 'windows_smtc_media_session.dart';
 
 DesktopMediaSession createDesktopMediaSession() {
   return switch (AppPlatform.current) {
+    AppPlatformType.android => AudioServiceDesktopMediaSession(),
     AppPlatformType.windows => WindowsSmtcMediaSession(),
     AppPlatformType.linux ||
     AppPlatformType.macos => AudioServiceDesktopMediaSession(),

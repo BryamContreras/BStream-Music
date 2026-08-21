@@ -137,6 +137,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  checks:
+    dependency: transitive
+    description:
+      name: checks
+      sha256: "016871c84732c1ac9856b8940236d5a5802ba638b3bd3e0ea7027b51a35f7aa7"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.1"
   cli_config:
     dependency: transitive
     description:
@@ -286,6 +294,11 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.4.2"
+  flutter_driver:
+    dependency: transitive
+    description: flutter
+    source: sdk
+    version: "0.0.0"
   flutter_lints:
     dependency: "direct dev"
     description:
@@ -349,6 +362,11 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.0.0"
+  fuchsia_remote_debug_protocol:
+    dependency: transitive
+    description: flutter
+    source: sdk
+    version: "0.0.0"
   glob:
     dependency: transitive
     description:
@@ -413,6 +431,11 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.8.0"
+  integration_test:
+    dependency: "direct dev"
+    description: flutter
+    source: sdk
+    version: "0.0.0"
   intl:
     dependency: transitive
     description:
@@ -477,14 +500,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.10.6"
-  just_audio_background:
-    dependency: "direct main"
-    description:
-      name: just_audio_background
-      sha256: "3900825701164577db65337792bc122b66f9eb1245ee47e7ae8244ae5ceb8030"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.1-beta.17"
   just_audio_platform_interface:
     dependency: transitive
     description:
@@ -501,6 +516,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.4.16"
+  kana_kit:
+    dependency: transitive
+    description:
+      name: kana_kit
+      sha256: "4e99cfddae947971c327ef3d8d82d35cf036c046c7f460583785d48c0f777fa3"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.1.1"
+  kuromoji:
+    dependency: "direct main"
+    description:
+      name: kuromoji
+      sha256: ad4ff9de8c41fbd51f71f7127ba671f3efbd14bead6a2e241b10a56338f9da7c
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.5"
   leak_tracker:
     dependency: transitive
     description:
@@ -709,6 +740,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "7.0.2"
+  pinyin:
+    dependency: transitive
+    description:
+      name: pinyin
+      sha256: "240f271a3c71af20c8d2757756b5ee8e9d79a955d37abad4b3568fd406b22411"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.3.0"
   piratetok_live:
     dependency: "direct main"
     description:
@@ -748,6 +787,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.5.2"
+  process:
+    dependency: transitive
+    description:
+      name: process
+      sha256: c6248e4526673988586e8c00bb22a49210c258dc91df5227d5da9748ecf79744
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.0.5"
   pub_semver:
     dependency: transitive
     description:
@@ -772,6 +819,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.4.2"
+  romanize:
+    dependency: "direct main"
+    description:
+      name: romanize
+      sha256: "4fad4cc9923531fbef6741231af63d32666fd1e05ffd21115f9ed0c2f41fe07b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.3"
   rxdart:
     dependency: transitive
     description:
@@ -1025,6 +1080,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  sync_http:
+    dependency: transitive
+    description:
+      name: sync_http
+      sha256: "7f0cd72eca000d2e026bcd6f990b81d0ca06022ef4e32fb257b30d3d1014a961"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.1"
   synchronized:
     dependency: transitive
     description:
@@ -1217,6 +1280,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.3"
+  webdriver:
+    dependency: transitive
+    description:
+      name: webdriver
+      sha256: "2f3a14ca026957870cfd9c635b83507e0e51d8091568e90129fbf805aba7cade"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.1.0"
   webkit_inspection_protocol:
     dependency: transitive
     description:

@@ -7,8 +7,10 @@ import 'package:path/path.dart' as p;
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
+import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
@@ -31,6 +33,16 @@ enum _TrackMenuAction {
 }
 
 enum _PlaylistMenuAction { renamePlaylist, deletePlaylist }
+
+// Keep overview covers at the same visual size as artwork in downloaded-song
+// and playlist detail rows. The shared card icon token is intentionally
+// smaller and is better suited to settings/action icons than album artwork.
+const double _libraryOverviewArtworkSize = 56;
+const double _libraryArtworkRowMinHeight = 70;
+const EdgeInsets _libraryOverviewContentPadding = EdgeInsets.only(
+  left: 12,
+  right: 4,
+);
 
 class _LibraryRoute {
   const _LibraryRoute.root() : type = _LibraryRouteType.root, playlistId = null;
@@ -772,9 +784,7 @@ class _LibraryRootView extends StatelessWidget {
         strings.library,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: Theme.of(
-          context,
-        ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+        style: appTabTitleStyle(context),
       ),
       body: CustomScrollView(
         key: const ValueKey('library-root-scroll'),
@@ -847,8 +857,9 @@ class _LibraryRootView extends StatelessWidget {
           const SliverToBoxAdapter(child: SizedBox(height: 10)),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
               child: _CreatePlaylistRow(
+                key: const ValueKey('create-playlist'),
                 label: strings.createPlaylist,
                 onPressed: onCreatePlaylist,
               ),
@@ -1717,13 +1728,7 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-        fontWeight: FontWeight.w900,
-        color: AppColors.contentHeadingFor(context),
-      ),
-    );
+    return AppSectionTitle(text);
   }
 }
 
@@ -1745,7 +1750,7 @@ class _PlaylistList extends StatelessWidget {
     if (playlists.isEmpty) {
       return SliverToBoxAdapter(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           child: Text(
             strings.noLocalPlaylists,
             style: TextStyle(color: AppColors.contentSubtitleFor(context)),
@@ -1765,7 +1770,7 @@ class _PlaylistList extends StatelessWidget {
             .whereType<LocalTrack>()
             .toList(growable: false);
         return Padding(
-          padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+          padding: const EdgeInsets.fromLTRB(6, 0, 6, appCardGap),
           child: _PlaylistRow(
             key: ValueKey('library-playlist-${playlist.id}'),
             playlist: playlist,
@@ -1809,7 +1814,10 @@ class _PlaylistRow extends StatelessWidget {
           ? null
           : Stack(
               children: [
-                _PlaylistCover(sources: thumbnailSources),
+                _PlaylistCover(
+                  key: ValueKey('library-playlist-artwork-${playlist.id}'),
+                  sources: thumbnailSources,
+                ),
                 if (playlist.isFavorites)
                   const Positioned(
                     top: 1,
@@ -1868,48 +1876,51 @@ String? _trackThumbnailSource(LocalTrack track) {
 }
 
 class _CreatePlaylistRow extends StatelessWidget {
-  const _CreatePlaylistRow({required this.label, required this.onPressed});
+  const _CreatePlaylistRow({
+    super.key,
+    required this.label,
+    required this.onPressed,
+  });
 
   final String label;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: onPressed,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
-            children: [
-              Container(
-                width: 58,
-                height: 58,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
+    return AppCardShell(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          minHeight: _libraryArtworkRowMinHeight,
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(appCardRadius),
+          onTap: onPressed,
+          child: Padding(
+            padding: _libraryOverviewContentPadding,
+            child: Row(
+              children: [
+                Container(
+                  width: _libraryOverviewArtworkSize,
+                  height: _libraryOverviewArtworkSize,
+                  decoration: BoxDecoration(
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(appListCardIconRadius),
+                  ),
+                  child: const Icon(Icons.add_rounded, size: 34),
                 ),
-                child: Icon(
-                  Icons.add_rounded,
-                  size: 34,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.contentTitleFor(context),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: appListCardTitleStyle(context),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1939,21 +1950,22 @@ class _LibraryEntry extends StatelessWidget {
   Widget build(BuildContext context) {
     return _FolderShell(
       child: ListTile(
-        minTileHeight: 76,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        minTileHeight: _libraryArtworkRowMinHeight,
+        minVerticalPadding: 7,
+        contentPadding: _libraryOverviewContentPadding,
+        horizontalTitleGap: 10,
         leading: leading ?? _FolderIcon(icon: icon),
         title: Text(
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            color: AppColors.contentTitleFor(context),
-          ),
+          style: appListCardTitleStyle(context),
         ),
         subtitle: Text(
           subtitle,
-          style: TextStyle(color: AppColors.contentSubtitleFor(context)),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: appListCardSubtitleStyle(context),
         ),
         trailing: trailing ?? const Icon(Icons.chevron_right_rounded),
         onTap: onTap,
@@ -1963,7 +1975,7 @@ class _LibraryEntry extends StatelessWidget {
 }
 
 class _PlaylistCover extends StatelessWidget {
-  const _PlaylistCover({required this.sources});
+  const _PlaylistCover({required this.sources, super.key});
 
   final List<String> sources;
 
@@ -1978,8 +1990,8 @@ class _PlaylistCover extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(3),
       child: SizedBox(
-        width: 58,
-        height: 58,
+        width: _libraryOverviewArtworkSize,
+        height: _libraryOverviewArtworkSize,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -2061,9 +2073,9 @@ class _FolderShellState extends State<_FolderShell> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final shape = RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(appCardRadius),
       side: BorderSide(
-        color: _hovered ? colors.primary : AppColors.cardBorderFor(context),
+        color: _hovered ? colors.primary : appListCardBorder(context),
       ),
     );
     return MouseRegion(
@@ -2073,7 +2085,7 @@ class _FolderShellState extends State<_FolderShell> {
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOutCubic,
         decoration: ShapeDecoration(
-          color: AppColors.cardSurfaceFor(context),
+          color: appListCardSurface(context),
           shape: shape,
         ),
         child: Material(
@@ -2081,7 +2093,9 @@ class _FolderShellState extends State<_FolderShell> {
           elevation: 0,
           shadowColor: const Color(0x14000000),
           clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(appCardRadius),
+          ),
           child: widget.child,
         ),
       ),
@@ -2101,15 +2115,15 @@ class _FolderIcon extends StatelessWidget {
         ? const [Color(0xFF18C75A), Color(0xFF0B8F43), Color(0xFF076B35)]
         : [accent.seed, accent.dark, accent.dark.withValues(alpha: 0.78)];
     return Container(
-      width: 58,
-      height: 58,
+      width: _libraryOverviewArtworkSize,
+      height: _libraryOverviewArtworkSize,
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: gradientColors,
         ),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(appListCardIconRadius),
       ),
       child: Icon(icon, color: Theme.of(context).colorScheme.onPrimary),
     );
@@ -2177,7 +2191,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     final menuButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
     final menuItemIconColor = AppColors.menuIconFor(context);
-    final borderRadius = BorderRadius.circular(8);
+    final borderRadius = BorderRadius.circular(appCardRadius);
     final baseColor = AppColors.cardSurfaceFor(context);
     final borderColor = selected
         ? colors.primary
@@ -2227,6 +2241,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
               leading: Stack(
                 children: [
                   _LocalArtwork(
+                    key: ValueKey('library-track-artwork-${track.id}'),
                     source: track.thumbnailPath ?? track.thumbnailUrl,
                   ),
                   if (isFavorite)
@@ -2752,7 +2767,7 @@ Future<void> _deleteFileBestEffort(String path) async {
 }
 
 class _LocalArtwork extends StatelessWidget {
-  const _LocalArtwork({required this.source});
+  const _LocalArtwork({required this.source, super.key});
 
   final String? source;
 

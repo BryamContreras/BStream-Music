@@ -68,6 +68,310 @@ void main() {
   });
 
   test(
+    'crossfade settings configure immediately and preserve rapid changes',
+    () async {
+      final player = _CrossfadePlayerService();
+      final settings = _CrossfadeSettingsController(
+        const SettingsState(
+          downloadDirectory: '/tmp/bstream-crossfade-test',
+          language: AppLanguage.spanish,
+          crossfadeEnabled: true,
+          crossfadeDuration: Duration(seconds: 10),
+        ),
+      );
+      final container = _container(player, settingsController: settings);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await _waitUntil(() => player.crossfadeConfigurations.isNotEmpty);
+      expect(player.crossfadeConfigurations.single, (
+        enabled: true,
+        duration: const Duration(seconds: 10),
+      ));
+
+      settings.setUnrelatedLanguage(AppLanguage.english);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(
+        player.crossfadeConfigurations,
+        hasLength(1),
+        reason: 'Unrelated settings must not rebuild the crossfade decks.',
+      );
+
+      final settingsNotifier = container.read(
+        settingsControllerProvider.notifier,
+      );
+      await Future.wait([
+        settingsNotifier.setCrossfadeEnabled(false),
+        settingsNotifier.setCrossfadeDuration(const Duration(seconds: 7)),
+        settingsNotifier.setCrossfadeEnabled(true),
+      ]);
+      await _waitUntil(() => player.crossfadeConfigurations.length == 4);
+
+      expect(player.crossfadeConfigurations, [
+        (enabled: true, duration: const Duration(seconds: 10)),
+        (enabled: false, duration: const Duration(seconds: 10)),
+        (enabled: false, duration: const Duration(seconds: 7)),
+        (enabled: true, duration: const Duration(seconds: 7)),
+      ]);
+      expect(player.crossfadeEnabled, isTrue);
+    },
+  );
+
+  test('changing only crossfade duration keeps the prepared deck', () async {
+    final player = _CrossfadePlayerService();
+    final settings = _CrossfadeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream-crossfade-duration-test',
+        language: AppLanguage.spanish,
+        crossfadeEnabled: true,
+        crossfadeDuration: Duration(seconds: 5),
+      ),
+    );
+    final container = _container(player, settingsController: settings);
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    await _waitUntil(
+      () =>
+          player.crossfadeConfigurations.isNotEmpty &&
+          player.crossfadePreparations.isNotEmpty,
+    );
+    player.crossfadePreparations.clear();
+
+    await settings.setCrossfadeDuration(const Duration(seconds: 7));
+    await _waitUntil(() => player.crossfadeConfigurations.length == 2);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(player.crossfadeConfigurations.last, (
+      enabled: true,
+      duration: const Duration(seconds: 7),
+    ));
+    expect(
+      player.crossfadePreparations,
+      isEmpty,
+      reason: 'The existing standby source is still valid for a new duration.',
+    );
+  });
+
+  test('crossfade prepares the exact next local queue item', () async {
+    final player = _CrossfadePlayerService();
+    final container = _container(
+      player,
+      settingsController: _enabledCrossfadeSettings(),
+    );
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    await _waitUntil(() => player.crossfadeConfigurations.isNotEmpty);
+    player.crossfadePreparations.clear();
+
+    final tracks = [_track(1), _track(2), _track(3)];
+    await container
+        .read(playerControllerProvider.notifier)
+        .playLocal(tracks[1], queue: tracks);
+    await _waitUntil(
+      () =>
+          player.crossfadePreparations.isNotEmpty &&
+          player.crossfadePreparations.last is LocalCrossfadePlaybackSource,
+    );
+
+    final prepared =
+        player.crossfadePreparations.last as LocalCrossfadePlaybackSource;
+    expect(prepared.track.id, 'track-3');
+  });
+
+  test(
+    'remote crossfade reuses its cached source and handoff advances once',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'bstream-controller-crossfade-',
+      );
+      addTearDown(() async {
+        if (await directory.exists()) {
+          await directory.delete(recursive: true);
+        }
+      });
+      final cachedSuccessor = File('${directory.path}/second.m4a');
+      await cachedSuccessor.writeAsBytes(const [1, 2, 3]);
+      final cache = _CrossfadeRemotePlaybackCache(
+        cachedTrackId: 'second',
+        file: cachedSuccessor,
+      );
+      final player = _CrossfadePlayerService();
+      final settings = _enabledCrossfadeSettings();
+      final container = _container(
+        player,
+        remoteCache: cache,
+        settingsController: settings,
+      );
+      addTearDown(container.dispose);
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+      ];
+
+      await container.read(playerControllerProvider.future);
+      await _waitUntil(() => player.crossfadeConfigurations.isNotEmpty);
+      player.crossfadePreparations.clear();
+      var handoffIndexUpdates = 0;
+      final queueSubscription = container.listen<PlaybackQueueState>(
+        playbackQueueProvider,
+        (_, next) {
+          if (next.currentIndex == 1) {
+            handoffIndexUpdates++;
+          }
+        },
+      );
+      addTearDown(queueSubscription.close);
+
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(
+        () => player.crossfadePreparations
+            .whereType<RemoteCrossfadePlaybackSource>()
+            .isNotEmpty,
+      );
+      final prepared = player.crossfadePreparations
+          .whereType<RemoteCrossfadePlaybackSource>()
+          .first;
+      expect(prepared.source.track.id, 'second');
+      expect(prepared.source.uri, cachedSuccessor.uri);
+      expect(cache.cachedLookups, contains('second'));
+      expect(player.playedRemote.map((track) => track.id), ['first']);
+
+      final preparationCount = player.crossfadePreparations.length;
+      final cachedLookupCount = cache.cachedLookups.length;
+      await settings.setCrossfadeDuration(const Duration(seconds: 7));
+      await _waitUntil(() => player.crossfadeConfigurations.length == 2);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(
+        player.crossfadePreparations,
+        hasLength(preparationCount),
+        reason: 'A duration-only change must preserve the remote standby deck.',
+      );
+      expect(
+        cache.cachedLookups,
+        hasLength(cachedLookupCount),
+        reason: 'A duration-only change must not restart remote prefetch.',
+      );
+      expect(player.preparedCrossfadeSource, same(prepared));
+
+      player.emitCrossfadeHandoff(prepared.source);
+      await _waitUntil(
+        () => container.read(playbackQueueProvider).currentIndex == 1,
+      );
+      player.emitCrossfadeHandoff(prepared.source);
+      await _flushCompletion();
+
+      expect(handoffIndexUpdates, 1);
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(player.playedRemote.map((track) => track.id), ['first']);
+    },
+  );
+
+  test(
+    'seek and reorder reprepare crossfade while stop invalidates it',
+    () async {
+      final player = _CrossfadePlayerService(
+        supportsLocalQueueReplacement: true,
+      );
+      final container = _container(
+        player,
+        settingsController: _enabledCrossfadeSettings(),
+      );
+      addTearDown(container.dispose);
+      final tracks = [_track(1), _track(2), _track(3)];
+
+      await container.read(playerControllerProvider.future);
+      await _waitUntil(() => player.crossfadeConfigurations.isNotEmpty);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playLocal(tracks.first, queue: tracks);
+      await _waitUntil(
+        () => player.preparedCrossfadeSource is LocalCrossfadePlaybackSource,
+      );
+      expect(
+        (player.preparedCrossfadeSource! as LocalCrossfadePlaybackSource)
+            .track
+            .id,
+        'track-2',
+      );
+
+      final preparationsBeforeSeek = player.crossfadePreparations.length;
+      await controller.seek(Duration.zero);
+      await _waitUntil(
+        () => player.crossfadePreparations.length > preparationsBeforeSeek,
+      );
+      expect(player.seekCrossfadeInvalidations, 1);
+      expect(player.currentSnapshot.position, Duration.zero);
+      expect(
+        (player.preparedCrossfadeSource! as LocalCrossfadePlaybackSource)
+            .track
+            .id,
+        'track-2',
+      );
+
+      await controller.reorderQueue(2, 1);
+      await _waitUntil(
+        () =>
+            player.preparedCrossfadeSource is LocalCrossfadePlaybackSource &&
+            (player.preparedCrossfadeSource! as LocalCrossfadePlaybackSource)
+                    .track
+                    .id ==
+                'track-3',
+      );
+      expect(
+        container.read(playbackQueueProvider).entries.map((entry) => entry.id),
+        ['track-1', 'track-3', 'track-2'],
+      );
+
+      await controller.stop();
+      await _flushCompletion();
+      expect(player.stopCrossfadeInvalidations, 1);
+      expect(player.preparedCrossfadeSource, isNull);
+    },
+  );
+
+  test('only the latest concurrent seek reprepares crossfade', () async {
+    final player = _CrossfadePlayerService(supportsLocalQueueReplacement: true);
+    final container = _container(
+      player,
+      settingsController: _enabledCrossfadeSettings(),
+    );
+    addTearDown(container.dispose);
+    final tracks = [_track(1), _track(2)];
+
+    await container.read(playerControllerProvider.future);
+    final controller = container.read(playerControllerProvider.notifier);
+    await controller.playLocal(tracks.first, queue: tracks);
+    await _waitUntil(() => player.preparedCrossfadeSource != null);
+    final preparationsBeforeSeek = player.crossfadePreparations.length;
+    player.blockSeeks = true;
+
+    final first = controller.seek(const Duration(seconds: 25));
+    final latest = controller.seek(Duration.zero);
+    await _waitUntil(() => player.blockedSeeks.length == 2);
+    player.blockedSeeks[0].complete();
+    await _flushCompletion();
+    expect(player.crossfadePreparations.length, preparationsBeforeSeek);
+    player.blockedSeeks[1].complete();
+    await Future.wait([first, latest]);
+    await _waitUntil(
+      () => player.crossfadePreparations.length > preparationsBeforeSeek,
+    );
+
+    expect(player.seekCrossfadeInvalidations, 2);
+    expect(player.crossfadePreparations.length, preparationsBeforeSeek + 1);
+    expect(
+      (player.preparedCrossfadeSource! as LocalCrossfadePlaybackSource)
+          .track
+          .id,
+      'track-2',
+    );
+  });
+
+  test(
     'an asynchronous remote failure refreshes its stream once without skipping the song',
     () async {
       final player = _FakePlayerService();
@@ -2232,10 +2536,13 @@ ProviderContainer _container(
   DesktopMediaSession? desktopSession,
   LocalTrackFileProbe? fileProbe,
   RemotePlaybackCache? remoteCache,
+  SettingsController? settingsController,
 }) {
   return ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
+      if (settingsController != null)
+        settingsControllerProvider.overrideWith(() => settingsController),
       if (audioResolver != null)
         audioStreamResolverProvider.overrideWithValue(audioResolver),
       if (desktopSession != null)
@@ -2253,6 +2560,16 @@ ProviderContainer _container(
         fileProbe ?? (_) async => LocalTrackFileAvailability.present,
       ),
     ],
+  );
+}
+
+_CrossfadeSettingsController _enabledCrossfadeSettings() {
+  return _CrossfadeSettingsController(
+    const SettingsState(
+      downloadDirectory: '/tmp/bstream-crossfade-test',
+      language: AppLanguage.spanish,
+      crossfadeEnabled: true,
+    ),
   );
 }
 
@@ -2465,6 +2782,106 @@ class _FakePlayerService implements PlayerService {
 
   @override
   Future<void> togglePlayPause() async {}
+}
+
+class _CrossfadePlayerService extends _FakePlayerService
+    implements CrossfadeCapablePlayer {
+  _CrossfadePlayerService({super.supportsLocalQueueReplacement});
+
+  final List<({bool enabled, Duration duration})> crossfadeConfigurations = [];
+  final List<CrossfadePlaybackSource?> crossfadePreparations = [];
+  CrossfadePlaybackSource? preparedCrossfadeSource;
+  int seekCrossfadeInvalidations = 0;
+  int stopCrossfadeInvalidations = 0;
+  bool _crossfadeEnabled = false;
+  bool blockSeeks = false;
+  final List<Completer<void>> blockedSeeks = [];
+
+  @override
+  bool get crossfadeEnabled => _crossfadeEnabled;
+
+  @override
+  Future<void> configureCrossfade({
+    required bool enabled,
+    required Duration duration,
+  }) async {
+    crossfadeConfigurations.add((enabled: enabled, duration: duration));
+    _crossfadeEnabled = enabled;
+    if (!enabled) {
+      preparedCrossfadeSource = null;
+    }
+  }
+
+  @override
+  Future<void> prepareCrossfade(CrossfadePlaybackSource? source) async {
+    crossfadePreparations.add(source);
+    preparedCrossfadeSource = source;
+  }
+
+  void emitCrossfadeHandoff(RemotePlaybackSource source) {
+    final track = source.track;
+    emit(
+      PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        trackId: track.id.isEmpty ? track.url : track.id,
+        queueEntryId: source.queueEntryId,
+        sourceUrl: track.url,
+        thumbnailUrl: track.thumbnailUrl,
+        duration: track.duration,
+        isRemote: true,
+      ),
+    );
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    seekCrossfadeInvalidations++;
+    preparedCrossfadeSource = null;
+    if (blockSeeks) {
+      final gate = Completer<void>();
+      blockedSeeks.add(gate);
+      await gate.future;
+    }
+    await super.seek(position);
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCrossfadeInvalidations++;
+    preparedCrossfadeSource = null;
+    await super.stop();
+  }
+}
+
+class _CrossfadeSettingsController extends SettingsController {
+  _CrossfadeSettingsController(this.initialState);
+
+  final SettingsState initialState;
+
+  @override
+  Future<SettingsState> build() async => initialState;
+
+  @override
+  Future<void> setCrossfadeEnabled(bool enabled) {
+    final current = state.asData?.value ?? initialState;
+    state = AsyncData(current.copyWith(crossfadeEnabled: enabled));
+    return Future<void>.value();
+  }
+
+  @override
+  Future<void> setCrossfadeDuration(Duration duration) {
+    final current = state.asData?.value ?? initialState;
+    state = AsyncData(current.copyWith(crossfadeDuration: duration));
+    return Future<void>.value();
+  }
+
+  void setUnrelatedLanguage(AppLanguage language) {
+    final current = state.asData?.value ?? initialState;
+    state = AsyncData(current.copyWith(language: language));
+  }
 }
 
 class _DelayedLocalPlayerService extends _FakePlayerService {
@@ -2681,6 +3098,42 @@ class _FakeRemotePlaybackCache extends RemotePlaybackCache {
   Future<void> evict(TrackInfo track) async {
     evictCalls++;
   }
+}
+
+class _CrossfadeRemotePlaybackCache extends RemotePlaybackCache {
+  _CrossfadeRemotePlaybackCache({
+    required this.cachedTrackId,
+    required this.file,
+  }) : super(policy: RemotePlaybackCachePolicy.android);
+
+  final String cachedTrackId;
+  final File file;
+  final List<String> cachedLookups = [];
+
+  @override
+  Future<File?> cachedFile(TrackInfo track) async {
+    cachedLookups.add(track.id);
+    return track.id == cachedTrackId ? file : null;
+  }
+
+  @override
+  Future<File?> warmResolved(
+    TrackInfo track, {
+    bool cancelOnSearchChange = false,
+  }) async {
+    return null;
+  }
+
+  @override
+  Future<void> retainOnlyTracks(Iterable<TrackInfo> tracks) async {}
+
+  @override
+  void protectPlaybackWindow(Iterable<TrackInfo> tracks) {}
+
+  @override
+  Future<void> prepareSession({
+    Iterable<String> protectedSourceUrls = const <String>[],
+  }) async {}
 }
 
 class _TrackingRemotePlaybackCache extends RemotePlaybackCache {

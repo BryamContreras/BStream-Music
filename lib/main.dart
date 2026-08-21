@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:just_audio_background/just_audio_background.dart';
 
 import 'core/constants/app_constants.dart';
 import 'core/platform/app_platform.dart';
@@ -10,6 +9,7 @@ import 'core/theme/app_theme.dart';
 import 'features/music/presentation/pages/home_page.dart';
 import 'features/music/presentation/providers/music_providers.dart';
 import 'services/player/notification_artwork_service.dart';
+import 'services/media_session/audio_service_desktop_media_session.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,20 +24,7 @@ Future<void> main() async {
     // Artwork download/cropping remains deferred until Android requests it,
     // so playback preparation never waits for image work.
     await NotificationArtworkService.instance.initialize();
-    await JustAudioBackground.init(
-      androidNotificationChannelId: 'com.bstream.bstream_music.audio',
-      androidNotificationChannelName: 'BStream Music',
-      notificationColor: AppColors.brandGreen,
-      // Android/Samsung media surfaces expect a monochrome notification mask.
-      androidNotificationIcon: 'drawable/ic_stat_bstream_music',
-      androidNotificationOngoing: true,
-      androidShowNotificationBadge: true,
-      // Notification artwork is decoded by Android and kept in a native LRU
-      // cache. Bounding it prevents high-resolution thumbnails from creating
-      // avoidable memory pressure during long background sessions.
-      artDownscaleWidth: 320,
-      artDownscaleHeight: 320,
-    );
+    await AudioServiceDesktopMediaSession.ensureInitialized();
   }
   runApp(const ProviderScope(child: BStreamMusicApp()));
 }
@@ -47,6 +34,7 @@ class BStreamMusicApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(desktopMediaSessionProvider);
     // Keep the per-track lyrics offset synchronized even while its route is
     // closed, without rebuilding the app when the offset itself changes.
     ref.watch(lyricsOffsetControllerProvider.select((_) => null));
@@ -147,7 +135,14 @@ ThemeData _buildDarkTheme({
     ),
     segmentedButtonTheme: _segmentedButtonTheme(accent, scheme),
     dialogTheme: DialogThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      backgroundColor: AppColors.dialogSurfaceForTheme(accent, scheme),
+      surfaceTintColor: Colors.transparent,
+      shadowColor: const Color(0xB8000000),
+      elevation: 18,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: AppColors.dialogBorderForTheme(accent, scheme)),
+      ),
     ),
     popupMenuTheme: PopupMenuThemeData(
       color: AppColors.menuBackground,
@@ -234,7 +229,14 @@ ThemeData _buildLightTheme({
     ),
     segmentedButtonTheme: _segmentedButtonTheme(accent, scheme),
     dialogTheme: DialogThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      backgroundColor: AppColors.dialogSurfaceForTheme(accent, scheme),
+      surfaceTintColor: Colors.transparent,
+      shadowColor: const Color(0x40000000),
+      elevation: 8,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: AppColors.dialogBorderForTheme(accent, scheme)),
+      ),
     ),
     popupMenuTheme: PopupMenuThemeData(
       color: scheme.surfaceContainerHighest.withValues(alpha: 0.97),

@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 String? _libCache;
 String? _coreCache;
+Future<String>? _modulesFuture;
 
 abstract class EJSBuilder {
   static String _buildScript(String lib, String core) {
@@ -48,29 +49,48 @@ abstract class EJSBuilder {
     return 'JSON.stringify(jsc(${json.encode(input)}))';
   }
 
-  static Future<String> getJSModules() async {
+  static Future<String> getJSModules() {
     if (_libCache != null && _coreCache != null) {
+      return Future<String>.value(_buildScript(_libCache!, _coreCache!));
+    }
+    return _modulesFuture ??= _loadJSModules();
+  }
+
+  static Future<String> _loadJSModules() async {
+    try {
+      final lib = ejs.modules['lib']!;
+      final core = ejs.modules['core']!;
+
+      final libReq = await http
+          .get(Uri.parse(lib['url']!))
+          .timeout(const Duration(seconds: 15));
+      if (libReq.statusCode < 200 || libReq.statusCode >= 300) {
+        throw Exception('Lib module returned HTTP ${libReq.statusCode}');
+      }
+      final libHash = sha256.convert(libReq.bodyBytes).toString();
+      if (libHash != lib['hash']) {
+        throw Exception('Lib module hash mismatch');
+      }
+
+      final coreReq = await http
+          .get(Uri.parse(core['url']!))
+          .timeout(const Duration(seconds: 15));
+      if (coreReq.statusCode < 200 || coreReq.statusCode >= 300) {
+        throw Exception('Core module returned HTTP ${coreReq.statusCode}');
+      }
+      final coreHash = sha256.convert(coreReq.bodyBytes).toString();
+      if (coreHash != core['hash']) {
+        throw Exception('Core module hash mismatch');
+      }
+
+      _libCache = libReq.body;
+      _coreCache = coreReq.body;
+
       return _buildScript(_libCache!, _coreCache!);
+    } catch (_) {
+      // A transient network failure must be retryable on the next request.
+      _modulesFuture = null;
+      rethrow;
     }
-
-    final lib = ejs.modules['lib']!;
-    final core = ejs.modules['core']!;
-
-    final libReq = (await http.get(Uri.parse(lib['url']!)));
-    final libHash = sha256.convert(libReq.bodyBytes).toString();
-    if (libHash != lib['hash']) {
-      throw Exception('Lib module hash mismatch');
-    }
-
-    final coreReq = (await http.get(Uri.parse(core['url']!)));
-    final coreHash = sha256.convert(coreReq.bodyBytes).toString();
-    if (coreHash != core['hash']) {
-      throw Exception('Core module hash mismatch');
-    }
-
-    _libCache = libReq.body;
-    _coreCache = coreReq.body;
-
-    return _buildScript(_libCache!, _coreCache!);
   }
 }

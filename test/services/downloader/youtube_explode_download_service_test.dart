@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:bstream_music/core/errors/app_exception.dart';
@@ -7,12 +8,126 @@ import 'package:bstream_music/features/music/domain/entities/download_result.dar
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_audio_stream_selector.dart';
+import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_explode_audio_resolver.dart';
 import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_explode_download_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 void main() {
+  group('DefaultYoutubeExplodeDownloadClient', () {
+    test(
+      'tries the next manifest client when the selected audio URL is rejected',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final manifestClients = <String>[];
+        final subscription = server.listen((request) async {
+          if (request.method == 'POST' && request.uri.path == '/player') {
+            final body = await utf8.decoder.bind(request).join();
+            final payload = jsonDecode(body) as Map<String, dynamic>;
+            final context = payload['context'] as Map<String, dynamic>;
+            final client = context['client'] as Map<String, dynamic>;
+            final clientName = client['clientName'] as String;
+            manifestClients.add(clientName);
+            final tag = clientName == 'FIRST' ? 140 : 251;
+            final extension = tag == 140 ? 'mp4' : 'webm';
+            final codec = tag == 140 ? 'mp4a.40.2' : 'opus';
+            final mediaUrl = Uri(
+              scheme: 'http',
+              host: InternetAddress.loopbackIPv4.address,
+              port: server.port,
+              path: '/media-$tag',
+              queryParameters: const {'clen': '4'},
+            );
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(
+              jsonEncode({
+                'playabilityStatus': {'status': 'OK'},
+                'videoDetails': {'videoId': 'abcdefghijk'},
+                'streamingData': {
+                  'adaptiveFormats': [
+                    {
+                      'itag': tag,
+                      'url': mediaUrl.toString(),
+                      'mimeType': 'audio/$extension; codecs="$codec"',
+                      'bitrate': tag == 140 ? 128000 : 160000,
+                      'contentLength': '4',
+                      'qualityLabel': 'audio',
+                    },
+                  ],
+                },
+              }),
+            );
+            await request.response.close();
+            return;
+          }
+          if (request.method == 'HEAD' &&
+              request.uri.path.startsWith('/media-')) {
+            request.response.contentLength = 4;
+            await request.response.close();
+            return;
+          }
+          request.response.statusCode = HttpStatus.notFound;
+          await request.response.close();
+        });
+        addTearDown(() async {
+          await subscription.cancel();
+          await server.close(force: true);
+        });
+
+        YoutubeApiClient manifestClient(String name) => YoutubeApiClient(
+          {
+            'context': {
+              'client': {
+                'clientName': name,
+                'clientVersion': '1.0',
+                'userAgent': 'BStream test',
+              },
+            },
+          },
+          'http://${InternetAddress.loopbackIPv4.address}:${server.port}/player',
+        );
+
+        final youtube = YoutubeExplode();
+        final validatedTags = <int>[];
+        final client = DefaultYoutubeExplodeDownloadClient(
+          client: youtube,
+          manifestAttempts: [
+            YoutubeManifestAttempt(
+              name: 'first',
+              client: manifestClient('FIRST'),
+            ),
+            YoutubeManifestAttempt(
+              name: 'second',
+              client: manifestClient('SECOND'),
+            ),
+          ],
+          validateDownloadStream: (stream) async {
+            validatedTags.add(stream.tag);
+            if (stream.tag == 140) {
+              throw const YoutubePlaybackStreamValidationException(
+                'The selected audio stream was rejected.',
+                statusCode: HttpStatus.forbidden,
+              );
+            }
+          },
+        );
+        addTearDown(() async {
+          await client.dispose();
+          youtube.close();
+        });
+
+        final resolved = await client.resolve(
+          'https://www.youtube.com/watch?v=abcdefghijk',
+        );
+
+        expect(resolved.formatId, '251');
+        expect(manifestClients, ['FIRST', 'SECOND']);
+        expect(validatedTags, [140, 251]);
+      },
+    );
+  });
+
   group('YoutubeExplodeDownloadService', () {
     test(
       'delegates initialization, metadata, playback info, and search',
@@ -130,6 +245,213 @@ void main() {
         expect(events.last.message, contains('youtube_explode_dart'));
       },
     );
+
+    test(
+      'retries the next youtube_explode client before invoking yt-dlp',
+      () async {
+        final temp = await Directory.systemTemp.createTemp(
+          'bstream_youtube_explode_candidate_retry_',
+        );
+        final fallback = _FakeDownloaderService();
+        final client = _FakeYoutubeExplodeCandidateClient([
+          YoutubeExplodeDownloadStream(
+            bytes: _streamThatFailsAfter(const [1, 2]),
+            extension: 'm4a',
+            videoId: 'abcdefghijk',
+            attemptName: 'androidSdkless',
+            contentLength: 4,
+          ),
+          YoutubeExplodeDownloadStream(
+            bytes: Stream<List<int>>.value(const [7, 8, 9]),
+            extension: 'webm',
+            videoId: 'abcdefghijk',
+            attemptName: 'visionOS+watch',
+            contentLength: 3,
+          ),
+        ]);
+        final service = YoutubeExplodeDownloadService(
+          fallback: fallback,
+          client: client,
+        );
+        final events = <DownloadProgress>[];
+        final subscription = service.progressStream.listen(events.add);
+        addTearDown(() async {
+          await subscription.cancel();
+          await service.dispose();
+          await fallback.dispose();
+          if (await temp.exists()) {
+            await temp.delete(recursive: true);
+          }
+        });
+
+        final result = await service.downloadAudio(
+          'https://www.youtube.com/watch?v=abcdefghijk',
+          DownloadOptions(
+            outputDirectory: temp.path,
+            fileName: 'Artist - Track',
+            taskId: 'candidate-retry-task',
+          ),
+        );
+
+        expect(result.fileName, 'Artist - Track.webm');
+        expect(await File(result.filePath).readAsBytes(), const [7, 8, 9]);
+        expect(
+          await File(p.join(temp.path, 'Artist - Track.m4a.part')).exists(),
+          isFalse,
+        );
+        expect(client.resolveCandidateCalls, 1);
+        expect(client.yieldedCandidates, 2);
+        expect(fallback.downloadCalls, 0);
+        expect(
+          events.any(
+            (event) =>
+                event.status == DownloadProgressStatus.running &&
+                event.message?.contains('androidSdkless') == true &&
+                event.message?.contains('siguiente cliente') == true,
+          ),
+          isTrue,
+        );
+        expect(
+          events.where(
+            (event) => event.status == DownloadProgressStatus.failed,
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test('invokes yt-dlp once after every reinforced client fails', () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'bstream_youtube_explode_candidates_exhausted_',
+      );
+      final fallback = _FakeDownloaderService(
+        onDownload: (_, url, options) async {
+          final file = File(p.join(options.outputDirectory, 'fallback.m4a'));
+          await file.writeAsBytes(const [9, 8, 7], flush: true);
+          return _completedResult(url, file);
+        },
+      );
+      final client = _FakeYoutubeExplodeCandidateClient([
+        YoutubeExplodeDownloadStream(
+          bytes: _streamThatFailsAfter(const [1]),
+          extension: 'm4a',
+          videoId: 'abcdefghijk',
+          attemptName: 'androidSdkless',
+          contentLength: 4,
+        ),
+        YoutubeExplodeDownloadStream(
+          bytes: _streamThatFailsAfter(const [2]),
+          extension: 'webm',
+          videoId: 'abcdefghijk',
+          attemptName: 'visionOS+watch',
+          contentLength: 4,
+        ),
+      ]);
+      final service = YoutubeExplodeDownloadService(
+        fallback: fallback,
+        client: client,
+      );
+      addTearDown(() async {
+        await service.dispose();
+        await fallback.dispose();
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+
+      final result = await service.downloadAudio(
+        'https://www.youtube.com/watch?v=abcdefghijk',
+        DownloadOptions(
+          outputDirectory: temp.path,
+          fileName: 'Artist - Track',
+          taskId: 'candidates-exhausted-task',
+        ),
+      );
+
+      expect(result.fileName, 'fallback.m4a');
+      expect(client.yieldedCandidates, 2);
+      expect(fallback.downloadCalls, 1);
+      expect(fallback.lastOptions?.taskId, 'candidates-exhausted-task');
+      expect(
+        await File(p.join(temp.path, 'Artist - Track.m4a.part')).exists(),
+        isFalse,
+      );
+      expect(
+        await File(p.join(temp.path, 'Artist - Track.webm.part')).exists(),
+        isFalse,
+      );
+    });
+
+    test('serializes only concurrent yt-dlp fallback transfers', () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'bstream_youtube_explode_serial_fallback_',
+      );
+      final firstFallbackStarted = Completer<void>();
+      final releaseFirstFallback = Completer<void>();
+      var activeFallbacks = 0;
+      var maximumActiveFallbacks = 0;
+      final fallback = _FakeDownloaderService(
+        onDownload: (service, url, options) async {
+          activeFallbacks++;
+          if (activeFallbacks > maximumActiveFallbacks) {
+            maximumActiveFallbacks = activeFallbacks;
+          }
+          if (service.downloadCalls == 1) {
+            firstFallbackStarted.complete();
+            await releaseFirstFallback.future;
+          }
+          final file = File(
+            p.join(temp.path, '${options.taskId ?? service.downloadCalls}.m4a'),
+          );
+          await file.writeAsBytes(const [1, 2, 3], flush: true);
+          activeFallbacks--;
+          return _completedResult(url, file);
+        },
+      );
+      final client = _FakeYoutubeExplodeDownloadClient(
+        resolveStream: (_) async => throw StateError('primary unavailable'),
+      );
+      final service = YoutubeExplodeDownloadService(
+        fallback: fallback,
+        client: client,
+      );
+      addTearDown(() async {
+        await service.dispose();
+        await fallback.dispose();
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+
+      final first = service.downloadAudio(
+        'https://www.youtube.com/watch?v=first-track',
+        DownloadOptions(
+          outputDirectory: temp.path,
+          fileName: 'First',
+          taskId: 'fallback-first',
+        ),
+      );
+      final second = service.downloadAudio(
+        'https://www.youtube.com/watch?v=second-track',
+        DownloadOptions(
+          outputDirectory: temp.path,
+          fileName: 'Second',
+          taskId: 'fallback-second',
+        ),
+      );
+
+      await firstFallbackStarted.future;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(fallback.downloadCalls, 1);
+      expect(maximumActiveFallbacks, 1);
+
+      releaseFirstFallback.complete();
+      await Future.wait([first, second]);
+
+      expect(fallback.downloadCalls, 2);
+      expect(maximumActiveFallbacks, 1);
+      expect(client.resolveCalls, 2);
+    });
 
     test(
       'emits the primary failure, removes the partial, and falls back with the same task id',
@@ -424,14 +746,20 @@ void main() {
       final blockedDirectory = File(p.join(temp.path, 'not-a-directory'));
       await blockedDirectory.writeAsString('occupied');
       final fallback = _FakeDownloaderService();
-      final client = _FakeYoutubeExplodeDownloadClient(
-        resolveStream: (_) async => YoutubeExplodeDownloadStream(
+      final client = _FakeYoutubeExplodeCandidateClient([
+        YoutubeExplodeDownloadStream(
           bytes: Stream<List<int>>.value(const [1, 2, 3]),
           extension: 'm4a',
           videoId: 'abcdefghijk',
           contentLength: 3,
         ),
-      );
+        YoutubeExplodeDownloadStream(
+          bytes: Stream<List<int>>.value(const [4, 5, 6]),
+          extension: 'webm',
+          videoId: 'abcdefghijk',
+          contentLength: 3,
+        ),
+      ]);
       final service = YoutubeExplodeDownloadService(
         fallback: fallback,
         client: client,
@@ -456,6 +784,7 @@ void main() {
       );
 
       expect(fallback.downloadCalls, 0);
+      expect(client.yieldedCandidates, 1);
     });
 
     test('reports both backend failures and keeps no part file', () async {
@@ -804,6 +1133,35 @@ class _FakeYoutubeExplodeDownloadClient
   Future<YoutubeExplodeDownloadStream> resolve(String url) {
     resolveCalls++;
     return resolveStream(url);
+  }
+
+  @override
+  Future<void> dispose() async {
+    disposed = true;
+  }
+}
+
+class _FakeYoutubeExplodeCandidateClient
+    implements YoutubeExplodeDownloadCandidateClient {
+  _FakeYoutubeExplodeCandidateClient(this.candidates);
+
+  final List<YoutubeExplodeDownloadStream> candidates;
+  int resolveCandidateCalls = 0;
+  int yieldedCandidates = 0;
+  bool disposed = false;
+
+  @override
+  Future<YoutubeExplodeDownloadStream> resolve(String url) {
+    return resolveCandidates(url).first;
+  }
+
+  @override
+  Stream<YoutubeExplodeDownloadStream> resolveCandidates(String url) async* {
+    resolveCandidateCalls++;
+    for (final candidate in candidates) {
+      yieldedCandidates++;
+      yield candidate;
+    }
   }
 
   @override

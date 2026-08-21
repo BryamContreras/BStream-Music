@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+
+import '../../audio_stream_resolver.dart';
 
 /// Loads one YouTube manifest for one explicitly selected InnerTube client.
 ///
@@ -12,6 +16,14 @@ typedef YoutubeManifestLoader =
       bool requireWatchPage,
     );
 
+/// Loads a manifest through the client selected for one attempt.
+/// This allows solver-backed clients to be initialized lazily.
+typedef YoutubeManifestAttemptLoader =
+    Future<StreamManifest> Function(
+      VideoId videoId,
+      YoutubeManifestAttempt attempt,
+    );
+
 /// Confirms that the exact audio stream selected from a manifest is readable.
 ///
 /// `youtube_explode_dart` validates only the first stream in a manifest, which
@@ -21,17 +33,26 @@ typedef YoutubeManifestLoader =
 typedef YoutubeSelectedAudioValidator =
     Future<void> Function(AudioOnlyStreamInfo stream);
 
+typedef YoutubeManifestAttemptCallback =
+    void Function(
+      YoutubeManifestAttempt attempt,
+      Duration elapsed,
+      Object? error,
+    );
+
 /// A single, ordered attempt used by [resolvePreferredYoutubeAudioStream].
 class YoutubeManifestAttempt {
   const YoutubeManifestAttempt({
     required this.name,
     required this.client,
     this.requireWatchPage = false,
+    this.requiresJsSolver = false,
   });
 
   final String name;
   final YoutubeApiClient client;
   final bool requireWatchPage;
+  final bool requiresJsSolver;
 }
 
 /// Details from a failed staged manifest resolution.
@@ -93,7 +114,8 @@ YoutubeApiClient get youtubeVisionOsClient => YoutubeApiClient({
 }, 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false');
 
 /// Current iOS edge fallback. HTTPS streams commonly require a GVS PO token,
-/// so it remains behind both VisionOS attempts instead of being a normal path.
+/// so it remains behind the fast tokenless clients and uses the JS solver when
+/// YouTube returns a deciphered stream.
 YoutubeApiClient get youtubeCurrentIosClient => YoutubeApiClient({
   'context': {
     'client': {
@@ -113,8 +135,15 @@ YoutubeApiClient get youtubeCurrentIosClient => YoutubeApiClient({
   },
 }, 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false');
 
+/// Fresh copy of the package's iOS profile. The package mutates the nested
+/// payload with visitor data, so its static instance must not be shared.
+YoutubeApiClient get youtubePackageIosClient {
+  final json = jsonDecode(jsonEncode(YoutubeApiClient.ios.toJson())) as Map;
+  return YoutubeApiClient.fromJson(Map<String, dynamic>.from(json));
+}
+
 /// Current Android VR last-resort client. PO-token enforcement is selective,
-/// so this client is also kept out of the normal resolution path.
+/// so it stays at the end of the solver-backed resolution path.
 YoutubeApiClient get youtubeCurrentAndroidVrClient => YoutubeApiClient({
   'context': {
     'client': {
@@ -138,22 +167,57 @@ YoutubeApiClient get youtubeCurrentAndroidVrClient => YoutubeApiClient({
 
 /// Ordered clients used for normal playback and downloads.
 ///
-/// Attempts are deliberately sequential. VisionOS with watch-page context is
-/// the reliable path; the context-free request remains as a cheaper retry for
-/// environments where the watch page itself is unavailable. Mobile clients
-/// are consulted only when both VisionOS variants fail or have no compatible
-/// audio.
+/// Attempts are deliberately sequential. The SDK-less Android client is the
+/// fast primary path; VisionOS with watch-page context remains the reliable
+/// retry when the primary client is blocked. Solver-backed edge clients are
+/// consulted only after those fast paths fail or have no compatible audio.
 List<YoutubeManifestAttempt> get defaultYoutubeManifestAttempts => [
+  YoutubeManifestAttempt(
+    name: 'androidSdkless',
+    client: YoutubeApiClient.androidSdkless,
+    requireWatchPage: false,
+  ),
   YoutubeManifestAttempt(
     name: 'visionOS+watch',
     client: youtubeVisionOsClient,
     requireWatchPage: true,
   ),
   YoutubeManifestAttempt(name: 'visionOS', client: youtubeVisionOsClient),
-  YoutubeManifestAttempt(name: 'iOS', client: youtubeCurrentIosClient),
+  YoutubeManifestAttempt(
+    name: 'safari',
+    client: YoutubeApiClient.safari,
+    requireWatchPage: true,
+    requiresJsSolver: true,
+  ),
+  YoutubeManifestAttempt(
+    name: 'tv',
+    client: YoutubeApiClient.tv,
+    requireWatchPage: true,
+    requiresJsSolver: true,
+  ),
+  YoutubeManifestAttempt(
+    name: 'customIOS',
+    client: youtubeCurrentIosClient,
+    requireWatchPage: true,
+    requiresJsSolver: true,
+  ),
+  YoutubeManifestAttempt(
+    name: 'packageIOS',
+    client: youtubePackageIosClient,
+    requireWatchPage: true,
+    requiresJsSolver: true,
+  ),
+  YoutubeManifestAttempt(
+    name: 'androidMusic',
+    client: YoutubeApiClient.androidMusic,
+    requireWatchPage: true,
+    requiresJsSolver: true,
+  ),
   YoutubeManifestAttempt(
     name: 'androidVr',
     client: youtubeCurrentAndroidVrClient,
+    requireWatchPage: true,
+    requiresJsSolver: true,
   ),
 ];
 
@@ -165,40 +229,60 @@ List<YoutubeManifestAttempt> get defaultYoutubeManifestAttempts => [
 Future<AudioOnlyStreamInfo> resolvePreferredYoutubeAudioStream({
   required VideoId videoId,
   required YoutubeManifestLoader loadManifest,
+  YoutubeManifestAttemptLoader? loadManifestForAttempt,
   YoutubeSelectedAudioValidator? validateSelectedStream,
   bool requireDirectUrl = false,
+  bool jsSolverAvailable = false,
   Iterable<YoutubeManifestAttempt>? attempts,
+  YoutubeManifestAttemptCallback? onAttempt,
 }) async {
   final failures = <YoutubeManifestFailure>[];
   final orderedAttempts = attempts ?? defaultYoutubeManifestAttempts;
+  var rateLimited = false;
 
   for (final attempt in orderedAttempts) {
+    if (attempt.requiresJsSolver && !jsSolverAvailable) {
+      continue;
+    }
+    if (rateLimited && attempt.requireWatchPage) {
+      continue;
+    }
+    final stopwatch = Stopwatch()..start();
     try {
-      final manifest = await loadManifest(
-        videoId,
-        attempt.client,
-        attempt.requireWatchPage,
-      );
+      final manifest = loadManifestForAttempt == null
+          ? await loadManifest(
+              videoId,
+              attempt.client,
+              attempt.requireWatchPage,
+            )
+          : await loadManifestForAttempt(videoId, attempt);
       final selected = selectPreferredYoutubeAudioStream(
         manifest.audioOnly,
         requireDirectUrl: requireDirectUrl,
       );
       if (selected != null) {
         await validateSelectedStream?.call(selected);
+        onAttempt?.call(attempt, stopwatch.elapsed, null);
         return selected;
       }
-      failures.add(
-        YoutubeManifestFailure(
-          clientName: attempt.name,
-          error: const FormatException(
-            'Manifest had no compatible audio-only stream.',
-          ),
-        ),
+      const error = FormatException(
+        'Manifest had no compatible audio-only stream.',
       );
-    } catch (error) {
       failures.add(
         YoutubeManifestFailure(clientName: attempt.name, error: error),
       );
+      onAttempt?.call(attempt, stopwatch.elapsed, error);
+    } catch (error) {
+      if (error is AudioStreamResolverException) {
+        rethrow;
+      }
+      if (error is RequestLimitExceededException) {
+        rateLimited = true;
+      }
+      failures.add(
+        YoutubeManifestFailure(clientName: attempt.name, error: error),
+      );
+      onAttempt?.call(attempt, stopwatch.elapsed, error);
     }
   }
 

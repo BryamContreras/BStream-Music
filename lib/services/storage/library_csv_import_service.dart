@@ -92,8 +92,17 @@ class LibraryCsvImportService {
     this._repository,
     this._search,
     this._download,
-    this._gate,
-  );
+    this._gate, {
+    int maxConcurrentTracks = 3,
+  }) : _maxConcurrentTracks = maxConcurrentTracks {
+    if (maxConcurrentTracks <= 0) {
+      throw ArgumentError.value(
+        maxConcurrentTracks,
+        'maxConcurrentTracks',
+        'Debe ser mayor que cero.',
+      );
+    }
+  }
 
   static const maxFailureDetails = 100;
 
@@ -101,6 +110,7 @@ class LibraryCsvImportService {
   final LibraryCsvTrackSearch _search;
   final LibraryCsvTrackDownload _download;
   final LibraryCsvGate _gate;
+  final int _maxConcurrentTracks;
   final Uuid _uuid = const Uuid();
 
   Future<LibraryCsvImportResult> import(
@@ -114,13 +124,15 @@ class LibraryCsvImportService {
     var reused = 0;
     var failed = 0;
     final failures = <LibraryCsvImportFailure>[];
+    final entryFailures = List<LibraryCsvImportFailure?>.filled(total, null);
+    final outcomes = List<LibraryCsvDownloadedTrack?>.filled(total, null);
     final playlistTracks =
         <
           String,
           ({
             String? id,
             String name,
-            List<({int position, String trackId})> items,
+            List<({int position, int sourceOrder, String trackId})> items,
           })
         >{};
 
@@ -139,73 +151,96 @@ class LibraryCsvImportService {
     }
 
     publish('');
-    for (var index = 0; index < document.tracks.length; index++) {
-      if (isCancellationRequested()) break;
-      final entry = document.tracks[index];
-      publish(entry.displayTitle);
-      try {
-        final resolved = await _resolve(entry);
-        final outcome = await _download(
-          resolved,
-          taskId: 'csv-${entry.rowNumber}-${index + 1}',
-        );
-        if (outcome.reusedExisting) {
-          reused++;
-        } else {
-          downloaded++;
-        }
-        for (final membership in entry.memberships) {
-          final displayName = membership.name.trim();
-          if (displayName.isEmpty) continue;
-          final normalizedName = displayName.toLowerCase();
-          final playlistId = membership.id?.trim();
-          final bucketKey = playlistId?.isNotEmpty == true
-              ? 'id:$playlistId'
-              : 'name:$normalizedName';
-          final bucket = playlistTracks.putIfAbsent(
-            bucketKey,
-            () => (
-              id: playlistId?.isNotEmpty == true ? playlistId : null,
-              name: displayName,
-              items: <({int position, String trackId})>[],
-            ),
+    var nextIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        if (isCancellationRequested() || nextIndex >= total) return;
+        final index = nextIndex++;
+        final entry = document.tracks[index];
+        publish(entry.displayTitle);
+        try {
+          final resolved = await _resolve(entry);
+          final outcome = await _download(
+            resolved,
+            taskId: 'csv-${entry.rowNumber}-${index + 1}',
           );
-          bucket.items.add((
-            position: membership.position,
-            trackId: outcome.track.id,
-          ));
-        }
-      } on LibraryCsvAmbiguousMatchException catch (error) {
-        failed++;
-        _recordFailure(
-          failures,
-          LibraryCsvImportFailure(
+          outcomes[index] = outcome;
+          if (outcome.reusedExisting) {
+            reused++;
+          } else {
+            downloaded++;
+          }
+        } on LibraryCsvAmbiguousMatchException catch (error) {
+          failed++;
+          entryFailures[index] = LibraryCsvImportFailure(
             rowNumber: entry.rowNumber,
             title: entry.displayTitle,
             message: error.message,
             ambiguous: true,
-          ),
-        );
-      } catch (error) {
-        failed++;
-        _recordFailure(
-          failures,
-          LibraryCsvImportFailure(
+          );
+        } catch (error) {
+          failed++;
+          entryFailures[index] = LibraryCsvImportFailure(
             rowNumber: entry.rowNumber,
             title: entry.displayTitle,
             message: error.toString(),
+          );
+        } finally {
+          processed++;
+          publish(entry.displayTitle);
+        }
+      }
+    }
+
+    final workerCount = math.min(_maxConcurrentTracks, total);
+    await Future.wait(List.generate(workerCount, (_) => worker()));
+    failures.addAll(
+      entryFailures.whereType<LibraryCsvImportFailure>().take(
+        maxFailureDetails,
+      ),
+    );
+
+    // Build memberships in source order. Downloads can finish in any order,
+    // but playlist names, ties in positions and deduplication remain exactly
+    // as deterministic as the original sequential importer.
+    for (var index = 0; index < outcomes.length; index++) {
+      final outcome = outcomes[index];
+      if (outcome == null) continue;
+      final entry = document.tracks[index];
+      for (final membership in entry.memberships) {
+        final displayName = membership.name.trim();
+        if (displayName.isEmpty) continue;
+        final normalizedName = displayName.toLowerCase();
+        final playlistId = membership.id?.trim();
+        final bucketKey = playlistId?.isNotEmpty == true
+            ? 'id:$playlistId'
+            : 'name:$normalizedName';
+        final bucket = playlistTracks.putIfAbsent(
+          bucketKey,
+          () => (
+            id: playlistId?.isNotEmpty == true ? playlistId : null,
+            name: displayName,
+            items: <({int position, int sourceOrder, String trackId})>[],
           ),
         );
-      } finally {
-        processed++;
-        publish(entry.displayTitle);
+        bucket.items.add((
+          position: membership.position,
+          sourceOrder: index,
+          trackId: outcome.track.id,
+        ));
       }
     }
 
     var playlistsUpdated = 0;
     for (final playlistEntry in playlistTracks.values) {
       final orderedIds = playlistEntry.items
-        ..sort((left, right) => left.position.compareTo(right.position));
+        ..sort((left, right) {
+          final byPosition = left.position.compareTo(right.position);
+          return byPosition != 0
+              ? byPosition
+              : left.sourceOrder.compareTo(right.sourceOrder);
+        });
       final uniqueIds = <String>[];
       final seen = <String>{};
       for (final item in orderedIds) {

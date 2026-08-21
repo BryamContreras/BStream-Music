@@ -9,20 +9,30 @@ import '../../core/errors/app_exception.dart' as app_errors;
 import '../../core/utils/image_source.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
+import 'crossfade_transition.dart';
 import 'notification_artwork_service.dart';
 import 'player_service.dart';
 
 typedef JustAudioOperationDeadline = Future<void> Function(Duration duration);
+typedef JustAudioPlayerFactory = AudioPlayer Function();
 
-class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
+class JustAudioPlayerService
+    implements PlayerService, NativeRemoteQueuePlayer, CrossfadeCapablePlayer {
+  static const _crossfadeShutdownGrace = Duration(seconds: 2);
+
   JustAudioPlayerService({
     NotificationArtworkService? notificationArtworkService,
     AudioPlayer? audioPlayer,
+    AudioPlayer? crossfadeAudioPlayer,
+    JustAudioPlayerFactory? crossfadePlayerFactory,
     Duration operationTimeout = const Duration(seconds: 45),
     JustAudioOperationDeadline? operationDeadline,
   }) : _notificationArtworkService =
            notificationArtworkService ?? NotificationArtworkService.instance,
        _player = audioPlayer ?? _createAudioPlayer(),
+       _injectedCrossfadePlayer = crossfadeAudioPlayer,
+       _crossfadePlayerFactory =
+           crossfadePlayerFactory ?? _createCrossfadeAudioPlayer,
        _operationTimeout = operationTimeout,
        // Public injection name is intentional; the stored hook stays private.
        // ignore: prefer_initializing_formals
@@ -42,9 +52,19 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
           maxPeriod: const Duration(milliseconds: 500),
         )
         .listen((position) {
+          if (_crossfadeRamp != null && !_primaryStillRepresentsSnapshot) {
+            // The native playlist may advance a few milliseconds before the
+            // logical handoff. Keep showing the outgoing timeline until then,
+            // but do not freeze it for the whole overlap.
+            return;
+          }
           _emit(_snapshot.copyWith(position: position));
+          _maybeStartCrossfade();
         });
     _durationSubscription = _player.durationStream.listen((duration) {
+      if (_crossfadeRamp != null && !_primaryStillRepresentsSnapshot) {
+        return;
+      }
       final watch = _remoteStartupWatch;
       if (watch != null && duration != null && !_loggedRemoteDuration) {
         _loggedRemoteDuration = true;
@@ -62,9 +82,21 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         return;
       }
       _emit(_snapshot.copyWith(duration: _usableDuration(duration)));
+      _maybeStartCrossfade();
     });
     _volumeSubscription = _player.volumeStream.listen((volume) {
-      _emit(_snapshot.copyWith(volume: volume.clamp(0, 1).toDouble()));
+      if (_crossfadeRamp != null) {
+        // During an overlap the primary player's physical gain is only one
+        // side of the ramp. It must never replace the user's logical master.
+        return;
+      }
+      final physical = volume.clamp(0, 1).toDouble();
+      // Every supported volume change enters through setVolume. A delayed
+      // native event from a cancelled ramp is physical deck state, not a new
+      // user-selected master, and must not lower the next track.
+      if ((physical - _masterVolume).abs() <= 0.001) {
+        _emit(_snapshot.copyWith(volume: _masterVolume));
+      }
     });
     _stateSubscription = _player.playerStateStream.listen((state) {
       // just_audio changes its native state to idle after a load error. Keep
@@ -86,12 +118,21 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       final status = switch (state.processingState) {
         ProcessingState.loading || ProcessingState.buffering =>
           state.playing ? PlayerStatus.playing : PlayerStatus.loading,
-        ProcessingState.completed => PlayerStatus.stopped,
+        ProcessingState.completed => PlayerStatus.completed,
         _ => state.playing ? PlayerStatus.playing : PlayerStatus.paused,
       };
+      if (_crossfadeRamp != null &&
+          state.processingState == ProcessingState.completed) {
+        return;
+      }
       _emit(_snapshot.copyWith(status: status));
+      _maybeStartCrossfade();
     });
     _playbackErrorSubscription = _player.errorStream.listen((error) {
+      if (_crossfadeRamp != null) {
+        unawaited(_promoteCrossfadeAfterOutgoingFailure());
+        return;
+      }
       final sequenceTags = _player.sequence
           .map((source) => source.tag)
           .toList(growable: false);
@@ -116,52 +157,69 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         ),
       );
     });
-    _sequenceStateSubscription = _player.sequenceStateStream.listen((state) {
-      final tag = state.currentSource?.tag;
-      if (tag is! MediaItem) {
-        return;
+    _sequenceStateSubscription = _player.sequenceStateStream.listen(
+      _handlePrimarySequenceState,
+    );
+  }
+
+  void _handlePrimarySequenceState(SequenceState state, {bool force = false}) {
+    final tag = state.currentSource?.tag;
+    if (tag is! MediaItem) {
+      return;
+    }
+    final queueEntryId = tag.extras?['queueEntryId']?.toString();
+    final isRemote = tag.extras?['isRemote'] == true;
+    final sameLogicalItem = _isSameLogicalMediaItem(
+      snapshot: _snapshot,
+      tag: tag,
+      queueEntryId: queueEntryId,
+    );
+    if (!force && _crossfadeRamp != null && !sameLogicalItem) {
+      // The primary playlist may reach its boundary a few milliseconds before
+      // the volume ramp. Keep the old logical item visible until handoff.
+      return;
+    }
+    if (isRemote && queueEntryId != null) {
+      for (final source in _remoteQueueSources) {
+        if (source.queueEntryId == queueEntryId) {
+          _activeRemoteTrack = source.track;
+          break;
+        }
       }
-      final queueEntryId = tag.extras?['queueEntryId']?.toString();
-      final isRemote = tag.extras?['isRemote'] == true;
-      final sameLogicalItem = _isSameLogicalMediaItem(
-        snapshot: _snapshot,
-        tag: tag,
+      if (_snapshot.queueEntryId != queueEntryId) {
+        _reportedFailureGeneration = null;
+        _diagnosticGeneration = null;
+        _diagnosticFuture = null;
+      }
+    }
+    _emit(
+      _snapshot.copyWith(
+        title: tag.title,
+        artist: tag.artist,
+        album: tag.album,
+        trackId: tag.id,
         queueEntryId: queueEntryId,
-      );
-      if (isRemote && queueEntryId != null) {
-        for (final source in _remoteQueueSources) {
-          if (source.queueEntryId == queueEntryId) {
-            _activeRemoteTrack = source.track;
-            break;
-          }
-        }
-        if (_snapshot.queueEntryId != queueEntryId) {
-          _reportedFailureGeneration = null;
-          _diagnosticGeneration = null;
-          _diagnosticFuture = null;
-        }
-      }
-      _emit(
-        _snapshot.copyWith(
-          title: tag.title,
-          artist: tag.artist,
-          album: tag.album,
-          trackId: tag.id,
-          queueEntryId: queueEntryId,
-          sourceUrl: tag.extras?['sourceUrl']?.toString(),
-          thumbnailUrl: displayArtworkSourceForMediaItem(tag),
-          // MediaItem only contains catalog metadata. Do not let a null
-          // catalog duration erase the duration detected from the media for
-          // the same logical item. A real queue transition must still clear
-          // it so the previous song's timeline is never reused.
-          duration:
-              _usableDuration(tag.duration) ??
-              (sameLogicalItem ? _usableDuration(_snapshot.duration) : null),
-          isRemote: isRemote,
-          isExternal: tag.extras?['isExternal'] == true,
-        ),
-      );
-    });
+        sourceUrl: tag.extras?['sourceUrl']?.toString(),
+        thumbnailUrl: displayArtworkSourceForMediaItem(tag),
+        duration:
+            _usableDuration(tag.duration) ??
+            (sameLogicalItem ? _usableDuration(_snapshot.duration) : null),
+        isRemote: isRemote,
+        isExternal: tag.extras?['isExternal'] == true,
+      ),
+    );
+  }
+
+  bool get _primaryStillRepresentsSnapshot {
+    final tag = _player.sequenceState.currentSource?.tag;
+    if (tag is! MediaItem) {
+      return true;
+    }
+    return _isSameLogicalMediaItem(
+      snapshot: _snapshot,
+      tag: tag,
+      queueEntryId: tag.extras?['queueEntryId']?.toString(),
+    );
   }
 
   static AudioPlayer _createAudioPlayer() => AudioPlayer(
@@ -181,7 +239,29 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     ),
   );
 
+  static AudioPlayer _createCrossfadeAudioPlayer() => AudioPlayer(
+    // Only the primary player owns interruptions and activation. Both decks
+    // still render through the same Android audio session during the overlap.
+    handleInterruptions: false,
+    handleAudioSessionActivation: false,
+    useProxyForRequestHeaders: false,
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        minBufferDuration: Duration(seconds: 2),
+        maxBufferDuration: Duration(seconds: 8),
+        bufferForPlaybackDuration: Duration(milliseconds: 250),
+        bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 750),
+        prioritizeTimeOverSizeThresholds: true,
+        backBufferDuration: Duration(seconds: 1),
+      ),
+    ),
+  );
+
   final AudioPlayer _player;
+  final AudioPlayer? _injectedCrossfadePlayer;
+  final JustAudioPlayerFactory _crossfadePlayerFactory;
+  AudioPlayer? _crossfadePlayer;
+  bool _injectedCrossfadePlayerUsed = false;
   final NotificationArtworkService _notificationArtworkService;
   final Duration _operationTimeout;
   final JustAudioOperationDeadline? _operationDeadline;
@@ -195,6 +275,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   late final StreamSubscription<SequenceState?> _sequenceStateSubscription;
 
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
+  double _masterVolume = 1;
   int _playbackGeneration = 0;
   int? _reportedFailureGeneration;
   int? _diagnosticGeneration;
@@ -203,6 +284,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   bool _shuffleEnabled = false;
   PlaybackRepeatMode _repeatMode = PlaybackRepeatMode.off;
   List<String> _localQueueIds = const [];
+  List<LocalTrack> _localQueueTracks = const [];
   List<RemotePlaybackSource> _remoteQueueSources = const [];
   bool _remoteHasSingleLogicalItem = false;
   Future<void> _remoteQueueMutationTail = Future<void>.value();
@@ -210,6 +292,20 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   int _remoteQueueRevision = 0;
   Stopwatch? _remoteStartupWatch;
   bool _loggedRemoteDuration = false;
+  bool _crossfadeEnabled = false;
+  Duration _crossfadeDuration = const Duration(seconds: 5);
+  int _crossfadeGeneration = 0;
+  CrossfadePlaybackSource? _preparedCrossfadeSource;
+  Future<void>? _crossfadePreparation;
+  CrossfadeRamp? _crossfadeRamp;
+  bool _crossfadePromotionInProgress = false;
+  Completer<void>? _crossfadePromotionCompletion;
+  bool _disableCrossfadeAfterHandoff = false;
+  bool _crossfadePaused = false;
+  Future<void> _crossfadeVolumeWriteTail = Future<void>.value();
+  Future<void> _seekTail = Future<void>.value();
+  int _seekRevision = 0;
+  StreamSubscription<PlayerException>? _crossfadeErrorSubscription;
   bool _disposed = false;
 
   @override
@@ -220,6 +316,585 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
 
   @override
   bool get supportsLocalQueueReplacement => true;
+
+  @override
+  bool get crossfadeEnabled => _crossfadeEnabled;
+
+  @override
+  Future<void> configureCrossfade({
+    required bool enabled,
+    required Duration duration,
+  }) async {
+    if (duration <= Duration.zero) {
+      throw ArgumentError.value(duration, 'duration', 'Must be positive.');
+    }
+    _crossfadeDuration = duration;
+    if (!enabled && _crossfadeRamp != null) {
+      // Once both tracks are audible, completing the current handoff avoids a
+      // jump back to the outgoing item. The setting applies at the boundary.
+      _disableCrossfadeAfterHandoff = true;
+      return;
+    }
+    if (enabled) {
+      _disableCrossfadeAfterHandoff = false;
+    }
+    if (_crossfadeEnabled == enabled) {
+      if (enabled) {
+        _maybeStartCrossfade();
+      }
+      return;
+    }
+    _crossfadeEnabled = enabled;
+    if (!enabled) {
+      _crossfadeGeneration++;
+      await _resetCrossfadeState(restorePrimaryVolume: true);
+    }
+  }
+
+  @override
+  Future<void> prepareCrossfade(CrossfadePlaybackSource? source) async {
+    if (_disposed) {
+      return;
+    }
+    if (!_crossfadeEnabled || source == null) {
+      _crossfadeGeneration++;
+      await _resetCrossfadeState(restorePrimaryVolume: true);
+      return;
+    }
+    if (_crossfadeRamp != null) {
+      return;
+    }
+
+    final effectiveSource = _effectiveCrossfadeSource(source);
+    final existing = _preparedCrossfadeSource;
+    final preparation = _crossfadePreparation;
+    if (existing?.logicalKey == effectiveSource.logicalKey) {
+      if (preparation != null) {
+        await preparation;
+      }
+      return;
+    }
+
+    final generation = ++_crossfadeGeneration;
+    await _resetCrossfadeState(restorePrimaryVolume: true);
+    if (!_isCrossfadeCurrent(generation)) {
+      return;
+    }
+    final future = _prepareCrossfadeSource(effectiveSource, generation);
+    _crossfadePreparation = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_crossfadePreparation, future)) {
+        _crossfadePreparation = null;
+      }
+    }
+  }
+
+  CrossfadePlaybackSource _effectiveCrossfadeSource(
+    CrossfadePlaybackSource requested,
+  ) {
+    if (requested case LocalCrossfadePlaybackSource()) {
+      final nextIndex = _player.nextIndex;
+      if (nextIndex != null &&
+          nextIndex >= 0 &&
+          nextIndex < _localQueueTracks.length) {
+        // just_audio owns the effective shuffled order for a native local
+        // playlist. Use that exact successor instead of a second random plan.
+        return LocalCrossfadePlaybackSource(_localQueueTracks[nextIndex]);
+      }
+    }
+    return requested;
+  }
+
+  Future<void> _prepareCrossfadeSource(
+    CrossfadePlaybackSource source,
+    int generation,
+  ) async {
+    final incoming = _newCrossfadePlayer();
+    _crossfadePlayer = incoming;
+    _crossfadeErrorSubscription = incoming.errorStream.listen((error) {
+      if (_isCrossfadeCurrent(generation) &&
+          identical(incoming, _crossfadePlayer)) {
+        developer.log(
+          'just_audio standby error',
+          name: 'BStreamPlayback',
+          error: error,
+        );
+        unawaited(_abortCrossfadeGeneration(generation));
+      }
+    });
+    try {
+      await incoming.setVolume(0);
+      if (!_isCrossfadeCurrent(generation) ||
+          !identical(incoming, _crossfadePlayer)) {
+        return;
+      }
+      await incoming
+          .setAudioSource(_crossfadeAudioSource(source), preload: true)
+          .timeout(_operationTimeout);
+      if (!_isCrossfadeCurrent(generation) ||
+          !identical(incoming, _crossfadePlayer)) {
+        return;
+      }
+      _preparedCrossfadeSource = source;
+      _maybeStartCrossfade();
+    } catch (error, stackTrace) {
+      if (_isCrossfadeCurrent(generation)) {
+        developer.log(
+          'just_audio crossfade preload failed',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        _crossfadeGeneration++;
+        await _resetCrossfadeState(restorePrimaryVolume: true);
+      }
+    }
+  }
+
+  AudioPlayer _newCrossfadePlayer() {
+    final injected = _injectedCrossfadePlayer;
+    if (injected != null && !_injectedCrossfadePlayerUsed) {
+      _injectedCrossfadePlayerUsed = true;
+      return injected;
+    }
+    return _crossfadePlayerFactory();
+  }
+
+  AudioSource _crossfadeAudioSource(CrossfadePlaybackSource source) =>
+      switch (source) {
+        LocalCrossfadePlaybackSource(:final track) => _localAudioSource(track),
+        RemoteCrossfadePlaybackSource(:final source) => _remoteAudioSource(
+          source,
+        ),
+      };
+
+  bool _isCrossfadeCurrent(int generation) =>
+      !_disposed && _crossfadeEnabled && generation == _crossfadeGeneration;
+
+  Future<void> _abortCrossfadeGeneration(int generation) async {
+    if (!_isCrossfadeCurrent(generation)) {
+      return;
+    }
+    _crossfadeGeneration++;
+    await _resetCrossfadeState(restorePrimaryVolume: true);
+  }
+
+  Future<void> _resetCrossfadeState({
+    required bool restorePrimaryVolume,
+  }) async {
+    _crossfadeRamp?.cancel();
+    _crossfadeRamp = null;
+    if (_disableCrossfadeAfterHandoff) {
+      // The user may disable crossfade after both decks became audible and
+      // the incoming deck may then fail before promotion. Consume the pending
+      // setting synchronously so a late reset cannot leave the service enabled
+      // while Settings already says it is off.
+      _disableCrossfadeAfterHandoff = false;
+      _crossfadeEnabled = false;
+    }
+    _crossfadePaused = false;
+    _preparedCrossfadeSource = null;
+    _crossfadePreparation = null;
+    final incoming = _crossfadePlayer;
+    _crossfadePlayer = null;
+    await _crossfadeErrorSubscription?.cancel();
+    _crossfadeErrorSubscription = null;
+    if (incoming != null) {
+      try {
+        await incoming.stop().timeout(const Duration(seconds: 2));
+      } catch (_) {
+        // A stale standby must never block the logical player.
+      }
+      try {
+        await incoming.dispose().timeout(const Duration(seconds: 2));
+      } catch (_) {
+        // Native teardown is best effort after an interrupted preload.
+      }
+    }
+    if (restorePrimaryVolume && !_disposed) {
+      try {
+        // A ramp tick may already be queued when cancellation wins. Restore
+        // through the same lane so this write is guaranteed to be last.
+        await _writePrimaryCrossfadeVolume(_masterVolume);
+      } catch (_) {
+        // The next explicit load restores the logical master volume.
+      }
+    }
+  }
+
+  Future<void> _invalidateCrossfadeForExplicitAction() async {
+    _crossfadeGeneration++;
+    final promotion = _crossfadePromotionCompletion;
+    if (promotion != null) {
+      await promotion.future;
+    }
+    await _resetCrossfadeState(restorePrimaryVolume: true);
+  }
+
+  Future<void> _awaitCrossfadeShutdownBarrier() async {
+    final promotion = _crossfadePromotionCompletion;
+    final timeout = _operationTimeout < _crossfadeShutdownGrace
+        ? _operationTimeout
+        : _crossfadeShutdownGrace;
+    try {
+      await Future.wait<void>([
+        if (promotion != null) promotion.future,
+        _crossfadeVolumeWriteTail,
+      ]).timeout(timeout);
+    } catch (_) {
+      // AudioPlayer.dispose is the bounded fallback for an unresponsive native
+      // command. Reaching it only after this grace period keeps the normal path
+      // serialized without letting a wedged load block application shutdown.
+    }
+  }
+
+  void _maybeStartCrossfade() {
+    if (!_crossfadeEnabled ||
+        _disposed ||
+        _crossfadeRamp != null ||
+        _crossfadePromotionInProgress ||
+        _preparedCrossfadeSource == null ||
+        _crossfadePlayer == null ||
+        _snapshot.status != PlayerStatus.playing) {
+      return;
+    }
+    final duration = _usableDuration(_snapshot.duration);
+    if (duration == null) {
+      return;
+    }
+    final remaining = duration - _snapshot.position;
+    if (remaining > _crossfadeDuration ||
+        remaining < const Duration(milliseconds: 350)) {
+      return;
+    }
+    final effectiveDuration = remaining < _crossfadeDuration
+        ? remaining
+        : _crossfadeDuration;
+    unawaited(_runCrossfade(_crossfadeGeneration, effectiveDuration));
+  }
+
+  Future<void> _runCrossfade(int generation, Duration duration) async {
+    final incoming = _crossfadePlayer;
+    final source = _preparedCrossfadeSource;
+    if (incoming == null ||
+        source == null ||
+        !_isCrossfadeCurrent(generation) ||
+        _crossfadeRamp != null) {
+      return;
+    }
+    late final CrossfadeRamp ramp;
+    ramp = CrossfadeRamp(
+      duration: duration,
+      applyGains: (gains) async {
+        if (!_isCrossfadeCurrent(generation) ||
+            !identical(_crossfadeRamp, ramp) ||
+            !identical(_crossfadePlayer, incoming)) {
+          return;
+        }
+        final master = _masterVolume;
+        await _writeCrossfadeVolumes(
+          incoming: incoming,
+          outgoingVolume: gains.outgoing * master,
+          incomingVolume: gains.incoming * master,
+        );
+      },
+    );
+    _crossfadeRamp = ramp;
+    try {
+      unawaited(_playCrossfadeIncoming(incoming, generation));
+      final completion = ramp.start();
+      if (_crossfadePaused || _snapshot.status != PlayerStatus.playing) {
+        ramp.pause();
+        await incoming.pause();
+      }
+      final completed = await completion;
+      if (!completed ||
+          !_isCrossfadeCurrent(generation) ||
+          !identical(_crossfadeRamp, ramp) ||
+          !identical(_crossfadePlayer, incoming)) {
+        return;
+      }
+      await _promoteCrossfadePlayer(
+        generation: generation,
+        incoming: incoming,
+        source: source,
+      );
+    } catch (error, stackTrace) {
+      if (_isCrossfadeCurrent(generation)) {
+        developer.log(
+          'just_audio crossfade failed',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        _crossfadeGeneration++;
+        await _resetCrossfadeState(restorePrimaryVolume: true);
+        if (!_disposed) {
+          // Promotion may already have moved the primary playlist before a
+          // later native option/volume write failed. Reflect its authoritative
+          // item so metadata can never remain on the outgoing song.
+          _handlePrimarySequenceState(_player.sequenceState, force: true);
+          _emit(
+            _snapshot.copyWith(
+              position: _player.position,
+              status: _player.playing
+                  ? PlayerStatus.playing
+                  : PlayerStatus.paused,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _playCrossfadeIncoming(
+    AudioPlayer incoming,
+    int generation,
+  ) async {
+    try {
+      await incoming.play();
+    } catch (error, stackTrace) {
+      if (_isCrossfadeCurrent(generation) &&
+          identical(incoming, _crossfadePlayer)) {
+        developer.log(
+          'just_audio standby play failed',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        await _abortCrossfadeGeneration(generation);
+      }
+    }
+  }
+
+  Future<void> _promoteCrossfadeAfterOutgoingFailure() async {
+    final incoming = _crossfadePlayer;
+    final source = _preparedCrossfadeSource;
+    final ramp = _crossfadeRamp;
+    if (incoming == null || source == null || ramp == null) {
+      return;
+    }
+    ramp.cancel();
+    await _promoteCrossfadePlayer(
+      generation: _crossfadeGeneration,
+      incoming: incoming,
+      source: source,
+    );
+  }
+
+  Future<void> _promoteCrossfadePlayer({
+    required int generation,
+    required AudioPlayer incoming,
+    required CrossfadePlaybackSource source,
+  }) async {
+    if (_crossfadePromotionInProgress ||
+        !_isCrossfadeCurrent(generation) ||
+        !identical(incoming, _crossfadePlayer)) {
+      return;
+    }
+    _crossfadePromotionInProgress = true;
+    final promotionCompletion = Completer<void>();
+    _crossfadePromotionCompletion = promotionCompletion;
+    try {
+      await _enqueueQueueMutation(() async {
+        if (!_isCrossfadeCurrent(generation) ||
+            !identical(incoming, _crossfadePlayer)) {
+          return;
+        }
+        final incomingPosition = incoming.position;
+        await _player.setVolume(0);
+        if (!_isCrossfadeCurrent(generation)) {
+          return;
+        }
+        final synchronized = await _synchronizePrimaryToCrossfadeSource(
+          source,
+          incomingPosition,
+          generation,
+        );
+        if (!synchronized || !_isCrossfadeCurrent(generation)) {
+          if (_isCrossfadeCurrent(generation)) {
+            _crossfadeGeneration++;
+            await _resetCrossfadeState(restorePrimaryVolume: true);
+            if (_player.processingState == ProcessingState.completed) {
+              _emit(_snapshot.copyWith(status: PlayerStatus.completed));
+            } else {
+              _handlePrimarySequenceState(_player.sequenceState, force: true);
+            }
+          }
+          return;
+        }
+        final shouldRemainPaused =
+            _crossfadePaused || _snapshot.status == PlayerStatus.paused;
+        if (shouldRemainPaused) {
+          await _player.pause();
+        } else if (!_player.playing) {
+          _startPlayback(_playbackGeneration);
+        }
+        final master = _masterVolume;
+        await _writeCrossfadeVolumes(
+          incoming: incoming,
+          outgoingVolume: master,
+          incomingVolume: 0,
+        );
+        if (!_isCrossfadeCurrent(generation)) {
+          return;
+        }
+
+        var nextSnapshot = _crossfadeSnapshot(
+          source,
+          position: incomingPosition,
+          detectedDuration: incoming.duration,
+        );
+        if (_crossfadePaused || _snapshot.status == PlayerStatus.paused) {
+          nextSnapshot = nextSnapshot.copyWith(status: PlayerStatus.paused);
+        }
+        await _crossfadeErrorSubscription?.cancel();
+        _crossfadeErrorSubscription = null;
+        _crossfadeRamp = null;
+        _preparedCrossfadeSource = null;
+        _crossfadePreparation = null;
+        _crossfadePlayer = null;
+        _emit(nextSnapshot);
+        if (_disableCrossfadeAfterHandoff) {
+          _disableCrossfadeAfterHandoff = false;
+          _crossfadeEnabled = false;
+        }
+        unawaited(_retireCrossfadePlayer(incoming));
+      }, label: 'crossfadePromotion');
+    } finally {
+      if (!promotionCompletion.isCompleted) {
+        promotionCompletion.complete();
+      }
+      if (identical(_crossfadePromotionCompletion, promotionCompletion)) {
+        _crossfadePromotionCompletion = null;
+      }
+      _crossfadePromotionInProgress = false;
+    }
+  }
+
+  Future<bool> _synchronizePrimaryToCrossfadeSource(
+    CrossfadePlaybackSource source,
+    Duration position,
+    int generation,
+  ) async {
+    switch (source) {
+      case LocalCrossfadePlaybackSource(:final track):
+        final index = _localQueueTracks.indexWhere(
+          (candidate) => candidate.id == track.id,
+        );
+        if (index >= 0 && index < _player.sequence.length) {
+          await _player.seek(position, index: index);
+        } else {
+          return false;
+        }
+        if (!_isCrossfadeCurrent(generation)) return false;
+        _activeRemoteTrack = null;
+      case RemoteCrossfadePlaybackSource(:final source):
+        final index = _remoteQueueSources.indexWhere(
+          (candidate) => candidate.queueEntryId == source.queueEntryId,
+        );
+        if (index >= 0 && index < _player.sequence.length) {
+          await _player.seek(position, index: index);
+        } else {
+          return false;
+        }
+        if (!_isCrossfadeCurrent(generation)) return false;
+        _activeRemoteTrack = source.track;
+    }
+    await _applyPlaybackOptions();
+    return _isCrossfadeCurrent(generation);
+  }
+
+  PlayerSnapshot _crossfadeSnapshot(
+    CrossfadePlaybackSource source, {
+    required Duration position,
+    required Duration? detectedDuration,
+  }) {
+    return switch (source) {
+      LocalCrossfadePlaybackSource(:final track) => PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        trackId: track.id,
+        sourceUrl: track.sourceUrl,
+        thumbnailUrl: track.thumbnailPath ?? track.thumbnailUrl,
+        position: position,
+        duration: _usableDuration(detectedDuration) ?? track.duration,
+        volume: _masterVolume,
+        isRemote: false,
+        isExternal: track.isExternal,
+        shuffleEnabled: _shuffleEnabled,
+        repeatMode: _repeatMode,
+      ),
+      RemoteCrossfadePlaybackSource(:final source) => PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: source.track.title,
+        artist: source.track.artist,
+        album: source.track.album,
+        trackId: source.track.id.isEmpty ? source.track.url : source.track.id,
+        queueEntryId: source.queueEntryId,
+        sourceUrl: source.track.url,
+        thumbnailUrl: source.track.thumbnailUrl,
+        position: position,
+        duration: _usableDuration(detectedDuration) ?? source.track.duration,
+        volume: _masterVolume,
+        isRemote: true,
+        shuffleEnabled: _shuffleEnabled,
+        repeatMode: _repeatMode,
+      ),
+    };
+  }
+
+  Future<void> _writeCrossfadeVolumes({
+    required AudioPlayer incoming,
+    required double outgoingVolume,
+    required double incomingVolume,
+  }) {
+    final write = _crossfadeVolumeWriteTail.then((_) async {
+      if (_disposed) {
+        return;
+      }
+      await Future.wait<void>([
+        _player.setVolume(outgoingVolume.clamp(0, 1).toDouble()),
+        incoming.setVolume(incomingVolume.clamp(0, 1).toDouble()),
+      ]);
+    });
+    _crossfadeVolumeWriteTail = write.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return write;
+  }
+
+  Future<void> _writePrimaryCrossfadeVolume(double volume) {
+    final write = _crossfadeVolumeWriteTail.then((_) async {
+      if (_disposed) {
+        return;
+      }
+      await _player.setVolume(volume.clamp(0, 1).toDouble());
+    });
+    _crossfadeVolumeWriteTail = write.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return write;
+  }
+
+  Future<void> _retireCrossfadePlayer(AudioPlayer player) async {
+    try {
+      await player.stop().timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Promotion is already complete; retirement cannot affect playback.
+    }
+    try {
+      await player.dispose().timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Best effort after a native decoder failure.
+    }
+  }
 
   @override
   Future<void> playRemote(TrackInfo track) async {
@@ -249,14 +924,19 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   }
 
   @override
-  Future<void> playRemoteSource(RemotePlaybackSource source) {
+  Future<void> playRemoteSource(RemotePlaybackSource source) async {
     final generation = ++_playbackGeneration;
     _remoteQueueRevision++;
     _cancelActiveSourceLoad();
+    await _invalidateCrossfadeForExplicitAction();
+    if (generation != _playbackGeneration || _disposed) {
+      return;
+    }
     final track = source.track;
 
     _activeRemoteTrack = track;
     _localQueueIds = const [];
+    _localQueueTracks = const [];
     _reportedFailureGeneration = null;
     _diagnosticGeneration = null;
     _diagnosticFuture = null;
@@ -271,7 +951,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         sourceUrl: track.url,
         thumbnailUrl: track.thumbnailUrl,
         duration: track.duration,
-        volume: _snapshot.volume,
+        volume: _masterVolume,
         isRemote: true,
       ),
     );
@@ -283,7 +963,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
       'format=${track.streamExtension ?? 'unknown'}',
       name: 'BStreamPlayback',
     );
-    return _enqueueQueueMutation(
+    await _enqueueQueueMutation(
       () async {
         if (generation != _playbackGeneration) {
           return;
@@ -586,6 +1266,8 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     }
     _playbackGeneration++;
     _remoteQueueRevision++;
+    _crossfadeGeneration++;
+    unawaited(_resetCrossfadeState(restorePrimaryVolume: true));
     // stop() switches just_audio's platform activation synchronously. That
     // interrupts the still-alive native load before its Future can complete
     // and publish a source after this timeout.
@@ -613,7 +1295,12 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
     _cancelActiveSourceLoad();
+    await _invalidateCrossfadeForExplicitAction();
+    if (generation != _playbackGeneration || _disposed) {
+      return;
+    }
     _localQueueIds = const [];
+    _localQueueTracks = const [];
     _emit(
       PlayerSnapshot(
         status: PlayerStatus.loading,
@@ -624,7 +1311,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         sourceUrl: track.sourceUrl,
         thumbnailUrl: track.thumbnailPath ?? track.thumbnailUrl,
         duration: track.duration,
-        volume: _snapshot.volume,
+        volume: _masterVolume,
         isRemote: false,
         isExternal: track.isExternal,
       ),
@@ -644,6 +1331,8 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         if (generation != _playbackGeneration) {
           return;
         }
+        _localQueueIds = [track.id];
+        _localQueueTracks = [track];
         _startPlayback(generation);
       },
       isSourceLoad: true,
@@ -663,6 +1352,10 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
     _cancelActiveSourceLoad();
+    await _invalidateCrossfadeForExplicitAction();
+    if (generation != _playbackGeneration || _disposed) {
+      return;
+    }
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
     final current = tracks[safeIndex];
     _emit(
@@ -675,7 +1368,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         sourceUrl: current.sourceUrl,
         thumbnailUrl: current.thumbnailPath ?? current.thumbnailUrl,
         duration: current.duration,
-        volume: _snapshot.volume,
+        volume: _masterVolume,
         isRemote: false,
         isExternal: current.isExternal,
       ),
@@ -699,6 +1392,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
           );
           _localQueueIds = queueIds;
         }
+        _localQueueTracks = List<LocalTrack>.unmodifiable(tracks);
         if (generation != _playbackGeneration) {
           return;
         }
@@ -717,7 +1411,11 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
   }
 
   @override
-  Future<void> replaceLocalQueue(List<LocalTrack> tracks, int preferredIndex) {
+  Future<void> replaceLocalQueue(
+    List<LocalTrack> tracks,
+    int preferredIndex,
+  ) async {
+    await _invalidateCrossfadeForExplicitAction();
     final generation = _playbackGeneration;
     final revision = ++_remoteQueueRevision;
     final desired = List<LocalTrack>.unmodifiable(tracks);
@@ -726,7 +1424,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
         generation == _playbackGeneration &&
         revision == _remoteQueueRevision &&
         _activeRemoteTrack == null;
-    return _enqueueQueueMutation(
+    await _enqueueQueueMutation(
       () async {
         // Queue replacement shares the same native mutation lane as remote
         // playback and stop. A request that was superseded before it reached the
@@ -745,10 +1443,11 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
             return;
           }
           _localQueueIds = const [];
+          _localQueueTracks = const [];
           _emit(
             PlayerSnapshot(
               status: PlayerStatus.stopped,
-              volume: _snapshot.volume,
+              volume: _masterVolume,
               shuffleEnabled: _shuffleEnabled,
               repeatMode: _repeatMode,
             ),
@@ -830,6 +1529,7 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
           return;
         }
         _localQueueIds = nextIds;
+        _localQueueTracks = desired;
 
         final retainedIndex = currentTrackId == null
             ? -1
@@ -864,13 +1564,26 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
 
   @override
   Future<void> pause() async {
-    await _player.pause();
+    _crossfadePaused = true;
+    _crossfadeRamp?.pause();
+    final incoming = _crossfadePlayer;
+    await Future.wait<void>([
+      _player.pause(),
+      if (_crossfadeRamp != null && incoming != null) incoming.pause(),
+    ]);
     _emit(_snapshot.copyWith(status: PlayerStatus.paused));
   }
 
   @override
   Future<void> resume() async {
     _startPlayback(_playbackGeneration);
+    final incoming = _crossfadePlayer;
+    _crossfadePaused = false;
+    if (_crossfadeRamp != null && incoming != null) {
+      unawaited(_playCrossfadeIncoming(incoming, _crossfadeGeneration));
+      _crossfadeRamp?.resume();
+    }
+    _emit(_snapshot.copyWith(status: PlayerStatus.playing));
   }
 
   @override
@@ -884,12 +1597,14 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
     _cancelActiveQueueOperation();
+    await _invalidateCrossfadeForExplicitAction();
     await _enqueueQueueMutation(() async {
       if (generation != _playbackGeneration) {
         return;
       }
       _remoteQueueSources = const [];
       _remoteHasSingleLogicalItem = false;
+      _localQueueTracks = const [];
       await _player.stop();
       if (generation == _playbackGeneration) {
         // An already-dispatched incremental playlist command may finish after
@@ -903,14 +1618,96 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
 
   @override
   Future<void> seek(Duration position) {
-    return _player.seek(position);
+    final generation = _playbackGeneration;
+    final revision = ++_seekRevision;
+    final target = position < Duration.zero ? Duration.zero : position;
+    final logicalIndex = _logicalPrimaryIndexForSnapshot(_snapshot);
+    final operation = _seekTail.then(
+      (_) => _performSeek(
+        target,
+        generation: generation,
+        revision: revision,
+        logicalIndex: logicalIndex,
+      ),
+    );
+    _seekTail = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return operation;
+  }
+
+  Future<void> _performSeek(
+    Duration target, {
+    required int generation,
+    required int revision,
+    required int? logicalIndex,
+  }) async {
+    if (_disposed ||
+        generation != _playbackGeneration ||
+        revision != _seekRevision) {
+      return;
+    }
+    await _invalidateCrossfadeForExplicitAction();
+    if (_disposed ||
+        generation != _playbackGeneration ||
+        revision != _seekRevision) {
+      return;
+    }
+    final index = logicalIndex != null && logicalIndex < _player.sequence.length
+        ? logicalIndex
+        : null;
+    if (index == null) {
+      await _player.seek(target);
+    } else {
+      await _player.seek(target, index: index);
+    }
+    if (!_disposed &&
+        generation == _playbackGeneration &&
+        revision == _seekRevision) {
+      // Publish the committed target before the controller stages a new
+      // standby. Otherwise a stale near-end snapshot can immediately restart
+      // the crossfade that this seek just cancelled.
+      _emit(_snapshot.copyWith(position: target));
+    }
+  }
+
+  int? _logicalPrimaryIndexForSnapshot(PlayerSnapshot snapshot) {
+    final sequence = _player.sequence;
+    for (var index = 0; index < sequence.length; index++) {
+      final tag = sequence[index].tag;
+      if (tag is MediaItem &&
+          _isSameLogicalMediaItem(
+            snapshot: snapshot,
+            tag: tag,
+            queueEntryId: tag.extras?['queueEntryId']?.toString(),
+          )) {
+        return index;
+      }
+    }
+    return null;
   }
 
   @override
-  Future<void> setVolume(double volume) {
+  Future<void> setVolume(double volume) async {
     final normalized = volume.clamp(0, 1).toDouble();
+    _masterVolume = normalized;
     _emit(_snapshot.copyWith(volume: normalized));
-    return _player.setVolume(normalized);
+    final ramp = _crossfadeRamp;
+    final incoming = _crossfadePlayer;
+    if (ramp != null && incoming != null) {
+      final gains = crossfadeGains(
+        masterVolume: normalized,
+        progress: ramp.progress,
+      );
+      await _writeCrossfadeVolumes(
+        incoming: incoming,
+        outgoingVolume: gains.outgoing,
+        incomingVolume: gains.incoming,
+      );
+      return;
+    }
+    await _player.setVolume(normalized);
   }
 
   @override
@@ -935,7 +1732,15 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     _disposed = true;
     _playbackGeneration++;
     _remoteQueueRevision++;
+    _crossfadeGeneration++;
+    _crossfadeRamp?.cancel();
+    _crossfadeRamp = null;
+    await _awaitCrossfadeShutdownBarrier();
     _cancelActiveQueueOperation();
+    final incoming = _crossfadePlayer;
+    _crossfadePlayer = null;
+    await _crossfadeErrorSubscription?.cancel();
+    _crossfadeErrorSubscription = null;
     await _positionSubscription.cancel();
     await _durationSubscription.cancel();
     await _volumeSubscription.cancel();
@@ -943,7 +1748,10 @@ class JustAudioPlayerService implements PlayerService, NativeRemoteQueuePlayer {
     await _playbackErrorSubscription.cancel();
     await _sequenceStateSubscription.cancel();
     try {
-      await _runStandaloneWithDeadline(_player.dispose, label: 'dispose');
+      await Future.wait<void>([
+        _runStandaloneWithDeadline(_player.dispose, label: 'dispose'),
+        if (incoming != null) _retireCrossfadePlayer(incoming),
+      ]);
     } on TimeoutException {
       // A native load can wedge during teardown on a broken media stack. The
       // Dart service still has to release its streams and let shutdown finish.

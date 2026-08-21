@@ -13,13 +13,19 @@ final libraryCsvImportServiceProvider = Provider<LibraryCsvImportService>((
     (track, {required taskId, onResolved}) async {
       final outcome = await ref
           .read(localTrackDownloadHelperProvider)
-          .resolveForLibrary(track, taskId: taskId, onResolved: onResolved);
+          .resolveForLibrary(
+            track,
+            taskId: taskId,
+            onResolved: onResolved,
+            allowConcurrentDownload: true,
+          );
       return LibraryCsvDownloadedTrack(
         track: outcome.track,
         reusedExisting: outcome.reusedExisting,
       );
     },
     _libraryCsvGate(ref),
+    maxConcurrentTracks: 3,
   );
 });
 
