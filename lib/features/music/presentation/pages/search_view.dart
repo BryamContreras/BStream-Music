@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_ui.dart';
 import '../../domain/entities/search_result.dart';
 import '../providers/music_providers.dart';
 import '../widgets/search_input.dart';
@@ -12,6 +13,8 @@ import 'remote_collection_detail_page.dart';
 
 class SearchView extends ConsumerWidget {
   const SearchView({required this.onOpenPlayer, super.key});
+
+  static const _headingTransitionDuration = Duration(milliseconds: 220);
 
   final VoidCallback onOpenPlayer;
 
@@ -25,9 +28,14 @@ class SearchView extends ConsumerWidget {
       _ => false,
     };
     final showHeading = !isMobile || !searchState.hasQuery;
+    final headingTransitionDuration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : _headingTransitionDuration;
 
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('search-tab-header-surface'),
+      headerTransitionKey: const ValueKey('search-tab-heading-transition'),
+      headerTransitionDuration: _headingTransitionDuration,
       header: showHeading
           ? Align(
               alignment: Alignment.centerLeft,
@@ -46,7 +54,10 @@ class SearchView extends ConsumerWidget {
         key: const ValueKey('search-results-scroll'),
         slivers: [
           SliverToBoxAdapter(
-            child: Padding(
+            child: AnimatedPadding(
+              key: const ValueKey('search-input-section-padding'),
+              duration: headingTransitionDuration,
+              curve: Curves.easeOutCubic,
               padding: EdgeInsets.fromLTRB(0, showHeading ? 0 : 20, 0, 14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -389,7 +400,7 @@ class _SearchCategoryTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(8);
+    final radius = BorderRadius.circular(appNavItemRadius);
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final motionDuration = disableAnimations
         ? Duration.zero
@@ -557,7 +568,7 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
   Widget build(BuildContext context) {
     final album = widget.album;
     final colors = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(8);
+    final radius = BorderRadius.circular(appCardRadius);
     final surface = _hovered
         ? Color.alphaBlend(
             colors.onSurface.withValues(alpha: 0.09),

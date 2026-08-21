@@ -53,6 +53,61 @@ class AndroidYtdlChannel {
     }
   }
 
+  Future<String> executeJavaScript(
+    String script, {
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    if (script.trim().isEmpty) {
+      throw const DownloaderException(
+        'No se puede ejecutar JavaScript vacio.',
+        code: 'quickjs_empty_script',
+      );
+    }
+    if (timeout <= Duration.zero) {
+      throw ArgumentError.value(timeout, 'timeout', 'Must be positive.');
+    }
+    return _invoke<String>('executeJavaScript', {
+      'script': script,
+      'timeoutMs': timeout.inMilliseconds,
+    });
+  }
+
+  Future<AndroidPoTokenData?> getPoTokens(String videoId) async {
+    final result = await _invoke<Map<Object?, Object?>>('getPoTokens', {
+      'videoId': videoId,
+    });
+    if (result['available'] != true) {
+      return null;
+    }
+    final playerToken = result['playerRequestPoToken']?.toString().trim();
+    final streamingToken = result['streamingDataPoToken']?.toString().trim();
+    final visitorData = result['visitorData']?.toString().trim();
+    final expiresAtEpochMs = _intValue(result['expiresAtEpochMs']);
+    if (playerToken == null ||
+        playerToken.isEmpty ||
+        streamingToken == null ||
+        streamingToken.isEmpty ||
+        visitorData == null ||
+        visitorData.isEmpty ||
+        expiresAtEpochMs == null) {
+      return null;
+    }
+    return AndroidPoTokenData(
+      visitorData: visitorData,
+      playerRequestPoToken: playerToken,
+      streamingDataPoToken: streamingToken,
+      expiresAt: DateTime.fromMillisecondsSinceEpoch(expiresAtEpochMs),
+    );
+  }
+
+  Future<void> disposePoTokens() async {
+    try {
+      await _methodChannel.invokeMethod<Object?>('disposePoTokens');
+    } on PlatformException {
+      // Token cleanup must never mask resolver disposal.
+    }
+  }
+
   Future<TrackInfo> getInfo(String url) async {
     final result = await _invoke<Map<Object?, Object?>>('getInfo', {
       'url': url,
@@ -162,8 +217,29 @@ class AndroidYtdlChannel {
     return seconds == null ? null : Duration(seconds: seconds);
   }
 
+  int? _intValue(Object? value) {
+    if (value is num) {
+      return value.toInt();
+    }
+    return int.tryParse(value?.toString() ?? '');
+  }
+
   String? _optionalString(Object? value) {
     final normalized = value?.toString().trim();
     return normalized == null || normalized.isEmpty ? null : normalized;
   }
+}
+
+class AndroidPoTokenData {
+  const AndroidPoTokenData({
+    required this.visitorData,
+    required this.playerRequestPoToken,
+    required this.streamingDataPoToken,
+    required this.expiresAt,
+  });
+
+  final String visitorData;
+  final String playerRequestPoToken;
+  final String streamingDataPoToken;
+  final DateTime expiresAt;
 }

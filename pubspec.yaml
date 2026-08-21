@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.4+124
+version: 1.2.5+125
 
 environment:
   sdk: ^3.12.0
@@ -43,6 +43,8 @@ dependencies:
   sqflite: ^2.4.3
   sqflite_common_ffi: ^2.4.2
   shared_preferences: ^2.5.5
+  romanize: ^0.0.3
+  kuromoji: ^1.0.5
   crypto: ^3.0.7
   image: ^4.8.0
   uuid: ^4.5.3
@@ -51,7 +53,6 @@ dependencies:
   media_kit_libs_windows_audio: ^1.0.9
   media_kit_libs_linux: ^1.2.1
   media_kit_libs_macos_audio: ^1.1.4
-  just_audio_background: ^0.0.1-beta.17
   audio_service: ^0.18.18
   audio_service_mpris: ^0.2.1
   smtc_windows: ^1.1.0
@@ -75,6 +76,8 @@ dependency_overrides:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to

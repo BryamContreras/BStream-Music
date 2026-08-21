@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/download_result.dart';
@@ -67,7 +68,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
     final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
     final identity = track.id.trim().isNotEmpty ? track.id : track.url;
     final colors = Theme.of(context).colorScheme;
-    final borderRadius = BorderRadius.circular(8);
+    final borderRadius = BorderRadius.circular(appCardRadius);
     final baseColor = AppColors.cardSurfaceFor(context);
     final surfaceColor = isCurrent || _hovered
         ? Color.alphaBlend(

@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.2.5+125 — 2026-08-20
+
+### Added
+
+- Dual-deck crossfade playback on Android and desktop with a persistent,
+  accessible whole-second duration control from 1 through 15 seconds.
+- Optional lyrics romanization that keeps each original line above a smaller
+  transliteration. Japanese, Korean, Chinese, Cyrillic, Arabic, and Hebrew can
+  be selected independently and are represented in the live settings preview.
+- Android EJS challenge solving through the bundled QuickJS runtime, optional
+  BotGuard WebView PO-token generation, and a shared Deno solver on desktop for
+  reinforced `youtube_explode_dart` requests.
+- Desktop Space-key Play/Pause handling for both player surfaces while leaving
+  Search and other focused editable fields untouched.
+
+### Improved
+
+- YouTube audio resolution now follows a deterministic client ladder, retries
+  solver-dependent clients only when needed, validates the exact selected
+  stream, and reports every attempted client when direct resolution fails.
+- Downloads try all reinforced `youtube_explode_dart` candidates before a
+  single serialized yt-dlp fallback. Resolution and transfers use bounded
+  deadlines, clean partial files, retain native containers, and avoid falling
+  back for local filesystem failures.
+- CSV restoration processes up to three tracks concurrently while keeping
+  playlist membership and source order deterministic, reusing existing files,
+  honoring cancellation, and continuing past individual failures.
+- Japanese romanization uses token boundaries instead of arbitrary character
+  chunks; paired original and romanized lyrics remain scrollable without
+  overflow on narrow displays and large text scales.
+- Full and mini-player layouts are denser and more consistent across Android
+  and desktop, with clearer primary controls, closer timeline labels, safe CJK
+  metadata wrapping, and a neutral accent-tinted desktop mini-player surface
+  independent of the full-player artwork background.
+- Library overview cards use the same larger artwork geometry as track-detail
+  rows, Settings cards share compact spacing and surfaces, and the Windows
+  playback queue uses more of the available width.
+- Search title changes and expandable Crossfade settings use bounded accessible
+  transitions, including reduced-motion behavior without layout jumps.
+- Android hides the desktop-only download-folder control. CSV export profiles
+  present only their compatibility names: BStream Music, MetroList,
+  Harmony/RiMusic, and Soundiiz.
+
+### Fixed
+
+- Legacy no-animation lyrics preferences now migrate to Smooth, and the
+  redundant play control was removed from the lyrics header on every platform.
+- Crossfade preparation, promotion, seeks, pause/resume, Stop, disabling, and
+  disposal are generation-aware so stale deck operations cannot replace the
+  current song or leak a prepared player.
+- Concurrent library downloads now coalesce identical tracks and publish one
+  consistent local file instead of racing duplicate writes.
+- Rapid tab changes no longer retain stale accessibility semantics nodes that
+  could trigger Flutter AXTree update errors.
+- Compact player artwork, multiline titles, timelines, and controls avoid the
+  observed bottom and horizontal overflows on small Android screens.
+
 ## 1.2.4+124 — 2026-08-15
 
 ### Added

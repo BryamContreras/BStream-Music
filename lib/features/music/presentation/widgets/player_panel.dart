@@ -300,7 +300,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
               child: showSideQueue
                   ? SizedBox(
                       key: const ValueKey('desktop-playback-queue-rail'),
-                      width: outer.maxWidth >= 1180 ? 360 : 320,
+                      width: outer.maxWidth >= 1180 ? 400 : 352,
                       child: _PlaybackQueuePanel(
                         queue: playbackQueue,
                         strings: strings,
@@ -849,6 +849,7 @@ class _LargeArtworkState extends State<_LargeArtwork> {
 
   @override
   Widget build(BuildContext context) {
+    final source = _normalizedSource(widget.url);
     return ConstrainedBox(
       key: const ValueKey('player-large-artwork'),
       constraints: BoxConstraints(
@@ -857,17 +858,30 @@ class _LargeArtworkState extends State<_LargeArtwork> {
       ),
       child: AspectRatio(
         aspectRatio: 1,
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          child: SizedBox.expand(
-            key: ValueKey(_transitionId),
-            child: _PlayerArtworkSurface(
-              url: _normalizedSource(widget.url),
-              isFavorite: widget.isFavorite,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              layoutBuilder: (currentChild, previousChildren) => Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [...previousChildren, ?currentChild],
+              ),
+              child: SizedBox.expand(
+                key: ValueKey(_transitionId),
+                child: _PlayerArtworkSurface(url: source),
+              ),
             ),
-          ),
+            if (widget.isFavorite)
+              const Positioned(
+                top: 6,
+                right: 6,
+                child: FavoriteStarBadge(iconSize: 26),
+              ),
+          ],
         ),
       ),
     );
@@ -883,10 +897,9 @@ class _LargeArtworkState extends State<_LargeArtwork> {
 }
 
 class _PlayerArtworkSurface extends StatelessWidget {
-  const _PlayerArtworkSurface({required this.url, required this.isFavorite});
+  const _PlayerArtworkSurface({required this.url});
 
   final String? url;
-  final bool isFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -904,47 +917,49 @@ class _PlayerArtworkSurface extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: AppColors.downloadGradientFor(context),
-                ),
-              ),
-              child: url == null
-                  ? Icon(
-                      Icons.music_note_rounded,
-                      size: 108,
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
-                    )
-                  : ColoredBox(
-                      color: colors.surfaceContainerHighest,
-                      child: ProportionalArtwork(
-                        source: url,
-                        fallback: Icon(
+      child: Stack(
+        fit: StackFit.expand,
+        clipBehavior: Clip.none,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: AppColors.downloadGradientFor(context),
+                    ),
+                  ),
+                  child: url == null
+                      ? Icon(
                           Icons.music_note_rounded,
                           size: 108,
                           color: Theme.of(
                             context,
                           ).colorScheme.onPrimaryContainer,
+                        )
+                      : ColoredBox(
+                          color: colors.surfaceContainerHighest,
+                          child: ProportionalArtwork(
+                            source: url,
+                            fallback: Icon(
+                              Icons.music_note_rounded,
+                              size: 108,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onPrimaryContainer,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
+                ),
+              ],
             ),
-            if (isFavorite)
-              const Positioned(
-                top: 6,
-                right: 6,
-                child: FavoriteStarBadge(iconSize: 26),
-              ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1072,15 +1087,18 @@ class _PlayerControls extends ConsumerWidget {
     );
 
     // The Android body is bottom-aligned so its playback actions stay close to
-    // the system inset. Reserve the tallest metadata height, then bottom-align
-    // the real title and artist at its top. This lets one- and multi-line titles
-    // share the exact same artwork position and artwork-to-title gap without
-    // reintroducing an artificial gap between the title and artist. Any unused
-    // line height remains after the artist, before the timeline.
+    // the system inset. Reserve the tallest metadata height while also letting
+    // the real metadata contribute its measured height. CJK fallback fonts can
+    // be taller than the Latin placeholder; constraining the real content with
+    // Positioned.fill would make a two-line title overflow that reservation.
+    // Keeping both children non-positioned makes the Stack use their maximum
+    // height, while unused placeholder height remains before the timeline.
     final stableMetadata = mobile
         ? SizedBox(
+            key: const ValueKey('player-stable-metadata'),
             width: double.infinity,
             child: Stack(
+              alignment: Alignment.topLeft,
               children: [
                 ExcludeSemantics(
                   child: Opacity(
@@ -1099,9 +1117,7 @@ class _PlayerControls extends ConsumerWidget {
                     ),
                   ),
                 ),
-                Positioned.fill(
-                  child: Align(alignment: Alignment.topLeft, child: metadata()),
-                ),
+                metadata(),
               ],
             ),
           )
@@ -1451,10 +1467,13 @@ class _PlaybackButtons extends ConsumerWidget {
           roomy ? 84.0 : 76.0,
           compact ? 94.0 : 116.0,
         );
-        final enlargedPlayIconSize = (enlargedPlaySize * 0.64).clamp(
-          42.0,
-          68.0,
-        );
+        final enlargedPlayIconSize = mobile
+            ? isPlaying
+                  ? (enlargedPlaySize * 0.80).clamp(58.0, 76.0)
+                  : (enlargedPlaySize * 0.92).clamp(68.0, 88.0)
+            : isPlaying
+            ? (enlargedPlaySize * 0.76).clamp(56.0, 88.0)
+            : (enlargedPlaySize * 0.88).clamp(64.0, 104.0);
         final centerGap = veryNarrow
             ? 2.0
             : narrow
@@ -1552,22 +1571,24 @@ class _PlaybackButtons extends ConsumerWidget {
         final primaryButton = SizedBox(
           width: enlargedPlaySize,
           height: enlargedPlaySize,
-          child: IconButton.filled(
+          child: IconButton(
             key: const ValueKey('player-primary-control'),
             tooltip: isPlaying ? strings.pause : strings.play,
             style: IconButton.styleFrom(
-              backgroundColor: AppColors.playbackPrimaryBackgroundFor(context),
-              foregroundColor: AppColors.playbackPrimaryForegroundFor(context),
-              disabledBackgroundColor:
-                  AppColors.playbackPrimaryDisabledBackgroundFor(context),
-              disabledForegroundColor:
-                  AppColors.playbackPrimaryDisabledForegroundFor(context),
+              backgroundColor: Colors.transparent,
+              disabledBackgroundColor: Colors.transparent,
             ),
+            color: controlColor,
+            disabledColor: controlColor.withValues(alpha: 0.38),
             padding: EdgeInsets.zero,
             constraints: BoxConstraints.tight(Size.square(enlargedPlaySize)),
             iconSize: enlargedPlayIconSize,
-            icon: Icon(
-              isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            icon: Transform.translate(
+              offset: isPlaying ? Offset.zero : Offset(mobile ? 1.25 : 1.5, 0),
+              transformHitTests: false,
+              child: Icon(
+                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              ),
             ),
             onPressed: hasTrack
                 ? () => ref
@@ -1940,8 +1961,8 @@ class _LabeledControlButton extends StatelessWidget {
           style: TextButton.styleFrom(
             foregroundColor: color,
             disabledForegroundColor: color.withValues(alpha: 0.38),
-            backgroundColor: color.withValues(alpha: 0.1),
-            disabledBackgroundColor: color.withValues(alpha: 0.05),
+            backgroundColor: Colors.transparent,
+            disabledBackgroundColor: Colors.transparent,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -2401,6 +2422,7 @@ class _WavySeekBarState extends State<_WavySeekBar>
     with SingleTickerProviderStateMixin {
   static const _trackInset = 10.0;
   late final AnimationController _wavePhase;
+  double? _dragFraction;
 
   @override
   void initState() {
@@ -2438,7 +2460,8 @@ class _WavySeekBarState extends State<_WavySeekBar>
   Widget build(BuildContext context) {
     final totalMs = widget.duration?.inMilliseconds ?? 0;
     final currentMs = widget.position.inMilliseconds.clamp(0, totalMs);
-    final fraction = totalMs <= 0 ? 0.0 : currentMs / totalMs;
+    final timelineFraction = totalMs <= 0 ? 0.0 : currentMs / totalMs;
+    final fraction = _dragFraction ?? timelineFraction;
     final canSeek = totalMs > 0;
 
     String percentageFor(int milliseconds) {
@@ -2466,15 +2489,21 @@ class _WavySeekBarState extends State<_WavySeekBar>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        void seekFromDx(double dx) {
+        double fractionFromDx(double dx) {
+          if (totalMs <= 0) {
+            return 0;
+          }
+          final trackWidth = constraints.maxWidth - (_trackInset * 2);
+          if (trackWidth <= 0) {
+            return 0;
+          }
+          return ((dx - _trackInset) / trackWidth).clamp(0.0, 1.0).toDouble();
+        }
+
+        void commitFraction(double nextFraction) {
           if (totalMs <= 0) {
             return;
           }
-          final trackWidth = constraints.maxWidth - (_trackInset * 2);
-          final nextFraction = ((dx - _trackInset) / trackWidth).clamp(
-            0.0,
-            1.0,
-          );
           widget.onSeek(
             Duration(milliseconds: (totalMs * nextFraction).round()),
           );
@@ -2499,11 +2528,22 @@ class _WavySeekBarState extends State<_WavySeekBar>
               : null,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: (details) => seekFromDx(details.localPosition.dx),
-            onHorizontalDragStart: (details) =>
-                seekFromDx(details.localPosition.dx),
-            onHorizontalDragUpdate: (details) =>
-                seekFromDx(details.localPosition.dx),
+            onTapUp: (details) =>
+                commitFraction(fractionFromDx(details.localPosition.dx)),
+            onHorizontalDragStart: (details) => setState(
+              () => _dragFraction = fractionFromDx(details.localPosition.dx),
+            ),
+            onHorizontalDragUpdate: (details) => setState(
+              () => _dragFraction = fractionFromDx(details.localPosition.dx),
+            ),
+            onHorizontalDragEnd: (_) {
+              final committed = _dragFraction;
+              setState(() => _dragFraction = null);
+              if (committed != null) {
+                commitFraction(committed);
+              }
+            },
+            onHorizontalDragCancel: () => setState(() => _dragFraction = null),
             child: SizedBox(
               width: double.infinity,
               height: 48,

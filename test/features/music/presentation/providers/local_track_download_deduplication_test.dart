@@ -136,6 +136,70 @@ void main() {
         expect(callsBeforeCompletion, 1);
         expect(fixture.musicRepository.downloadCalls, 1);
         expect(results[0].track.id, results[1].track.id);
+        expect(results[0].reusedExisting, isFalse);
+        expect(results[1].reusedExisting, isTrue);
+        expect(fixture.libraryRepository.localTracks, hasLength(1));
+      },
+    );
+
+    test(
+      'coalesces distinct initial identities that resolve to the same video',
+      () async {
+        final releaseDownload = Completer<void>();
+        const resolved = TrackInfo(
+          id: 'resolved-shared-video',
+          title: 'Resolved shared song',
+          artist: 'Resolved artist',
+          artists: ['Resolved artist'],
+          album: 'Resolved album',
+          url: 'https://video.example/watch/shared-video',
+          thumbnailUrl: 'file:///missing-resolved-artwork.jpg',
+          duration: Duration(minutes: 3),
+        );
+        final fixture = await _DownloadFixture.create(
+          downloadGate: releaseDownload.future,
+          resolvedInfo: resolved,
+        );
+        addTearDown(fixture.dispose);
+
+        final first = fixture.helper.resolveForLibrary(
+          const TrackInfo(
+            id: 'unresolved-one',
+            title: 'Sin título',
+            artist: 'Desconocido',
+            url: 'https://catalog.example/unresolved/one',
+          ),
+          allowConcurrentDownload: true,
+        );
+        final second = fixture.helper.resolveForLibrary(
+          const TrackInfo(
+            id: 'unresolved-two',
+            title: 'Untitled',
+            artist: 'Unknown',
+            url: 'https://catalog.example/unresolved/two',
+          ),
+          allowConcurrentDownload: true,
+        );
+
+        await fixture.musicRepository.firstDownloadStarted.future;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+
+        expect(fixture.musicRepository.infoCalls, 2);
+        expect(fixture.musicRepository.downloadCalls, 1);
+
+        releaseDownload.complete();
+        final results = await Future.wait([
+          first,
+          second,
+        ]).timeout(const Duration(seconds: 3));
+
+        expect(results.map((result) => result.track.id).toSet(), hasLength(1));
+        expect(results.where((result) => result.reusedExisting), hasLength(1));
+        expect(
+          results.where((result) => result.downloadResult != null),
+          hasLength(1),
+        );
+        expect(fixture.musicRepository.downloadCalls, 1);
         expect(fixture.libraryRepository.localTracks, hasLength(1));
       },
     );
@@ -191,6 +255,41 @@ void main() {
         expect(fixture.musicRepository.downloadCalls, 2);
         expect(results[0].track.id, results[1].track.id);
         expect(results[2].track.id, isNot(results[0].track.id));
+      },
+    );
+
+    test(
+      'runs distinct restore downloads concurrently with a global limit',
+      () async {
+        final releaseDownloads = Completer<void>();
+        final fixture = await _DownloadFixture.create(
+          downloadGate: releaseDownloads.future,
+        );
+        addTearDown(fixture.dispose);
+        final operations = [
+          for (var index = 0; index < 4; index++)
+            fixture.helper.resolveForLibrary(
+              _remoteTrack(
+                id: 'restore-$index',
+                url: 'https://catalog.example/tracks/restore-$index',
+                thumbnailUrl: 'file:///missing-$index-artwork.jpg',
+              ),
+              allowConcurrentDownload: true,
+            ),
+        ];
+
+        await _waitUntil(() => fixture.musicRepository.downloadCalls == 3);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(fixture.musicRepository.downloadCalls, 3);
+
+        releaseDownloads.complete();
+        final results = await Future.wait(
+          operations,
+        ).timeout(const Duration(seconds: 3));
+
+        expect(fixture.musicRepository.downloadCalls, 4);
+        expect(results.map((result) => result.track.id).toSet(), hasLength(4));
+        expect(fixture.libraryRepository.localTracks, hasLength(4));
       },
     );
 

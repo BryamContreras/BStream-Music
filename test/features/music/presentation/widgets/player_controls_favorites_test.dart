@@ -138,8 +138,31 @@ void main() {
         final lyricsButton = tester.widget<TextButton>(
           find.descendant(of: lyrics, matching: find.byType(TextButton)),
         );
+        final volumeButton = tester.widget<TextButton>(
+          find.descendant(of: volume, matching: find.byType(TextButton)),
+        );
         expect(lyricsIcon.size, 24);
         expect(lyricsLabel.style?.fontSize, 14);
+        expect(
+          lyricsButton.style?.backgroundColor?.resolve(<WidgetState>{}),
+          Colors.transparent,
+        );
+        expect(
+          volumeButton.style?.backgroundColor?.resolve(<WidgetState>{}),
+          Colors.transparent,
+        );
+        expect(
+          lyricsButton.style?.backgroundColor?.resolve(<WidgetState>{
+            WidgetState.disabled,
+          }),
+          Colors.transparent,
+        );
+        expect(
+          volumeButton.style?.backgroundColor?.resolve(<WidgetState>{
+            WidgetState.disabled,
+          }),
+          Colors.transparent,
+        );
         expect(
           lyricsButton.style?.shape?.resolve(<WidgetState>{}),
           isA<RoundedRectangleBorder>(),
@@ -155,6 +178,7 @@ void main() {
           tester.getSize(primary),
           Size.square(originalPlaySize.toDouble()),
         );
+        _expectTransparentPrimaryControl(tester, mobile: true);
         expect(tester.getSize(previous).shortestSide, greaterThanOrEqualTo(52));
         expect(tester.getSize(next).shortestSide, greaterThanOrEqualTo(52));
 
@@ -180,6 +204,90 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+  }
+
+  for (final variant in const [
+    (
+      name: 'Android 390 playing',
+      size: Size(390, 820),
+      status: PlayerStatus.playing,
+    ),
+    (
+      name: 'Android 430 paused',
+      size: Size(430, 900),
+      status: PlayerStatus.paused,
+    ),
+  ]) {
+    testWidgets('${variant.name} keeps a visually dominant primary glyph', (
+      tester,
+    ) async {
+      _configureView(tester, variant.size);
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot.copyWith(status: variant.status),
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      _expectTransparentPrimaryControl(tester, mobile: true);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('player-primary-control')),
+          matching: find.byIcon(
+            variant.status == PlayerStatus.playing
+                ? Icons.pause_rounded
+                : Icons.play_arrow_rounded,
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final variant in const [
+    (name: 'Android', size: Size(360, 800), platform: TargetPlatform.android),
+    (name: 'Windows', size: Size(1280, 720), platform: TargetPlatform.windows),
+  ]) {
+    testWidgets('${variant.name} progress drag commits only its final seek', (
+      tester,
+    ) async {
+      _configureView(tester, variant.size);
+      final controller = _TestPlayerController(snapshot);
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: variant.platform,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          playerController: controller,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final progress = find.byKey(
+        const ValueKey('player-progress-color-animation'),
+      );
+      final rect = tester.getRect(progress);
+      final gesture = await tester.startGesture(
+        Offset(rect.right - 12, rect.center.dy),
+      );
+      await gesture.moveTo(Offset(rect.center.dx, rect.center.dy));
+      await gesture.moveTo(Offset(rect.left + 12, rect.center.dy));
+      await gesture.moveTo(Offset(rect.left - 20, rect.center.dy));
+      await tester.pump();
+      expect(controller.seekCalls, 0);
+
+      await gesture.up();
+      await tester.pump();
+      expect(controller.seekCalls, 1);
+      expect(controller.lastSeek, Duration.zero);
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets('Windows keeps secondary controls in one row', (tester) async {
@@ -221,6 +329,7 @@ void main() {
       find.byKey(const ValueKey('player-favorite-control')),
       findsOneWidget,
     );
+    _expectTransparentPrimaryControl(tester, mobile: false);
     expect(tester.takeException(), isNull);
   });
 
@@ -264,12 +373,66 @@ void main() {
       tester.getSize(find.byKey(const ValueKey('player-primary-control'))),
       const Size.square(76),
     );
+    _expectTransparentPrimaryControl(tester, mobile: true);
     final volume = find.byKey(const ValueKey('player-volume-control'));
     await tester.ensureVisible(volume);
     await tester.pump();
     expect(tester.getRect(volume).bottom, lessThanOrEqualTo(568));
     expect(tester.takeException(), isNull);
   });
+
+  for (final variant in const [
+    (size: Size(320, 720), textScale: 1.0),
+    (size: Size(390, 820), textScale: 1.6),
+  ]) {
+    testWidgets(
+      '${variant.size.width.toInt()} px Android contains multiline CJK metadata',
+      (tester) async {
+        _configureView(
+          tester,
+          variant.size,
+          textScaleFactor: variant.textScale,
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.android,
+            snapshot: snapshot.copyWith(
+              title: '夜空に輝く星を見上げながら一緒に歌う長い日本語の曲名',
+              artist: 'とても長い日本語のアーティスト名',
+            ),
+            localTrack: localTrack,
+            playlists: _TestPlaylistsController(),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        final metadata = tester.getRect(
+          find.byKey(const ValueKey('player-stable-metadata')),
+        );
+        final title = find.byKey(const ValueKey('player-track-title'));
+        final artist = find.byKey(const ValueKey('player-track-artist'));
+        final titleText = tester.widget<Text>(title);
+        expect(titleText.maxLines, 2);
+        expect(
+          find.ancestor(of: title, matching: find.byType(Positioned)),
+          findsNothing,
+        );
+        expect(tester.getRect(title).top, greaterThanOrEqualTo(metadata.top));
+        expect(
+          tester.getRect(artist).bottom,
+          lessThanOrEqualTo(metadata.bottom + 0.1),
+        );
+
+        final volume = find.byKey(const ValueKey('player-volume-control'));
+        await tester.ensureVisible(volume);
+        await tester.pump();
+        expect(tester.getSize(volume).height, 48);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets(
     'short Android viewports gently reduce artwork without resizing controls',
@@ -375,6 +538,7 @@ void main() {
       find.byKey(const ValueKey('player-primary-control')),
       findsOneWidget,
     );
+    _expectTransparentPrimaryControl(tester, mobile: false);
     expect(
       find.byKey(const ValueKey('player-progress-color-animation')),
       findsOneWidget,
@@ -752,6 +916,73 @@ void main() {
   });
 }
 
+void _expectTransparentPrimaryControl(
+  WidgetTester tester, {
+  required bool mobile,
+}) {
+  final primaryFinder = find.byKey(const ValueKey('player-primary-control'));
+  final primary = tester.widget<IconButton>(primaryFinder);
+  final previous = tester.widget<IconButton>(
+    find.descendant(
+      of: find.byKey(const ValueKey('player-previous-control')),
+      matching: find.byType(IconButton),
+    ),
+  );
+  final next = tester.widget<IconButton>(
+    find.descendant(
+      of: find.byKey(const ValueKey('player-next-control')),
+      matching: find.byType(IconButton),
+    ),
+  );
+
+  expect(
+    primary.style?.backgroundColor?.resolve(<WidgetState>{}),
+    Colors.transparent,
+  );
+  expect(
+    primary.style?.backgroundColor?.resolve(<WidgetState>{
+      WidgetState.disabled,
+    }),
+    Colors.transparent,
+  );
+  expect(primary.color, previous.color);
+  expect(primary.color, next.color);
+
+  final buttonSize = tester.getSize(primaryFinder).shortestSide;
+  final isShowingPause = find
+      .descendant(of: primaryFinder, matching: find.byIcon(Icons.pause_rounded))
+      .evaluate()
+      .isNotEmpty;
+  final expectedIconSize = mobile
+      ? isShowingPause
+            ? (buttonSize * 0.80).clamp(58.0, 76.0)
+            : (buttonSize * 0.92).clamp(68.0, 88.0)
+      : isShowingPause
+      ? (buttonSize * 0.76).clamp(56.0, 88.0)
+      : (buttonSize * 0.88).clamp(64.0, 104.0);
+  expect(primary.iconSize, closeTo(expectedIconSize, 0.01));
+  expect(
+    primary.iconSize!,
+    greaterThan(previous.iconSize! * (isShowingPause ? 1.20 : 1.40)),
+  );
+  expect(
+    primary.iconSize!,
+    greaterThan(next.iconSize! * (isShowingPause ? 1.20 : 1.40)),
+  );
+  final iconTranslation = tester.widget<Transform>(
+    find.descendant(of: primaryFinder, matching: find.byType(Transform)),
+  );
+  expect(
+    iconTranslation.transform.getTranslation().x,
+    isShowingPause
+        ? 0
+        : mobile
+        ? 1.25
+        : 1.5,
+  );
+  expect(iconTranslation.transform.getTranslation().y, 0);
+}
+
 void _configureView(
   WidgetTester tester,
   Size size, {
@@ -780,6 +1011,7 @@ Widget _playerHarness({
   required _TestPlaylistsController playlists,
   TrackShareService? shareService,
   TrackInfo? canonicalRemoteTrack,
+  _TestPlayerController? playerController,
 }) {
   const accent = AppAccent.blue;
   final scheme = ColorScheme.fromSeed(
@@ -791,10 +1023,12 @@ Widget _playerHarness({
     key: key,
     overrides: [
       playerControllerProvider.overrideWith(
-        () => _TestPlayerController(
-          snapshot,
-          canonicalRemoteTrack: canonicalRemoteTrack,
-        ),
+        () =>
+            playerController ??
+            _TestPlayerController(
+              snapshot,
+              canonicalRemoteTrack: canonicalRemoteTrack,
+            ),
       ),
       playlistsControllerProvider.overrideWith(() => playlists),
       libraryTracksProvider.overrideWith((ref) async => [localTrack]),
@@ -859,9 +1093,21 @@ class _TestPlayerController extends PlayerController {
 
   final PlayerSnapshot snapshot;
   final TrackInfo? canonicalRemoteTrack;
+  int seekCalls = 0;
+  Duration? lastSeek;
 
   @override
   Future<PlayerSnapshot> build() async => snapshot;
+
+  void emit(PlayerSnapshot nextSnapshot) {
+    state = AsyncData(nextSnapshot);
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    seekCalls++;
+    lastSeek = position;
+  }
 
   @override
   TrackInfo? currentRemoteTrackFor(String sourceUrl) {

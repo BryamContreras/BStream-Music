@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -11,6 +12,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/theme/app_ui.dart';
 import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
@@ -59,12 +61,6 @@ final settingsExternalLauncherProvider = Provider<SettingsExternalLauncher>(
   (ref) =>
       (url) => launchUrl(url, mode: LaunchMode.externalApplication),
 );
-
-const _settingsSurfaceRadius = 12.0;
-const _settingsInnerRadius = 10.0;
-const _settingsCardGap = 8.0;
-const _settingsGroupGap = 20.0;
-const _settingsGroupHeadingGap = 12.0;
 
 enum _SettingsRoute { root, appearance, lyrics, storage, live, about }
 
@@ -191,10 +187,10 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       }
       return ScrolledUnderTabFrame(
         surfaceKey: const ValueKey('settings-tab-header-surface'),
-        headerHorizontalPadding: 12,
+        headerHorizontalPadding: 6,
         header: header,
         body: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           child: body,
         ),
       );
@@ -304,6 +300,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       _SettingsRoute.lyrics => _LyricsAppearanceSettings(
         animationStyle: state.lyricsAnimationStyle,
         alignment: state.lyricsTextAlignment,
+        romanizationEnabled: state.lyricsRomanizationEnabled,
+        romanizationLanguages: state.lyricsRomanizationLanguages,
         strings: strings,
         onAnimationChanged: (style) => ref
             .read(settingsControllerProvider.notifier)
@@ -311,6 +309,12 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onAlignmentChanged: (alignment) => ref
             .read(settingsControllerProvider.notifier)
             .setLyricsTextAlignment(alignment),
+        onRomanizationEnabledChanged: (enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .setLyricsRomanizationEnabled(enabled),
+        onRomanizationLanguagesChanged: (languages) => ref
+            .read(settingsControllerProvider.notifier)
+            .setLyricsRomanizationLanguages(languages),
       ),
       _SettingsRoute.storage => _StorageSettings(
         strings: strings,
@@ -414,7 +418,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               accent: state.accent.seedColor,
               onTap: () => _openRoute(_SettingsRoute.appearance),
             ),
-            const SizedBox(height: _settingsCardGap),
+            const SizedBox(height: appCardGap),
             _SettingsEntryCard(
               key: const ValueKey('settings-card-lyrics-appearance'),
               icon: Icons.lyrics_rounded,
@@ -443,6 +447,19 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                     .selectDuration,
                 onCustomDuration: () => _chooseSleepTimerDuration(sleepTimer),
               ),
+            ),
+            const SizedBox(height: appCardGap),
+            _CrossfadeSettings(
+              key: const ValueKey('settings-inline-crossfade'),
+              enabled: state.crossfadeEnabled,
+              duration: state.crossfadeDuration,
+              strings: strings,
+              onEnabledChanged: ref
+                  .read(settingsControllerProvider.notifier)
+                  .setCrossfadeEnabled,
+              onDurationSelected: ref
+                  .read(settingsControllerProvider.notifier)
+                  .setCrossfadeDuration,
             ),
           ],
         ),
@@ -474,7 +491,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                 },
                 onTap: () => _openRoute(_SettingsRoute.live),
               ),
-              const SizedBox(height: _settingsCardGap),
+              const SizedBox(height: appCardGap),
               _LiveRequestStorageCard(
                 state: liveState,
                 strings: strings,
@@ -1204,27 +1221,11 @@ class _CsvProfileDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final options = <(LibraryCsvProfile, String, String)>[
-      (
-        LibraryCsvProfile.bstream,
-        strings.csvProfileBStream,
-        strings.csvProfileBStreamSummary,
-      ),
-      (
-        LibraryCsvProfile.metroList,
-        strings.csvProfileMetroList,
-        strings.csvProfileMetroListSummary,
-      ),
-      (
-        LibraryCsvProfile.harmony,
-        strings.csvProfileHarmony,
-        strings.csvProfileHarmonySummary,
-      ),
-      (
-        LibraryCsvProfile.soundiiz,
-        strings.csvProfileSoundiiz,
-        strings.csvProfileSoundiizSummary,
-      ),
+    final options = <(LibraryCsvProfile, String)>[
+      (LibraryCsvProfile.bstream, strings.csvProfileBStream),
+      (LibraryCsvProfile.metroList, strings.csvProfileMetroList),
+      (LibraryCsvProfile.harmony, strings.csvProfileHarmony),
+      (LibraryCsvProfile.soundiiz, strings.csvProfileSoundiiz),
     ];
     return AlertDialog(
       key: const ValueKey('csv-export-profile-dialog'),
@@ -1239,14 +1240,16 @@ class _CsvProfileDialog extends StatelessWidget {
               for (var index = 0; index < options.length; index++) ...[
                 if (index > 0) const SizedBox(height: 6),
                 Material(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(_settingsSurfaceRadius),
+                  key: ValueKey(
+                    'csv-profile-surface-${options[index].$1.name}',
+                  ),
+                  color: AppColors.neutralSurfaceFor(context),
+                  borderRadius: BorderRadius.circular(appCardRadius),
                   clipBehavior: Clip.antiAlias,
                   child: ListTile(
                     key: ValueKey('csv-profile-${options[index].$1.name}'),
                     minVerticalPadding: 10,
                     title: Text(options[index].$2),
-                    subtitle: Text(options[index].$3, maxLines: 3),
                     trailing: const Icon(Icons.chevron_right_rounded),
                     onTap: () => onSelected(options[index].$1),
                   ),
@@ -1312,9 +1315,7 @@ class _SettingsHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = Theme.of(
-      context,
-    ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
+    final style = appTabTitleStyle(context);
     if (route == _SettingsRoute.root) {
       return Text(
         key: const ValueKey('settings-tab-title'),
@@ -1380,7 +1381,7 @@ class _SettingsEntryCard extends StatelessWidget {
       child: Material(
         color: AppColors.cardSurfaceFor(context),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(_settingsSurfaceRadius),
+          borderRadius: BorderRadius.circular(appCardRadius),
           side: BorderSide(color: AppColors.cardBorderFor(context)),
         ),
         clipBehavior: Clip.antiAlias,
@@ -1397,7 +1398,9 @@ class _SettingsEntryCard extends StatelessWidget {
                     height: 46,
                     decoration: BoxDecoration(
                       color: highlight.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(_settingsInnerRadius),
+                      borderRadius: BorderRadius.circular(
+                        appListCardIconRadius,
+                      ),
                       border: Border.all(
                         color: highlight.withValues(alpha: 0.24),
                       ),
@@ -1484,7 +1487,7 @@ class _AboutApplicationSettings extends StatelessWidget {
           subtitle: AppConstants.appVersion,
           onTap: null,
         ),
-        const SizedBox(height: _settingsCardGap),
+        const SizedBox(height: appCardGap),
         _SettingsEntryCard(
           key: const ValueKey('settings-about-support'),
           icon: Icons.favorite_outline_rounded,
@@ -1492,7 +1495,7 @@ class _AboutApplicationSettings extends StatelessWidget {
           subtitle: strings.supportDevelopmentBody,
           onTap: onSupport,
         ),
-        const SizedBox(height: _settingsCardGap),
+        const SizedBox(height: appCardGap),
         _SettingsEntryCard(
           key: const ValueKey('settings-about-github'),
           icon: Icons.code_rounded,
@@ -1582,7 +1585,7 @@ class _LanguageDialogOption extends StatelessWidget {
             ? colors.primaryContainer.withValues(alpha: 0.72)
             : colors.surfaceContainerHighest.withValues(alpha: 0.72),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(_settingsInnerRadius),
+          borderRadius: BorderRadius.circular(appListCardIconRadius),
           side: BorderSide(
             color: selected ? colors.primary : colors.outlineVariant,
           ),
@@ -1738,16 +1741,25 @@ class _LyricsAppearanceSettings extends StatelessWidget {
   const _LyricsAppearanceSettings({
     required this.animationStyle,
     required this.alignment,
+    required this.romanizationEnabled,
+    required this.romanizationLanguages,
     required this.strings,
     required this.onAnimationChanged,
     required this.onAlignmentChanged,
+    required this.onRomanizationEnabledChanged,
+    required this.onRomanizationLanguagesChanged,
   });
 
   final LyricsAnimationStyle animationStyle;
   final LyricsTextAlignment alignment;
+  final bool romanizationEnabled;
+  final Set<LyricsRomanizationLanguage> romanizationLanguages;
   final AppStrings strings;
   final ValueChanged<LyricsAnimationStyle> onAnimationChanged;
   final ValueChanged<LyricsTextAlignment> onAlignmentChanged;
+  final ValueChanged<bool> onRomanizationEnabledChanged;
+  final ValueChanged<Set<LyricsRomanizationLanguage>>
+  onRomanizationLanguagesChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1810,6 +1822,93 @@ class _LyricsAppearanceSettings extends StatelessWidget {
           ),
           const SizedBox(height: 22),
           Text(
+            strings.lyricsRomanization,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          Material(
+            key: const ValueKey('lyrics-romanization-card'),
+            color: AppColors.neutralSurfaceFor(context),
+            borderRadius: BorderRadius.circular(appCardRadius),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                SwitchListTile.adaptive(
+                  key: const ValueKey('lyrics-romanization-toggle'),
+                  value: romanizationEnabled,
+                  title: Text(strings.romanizeLyrics),
+                  subtitle: Text(strings.romanizeLyricsSummary),
+                  secondary: const Icon(Icons.translate_rounded),
+                  onChanged: onRomanizationEnabledChanged,
+                ),
+                if (romanizationEnabled) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    key: const ValueKey('lyrics-romanization-languages'),
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            strings.romanizationLanguages,
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final language
+                                  in LyricsRomanizationLanguage.values)
+                                FilterChip(
+                                  key: ValueKey(
+                                    'lyrics-romanization-language-'
+                                    '${language.code}',
+                                  ),
+                                  selected: romanizationLanguages.contains(
+                                    language,
+                                  ),
+                                  showCheckmark: true,
+                                  label: Text(
+                                    strings.romanizationLanguageLabel(language),
+                                  ),
+                                  onSelected:
+                                      romanizationLanguages.contains(
+                                            language,
+                                          ) &&
+                                          romanizationLanguages.length == 1
+                                      ? null
+                                      : (selected) {
+                                          final next = romanizationLanguages
+                                              .toSet();
+                                          if (selected) {
+                                            next.add(language);
+                                          } else {
+                                            next.remove(language);
+                                          }
+                                          onRomanizationLanguagesChanged(next);
+                                        },
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 22),
+          Text(
             strings.lyricsPreview,
             style: Theme.of(
               context,
@@ -1819,6 +1918,8 @@ class _LyricsAppearanceSettings extends StatelessWidget {
           _LyricsAnimationPreview(
             animationStyle: animationStyle,
             alignment: alignment,
+            romanizationEnabled: romanizationEnabled,
+            romanizationLanguages: romanizationLanguages,
             strings: strings,
           ),
         ],
@@ -1831,35 +1932,77 @@ IconData _lyricsAnimationIcon(LyricsAnimationStyle style) => switch (style) {
   LyricsAnimationStyle.smooth => Icons.auto_awesome_rounded,
   LyricsAnimationStyle.slide => Icons.swipe_up_rounded,
   LyricsAnimationStyle.highlight => Icons.zoom_in_rounded,
-  LyricsAnimationStyle.none => Icons.motion_photos_off_rounded,
 };
 
-class _LyricsAnimationPreview extends StatefulWidget {
+class _LyricsAnimationPreview extends ConsumerStatefulWidget {
   const _LyricsAnimationPreview({
     required this.animationStyle,
     required this.alignment,
+    required this.romanizationEnabled,
+    required this.romanizationLanguages,
     required this.strings,
   });
 
   final LyricsAnimationStyle animationStyle;
   final LyricsTextAlignment alignment;
+  final bool romanizationEnabled;
+  final Set<LyricsRomanizationLanguage> romanizationLanguages;
   final AppStrings strings;
 
   @override
-  State<_LyricsAnimationPreview> createState() =>
+  ConsumerState<_LyricsAnimationPreview> createState() =>
       _LyricsAnimationPreviewState();
 }
 
-class _LyricsAnimationPreviewState extends State<_LyricsAnimationPreview> {
+class _LyricsAnimationPreviewState
+    extends ConsumerState<_LyricsAnimationPreview> {
   int _replayToken = 0;
+  late List<String> _sourceLines;
+  late Future<List<String>> _romanizedLines;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshDisplayLines();
+  }
 
   @override
   void didUpdateWidget(covariant _LyricsAnimationPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.animationStyle != widget.animationStyle ||
-        oldWidget.alignment != widget.alignment) {
+        oldWidget.alignment != widget.alignment ||
+        oldWidget.romanizationEnabled != widget.romanizationEnabled ||
+        oldWidget.romanizationLanguages != widget.romanizationLanguages ||
+        oldWidget.strings.appLanguage != widget.strings.appLanguage) {
       _replayToken++;
     }
+    if (oldWidget.romanizationEnabled != widget.romanizationEnabled ||
+        oldWidget.romanizationLanguages != widget.romanizationLanguages ||
+        oldWidget.strings.appLanguage != widget.strings.appLanguage) {
+      _refreshDisplayLines();
+    }
+  }
+
+  void _refreshDisplayLines() {
+    _sourceLines = widget.romanizationEnabled
+        ? _lyricsRomanizationPreviewLines(_previewLanguage())
+        : [
+            widget.strings.lyricsPreviewPreviousLine,
+            widget.strings.lyricsPreviewActiveLine,
+            widget.strings.lyricsPreviewNextLine,
+          ];
+    _romanizedLines = widget.romanizationEnabled
+        ? ref
+              .read(lyricsRomanizationServiceProvider)
+              .romanizePreview(_sourceLines, widget.romanizationLanguages)
+        : Future<List<String>>.value(const <String>[]);
+  }
+
+  LyricsRomanizationLanguage _previewLanguage() {
+    return LyricsRomanizationLanguage.values.firstWhere(
+      widget.romanizationLanguages.contains,
+      orElse: () => LyricsRomanizationLanguage.korean,
+    );
   }
 
   @override
@@ -1868,80 +2011,199 @@ class _LyricsAnimationPreviewState extends State<_LyricsAnimationPreview> {
     final accent = colors.primary;
     final centered = widget.alignment == LyricsTextAlignment.centered;
     final textAlign = centered ? TextAlign.center : TextAlign.start;
-    return Container(
-      key: const ValueKey('lyrics-animation-preview'),
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF111715), Color(0xFF030504)],
-        ),
-        borderRadius: BorderRadius.circular(_settingsSurfaceRadius),
-        border: Border.all(color: accent.withValues(alpha: 0.28)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            widget.strings.lyricsPreviewPreviousLine,
-            key: const ValueKey('lyrics-preview-previous-line'),
-            textAlign: textAlign,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.38),
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
+    return FutureBuilder<List<String>>(
+      key: ObjectKey(_romanizedLines),
+      future: _romanizedLines,
+      builder: (context, snapshot) {
+        final romanizedLines = widget.romanizationEnabled
+            ? snapshot.data
+            : null;
+        String? romanizedLineAt(int index) {
+          if (romanizedLines == null || index >= romanizedLines.length) {
+            return null;
+          }
+          return romanizedLines[index];
+        }
+
+        return Container(
+          key: const ValueKey('lyrics-animation-preview'),
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF111715), Color(0xFF030504)],
             ),
+            borderRadius: BorderRadius.circular(appCardRadius),
+            border: Border.all(color: accent.withValues(alpha: 0.28)),
           ),
-          const SizedBox(height: 13),
-          LyricsAnimationPreviewTransition(
-            key: ValueKey(
-              'lyrics-preview-${widget.animationStyle.code}-'
-              '${widget.alignment.name}-$_replayToken',
-            ),
-            style: widget.animationStyle,
-            accent: accent,
-            alignment: centered ? Alignment.center : Alignment.centerLeft,
-            child: Text(
-              widget.strings.lyricsPreviewActiveLine,
-              key: const ValueKey('lyrics-preview-active-line'),
-              textAlign: textAlign,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 21,
-                height: 1.15,
-                fontWeight: FontWeight.w900,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _LyricsPreviewLine(
+                slot: 'previous',
+                original: _sourceLines[0],
+                romanized: romanizedLineAt(0),
+                textAlign: textAlign,
+                originalStyle: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.38),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+                romanizedStyle: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.48),
+                  fontSize: 12,
+                  height: 1.15,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
+              const SizedBox(height: 13),
+              LyricsAnimationPreviewTransition(
+                key: ValueKey(
+                  'lyrics-preview-${widget.animationStyle.code}-'
+                  '${widget.alignment.name}-$_replayToken',
+                ),
+                style: widget.animationStyle,
+                accent: accent,
+                alignment: centered ? Alignment.center : Alignment.centerLeft,
+                child: _LyricsPreviewLine(
+                  slot: 'active',
+                  original: _sourceLines[1],
+                  romanized: romanizedLineAt(1),
+                  textAlign: textAlign,
+                  romanizationGap: 4,
+                  originalStyle: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 21,
+                    height: 1.15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                  romanizedStyle: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.72),
+                    fontSize: 14,
+                    height: 1.2,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 13),
+              _LyricsPreviewLine(
+                slot: 'next',
+                original: _sourceLines[2],
+                romanized: romanizedLineAt(2),
+                textAlign: textAlign,
+                originalStyle: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.38),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+                romanizedStyle: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.48),
+                  fontSize: 12,
+                  height: 1.15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: centered ? Alignment.center : Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: const ValueKey('lyrics-preview-replay'),
+                  onPressed: () => setState(() => _replayToken++),
+                  style: TextButton.styleFrom(foregroundColor: accent),
+                  icon: const Icon(Icons.replay_rounded, size: 18),
+                  label: Text(widget.strings.replayAnimation),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 13),
-          Text(
-            widget.strings.lyricsPreviewNextLine,
-            key: const ValueKey('lyrics-preview-next-line'),
-            textAlign: textAlign,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.38),
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: centered ? Alignment.center : Alignment.centerLeft,
-            child: TextButton.icon(
-              key: const ValueKey('lyrics-preview-replay'),
-              onPressed: () => setState(() => _replayToken++),
-              style: TextButton.styleFrom(foregroundColor: accent),
-              icon: const Icon(Icons.replay_rounded, size: 18),
-              label: Text(widget.strings.replayAnimation),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
+
+class _LyricsPreviewLine extends StatelessWidget {
+  const _LyricsPreviewLine({
+    required this.slot,
+    required this.original,
+    required this.romanized,
+    required this.textAlign,
+    required this.originalStyle,
+    required this.romanizedStyle,
+    this.romanizationGap = 2,
+  });
+
+  final String slot;
+  final String original;
+  final String? romanized;
+  final TextAlign textAlign;
+  final TextStyle originalStyle;
+  final TextStyle romanizedStyle;
+  final double romanizationGap;
+
+  @override
+  Widget build(BuildContext context) {
+    final romanizedText = romanized?.trim();
+    final showRomanization =
+        romanizedText != null &&
+        romanizedText.isNotEmpty &&
+        romanizedText != original.trim();
+    return Column(
+      key: ValueKey('lyrics-preview-$slot-pair'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          original,
+          key: ValueKey('lyrics-preview-$slot-line'),
+          textAlign: textAlign,
+          style: originalStyle,
+        ),
+        if (showRomanization) ...[
+          SizedBox(height: romanizationGap),
+          Text(
+            romanizedText,
+            key: ValueKey('lyrics-preview-$slot-romanized-line'),
+            textAlign: textAlign,
+            style: romanizedStyle,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+List<String> _lyricsRomanizationPreviewLines(
+  LyricsRomanizationLanguage language,
+) => switch (language) {
+  LyricsRomanizationLanguage.japanese => const [
+    'よるが かがやきはじめる',
+    'いっしょに このうたを うたう',
+    'リズムが またはじまる',
+  ],
+  LyricsRomanizationLanguage.korean => const [
+    '밤이 빛나기 시작해',
+    '함께 이 노래를 불러',
+    '리듬이 다시 시작돼',
+  ],
+  LyricsRomanizationLanguage.chinese => const ['夜空开始闪耀', '我们一起唱这首歌', '节奏再次开始'],
+  LyricsRomanizationLanguage.cyrillic => const [
+    'Ночь начинает сиять',
+    'Мы вместе поём эту песню',
+    'И ритм начинается снова',
+  ],
+  LyricsRomanizationLanguage.arabic => const [
+    'يبدأ الليل في التألق',
+    'نغني هذه الأغنية معًا',
+    'ويبدأ الإيقاع من جديد',
+  ],
+  LyricsRomanizationLanguage.hebrew => const [
+    'הלילה מתחיל לזהור',
+    'אנחנו שרים יחד',
+    'והקצב מתחיל שוב',
+  ],
+};
 
 class _AccentSwatch extends StatelessWidget {
   const _AccentSwatch({
@@ -1968,7 +2230,7 @@ class _AccentSwatch extends StatelessWidget {
         message: label,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(_settingsInnerRadius),
+          borderRadius: BorderRadius.circular(appListCardIconRadius),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             width: 48,
@@ -1980,7 +2242,7 @@ class _AccentSwatch extends StatelessWidget {
                 end: Alignment.bottomRight,
                 colors: [accent.seedColor, accent.darkColor],
               ),
-              borderRadius: BorderRadius.circular(_settingsInnerRadius),
+              borderRadius: BorderRadius.circular(appListCardIconRadius),
               border: Border.all(
                 color: selected ? scheme.onSurface : scheme.outlineVariant,
                 width: selected ? 3 : 1,
@@ -2100,7 +2362,7 @@ class _SleepTimerSettings extends StatelessWidget {
       child: Material(
         color: AppColors.cardSurfaceFor(context),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(_settingsSurfaceRadius),
+          borderRadius: BorderRadius.circular(appCardRadius),
           side: BorderSide(color: AppColors.cardBorderFor(context)),
         ),
         clipBehavior: Clip.antiAlias,
@@ -2140,7 +2402,7 @@ class _SleepTimerSettings extends StatelessWidget {
                               ) ...[
                                 if (index > 0) const SizedBox(width: 8),
                                 Expanded(
-                                  child: _SleepTimerOptionButton(
+                                  child: _PlaybackOptionButton(
                                     selected:
                                         state.selectedDuration ==
                                         _presets[index],
@@ -2156,7 +2418,7 @@ class _SleepTimerSettings extends StatelessWidget {
                             ],
                           ),
                           const SizedBox(height: 10),
-                          _SleepTimerOptionButton(
+                          _PlaybackOptionButton(
                             selected: customSelected,
                             inactiveIcon: Icons.tune_rounded,
                             label: strings.customDuration,
@@ -2174,8 +2436,483 @@ class _SleepTimerSettings extends StatelessWidget {
   }
 }
 
-class _SleepTimerOptionButton extends StatelessWidget {
-  const _SleepTimerOptionButton({
+class _CrossfadeSettings extends StatelessWidget {
+  const _CrossfadeSettings({
+    required this.enabled,
+    required this.duration,
+    required this.strings,
+    required this.onEnabledChanged,
+    required this.onDurationSelected,
+    super.key,
+  });
+
+  final bool enabled;
+  final Duration duration;
+  final AppStrings strings;
+  final ValueChanged<bool> onEnabledChanged;
+  final ValueChanged<Duration> onDurationSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final desktopLayout =
+        AppPlatform.isDesktop &&
+        Theme.of(context).platform != TargetPlatform.android;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: desktopLayout ? 760 : 520),
+      child: Material(
+        color: AppColors.cardSurfaceFor(context),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(appCardRadius),
+          side: BorderSide(color: AppColors.cardBorderFor(context)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile.adaptive(
+              key: const ValueKey('settings-crossfade-switch'),
+              value: enabled,
+              onChanged: onEnabledChanged,
+              secondary: const Icon(Icons.multitrack_audio_rounded),
+              title: Text(
+                strings.crossfade,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              subtitle: Text(strings.crossfadeSummary),
+            ),
+            AnimatedSwitcher(
+              key: const ValueKey('settings-crossfade-options-transition'),
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 180),
+              reverseDuration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 140),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) => ClipRect(
+                child: SizeTransition(
+                  sizeFactor: animation,
+                  alignment: Alignment.topCenter,
+                  child: FadeTransition(opacity: animation, child: child),
+                ),
+              ),
+              child: enabled
+                  ? Padding(
+                      key: const ValueKey('settings-crossfade-options'),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                      child: _CrossfadeDurationSlider(
+                        duration: duration,
+                        strings: strings,
+                        onDurationSelected: onDurationSelected,
+                      ),
+                    )
+                  : const SizedBox.shrink(
+                      key: ValueKey('settings-crossfade-options-hidden'),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CrossfadeDurationSlider extends StatefulWidget {
+  const _CrossfadeDurationSlider({
+    required this.duration,
+    required this.strings,
+    required this.onDurationSelected,
+  });
+
+  final Duration duration;
+  final AppStrings strings;
+  final ValueChanged<Duration> onDurationSelected;
+
+  @override
+  State<_CrossfadeDurationSlider> createState() =>
+      _CrossfadeDurationSliderState();
+}
+
+class _CrossfadeDurationSliderState extends State<_CrossfadeDurationSlider> {
+  static const _thumbDiameter = 18.0;
+  static const _trackHeight = 3.0;
+  static const _labelTargetWidth = 48.0;
+
+  int? _dragPreviewIndex;
+  bool _isDragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final durations = supportedCrossfadeDurations;
+    const labeledSeconds = [1, 5, 10, 15];
+    final committedIndex = durations
+        .indexOf(widget.duration)
+        .clamp(0, durations.length - 1);
+    final selectedIndex = (_dragPreviewIndex ?? committedIndex).clamp(
+      0,
+      durations.length - 1,
+    );
+    final accent = AppColors.downloadAccentFor(context);
+    final inactive = AppColors.menuInactiveSliderFor(context);
+    final selected = durations[selectedIndex];
+    final increasedIndex = (selectedIndex + 1).clamp(0, durations.length - 1);
+    final decreasedIndex = (selectedIndex - 1).clamp(0, durations.length - 1);
+    final motionDuration =
+        MediaQuery.disableAnimationsOf(context) || _isDragging
+        ? Duration.zero
+        : const Duration(milliseconds: 150);
+
+    void previewIndex(int index) {
+      final nextIndex = index.clamp(0, durations.length - 1);
+      if (_dragPreviewIndex != nextIndex) {
+        setState(() => _dragPreviewIndex = nextIndex);
+      }
+    }
+
+    void commitIndex(int index) {
+      final next = durations[index.clamp(0, durations.length - 1)];
+      if (_dragPreviewIndex != null) {
+        setState(() => _dragPreviewIndex = null);
+      }
+      if (next != widget.duration) {
+        widget.onDurationSelected(next);
+      }
+    }
+
+    return Semantics(
+      container: true,
+      slider: true,
+      label: widget.strings.crossfadeDuration,
+      value: widget.strings.secondsShort(selected.inSeconds),
+      increasedValue: widget.strings.secondsShort(
+        durations[increasedIndex].inSeconds,
+      ),
+      decreasedValue: widget.strings.secondsShort(
+        durations[decreasedIndex].inSeconds,
+      ),
+      onIncrease: selectedIndex < durations.length - 1
+          ? () => commitIndex(selectedIndex + 1)
+          : null,
+      onDecrease: selectedIndex > 0
+          ? () => commitIndex(selectedIndex - 1)
+          : null,
+      child: ExcludeSemantics(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.strings.crossfadeDuration,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: AppColors.contentSubtitleFor(context),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                AnimatedSwitcher(
+                  duration: motionDuration,
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  child: Text(
+                    key: ValueKey(
+                      'settings-crossfade-current-${selected.inSeconds}s',
+                    ),
+                    widget.strings.secondsShort(selected.inSeconds),
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: accent,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            SizedBox(
+              key: const ValueKey('settings-crossfade-duration-slider'),
+              height: 48,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth;
+                  final thumbRadius = _thumbDiameter / 2;
+                  final usableWidth = (width - _thumbDiameter).clamp(
+                    1.0,
+                    double.infinity,
+                  );
+                  final selectedFraction =
+                      selectedIndex / (durations.length - 1);
+                  final thumbLeft = usableWidth * selectedFraction;
+                  final trackTop = (constraints.maxHeight - _trackHeight) / 2;
+                  final thumbTop = (constraints.maxHeight - _thumbDiameter) / 2;
+
+                  int indexForPosition(double dx) {
+                    final fraction = ((dx - thumbRadius) / usableWidth).clamp(
+                      0.0,
+                      1.0,
+                    );
+                    return (fraction * (durations.length - 1)).round();
+                  }
+
+                  KeyEventResult handleKeyEvent(
+                    FocusNode node,
+                    KeyEvent event,
+                  ) {
+                    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+                      return KeyEventResult.ignored;
+                    }
+                    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                      commitIndex(selectedIndex - 1);
+                      return KeyEventResult.handled;
+                    }
+                    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
+                        event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                      commitIndex(selectedIndex + 1);
+                      return KeyEventResult.handled;
+                    }
+                    if (event.logicalKey == LogicalKeyboardKey.home) {
+                      commitIndex(0);
+                      return KeyEventResult.handled;
+                    }
+                    if (event.logicalKey == LogicalKeyboardKey.end) {
+                      commitIndex(durations.length - 1);
+                      return KeyEventResult.handled;
+                    }
+                    return KeyEventResult.ignored;
+                  }
+
+                  return Focus(
+                    onKeyEvent: handleKeyEvent,
+                    child: Builder(
+                      builder: (focusContext) {
+                        final focused = Focus.of(focusContext).hasFocus;
+                        return AnimatedContainer(
+                          duration: motionDuration,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: focused
+                                  ? accent.withValues(alpha: 0.7)
+                                  : Colors.transparent,
+                            ),
+                          ),
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTapDown: (_) {
+                                Focus.of(focusContext).requestFocus();
+                              },
+                              onTapUp: (details) {
+                                commitIndex(
+                                  indexForPosition(details.localPosition.dx),
+                                );
+                              },
+                              onHorizontalDragStart: (details) {
+                                Focus.of(focusContext).requestFocus();
+                                setState(() {
+                                  _isDragging = true;
+                                  _dragPreviewIndex = indexForPosition(
+                                    details.localPosition.dx,
+                                  );
+                                });
+                              },
+                              onHorizontalDragUpdate: (details) => previewIndex(
+                                indexForPosition(details.localPosition.dx),
+                              ),
+                              onHorizontalDragEnd: (_) {
+                                final preview =
+                                    _dragPreviewIndex ?? committedIndex;
+                                setState(() => _isDragging = false);
+                                commitIndex(preview);
+                              },
+                              onHorizontalDragCancel: () {
+                                if (_isDragging || _dragPreviewIndex != null) {
+                                  setState(() {
+                                    _isDragging = false;
+                                    _dragPreviewIndex = null;
+                                  });
+                                }
+                              },
+                              child: Stack(
+                                children: [
+                                  Positioned(
+                                    left: thumbRadius,
+                                    right: thumbRadius,
+                                    top: trackTop,
+                                    height: _trackHeight,
+                                    child: DecoratedBox(
+                                      key: const ValueKey(
+                                        'settings-crossfade-duration-track',
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: inactive,
+                                        borderRadius: BorderRadius.circular(
+                                          _trackHeight / 2,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  AnimatedPositioned(
+                                    key: const ValueKey(
+                                      'settings-crossfade-duration-fill',
+                                    ),
+                                    duration: motionDuration,
+                                    curve: Curves.easeOutCubic,
+                                    left: thumbRadius,
+                                    top: trackTop,
+                                    width: usableWidth * selectedFraction,
+                                    height: _trackHeight,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        color: accent,
+                                        borderRadius: BorderRadius.circular(
+                                          _trackHeight / 2,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  for (
+                                    var index = 0;
+                                    index < durations.length;
+                                    index++
+                                  )
+                                    Positioned(
+                                      left:
+                                          thumbRadius +
+                                          usableWidth *
+                                              (index / (durations.length - 1)) -
+                                          3,
+                                      top: (constraints.maxHeight - 6) / 2,
+                                      width: 6,
+                                      height: 6,
+                                      child: DecoratedBox(
+                                        key: ValueKey(
+                                          'settings-crossfade-tick-'
+                                          '${durations[index].inSeconds}s',
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: index <= selectedIndex
+                                              ? accent
+                                              : inactive,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                    ),
+                                  AnimatedPositioned(
+                                    key: const ValueKey(
+                                      'settings-crossfade-duration-thumb',
+                                    ),
+                                    duration: motionDuration,
+                                    curve: Curves.easeOutCubic,
+                                    left: thumbLeft,
+                                    top: thumbTop,
+                                    width: _thumbDiameter,
+                                    height: _thumbDiameter,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        color: accent,
+                                        shape: BoxShape.circle,
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Color(0x30000000),
+                                            blurRadius: 5,
+                                            offset: Offset(0, 2),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
+            SizedBox(
+              height: 48,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth;
+                  final usableWidth = (width - _thumbDiameter).clamp(
+                    1.0,
+                    double.infinity,
+                  );
+                  final targetWidth = width < _labelTargetWidth
+                      ? width
+                      : _labelTargetWidth;
+                  return Stack(
+                    children: [
+                      for (final seconds in labeledSeconds)
+                        Builder(
+                          builder: (context) {
+                            final fraction =
+                                (seconds - 1) / (durations.length - 1);
+                            final markerCenter =
+                                _thumbDiameter / 2 + usableWidth * fraction;
+                            final left = (markerCenter - targetWidth / 2).clamp(
+                              0.0,
+                              width - targetWidth,
+                            );
+                            final translation =
+                                markerCenter - (left + targetWidth / 2);
+                            return Positioned(
+                              left: left,
+                              top: 0,
+                              width: targetWidth,
+                              height: 48,
+                              child: InkWell(
+                                key: ValueKey('settings-crossfade-${seconds}s'),
+                                onTap: () => commitIndex(seconds - 1),
+                                borderRadius: BorderRadius.circular(6),
+                                child: Transform.translate(
+                                  offset: Offset(translation, 0),
+                                  child: Center(
+                                    child: Text(
+                                      widget.strings.secondsShort(seconds),
+                                      textAlign: TextAlign.center,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium
+                                          ?.copyWith(
+                                            color: seconds == selected.inSeconds
+                                                ? accent
+                                                : AppColors.contentSubtitleFor(
+                                                    context,
+                                                  ),
+                                            fontWeight:
+                                                seconds == selected.inSeconds
+                                                ? FontWeight.w900
+                                                : FontWeight.w700,
+                                          ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaybackOptionButton extends StatelessWidget {
+  const _PlaybackOptionButton({
     required this.selected,
     required this.inactiveIcon,
     required this.label,
@@ -2190,7 +2927,7 @@ class _SleepTimerOptionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final borderRadius = BorderRadius.circular(_settingsInnerRadius);
+    final borderRadius = BorderRadius.circular(appListCardIconRadius);
     return SizedBox(
       height: 52,
       child: Material(
@@ -2247,17 +2984,12 @@ class _SettingsGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: _settingsGroupGap),
+      padding: const EdgeInsets.only(bottom: appSectionGap),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: _settingsGroupHeadingGap),
+          Text(title, style: appSectionTitleStyle(context)),
+          const SizedBox(height: appGroupHeadingGap),
           ...children,
         ],
       ),
@@ -2292,24 +3024,22 @@ class _StorageSettings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final headingStyle = Theme.of(
-      context,
-    ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(strings.downloads, style: headingStyle),
-        const SizedBox(height: 14),
-        _PathField(
-          controller: downloadPathController,
-          focusNode: downloadPathFocusNode,
-          label: strings.folder,
-          icon: Icons.folder_rounded,
-          browseTooltip: strings.browseFolder,
-          onBrowse: canChangeDownloadDirectory ? onBrowse : null,
-        ),
-        const SizedBox(height: _settingsGroupGap),
+        if (canChangeDownloadDirectory) ...[
+          Text(strings.downloads, style: appSectionTitleStyle(context)),
+          const SizedBox(height: 8),
+          _PathField(
+            controller: downloadPathController,
+            focusNode: downloadPathFocusNode,
+            label: strings.folder,
+            icon: Icons.folder_rounded,
+            browseTooltip: strings.browseFolder,
+            onBrowse: onBrowse,
+          ),
+          const SizedBox(height: appSectionGap),
+        ],
         _StorageTransferSection(
           title: strings.importData,
           children: [
@@ -2320,7 +3050,7 @@ class _StorageSettings extends StatelessWidget {
               subtitle: strings.importBackupSummary,
               onTap: busy ? null : onImportBackup,
             ),
-            const SizedBox(height: _settingsCardGap),
+            const SizedBox(height: appCardGap),
             _SettingsEntryCard(
               key: const ValueKey('storage-import-csv'),
               icon: Icons.upload_file_rounded,
@@ -2330,7 +3060,7 @@ class _StorageSettings extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: _settingsGroupGap),
+        const SizedBox(height: appSectionGap),
         _StorageTransferSection(
           title: strings.exportData,
           children: [
@@ -2341,7 +3071,7 @@ class _StorageSettings extends StatelessWidget {
               subtitle: strings.exportBackupSummary,
               onTap: busy ? null : onExportBackup,
             ),
-            const SizedBox(height: _settingsCardGap),
+            const SizedBox(height: appCardGap),
             _SettingsEntryCard(
               key: const ValueKey('storage-export-csv'),
               icon: Icons.download_for_offline_rounded,
@@ -2367,13 +3097,8 @@ class _StorageTransferSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: _settingsGroupHeadingGap),
+        Text(title, style: appSectionTitleStyle(context)),
+        const SizedBox(height: appGroupHeadingGap),
         ...children,
       ],
     );
@@ -2453,14 +3178,8 @@ class _TikTokLiveSettings extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            strings.tiktokLive,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 10),
+          Text(strings.tiktokLive, style: appSectionTitleStyle(context)),
+          const SizedBox(height: appSectionTitleGap),
           LayoutBuilder(
             builder: (context, constraints) {
               final input = TextField(
@@ -2515,9 +3234,7 @@ class _TikTokLiveSettings extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             strings.commandPermissions,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w800),
+            style: appSecondaryLabelStyle(context),
           ),
           const SizedBox(height: 7),
           Wrap(

@@ -1,7 +1,7 @@
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
 
-enum PlayerStatus { idle, loading, playing, paused, stopped, failed }
+enum PlayerStatus { idle, loading, playing, paused, completed, stopped, failed }
 
 enum PlaybackRepeatMode { off, all, one }
 
@@ -117,6 +117,45 @@ class RemotePlaybackSource {
   final bool isOnlyLogicalQueueItem;
 
   String get sourceKey => '$queueEntryId\u0000$uri';
+}
+
+sealed class CrossfadePlaybackSource {
+  const CrossfadePlaybackSource();
+
+  String get logicalKey;
+}
+
+final class LocalCrossfadePlaybackSource extends CrossfadePlaybackSource {
+  const LocalCrossfadePlaybackSource(this.track);
+
+  final LocalTrack track;
+
+  @override
+  String get logicalKey => 'local:${track.id}\u0000${track.filePath}';
+}
+
+final class RemoteCrossfadePlaybackSource extends CrossfadePlaybackSource {
+  const RemoteCrossfadePlaybackSource(this.source);
+
+  final RemotePlaybackSource source;
+
+  @override
+  String get logicalKey => 'remote:${source.queueEntryId}';
+}
+
+/// Optional dual-deck capability. The regular [PlayerService] remains the only
+/// logical player observed by the UI, queue and system media session.
+abstract interface class CrossfadeCapablePlayer {
+  bool get crossfadeEnabled;
+
+  Future<void> configureCrossfade({
+    required bool enabled,
+    required Duration duration,
+  });
+
+  /// Prepares the exact logical successor selected by the controller. Passing
+  /// null invalidates any preparation without changing current playback.
+  Future<void> prepareCrossfade(CrossfadePlaybackSource? source);
 }
 
 /// Optional capability implemented by Android's native player. It keeps

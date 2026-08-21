@@ -1,8 +1,7 @@
 enum LyricsAnimationStyle {
   smooth,
   slide,
-  highlight,
-  none;
+  highlight;
 
   String get code => name;
 
@@ -10,7 +9,6 @@ enum LyricsAnimationStyle {
     return switch (code) {
       'slide' => LyricsAnimationStyle.slide,
       'highlight' => LyricsAnimationStyle.highlight,
-      'none' => LyricsAnimationStyle.none,
       _ => LyricsAnimationStyle.smooth,
     };
   }

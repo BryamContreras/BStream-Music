@@ -22,6 +22,7 @@ class SearchInput extends StatefulWidget {
 
 class _SearchInputState extends State<SearchInput> {
   final _controller = TextEditingController();
+  final _focusNode = FocusNode();
   bool _hadText = false;
 
   @override
@@ -43,6 +44,7 @@ class _SearchInputState extends State<SearchInput> {
   void dispose() {
     _controller.removeListener(_handleTextChanged);
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -52,6 +54,7 @@ class _SearchInputState extends State<SearchInput> {
 
     void clear() {
       _controller.clear();
+      _focusNode.requestFocus();
     }
 
     final hasText = _controller.text.isNotEmpty;
@@ -60,6 +63,7 @@ class _SearchInputState extends State<SearchInput> {
       width: double.infinity,
       child: TextField(
         controller: _controller,
+        focusNode: _focusNode,
         textInputAction: TextInputAction.search,
         onSubmitted: (_) => submit(),
         decoration: InputDecoration(

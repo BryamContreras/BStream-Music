@@ -15,7 +15,7 @@ class VideoController {
 
   Future<PlayerResponse> getPlayerResponse(
       VideoId videoId, YoutubeApiClient client,
-      {WatchPage? watchPage}) async {
+      {WatchPage? watchPage, YoutubePoTokenContext? poToken}) async {
     final payload = client.payload;
     assert(payload['context'] != null, 'client must contain a context');
     assert(payload['context']!['client'] != null,
@@ -24,20 +24,29 @@ class VideoController {
     final userAgent = payload['context']!['client']!['userAgent'] as String?;
     final ytCfg = watchPage?.ytCfg;
 
-    final body = {
-      ...payload,
-      'videoId': videoId.value,
-      if (ytCfg?.containsKey('STS') ?? false)
-        'playbackContext': {
-          'contentPlaybackContext': {
-            'html5Preference': 'HTML5_PREF_WANTS',
-            'signatureTimestamp': ytCfg!['STS'].toString()
+    final body = _copyMap(Map<Object?, Object?>.from(payload))
+      ..addAll({
+        'videoId': videoId.value,
+        if (ytCfg?.containsKey('STS') ?? false)
+          'playbackContext': {
+            'contentPlaybackContext': {
+              'html5Preference': 'HTML5_PREF_WANTS',
+              'signatureTimestamp': ytCfg!['STS'].toString()
+            }
           }
-        }
-    };
-    if (body['context']!['client']['clientName'] == 'IOS') {
-      body['context']!['client']!['visitorData'] =
-          await _extractVisitorData(httpClient, client);
+      });
+    final context = body['context'] as Map<String, dynamic>;
+    final contextClient = context['client'] as Map<String, dynamic>;
+    var visitorData = poToken?.visitorData ?? _visitorDataFromConfig(ytCfg);
+    if (contextClient['clientName'] == 'IOS' && visitorData == null) {
+      visitorData = await _extractVisitorData(httpClient, client);
+    }
+    if (visitorData != null && visitorData.isNotEmpty) {
+      contextClient['visitorData'] = visitorData;
+    }
+    final playerPoToken = poToken?.playerRequestPoToken;
+    if (playerPoToken != null && playerPoToken.isNotEmpty) {
+      body['serviceIntegrityDimensions'] = {'poToken': playerPoToken};
     }
 
     final content = await httpClient.postString(
@@ -48,9 +57,8 @@ class VideoController {
         'X-Youtube-Client-Name': payload['context']!['client']!['clientName'],
         'X-Youtube-Client-Version':
             payload['context']!['client']!['clientVersion'],
-        if (ytCfg != null)
-          'X-Goog-Visitor-Id': ytCfg['INNERTUBE_CONTEXT']['client']
-              ['visitorData'],
+        if (visitorData != null && visitorData.isNotEmpty)
+          'X-Goog-Visitor-Id': visitorData,
         'Origin': 'https://www.youtube.com',
         'Sec-Fetch-Mode': 'navigate',
         'Content-Type': 'application/json',
@@ -59,6 +67,28 @@ class VideoController {
       },
     );
     return PlayerResponse.parse(content);
+  }
+
+  String? _visitorDataFromConfig(Map<String, dynamic>? ytCfg) {
+    final value = ytCfg?['INNERTUBE_CONTEXT']?['client']?['visitorData'];
+    return value is String && value.isNotEmpty ? value : null;
+  }
+
+  Map<String, dynamic> _copyMap(Map<Object?, Object?> source) {
+    return <String, dynamic>{
+      for (final entry in source.entries)
+        entry.key.toString(): _copyValue(entry.value),
+    };
+  }
+
+  Object? _copyValue(Object? value) {
+    if (value is Map) {
+      return _copyMap(Map<Object?, Object?>.from(value));
+    }
+    if (value is List) {
+      return value.map(_copyValue).toList(growable: true);
+    }
+    return value;
   }
 
   String? _visitorData;

@@ -7,11 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../platform_channels/android_screen_channel.dart';
+import '../../../../services/lyrics/lyrics_romanization_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
-import '../../../../services/player/player_service.dart';
 import '../../domain/entities/lyrics.dart';
 import '../providers/music_providers.dart';
 import 'lyrics_animation_transition.dart';
+import 'mini_player.dart';
 import 'playback_gradient_background.dart';
 import 'playback_progress_line.dart';
 
@@ -51,6 +52,9 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
   String? _lookupIdentity;
   bool _showSimilarLyrics = false;
   String _manualSearchTitle = '';
+  LyricsDocument? _romanizationSource;
+  Set<LyricsRomanizationLanguage>? _romanizationLanguages;
+  Future<RomanizedLyricsView>? _romanizationFuture;
 
   @override
   void initState() {
@@ -83,10 +87,16 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     final lyricsCentered = lyricsTextAlignment == LyricsTextAlignment.centered;
     final lyricsAnimationStyle =
         settings?.lyricsAnimationStyle ?? LyricsAnimationStyle.smooth;
+    final lyricsRomanizationEnabled =
+        settings?.lyricsRomanizationEnabled ?? false;
+    final lyricsRomanizationLanguages =
+        settings?.lyricsRomanizationLanguages ??
+        defaultLyricsRomanizationLanguages;
     final systemBottomInset = math.max(
       MediaQuery.viewPaddingOf(context).bottom,
       MediaQuery.paddingOf(context).bottom,
     );
+    final miniPlayerHeight = miniPlayerHeightFor(context);
     _syncLookup(lookup);
 
     return Scaffold(
@@ -101,7 +111,9 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
           SafeArea(
             bottom: false,
             child: Padding(
-              padding: EdgeInsets.only(bottom: systemBottomInset),
+              padding: EdgeInsets.only(
+                bottom: systemBottomInset + miniPlayerHeight,
+              ),
               child: Column(
                 children: [
                   _LyricsHeader(lookup: lookup),
@@ -119,6 +131,8 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
                             offset,
                             lyricsCentered,
                             lyricsAnimationStyle,
+                            lyricsRomanizationEnabled,
+                            lyricsRomanizationLanguages,
                           )
                         : ref
                               .watch(lyricsProvider(lookup))
@@ -148,10 +162,23 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
                                   offset,
                                   lyricsCentered,
                                   lyricsAnimationStyle,
+                                  lyricsRomanizationEnabled,
+                                  lyricsRomanizationLanguages,
                                 ),
                               ),
                   ),
                 ],
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: systemBottomInset,
+            child: SizedBox(
+              height: miniPlayerHeight,
+              child: MiniPlayer(
+                onOpenPlayer: () => Navigator.of(context).pop(),
               ),
             ),
           ),
@@ -165,6 +192,8 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     Duration offset,
     bool lyricsCentered,
     LyricsAnimationStyle lyricsAnimationStyle,
+    bool lyricsRomanizationEnabled,
+    Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages,
   ) {
     final strings = ref.watch(appStringsProvider);
     if (lyrics == null) {
@@ -184,12 +213,75 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
         footer: sourceFooter,
       );
     }
+    final romanizationFuture =
+        lyricsRomanizationEnabled && lyricsRomanizationLanguages.isNotEmpty
+        ? _romanizedLyrics(lyrics, lyricsRomanizationLanguages)
+        : null;
+    return FutureBuilder<RomanizedLyricsView>(
+      future: romanizationFuture,
+      builder: (context, snapshot) => _buildLyricsContent(
+        lyrics,
+        offset: offset,
+        lyricsCentered: lyricsCentered,
+        lyricsAnimationStyle: lyricsAnimationStyle,
+        sourceFooter: sourceFooter,
+        romanized:
+            lyricsRomanizationEnabled &&
+                snapshot.connectionState == ConnectionState.done
+            ? snapshot.data
+            : null,
+      ),
+    );
+  }
+
+  Future<RomanizedLyricsView> _romanizedLyrics(
+    LyricsDocument lyrics,
+    Set<LyricsRomanizationLanguage> languages,
+  ) {
+    final sameLanguages =
+        _romanizationLanguages?.length == languages.length &&
+        _romanizationLanguages?.containsAll(languages) == true;
+    if (identical(_romanizationSource, lyrics) &&
+        sameLanguages &&
+        _romanizationFuture != null) {
+      return _romanizationFuture!;
+    }
+    _romanizationSource = lyrics;
+    _romanizationLanguages = Set.unmodifiable(languages);
+    final future = ref
+        .read(lyricsRomanizationServiceProvider)
+        .romanizeDocument(lyrics, languages);
+    _romanizationFuture = future;
+    unawaited(
+      future.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stackTrace) {
+          if (identical(_romanizationFuture, future)) {
+            _romanizationSource = null;
+            _romanizationLanguages = null;
+            _romanizationFuture = null;
+          }
+        },
+      ),
+    );
+    return future;
+  }
+
+  Widget _buildLyricsContent(
+    LyricsDocument lyrics, {
+    required Duration offset,
+    required bool lyricsCentered,
+    required LyricsAnimationStyle lyricsAnimationStyle,
+    required String sourceFooter,
+    RomanizedLyricsView? romanized,
+  }) {
     if (lyrics.lines.isNotEmpty) {
       return Stack(
         fit: StackFit.expand,
         children: [
           _SyncedLyricsTimeline(
             lines: lyrics.lines,
+            romanizedLines: romanized?.syncedLines,
             offset: offset,
             sourceFooter: sourceFooter,
             lyricsCentered: lyricsCentered,
@@ -216,14 +308,15 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     if (plainLyrics != null && plainLyrics.isNotEmpty) {
       return _PlainLyricsView(
         lyrics: plainLyrics,
+        romanizedLyrics: romanized?.plainLyrics?.trim(),
         sourceFooter: sourceFooter,
         lyricsCentered: lyricsCentered,
       );
     }
     return _LyricsMessage(
       icon: Icons.search_off_rounded,
-      message: strings.lyricsNotFound,
-      actionLabel: strings.similarLyrics,
+      message: ref.watch(appStringsProvider).lyricsNotFound,
+      actionLabel: ref.watch(appStringsProvider).similarLyrics,
       actionIcon: Icons.manage_search_rounded,
       onAction: () => setState(() => _showSimilarLyrics = true),
     );
@@ -540,12 +633,6 @@ class _LyricsHeader extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final currentLookup = lookup;
-    final accent = AppColors.downloadAccentFor(context);
-    final isPlaying = ref.watch(
-      playerControllerProvider.select(
-        (player) => player.value?.status == PlayerStatus.playing,
-      ),
-    );
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -589,27 +676,6 @@ class _LyricsHeader extends ConsumerWidget {
                     ),
                   ],
                 ),
-              ),
-              IconButton.filled(
-                key: const ValueKey('lyrics-playback-control'),
-                tooltip: isPlaying ? strings.pause : strings.play,
-                style: IconButton.styleFrom(
-                  backgroundColor: accent,
-                  foregroundColor: AppColors.playIconForegroundFor(context),
-                  disabledBackgroundColor: AppColors.downloadAccentFor(
-                    context,
-                  ).withValues(alpha: 0.42),
-                  disabledForegroundColor:
-                      AppColors.playIconDisabledForegroundFor(context),
-                ),
-                icon: Icon(
-                  isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                ),
-                onPressed: currentLookup == null
-                    ? null
-                    : () => ref
-                          .read(playerControllerProvider.notifier)
-                          .togglePlayPause(),
               ),
             ],
           ),
@@ -663,6 +729,7 @@ class _LyricsHeaderProgress extends ConsumerWidget {
 class _SyncedLyricsTimeline extends ConsumerStatefulWidget {
   const _SyncedLyricsTimeline({
     required this.lines,
+    required this.romanizedLines,
     required this.offset,
     required this.sourceFooter,
     required this.lyricsCentered,
@@ -670,6 +737,7 @@ class _SyncedLyricsTimeline extends ConsumerStatefulWidget {
   });
 
   final List<LyricLine> lines;
+  final List<String>? romanizedLines;
   final Duration offset;
   final String sourceFooter;
   final bool lyricsCentered;
@@ -686,7 +754,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   ProviderSubscription<Duration>? _positionSubscription;
   Timer? _resumeAutoScrollTimer;
   bool _autoScrollSuspended = false;
-  double? _activeFontSize;
+  double? _activeScaledFontSize;
   double? _layoutWidth;
   int _animationRevision = 0;
 
@@ -718,19 +786,24 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
         oldWidget.offset != widget.offset) {
       _updateActiveLine(ref.read(currentPlaybackPositionProvider));
     }
+    if (!identical(oldWidget.romanizedLines, widget.romanizedLines)) {
+      _scheduleAutoScroll();
+    }
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final nextActiveFontSize = _lyricsTypographyFor(context).active;
+    final nextActiveScaledFontSize = MediaQuery.textScalerOf(
+      context,
+    ).scale(_lyricsTypographyFor(context).active);
     final nextLayoutWidth = MediaQuery.sizeOf(context).width;
-    final previousActiveFontSize = _activeFontSize;
+    final previousActiveScaledFontSize = _activeScaledFontSize;
     final previousLayoutWidth = _layoutWidth;
-    _activeFontSize = nextActiveFontSize;
+    _activeScaledFontSize = nextActiveScaledFontSize;
     _layoutWidth = nextLayoutWidth;
-    if (previousActiveFontSize != null &&
-        (previousActiveFontSize != nextActiveFontSize ||
+    if (previousActiveScaledFontSize != null &&
+        (previousActiveScaledFontSize != nextActiveScaledFontSize ||
             previousLayoutWidth != nextLayoutWidth)) {
       _scheduleAutoScroll();
     }
@@ -831,6 +904,13 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
                       ? const ValueKey('active-lyric-line')
                       : ValueKey('lyric-line-$index'),
                   line: widget.lines[index],
+                  originalText: widget.lines[index].text,
+                  romanizedText:
+                      widget.romanizedLines != null &&
+                          index < widget.romanizedLines!.length
+                      ? widget.romanizedLines![index]
+                      : null,
+                  romanizationKey: ValueKey('lyrics-line-romanization-$index'),
                   active: index == _activeIndex,
                   passed: index < _activeIndex,
                   lyricsCentered: widget.lyricsCentered,
@@ -883,6 +963,9 @@ class _LyricLineTile extends StatelessWidget {
   const _LyricLineTile({
     required this.contentKey,
     required this.line,
+    required this.originalText,
+    required this.romanizedText,
+    required this.romanizationKey,
     required this.active,
     required this.passed,
     required this.lyricsCentered,
@@ -896,6 +979,9 @@ class _LyricLineTile extends StatelessWidget {
 
   final Key contentKey;
   final LyricLine line;
+  final String originalText;
+  final String? romanizedText;
+  final Key romanizationKey;
   final bool active;
   final bool passed;
   final bool lyricsCentered;
@@ -932,25 +1018,64 @@ class _LyricLineTile extends StatelessWidget {
             ]
           : null,
     );
+    final trimmedRomanization = romanizedText?.trim();
+    final showRomanization =
+        trimmedRomanization != null &&
+        trimmedRomanization.isNotEmpty &&
+        trimmedRomanization != originalText.trim();
+    final animationDuration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 240);
     final lineText = Padding(
       key: contentKey,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-      child: Text(
-        line.text,
-        textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            originalText,
+            textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
+          ),
+          if (showRomanization) ...[
+            SizedBox(height: active ? 5 : 4),
+            AnimatedDefaultTextStyle(
+              duration: animationDuration,
+              curve: Curves.easeOutCubic,
+              style: TextStyle(
+                color: Colors.white.withValues(
+                  alpha: active ? 0.72 : (passed ? 0.55 : 0.48),
+                ),
+                fontSize: ((active ? activeFontSize : inactiveFontSize) * 0.62)
+                    .clamp(15.0, 22.0)
+                    .toDouble(),
+                height: 1.25,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0,
+              ),
+              child: Text(
+                trimmedRomanization,
+                key: romanizationKey,
+                textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
+              ),
+            ),
+          ],
+        ],
       ),
     );
-    final styledLine = animationStyle == LyricsAnimationStyle.none
-        ? DefaultTextStyle(style: textStyle, child: lineText)
-        : AnimatedDefaultTextStyle(
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
-            style: textStyle,
-            child: lineText,
-          );
+    final styledLine = AnimatedDefaultTextStyle(
+      duration: animationDuration,
+      curve: Curves.easeOutCubic,
+      style: textStyle,
+      child: lineText,
+    );
     return Semantics(
+      label: showRomanization
+          ? '$originalText\n$trimmedRomanization'
+          : originalText,
+      excludeSemantics: true,
       selected: active,
       button: true,
+      onTap: onTap,
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
@@ -1112,11 +1237,13 @@ class _LyricsOffsetControls extends ConsumerWidget {
 class _PlainLyricsView extends ConsumerWidget {
   const _PlainLyricsView({
     required this.lyrics,
+    required this.romanizedLyrics,
     required this.sourceFooter,
     required this.lyricsCentered,
   });
 
   final String lyrics;
+  final String? romanizedLyrics;
   final String sourceFooter;
   final bool lyricsCentered;
 
@@ -1127,6 +1254,35 @@ class _PlainLyricsView extends ConsumerWidget {
     final displayedLyrics = lyricsCentered
         ? lyrics.split('\n').map((line) => line.trim()).join('\n')
         : lyrics;
+    final trimmedRomanization = romanizedLyrics?.trim();
+    final showRomanization =
+        trimmedRomanization != null &&
+        trimmedRomanization.isNotEmpty &&
+        trimmedRomanization != lyrics.trim();
+    final displayedRomanization = showRomanization
+        ? (lyricsCentered
+              ? trimmedRomanization
+                    .split('\n')
+                    .map((line) => line.trim())
+                    .join('\n')
+              : trimmedRomanization)
+        : null;
+    final originalLines = displayedLyrics.split('\n');
+    final romanizedLines = displayedRomanization?.split('\n');
+    final canPairLines =
+        romanizedLines != null && romanizedLines.length == originalLines.length;
+    final originalStyle = TextStyle(
+      color: Colors.white.withValues(alpha: 0.9),
+      fontSize: typography.plain,
+      height: 1.38,
+      fontWeight: FontWeight.w800,
+    );
+    final romanizedStyle = TextStyle(
+      color: Colors.white.withValues(alpha: 0.62),
+      fontSize: typography.plain * 0.62,
+      height: 1.36,
+      fontWeight: FontWeight.w600,
+    );
     final horizontalPadding =
         Theme.of(context).platform == TargetPlatform.android ? 16.0 : 28.0;
     return SingleChildScrollView(
@@ -1160,17 +1316,47 @@ class _PlainLyricsView extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 24),
-          Text(
+          Column(
             key: const ValueKey('plain-lyrics-text'),
-            displayedLyrics,
-            textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.9),
-              fontSize: typography.plain,
-              height: 1.38,
-              fontWeight: FontWeight.w800,
-            ),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: canPairLines
+                ? [
+                    for (var index = 0; index < originalLines.length; index++)
+                      _PlainLyricLine(
+                        key: ValueKey('plain-lyrics-pair-$index'),
+                        originalKey: ValueKey('plain-lyrics-original-$index'),
+                        romanizationKey: ValueKey(
+                          'plain-lyrics-romanization-$index',
+                        ),
+                        original: originalLines[index],
+                        romanized: romanizedLines[index],
+                        textAlign: lyricsCentered
+                            ? TextAlign.center
+                            : TextAlign.start,
+                        originalStyle: originalStyle,
+                        romanizedStyle: romanizedStyle,
+                      ),
+                  ]
+                : [
+                    Text(
+                      key: const ValueKey('plain-lyrics-original'),
+                      displayedLyrics,
+                      textAlign: lyricsCentered
+                          ? TextAlign.center
+                          : TextAlign.start,
+                      style: originalStyle,
+                    ),
+                  ],
           ),
+          if (displayedRomanization != null && !canPairLines) ...[
+            const SizedBox(height: 12),
+            Text(
+              key: const ValueKey('plain-lyrics-romanization'),
+              displayedRomanization,
+              textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
+              style: romanizedStyle,
+            ),
+          ],
           const SizedBox(height: 32),
           Text(
             sourceFooter,
@@ -1182,6 +1368,65 @@ class _PlainLyricsView extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PlainLyricLine extends StatelessWidget {
+  const _PlainLyricLine({
+    required this.originalKey,
+    required this.romanizationKey,
+    required this.original,
+    required this.romanized,
+    required this.textAlign,
+    required this.originalStyle,
+    required this.romanizedStyle,
+    super.key,
+  });
+
+  final Key originalKey;
+  final Key romanizationKey;
+  final String original;
+  final String romanized;
+  final TextAlign textAlign;
+  final TextStyle originalStyle;
+  final TextStyle romanizedStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmedRomanization = romanized.trim();
+    final showRomanization =
+        trimmedRomanization.isNotEmpty &&
+        trimmedRomanization != original.trim();
+    final semanticLabel = showRomanization
+        ? '$original\n$trimmedRomanization'
+        : original;
+    return Semantics(
+      label: semanticLabel,
+      excludeSemantics: true,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              original,
+              key: originalKey,
+              textAlign: textAlign,
+              style: originalStyle,
+            ),
+            if (showRomanization) ...[
+              const SizedBox(height: 4),
+              Text(
+                trimmedRomanization,
+                key: romanizationKey,
+                textAlign: textAlign,
+                style: romanizedStyle,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

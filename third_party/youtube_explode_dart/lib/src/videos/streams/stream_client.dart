@@ -9,6 +9,7 @@ import '../../reverse_engineering/challenges/js_challenge.dart';
 import '../../reverse_engineering/heuristics.dart';
 import '../../reverse_engineering/models/stream_info_provider.dart';
 import '../../reverse_engineering/pages/watch_page.dart';
+import '../../reverse_engineering/po_token.dart';
 import '../../reverse_engineering/youtube_http_client.dart';
 import '../video_id.dart';
 import '../youtube_api_client.dart';
@@ -21,19 +22,27 @@ class StreamClient {
   final YoutubeHttpClient _httpClient;
   final StreamController _controller;
   final BaseJSChallengeSolver? _jsChallengeSolver;
+  final YoutubeManifestClientsProvider? _manifestClientsProvider;
+  final YoutubePoTokenProvider? _poTokenProvider;
 
   /// Initializes an instance of [StreamClient]
-  StreamClient(this._httpClient, {BaseJSChallengeSolver? jsSolver})
-      : _controller = StreamController(_httpClient),
-        _jsChallengeSolver = jsSolver;
+  StreamClient(
+    this._httpClient, {
+    BaseJSChallengeSolver? jsSolver,
+    YoutubeManifestClientsProvider? manifestClientsProvider,
+    YoutubePoTokenProvider? poTokenProvider,
+  })  : _controller = StreamController(_httpClient),
+        _jsChallengeSolver = jsSolver,
+        _manifestClientsProvider = manifestClientsProvider,
+        _poTokenProvider = poTokenProvider;
 
   /// Gets the manifest that contains information
   /// about available streams in the specified video.
   ///
   /// See [YoutubeApiClient] for all the possible clients that can be set using the [ytClients] parameter.
   /// If [ytClients] is null the library automatically manages the clients, otherwise only the clients provided are used.
-  /// Currently by default the  [YoutubeApiClient.androidSdkless] client is used,
-  /// and if a js solver is provided the [YoutubeApiClient.safari] is used additionally.
+  /// When a [YoutubeManifestClientsProvider] is configured, it supplies a fresh
+  /// ordered list for automatic refreshes instead of the built-in client list.
   ///
   ///
   /// Note: if using any android client youtube often prevents downloading the same stream multiple times or downloading more than one stream from the same manifest.
@@ -65,9 +74,13 @@ class StreamClient {
         'ytClients cannot be an empty list');
 
     videoId = VideoId.fromString(videoId);
-    final clients = ytClients ?? [YoutubeApiClient.androidSdkless];
+    final clients = ytClients?.toList() ??
+        _manifestClientsProvider?.call() ??
+        [YoutubeApiClient.androidSdkless];
 
-    if (_jsChallengeSolver != null && ytClients == null) {
+    if (_jsChallengeSolver != null &&
+        ytClients == null &&
+        _manifestClientsProvider == null) {
       clients.add(YoutubeApiClient.safari);
     }
 
@@ -123,7 +136,9 @@ class StreamClient {
     }
 
     // If the user has not provided any client retry with the tv which work also in some restricted videos.
-    if (uniqueStreams.isEmpty && ytClients == null) {
+    if (uniqueStreams.isEmpty &&
+        ytClients == null &&
+        _manifestClientsProvider == null) {
       return getManifest(videoId, ytClients: [YoutubeApiClient.tv]);
     }
     if (uniqueStreams.isEmpty) {
@@ -187,8 +202,13 @@ class StreamClient {
     if (requireWatchPage) {
       watchPage = await WatchPage.get(_httpClient, videoId.value);
     }
-    final playerResponse = await _controller
-        .getPlayerResponse(videoId, ytClient, watchPage: watchPage);
+    final poToken = await _poTokenProvider?.getToken(videoId, ytClient);
+    final playerResponse = await _controller.getPlayerResponse(
+      videoId,
+      ytClient,
+      watchPage: watchPage,
+      poToken: poToken,
+    );
 
     if (!playerResponse.previewVideoId.isNullOrWhiteSpace) {
       throw VideoRequiresPurchaseException.preview(
@@ -207,25 +227,36 @@ class StreamClient {
         reason: playerResponse.videoPlayabilityError ?? '',
       );
     }
+
     yield* _parseStreamInfo(playerResponse.streams,
-        watchPage: watchPage, videoId: videoId);
+        watchPage: watchPage,
+        videoId: videoId,
+        streamingDataPoToken: poToken?.streamingDataPoToken);
 
     if (!playerResponse.dashManifestUrl.isNullOrWhiteSpace) {
       final dashManifest =
           await _controller.getDashManifest(playerResponse.dashManifestUrl!);
       yield* _parseStreamInfo(dashManifest.streams,
-          watchPage: watchPage, videoId: videoId);
+          watchPage: watchPage,
+          videoId: videoId,
+          streamingDataPoToken: poToken?.streamingDataPoToken);
     }
     if (!playerResponse.hlsManifestUrl.isNullOrWhiteSpace) {
       final hlsManifest =
           await _controller.getHlsManifest(playerResponse.hlsManifestUrl!);
       yield* _parseStreamInfo(hlsManifest.streams,
-          watchPage: watchPage, videoId: videoId);
+          watchPage: watchPage,
+          videoId: videoId,
+          streamingDataPoToken: poToken?.streamingDataPoToken);
     }
   }
 
-  Stream<StreamInfo> _parseStreamInfo(Iterable<StreamInfoProvider> streams,
-      {WatchPage? watchPage, VideoId? videoId}) async* {
+  Stream<StreamInfo> _parseStreamInfo(
+    Iterable<StreamInfoProvider> streams, {
+    WatchPage? watchPage,
+    VideoId? videoId,
+    String? streamingDataPoToken,
+  }) async* {
     // First pass: collect all unique challenges
     final nChallenges = <String>{};
     final sigChallenges = <String>{};
@@ -275,6 +306,14 @@ class StreamClient {
       late Uri url;
       try {
         url = Uri.parse(stream.url);
+        if (!url.hasScheme || url.host.isEmpty) {
+          continue;
+        }
+        if (streamingDataPoToken != null &&
+            streamingDataPoToken.isNotEmpty &&
+            !url.queryParameters.containsKey('pot')) {
+          url = url.setQueryParam('pot', streamingDataPoToken);
+        }
       } catch (e) {
         continue;
       }

@@ -162,21 +162,119 @@ void main() {
         );
         final play = find.byKey(const ValueKey('mini-player-primary-control'));
         final next = find.byKey(const ValueKey('mini-player-next-control'));
+        final shuffle = find.byKey(
+          const ValueKey('mini-player-shuffle-control'),
+        );
+        final repeat = find.byKey(const ValueKey('mini-player-repeat-control'));
+        final lyrics = find.byKey(const ValueKey('mini-player-lyrics-control'));
+        final volume = find.byKey(const ValueKey('mini-player-volume-control'));
+        final progress = find.byKey(const ValueKey('mini-player-progress'));
         final surfaceRect = tester.getRect(surface);
+        final previousRect = tester.getRect(previous);
+        final progressRect = tester.getRect(progress);
+        final shuffleCenter = tester.getCenter(shuffle);
         final previousCenter = tester.getCenter(previous);
         final playCenter = tester.getCenter(play);
         final nextCenter = tester.getCenter(next);
+        final repeatCenter = tester.getCenter(repeat);
 
-        const sideNavigationWidth = 248.0;
-        const dividerWidth = 1.0;
-        final contentStart = sideNavigationWidth + dividerWidth;
-        expect(surfaceRect.left, closeTo(contentStart, 0.1));
-        expect(surfaceRect.width, closeTo(viewport.width - contentStart, 0.1));
+        expect(surfaceRect.left, closeTo(0, 0.1));
+        expect(surfaceRect.width, closeTo(viewport.width, 0.1));
+        expect(surfaceRect.height, 94);
         expect(playCenter.dx, closeTo(surfaceRect.center.dx, 0.1));
-        expect(playCenter.dx - previousCenter.dx, closeTo(56, 0.1));
-        expect(nextCenter.dx - playCenter.dx, closeTo(56, 0.1));
+        expect(tester.getSize(play), const Size.square(52));
+        expect(
+          find.byKey(const ValueKey('mini-player-primary-gradient')),
+          findsNothing,
+        );
+        final playButton = tester.widget<IconButton>(play);
+        final previousButton = tester.widget<IconButton>(
+          find.descendant(of: previous, matching: find.byType(IconButton)),
+        );
+        expect(playButton.iconSize, 40);
+        expect(
+          playButton.style?.foregroundColor?.resolve(<WidgetState>{}),
+          previousButton.color,
+        );
+        expect(tester.getSize(shuffle), const Size.square(48));
+        expect(tester.getSize(previous), const Size.square(48));
+        expect(tester.getSize(next), const Size.square(48));
+        expect(
+          tester
+              .widget<IconButton>(
+                find.descendant(
+                  of: previous,
+                  matching: find.byType(IconButton),
+                ),
+              )
+              .iconSize,
+          30,
+        );
+        expect(
+          tester
+              .widget<IconButton>(
+                find.descendant(of: next, matching: find.byType(IconButton)),
+              )
+              .iconSize,
+          30,
+        );
+        expect(
+          tester
+              .widget<IconButton>(
+                find.descendant(of: shuffle, matching: find.byType(IconButton)),
+              )
+              .iconSize,
+          26,
+        );
+        expect(
+          tester
+              .widget<IconButton>(
+                find.descendant(of: repeat, matching: find.byType(IconButton)),
+              )
+              .iconSize,
+          26,
+        );
+        expect(tester.getSize(repeat), const Size.square(48));
+        expect(tester.getSize(lyrics), const Size.square(48));
+        expect(tester.getSize(volume), const Size(152, 44));
+        expect(previousCenter.dx - shuffleCenter.dx, closeTo(48, 0.1));
+        expect(playCenter.dx - previousCenter.dx, closeTo(50, 0.1));
+        expect(nextCenter.dx - playCenter.dx, closeTo(50, 0.1));
+        expect(repeatCenter.dx - nextCenter.dx, closeTo(48, 0.1));
         expect(previousCenter.dy, closeTo(playCenter.dy, 0.1));
         expect(nextCenter.dy, closeTo(playCenter.dy, 0.1));
+        expect(progressRect.top - previousRect.bottom, closeTo(2, 0.1));
+        expect(
+          (previousRect.top + progressRect.bottom) / 2,
+          closeTo(surfaceRect.center.dy + 4, 0.1),
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-current-time')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-total-time')),
+          findsOneWidget,
+        );
+        expect(find.text('0:00'), findsOneWidget);
+        expect(find.text('3:00'), findsOneWidget);
+        expect(tester.getRect(shuffle).right, lessThan(previousCenter.dx));
+        expect(tester.getRect(repeat).left, greaterThan(nextCenter.dx));
+        expect(
+          tester.getRect(volume).right,
+          closeTo(surfaceRect.right - 20, 0.1),
+        );
+        expect(
+          find.descendant(
+            of: volume,
+            matching: find.byKey(const ValueKey('mini-player-volume-slider')),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: volume, matching: find.byType(Slider)),
+          findsNothing,
+        );
         expect(tester.takeException(), isNull);
 
         await tester.tap(previous);
@@ -187,6 +285,170 @@ void main() {
         expect(find.byKey(const ValueKey('player-tab-title')), findsNothing);
         expect(tester.takeException(), isNull);
       }
+      debugDefaultTargetPlatformOverride = null;
+    },
+    skip: !io.Platform.isWindows,
+  );
+
+  testWidgets(
+    'desktop player survives navigation layout resize without rebuilding playback',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view
+        ..physicalSize = const Size(900, 720)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      final playerService = _FakePlayerService(
+        snapshot: const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          title: 'Pista persistente',
+          artist: 'Artista persistente',
+          trackId: 'responsive-player-track',
+          thumbnailUrl: 'https://example.com/responsive-artwork.jpg',
+          position: Duration(seconds: 37),
+          duration: Duration(minutes: 3, seconds: 47),
+        ),
+      );
+      await tester.pumpWidget(_testApp(playerService: playerService));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(
+        find.byKey(const ValueKey('side-navigation-surface')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-shell-transition')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-item-2')),
+        findsOneWidget,
+      );
+      expect(find.byType(MiniPlayer), findsOneWidget);
+      final miniPlayerClip = find.byKey(
+        const ValueKey('mini-player-shell-clip'),
+      );
+      final bottomNavigationClip = find.byKey(
+        const ValueKey('bottom-navigation-shell-clip'),
+      );
+      expect(
+        tester.getBottomLeft(miniPlayerClip).dy,
+        closeTo(tester.getTopLeft(bottomNavigationClip).dy, 0.1),
+      );
+      final retainedMiniPlayer = tester.element(find.byType(MiniPlayer));
+
+      await tester.tapAt(
+        tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final playerView = find.byKey(const ValueKey('player-view'));
+      final playerPanel = find.byType(PlayerPanel);
+      final playerTitle = find.descendant(
+        of: playerView,
+        matching: find.byKey(const ValueKey('player-track-title')),
+      );
+      final playerArtist = find.descendant(
+        of: playerView,
+        matching: find.byKey(const ValueKey('player-track-artist')),
+      );
+      final playerTrack = find.descendant(
+        of: playerView,
+        matching: find.byKey(const ValueKey('player-progress-color-animation')),
+      );
+      final playerArtwork = find.descendant(
+        of: playerView,
+        matching: find.byType(ProportionalArtwork),
+      );
+      expect(playerView, findsOneWidget);
+      expect(playerPanel, findsOneWidget);
+      expect(playerTitle, findsOneWidget);
+      expect(playerArtist, findsOneWidget);
+      expect(playerTrack, findsOneWidget);
+      expect(playerArtwork, findsOneWidget);
+      expect(tester.widget<Text>(playerTitle).data, 'Pista persistente');
+      expect(tester.widget<Text>(playerArtist).data, 'Artista persistente');
+      expect(
+        tester.widget<ProportionalArtwork>(playerArtwork).source,
+        'https://example.com/responsive-artwork.jpg',
+      );
+      final retainedPlayerPanel = tester.element(playerPanel);
+      final retainedPlayerTitle = tester.element(playerTitle);
+      final retainedPlayerTrack = tester.element(playerTrack);
+      final retainedPlayerArtwork = tester.element(playerArtwork);
+      final playerMiniOpacity = tester.widget<Opacity>(
+        find.byKey(const ValueKey('mini-player-shell-opacity')),
+      );
+      final bottomNavigationOpacity = tester.widget<Opacity>(
+        find.byKey(const ValueKey('bottom-navigation-shell-opacity')),
+      );
+      expect(playerMiniOpacity.opacity, 0);
+      expect(bottomNavigationOpacity.opacity, 0);
+
+      expect(playerService.stopCalls, 0);
+      expect(playerService.disposeCalls, 0);
+      tester.view.physicalSize = const Size(1280, 720);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(
+        find.byKey(const ValueKey('side-navigation-surface')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-shell-transition')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('side-navigation-item-2')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-item-2')),
+        findsNothing,
+      );
+      expect(tester.getBottomLeft(miniPlayerClip).dy, closeTo(720, 0.1));
+      expect(playerView, findsOneWidget);
+      expect(
+        identical(
+          retainedPlayerPanel,
+          tester.element(find.byType(PlayerPanel)),
+        ),
+        isTrue,
+      );
+      expect(
+        identical(retainedMiniPlayer, tester.element(find.byType(MiniPlayer))),
+        isTrue,
+      );
+      expect(
+        identical(retainedPlayerTitle, tester.element(playerTitle)),
+        isTrue,
+      );
+      expect(
+        identical(retainedPlayerTrack, tester.element(playerTrack)),
+        isTrue,
+      );
+      expect(
+        identical(retainedPlayerArtwork, tester.element(playerArtwork)),
+        isTrue,
+      );
+      expect(tester.widget<Text>(playerTitle).data, 'Pista persistente');
+      expect(tester.widget<Text>(playerArtist).data, 'Artista persistente');
+      expect(
+        tester.widget<ProportionalArtwork>(playerArtwork).source,
+        'https://example.com/responsive-artwork.jpg',
+      );
+      expect(playerTrack, findsOneWidget);
+      expect(playerService.stopCalls, 0);
+      expect(playerService.disposeCalls, 0);
+      expect(tester.takeException(), isNull);
       debugDefaultTargetPlatformOverride = null;
     },
     skip: !io.Platform.isWindows,
@@ -221,11 +483,27 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-surface'))).height,
-      62,
+      61,
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-primary-control'))),
       const Size.square(48),
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-primary-gradient')),
+      findsNothing,
+    );
+    final playButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('mini-player-primary-control')),
+    );
+    expect(playButton.iconSize, 36);
+    expect(
+      playButton.style?.foregroundColor?.resolve(<WidgetState>{}),
+      AppColors.playbackControlForegroundFor(
+        tester.element(
+          find.byKey(const ValueKey('mini-player-primary-control')),
+        ),
+      ),
     );
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
@@ -282,7 +560,7 @@ void main() {
     final context = tester.element(glass);
 
     expect(scaffold.extendBody, isTrue);
-    expect(tester.getSize(content).height, 76);
+    expect(tester.getSize(content).height, 72);
     expect(
       find.descendant(of: glass, matching: find.byType(BackdropFilter)),
       findsOneWidget,
@@ -306,7 +584,7 @@ void main() {
     expect(tester.getBottomLeft(glass).dy, closeTo(800, 0.1));
     expect(
       tester.getSize(glass).height,
-      closeTo(76 + MediaQuery.paddingOf(context).bottom, 0.1),
+      closeTo(72 + MediaQuery.paddingOf(context).bottom, 0.1),
     );
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
@@ -885,7 +1163,7 @@ void main() {
       tester
           .getSize(find.byKey(const ValueKey('bottom-navigation-content')))
           .height,
-      greaterThan(76),
+      greaterThan(72),
     );
     final navigationItems = find.descendant(
       of: find.byKey(const ValueKey('bottom-navigation-content')),
@@ -1805,8 +2083,12 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 300));
 
-    await tester.ensureVisible(find.byType(SwitchListTile));
-    await tester.tap(find.byType(SwitchListTile));
+    final timerSwitch = find.descendant(
+      of: find.byKey(const ValueKey('settings-inline-timer')),
+      matching: find.byType(SwitchListTile),
+    );
+    await tester.ensureVisible(timerSwitch);
+    await tester.tap(timerSwitch);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Personalizar'));
     await tester.pumpAndSettle();
@@ -1935,7 +2217,7 @@ void main() {
         .first;
     final shape =
         tester.widget<Material>(cardMaterial).shape! as RoundedRectangleBorder;
-    expect(shape.borderRadius, BorderRadius.circular(12));
+    expect(shape.borderRadius, BorderRadius.circular(6));
 
     await tester.tap(card);
     await tester.pumpAndSettle();
@@ -2014,6 +2296,8 @@ void main() {
       350,
       scrollable: find.byType(Scrollable).first,
     );
+    await tester.ensureVisible(about);
+    await tester.pumpAndSettle();
     await tester.tap(about);
     await tester.pumpAndSettle();
     final button = find.byKey(const ValueKey('settings-about-support'));
@@ -2062,6 +2346,8 @@ void main() {
       350,
       scrollable: find.byType(Scrollable).first,
     );
+    await tester.ensureVisible(about);
+    await tester.pumpAndSettle();
     await tester.tap(about);
     await tester.pumpAndSettle();
     final button = find.byKey(const ValueKey('settings-about-github'));
@@ -2122,8 +2408,8 @@ void main() {
     await tester.ensureVisible(card);
     await tester.pumpAndSettle();
     final cardRect = tester.getRect(card);
-    expect(cardRect.left, closeTo(12, 0.1));
-    expect(cardRect.right, closeTo(308, 0.1));
+    expect(cardRect.left, closeTo(6, 0.1));
+    expect(cardRect.right, closeTo(314, 0.1));
     expect(find.text('Información de la aplicación'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -3115,20 +3401,18 @@ void main() {
       find.byKey(const ValueKey('mini-player-primary-control')),
     );
     final miniPlayerContext = tester.element(find.byType(MiniPlayer));
-    final miniGradient = AppColors.downloadGradientFor(miniPlayerContext);
     final miniProgressAccent = AppColors.downloadAccentFor(miniPlayerContext);
-    final miniForeground = AppColors.playIconForegroundFor(miniPlayerContext);
+    final miniForeground = AppColors.playbackControlForegroundFor(
+      miniPlayerContext,
+    );
     expect(
       miniPlayerControl.style?.foregroundColor?.resolve(<WidgetState>{}),
       miniForeground,
     );
-    final miniGradientBox = tester.widget<DecoratedBox>(
+    expect(
       find.byKey(const ValueKey('mini-player-primary-gradient')),
+      findsNothing,
     );
-    final miniGradientDecoration = miniGradientBox.decoration as BoxDecoration;
-    final actualMiniGradient =
-        (miniGradientDecoration.gradient! as LinearGradient).colors;
-    expect(actualMiniGradient, miniGradient);
     expect(
       miniPlayerControl.style?.backgroundColor?.resolve(<WidgetState>{}),
       Colors.transparent,
@@ -3195,24 +3479,24 @@ void main() {
       isNot(playerTheme.colorScheme.onSurfaceVariant),
     );
     expect(
-      playerControl.style?.foregroundColor?.resolve(<WidgetState>{}),
-      playerTheme.colorScheme.onPrimary,
+      playerControl.color,
+      AppColors.playbackControlForegroundFor(playerContext),
     );
     expect(
       playerControl.style?.backgroundColor?.resolve(<WidgetState>{}),
-      AppColors.playbackPrimaryBackgroundFor(playerContext),
+      Colors.transparent,
     );
     expect(
-      playerControl.style?.foregroundColor?.resolve(<WidgetState>{
-        WidgetState.disabled,
-      }),
-      AppColors.playbackPrimaryDisabledForegroundFor(playerContext),
+      playerControl.disabledColor,
+      AppColors.playbackControlForegroundFor(
+        playerContext,
+      ).withValues(alpha: 0.38),
     );
     expect(
       playerControl.style?.backgroundColor?.resolve(<WidgetState>{
         WidgetState.disabled,
       }),
-      AppColors.playbackPrimaryDisabledBackgroundFor(playerContext),
+      Colors.transparent,
     );
     final playerProgressAnimation = tester
         .widget<TweenAnimationBuilder<Color?>>(
@@ -3530,9 +3814,12 @@ void main() {
         lessThan(tester.getTopLeft(titleText).dy),
       );
       expect(find.byTooltip('Volumen'), findsOneWidget);
-      expect(find.byTooltip('Letras'), findsOneWidget);
       expect(find.byTooltip('Cola de reproducción'), findsOneWidget);
       final lyricsControl = find.byKey(const ValueKey('player-lyrics-control'));
+      expect(
+        find.descendant(of: lyricsControl, matching: find.byTooltip('Letras')),
+        findsOneWidget,
+      );
       final shuffleControl = find.byKey(
         const ValueKey('player-shuffle-control'),
       );
@@ -3668,6 +3955,7 @@ void main() {
         find.byKey(const ValueKey('desktop-playback-queue-rail')),
       );
       expect(queueRail.left, playerSurface.right);
+      expect(queueRail.width, closeTo(352, 0.1));
       expect(queueRail.top, 0);
       expect(queueRail.bottom, 600);
       expect(
@@ -3715,15 +4003,219 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 500));
 
-      for (final width in const [500.0, 460.0, 430.0, 390.0, 520.0]) {
+      tester.view.physicalSize = const Size(839, 720);
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final playerPanel = find.byType(PlayerPanel);
+      final title = find.byKey(const ValueKey('player-track-title'));
+      final track = find.byKey(
+        const ValueKey('player-progress-color-animation'),
+      );
+      final artwork = find.byKey(const ValueKey('player-large-artwork'));
+      final retainedPlayerPanel = tester.element(playerPanel);
+      final retainedTitle = tester.element(title);
+      final retainedTrack = tester.element(track);
+      final retainedArtwork = tester.element(artwork);
+      final artworkAt839 = tester.getSize(artwork);
+
+      expect(
+        find.byKey(const ValueKey('player-content-scroll')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('player-previous-control')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('player-primary-control')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('player-next-control')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      tester.view.physicalSize = const Size(840, 720);
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        identical(retainedPlayerPanel, tester.element(playerPanel)),
+        isTrue,
+      );
+      expect(identical(retainedTitle, tester.element(title)), isTrue);
+      expect(identical(retainedTrack, tester.element(track)), isTrue);
+      expect(identical(retainedArtwork, tester.element(artwork)), isTrue);
+      expect(tester.getSize(artwork).width, lessThan(artworkAt839.width));
+      expect(
+        find.byKey(const ValueKey('player-content-scroll')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('player-previous-control')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('player-primary-control')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('player-next-control')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      for (final width in const [
+        900.0,
+        1280.0,
+        500.0,
+        460.0,
+        430.0,
+        390.0,
+        520.0,
+      ]) {
         tester.view.physicalSize = Size(width, 720);
         await tester.pump(const Duration(milliseconds: 200));
+        expect(
+          identical(retainedPlayerPanel, tester.element(playerPanel)),
+          isTrue,
+        );
+        expect(title, findsOneWidget);
+        expect(track, findsOneWidget);
+        expect(artwork, findsOneWidget);
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'El reproductor no debe desbordar a ${width.toInt()} px.',
+        );
       }
-
-      expect(tester.takeException(), isNull);
     },
     skip: !io.Platform.isWindows,
   );
+
+  testWidgets(
+    'desktop Space toggles mini and full player without stealing focused input',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view
+        ..physicalSize = const Size(1280, 720)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      final playerService = _FakePlayerService(
+        snapshot: const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          title: 'Atajo de escritorio',
+          artist: 'BStream Music',
+          trackId: 'desktop-space-shortcut',
+          duration: Duration(minutes: 3),
+        ),
+      );
+      await tester.pumpWidget(_testApp(playerService: playerService));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final shortcut = find.byKey(
+        const ValueKey('desktop-playback-keyboard-shortcut'),
+      );
+      expect(shortcut, findsOneWidget);
+      expect(tester.widget<Focus>(shortcut).includeSemantics, isFalse);
+      expect(tester.widget<Focus>(shortcut).focusNode?.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(playerService.togglePlayPauseCalls, 1);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(playerService.togglePlayPauseCalls, 1);
+
+      await tester.tap(find.byKey(const ValueKey('mini-player-volume-slider')));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(playerService.togglePlayPauseCalls, 1);
+
+      await tester.tap(find.byKey(const ValueKey('side-navigation-item-2')));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(PlayerPanel), findsOneWidget);
+      expect(tester.widget<Focus>(shortcut).focusNode?.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(playerService.togglePlayPauseCalls, 2);
+
+      await tester.tap(find.byKey(const ValueKey('side-navigation-item-1')));
+      await tester.pump(const Duration(milliseconds: 500));
+      final searchField = find.byType(TextField);
+      expect(searchField, findsOneWidget);
+      await tester.tap(searchField);
+      await tester.enterText(searchField, 'consulta');
+      await tester.pump();
+      final editableText = tester.widget<EditableText>(
+        find.descendant(of: searchField, matching: find.byType(EditableText)),
+      );
+      expect(editableText.focusNode.hasFocus, isTrue);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.space, character: ' ');
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(playerService.togglePlayPauseCalls, 2);
+      expect(editableText.controller.text, 'consulta');
+      expect(editableText.focusNode.hasFocus, isTrue);
+
+      await tester.tap(find.byKey(const ValueKey('side-navigation-item-2')));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(editableText.focusNode.hasFocus, isFalse);
+      expect(tester.widget<Focus>(shortcut).focusNode?.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(playerService.togglePlayPauseCalls, 3);
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets('library entry cards have matching heights', (tester) async {
+    final libraryRepository = _FakeLibraryRepository();
+    libraryRepository.playlists.add(
+      Playlist(
+        id: 'test-playlist-height',
+        name: 'Playlist de prueba',
+        trackIds: const [],
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+      ),
+    );
+
+    await tester.pumpWidget(_testApp(libraryRepository: libraryRepository));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.text('Biblioteca').last);
+    await tester.pump(const Duration(milliseconds: 500));
+
+    final downloadsEntry = find.byKey(
+      const ValueKey('library-downloads-entry'),
+    );
+    final createPlaylistRow = find.byKey(const ValueKey('create-playlist'));
+    final playlistEntry = find.byKey(
+      const ValueKey('library-playlist-test-playlist-height'),
+    );
+
+    expect(downloadsEntry, findsOneWidget);
+    expect(createPlaylistRow, findsOneWidget);
+    expect(playlistEntry, findsOneWidget);
+
+    final downloadsHeight = tester.getSize(downloadsEntry).height;
+    final createHeight = tester.getSize(createPlaylistRow).height;
+    final playlistHeight = tester.getSize(playlistEntry).height;
+
+    expect(downloadsHeight, createHeight);
+    expect(downloadsHeight, playlistHeight);
+    expect(downloadsHeight, greaterThanOrEqualTo(56));
+    expect(downloadsHeight, lessThanOrEqualTo(72));
+  });
 
   testWidgets('cancelling create playlist dialog returns to library safely', (
     tester,
@@ -3875,13 +4367,14 @@ Widget _libraryPanelTestApp({
   );
 }
 
-_FakeLibraryRepository _homeCardsRepository() {
+_FakeLibraryRepository _homeCardsRepository({String? thumbnailUrl}) {
   final repository = _FakeLibraryRepository();
   final track = LocalTrack(
     id: 'home-card-track',
     title: 'Cancion reciente',
     artist: 'BStream Music',
     filePath: r'C:\Music\home-card-track.mp3',
+    thumbnailUrl: thumbnailUrl,
     addedAt: DateTime(2026),
   );
   repository.history.add(track);
@@ -4130,6 +4623,7 @@ class _ControllableLocalTrackDownloadHelper extends LocalTrackDownloadHelper {
     String? taskId,
     void Function(TrackInfo track)? onResolved,
     void Function()? onDownloadStarted,
+    bool allowConcurrentDownload = false,
   }) async {
     onResolved?.call(track);
     onDownloadStarted?.call();
@@ -4250,6 +4744,9 @@ class _FakePlayerService implements PlayerService {
   final PlayerSnapshot snapshot;
   int pauseCalls = 0;
   int resumeCalls = 0;
+  int togglePlayPauseCalls = 0;
+  int stopCalls = 0;
+  int disposeCalls = 0;
   final List<String> playedLocalIds = [];
 
   @override
@@ -4263,6 +4760,7 @@ class _FakePlayerService implements PlayerService {
 
   @override
   Future<void> dispose() async {
+    disposeCalls++;
     await _snapshotController.close();
   }
 
@@ -4309,10 +4807,14 @@ class _FakePlayerService implements PlayerService {
   Future<void> setRepeatMode(PlaybackRepeatMode mode) async {}
 
   @override
-  Future<void> togglePlayPause() async {}
+  Future<void> togglePlayPause() async {
+    togglePlayPauseCalls++;
+  }
 
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async {
+    stopCalls++;
+  }
 }
 
 class _RecordingHomePlayerController extends PlayerController {

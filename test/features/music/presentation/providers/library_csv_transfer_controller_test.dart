@@ -89,7 +89,7 @@ void main() {
   );
 
   test(
-    'requestCancel finishes the active song and cancels the remainder',
+    'requestCancel finishes the active batch and cancels the remainder',
     () async {
       final repository = _MemoryLibraryRepository();
       final download = Completer<LocalTrackDownloadResult>();
@@ -119,6 +119,18 @@ void main() {
             artist: 'Artist',
             youtubeVideoId: '9bZkp7q19f0',
           ),
+          LibraryCsvTrack(
+            rowNumber: 4,
+            title: 'Third',
+            artist: 'Artist',
+            youtubeVideoId: 'J---aiyznGQ',
+          ),
+          LibraryCsvTrack(
+            rowNumber: 5,
+            title: 'Fourth',
+            artist: 'Artist',
+            youtubeVideoId: 'M7lc1UVf-VE',
+          ),
         ],
         detectedFormat: LibraryCsvDetectedFormat.metroList,
         defaultPlaylistName: 'songs',
@@ -129,7 +141,7 @@ void main() {
       );
 
       final operation = controller.importDocument(document);
-      await _waitUntil(() => helper?.calls == 1);
+      await _waitUntil(() => helper?.calls == 3);
       controller.requestCancel();
       expect(
         container.read(libraryCsvTransferControllerProvider).cancelRequested,
@@ -156,9 +168,9 @@ void main() {
 
       final result = await operation;
 
-      expect(helper!.calls, 1);
-      expect(result.processed, 1);
-      expect(result.downloaded, 1);
+      expect(helper!.calls, 3);
+      expect(result.processed, 3);
+      expect(result.downloaded, 3);
       expect(result.cancelled, isTrue);
       final state = container.read(libraryCsvTransferControllerProvider);
       expect(state.phase, LibraryCsvTransferPhase.completed);
@@ -188,6 +200,7 @@ class _ControlledDownloadHelper extends LocalTrackDownloadHelper {
     String? taskId,
     void Function(TrackInfo track)? onResolved,
     void Function()? onDownloadStarted,
+    bool allowConcurrentDownload = false,
   }) {
     calls++;
     onResolved?.call(track);

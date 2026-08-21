@@ -680,6 +680,7 @@ class _CountingLocalTrackDownloadHelper extends LocalTrackDownloadHelper {
     String? taskId,
     void Function(TrackInfo track)? onResolved,
     void Function()? onDownloadStarted,
+    bool allowConcurrentDownload = false,
   }) async {
     calls++;
     onResolved?.call(track);

@@ -2,7 +2,7 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, Windows, Linux, and macOS.
 
-Current version: **1.2.4+124**.
+Current version: **1.2.5+125**.
 
 > The repository does not store media content or third-party binaries. Android
 > and desktop builds download and bundle a checksum-verified `yt-dlp`; desktop
@@ -11,33 +11,32 @@ Current version: **1.2.4+124**.
 
 <img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
 
-## What's new in 1.2.4
+## What's new in 1.2.5
 
-- Resolve and download YouTube audio with `youtube_explode_dart` first, validate
-  the exact selected stream, and fall back visibly to yt-dlp only when needed.
-- Search YouTube Music through InnerTube tabs for Songs, Videos, and Albums;
-  switch categories with an accessible cross-fade, and open albums, mixes, and
-  playlists in bounded, contrast-safe blurred artwork detail pages before
-  creating their queues.
-- Show refreshable YouTube Music shelves on Home while hiding empty local
-  Recently played and Playlists sections, and preserve engine-detected
-  duration and seeking when recommendation metadata omits the track length.
-- Import and export library metadata through robust CSV profiles compatible
-  with BStream, MetroList, Harmony/RiMusic, Soundiiz, and common layouts.
-- Run TikTok LIVE queues natively in Dart on Android, Windows, Linux, and macOS,
-  with optional saving to the Library and bounded request processing.
-- Use generation-aware, time-bounded playback opens and latest-request-wins
-  managed fallback downloads so stale sources cannot block a new song or Stop.
-- Preserve native M4A/AAC, WebM/Opus, and other supported YouTube audio formats,
-  with bounded temporary caches and validated partial downloads.
-- Improve Settings navigation, compact card styling, language selection,
-  transfer actions, lyrics animation choices, and persistent appearance options.
-- Improve small-device and accessibility behavior with lazy library lists,
-  bounded artwork decoding, 48 dp controls, and layouts tested at 300% text.
-- Include release APKs for ARMv7, ARMv8, and x86_64, and remove the obsolete
-  external Python TikTok LIVE bridge from desktop packages.
-- Share a song with one recognized HTTPS link, preferring YouTube Music for
-  InnerTube catalog tracks and regular YouTube for generic video results.
+- Resolve YouTube manifests through a reinforced `youtube_explode_dart` client
+  ladder, including EJS challenge solving with bundled QuickJS on Android or
+  Deno on desktop and optional Android PO-token generation. yt-dlp remains the
+  final fallback after the direct candidates are exhausted.
+- Download native YouTube audio directly through the same reinforced resolver,
+  with exact-stream validation, candidate retries, bounded deadlines, safe
+  partial-file publication, and a serialized yt-dlp fallback.
+- Crossfade playback now uses two coordinated decks on Android and desktop and
+  can be adjusted to every whole second from 1 to 15 in Playback settings.
+- Romanize lyrics while retaining the original line above a smaller
+  transliteration. Japanese, Korean, Chinese, Cyrillic, Arabic, and Hebrew can
+  be enabled independently, and the live appearance preview shows the result.
+- Restore CSV libraries with up to three bounded concurrent resolutions and
+  downloads while preserving playlist order, deduplication, cancellation, and
+  per-track failure reporting.
+- Refine the full and mini players across compact Android screens and desktop,
+  including clearer transport controls, denser timelines, safer CJK metadata,
+  and an independent accent-tinted desktop mini-player surface.
+- Toggle desktop playback with Space from either player without intercepting
+  typing in Search or another editable field.
+- Use consistent compact cards and larger artwork across Library and Settings,
+  a wider desktop playback queue, and smoother Search and navigation changes.
+- Remove the obsolete no-animation lyrics option, default legacy preferences
+  safely to Smooth, and omit the redundant play button from the lyrics header.
 
 ## Main features
 
@@ -52,12 +51,14 @@ Current version: **1.2.4+124**.
   dedicated Play/Pause control and a More menu for Download and Add to
   playlist; tapping the row still opens the full player.
 - Remote playback and audio downloads with real-time progress.
-- Direct YouTube playback falls back to a short-lived, chunked yt-dlp cache
-  when GoogleVideo rejects the player's HTTP range requests; native M4A/AAC,
+- Direct YouTube playback and downloads try a maintained, deterministic
+  `youtube_explode_dart` client ladder first. Solver-dependent retries use the
+  bundled QuickJS runtime and optional PO tokens on Android or Deno on desktop;
+  yt-dlp is the final fallback when direct candidates fail. Native M4A/AAC,
   WebM/Opus, and other available audio containers remain unconverted. Stale
   A -> B -> C preparations are cancelled, stalled transfers time out, and the
-  managed fallback cache is bounded to 12 files (128 MiB total/64 MiB per file
-  on Android; 256 MiB total/128 MiB per file on desktop).
+  managed playback fallback cache is bounded to 12 files (128 MiB total/64 MiB
+  per file on Android; 256 MiB total/128 MiB per file on desktop).
 - High-quality artwork uses one proportional crop policy from search through
   playback and downloaded-library storage.
 - SQLite-backed local library.
@@ -68,10 +69,12 @@ Current version: **1.2.4+124**.
 - Dedicated **Favorites** playlist with accent-colored hearts on favorited
   tracks.
 - ZIP backup and restore for the database, audio files, and thumbnails.
-- CSV import/export for BStream, MetroList, Harmony/RiMusic, Soundiiz,
-  Exportify, and common title/artist/album/ISRC layouts. CSV imports show a
-  preview, reuse existing local tracks, and download missing songs one at a
-  time only after confirmation; CSV exports contain metadata, not audio.
+- CSV imports recognize BStream, MetroList, Harmony/RiMusic, Soundiiz,
+  Exportify, and common title/artist/album/ISRC layouts. They show a preview,
+  reuse existing local tracks, and process up to three missing songs
+  concurrently only after confirmation while retaining source playlist order.
+  Exports offer BStream Music, MetroList, Harmony/RiMusic, and Soundiiz profiles
+  and contain metadata, not audio.
 
 ### Player
 
@@ -83,8 +86,11 @@ Current version: **1.2.4+124**.
   applications can recognize: YouTube Music when the track came from the
   InnerTube catalog, otherwise the regular YouTube watch URL. Local-only files
   without a YouTube identity are intentionally not shared.
-- Lyrics offer four persistent animation styles, Normal/Centered alignment,
-  and a live preview in Appearance settings.
+- Lyrics offer three persistent animation styles (Smooth by default),
+  Normal/Centered alignment, optional per-script romanization, and a live
+  preview in Appearance settings.
+- Crossfade uses coordinated playback decks and supports every whole-second
+  duration from 1 through 15 seconds on Android and desktop.
 - Playback queue synchronized with playlists and the library.
 - Queue side panel on Windows and a dedicated queue view on Android.
 - Change tracks directly from the queue and reorder them with a long press.
@@ -104,6 +110,8 @@ Current version: **1.2.4+124**.
 - Theme-aware dynamic background derived from the track artwork.
 - Animated progress bar with waves and the selected accent color.
 - Direct volume control beside the repeat button.
+- On desktop, Space toggles Play/Pause from the mini or full player unless an
+  editable text field such as Search currently has focus.
 - Synchronized lyrics powered by LRCLIB, with plain-lyrics fallback, automatic
   scrolling, tap-to-seek, and a manual timing offset from `-10` to `+10` seconds
   in `0.50`-second steps.
@@ -188,10 +196,10 @@ actually delivers to the WebSocket client.
 
 | Platform | Player | Downloads | Notes |
 | --- | --- | --- | --- |
-| Android | `just_audio` + `audio_service` | `youtubedl-android` + QuickJS | `minSdk 24`; TikTok LIVE; open local audio from Android; release APKs support `armeabi-v7a`, `arm64-v8a`, and `x86_64` |
-| Windows | `media_kit` | Bundled `yt-dlp` + Deno | SMTC controls, TikTok LIVE, queue side panel, and external tools |
-| Linux | `media_kit` | Bundled `yt-dlp` + Deno | MPRIS controls; TikTok LIVE; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
-| macOS | `media_kit` | Bundled `yt-dlp` + Deno | Now Playing controls; TikTok LIVE; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
+| Android | `just_audio` + `audio_service` | `youtubedl-android` + QuickJS | `minSdk 24`; `youtube_explode_dart` can reuse bundled QuickJS and an optional BotGuard WebView PO-token provider; TikTok LIVE; open local audio from Android; release APKs support `armeabi-v7a`, `arm64-v8a`, and `x86_64` |
+| Windows | `media_kit` | Bundled `yt-dlp` + Deno | Shared Deno EJS solver for `youtube_explode_dart`; SMTC controls, TikTok LIVE, queue side panel, and external tools |
+| Linux | `media_kit` | Bundled `yt-dlp` + Deno | Shared Deno EJS solver; MPRIS controls; TikTok LIVE; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
+| macOS | `media_kit` | Bundled `yt-dlp` + Deno | Shared Deno EJS solver; Now Playing controls; TikTok LIVE; separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
 
 Downloads and remote playback use the same native-audio selection policy on
 every platform: prefer the best available M4A/AAC stream, otherwise use the
@@ -431,8 +439,9 @@ The workflow verifies all three APK signatures before uploading the artifacts.
 - Favorites are implemented as a reserved playlist (`bstream:favorites`), so no separate table is required.
 - ZIP backups contain the database, `audio/`, `thumbnails/`, and a manifest.
 - The Storage page separates local ZIP backup transfer from portable CSV
-  transfer. BStream CSV preserves playlist membership and order; compatibility
-  profiles can be selected when exporting to other music-library apps.
+  transfer. BStream CSV preserves playlist membership and order; importing can
+  resolve up to three missing tracks concurrently, and BStream Music,
+  MetroList, Harmony/RiMusic, or Soundiiz can be selected as export profiles.
 - Restore validates the manifest, archive paths and limits, SQLite integrity,
   schema, and version before touching local data. Database and media changes
   are staged on their destination filesystems and rolled back if activation

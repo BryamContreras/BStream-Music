@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/platform/app_platform.dart';
@@ -31,6 +33,7 @@ import '../widgets/settings_panel.dart';
 import '../widgets/source_image.dart';
 import 'remote_collection_detail_page.dart';
 import 'search_view.dart';
+import '../widgets/lyrics_page.dart';
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -49,6 +52,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       LibraryNavigationController();
   final SettingsNavigationController _settingsNavigationController =
       SettingsNavigationController();
+  final FocusNode _desktopPlaybackShortcutFocus = FocusNode(
+    debugLabel: 'Desktop playback shortcut',
+  );
   int _rootBackCount = 0;
   DateTime? _lastRootBackAt;
   StreamSubscription<ExternalAudioRequest>? _externalAudioSubscription;
@@ -216,6 +222,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       return;
     }
 
+    _releaseFocusForViewChange();
     setState(() {
       _rootBackCount = 0;
       _lastRootBackAt = null;
@@ -234,6 +241,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   void _openSearch() {
+    _releaseFocusForViewChange();
     setState(() {
       _viewHistory.clear();
       _rootBackCount = 0;
@@ -242,9 +250,50 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
   }
 
+  void _openLyrics() {
+    Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: (_) => const LyricsPage()));
+  }
+
   void _openPlaylistFromHome(String playlistId) {
     _libraryNavigationController.openPlaylist(playlistId);
     _setSelectedIndex(_libraryIndex);
+  }
+
+  void _releaseFocusForViewChange() {
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus != null &&
+        !identical(primaryFocus, _desktopPlaybackShortcutFocus)) {
+      primaryFocus.unfocus(disposition: UnfocusDisposition.scope);
+    }
+    if (AppPlatform.isDesktop &&
+        _desktopPlaybackShortcutFocus.canRequestFocus) {
+      _desktopPlaybackShortcutFocus.requestFocus();
+    }
+  }
+
+  KeyEventResult _handleDesktopPlaybackKey(
+    FocusNode shortcutFocus,
+    KeyEvent event,
+  ) {
+    if (!AppPlatform.isDesktop ||
+        event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.space) {
+      return KeyEventResult.ignored;
+    }
+
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isControlPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isShiftPressed ||
+        !identical(FocusManager.instance.primaryFocus, shortcutFocus)) {
+      return KeyEventResult.ignored;
+    }
+
+    unawaited(ref.read(playerControllerProvider.notifier).togglePlayPause());
+    return KeyEventResult.handled;
   }
 
   void _handleSystemBack() {
@@ -300,6 +349,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _incomingTrackLinkSubscription?.close();
     _libraryNavigationController.dispose();
     _settingsNavigationController.dispose();
+    _desktopPlaybackShortcutFocus.dispose();
     super.dispose();
   }
 
@@ -318,6 +368,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       return false;
     }
 
+    _releaseFocusForViewChange();
     setState(() {
       _selectedIndex = target;
     });
@@ -326,7 +377,6 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    ref.watch(desktopMediaSessionProvider);
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesAndroidNavigation;
     final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
@@ -396,155 +446,158 @@ class _HomePageState extends ConsumerState<HomePage> {
             ),
           ];
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) {
-          _handleSystemBack();
-        }
-      },
-      child: Scaffold(
-        // Keep the body edge-to-edge on Android. The bottom chrome is hosted
-        // inside the body so its animation cannot resize the Scaffold.
-        extendBody: !useSideNavigation && _usesAndroidNavigation,
-        body: SafeArea(
-          bottom: false,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: Theme.of(context).brightness == Brightness.dark
-                    ? const [
-                        Color(0xFF050705),
-                        Color(0xFF030403),
-                        Color(0xFF070907),
-                      ]
-                    : const [
-                        Color(0xFFF5F8F6),
-                        Color(0xFFFFFFFF),
-                        Color(0xFFEFF7F1),
-                      ],
-              ),
-            ),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                AnimatedSwitcher(
-                  key: const ValueKey('shell-background-transition'),
-                  duration: shellTransitionDuration,
-                  reverseDuration: shellTransitionDuration,
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  layoutBuilder: (currentChild, previousChildren) => Stack(
-                    fit: StackFit.expand,
-                    children: <Widget>[...previousChildren, ?currentChild],
-                  ),
-                  child: SizedBox.expand(
-                    key: ValueKey(
-                      _isPlayerSelected
-                          ? 'shell-background-player'
-                          : 'shell-background-browsing',
-                    ),
-                    child: _isPlayerSelected
-                        ? const PlayerPlaybackGradientBackground()
-                        : const BrowsingTabBackground(),
-                  ),
+    return Focus(
+      key: const ValueKey('desktop-playback-keyboard-shortcut'),
+      focusNode: _desktopPlaybackShortcutFocus,
+      autofocus: AppPlatform.isDesktop,
+      skipTraversal: true,
+      includeSemantics: false,
+      onKeyEvent: _handleDesktopPlaybackKey,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) {
+            _handleSystemBack();
+          }
+        },
+        child: Scaffold(
+          // Keep the body edge-to-edge on Android. The bottom chrome is hosted
+          // inside the body so its animation cannot resize the Scaffold.
+          extendBody: !useSideNavigation && _usesAndroidNavigation,
+          body: SafeArea(
+            bottom: false,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: Theme.of(context).brightness == Brightness.dark
+                      ? const [
+                          Color(0xFF050705),
+                          Color(0xFF030403),
+                          Color(0xFF070907),
+                        ]
+                      : const [
+                          Color(0xFFF5F8F6),
+                          Color(0xFFFFFFFF),
+                          Color(0xFFEFF7F1),
+                        ],
                 ),
-                SafeArea(
-                  top: false,
-                  bottom: false,
-                  child: Row(
-                    children: [
-                      if (useSideNavigation)
-                        _SideNavigation(
-                          selectedIndex: _selectedIndex,
-                          dimPlaybackBackground: _isPlayerSelected,
-                          transitionDuration: shellTransitionDuration,
-                          onSelected: _selectIndex,
-                          destinations: destinations,
-                        ),
-                      Expanded(
-                        child: ClipRect(
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              Positioned.fill(
-                                child: _PersistentCurrentViews(
-                                  selectedIndex: _selectedIndex,
-                                  homeIndex: _homeIndex,
-                                  searchIndex: _searchIndex,
-                                  playerIndex: _playerIndex,
-                                  libraryIndex: _libraryIndex,
-                                  settingsIndex: _settingsIndex,
-                                  contentBottomPadding:
-                                      browsingContentBottomPadding,
-                                  libraryNavigationController:
-                                      _libraryNavigationController,
-                                  settingsNavigationController:
-                                      _settingsNavigationController,
-                                  onOpenPlayer: _openPlayer,
-                                  onOpenSearch: _openSearch,
-                                  onOpenPlaylist: _openPlaylistFromHome,
-                                ),
-                              ),
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: bottomNavigationHeight,
-                                child: _ShellVisibilityTransition(
-                                  key: const ValueKey(
-                                    'mini-player-shell-transition',
-                                  ),
-                                  clipKey: const ValueKey(
-                                    'mini-player-shell-clip',
-                                  ),
-                                  opacityKey: const ValueKey(
-                                    'mini-player-shell-opacity',
-                                  ),
-                                  visible: !_isPlayerSelected,
-                                  duration: shellTransitionDuration,
-                                  child: SizedBox(
-                                    height: miniPlayerHeight,
-                                    child: MiniPlayer(
-                                      onOpenPlayer: _openPlayer,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              if (!useSideNavigation)
-                                Positioned(
-                                  left: 0,
-                                  right: 0,
-                                  bottom: 0,
-                                  child: _ShellVisibilityTransition(
-                                    key: const ValueKey(
-                                      'bottom-navigation-shell-transition',
-                                    ),
-                                    clipKey: const ValueKey(
-                                      'bottom-navigation-shell-clip',
-                                    ),
-                                    opacityKey: const ValueKey(
-                                      'bottom-navigation-shell-opacity',
-                                    ),
-                                    visible: showBottomNavigation,
-                                    duration: shellTransitionDuration,
-                                    child: _BottomNavigation(
-                                      selectedIndex: _selectedIndex,
-                                      onDestinationSelected: _selectIndex,
-                                      destinations: destinations,
-                                      glassyCompact: _usesAndroidNavigation,
-                                    ),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  AnimatedSwitcher(
+                    key: const ValueKey('shell-background-transition'),
+                    duration: shellTransitionDuration,
+                    reverseDuration: shellTransitionDuration,
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    layoutBuilder: (currentChild, previousChildren) => Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[...previousChildren, ?currentChild],
+                    ),
+                    child: SizedBox.expand(
+                      key: ValueKey(
+                        _isPlayerSelected
+                            ? 'shell-background-player'
+                            : 'shell-background-browsing',
+                      ),
+                      child: _isPlayerSelected
+                          ? const PlayerPlaybackGradientBackground()
+                          : const BrowsingTabBackground(),
+                    ),
+                  ),
+                  SafeArea(
+                    top: false,
+                    bottom: false,
+                    child: Row(
+                      children: [
+                        if (useSideNavigation)
+                          _SideNavigation(
+                            selectedIndex: _selectedIndex,
+                            dimPlaybackBackground: _isPlayerSelected,
+                            transitionDuration: shellTransitionDuration,
+                            onSelected: _selectIndex,
+                            destinations: destinations,
+                          ),
+                        Expanded(
+                          child: ClipRect(
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Positioned.fill(
+                                  child: _PersistentCurrentViews(
+                                    selectedIndex: _selectedIndex,
+                                    homeIndex: _homeIndex,
+                                    searchIndex: _searchIndex,
+                                    playerIndex: _playerIndex,
+                                    libraryIndex: _libraryIndex,
+                                    settingsIndex: _settingsIndex,
+                                    contentBottomPadding:
+                                        browsingContentBottomPadding,
+                                    libraryNavigationController:
+                                        _libraryNavigationController,
+                                    settingsNavigationController:
+                                        _settingsNavigationController,
+                                    onOpenPlayer: _openPlayer,
+                                    onOpenSearch: _openSearch,
+                                    onOpenPlaylist: _openPlaylistFromHome,
                                   ),
                                 ),
-                            ],
+                                if (!useSideNavigation)
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    child: _ShellVisibilityTransition(
+                                      key: const ValueKey(
+                                        'bottom-navigation-shell-transition',
+                                      ),
+                                      clipKey: const ValueKey(
+                                        'bottom-navigation-shell-clip',
+                                      ),
+                                      opacityKey: const ValueKey(
+                                        'bottom-navigation-shell-opacity',
+                                      ),
+                                      visible: showBottomNavigation,
+                                      duration: shellTransitionDuration,
+                                      child: _BottomNavigation(
+                                        selectedIndex: _selectedIndex,
+                                        onDestinationSelected: _selectIndex,
+                                        destinations: destinations,
+                                        glassyCompact: _usesAndroidNavigation,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: useSideNavigation ? 0 : bottomNavigationHeight,
+                    child: _ShellVisibilityTransition(
+                      key: const ValueKey('mini-player-shell-transition'),
+                      clipKey: const ValueKey('mini-player-shell-clip'),
+                      opacityKey: const ValueKey('mini-player-shell-opacity'),
+                      visible: !_isPlayerSelected,
+                      duration: shellTransitionDuration,
+                      child: SizedBox(
+                        height: miniPlayerHeight,
+                        child: MiniPlayer(
+                          onOpenPlayer: _openPlayer,
+                          onOpenLyrics: _openLyrics,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -625,7 +678,7 @@ class _BottomNavigation extends StatelessWidget {
   final bool glassyCompact;
 
   static double baseHeight({required bool glassyCompact}) =>
-      glassyCompact ? 76.0 : 82.0;
+      glassyCompact ? 72.0 : 78.0;
 
   @override
   Widget build(BuildContext context) {
@@ -717,7 +770,7 @@ class _BottomNavigationItem extends StatelessWidget {
     return InkWell(
       key: ValueKey('bottom-navigation-item-$destinationIndex'),
       onTap: onTap,
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(appNavItemRadius),
       child: TweenAnimationBuilder<double>(
         key: ValueKey('bottom-navigation-selection-$destinationIndex'),
         tween: Tween<double>(end: selected ? 1 : 0),
@@ -726,7 +779,7 @@ class _BottomNavigationItem extends StatelessWidget {
         builder: (context, value, _) {
           final foreground = Color.lerp(inactive, active, value)!;
           return Container(
-            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
+            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(22)),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1114,24 +1167,27 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
         padding: EdgeInsets.only(bottom: widget.bottomPadding),
         child: IgnorePointer(
           ignoring: !widget.selected,
-          child: ExcludeSemantics(
+          child: ExcludeFocus(
             excluding: !widget.selected,
-            child: AnimatedOpacity(
-              opacity: entered ? 1 : 0,
-              duration: duration,
-              // A symmetric fade keeps the outgoing view visible while a newly
-              // visited, data-heavy tab completes its first frame. An ease-out
-              // here made both slots nearly transparent at once and produced a
-              // brief dark flash on slower Android devices.
-              curve: Curves.easeInOutCubic,
-              child: AnimatedSlide(
-                offset: entered ? Offset.zero : const Offset(0.018, 0),
+            child: ExcludeSemantics(
+              excluding: !widget.selected,
+              child: AnimatedOpacity(
+                opacity: entered ? 1 : 0,
                 duration: duration,
-                curve: Curves.easeOutCubic,
-                child: RepaintBoundary(
-                  child: TickerMode(
-                    enabled: widget.selected,
-                    child: widget.child,
+                // A symmetric fade keeps the outgoing view visible while a newly
+                // visited, data-heavy tab completes its first frame. An ease-out
+                // here made both slots nearly transparent at once and produced a
+                // brief dark flash on slower Android devices.
+                curve: Curves.easeInOutCubic,
+                child: AnimatedSlide(
+                  offset: entered ? Offset.zero : const Offset(0.018, 0),
+                  duration: duration,
+                  curve: Curves.easeOutCubic,
+                  child: RepaintBoundary(
+                    child: TickerMode(
+                      enabled: widget.selected,
+                      child: widget.child,
+                    ),
                   ),
                 ),
               ),
@@ -1172,9 +1228,7 @@ class _HomeView extends ConsumerWidget {
               strings.home,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+              style: appTabTitleStyle(context),
             ),
           ),
           SizedBox.square(
@@ -1443,15 +1497,10 @@ class _HomeSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: Text(
-              title,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: Theme.of(context).colorScheme.onSurface,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: AppSectionTitle(title),
           ),
+          const SizedBox(height: appSectionTitleGap),
           child,
         ],
       ),
@@ -1479,8 +1528,11 @@ class _RecommendedTrackCard extends StatelessWidget {
       child: Material(
         color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(appCardRadius),
+        ),
         child: InkWell(
+          borderRadius: BorderRadius.circular(appCardRadius),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.all(8),
@@ -1489,6 +1541,9 @@ class _RecommendedTrackCard extends StatelessWidget {
               children: [
                 _HomeArtwork(
                   source: track.thumbnailUrl ?? track.catalogThumbnailUrl,
+                  surfaceKey: ValueKey(
+                    'home-recommendation-artwork-${track.id}',
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -1544,12 +1599,15 @@ class _RecommendedCollectionCard extends StatelessWidget {
       child: Material(
         color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(appCardRadius),
+        ),
         child: Semantics(
           button: true,
           label: strings.openCollection(collection.title),
           child: InkWell(
             key: ValueKey('home-collection-open-${collection.browseId}'),
+            borderRadius: BorderRadius.circular(appCardRadius),
             onTap: () => _openCollection(context, subtitle),
             child: Padding(
               padding: const EdgeInsets.all(8),
@@ -1558,7 +1616,12 @@ class _RecommendedCollectionCard extends StatelessWidget {
                 children: [
                   Stack(
                     children: [
-                      _HomeArtwork(source: collection.thumbnailUrl),
+                      _HomeArtwork(
+                        source: collection.thumbnailUrl,
+                        surfaceKey: ValueKey(
+                          'home-collection-artwork-${collection.browseId}',
+                        ),
+                      ),
                       Positioned(
                         right: 7,
                         bottom: 7,
@@ -1647,8 +1710,11 @@ class _RecentTrackCard extends ConsumerWidget {
       child: Material(
         color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(appCardRadius),
+        ),
         child: InkWell(
+          borderRadius: BorderRadius.circular(appCardRadius),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.all(8),
@@ -1659,6 +1725,7 @@ class _RecentTrackCard extends ConsumerWidget {
                   children: [
                     _HomeArtwork(
                       source: track.thumbnailPath ?? track.thumbnailUrl,
+                      surfaceKey: ValueKey('home-recent-artwork-${track.id}'),
                     ),
                     if (isFavorite)
                       const Positioned(
@@ -1721,8 +1788,11 @@ class _HomePlaylistCard extends StatelessWidget {
       child: Material(
         color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(appCardRadius),
+        ),
         child: InkWell(
+          borderRadius: BorderRadius.circular(appCardRadius),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.all(8),
@@ -1731,7 +1801,12 @@ class _HomePlaylistCard extends StatelessWidget {
               children: [
                 Stack(
                   children: [
-                    _HomePlaylistCover(sources: thumbnailSources),
+                    _HomePlaylistCover(
+                      sources: thumbnailSources,
+                      surfaceKey: ValueKey(
+                        'home-playlist-artwork-${playlist.id}',
+                      ),
+                    ),
                     if (playlist.isFavorites)
                       const Positioned(
                         top: 2,
@@ -1768,92 +1843,99 @@ class _HomePlaylistCard extends StatelessWidget {
 }
 
 class _HomeArtwork extends StatelessWidget {
-  const _HomeArtwork({required this.source});
+  const _HomeArtwork({required this.source, required this.surfaceKey});
 
   final String? source;
+  final Key surfaceKey;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: AspectRatio(
-        aspectRatio: 1,
-        child: ProportionalArtwork(
-          source: source,
-          cacheWidth: 640,
-          fallback: const _HomeImageFallback(icon: Icons.music_note_rounded),
-        ),
+    return _HomeArtworkFrame(
+      surfaceKey: surfaceKey,
+      child: ProportionalArtwork(
+        source: source,
+        cacheWidth: 640,
+        fallback: const _HomeImageFallback(icon: Icons.music_note_rounded),
       ),
     );
   }
 }
 
 class _HomePlaylistCover extends StatelessWidget {
-  const _HomePlaylistCover({required this.sources});
+  const _HomePlaylistCover({required this.sources, required this.surfaceKey});
 
   final List<String> sources;
+  final Key surfaceKey;
 
   @override
   Widget build(BuildContext context) {
     if (sources.isEmpty) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: const AspectRatio(
-          aspectRatio: 1,
-          child: _HomeImageFallback(icon: Icons.queue_music_rounded),
-        ),
+      return _HomeArtworkFrame(
+        surfaceKey: surfaceKey,
+        child: const _HomeImageFallback(icon: Icons.queue_music_rounded),
       );
     }
 
     final underlay = sources.skip(1).take(3).toList(growable: false);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: AspectRatio(
-        aspectRatio: 1,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            SourceImage(
-              source: sources.first,
-              cacheWidth: 640,
-              fallback: const _HomeImageFallback(
-                icon: Icons.queue_music_rounded,
-              ),
-            ),
-            if (underlay.isNotEmpty)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: 34,
-                child: DecoratedBox(
-                  decoration: const BoxDecoration(color: Color(0xAA000000)),
-                  child: Row(
-                    children: [
-                      for (final source in underlay)
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.all(1),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(3),
-                              child: SourceImage(
-                                source: source,
-                                cacheWidth: 256,
-                                fallback: const _HomeImageFallback(
-                                  icon: Icons.music_note_rounded,
-                                  iconSize: 16,
-                                ),
+    return _HomeArtworkFrame(
+      surfaceKey: surfaceKey,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          SourceImage(
+            source: sources.first,
+            cacheWidth: 640,
+            fallback: const _HomeImageFallback(icon: Icons.queue_music_rounded),
+          ),
+          if (underlay.isNotEmpty)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 34,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(color: Color(0xAA000000)),
+                child: Row(
+                  children: [
+                    for (final source in underlay)
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.all(1),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: SourceImage(
+                              source: source,
+                              cacheWidth: 256,
+                              fallback: const _HomeImageFallback(
+                                icon: Icons.music_note_rounded,
+                                iconSize: 16,
                               ),
                             ),
                           ),
                         ),
-                    ],
-                  ),
+                      ),
+                  ],
                 ),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
+    );
+  }
+}
+
+class _HomeArtworkFrame extends StatelessWidget {
+  const _HomeArtworkFrame({required this.surfaceKey, required this.child});
+
+  final Key surfaceKey;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      key: surfaceKey,
+      aspectRatio: 1,
+      child: ClipRRect(borderRadius: BorderRadius.circular(8), child: child),
     );
   }
 }

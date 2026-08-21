@@ -209,7 +209,7 @@ void main() {
 
   group('LibraryCsvImportService queue behavior', () {
     test(
-      'a failed item is recorded and later items still run sequentially',
+      'downloads a bounded batch in parallel and continues after a failure',
       () async {
         var activeDownloads = 0;
         var maximumActiveDownloads = 0;
@@ -236,14 +236,20 @@ void main() {
             _directTrack(2, 'First', 'aaaaaaaaaaa'),
             _directTrack(3, 'Second', 'bbbbbbbbbbb'),
             _directTrack(4, 'Third', 'ccccccccccc'),
+            _directTrack(5, 'Fourth', 'ddddddddddd'),
           ]),
           isCancellationRequested: () => false,
         );
 
-        expect(downloadOrder, ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'ccccccccccc']);
-        expect(maximumActiveDownloads, 1);
-        expect(result.processed, 3);
-        expect(result.downloaded, 2);
+        expect(downloadOrder, [
+          'aaaaaaaaaaa',
+          'bbbbbbbbbbb',
+          'ccccccccccc',
+          'ddddddddddd',
+        ]);
+        expect(maximumActiveDownloads, 3);
+        expect(result.processed, 4);
+        expect(result.downloaded, 3);
         expect(result.failed, 1);
         expect(result.failures.single.title, 'Second');
         expect(result.successful + result.failed, result.processed);
@@ -259,6 +265,7 @@ void main() {
         final downloadOrder = <String>[];
         final progress = <LibraryCsvImportProgress>[];
         final harness = _ImportHarness(
+          maxConcurrentTracks: 1,
           search: (_) async => const [],
           download: (track, {required taskId, onResolved}) async {
             downloadOrder.add(track.id);
@@ -300,6 +307,7 @@ void main() {
         final searchStarted = Completer<void>();
         final releaseSearch = Completer<List<TrackInfo>>();
         final harness = _ImportHarness(
+          maxConcurrentTracks: 1,
           search: (_) async {
             searchCalls++;
             searchStarted.complete();
@@ -478,17 +486,24 @@ void main() {
 class _ImportHarness {
   _ImportHarness({
     _MemoryLibraryRepository? repository,
+    this.maxConcurrentTracks = 3,
     required this.search,
     required this.download,
   }) : repository = repository ?? _MemoryLibraryRepository();
 
   final _MemoryLibraryRepository repository;
+  final int maxConcurrentTracks;
   final LibraryCsvTrackSearch search;
   final LibraryCsvTrackDownload download;
   var gateCalls = 0;
 
-  LibraryCsvImportService get service =>
-      LibraryCsvImportService(repository, search, download, _gate);
+  LibraryCsvImportService get service => LibraryCsvImportService(
+    repository,
+    search,
+    download,
+    _gate,
+    maxConcurrentTracks: maxConcurrentTracks,
+  );
 
   Future<T> _gate<T>(Future<T> Function() operation) async {
     gateCalls++;

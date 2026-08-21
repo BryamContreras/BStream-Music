@@ -22,14 +22,17 @@ import '../../../../core/utils/safe_file_name.dart';
 import '../../../../platform_channels/android_ytdl_channel.dart';
 import '../../../../services/downloader/android_downloader_service.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
+import '../../../../services/downloader/desktop_tool_locator.dart';
 import '../../../../services/downloader/desktop_downloader_service.dart';
 import '../../../../services/downloader/downloader_service.dart';
 import '../../../../services/downloader/fallback_audio_resolver.dart';
 import '../../../../services/downloader/yt_dlp_audio_resolver.dart';
 import '../../../../services/downloader/adapters/youtube_explode/youtube_explode_audio_resolver.dart';
 import '../../../../services/downloader/adapters/youtube_explode/youtube_explode_download_service.dart';
+import '../../../../services/downloader/adapters/youtube_explode/youtube_explode_runtime.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
+import '../../../../services/lyrics/lyrics_romanization_service.dart';
 import '../../../../services/media_session/desktop_media_session.dart';
 import '../../../../services/media_session/desktop_media_session_factory.dart';
 import '../../../../services/player/just_audio_player_service.dart';
@@ -71,6 +74,7 @@ import 'lyrics_animation_style.dart';
 
 export 'app_strings.dart';
 export 'lyrics_animation_style.dart';
+export '../../domain/entities/lyrics_romanization_language.dart';
 
 part 'app_strings_provider.dart';
 part 'download_controller.dart';
@@ -86,6 +90,16 @@ part 'settings_controller.dart';
 part 'sleep_timer_controller.dart';
 part 'tiktok_live_controller.dart';
 
+final youtubeExplodeRuntimeProvider = Provider<YoutubeExplodeRuntime>((ref) {
+  final runtime = YoutubeExplodeRuntime(
+    platform: AppPlatform.current,
+    androidChannel: AppPlatform.isAndroid ? AndroidYtdlChannel() : null,
+    denoExecutable: AppPlatform.isDesktop ? findBundledDenoExecutable() : null,
+  );
+  ref.onDispose(runtime.dispose);
+  return runtime;
+});
+
 final downloaderServiceProvider = Provider<DownloaderService>((ref) {
   late final DownloaderService fallback;
   if (AppPlatform.isAndroid) {
@@ -100,7 +114,12 @@ final downloaderServiceProvider = Provider<DownloaderService>((ref) {
     );
   }
 
-  final service = YoutubeExplodeDownloadService(fallback: fallback);
+  final service = YoutubeExplodeDownloadService(
+    fallback: fallback,
+    client: DefaultYoutubeExplodeDownloadClient(
+      runtime: ref.watch(youtubeExplodeRuntimeProvider),
+    ),
+  );
   ref.onDispose(service.dispose);
   return service;
 });
@@ -114,11 +133,15 @@ final ytDlpDownloaderServiceProvider = Provider<DownloaderService>((ref) {
 });
 
 final downloaderWarmupProvider = FutureProvider<void>((ref) async {
+  final runtime = ref.watch(youtubeExplodeRuntimeProvider);
+  if (AppPlatform.isAndroid) {
+    unawaited(runtime.prewarmPoTokens());
+  }
   await ref.watch(downloaderServiceProvider).initialize();
 });
 
 final playerServiceProvider = Provider<PlayerService>((ref) {
-  final service = AppPlatform.isDesktop
+  final PlayerService service = AppPlatform.isDesktop
       ? MediaKitPlayerService()
       : JustAudioPlayerService();
   ref.onDispose(service.dispose);
@@ -177,6 +200,14 @@ final lyricsServiceProvider = Provider<LyricsService>((ref) {
     cacheTtl: const Duration(minutes: 15),
     maxCacheEntries: 24,
   );
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+final lyricsRomanizationServiceProvider = Provider<LyricsRomanizationService>((
+  ref,
+) {
+  final service = LyricsRomanizationService();
   ref.onDispose(service.dispose);
   return service;
 });
@@ -286,7 +317,9 @@ typedef DesktopMediaSessionFactory = DesktopMediaSession? Function();
 
 final desktopMediaSessionFactoryProvider = Provider<DesktopMediaSessionFactory>(
   (ref) =>
-      () => AppPlatform.isDesktop ? createDesktopMediaSession() : null,
+      () => AppPlatform.isDesktop || AppPlatform.isAndroid
+      ? createDesktopMediaSession()
+      : null,
 );
 
 final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
@@ -644,7 +677,9 @@ final downloadAudioProvider = Provider<DownloadAudio>((ref) {
 });
 
 final audioStreamResolverProvider = Provider<AudioStreamResolver>((ref) {
-  final primary = YoutubeExplodeAudioResolver();
+  final primary = YoutubeExplodeAudioResolver(
+    runtime: ref.watch(youtubeExplodeRuntimeProvider),
+  );
   final fallback = YtDlpAudioResolver(
     ref.watch(ytDlpDownloaderServiceProvider),
   );

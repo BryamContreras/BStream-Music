@@ -5,6 +5,7 @@ import '../extensions/helpers_extension.dart';
 import '../reverse_engineering/challenges/js_challenge.dart';
 import '../reverse_engineering/clients/related_videos_client.dart';
 import '../reverse_engineering/pages/watch_page.dart';
+import '../reverse_engineering/po_token.dart';
 import '../reverse_engineering/youtube_http_client.dart';
 import 'videos.dart';
 
@@ -32,8 +33,17 @@ class VideoClient {
   CommentsClient get comments => commentsClient;
 
   /// Initializes an instance of [VideoClient].
-  VideoClient(this._httpClient, {BaseJSChallengeSolver? jsSolver})
-      : streamsClient = StreamClient(_httpClient, jsSolver: jsSolver),
+  VideoClient(
+    this._httpClient, {
+    BaseJSChallengeSolver? jsSolver,
+    YoutubeManifestClientsProvider? manifestClientsProvider,
+    YoutubePoTokenProvider? poTokenProvider,
+  })  : streamsClient = StreamClient(
+          _httpClient,
+          jsSolver: jsSolver,
+          manifestClientsProvider: manifestClientsProvider,
+          poTokenProvider: poTokenProvider,
+        ),
         closedCaptions = ClosedCaptionClient(_httpClient),
         commentsClient = CommentsClient(_httpClient);
 

@@ -20,22 +20,36 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.thread
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : AudioServiceActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val updateLock = Object()
+    // Normal extractor calls can overlap. Fairness prevents new readers from
+    // starving a recovery once it is waiting for exclusive access.
+    private val extractorExecutionLock = ReentrantReadWriteLock(true)
     private val managedPlaybackExecutionLock = Object()
     private val managedPlaybackStateLock = Object()
+    private val quickJsExecutor = Executors.newSingleThreadExecutor()
+    private val quickJsStateLock = Object()
     @Volatile
     private var managedPlaybackGeneration = 0L
     @Volatile
     private var activeManagedPlaybackProcessId: String? = null
+    @Volatile
+    private var activeQuickJsProcess: Process? = null
+    @Volatile
+    private var quickJsDestroyed = false
     // The player switches to a prepared file after this MethodChannel call
     // returns. Preserve both sides of that hand-off so cache pruning cannot
     // unlink the source that is still playing while the new one opens.
@@ -56,6 +70,7 @@ class MainActivity : AudioServiceActivity() {
     private var pendingExternalAudioPermissionRequest: ExternalAudioRequest? = null
     private var audioPermissionRequestInFlight = false
     private var notificationPermissionRequestInFlight = false
+    private var androidPoTokenProvider: AndroidPoTokenProvider? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +88,9 @@ class MainActivity : AudioServiceActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "initYtdl" -> initYtdl(result)
+                "executeJavaScript" -> executeJavaScript(call, result)
+                "getPoTokens" -> getPoTokens(call, result)
+                "disposePoTokens" -> disposePoTokens(result)
                 "getInfo" -> getInfo(call, result)
                 "getPlaybackInfo" -> getPlaybackInfo(call, result)
                 "prepareManagedPlayback" -> prepareManagedPlayback(call, result)
@@ -172,6 +190,14 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun onDestroy() {
+        quickJsDestroyed = true
+        synchronized(quickJsStateLock) {
+            activeQuickJsProcess?.destroyForcibly()
+            activeQuickJsProcess = null
+        }
+        quickJsExecutor.shutdownNow()
+        androidPoTokenProvider?.dispose()
+        androidPoTokenProvider = null
         val managedProcessId = synchronized(managedPlaybackStateLock) {
             managedPlaybackGeneration++
             activeManagedPlaybackProcessId.also {
@@ -273,6 +299,162 @@ class MainActivity : AudioServiceActivity() {
         runAsync(result) {
             ensureYoutubeDlInitialized()
             true
+        }
+    }
+
+    private fun executeJavaScript(call: MethodCall, result: MethodChannel.Result) {
+        val script = call.requiredString("script")
+        if (script.isBlank()) {
+            result.error("quickjs_empty_script", "El script JavaScript esta vacio.", null)
+            return
+        }
+        val timeoutMs = call.argument<Number>("timeoutMs")?.toLong()
+            ?: QUICKJS_DEFAULT_TIMEOUT_MS
+        if (timeoutMs !in QUICKJS_MIN_TIMEOUT_MS..QUICKJS_MAX_TIMEOUT_MS) {
+            result.error(
+                "quickjs_invalid_timeout",
+                "El timeout de QuickJS esta fuera de rango.",
+                null,
+            )
+            return
+        }
+        if (quickJsDestroyed) {
+            result.error("quickjs_destroyed", "La actividad Android ya fue cerrada.", null)
+            return
+        }
+
+        try {
+            quickJsExecutor.execute {
+                try {
+                    val output = executeQuickJsBlocking(script, timeoutMs)
+                    if (!quickJsDestroyed) {
+                        mainHandler.post { result.success(output) }
+                    }
+                } catch (error: Throwable) {
+                    Log.e(TAG, "Fallo al ejecutar QuickJS", error)
+                    if (!quickJsDestroyed) {
+                        mainHandler.post {
+                            result.error(
+                                "quickjs_error",
+                                error.describeForFlutter(),
+                                error.stackTraceToString(),
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (error: Throwable) {
+            result.error("quickjs_executor_unavailable", error.message, null)
+        }
+    }
+
+    private fun getPoTokens(call: MethodCall, result: MethodChannel.Result) {
+        val videoId = call.requiredString("videoId")
+        val provider = androidPoTokenProvider ?: AndroidPoTokenProvider(applicationContext).also {
+            androidPoTokenProvider = it
+        }
+        provider.getTokens(videoId).whenComplete { value, error ->
+            mainHandler.post {
+                if (error != null) {
+                    Log.w(TAG, "No se pudo generar PO token: ${error.message}")
+                    result.success(mapOf("available" to false))
+                } else {
+                    result.success(value ?: mapOf("available" to false))
+                }
+            }
+        }
+    }
+
+    private fun disposePoTokens(result: MethodChannel.Result) {
+        androidPoTokenProvider?.dispose()
+        androidPoTokenProvider = null
+        result.success(null)
+    }
+
+    private fun executeQuickJsBlocking(script: String, timeoutMs: Long): String {
+        val executable = File(applicationInfo.nativeLibraryDir, QUICKJS_LIBRARY_NAME)
+        if (!executable.isFile) {
+            throw IllegalStateException(
+                "No se encontro el runtime QuickJS incluido en ${executable.absolutePath}.",
+            )
+        }
+
+        val directory = File(cacheDir, QUICKJS_CACHE_DIRECTORY)
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw IllegalStateException("No se pudo crear el directorio temporal de QuickJS.")
+        }
+        val scriptFile = File(directory, "script-${UUID.randomUUID()}.js")
+
+        var process: Process? = null
+        val stdout = StringBuilder()
+        val stderr = StringBuilder()
+        var stdoutThread: Thread? = null
+        var stderrThread: Thread? = null
+        try {
+            scriptFile.writeText(script, StandardCharsets.UTF_8)
+            val startedProcess = ProcessBuilder(
+                executable.absolutePath,
+                "--script",
+                scriptFile.absolutePath,
+            ).redirectErrorStream(false).start()
+            process = startedProcess
+            synchronized(quickJsStateLock) {
+                if (quickJsDestroyed) {
+                    startedProcess.destroyForcibly()
+                    throw IllegalStateException("La actividad Android ya fue cerrada.")
+                }
+                activeQuickJsProcess = startedProcess
+            }
+
+            val runningProcess = startedProcess
+            stdoutThread = thread(name = "BStreamQuickJsStdout") {
+                runningProcess.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (stdout.length < QUICKJS_OUTPUT_LIMIT) {
+                            stdout.append(line).append('\n')
+                        }
+                    }
+                }
+            }
+            stderrThread = thread(name = "BStreamQuickJsStderr") {
+                runningProcess.errorStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (stderr.length < QUICKJS_ERROR_LIMIT) {
+                            stderr.append(line).append('\n')
+                        }
+                    }
+                }
+            }
+
+            if (!runningProcess.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+                runningProcess.destroyForcibly()
+                runningProcess.waitFor(1, TimeUnit.SECONDS)
+                throw IllegalStateException("QuickJS excedio el timeout de ${timeoutMs}ms.")
+            }
+            stdoutThread.join(1000)
+            stderrThread.join(1000)
+            val exitCode = runningProcess.exitValue()
+            if (exitCode != 0) {
+                val detail = stderr.toString().trim().ifEmpty {
+                    "QuickJS termino con codigo $exitCode."
+                }
+                throw IllegalStateException(detail)
+            }
+            return stdout.toString().trim().ifEmpty {
+                throw IllegalStateException("QuickJS no devolvio un resultado.")
+            }
+        } finally {
+            process?.destroy()
+            stdoutThread?.interrupt()
+            stderrThread?.interrupt()
+            synchronized(quickJsStateLock) {
+                if (activeQuickJsProcess === process) {
+                    activeQuickJsProcess = null
+                }
+            }
+            if (!scriptFile.delete() && scriptFile.exists()) {
+                Log.w(TAG, "No se pudo borrar el script temporal de QuickJS")
+            }
         }
     }
 
@@ -757,6 +939,10 @@ class MainActivity : AudioServiceActivity() {
         request.addOption("--progress-template", PROGRESS_TEMPLATE)
         request.addOption("--progress-delta", "0.2")
         request.addOption("--print", "after_move:filepath")
+        // The default YouTube client can resolve metadata but returns media
+        // URLs that fail with HTTP 403 when the download starts. The embedded
+        // web client produces a compatible signed URL for the actual transfer.
+        request.addOption("--extractor-args", "youtube:player_client=web_embedded")
         if (restrictFileNames) {
             request.addOption("--restrict-filenames")
         }
@@ -1041,28 +1227,36 @@ class MainActivity : AudioServiceActivity() {
         onRetry: (() -> Unit)? = null,
         block: () -> T,
     ): T {
-        return try {
-            block()
+        try {
+            // read {} always unlocks before the exception reaches the catch;
+            // recovery never attempts an unsafe read-to-write lock upgrade.
+            return extractorExecutionLock.read { block() }
         } catch (error: Exception) {
             if (!shouldRetryAfterExtractorUpdate(error)) {
                 throw error
             }
             Log.w(TAG, "Retrying $operation after yt-dlp update", error)
             onRetry?.invoke()
-            if (!updateYoutubeDlBlocking()) {
-                throw error
-            }
-            try {
-                block()
-            } catch (retryError: Exception) {
-                retryError.addSuppressed(error)
-                try {
-                    // Never leave an extractor that failed its own retry.
-                    restoreBundledYoutubeDl()
-                } catch (restoreError: Throwable) {
-                    retryError.addSuppressed(restoreError)
+
+            // Updating and restoring yt-dlp replace its shared directory. Wait
+            // for every active extractor process to finish, and prevent new
+            // ones from starting until the retry leaves a stable installation.
+            return extractorExecutionLock.write {
+                if (!updateYoutubeDlBlocking()) {
+                    throw error
                 }
-                throw retryError
+                try {
+                    block()
+                } catch (retryError: Exception) {
+                    retryError.addSuppressed(error)
+                    try {
+                        // Never leave an extractor that failed its own retry.
+                        restoreBundledYoutubeDl()
+                    } catch (restoreError: Throwable) {
+                        retryError.addSuppressed(restoreError)
+                    }
+                    throw retryError
+                }
             }
         }
     }
@@ -1347,6 +1541,13 @@ class MainActivity : AudioServiceActivity() {
         private const val DEFAULT_SEARCH_RESULT_LIMIT = 20
         private const val MAX_SEARCH_RESULT_LIMIT = 50
         private const val TAG = "BStreamYtdl"
+        private const val QUICKJS_LIBRARY_NAME = "libqjs.so"
+        private const val QUICKJS_CACHE_DIRECTORY = "bstream_quickjs"
+        private const val QUICKJS_DEFAULT_TIMEOUT_MS = 15000L
+        private const val QUICKJS_MIN_TIMEOUT_MS = 1000L
+        private const val QUICKJS_MAX_TIMEOUT_MS = 60000L
+        private const val QUICKJS_OUTPUT_LIMIT = 4 * 1024 * 1024
+        private const val QUICKJS_ERROR_LIMIT = 32 * 1024
         private const val EXTERNAL_AUDIO_TAG = "BStreamExternalAudio"
         private const val YTDLP_SHARED_PREFS = "youtubedl-android"
         private const val YTDLP_VERSION_KEY = "dlpVersion"

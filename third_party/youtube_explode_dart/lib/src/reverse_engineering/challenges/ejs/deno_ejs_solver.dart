@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show min;
 
-import 'package:path/path.dart' as path;
 import 'package:logging/logging.dart';
+import 'package:path/path.dart' as path;
 
 import 'base_ejs_solver.dart';
 import 'ejs.dart';
@@ -13,32 +15,48 @@ class DenoEJSSolver extends BaseEJSSolver {
 
   DenoEJSSolver._(this._deno);
 
-  static Future<DenoEJSSolver> init({String? denoExe}) async {
+  static Future<DenoEJSSolver> init({
+    String? denoExe,
+    Duration evalTimeout = const Duration(seconds: 15),
+  }) async {
     final modules = await EJSBuilder.getJSModules();
-    final deno = await _DenoProcess.init(initCode: modules, denoExe: denoExe);
+    final deno = await _DenoProcess.init(
+      initCode: modules,
+      denoExe: denoExe,
+      evalTimeout: evalTimeout,
+    );
     return DenoEJSSolver._(deno);
   }
 
   @override
   Future<String> executeJavaScript(String jsCode) async {
-    final filePath = path.join((_deno.tmpDir.path),
-        'ejs_output_${DateTime.now().microsecondsSinceEpoch}.txt');
+    final filePath = path.join(
+      _deno.tmpDir.path,
+      'ejs_output_${DateTime.now().microsecondsSinceEpoch}.txt',
+    );
 
-    // Wrap the call into a write to file
-    final wrappedCode = 'await Deno.writeTextFile("$filePath", $jsCode);';
-
+    // JSON encoding keeps Windows backslashes from becoming JS escapes.
+    final wrappedCode =
+        'await Deno.writeTextFile(${jsonEncode(filePath)}, $jsCode);';
     final result = await _deno.eval(wrappedCode);
 
-    if (result != "undefined") {
+    if (result != 'undefined') {
       throw Exception('Expected undefined result from Deno eval, got: $result');
     }
 
     final file = File(filePath);
-    return await file.readAsString();
+    try {
+      return await file.readAsString();
+    } finally {
+      try {
+        await file.delete();
+      } catch (_) {}
+    }
   }
 
   @override
   void dispose() {
+    super.dispose();
     _deno.dispose();
   }
 }
@@ -47,116 +65,190 @@ class _DenoProcess {
   static final _logger = Logger('YoutubeExplode.Deno.Process');
 
   final Process _process;
-  final StreamController<String> _stdoutController =
-      StreamController.broadcast();
   final Directory tmpDir;
-
-  // Queue for incoming eval requests
+  final Duration evalTimeout;
   final Queue<_EvalRequest> _evalQueue = Queue<_EvalRequest>();
-  bool _isProcessing = false; // Flag to indicate if an eval is currently active
 
-  _DenoProcess(this._process, this.tmpDir) {
-    // Listen to Deno's stdout and add data to the stream controller
-    _process.stdout
-        .transform(SystemEncoding().decoder)
-        .listen(_stdoutController.add, onDone: () {
-      _logger.info('Deno process stdout closed.');
-      _stdoutController.close();
-    }, onError: (e) {
-      _logger.info('Deno process stdout error occurred: $e');
-    });
+  StreamSubscription<String>? _stdoutSubscription;
+  StreamSubscription<String>? _stderrSubscription;
+  _EvalRequest? _activeRequest;
+  Timer? _evalTimer;
+  String _stderr = '';
+  bool _disposed = false;
+  bool _terminal = false;
+
+  _DenoProcess(this._process, this.tmpDir, this.evalTimeout) {
+    _stdoutSubscription = _process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen(
+      _handleStdout,
+      onDone: _handleProcessDone,
+      onError: (Object error, StackTrace stackTrace) {
+        _terminal = true;
+        _failAll(error, stackTrace);
+      },
+    );
+    _stderrSubscription = _process.stderr
+        .transform(utf8.decoder)
+        .listen(_handleStderr, onError: (_) {});
+    unawaited(
+      _process.exitCode.then((_) => _handleProcessDone()),
+    );
   }
 
-  /// Disposes the Deno process.
   void dispose() {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
+    _evalTimer?.cancel();
+    _failAll(StateError('Deno process disposed.'));
+    unawaited(_stdoutSubscription?.cancel());
+    unawaited(_stderrSubscription?.cancel());
     _process.kill();
-    tmpDir.delete(recursive: true);
+    unawaited(_deleteDirectory());
   }
 
-  /// Sends JavaScript code to Deno for evaluation.
-  /// Assumes single-line input produces single-line output.
   Future<String> eval(String code) {
+    if (_disposed || _terminal) {
+      return Future<String>.error(StateError('Deno process is unavailable.'));
+    }
     final completer = Completer<String>();
-    final request = _EvalRequest(code, completer);
-    _evalQueue.addLast(request); // Add request to the end of the queue
-    _processQueue(); // Attempt to process the queue
-
+    _evalQueue.addLast(_EvalRequest(code, completer));
+    _processQueue();
     return completer.future;
   }
 
-  // Processes the eval queue.
   void _processQueue() {
-    if (_isProcessing || _evalQueue.isEmpty) {
-      return; // Already processing or nothing in queue
+    if (_disposed ||
+        _terminal ||
+        _activeRequest != null ||
+        _evalQueue.isEmpty) {
+      return;
     }
 
-    _isProcessing = true;
-    final request =
-        _evalQueue.first; // Get the next request without removing it yet
-
-    StreamSubscription? currentOutputSubscription;
-    Completer<void> lineReceived = Completer<void>();
-
-    currentOutputSubscription = _stdoutController.stream.listen((data) {
-      if (!lineReceived.isCompleted) {
-        // Assuming single line output per eval.
-        // This will capture the first full line or chunk received after sending the code.
-        request.completer.complete(data.trim());
-        lineReceived.complete();
-        currentOutputSubscription
-            ?.cancel(); // Cancel subscription for this request
-        _evalQueue.removeFirst(); // Remove the processed request
-        _isProcessing = false; // Mark as no longer processing
-        _processQueue(); // Attempt to process next item in queue
-      }
-    }, onError: (e) {
-      if (!request.completer.isCompleted) {
-        request.completer.completeError(e);
-        lineReceived.completeError(e);
-        currentOutputSubscription?.cancel();
-        _evalQueue.removeFirst();
-        _isProcessing = false;
-        _processQueue();
-      }
-    }, onDone: () {
-      if (!request.completer.isCompleted) {
-        request.completer.completeError(
-            StateError('Deno process closed while awaiting eval result.'));
-        lineReceived.completeError(
-            StateError('Deno process closed while awaiting eval result.'));
-        currentOutputSubscription?.cancel();
-        _evalQueue.removeFirst();
-        _isProcessing = false;
-        _processQueue();
-      }
-    });
-
-    _process.stdin.writeln(request.code); // Send the code to Deno
+    final request = _evalQueue.removeFirst();
+    _activeRequest = request;
+    try {
+      _process.stdin.writeln(request.code);
+      _evalTimer = Timer(evalTimeout, () {
+        _terminal = true;
+        _failAll(TimeoutException('Deno JavaScript evaluation timed out.'));
+        _process.kill();
+      });
+    } catch (error, stackTrace) {
+      _terminal = true;
+      _failAll(error, stackTrace);
+    }
   }
 
-  static Future<_DenoProcess> init(
-      {required String initCode, String? denoExe}) async {
+  void _handleStdout(String line) {
+    if (line.trim().isEmpty) {
+      return;
+    }
+    _completeActive(null, null, result: line.trim());
+  }
+
+  void _handleStderr(String chunk) {
+    if (chunk.isEmpty) return;
+    if (_stderr.length >= 2048) return;
+    final remaining = 2048 - _stderr.length;
+    _stderr += chunk.substring(0, min(chunk.length, remaining));
+  }
+
+  void _handleProcessDone() {
+    if (_disposed || _terminal) {
+      return;
+    }
+    _terminal = true;
+    final detail = _stderr.trim();
+    _failAll(
+      StateError(
+        detail.isEmpty
+            ? 'Deno process closed while awaiting eval result.'
+            : 'Deno process closed: $detail',
+      ),
+    );
+  }
+
+  void _completeActive(
+    Object? error,
+    StackTrace? stackTrace, {
+    String? result,
+  }) {
+    final request = _activeRequest;
+    if (request == null) {
+      return;
+    }
+    _activeRequest = null;
+    _evalTimer?.cancel();
+    _evalTimer = null;
+    if (error != null) {
+      request.completer.completeError(error, stackTrace ?? StackTrace.current);
+    } else {
+      request.completer.complete(result!);
+    }
+    _processQueue();
+  }
+
+  void _failAll(Object error, [StackTrace? stackTrace]) {
+    _completeActive(error, stackTrace);
+    while (_evalQueue.isNotEmpty) {
+      final request = _evalQueue.removeFirst();
+      if (!request.completer.isCompleted) {
+        request.completer
+            .completeError(error, stackTrace ?? StackTrace.current);
+      }
+    }
+  }
+
+  Future<void> _deleteDirectory() async {
+    try {
+      await tmpDir.delete(recursive: true);
+    } catch (_) {}
+  }
+
+  static Future<_DenoProcess> init({
+    required String initCode,
+    String? denoExe,
+    Duration evalTimeout = const Duration(seconds: 15),
+  }) async {
+    if (evalTimeout <= Duration.zero) {
+      throw ArgumentError.value(
+          evalTimeout, 'evalTimeout', 'Must be positive.');
+    }
+
     final tmpDir = await Directory.systemTemp.createTemp('yt_deno_');
     final tmpFile = File(path.join(tmpDir.path, 'deno_init.js'));
-    await tmpFile.writeAsString(initCode);
-    final proc = await Process.start(denoExe ?? 'deno', [
-      'repl',
-      '--quiet',
-      '--no-lock',
-      '--no-npm',
-      '--no-remote',
-      '--allow-write=${tmpDir.path}',
-      '--eval-file=${tmpFile.path}',
-    ], environment: {
-      'NO_COLOR': '1',
-    });
-    _logger.info(
-        'Deno process started with PID: ${proc.pid}, using tmpdir: ${tmpDir.path}');
-    return _DenoProcess(proc, tmpDir);
+    try {
+      await tmpFile.writeAsString(initCode);
+      final process = await Process.start(denoExe ?? 'deno', [
+        'repl',
+        '--quiet',
+        '--no-lock',
+        '--no-npm',
+        '--no-remote',
+        '--allow-write=${tmpDir.path}',
+        '--eval-file=${tmpFile.path}',
+      ], environment: {
+        ...Platform.environment,
+        'NO_COLOR': '1',
+      });
+      _logger.info(
+        'Deno process started with PID: ${process.pid}, '
+        'using tmpdir: ${tmpDir.path}',
+      );
+      return _DenoProcess(process, tmpDir, evalTimeout);
+    } catch (_) {
+      try {
+        await tmpDir.delete(recursive: true);
+      } catch (_) {}
+      rethrow;
+    }
   }
 }
 
-// Helper class for queue items
 class _EvalRequest {
   final String code;
   final Completer<String> completer;

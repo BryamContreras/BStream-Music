@@ -112,6 +112,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       _activeLocalQueueSourceId == liveQueueSourceId ||
       _activeRemoteQueueSourceId == liveQueueSourceId;
   int _playRequestId = 0;
+  int _seekRequestId = 0;
   int _remoteQueueGeneration = 0;
   int? _remoteRecoveryAttemptedRequestId;
   String? _remoteRecoveryInFlightQueueEntryId;
@@ -123,6 +124,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   String? _lastRecordedLocalTrackId;
   Future<void> _historyWrite = Future<void>.value();
   String? _remotePrefetchSignature;
+  Future<void> _crossfadeConfigurationTail = Future<void>.value();
   bool _disposed = false;
 
   bool get _changingLocalTrack => _changingLocalTrackRequestId != null;
@@ -130,6 +132,28 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   @override
   Future<PlayerSnapshot> build() async {
     final service = ref.watch(playerServiceProvider);
+    ref.listen<({bool enabled, Duration duration})?>(
+      settingsControllerProvider.select((settings) {
+        final value = settings.asData?.value;
+        return value == null
+            ? null
+            : (
+                enabled: value.crossfadeEnabled,
+                duration: value.crossfadeDuration,
+              );
+      }),
+      (previous, next) {
+        if (next != null) {
+          _scheduleCrossfadeConfiguration(
+            enabled: next.enabled,
+            duration: next.duration,
+            prepareWhenEnabled:
+                next.enabled && (previous == null || !previous.enabled),
+          );
+        }
+      },
+      fireImmediately: true,
+    );
     final initialSnapshot = _decorateSnapshot(service.currentSnapshot);
     final activeRemoteSource =
         (initialSnapshot.isRemote ||
@@ -151,8 +175,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       if (_disposed) {
         return;
       }
-      final nativeRemoteTransition = _isNativeRemoteQueueSnapshot(snapshot);
-      if (!nativeRemoteTransition && _isStaleRemoteSnapshot(snapshot)) {
+      final internalRemoteTransition =
+          _isNativeRemoteQueueSnapshot(snapshot) ||
+          _isCrossfadeRemoteQueueSnapshot(snapshot);
+      if (!internalRemoteTransition && _isStaleRemoteSnapshot(snapshot)) {
         return;
       }
       final previousRemoteTrack = _currentRemoteTrack;
@@ -183,6 +209,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       if (queueIndexChanged && decorated.isRemote) {
         _remotePrefetchSignature = null;
         unawaited(_warmUpcomingRemoteTracks(_playRequestId));
+      } else if (queueIndexChanged) {
+        unawaited(_stageLocalCrossfade());
       }
       if (!_maybeRecoverRemoteFailure(
         decorated,
@@ -202,6 +230,52 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       unawaited(subscription.cancel());
     });
     return initialSnapshot;
+  }
+
+  void _scheduleCrossfadeConfiguration({
+    required bool enabled,
+    required Duration duration,
+    required bool prepareWhenEnabled,
+  }) {
+    final previous = _crossfadeConfigurationTail;
+    _crossfadeConfigurationTail = () async {
+      await previous;
+      if (_disposed) {
+        return;
+      }
+      final service = ref.read(playerServiceProvider);
+      if (service is! CrossfadeCapablePlayer) {
+        return;
+      }
+      final crossfadeService = service as CrossfadeCapablePlayer;
+      await crossfadeService.configureCrossfade(
+        enabled: enabled,
+        duration: duration,
+      );
+      if (_disposed) {
+        return;
+      }
+      if (!enabled || !prepareWhenEnabled) {
+        return;
+      }
+      if (_currentRemoteTrack != null) {
+        // Enabling in the middle of a track must not be defeated by a cache
+        // signature produced while crossfade was disabled.
+        _remotePrefetchSignature = null;
+        // Preparation can involve network/cache I/O. Do not keep it in the
+        // configuration lane or a quick off toggle would wait behind a slow
+        // standby load before it can cancel that load.
+        unawaited(_warmUpcomingRemoteTracks(_playRequestId));
+      } else {
+        unawaited(_stageLocalCrossfade());
+      }
+    }();
+    _crossfadeConfigurationTail = _crossfadeConfigurationTail.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('Crossfade configuration failed: $error\n$stackTrace');
+      },
+    );
   }
 
   Future<void> playRemote(
@@ -385,6 +459,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
             // with this stale primary error.
             return;
           }
+          debugPrint(
+            '[PlayerController] nativeRemoteService.playRemoteSource failed '
+            '(hasStreamUrl=${playableTrack.streamUrl != null && playableTrack.streamUrl!.isNotEmpty}): '
+            '${readableAudioStreamError(error)}',
+          );
           if (_remoteRecoveryAttemptedRequestId != requestId &&
               _shouldRecoverRemoteError(playableTrack, error)) {
             final fallbackOnly = _hasKnownResolverSource(playableTrack);
@@ -444,6 +523,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
           // primary failure that already triggered and completed recovery.
           return;
         }
+        debugPrint(
+          '[PlayerController] playerService.playRemote failed '
+          '(hasStreamUrl=${playableTrack.streamUrl != null && playableTrack.streamUrl!.isNotEmpty}): '
+          '${readableAudioStreamError(error)}',
+        );
         if (_remoteRecoveryAttemptedRequestId != requestId &&
             _shouldRecoverRemoteError(playableTrack, error)) {
           final fallbackOnly = _hasKnownResolverSource(playableTrack);
@@ -511,6 +595,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         ? 'youtube_explode_dart'
         : 'yt-dlp';
     final detail = readableAudioStreamError(error);
+    debugPrint(
+      '[PlayerController] $provider failed at resolution stage '
+      '(hasStreamUrl=${track.streamUrl != null && track.streamUrl!.isNotEmpty}): '
+      '$detail',
+    );
     final message = detail.isEmpty
         ? '$provider falló. Probando con yt-dlp...'
         : '$provider falló: $detail. Probando con yt-dlp...';
@@ -716,6 +805,26 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (pending != null &&
         pending.queueEntryId != queueEntryId &&
         _remoteRecoveryInFlightQueueEntryId != pending.queueEntryId) {
+      return false;
+    }
+    for (var index = 0; index < _queue.length; index++) {
+      if (_queue[index].remote != null &&
+          _remoteQueueEntryId(index) == queueEntryId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _isCrossfadeRemoteQueueSnapshot(PlayerSnapshot snapshot) {
+    final service = ref.read(playerServiceProvider);
+    if (!snapshot.isRemote ||
+        snapshot.status != PlayerStatus.playing ||
+        service is! CrossfadeCapablePlayer) {
+      return false;
+    }
+    final queueEntryId = snapshot.queueEntryId;
+    if (queueEntryId == null || queueEntryId.isEmpty) {
       return false;
     }
     for (var index = 0; index < _queue.length; index++) {
@@ -1091,6 +1200,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       _useNativeLocalQueue = true;
       _activeLocalQueueSourceId = null;
       _publishPlaybackQueue();
+      unawaited(_stageLocalCrossfade());
       return;
     }
 
@@ -1109,6 +1219,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
     _resetShuffleHistory();
     _publishPlaybackQueue();
+    unawaited(_stageLocalCrossfade());
   }
 
   static String playlistQueueSourceId(String playlistId) {
@@ -1154,6 +1265,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         await service.stop();
       }
     }
+    unawaited(_stageLocalCrossfade());
     return true;
   }
 
@@ -1274,6 +1386,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         const <RemotePlaybackSource>[],
       );
     }
+    if (service is CrossfadeCapablePlayer) {
+      await (service as CrossfadeCapablePlayer).prepareCrossfade(null);
+    }
     return true;
   }
 
@@ -1314,6 +1429,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
     if (_useNativeLocalQueue && service.supportsLocalQueueReplacement) {
       await service.replaceLocalQueue(localQueue, _queueIndex);
+      unawaited(_stageLocalCrossfade());
     }
   }
 
@@ -1363,6 +1479,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       _changingLocalTrackRequestId = null;
       if (!track.isExternal) {
         await _recordLocalTrackPlayed(track.id);
+      }
+      if (_isCurrentPlayRequest(requestId)) {
+        unawaited(_stageLocalCrossfade());
       }
     } catch (error, stackTrace) {
       if (_isCurrentPlayRequest(requestId)) {
@@ -1433,7 +1552,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Future<void> resume() async {
     final snapshot =
         state.value ?? ref.read(playerServiceProvider).currentSnapshot;
-    if ((snapshot.status == PlayerStatus.stopped || _explicitlyStopped) &&
+    if ((snapshot.status == PlayerStatus.stopped ||
+            snapshot.status == PlayerStatus.completed ||
+            _explicitlyStopped) &&
         _queueIndex >= 0 &&
         _queueIndex < _queue.length) {
       await _playQueueItem(_queue[_queueIndex]);
@@ -1446,7 +1567,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Future<void> togglePlayPause() async {
     final snapshot =
         state.value ?? ref.read(playerServiceProvider).currentSnapshot;
-    if (snapshot.status == PlayerStatus.stopped &&
+    if ((snapshot.status == PlayerStatus.stopped ||
+            snapshot.status == PlayerStatus.completed) &&
         _queueIndex >= 0 &&
         _queueIndex < _queue.length) {
       await _playQueueItem(_queue[_queueIndex]);
@@ -1547,6 +1669,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         localQueue != null &&
         service.supportsLocalQueueReplacement) {
       await service.replaceLocalQueue(localQueue, _queueIndex);
+      unawaited(_stageLocalCrossfade());
       return;
     }
     if (_queueIndex >= 0 &&
@@ -1554,6 +1677,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         _queue[_queueIndex].remote != null) {
       _remotePrefetchSignature = null;
       unawaited(_warmUpcomingRemoteTracks(_playRequestId));
+    } else {
+      unawaited(_stageLocalCrossfade());
     }
   }
 
@@ -1572,7 +1697,20 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   Future<void> seek(Duration position) async {
+    final seekRequestId = ++_seekRequestId;
+    final playRequestId = _playRequestId;
     await ref.read(playerServiceProvider).seek(position);
+    if (_disposed ||
+        seekRequestId != _seekRequestId ||
+        playRequestId != _playRequestId) {
+      return;
+    }
+    if (_currentRemoteTrack != null) {
+      _remotePrefetchSignature = null;
+      unawaited(_warmUpcomingRemoteTracks(_playRequestId));
+    } else {
+      unawaited(_stageLocalCrossfade());
+    }
   }
 
   Future<void> setVolume(double volume) async {
@@ -1592,6 +1730,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _syncPlaybackOptions();
     _remotePrefetchSignature = null;
     unawaited(_warmUpcomingRemoteTracks(_playRequestId));
+    unawaited(_stageLocalCrossfade());
   }
 
   void cycleRepeatMode() {
@@ -1610,6 +1749,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _syncPlaybackOptions();
     _remotePrefetchSignature = null;
     unawaited(_warmUpcomingRemoteTracks(_playRequestId));
+    unawaited(_stageLocalCrossfade());
   }
 
   Future<void> _playQueueItem(
@@ -1657,6 +1797,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
     if (upcoming.isEmpty) {
       _remotePrefetchSignature = null;
+      if (service case final CrossfadeCapablePlayer crossfadeService) {
+        await crossfadeService.prepareCrossfade(null);
+      }
       if (nativeRemoteService != null) {
         await nativeRemoteService.updateRemoteQueue(
           const <RemotePlaybackSource>[],
@@ -1719,6 +1862,14 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
           ));
         }
         preparedSources.add(source);
+        if (preparedSources.length == 1 && service is CrossfadeCapablePlayer) {
+          final crossfadeService = service as CrossfadeCapablePlayer;
+          unawaited(
+            crossfadeService.prepareCrossfade(
+              RemoteCrossfadePlaybackSource(source),
+            ),
+          );
+        }
         if (nativeRemoteService != null) {
           await nativeRemoteService.updateRemoteQueue(
             preparedSources,
@@ -1782,7 +1933,47 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         _isRemotePrefetchCurrent(requestId, currentQueueEntryId) &&
         _remotePrefetchSignature == signature) {
       _remotePrefetchSignature = null;
+      if (preparedSources.isEmpty && service is CrossfadeCapablePlayer) {
+        final crossfadeService = service as CrossfadeCapablePlayer;
+        await crossfadeService.prepareCrossfade(null);
+      }
     }
+  }
+
+  Future<void> _stageLocalCrossfade() async {
+    if (_disposed) {
+      return;
+    }
+    final service = ref.read(playerServiceProvider);
+    if (service is! CrossfadeCapablePlayer) {
+      return;
+    }
+    final crossfadeService = service as CrossfadeCapablePlayer;
+    if (!crossfadeService.crossfadeEnabled) {
+      return;
+    }
+    LocalTrack? successor;
+    if (_queue.length > 1 &&
+        _queueIndex >= 0 &&
+        _queueIndex < _queue.length &&
+        _queue[_queueIndex].local != null &&
+        _repeatMode != PlaybackRepeatMode.one) {
+      int nextIndex;
+      if (_shuffleEnabled) {
+        _ensureShufflePlan();
+        nextIndex = _shufflePlan.isEmpty ? -1 : _shufflePlan.first;
+      } else if (_queueIndex < _queue.length - 1) {
+        nextIndex = _queueIndex + 1;
+      } else {
+        nextIndex = _repeatMode == PlaybackRepeatMode.all ? 0 : -1;
+      }
+      if (nextIndex >= 0 && nextIndex < _queue.length) {
+        successor = _queue[nextIndex].local;
+      }
+    }
+    await crossfadeService.prepareCrossfade(
+      successor == null ? null : LocalCrossfadePlaybackSource(successor),
+    );
   }
 
   bool _isRemotePrefetchCurrent(int requestId, String currentQueueEntryId) {
@@ -2231,6 +2422,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         _changingLocalTrack ||
         (snapshot.status == PlayerStatus.failed && snapshot.isRemote) ||
         (snapshot.status != PlayerStatus.stopped &&
+            snapshot.status != PlayerStatus.completed &&
             snapshot.status != PlayerStatus.failed) ||
         snapshot.trackId == null ||
         _queue.isEmpty ||

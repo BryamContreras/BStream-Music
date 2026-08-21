@@ -35,8 +35,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 80));
       final openingFirst = railWidth();
       final openingSurfaceFirst = surfaceWidth();
-      expect(openingFirst, inExclusiveRange(0, 320));
-      expect(openingSurfaceFirst, inExclusiveRange(640, 960));
+      expect(openingFirst, inExclusiveRange(0, 352));
+      expect(openingSurfaceFirst, inExclusiveRange(608, 960));
       expect(rail, findsOneWidget);
       expect(
         find.ancestor(of: rail, matching: find.byType(ClipRect)),
@@ -56,19 +56,19 @@ void main() {
 
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump();
-      expect(railWidth(), closeTo(320, 0.1));
-      expect(surfaceWidth(), closeTo(640, 0.1));
+      expect(railWidth(), closeTo(352, 0.1));
+      expect(surfaceWidth(), closeTo(608, 0.1));
 
       await tester.tap(toggle);
       await tester.pump();
-      expect(railWidth(), closeTo(320, 0.1));
-      expect(surfaceWidth(), closeTo(640, 0.1));
+      expect(railWidth(), closeTo(352, 0.1));
+      expect(surfaceWidth(), closeTo(608, 0.1));
 
       await tester.pump(const Duration(milliseconds: 80));
       final closingFirst = railWidth();
       final closingSurfaceFirst = surfaceWidth();
-      expect(closingFirst, inExclusiveRange(0, 320));
-      expect(closingSurfaceFirst, inExclusiveRange(640, 960));
+      expect(closingFirst, inExclusiveRange(0, 352));
+      expect(closingSurfaceFirst, inExclusiveRange(608, 960));
       expect(rail, findsOneWidget);
       final closingFade = tester.widget<FadeTransition>(
         find.ancestor(of: rail, matching: find.byType(FadeTransition)).first,
@@ -115,8 +115,8 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(rail, findsOneWidget);
-      expect(tester.getSize(switcherFinder).width, closeTo(320, 0.1));
-      expect(tester.getSize(surface).width, closeTo(640, 0.1));
+      expect(tester.getSize(switcherFinder).width, closeTo(352, 0.1));
+      expect(tester.getSize(surface).width, closeTo(608, 0.1));
 
       await tester.tap(toggle);
       await tester.pump();

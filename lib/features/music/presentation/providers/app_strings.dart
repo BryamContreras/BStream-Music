@@ -1,5 +1,6 @@
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../domain/entities/lyrics_romanization_language.dart';
 import 'lyrics_animation_style.dart';
 
 enum AppLanguage { spanish, english }
@@ -172,16 +173,32 @@ class AppStrings {
   String get normalLyricsAlignment => choose('Normal', 'Normal');
   String get centeredLyricsAlignment => choose('Centrada', 'Centered');
   String get lyricsAppearance =>
-      choose('Animación y alineación', 'Animation and alignment');
+      choose('Apariencia de letras', 'Lyrics appearance');
   String get lyricsAppearanceSummary => choose(
-    'Personaliza cómo aparecen y se alinean las letras.',
-    'Customize how lyrics appear and align.',
+    'Personaliza la animación, alineación y romanización.',
+    'Customize lyrics animation, alignment, and romanization.',
   );
   String get lyricsAnimation => choose('Animación', 'Animation');
   String get lyricsAnimationSmooth => choose('Suave', 'Smooth');
   String get lyricsAnimationSlide => choose('Deslizar', 'Slide');
   String get lyricsAnimationHighlight => choose('Resaltar', 'Highlight');
-  String get lyricsAnimationNone => choose('Sin animación', 'No animation');
+  String get lyricsRomanization => choose('Romanización', 'Romanization');
+  String get romanizeLyrics => choose('Romanizar letras', 'Romanize lyrics');
+  String get romanizeLyricsSummary => choose(
+    'Convierte los idiomas seleccionados al alfabeto latino.',
+    'Convert the selected languages to the Latin alphabet.',
+  );
+  String get romanizationLanguages =>
+      choose('Idiomas para romanizar', 'Languages to romanize');
+  String romanizationLanguageLabel(LyricsRomanizationLanguage language) =>
+      switch (language) {
+        LyricsRomanizationLanguage.japanese => choose('Japonés', 'Japanese'),
+        LyricsRomanizationLanguage.korean => choose('Coreano', 'Korean'),
+        LyricsRomanizationLanguage.chinese => choose('Chino', 'Chinese'),
+        LyricsRomanizationLanguage.cyrillic => choose('Cirílico', 'Cyrillic'),
+        LyricsRomanizationLanguage.arabic => choose('Árabe', 'Arabic'),
+        LyricsRomanizationLanguage.hebrew => choose('Hebreo', 'Hebrew'),
+      };
   String get lyricsPreview => choose('Vista previa', 'Preview');
   String get lyricsPreviewPreviousLine =>
       choose('La noche empieza a brillar', 'The night begins to glow');
@@ -195,7 +212,6 @@ class AppStrings {
     LyricsAnimationStyle.smooth => lyricsAnimationSmooth,
     LyricsAnimationStyle.slide => lyricsAnimationSlide,
     LyricsAnimationStyle.highlight => lyricsAnimationHighlight,
-    LyricsAnimationStyle.none => lyricsAnimationNone,
   };
   String get retry => choose('Reintentar', 'Retry');
   String get lyricsSource =>
@@ -390,17 +406,18 @@ class AppStrings {
         'Se omitirán $invalid filas inválidas y se combinarán $duplicates '
         'filas repetidas. '
         'Las canciones existentes se reutilizarán; las faltantes se '
-        'descargarán una por una.',
+        'descargarán en paralelo con un límite seguro.',
     '$tracks songs and $playlists playlists were found. $invalid invalid '
         'rows will be skipped and $duplicates repeated rows will be merged. '
         'Existing songs '
-        'will be reused; missing songs will be downloaded one at a time.',
+        'will be reused; missing songs will be downloaded in parallel with a '
+        'safe limit.',
   );
   String get csvImportDataNotice => choose(
     'La descarga puede consumir datos y almacenamiento. Puedes detener la '
-        'importación después de la canción activa.',
+        'importación después de las descargas activas.',
     'Downloads may use data and storage. You can stop the import after the '
-        'current song.',
+        'active downloads finish.',
   );
   String get importAndDownload =>
       choose('Importar y descargar', 'Import and download');
@@ -409,10 +426,10 @@ class AppStrings {
   String csvImportProgress(int processed, int total) =>
       choose('$processed de $total canciones', '$processed of $total songs');
   String get stopAfterCurrent =>
-      choose('Detener después de esta canción', 'Stop after this song');
+      choose('Detener después de las activas', 'Stop after active downloads');
   String get csvStopRequested => choose(
-    'Se detendrá al terminar la canción activa.',
-    'The import will stop after the current song.',
+    'Se detendrá al terminar las descargas activas.',
+    'The import will stop after the active downloads finish.',
   );
   String get csvImportCompleted =>
       choose('Importación terminada', 'Import complete');
@@ -441,26 +458,10 @@ class AppStrings {
   );
   String get chooseCsvProfile =>
       choose('Formato del archivo CSV', 'CSV file format');
-  String get csvProfileBStream => choose('BStream completo', 'Full BStream');
-  String get csvProfileBStreamSummary => choose(
-    'Conserva playlists, posiciones, IDs y metadatos.',
-    'Preserves playlists, positions, IDs, and metadata.',
-  );
+  String get csvProfileBStream => 'BStream Music';
   String get csvProfileMetroList => 'MetroList';
-  String get csvProfileMetroListSummary => choose(
-    'Título, artista, álbum e ID de YouTube.',
-    'Title, artist, album, and YouTube ID.',
-  );
   String get csvProfileHarmony => 'Harmony / RiMusic';
-  String get csvProfileHarmonySummary => choose(
-    'Formato de playlists y metadatos compatible con Harmony y RiMusic.',
-    'Playlist and metadata format compatible with Harmony and RiMusic.',
-  );
   String get csvProfileSoundiiz => 'Soundiiz';
-  String get csvProfileSoundiizSummary => choose(
-    'Formato sencillo de título, artista, álbum e ISRC.',
-    'Simple title, artist, album, and ISRC format.',
-  );
   String get csvExported =>
       choose('Archivo CSV exportado.', 'CSV file exported.');
   String get csvExportFailed => choose(
@@ -532,6 +533,14 @@ class AppStrings {
   String get automaticShutdown =>
       choose('Apagado automático', 'Automatic shutdown');
   String get sleepTimerOff => choose('Desactivado', 'Off');
+  String get crossfade => 'Crossfade';
+  String get crossfadeSummary => choose(
+    'Superpone suavemente el final de una canción con el inicio de la siguiente.',
+    'Smoothly overlaps the end of one song with the start of the next.',
+  );
+  String get crossfadeDuration =>
+      choose('Duración del crossfade', 'Crossfade duration');
+  String secondsShort(int seconds) => '$seconds s';
   String get customDuration => choose('Personalizar', 'Custom');
   String get timerDuration =>
       choose('Duración del temporizador', 'Timer duration');

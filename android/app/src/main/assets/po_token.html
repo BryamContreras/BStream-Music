@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BotGuard</title>
+  <script>
+    // The page is intentionally offline. Kotlin supplies BotGuard's challenge
+    // and integrity responses through the JavaScript bridge.
+    var bgVmFunctions = null;
+    var bgVm = null;
+    var bgProgram = null;
+    var poTokenMinter = null;
+
+    function loadBotGuard(challengeData) {
+      bgVm = window[challengeData.globalName];
+      bgProgram = challengeData.program;
+      bgVmFunctions = null;
+      if (!bgVm || !bgVm.a) {
+        throw new Error('[BotGuardClient]: VM not found or invalid');
+      }
+
+      var vmFunctionsCallback = function(
+          asyncSnapshotFunction, shutdownFunction, passEventFunction, checkCameraFunction) {
+        bgVmFunctions = {
+          asyncSnapshotFunction: asyncSnapshotFunction,
+          shutdownFunction: shutdownFunction,
+          passEventFunction: passEventFunction,
+          checkCameraFunction: checkCameraFunction
+        };
+      };
+
+      bgVm.a(bgProgram, vmFunctionsCallback, true, undefined, function() {}, [[], []]);
+      return new Promise(function(resolve, reject) {
+        var attempts = 0;
+        var timer = setInterval(function() {
+          if (bgVmFunctions && bgVmFunctions.asyncSnapshotFunction) {
+            clearInterval(timer);
+            resolve({vmFunctions: bgVmFunctions, vm: bgVm, program: bgProgram});
+          } else if (++attempts >= 10000) {
+            clearInterval(timer);
+            reject(new Error('[BotGuardClient]: snapshot function timeout'));
+          }
+        }, 1);
+      });
+    }
+
+    function snapshot(botguard) {
+      return new Promise(function(resolve, reject) {
+        if (!botguard.vmFunctions || !botguard.vmFunctions.asyncSnapshotFunction) {
+          reject(new Error('[BotGuardClient]: snapshot function missing'));
+          return;
+        }
+        try {
+          botguard.vmFunctions.asyncSnapshotFunction(
+              function(response) { resolve(response); },
+              [undefined, undefined, window.webPoSignalOutput, undefined]);
+        } catch (error) {
+          reject(new Error('[BotGuardClient]: snapshot failed: ' + error.message));
+        }
+      });
+    }
+
+    function runBotGuard(challengeData) {
+      var interpreter =
+          challengeData.interpreterJavascript.privateDoNotAccessOrElseSafeScriptWrappedValue;
+      if (!interpreter) {
+        throw new Error('[BotGuardClient]: interpreter JavaScript missing');
+      }
+      new Function(interpreter)();
+      window.webPoSignalOutput = [];
+      return loadBotGuard({
+        globalName: challengeData.globalName,
+        program: challengeData.program
+      }).then(function(botguard) {
+        return snapshot(botguard);
+      }).then(function(botguardResponse) {
+        return {
+          webPoSignalOutput: window.webPoSignalOutput,
+          botguardResponse: botguardResponse
+        };
+      });
+    }
+
+    async function createPoTokenMinter(webPoSignalOutput, integrityToken) {
+      var getMinter = webPoSignalOutput[0];
+      if (typeof getMinter !== 'function') {
+        throw new Error('[BotGuardClient]: poToken minter is missing');
+      }
+      var result = getMinter(integrityToken);
+      poTokenMinter = result && typeof result.then === 'function' ? await result : result;
+      if (typeof poTokenMinter !== 'function') {
+        throw new Error('[BotGuardClient]: invalid poToken minter');
+      }
+    }
+
+    async function obtainPoToken(identifier) {
+      if (typeof poTokenMinter !== 'function') {
+        throw new Error('[BotGuardClient]: poToken minter is not initialized');
+      }
+      var result = poTokenMinter(identifier);
+      result = result && typeof result.then === 'function' ? await result : result;
+      if (!(result instanceof Uint8Array)) {
+        throw new Error('[BotGuardClient]: invalid poToken result');
+      }
+      return result;
+    }
+  </script>
+</head>
+<body></body>
+</html>

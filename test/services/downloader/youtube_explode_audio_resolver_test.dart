@@ -43,42 +43,133 @@ void main() {
       final attempts = defaultYoutubeManifestAttempts;
 
       expect(attempts.map((attempt) => attempt.name), [
+        'androidSdkless',
         'visionOS+watch',
         'visionOS',
-        'iOS',
+        'safari',
+        'tv',
+        'customIOS',
+        'packageIOS',
+        'androidMusic',
         'androidVr',
       ]);
-      expect(_clientVersion(attempts[0].client), '1.02');
+      expect(_clientName(attempts[0].client), 'ANDROID');
+      expect(_clientVersion(attempts[0].client), '20.10.38');
       expect(_clientVersion(attempts[1].client), '1.02');
-      expect(_clientVersion(attempts[2].client), '21.26.4');
-      expect(_clientVersion(attempts[3].client), '1.65.10');
+      expect(_clientVersion(attempts[2].client), '1.02');
+      expect(_clientVersion(attempts[3].client), '2.20250312.04.00');
+      expect(_clientVersion(attempts[4].client), '7.20251105.10.00');
+      expect(_clientVersion(attempts[5].client), '21.26.4');
+      expect(_clientVersion(attempts[6].client), '20.10.4');
+      expect(_clientVersion(attempts[7].client), '2.16.032');
+      expect(_clientVersion(attempts[8].client), '1.65.10');
       expect(attempts.map((attempt) => attempt.requireWatchPage), [
+        false,
         true,
         false,
-        false,
-        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
       ]);
+      expect(attempts.map((attempt) => attempt.requiresJsSolver), [
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+      ]);
+    });
+
+    test(
+      'skips solver-dependent clients when no solver is available',
+      () async {
+        final calls = <String>[];
+        final result = await resolvePreferredYoutubeAudioStream(
+          videoId: VideoId('abcdefghijk'),
+          attempts: [
+            YoutubeManifestAttempt(
+              name: 'fast',
+              client: YoutubeApiClient.androidSdkless,
+            ),
+            YoutubeManifestAttempt(
+              name: 'solver',
+              client: YoutubeApiClient.safari,
+              requiresJsSolver: true,
+            ),
+          ],
+          loadManifest: (videoId, client, requireWatchPage) async {
+            calls.add(_clientName(client));
+            return StreamManifest([_audioStream(tag: 140)]);
+          },
+        );
+
+        expect(result.tag, 140);
+        expect(calls, ['ANDROID']);
+      },
+    );
+
+    test('uses the attempt loader for solver-dependent clients', () async {
+      final calls = <String>[];
+      final result = await resolvePreferredYoutubeAudioStream(
+        videoId: VideoId('abcdefghijk'),
+        attempts: [
+          YoutubeManifestAttempt(
+            name: 'solver',
+            client: YoutubeApiClient.safari,
+            requiresJsSolver: true,
+          ),
+        ],
+        jsSolverAvailable: true,
+        loadManifest: (videoId, client, requireWatchPage) async {
+          throw StateError('The attempt loader should have been used.');
+        },
+        loadManifestForAttempt: (videoId, attempt) async {
+          calls.add(attempt.name);
+          return StreamManifest([_audioStream(tag: 251, codec: 'opus')]);
+        },
+      );
+
+      expect(result.tag, 251);
+      expect(calls, ['solver']);
     });
 
     test('provides fresh mutable nested payloads for every attempt list', () {
       final first = defaultYoutubeManifestAttempts;
       final firstIosClient =
-          first[2].client.payload['context']['client'] as Map<String, dynamic>;
+          first[5].client.payload['context']['client'] as Map<String, dynamic>;
+      final firstPackageIosClient =
+          first[6].client.payload['context']['client'] as Map<String, dynamic>;
 
       // youtube_explode_dart's iOS path performs this same nested mutation
       // after fetching visitor data. This used to throw because our payload
       // was built from const maps.
       firstIosClient['visitorData'] = 'visitor-from-first-session';
       expect(firstIosClient['visitorData'], 'visitor-from-first-session');
+      firstPackageIosClient['visitorData'] = 'visitor-from-first-session';
+      expect(
+        firstPackageIosClient['visitorData'],
+        'visitor-from-first-session',
+      );
 
       final second = defaultYoutubeManifestAttempts;
       final secondIosClient =
-          second[2].client.payload['context']['client'] as Map<String, dynamic>;
+          second[5].client.payload['context']['client'] as Map<String, dynamic>;
+      final secondPackageIosClient =
+          second[6].client.payload['context']['client'] as Map<String, dynamic>;
 
       expect(secondIosClient, isNot(same(firstIosClient)));
       expect(secondIosClient, isNot(contains('visitorData')));
-      expect(second[0].client, isNot(same(first[0].client)));
-      expect(second[3].client, isNot(same(first[3].client)));
+      expect(secondPackageIosClient, isNot(same(firstPackageIosClient)));
+      expect(secondPackageIosClient, isNot(contains('visitorData')));
+      expect(second[1].client, isNot(same(first[1].client)));
+      expect(second[5].client, isNot(same(first[5].client)));
     });
 
     test('stops after the first client returns usable audio', () async {
@@ -97,7 +188,7 @@ void main() {
       );
 
       expect(result.tag, 140);
-      expect(calls, ['VISIONOS:true']);
+      expect(calls, ['ANDROID:false']);
       expect(validated, [140]);
     });
 
@@ -149,6 +240,17 @@ void main() {
 
         final result = await resolvePreferredYoutubeAudioStream(
           videoId: VideoId('abcdefghijk'),
+          attempts: [
+            YoutubeManifestAttempt(
+              name: 'visionOS+watch',
+              client: youtubeVisionOsClient,
+              requireWatchPage: true,
+            ),
+            YoutubeManifestAttempt(
+              name: 'visionOS',
+              client: youtubeVisionOsClient,
+            ),
+          ],
           loadManifest: (videoId, client, requireWatchPage) async {
             final name = _clientName(client);
             calls.add('$name:$requireWatchPage');
@@ -194,6 +296,17 @@ void main() {
 
         final result = await resolvePreferredYoutubeAudioStream(
           videoId: VideoId('abcdefghijk'),
+          attempts: [
+            YoutubeManifestAttempt(
+              name: 'visionOS+watch',
+              client: youtubeVisionOsClient,
+              requireWatchPage: true,
+            ),
+            YoutubeManifestAttempt(
+              name: 'visionOS',
+              client: youtubeVisionOsClient,
+            ),
+          ],
           loadManifest: (videoId, client, requireWatchPage) async {
             calls.add('${_clientName(client)}:$requireWatchPage');
             if (requireWatchPage || _clientName(client) != 'VISIONOS') {
@@ -273,7 +386,7 @@ void main() {
       await validator.validate(_audioStream(tag: 140, url: _serverUrl(server)));
       await requestSeen.future;
 
-      expect(receivedRange, 'bytes=0-1');
+      expect(receivedRange, 'bytes=0-');
       expect(receivedUserAgent, 'BStream probe');
       expect(receivedProbeHeader, 'same-headers');
     });
@@ -295,6 +408,69 @@ void main() {
       );
 
       await validator.validate(_audioStream(tag: 140, url: _serverUrl(server)));
+    });
+
+    test(
+      'matches the player range and rejects finite-probe-only streams',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((request) async {
+          if (request.headers.value(HttpHeaders.rangeHeader) == 'bytes=0-') {
+            request.response.statusCode = HttpStatus.forbidden;
+          } else {
+            request.response
+              ..statusCode = HttpStatus.partialContent
+              ..contentLength = 2
+              ..add(const [7, 8]);
+          }
+          await request.response.close();
+        });
+
+        final validator = YoutubePlaybackStreamValidator(
+          headers: const {},
+          timeout: const Duration(seconds: 2),
+        );
+
+        await expectLater(
+          validator.validate(_audioStream(tag: 140, url: _serverUrl(server))),
+          throwsA(
+            isA<YoutubePlaybackStreamValidationException>().having(
+              (error) => error.statusCode,
+              'statusCode',
+              HttpStatus.forbidden,
+            ),
+          ),
+        );
+      },
+    );
+
+    test('rejects successful HTML challenge responses', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.html
+          ..add('<html><body>challenge</body></html>'.codeUnits);
+        await request.response.close();
+      });
+
+      final validator = YoutubePlaybackStreamValidator(
+        headers: const {},
+        timeout: const Duration(seconds: 2),
+      );
+
+      await expectLater(
+        validator.validate(_audioStream(tag: 140, url: _serverUrl(server))),
+        throwsA(
+          isA<YoutubePlaybackStreamValidationException>().having(
+            (error) => error.message,
+            'message',
+            contains('non-media'),
+          ),
+        ),
+      );
     });
 
     test('rejects HTTP errors and an empty successful response', () async {

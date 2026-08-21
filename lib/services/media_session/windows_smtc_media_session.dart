@@ -275,7 +275,9 @@ class WindowsSmtcMediaSession implements DesktopMediaSession {
     PlayerStatus.loading => PlaybackStatus.changing,
     PlayerStatus.playing => PlaybackStatus.playing,
     PlayerStatus.paused => PlaybackStatus.paused,
-    PlayerStatus.stopped || PlayerStatus.failed => PlaybackStatus.stopped,
+    PlayerStatus.completed ||
+    PlayerStatus.stopped ||
+    PlayerStatus.failed => PlaybackStatus.stopped,
   };
 
   RepeatMode _toSmtcRepeatMode(PlaybackRepeatMode mode) => switch (mode) {

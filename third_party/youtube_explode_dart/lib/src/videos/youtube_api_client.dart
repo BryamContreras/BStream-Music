@@ -231,3 +231,8 @@ class YoutubeApiClient {
         'Origin': 'https://www.youtube.com',
       });
 }
+
+/// Creates the ordered clients used when an expiring stream must be refreshed.
+/// A provider is used instead of a fixed list because some clients carry
+/// request-scoped fields such as visitor data.
+typedef YoutubeManifestClientsProvider = List<YoutubeApiClient> Function();

@@ -1,5 +1,32 @@
 part of 'music_providers.dart';
 
+const supportedCrossfadeDurations = <Duration>[
+  Duration(seconds: 1),
+  Duration(seconds: 2),
+  Duration(seconds: 3),
+  Duration(seconds: 4),
+  Duration(seconds: 5),
+  Duration(seconds: 6),
+  Duration(seconds: 7),
+  Duration(seconds: 8),
+  Duration(seconds: 9),
+  Duration(seconds: 10),
+  Duration(seconds: 11),
+  Duration(seconds: 12),
+  Duration(seconds: 13),
+  Duration(seconds: 14),
+  Duration(seconds: 15),
+];
+
+const defaultCrossfadeDuration = Duration(seconds: 5);
+
+Duration crossfadeDurationFromStoredSeconds(int? seconds) {
+  return supportedCrossfadeDurations.firstWhere(
+    (duration) => duration.inSeconds == seconds,
+    orElse: () => defaultCrossfadeDuration,
+  );
+}
+
 enum LyricsTextAlignment {
   normal,
   centered;
@@ -22,6 +49,10 @@ class SettingsState {
     this.accent = AppAccent.white,
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
     this.lyricsAnimationStyle = LyricsAnimationStyle.smooth,
+    this.lyricsRomanizationEnabled = false,
+    this.lyricsRomanizationLanguages = defaultLyricsRomanizationLanguages,
+    this.crossfadeEnabled = false,
+    this.crossfadeDuration = defaultCrossfadeDuration,
     this.ytDlpPath,
     this.hasYtDlp,
   });
@@ -32,6 +63,10 @@ class SettingsState {
   final AppAccent accent;
   final LyricsTextAlignment lyricsTextAlignment;
   final LyricsAnimationStyle lyricsAnimationStyle;
+  final bool lyricsRomanizationEnabled;
+  final Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages;
+  final bool crossfadeEnabled;
+  final Duration crossfadeDuration;
   final String? ytDlpPath;
   final bool? hasYtDlp;
 
@@ -42,6 +77,10 @@ class SettingsState {
     AppAccent? accent,
     LyricsTextAlignment? lyricsTextAlignment,
     LyricsAnimationStyle? lyricsAnimationStyle,
+    bool? lyricsRomanizationEnabled,
+    Set<LyricsRomanizationLanguage>? lyricsRomanizationLanguages,
+    bool? crossfadeEnabled,
+    Duration? crossfadeDuration,
     String? ytDlpPath,
     bool? hasYtDlp,
   }) {
@@ -52,6 +91,12 @@ class SettingsState {
       accent: accent ?? this.accent,
       lyricsTextAlignment: lyricsTextAlignment ?? this.lyricsTextAlignment,
       lyricsAnimationStyle: lyricsAnimationStyle ?? this.lyricsAnimationStyle,
+      lyricsRomanizationEnabled:
+          lyricsRomanizationEnabled ?? this.lyricsRomanizationEnabled,
+      lyricsRomanizationLanguages:
+          lyricsRomanizationLanguages ?? this.lyricsRomanizationLanguages,
+      crossfadeEnabled: crossfadeEnabled ?? this.crossfadeEnabled,
+      crossfadeDuration: crossfadeDuration ?? this.crossfadeDuration,
       ytDlpPath: ytDlpPath ?? this.ytDlpPath,
       hasYtDlp: hasYtDlp ?? this.hasYtDlp,
     );
@@ -65,9 +110,17 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _accentKey = 'settings.accent';
   static const _lyricsTextAlignmentKey = 'settings.lyricsAlignment';
   static const _lyricsAnimationStyleKey = 'settings.lyricsAnimation';
+  static const _lyricsRomanizationEnabledKey =
+      'settings.lyricsRomanizationEnabled';
+  static const _lyricsRomanizationLanguagesKey =
+      'settings.lyricsRomanizationLanguages';
+  static const _crossfadeEnabledKey = 'settings.crossfadeEnabled';
+  static const _crossfadeSecondsKey = 'settings.crossfadeSeconds';
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
   Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
+  Future<void> _lyricsRomanizationWriteTail = Future<void>.value();
+  Future<void> _crossfadeWriteTail = Future<void>.value();
 
   @override
   Future<SettingsState> build() async {
@@ -83,9 +136,28 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final lyricsTextAlignment = LyricsTextAlignment.fromCode(
       prefs.getString(_lyricsTextAlignmentKey),
     );
-    final lyricsAnimationStyle = LyricsAnimationStyle.fromCode(
-      prefs.getString(_lyricsAnimationStyleKey),
+    final storedLyricsAnimationStyle = prefs.getString(
+      _lyricsAnimationStyleKey,
     );
+    final lyricsAnimationStyle = LyricsAnimationStyle.fromCode(
+      storedLyricsAnimationStyle,
+    );
+    if (storedLyricsAnimationStyle == 'none') {
+      await prefs.setString(
+        _lyricsAnimationStyleKey,
+        lyricsAnimationStyle.code,
+      );
+    }
+    final lyricsRomanizationEnabled =
+        prefs.getBool(_lyricsRomanizationEnabledKey) ?? false;
+    final lyricsRomanizationLanguages = LyricsRomanizationLanguage.fromCodes(
+      prefs.getStringList(_lyricsRomanizationLanguagesKey),
+    );
+    final crossfadeSeconds = prefs.getInt(_crossfadeSecondsKey);
+    final crossfadeDuration = crossfadeDurationFromStoredSeconds(
+      crossfadeSeconds,
+    );
+    final crossfadeEnabled = prefs.getBool(_crossfadeEnabledKey) ?? false;
     final storedDirectory = prefs.getString(_downloadDirectoryKey);
     var downloadDirectory = _migrateLegacyDownloadDirectory(
       prefs.getString(_downloadDirectoryKey) ?? defaultDirectory,
@@ -118,6 +190,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         accent: accent,
         lyricsTextAlignment: lyricsTextAlignment,
         lyricsAnimationStyle: lyricsAnimationStyle,
+        lyricsRomanizationEnabled: lyricsRomanizationEnabled,
+        lyricsRomanizationLanguages: lyricsRomanizationLanguages,
+        crossfadeEnabled: crossfadeEnabled,
+        crossfadeDuration: crossfadeDuration,
         ytDlpPath: await downloader.getYtDlpPath(),
         hasYtDlp: await downloader.hasYtDlp(),
       );
@@ -130,6 +206,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       accent: accent,
       lyricsTextAlignment: lyricsTextAlignment,
       lyricsAnimationStyle: lyricsAnimationStyle,
+      lyricsRomanizationEnabled: lyricsRomanizationEnabled,
+      lyricsRomanizationLanguages: lyricsRomanizationLanguages,
+      crossfadeEnabled: crossfadeEnabled,
+      crossfadeDuration: crossfadeDuration,
     );
   }
 
@@ -330,6 +410,94 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       );
     });
     _lyricsAnimationStyleWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> setLyricsRomanizationEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.lyricsRomanizationEnabled == enabled) {
+      return;
+    }
+    state = AsyncData(current.copyWith(lyricsRomanizationEnabled: enabled));
+    final write = _lyricsRomanizationWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_lyricsRomanizationEnabledKey, enabled);
+    });
+    _lyricsRomanizationWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> setLyricsRomanizationLanguages(
+    Set<LyricsRomanizationLanguage> languages,
+  ) async {
+    if (languages.isEmpty) {
+      return;
+    }
+    final selected = Set<LyricsRomanizationLanguage>.unmodifiable(languages);
+    final current = state.asData?.value ?? await future;
+    if (current.lyricsRomanizationLanguages.length == selected.length &&
+        current.lyricsRomanizationLanguages.containsAll(selected)) {
+      return;
+    }
+    state = AsyncData(current.copyWith(lyricsRomanizationLanguages: selected));
+    final write = _lyricsRomanizationWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_lyricsRomanizationLanguagesKey, [
+        for (final language in LyricsRomanizationLanguage.values)
+          if (selected.contains(language)) language.code,
+      ]);
+    });
+    _lyricsRomanizationWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> toggleLyricsRomanizationLanguage(
+    LyricsRomanizationLanguage language,
+  ) async {
+    final current = state.asData?.value ?? await future;
+    final selected = current.lyricsRomanizationLanguages.toSet();
+    if (!selected.add(language) && selected.length > 1) {
+      selected.remove(language);
+    }
+    await setLyricsRomanizationLanguages(selected);
+  }
+
+  Future<void> setCrossfadeEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.crossfadeEnabled == enabled) {
+      return;
+    }
+    state = AsyncData(current.copyWith(crossfadeEnabled: enabled));
+    final write = _crossfadeWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_crossfadeEnabledKey, enabled);
+    });
+    _crossfadeWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> setCrossfadeDuration(Duration duration) async {
+    if (!supportedCrossfadeDurations.contains(duration)) {
+      throw ArgumentError.value(
+        duration,
+        'duration',
+        'Crossfade must be a whole number of seconds from 1 through 15.',
+      );
+    }
+    final current = state.asData?.value ?? await future;
+    if (current.crossfadeDuration == duration) {
+      return;
+    }
+    state = AsyncData(current.copyWith(crossfadeDuration: duration));
+    final write = _crossfadeWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_crossfadeSecondsKey, duration.inSeconds);
+    });
+    _crossfadeWriteTail = write.catchError((_) {});
     await write;
   }
 
