@@ -11,10 +11,7 @@ class AppSectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: appSectionTitleStyle(context),
-    );
+    return Text(text, style: appSectionTitleStyle(context));
   }
 }
 
@@ -73,8 +70,9 @@ class AppListCard extends StatelessWidget {
                     height: appListCardIconSize,
                     decoration: BoxDecoration(
                       color: highlight.withValues(alpha: 0.14),
-                      borderRadius:
-                          BorderRadius.circular(appListCardIconRadius),
+                      borderRadius: BorderRadius.circular(
+                        appListCardIconRadius,
+                      ),
                       border: Border.all(
                         color: highlight.withValues(alpha: 0.24),
                       ),
@@ -106,7 +104,9 @@ class AppListCard extends StatelessWidget {
                   if (status != null) ...[
                     const SizedBox(width: 8),
                     Icon(
-                      status! ? Icons.check_circle_rounded : Icons.error_rounded,
+                      status!
+                          ? Icons.check_circle_rounded
+                          : Icons.error_rounded,
                       color: status! ? colors.primary : colors.error,
                       size: 19,
                     ),

@@ -46,42 +46,41 @@ const double appNavItemRadius = 16.0;
 
 /// Shared text style for tab header titles (Home, Biblioteca, Ajustes, etc.).
 TextStyle appTabTitleStyle(BuildContext context) {
-  return Theme.of(context).textTheme.headlineMedium!.copyWith(
-        fontWeight: FontWeight.w900,
-      );
+  return Theme.of(
+    context,
+  ).textTheme.headlineMedium!.copyWith(fontWeight: FontWeight.w900);
 }
 
 /// Shared text style for section headings inside a page
 /// (e.g. "Recently Played", "My Playlists", "General", "Appearance").
 TextStyle appSectionTitleStyle(BuildContext context) {
   return Theme.of(context).textTheme.titleLarge!.copyWith(
-        fontWeight: FontWeight.w900,
-        color: AppColors.contentHeadingFor(context),
-      );
+    fontWeight: FontWeight.w900,
+    color: AppColors.contentHeadingFor(context),
+  );
 }
 
 /// Shared text style for the title text inside a list card.
 TextStyle appListCardTitleStyle(BuildContext context) {
-  return Theme.of(context).textTheme.titleMedium!.copyWith(
-        fontWeight: FontWeight.w800,
-      );
+  return Theme.of(
+    context,
+  ).textTheme.titleMedium!.copyWith(fontWeight: FontWeight.w800);
 }
 
 /// Shared text style for the subtitle text inside a list card.
 TextStyle appListCardSubtitleStyle(BuildContext context) {
   final colors = Theme.of(context).colorScheme;
-  return Theme.of(context).textTheme.bodySmall!.copyWith(
-        color: colors.onSurfaceVariant,
-        height: 1.25,
-      );
+  return Theme.of(
+    context,
+  ).textTheme.bodySmall!.copyWith(color: colors.onSurfaceVariant, height: 1.25);
 }
 
 /// Shared text style for secondary labels (e.g. "Command permissions",
 /// "Pending requests" inside a settings detail page).
 TextStyle appSecondaryLabelStyle(BuildContext context) {
-  return Theme.of(context).textTheme.bodyMedium!.copyWith(
-        fontWeight: FontWeight.w800,
-      );
+  return Theme.of(
+    context,
+  ).textTheme.bodyMedium!.copyWith(fontWeight: FontWeight.w800);
 }
 
 /// Returns the card surface color for the current context.
