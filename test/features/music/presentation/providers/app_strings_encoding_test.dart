@@ -82,38 +82,35 @@ void main() {
     );
   });
 
-  test(
-    'YouTube Music disclosure stays brief and explains the access risk',
-    () {
-      const spanish = AppStrings(AppLanguage.spanish);
-      const english = AppStrings(AppLanguage.english);
+  test('YouTube Music disclosure stays brief and explains the access risk', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
 
-      expect(
-        spanish.youtubeMusicUnofficialDisclosure,
-        allOf(
-          contains('no oficiales'),
-          contains('no guarda tu contraseña'),
-          contains('cambiar, bloquear o restringir'),
-        ),
-      );
-      expect(
-        english.youtubeMusicUnofficialDisclosure,
-        allOf(
-          contains('unofficial'),
-          contains('never stores your password'),
-          contains('may change, block, or restrict'),
-        ),
-      );
-      expect(
-        spanish.youtubeMusicUnofficialDisclosure,
-        isNot(contains('Favoritos')),
-      );
-      expect(
-        english.youtubeMusicUnofficialDisclosure,
-        isNot(contains('Favorites')),
-      );
-    },
-  );
+    expect(
+      spanish.youtubeMusicUnofficialDisclosure,
+      allOf(
+        contains('no oficiales'),
+        contains('no guarda tu contraseña'),
+        contains('cambiar, bloquear o restringir'),
+      ),
+    );
+    expect(
+      english.youtubeMusicUnofficialDisclosure,
+      allOf(
+        contains('unofficial'),
+        contains('never stores your password'),
+        contains('may change, block, or restrict'),
+      ),
+    );
+    expect(
+      spanish.youtubeMusicUnofficialDisclosure,
+      isNot(contains('Favoritos')),
+    );
+    expect(
+      english.youtubeMusicUnofficialDisclosure,
+      isNot(contains('Favorites')),
+    );
+  });
 }
 
 const _mojibakeMarkers = <String, String>{
