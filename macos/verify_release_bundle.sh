@@ -64,6 +64,11 @@ while IFS= read -r -d '' candidate; do
     [[ "$dependency" == "$candidate" ]] && continue
 
     case "$dependency" in
+      # Swift frameworks produced by Xcode link against the platform Swift
+      # runtime through @rpath. These dylibs are supplied by macOS and must not
+      # be copied into the application bundle (and are not third-party code).
+      @rpath/libswift*.dylib)
+        ;;
       @rpath/*)
         relative_path="${dependency#@rpath/}"
         if [[ ! -e "$frameworks_dir/$relative_path" ]]; then
