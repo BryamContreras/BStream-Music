@@ -25,6 +25,8 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
     WebUri('https://consent.google.com/'),
     WebUri('https://accounts.youtube.com/'),
     WebUri('https://consent.youtube.com/'),
+    WebUri('https://www.youtube.com/'),
+    WebUri('https://youtube.com/'),
     musicUrl,
   ];
 
@@ -96,9 +98,13 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
     // begin by deleting only Google/YouTube cookies visible to BStream's
     // WebView profile. Browser and system cookies are not touched.
     final result = await _clearPrivateBrowserData();
-    if (!result.completed) {
+    // Cookies are the authentication boundary. DOM storage and cache are
+    // best-effort on Android/WebView2 and are retried during cleanup; they
+    // must not make a valid fresh login impossible.
+    if (!result.cookiesCleared) {
       throw const YouTubeMusicWebAuthException(
-        'No se pudo aislar por completo la sesión anterior de YouTube Music.',
+        'No se pudieron limpiar las cookies de la sesión anterior de '
+        'YouTube Music.',
       );
     }
   }
@@ -354,9 +360,24 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
   Future<bool> _clearAuthenticationCookies() async {
     try {
       final cookieManager = _effectiveCookieManager;
+      // On Android this is the same app-scoped WebView jar used by the login
+      // page. On Windows the manager belongs to the dedicated per-login
+      // WebView2 profile. Both OpenTune and Metrolist use the platform-wide
+      // deletion primitive because it is more reliable than deleting cookies
+      // one by one (especially HttpOnly/domain cookies).
+      try {
+        if (await cookieManager.deleteAllCookies()) {
+          return true;
+        }
+      } on Object {
+        // Some plugin/platform versions do not implement this primitive;
+        // retain the exact-origin fallback below.
+      }
+
       // Android shares a WebView cookie jar inside the app. Avoid the global
-      // deleteAllCookies API so unrelated embedded sessions stay untouched;
-      // system browsers use a different profile and are never affected.
+      // deleteAllCookies API when it is unavailable so unrelated embedded
+      // sessions stay untouched; system browsers use a different profile and
+      // are never affected.
       for (final url in _authenticationCookieUrls) {
         final cookies = await cookieManager.getCookies(url: url);
         for (final cookie in cookies) {

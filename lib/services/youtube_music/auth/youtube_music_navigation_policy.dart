@@ -9,7 +9,17 @@ class YouTubeMusicNavigationPolicy {
     'consent.google.com',
     'accounts.youtube.com',
     'consent.youtube.com',
+    // Google may move the sign-in continuation through these exact hosts.
+    // Keep this an exact-host list; never accept arbitrary *.google.com or
+    // *.youtube.com descendants in the main frame.
+    'www.google.com',
+    'ogs.google.com',
+    'gds.google.com',
+    'myaccount.google.com',
     'music.youtube.com',
+    'www.youtube.com',
+    'youtube.com',
+    'm.youtube.com',
   };
 
   final Set<String> allowedHosts;

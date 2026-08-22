@@ -16,6 +16,7 @@ import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/playlist_entry.dart';
+import '../../domain/entities/track_info.dart';
 import '../providers/local_audio_availability.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
@@ -29,6 +30,7 @@ import 'track_play_button.dart';
 enum _LibraryRouteType { root, downloads, live, playlist }
 
 enum _TrackMenuAction {
+  download,
   renameTrack,
   addToPlaylist,
   toggleFavorite,
@@ -1355,6 +1357,81 @@ List<String> _catalogPlaylistThumbnailSources(List<_CatalogDisplayItem> items) {
       .toList(growable: false);
 }
 
+Widget _trackMenuItem(IconData icon, String label) {
+  return Row(
+    children: <Widget>[
+      Icon(icon),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
+    ],
+  );
+}
+
+Future<String?> _pickDestinationPlaylist(
+  BuildContext context,
+  WidgetRef ref, {
+  String? excludePlaylistId,
+}) async {
+  final strings = ref.read(appStringsProvider);
+  final playlists = (await ref.read(playlistsControllerProvider.future))
+      .where(
+        (playlist) => !playlist.isFavorites && playlist.id != excludePlaylistId,
+      )
+      .toList(growable: false);
+  if (!context.mounted) return null;
+  if (playlists.isEmpty) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(strings.createPlaylistFirst)));
+    return null;
+  }
+  final tracks = await ref.read(libraryTracksProvider.future);
+  final catalogs = await ref.read(catalogPlaylistsProvider.future);
+  if (!context.mounted) return null;
+  return showDialog<String>(
+    context: context,
+    builder: (_) => PlaylistPickerDialog(
+      title: strings.choosePlaylist,
+      playlists: playlists,
+      tracks: tracks,
+      catalogPlaylists: catalogs,
+    ),
+  );
+}
+
+TrackInfo? _remoteTrackInfoForLocal(LocalTrack track) {
+  final sourceUrl = track.sourceUrl?.trim();
+  final sourceId = track.sourceId?.trim();
+  if ((sourceUrl == null || sourceUrl.isEmpty) &&
+      (sourceId == null || sourceId.isEmpty)) {
+    return null;
+  }
+  final id = sourceId == null || sourceId.isEmpty ? sourceUrl! : sourceId;
+  final url = sourceUrl == null || sourceUrl.isEmpty
+      ? Uri.https('www.youtube.com', '/watch', <String, String>{
+          'v': id,
+        }).toString()
+      : sourceUrl;
+  final artists = track.artists.isEmpty
+      ? <String>[track.artist]
+      : track.artists;
+  return TrackInfo(
+    id: id,
+    title: track.title,
+    artist: track.artist,
+    artists: artists,
+    artistBrowseIds: track.artistBrowseIds,
+    album: track.album,
+    duration: track.duration,
+    thumbnailUrl: track.thumbnailUrl,
+    catalogThumbnailUrl: track.catalogThumbnailUrl ?? track.thumbnailUrl,
+    url: url,
+    metadataSource: TrackMetadataSource.youtubeMusic,
+  );
+}
+
 class _CatalogTrackListView extends ConsumerWidget {
   const _CatalogTrackListView({
     required this.title,
@@ -1478,13 +1555,19 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
             .maybeWhen(data: (available) => available, orElse: () => true);
     final borderRadius = BorderRadius.circular(appCardRadius);
     final baseColor = appListCardSurface(context);
+    final activeColor = Color.alphaBlend(
+      colors.primary.withValues(alpha: 0.13),
+      baseColor,
+    );
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         decoration: BoxDecoration(
-          color: _hovered
+          color: isCurrent
+              ? activeColor
+              : _hovered
               ? Color.alphaBlend(
                   colors.onSurface.withValues(alpha: 0.075),
                   baseColor,
@@ -1492,8 +1575,10 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
               : baseColor,
           borderRadius: borderRadius,
           border: Border.all(
-            color: _hovered ? colors.primary : appListCardBorder(context),
-            width: _hovered ? 1.4 : 1,
+            color: isCurrent || _hovered
+                ? colors.primary
+                : appListCardBorder(context),
+            width: isCurrent || _hovered ? 1.4 : 1,
           ),
         ),
         child: Material(
@@ -1546,7 +1631,9 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
-                color: AppColors.contentTitleFor(context),
+                color: isCurrent
+                    ? colors.primary
+                    : AppColors.contentTitleFor(context),
               ),
             ),
             subtitle: PlaylistTrackSubtitle(
@@ -1585,33 +1672,45 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                     ),
                     tooltip: strings.moreOptions,
                     icon: const Icon(Icons.more_vert_rounded),
-                    onSelected: (action) async {
-                      if (action == _TrackMenuAction.removeFromPlaylist) {
-                        await ref
-                            .read(playlistsControllerProvider.notifier)
-                            .removeCatalogEntry(
-                              widget.playlist.id,
-                              widget.item.entry.id,
-                            );
-                      }
-                    },
-                    itemBuilder: (context) =>
-                        <PopupMenuEntry<_TrackMenuAction>>[
+                    onSelected: (action) => _handleAction(context, action),
+                    itemBuilder: (context) {
+                      final entries = <PopupMenuEntry<_TrackMenuAction>>[];
+                      final remote = widget.item.playback?.remoteTrack;
+                      if (remote != null && !isDownloaded) {
+                        entries.add(
                           PopupMenuItem<_TrackMenuAction>(
-                            value: _TrackMenuAction.removeFromPlaylist,
-                            child: Row(
-                              children: <Widget>[
-                                const Icon(Icons.playlist_remove_rounded),
-                                const SizedBox(width: 12),
-                                Text(
-                                  widget.playlist.isFavorites
-                                      ? strings.removeFromFavorites
-                                      : strings.removeFromPlaylist,
-                                ),
-                              ],
+                            value: _TrackMenuAction.download,
+                            child: _trackMenuItem(
+                              Icons.download_rounded,
+                              strings.download,
                             ),
                           ),
-                        ],
+                        );
+                      }
+                      if (widget.item.isPlayable) {
+                        entries.add(
+                          PopupMenuItem<_TrackMenuAction>(
+                            value: _TrackMenuAction.addToPlaylist,
+                            child: _trackMenuItem(
+                              Icons.playlist_add_rounded,
+                              strings.addToPlaylist,
+                            ),
+                          ),
+                        );
+                      }
+                      entries.add(
+                        PopupMenuItem<_TrackMenuAction>(
+                          value: _TrackMenuAction.removeFromPlaylist,
+                          child: _trackMenuItem(
+                            Icons.playlist_remove_rounded,
+                            widget.playlist.isFavorites
+                                ? strings.removeFromFavorites
+                                : strings.removeFromPlaylist,
+                          ),
+                        ),
+                      );
+                      return entries;
+                    },
                   ),
                 ),
               ],
@@ -1684,6 +1783,58 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
     return currentLogicalEntryId != null
         ? currentLogicalEntryId == widget.item.entry.id
         : widget.item.matchesSnapshot(snapshot);
+  }
+
+  Future<void> _handleAction(
+    BuildContext context,
+    _TrackMenuAction action,
+  ) async {
+    final controller = ref.read(playlistsControllerProvider.notifier);
+    switch (action) {
+      case _TrackMenuAction.download:
+        final remote = widget.item.playback?.remoteTrack;
+        if (remote == null) return;
+        await ref
+            .read(downloadControllerProvider.notifier)
+            .downloadAudio(remote);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(ref.read(appStringsProvider).downloadQueued),
+            ),
+          );
+        }
+      case _TrackMenuAction.addToPlaylist:
+        final playlistId = await _pickDestinationPlaylist(
+          context,
+          ref,
+          excludePlaylistId: widget.playlist.id,
+        );
+        if (playlistId == null || !context.mounted) return;
+        final local = widget.item.localTrack;
+        final remote = widget.item.playback?.remoteTrack;
+        if (local != null) {
+          await controller.addTrackToPlaylist(playlistId, local.id);
+        } else if (remote != null) {
+          await controller.addRemoteTrackToPlaylist(playlistId, remote);
+        }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(ref.read(appStringsProvider).songAddedToPlaylist),
+            ),
+          );
+        }
+      case _TrackMenuAction.removeFromPlaylist:
+        await controller.removeCatalogEntry(
+          widget.playlist.id,
+          widget.item.entry.id,
+        );
+      case _TrackMenuAction.renameTrack:
+      case _TrackMenuAction.toggleFavorite:
+      case _TrackMenuAction.deleteTrack:
+        return;
+    }
   }
 }
 
@@ -2975,54 +3126,45 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                 ),
                               ],
                               _TrackListMode.playlist => [
+                                if (_remoteTrackInfoForLocal(track) != null)
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.download,
+                                    child: _trackMenuItem(
+                                      Icons.download_rounded,
+                                      strings.download,
+                                    ),
+                                  ),
+                                PopupMenuItem(
+                                  value: _TrackMenuAction.addToPlaylist,
+                                  child: _trackMenuItem(
+                                    Icons.playlist_add_rounded,
+                                    strings.addToPlaylist,
+                                  ),
+                                ),
                                 PopupMenuItem(
                                   value: _TrackMenuAction.renameTrack,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.drive_file_rename_outline_rounded,
-                                        color: menuItemIconColor,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Text(strings.rename),
-                                    ],
+                                  child: _trackMenuItem(
+                                    Icons.drive_file_rename_outline_rounded,
+                                    strings.rename,
                                   ),
                                 ),
                                 PopupMenuItem(
                                   value: _TrackMenuAction.toggleFavorite,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        isFavorite
-                                            ? Icons.favorite_rounded
-                                            : Icons.favorite_border_rounded,
-                                        color: isFavorite
-                                            ? Theme.of(
-                                                context,
-                                              ).colorScheme.primary
-                                            : menuItemIconColor,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Text(
-                                        isFavorite
-                                            ? strings.removeFromFavorites
-                                            : strings.addToFavorites,
-                                      ),
-                                    ],
+                                  child: _trackMenuItem(
+                                    isFavorite
+                                        ? Icons.favorite_rounded
+                                        : Icons.favorite_border_rounded,
+                                    isFavorite
+                                        ? strings.removeFromFavorites
+                                        : strings.addToFavorites,
                                   ),
                                 ),
                                 if (playlistId != Playlist.favoritesId)
                                   PopupMenuItem(
                                     value: _TrackMenuAction.removeFromPlaylist,
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.playlist_remove_rounded,
-                                          color: menuItemIconColor,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Text(strings.removeFromPlaylist),
-                                      ],
+                                    child: _trackMenuItem(
+                                      Icons.playlist_remove_rounded,
+                                      strings.removeFromPlaylist,
                                     ),
                                   ),
                               ],
@@ -3098,6 +3240,19 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     _TrackMenuAction action,
   ) async {
     switch (action) {
+      case _TrackMenuAction.download:
+        final remote = _remoteTrackInfoForLocal(track);
+        if (remote == null) return;
+        await ref
+            .read(downloadControllerProvider.notifier)
+            .downloadAudio(remote);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(ref.read(appStringsProvider).downloadQueued),
+            ),
+          );
+        }
       case _TrackMenuAction.renameTrack:
         await _renameTrack(context, ref);
       case _TrackMenuAction.addToPlaylist:
@@ -3166,36 +3321,10 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
   }
 
   Future<void> _addToPlaylist(BuildContext context, WidgetRef ref) async {
-    final playlists = (await ref.read(
-      playlistsControllerProvider.future,
-    )).where((playlist) => !playlist.isFavorites).toList(growable: false);
-    if (!context.mounted) {
-      return;
-    }
-    if (playlists.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(ref.read(appStringsProvider).createPlaylistFirst),
-        ),
-      );
-      return;
-    }
-
-    final playlistId = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return SimpleDialog(
-          title: Text(ref.read(appStringsProvider).choosePlaylist),
-          children: playlists
-              .map(
-                (playlist) => SimpleDialogOption(
-                  onPressed: () => Navigator.of(context).pop(playlist.id),
-                  child: Text(playlist.name),
-                ),
-              )
-              .toList(growable: false),
-        );
-      },
+    final playlistId = await _pickDestinationPlaylist(
+      context,
+      ref,
+      excludePlaylistId: this.playlistId,
     );
     if (playlistId == null || !context.mounted) {
       return;

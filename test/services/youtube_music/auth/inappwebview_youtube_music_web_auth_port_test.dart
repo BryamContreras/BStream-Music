@@ -35,11 +35,18 @@ void main() {
           },
         );
 
-        await expectLater(
-          port.prepare(),
-          throwsA(isA<YouTubeMusicWebAuthException>()),
-          reason: failedStore,
-        );
+        if (failedStore == 'cookies') {
+          await expectLater(
+            port.prepare(),
+            throwsA(isA<YouTubeMusicWebAuthException>()),
+            reason: failedStore,
+          );
+        } else {
+          // Cache/DOM storage are best-effort platform stores. A failed
+          // cleanup there must not block a fresh authenticated session when
+          // the cookie boundary was cleared successfully.
+          await port.prepare();
+        }
         expect(cookieCalls, 1, reason: failedStore);
         expect(storageCalls, 1, reason: failedStore);
         expect(cacheCalls, 1, reason: failedStore);
@@ -48,7 +55,7 @@ void main() {
   );
 
   test(
-    'a failed prepare remains retryable without opening the session',
+    'a noncritical cleanup failure does not block a fresh session',
     () async {
       var cookieCalls = 0;
       var storageCalls = 0;
@@ -65,10 +72,7 @@ void main() {
         cacheCleaner: () async => cacheCalls += 1,
       );
 
-      await expectLater(
-        port.prepare(),
-        throwsA(isA<YouTubeMusicWebAuthException>()),
-      );
+      await port.prepare();
       await port.prepare();
 
       expect(cookieCalls, 2);

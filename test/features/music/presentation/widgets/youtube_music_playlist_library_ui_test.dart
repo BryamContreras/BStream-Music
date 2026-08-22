@@ -104,6 +104,34 @@ void main() {
   );
 
   testWidgets(
+    'remote playlist song menu offers download and add-to-playlist actions',
+    (tester) async {
+      final fixture = _remoteCatalogFixture();
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      await tester.pumpWidget(
+        _libraryHarness(fixture: fixture, controller: controller),
+      );
+      await _pumpLibrary(tester);
+
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+      await tester.tap(
+        find.byKey(const ValueKey('library-catalog-menu-occurrence-a')),
+      );
+      await tester.pump();
+
+      expect(find.text('Descargar'), findsOneWidget);
+      expect(find.text('Añadir a playlist'), findsOneWidget);
+      expect(find.text('Quitar de playlist'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'linked playlist local-only action never requests YouTube deletion',
     (tester) async {
       final fixture = _remoteCatalogFixture();
