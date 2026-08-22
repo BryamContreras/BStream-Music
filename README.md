@@ -315,6 +315,8 @@ output asynchronously.
 - Stable Flutter compatible with Dart `^3.12.0`.
 - Android Studio and Android SDK for Android development.
 - Visual Studio/Build Tools with **Desktop development with C++** for Windows.
+- The pinned NuGet CLI on `PATH` for Windows plugin dependencies (the build
+  bootstrap below installs it when needed).
 - A stable Rust toolchain with the MSVC x64 target for Windows SMTC builds.
 - Clang, CMake, Ninja, GTK 3, and libmpv for Linux.
 - A Mac with Xcode to build, sign, and test macOS.
@@ -358,6 +360,24 @@ Install `yt-dlp` with `winget`:
 ```powershell
 winget install yt-dlp.yt-dlp
 ```
+
+The Windows WebView login also needs the NuGet CLI at build time. If a build
+reports `NUGET-NOTFOUND` or `NUGET-NOTFOUND install Microsoft.Web.WebView2`,
+run this once from the repository root, then clear Flutter's generated CMake
+cache before rebuilding:
+
+```powershell
+$nuget = .\tool\ensure_nuget.ps1
+$env:Path = "$(Split-Path -Parent $nuget);$env:Path"
+flutter clean
+flutter pub get --enforce-lockfile
+flutter build windows --release
+```
+
+The script downloads NuGet `6.12.2` from the official distribution endpoint,
+verifies its SHA-256, and stores it under the user/runner tool directory. A
+WebView2 Runtime is required to run the login screen on the Windows machine;
+it is not required merely to compile the application.
 
 For a portable Windows build, place verified `yt-dlp` and Deno executables in
 `windows/tools` before compiling Release. CMake copies both next to the

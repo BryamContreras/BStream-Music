@@ -42,8 +42,14 @@ jobs:
           rustup default stable
           rustup target add x86_64-pc-windows-msvc
 
+      - name: Install pinned NuGet CLI
+        shell: pwsh
+        run: ./tool/ensure_nuget.ps1
+
       - name: Resolve locked dependencies
-        run: flutter pub get --enforce-lockfile
+        run: |
+          flutter clean
+          flutter pub get --enforce-lockfile
 
       - name: Prepare checksum-pinned desktop tools
         shell: pwsh

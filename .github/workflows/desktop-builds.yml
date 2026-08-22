@@ -49,6 +49,11 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@4733eaac7c1b0da527e4206b7671e0061de1ce37 # v6
+        with:
+          gradle-version: "8.14.3"
+
       - name: Set up Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
@@ -58,6 +63,11 @@ jobs:
 
       - name: Resolve dependencies
         run: flutter pub get --enforce-lockfile
+
+      - name: Configure Android Gradle properties
+        shell: bash
+        run: |
+          printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$ANDROID_HOME" "$FLUTTER_ROOT" > android/local.properties
 
       - name: Verify formatting
         run: >-
@@ -72,7 +82,9 @@ jobs:
 
       - name: Test Android yt-dlp update policy
         working-directory: android
-        run: ./gradlew :app:testDebugUnitTest --no-daemon
+        run: |
+          gradle --version
+          gradle :app:testDebugUnitTest --no-daemon
 
       - name: Upload coverage report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -303,8 +315,14 @@ jobs:
           rustup default stable
           rustup target add x86_64-pc-windows-msvc
 
+      - name: Install pinned NuGet CLI
+        shell: pwsh
+        run: ./tool/ensure_nuget.ps1
+
       - name: Resolve dependencies
-        run: flutter pub get --enforce-lockfile
+        run: |
+          flutter clean
+          flutter pub get --enforce-lockfile
 
       - name: Prepare yt-dlp and Deno
         shell: pwsh
