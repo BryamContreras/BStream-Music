@@ -10,6 +10,13 @@ TrackInfo _mergeTrackInfo(TrackInfo base, TrackInfo resolved) {
   final artists = preserveMusicMetadata
       ? (baseArtists.isNotEmpty ? baseArtists : resolvedArtists)
       : (resolvedArtists.isNotEmpty ? resolvedArtists : baseArtists);
+  final artistBrowseIds = preserveMusicMetadata
+      ? (base.artistBrowseIds.isNotEmpty
+            ? base.artistBrowseIds
+            : resolved.artistBrowseIds)
+      : (resolved.artistBrowseIds.isNotEmpty
+            ? resolved.artistBrowseIds
+            : base.artistBrowseIds);
   return TrackInfo(
     id: preserveMusicMetadata
         ? _preferredIdentifier(base.id, resolved.id)
@@ -63,6 +70,7 @@ TrackInfo _mergeTrackInfo(TrackInfo base, TrackInfo resolved) {
         ? resolved.httpHeaders
         : resolved.httpHeaders ?? base.httpHeaders,
     artists: artists,
+    artistBrowseIds: artistBrowseIds,
     metadataSource: preserveMusicMetadata
         ? base.metadataSource
         : resolved.metadataSource,
@@ -464,6 +472,7 @@ class RemoteTrackResolver {
       viewCount: track.viewCount,
       httpHeaders: track.httpHeaders,
       artists: track.artists,
+      artistBrowseIds: track.artistBrowseIds,
       metadataSource: track.metadataSource,
     );
   }

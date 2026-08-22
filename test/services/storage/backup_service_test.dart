@@ -75,6 +75,88 @@ void main() {
     expect(databaseService.initializeCalls, 1);
   });
 
+  test('backup extraction budget rejects oversized and bomb-like archives', () {
+    expect(
+      () => validateBackupArchiveBudget(
+        archiveBytes: 1024,
+        entrySizes: const [512, 1024],
+        maxEntries: 3,
+        maxExpandedBytes: 4096,
+        maxSingleEntryBytes: 2048,
+        maxExpansionRatio: 4,
+        minimumExpansionAllowance: 0,
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => validateBackupArchiveBudget(
+        archiveBytes: 100,
+        entrySizes: const [1001],
+        maxSingleEntryBytes: 1000,
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => validateBackupArchiveBudget(
+        archiveBytes: 100,
+        entrySizes: const [100, 100, 100],
+        maxEntries: 2,
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => validateBackupArchiveBudget(
+        archiveBytes: 100,
+        entrySizes: const [1001],
+        maxExpandedBytes: 1000,
+        maxSingleEntryBytes: 2000,
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => validateBackupArchiveBudget(
+        archiveBytes: 10,
+        entrySizes: const [101],
+        maxExpansionRatio: 10,
+        minimumExpansionAllowance: 0,
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test(
+    'restore rejects duplicate approved paths before touching data',
+    () async {
+      final archive = Archive()
+        ..add(
+          ArchiveFile.bytes(
+            'database/${AppConstants.databaseName}',
+            'database-v2'.codeUnits,
+          ),
+        )
+        ..add(
+          ArchiveFile.bytes(
+            'database\\${AppConstants.databaseName}',
+            'database-v3'.codeUnits,
+          ),
+        );
+      final backup = File(p.join(sandbox.path, 'duplicate.zip'));
+      await backup.writeAsBytes(ZipEncoder().encodeBytes(archive));
+
+      await expectLater(
+        BackupService(
+          databaseService,
+          coordinator,
+        ).restoreBackupFile(backupPath: backup.path, mediaRoot: mediaRoot.path),
+        throwsFormatException,
+      );
+
+      expect(await databaseFile.readAsString(), 'database-v1');
+      expect(databaseService.validationCalls, 0);
+      expect(databaseService.closeCalls, 0);
+    },
+  );
+
   test('restore replaces media and ignores unsafe archive paths', () async {
     final archive = Archive()
       ..add(
@@ -122,6 +204,7 @@ void main() {
     expect(databaseService.initializeCalls, 1);
     expect(databaseService.rewriteMediaRootCalls, 1);
     expect(databaseService.rewriteMediaRoot, mediaRoot.path);
+    expect(databaseService.recommendationGeneration, 1);
   });
 
   test('restore validates the database before touching active data', () async {
@@ -153,6 +236,7 @@ void main() {
     expect(databaseService.validationCalls, 1);
     expect(databaseService.closeCalls, 0);
     expect(databaseService.initializeCalls, 0);
+    expect(databaseService.recommendationGeneration, 1);
   });
 
   test('restore rejects an incompatible manifest before validation', () async {
@@ -241,6 +325,7 @@ void main() {
     expect(databaseService.closeCalls, 2);
     expect(databaseService.initializeCalls, 2);
     expect(databaseService.rewriteMediaRootCalls, 0);
+    expect(databaseService.recommendationGeneration, 1);
   });
 }
 

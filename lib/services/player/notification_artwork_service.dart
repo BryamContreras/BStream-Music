@@ -16,6 +16,7 @@ import '../../core/utils/image_source.dart';
 
 typedef NotificationArtworkCacheDirectoryProvider =
     Future<Directory> Function();
+typedef NotificationArtworkServerBinder = Future<HttpServer> Function();
 
 /// Supplies square, center-cropped artwork to Android media notifications.
 ///
@@ -26,6 +27,7 @@ typedef NotificationArtworkCacheDirectoryProvider =
 class NotificationArtworkService {
   NotificationArtworkService({
     NotificationArtworkCacheDirectoryProvider? cacheDirectoryProvider,
+    NotificationArtworkServerBinder? serverBinder,
     this.outputSize = 320,
     this.maximumCacheEntries = 128,
     this.maximumRegisteredSources = 512,
@@ -41,7 +43,8 @@ class NotificationArtworkService {
        assert(sourceIdleTimeout > Duration.zero),
        assert(sourceTotalTimeout > Duration.zero),
        _cacheDirectoryProvider =
-           cacheDirectoryProvider ?? _defaultCacheDirectory;
+           cacheDirectoryProvider ?? _defaultCacheDirectory,
+       _serverBinder = serverBinder ?? _bindLoopbackServer;
 
   static final NotificationArtworkService instance =
       NotificationArtworkService();
@@ -50,6 +53,7 @@ class NotificationArtworkService {
   static const _routePrefix = 'notification-artwork';
 
   final NotificationArtworkCacheDirectoryProvider _cacheDirectoryProvider;
+  final NotificationArtworkServerBinder _serverBinder;
   final int outputSize;
   final int maximumCacheEntries;
   final int maximumRegisteredSources;
@@ -69,9 +73,25 @@ class NotificationArtworkService {
   bool _disposed = false;
   int _activeWork = 0;
 
-  /// Starts the loopback endpoint. Startup failure is intentionally best
-  /// effort: callers will keep using the original artwork URI.
-  Future<void> initialize() => _initialization ??= _startServer();
+  /// Starts the optional loopback endpoint.
+  ///
+  /// A failure is reported to the startup coordinator, while clearing the
+  /// cached attempt allows a later retry. Playback remains independent from
+  /// this service and can keep using the original artwork URI.
+  Future<void> initialize() {
+    final current = _initialization;
+    if (current != null) {
+      return current;
+    }
+    late final Future<void> attempt;
+    attempt = _startServer().whenComplete(() {
+      if (_server == null && identical(_initialization, attempt)) {
+        _initialization = null;
+      }
+    });
+    _initialization = attempt;
+    return attempt;
+  }
 
   /// Returns a local artwork URL without doing file, network, or image work.
   ///
@@ -117,25 +137,19 @@ class NotificationArtworkService {
     if (_disposed || _server != null) {
       return;
     }
-    try {
-      final server = await HttpServer.bind(
-        InternetAddress.loopbackIPv4,
-        0,
-        shared: false,
-      );
-      if (_disposed) {
-        await server.close(force: true);
-        return;
-      }
-      _server = server;
-      unawaited(
-        server.forEach(_handleRequest).catchError((Object _, StackTrace _) {}),
-      );
-    } catch (_) {
-      // Artwork is optional metadata. Playback must remain available when a
-      // device does not allow opening the loopback endpoint.
+    final server = await _serverBinder();
+    if (_disposed) {
+      await server.close(force: true);
+      return;
     }
+    _server = server;
+    unawaited(
+      server.forEach(_handleRequest).catchError((Object _, StackTrace _) {}),
+    );
   }
+
+  static Future<HttpServer> _bindLoopbackServer() =>
+      HttpServer.bind(InternetAddress.loopbackIPv4, 0, shared: false);
 
   Future<void> _handleRequest(HttpRequest request) async {
     final response = request.response;

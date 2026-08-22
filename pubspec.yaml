@@ -44,7 +44,9 @@ dependencies:
   sqflite_common_ffi: ^2.4.2
   shared_preferences: ^2.5.5
   romanize: ^0.0.3
-  kuromoji: ^1.0.5
+  # The compact dictionary loader uses kuromoji's private tokenizer/dictionary
+  # APIs. Keep this exact until that adapter is migrated to a public contract.
+  kuromoji: 1.0.5
   crypto: ^3.0.7
   image: ^4.8.0
   uuid: ^4.5.3
@@ -60,6 +62,10 @@ dependencies:
   csv: ^8.0.0
   url_launcher: ^6.3.2
   app_links: ^7.2.1
+  # Keep these exact while file_picker 11 pins the Windows stack to win32 5.
+  # flutter_secure_storage 11 currently requires win32 6 on Windows.
+  flutter_inappwebview: 6.1.5
+  flutter_secure_storage: 10.0.0
   # 13.1+ requires win32 6, while file_picker 11 is still on win32 5.
   # 12.0.2 keeps the current picker stack compatible and includes the modern
   # SharePlus/ShareParams API on all four supported platforms.
@@ -102,6 +108,7 @@ flutter:
   assets:
     - assets/icons/bstream_icon.png
     - assets/fonts/Roboto-LICENSE.txt
+    - assets/dictionaries/kuromoji-ipadic.bin.bz2
 
   fonts:
     - family: Roboto

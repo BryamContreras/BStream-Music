@@ -20,11 +20,15 @@ class TrackInfoModel extends TrackInfo {
     super.viewCount,
     super.httpHeaders,
     super.artists,
+    super.artistBrowseIds,
     super.metadataSource,
   });
 
   factory TrackInfoModel.fromJson(Map<String, dynamic> json) {
     final artistNames = _stringListValues(json['artists']);
+    final artistBrowseIds = _nullableStringListValues(
+      json['artist_browse_ids'],
+    );
     final metadataSource = _metadataSource(json['metadata_source']);
     final artist =
         (metadataSource == TrackMetadataSource.youtubeMusic &&
@@ -71,6 +75,7 @@ class TrackInfoModel extends TrackInfo {
           : artist == 'Desconocido'
           ? const []
           : [artist],
+      artistBrowseIds: artistBrowseIds,
       metadataSource: metadataSource,
     );
   }
@@ -101,6 +106,7 @@ class TrackInfoModel extends TrackInfo {
       'view_count': viewCount,
       'http_headers': httpHeaders,
       'artists': artists,
+      'artist_browse_ids': artistBrowseIds,
       'metadata_source': metadataSource.name,
     };
   }
@@ -410,6 +416,13 @@ class TrackInfoModel extends TrackInfo {
       return const [];
     }
     return value.map(_stringValue).whereType<String>().toList(growable: false);
+  }
+
+  static List<String?> _nullableStringListValues(Object? value) {
+    if (value is! List) {
+      return const [];
+    }
+    return List<String?>.unmodifiable(value.map(_stringValue));
   }
 
   static TrackMetadataSource _metadataSource(Object? value) {

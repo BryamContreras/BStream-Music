@@ -38,6 +38,123 @@ class AppStrings {
       choose('Refrescar recomendaciones', 'Refresh recommendations');
   String get refreshingHomeRecommendations =>
       choose('Refrescando recomendaciones', 'Refreshing recommendations');
+  String get youtubeMusicAccount =>
+      choose('Cuenta de YouTube Music', 'YouTube Music account');
+  String get signInToYouTubeMusic =>
+      choose('Iniciar sesión en YouTube Music', 'Sign in to YouTube Music');
+  String get youtubeMusicUnofficialTitle =>
+      choose('Integración no oficial', 'Unofficial integration');
+  String get youtubeMusicUnofficialDisclosure => choose(
+    'La integración con YouTube Music utiliza interfaces no oficiales y no '
+        'está afiliada con Google. BStream abrirá la página real de Google '
+        'para iniciar sesión. BStream no guarda tu contraseña, pero para '
+        'mantener la sesión guardará cifradas en este dispositivo las cookies '
+        'necesarias. YouTube puede cambiar, bloquear o restringir esta función. '
+        'Al continuar, la primera sincronización puede crear playlists privadas '
+        'en tu cuenta y modificar tus playlists de YouTube Music. Favoritos '
+        'permanece sólo en BStream. Tú decides por separado si una playlist '
+        'borrada localmente también debe eliminarse de YouTube Music.',
+    'The YouTube Music integration uses unofficial interfaces and is not '
+        'affiliated with Google. BStream will open Google’s real sign-in page. '
+        'BStream never stores your password, but it will securely store the '
+        'required session cookies on this device. YouTube may change, block, '
+        'or restrict this feature. By continuing, the first sync may create '
+        'private playlists in your account and modify your YouTube Music '
+        'playlists. Favorites remains local to BStream. You separately control '
+        'whether a playlist deleted locally is also deleted from YouTube Music.',
+  );
+  String get understandAndContinue =>
+      choose('Entiendo y continuar', 'I understand, continue');
+  String get syncNow => choose('Sincronizar ahora', 'Sync now');
+  String get playlistSyncConsentTitle =>
+      choose('Sincronizar playlists', 'Synchronize playlists');
+  String playlistSyncConsentBody(int? localPlaylistCount) {
+    final localPreservation = localPlaylistCount == null
+        ? choose(
+            'Tus playlists locales se conservarán',
+            'Your local playlists will stay',
+          )
+        : choose(
+            localPlaylistCount == 1
+                ? 'Tu playlist local se conservará'
+                : 'Tus $localPlaylistCount playlists locales se conservarán',
+            localPlaylistCount == 1
+                ? 'Your local playlist will stay'
+                : 'Your $localPlaylistCount local playlists will stay',
+          );
+    return choose(
+      '$localPreservation en BStream y Favoritos permanecerá sólo '
+          'en este dispositivo. Las playlists locales que aún no estén '
+          'vinculadas se crearán como privadas en YouTube Music. Las playlists '
+          'remotas se importarán en BStream. Esta primera sincronización no '
+          'elimina tus playlists locales.',
+      '$localPreservation in BStream, and Favorites will remain local to '
+          'this device. Local playlists that are not linked yet will be created '
+          'as private playlists in YouTube Music. Remote playlists will be '
+          'imported into BStream. This first sync does not delete your local '
+          'playlists.',
+    );
+  }
+
+  String get keepAndSync =>
+      choose('Conservar y sincronizar', 'Keep and synchronize');
+  String get notNow => choose('Ahora no', 'Not now');
+  String get playlistSyncConsentSaveFailed => choose(
+    'No se pudo guardar tu decisión. No se inició la sincronización.',
+    'Your decision could not be saved. Synchronization was not started.',
+  );
+  String get syncingPlaylists =>
+      choose('Sincronizando playlists…', 'Syncing playlists…');
+  String get playlistsSynchronized =>
+      choose('Playlists sincronizadas', 'Playlists synchronized');
+  String get resolvePlaylistSyncConflicts =>
+      choose('Resolver conflictos', 'Resolve conflicts');
+  String get playlistSyncConflictWarning => choose(
+    'BStream detuvo estas playlists para no repetir ni sobrescribir cambios '
+        'inciertos. Elige qué versión conservar en cada una.',
+    'BStream paused these playlists to avoid repeating or overwriting '
+        'uncertain changes. Choose which version to keep for each one.',
+  );
+  String get keepBStreamPlaylist => choose('Conservar BStream', 'Keep BStream');
+  String get keepYouTubeMusicPlaylist =>
+      choose('Conservar YouTube Music', 'Keep YouTube Music');
+  String get noPlaylistSyncConflicts => choose(
+    'No hay conflictos de playlists pendientes.',
+    'There are no unresolved playlist conflicts.',
+  );
+  String get playlistConflictResolveFailed => choose(
+    'No se pudo cerrar el conflicto. La playlist permanece detenida para '
+        'evitar repetir una escritura incierta.',
+    'The conflict could not be closed. The playlist remains paused to avoid '
+        'repeating an uncertain write.',
+  );
+  String get switchYouTubeChannel => choose('Cambiar canal', 'Switch channel');
+  String get disconnectYouTubeMusic =>
+      choose('Desconectar YouTube Music', 'Disconnect YouTube Music');
+  String get youtubeMusicLoginBlocked => choose(
+    'Google bloqueó el inicio de sesión dentro de la app. Por seguridad, '
+        'BStream no puede copiar la sesión de tu navegador. Puedes seguir '
+        'usando la app sin cuenta.',
+    'Google blocked sign-in inside the app. For security, BStream cannot copy '
+        'the session from your browser. You can keep using the app without an '
+        'account.',
+  );
+  String get continueListening =>
+      choose('Seguir escuchando', 'Continue listening');
+  String becauseYouListened(String? seedTitle) {
+    final normalized = seedTitle?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return choose('Porque escuchaste…', 'Because you listened…');
+    }
+    return choose(
+      'Porque escuchaste $normalized',
+      'Because you listened to $normalized',
+    );
+  }
+
+  String get yourMixes => choose('Tus mixes', 'Your mixes');
+  String get newForYou => choose('Nuevos para ti', 'New for you');
+  String get discovery => choose('Descubrimiento', 'Discovery');
   String get recentlyPlayed =>
       choose('Escuchado recientemente', 'Recently played');
   String get myPlaylists => choose('Mis playlists', 'My playlists');
@@ -266,6 +383,10 @@ class AppStrings {
   String get downloads => choose('Descargas', 'Downloads');
   String get downloadedSongs =>
       choose('Canciones descargadas', 'Downloaded songs');
+  String get streamOnlySong => choose(
+    'No descargada; requiere conexión',
+    'Not downloaded; connection required',
+  );
   String get liveQueue => choose('LIVE', 'LIVE');
   String get liveQueueTitle => choose('Cola LIVE', 'LIVE queue');
   String get playbackQueue => choose('Cola de reproducción', 'Playback queue');
@@ -325,6 +446,34 @@ class AppStrings {
       choose('Playlist renombrada.', 'Playlist renamed.');
   String get playlistDeleted =>
       choose('Playlist eliminada.', 'Playlist deleted.');
+  String get removePlaylistFromBStream =>
+      choose('Quitar sólo de BStream', 'Remove only from BStream');
+  String get deletePlaylistFromYouTubeMusic => choose(
+    'Eliminar también de YouTube Music',
+    'Also delete from YouTube Music',
+  );
+  String get confirmDeleteSyncedPlaylist => choose(
+    'Esta playlist está sincronizada con YouTube Music. Puedes quitarla sólo '
+        'de BStream o eliminar también la playlist de tu cuenta. Las canciones '
+        'descargadas no se borrarán.',
+    'This playlist is synced with YouTube Music. You can remove it only from '
+        'BStream or also delete the playlist from your account. Downloaded '
+        'songs will not be deleted.',
+  );
+  String get confirmDeleteReadOnlySyncedPlaylist => choose(
+    'Esta playlist está vinculada con YouTube Music, pero la cuenta activa no '
+        'puede eliminarla allí. Sólo se quitará de BStream y no se volverá a '
+        'importar automáticamente.',
+    'This playlist is linked to YouTube Music, but the active account cannot '
+        'delete it there. It will only be removed from BStream and will not be '
+        'imported automatically again.',
+  );
+  String get youtubeMusicPlaylistDeletionScheduled => choose(
+    'La playlist se quitó de BStream. Su eliminación en YouTube Music quedó '
+        'programada para la próxima sincronización.',
+    'The playlist was removed from BStream. Its YouTube Music deletion is '
+        'scheduled for the next sync.',
+  );
   String get confirmDeletePlaylist => choose(
     'Esta acción no elimina las canciones guardadas.',
     'This does not delete downloaded songs.',
@@ -521,6 +670,39 @@ class AppStrings {
   String get spanish => choose('Español', 'Spanish');
   String get english => 'English';
   String get playback => choose('Reproducción', 'Playback');
+  String get album => choose('Álbum', 'Album');
+  String get privacyAndRecommendations =>
+      choose('Privacidad y recomendaciones', 'Privacy and recommendations');
+  String get recommendationHistory =>
+      choose('Historial de recomendaciones', 'Recommendation history');
+  String get recommendationHistoryEnabled => choose(
+    'BStream aprende de las canciones que escuchas para personalizar Inicio.',
+    'BStream learns from the songs you listen to in order to personalize Home.',
+  );
+  String get recommendationHistoryDisabled => choose(
+    'Las nuevas reproducciones no se usarán para personalizar Inicio.',
+    'New plays will not be used to personalize Home.',
+  );
+  String get clearRecommendationHistory => choose(
+    'Borrar historial y recomendaciones',
+    'Clear history and recommendations',
+  );
+  String get clearRecommendationHistorySummary => choose(
+    'Elimina las señales locales y la caché personalizada sin borrar descargas, favoritos ni playlists.',
+    'Deletes local signals and the personalized cache without removing downloads, favorites, or playlists.',
+  );
+  String get clearRecommendationHistoryTitle => choose(
+    '¿Borrar historial y recomendaciones?',
+    'Clear history and recommendations?',
+  );
+  String get clearRecommendationHistoryMessage => choose(
+    'BStream olvidará lo aprendido de tus escuchas. Tus descargas, favoritos y playlists permanecerán intactos.',
+    'BStream will forget what it learned from your listening. Downloads, favorites, and playlists will remain intact.',
+  );
+  String get recommendationHistoryCleared => choose(
+    'Historial y recomendaciones eliminados.',
+    'History and recommendations cleared.',
+  );
   String get sleepTimer => choose('Temporizador', 'Sleep timer');
   String get storage => choose('Almacenamiento', 'Storage');
   String get downloadsAndBackup =>

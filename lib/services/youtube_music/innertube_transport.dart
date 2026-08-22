@@ -5,10 +5,15 @@ import 'dart:io';
 import '../../core/utils/bounded_byte_stream.dart';
 
 class InnerTubeHttpResponse {
-  const InnerTubeHttpResponse({required this.statusCode, required this.body});
+  const InnerTubeHttpResponse({
+    required this.statusCode,
+    required this.body,
+    this.headers = const <String, String>{},
+  });
 
   final int statusCode;
   final String body;
+  final Map<String, String> headers;
 }
 
 abstract interface class InnerTubeTransport {
@@ -120,9 +125,14 @@ class IoInnerTubeTransport implements InnerTubeTransport {
       } on ByteStreamLimitException catch (error) {
         throw FormatException(error.toString());
       }
+      final responseHeaders = <String, String>{};
+      response.headers.forEach((name, values) {
+        responseHeaders[name.toLowerCase()] = values.join(',');
+      });
       return InnerTubeHttpResponse(
         statusCode: response.statusCode,
         body: utf8.decode(bytes),
+        headers: responseHeaders,
       );
     }();
 

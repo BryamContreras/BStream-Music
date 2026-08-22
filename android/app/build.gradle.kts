@@ -33,6 +33,10 @@ val bundledYtDlpVersion = providers.environmentVariable("YT_DLP_VERSION")
     .orElse("2026.07.04")
 val bundledYtDlpSha256 = providers.environmentVariable("YT_DLP_ANDROID_SHA256")
     .orElse("495be29ff4d9d4e9be7eabdfef225221e5d5282e77f2f505abc6dca80349f3fd")
+val allowNightlyYtDlpUpdates = providers
+    .gradleProperty("allow-nightly-ytdlp-updates")
+    .map { value -> value.equals("true", ignoreCase = true) }
+    .orElse(false)
 val bundledYtDlpResDirectory = layout.buildDirectory.dir("generated/bundled-ytdlp/res")
 val bundledYtDlpResource = bundledYtDlpResDirectory.map { it.file("raw/ytdlp") }
 
@@ -135,6 +139,16 @@ android {
             "BUNDLED_YTDLP_VERSION",
             "\"${bundledYtDlpVersion.get()}\"",
         )
+        buildConfigField(
+            "String",
+            "BUNDLED_YTDLP_SHA256",
+            "\"${bundledYtDlpSha256.get().lowercase()}\"",
+        )
+        buildConfigField(
+            "boolean",
+            "ALLOW_NIGHTLY_YTDLP_UPDATES",
+            allowNightlyYtDlpUpdates.get().toString(),
+        )
         if (!splitPerAbi) {
             ndk {
                 abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
@@ -206,4 +220,5 @@ dependencies {
     val youtubedlAndroid = "0.18.1"
 
     implementation("io.github.junkfood02.youtubedl-android:library:$youtubedlAndroid")
+    testImplementation(kotlin("test"))
 }

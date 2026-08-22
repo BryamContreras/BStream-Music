@@ -13,7 +13,7 @@ class TrackPlayButton extends StatelessWidget {
 
   final String tooltip;
   final bool isPlaying;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {

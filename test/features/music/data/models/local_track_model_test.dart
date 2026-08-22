@@ -14,6 +14,7 @@ void main() {
         title: 'Die With A Smile',
         artist: 'Lady Gaga, Bruno Mars',
         artists: const ['Lady Gaga', 'Bruno Mars'],
+        artistBrowseIds: const ['UC-LadyGaga', null],
         album: 'Die With A Smile',
         filePath: r'C:\Music\die-with-a-smile.m4a',
         addedAt: addedAt,
@@ -33,11 +34,16 @@ void main() {
       final restored = LocalTrackModel.fromMap(map);
 
       expect(map['artists_json'], jsonEncode(original.artists));
+      expect(
+        map['artist_browse_ids_json'],
+        jsonEncode(original.artistBrowseIds),
+      );
       expect(map['metadata_source'], TrackMetadataSource.youtubeMusic.name);
       expect(restored.id, original.id);
       expect(restored.title, original.title);
       expect(restored.artist, original.artist);
       expect(restored.artists, original.artists);
+      expect(restored.artistBrowseIds, original.artistBrowseIds);
       expect(restored.album, original.album);
       expect(restored.filePath, original.filePath);
       expect(restored.addedAt, addedAt);
@@ -69,6 +75,7 @@ void main() {
 
       expect(track.album, isNull);
       expect(track.artists, const ['Legacy artist']);
+      expect(track.artistBrowseIds, isEmpty);
       expect(track.metadataSource, TrackMetadataSource.youtube);
       expect(track.sourceId, isNull);
       expect(track.catalogThumbnailUrl, isNull);

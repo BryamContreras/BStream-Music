@@ -131,7 +131,7 @@ void main() {
   });
 
   test('fallback drops cached tabs and exposes only yt-dlp Videos', () async {
-    final failure = StateError('albums endpoint changed');
+    const failure = InnerTubeFormatException('albums endpoint changed');
     final catalog = _FakeCatalog(
       songResults: [
         InnerTubeSong(
@@ -185,7 +185,7 @@ void main() {
           artists: const ['Artist'],
         ),
       ],
-      albumError: StateError('albums endpoint changed'),
+      albumError: const InnerTubeFormatException('albums endpoint changed'),
     );
     final fallbackFailure = StateError('yt-dlp search failed');
     final downloader = _FakeDownloaderService(searchError: fallbackFailure);

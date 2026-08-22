@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/image_source.dart';
+import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
 import 'source_image.dart';
@@ -13,16 +14,21 @@ class PlaylistPickerDialog extends StatelessWidget {
     required this.title,
     required this.playlists,
     required this.tracks,
+    this.catalogPlaylists = const <CatalogPlaylist>[],
     super.key,
   });
 
   final String title;
   final List<Playlist> playlists;
   final List<LocalTrack> tracks;
+  final List<CatalogPlaylist> catalogPlaylists;
 
   @override
   Widget build(BuildContext context) {
     final tracksById = {for (final track in tracks) track.id: track};
+    final catalogsById = <String, CatalogPlaylist>{
+      for (final catalog in catalogPlaylists) catalog.playlist.id: catalog,
+    };
     final selectablePlaylists = playlists
         .where((playlist) => !playlist.isFavorites)
         .toList(growable: false);
@@ -38,23 +44,33 @@ class PlaylistPickerDialog extends StatelessWidget {
           maxWidth: 420,
           maxHeight: math.min(480, MediaQuery.sizeOf(context).height * 0.65),
         ),
-        child: ListView.builder(
-          shrinkWrap: true,
-          itemCount: selectablePlaylists.length,
-          itemBuilder: (context, index) {
-            final playlist = selectablePlaylists[index];
-            return SimpleDialogOption(
-              onPressed: () => Navigator.of(context).pop(playlist.id),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: _PlaylistOption(
-                playlist: playlist,
-                thumbnailSources: _playlistThumbnailSources(
-                  playlist,
-                  tracksById,
+        child: SizedBox(
+          // AlertDialog measures its content intrinsically. A viewport cannot
+          // provide intrinsic dimensions, so give the lazy list a finite width
+          // while still allowing the dialog constraints to shrink it on mobile.
+          width: 420,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: selectablePlaylists.length,
+            itemBuilder: (context, index) {
+              final playlist = selectablePlaylists[index];
+              return SimpleDialogOption(
+                onPressed: () => Navigator.of(context).pop(playlist.id),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 8,
                 ),
-              ),
-            );
-          },
+                child: _PlaylistOption(
+                  playlist: playlist,
+                  thumbnailSources: _playlistThumbnailSources(
+                    playlist,
+                    tracksById,
+                    catalog: catalogsById[playlist.id],
+                  ),
+                ),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -178,15 +194,27 @@ class _PlaylistOptionFallback extends StatelessWidget {
 
 List<String> _playlistThumbnailSources(
   Playlist playlist,
-  Map<String, LocalTrack> tracksById,
-) {
-  final sources = playlist.trackIds
-      .map((id) => tracksById[id])
-      .whereType<LocalTrack>()
-      .map(_trackThumbnailSource)
-      .whereType<String>()
-      .toSet()
-      .toList(growable: false);
+  Map<String, LocalTrack> tracksById, {
+  CatalogPlaylist? catalog,
+}) {
+  final sources =
+      (catalog == null
+              ? playlist.trackIds
+                    .map((id) => tracksById[id])
+                    .whereType<LocalTrack>()
+                    .map(_trackThumbnailSource)
+              : catalog.entries.where((entry) => !entry.isDeleted).map((entry) {
+                  final local = tracksById[entry.localTrackId];
+                  return local == null
+                      ? _normalizedThumbnailSource(entry.track.thumbnailUrl)
+                      : _trackThumbnailSource(local) ??
+                            _normalizedThumbnailSource(
+                              entry.track.thumbnailUrl,
+                            );
+                }))
+          .whereType<String>()
+          .toSet()
+          .toList(growable: false);
 
   if (sources.length <= 1) {
     return sources;
@@ -197,6 +225,11 @@ List<String> _playlistThumbnailSources(
     ...sources.skip(start),
     ...sources.take(start),
   ].take(4).toList(growable: false);
+}
+
+String? _normalizedThumbnailSource(String? value) {
+  final normalized = value?.trim();
+  return normalized == null || normalized.isEmpty ? null : normalized;
 }
 
 String? _trackThumbnailSource(LocalTrack track) {

@@ -119,10 +119,14 @@ void main() {
       tester,
       player: player,
       lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
     );
 
     expect(_activeLine('First line'), findsOneWidget);
-    expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-control')),
+      findsOneWidget,
+    );
 
     player.emit(
       lookupSnapshot.copyWith(position: const Duration(milliseconds: 4250)),
@@ -230,29 +234,69 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  for (final platform in const [
-    TargetPlatform.android,
-    TargetPlatform.windows,
-  ]) {
-    testWidgets('lyrics header omits playback control on ${platform.name}', (
-      tester,
-    ) async {
-      await _pumpLyricsPage(
-        tester,
-        player: _FakePlayerService(lookupSnapshot),
-        lyrics: _FakeLyricsService(syncedDocument),
-        platform: platform,
-      );
-
-      expect(
-        find.byKey(const ValueKey('lyrics-playback-control')),
-        findsNothing,
-      );
-      expect(find.byKey(const ValueKey('lyrics-back-button')), findsOneWidget);
-      expect(find.text('Lyrics'), findsOneWidget);
-      expect(tester.takeException(), isNull);
+  testWidgets('mobile lyrics move playback and artwork into the header', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(320, 568)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
     });
-  }
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+      textScale: 1.6,
+    );
+
+    final artwork = find.byKey(const ValueKey('lyrics-header-artwork'));
+    final playback = find.byKey(const ValueKey('lyrics-playback-control'));
+    expect(find.byKey(const ValueKey('lyrics-back-button')), findsNothing);
+    expect(artwork, findsOneWidget);
+    expect(tester.getRect(artwork).left, greaterThanOrEqualTo(8));
+    expect(
+      find.byKey(const ValueKey('lyrics-header-artwork-fallback')),
+      findsOneWidget,
+    );
+    expect(playback, findsOneWidget);
+    expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+    final playbackButton = tester.widget<IconButton>(playback);
+    expect(playbackButton.iconSize, 36);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+
+    final semantics = tester.ensureSemantics();
+    final artworkSemantics = tester.getSemantics(artwork).getSemanticsData();
+    expect(artworkSemantics.hasAction(SemanticsAction.tap), isTrue);
+    semantics.dispose();
+
+    await tester.tap(playback);
+    await tester.pump();
+    expect(player.togglePlayPauseCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop lyrics retain the bottom mini player and lean header', (
+    tester,
+  ) async {
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.windows,
+    );
+
+    expect(find.byKey(const ValueKey('lyrics-back-button')), findsOneWidget);
+    expect(find.text('Lyrics'), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-header-artwork')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('lyrics keep the mini player visible below the content', (
     tester,
@@ -796,7 +840,15 @@ void main() {
     final decoration =
         tester.widget<Container>(controls).decoration! as BoxDecoration;
     final controlsContext = tester.element(controls);
-    expect(decoration.color, AppColors.menuBackgroundFor(controlsContext));
+    final surfaceAlpha = Theme.of(controlsContext).brightness == Brightness.dark
+        ? 0.62
+        : 0.72;
+    expect(
+      decoration.color,
+      AppColors.menuBackgroundFor(
+        controlsContext,
+      ).withValues(alpha: surfaceAlpha),
+    );
     expect(
       (decoration.border! as Border).top.color,
       AppColors.menuBorderFor(controlsContext),
@@ -1472,6 +1524,7 @@ Future<ProviderContainer> _pumpLyricsPage(
   LyricsRomanizationService? lyricsRomanizationService,
   bool disableAnimations = false,
   TargetPlatform? platform,
+  double textScale = 1,
 }) async {
   final settingsController = _FakeLyricsSettingsController(
     lyricsTextAlignment,
@@ -1511,12 +1564,13 @@ Future<ProviderContainer> _pumpLyricsPage(
       container: container,
       child: MaterialApp(
         theme: platform == null ? null : ThemeData(platform: platform),
-        builder: disableAnimations
-            ? (context, child) => MediaQuery(
-                data: MediaQuery.of(context).copyWith(disableAnimations: true),
-                child: child!,
-              )
-            : null,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            disableAnimations: disableAnimations,
+            textScaler: TextScaler.linear(textScale),
+          ),
+          child: child!,
+        ),
         home: const LyricsPage(),
       ),
     ),
@@ -1564,6 +1618,16 @@ class _FakeLyricsSettingsController extends SettingsController {
     final current = await future;
     state = AsyncData(
       current.copyWith(lyricsTextAlignment: lyricsTextAlignment),
+    );
+  }
+
+  @override
+  Future<void> setLyricsAnimationStyle(
+    LyricsAnimationStyle lyricsAnimationStyle,
+  ) async {
+    final current = await future;
+    state = AsyncData(
+      current.copyWith(lyricsAnimationStyle: lyricsAnimationStyle),
     );
   }
 
@@ -1696,6 +1760,7 @@ class _FakePlayerService implements PlayerService {
   final StreamController<PlayerSnapshot> _snapshots =
       StreamController<PlayerSnapshot>.broadcast(sync: true);
   final List<Duration> seekPositions = [];
+  int togglePlayPauseCalls = 0;
   PlayerSnapshot _snapshot;
 
   void emit(PlayerSnapshot snapshot) {
@@ -1759,5 +1824,7 @@ class _FakePlayerService implements PlayerService {
   Future<void> stop() async {}
 
   @override
-  Future<void> togglePlayPause() async {}
+  Future<void> togglePlayPause() async {
+    togglePlayPauseCalls++;
+  }
 }

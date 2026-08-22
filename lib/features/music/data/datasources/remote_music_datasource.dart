@@ -12,6 +12,7 @@ TrackInfo trackInfoFromInnerTubeSong(InnerTubeSong song) {
     title: song.title,
     artist: song.artist.isEmpty ? 'Desconocido' : song.artist,
     artists: song.artists,
+    artistBrowseIds: song.artistBrowseIds,
     album: song.album,
     duration: song.duration,
     // The catalog shelf commonly exposes only tiny artwork. Prefer the stable
@@ -64,7 +65,10 @@ class RemoteMusicDataSource {
         if (songs.isNotEmpty && _hasRelevantResult(query, songs)) {
           return List.unmodifiable(songs.map(trackInfoFromInnerTubeSong));
         }
-      } catch (_) {
+      } catch (error) {
+        if (!_isExpectedInnerTubeFailure(error)) {
+          rethrow;
+        }
         // InnerTube is an unofficial, changing endpoint. Search must remain
         // usable through the existing yt-dlp YouTube fallback whenever its
         // bootstrap, request, or response format is unavailable.
@@ -120,6 +124,9 @@ class RemoteMusicDataSource {
         ),
       };
     } catch (error) {
+      if (!_isExpectedInnerTubeFailure(error)) {
+        rethrow;
+      }
       return _searchVideosWithYtDlp(normalizedQuery, primaryError: error);
     }
   }
@@ -164,6 +171,10 @@ class RemoteMusicDataSource {
       tracks: tracks,
       primaryError: primaryError,
     );
+  }
+
+  bool _isExpectedInnerTubeFailure(Object error) {
+    return error is InnerTubeException || error is UnsupportedError;
   }
 
   bool _isDirectYouTubeReference(String query) {

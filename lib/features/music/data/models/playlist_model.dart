@@ -9,6 +9,8 @@ class PlaylistModel extends Playlist {
     required super.trackIds,
     required super.createdAt,
     required super.updatedAt,
+    super.localRevision,
+    super.deletedAt,
   });
 
   factory PlaylistModel.fromMap(Map<String, Object?> map) {
@@ -20,6 +22,8 @@ class PlaylistModel extends Playlist {
       trackIds: ids.toList(growable: false),
       createdAt: DateTime.parse(map['created_at']! as String),
       updatedAt: DateTime.parse(map['updated_at']! as String),
+      localRevision: _integer(map['local_revision']),
+      deletedAt: _date(map['deleted_at']),
     );
   }
 
@@ -30,6 +34,8 @@ class PlaylistModel extends Playlist {
       trackIds: playlist.trackIds,
       createdAt: playlist.createdAt,
       updatedAt: playlist.updatedAt,
+      localRevision: playlist.localRevision,
+      deletedAt: playlist.deletedAt,
     );
   }
 
@@ -40,6 +46,16 @@ class PlaylistModel extends Playlist {
       'track_ids': jsonEncode(trackIds),
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'local_revision': localRevision,
+      'deleted_at': deletedAt?.toIso8601String(),
     };
+  }
+
+  static int _integer(Object? value) {
+    return value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+  }
+
+  static DateTime? _date(Object? value) {
+    return value == null ? null : DateTime.tryParse('$value');
   }
 }

@@ -111,6 +111,30 @@ void main() {
     );
   });
 
+  test('contains an optional notification artwork warmup failure', () async {
+    final asynchronousErrors = <Object>[];
+    var attempts = 0;
+
+    await runZonedGuarded(() async {
+      final artwork = NotificationArtworkService(
+        serverBinder: () {
+          attempts++;
+          return Future<HttpServer>.error(StateError('loopback unavailable'));
+        },
+      );
+      final service = JustAudioPlayerService(
+        audioPlayer: _BlockingAudioPlayer(),
+        notificationArtworkService: artwork,
+      );
+      await _drainEvents();
+      await service.dispose();
+      await artwork.dispose();
+    }, (error, _) => asynchronousErrors.add(error));
+
+    expect(attempts, 1);
+    expect(asynchronousErrors, isEmpty);
+  });
+
   test(
     'hung source A cannot block B or overwrite it when A completes late',
     () async {

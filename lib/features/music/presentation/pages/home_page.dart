@@ -18,6 +18,7 @@ import '../../../../platform_channels/android_external_audio_channel.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/remote_music_datasource.dart';
+import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/track_info.dart';
@@ -31,12 +32,31 @@ import '../widgets/player_panel.dart';
 import '../widgets/scrolled_under_tab_frame.dart';
 import '../widgets/settings_panel.dart';
 import '../widgets/source_image.dart';
+import '../widgets/youtube_music_account_button.dart';
 import 'remote_collection_detail_page.dart';
 import 'search_view.dart';
 import '../widgets/lyrics_page.dart';
 
+double _shellSystemBottomInset(BuildContext context) {
+  final mediaQuery = MediaQuery.of(context);
+  // When Scaffold has already resized its body above the IME, the body's
+  // bottom edge is the keyboard edge. Reserving viewPadding again leaves a
+  // visible strip between the mini player and the bottom navigation.
+  if (mediaQuery.viewInsets.bottom > 0) {
+    return 0;
+  }
+  return math.max(mediaQuery.viewPadding.bottom, mediaQuery.padding.bottom);
+}
+
+enum HomeInitialDestination { home, player }
+
 class HomePage extends ConsumerStatefulWidget {
-  const HomePage({super.key});
+  const HomePage({
+    super.key,
+    this.initialDestination = HomeInitialDestination.home,
+  });
+
+  final HomeInitialDestination initialDestination;
 
   @override
   ConsumerState<HomePage> createState() => _HomePageState();
@@ -46,7 +66,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   static const _maxViewHistory = 2;
   static const _shellTransitionDuration = Duration(milliseconds: 320);
 
-  int _selectedIndex = 0;
+  late int _selectedIndex;
   final List<int> _viewHistory = [];
   final LibraryNavigationController _libraryNavigationController =
       LibraryNavigationController();
@@ -64,10 +84,17 @@ class _HomePageState extends ConsumerState<HomePage> {
   Future<void> _incomingTrackLinkWork = Future<void>.value();
   final Set<String> _startedExternalAudioRequests = <String>{};
   final Set<String> _reportedIncompleteExternalFolders = <String>{};
+  LocalHistoryEntry? _playerHistoryEntry;
+  bool _playerHistoryRegistrationScheduled = false;
+  bool _ignorePlayerHistoryRemoval = false;
 
   @override
   void initState() {
     super.initState();
+    _selectedIndex = switch (widget.initialDestination) {
+      HomeInitialDestination.home => _homeIndex,
+      HomeInitialDestination.player => _playerIndex,
+    };
     unawaited(
       Future.wait([
         ref.read(downloaderWarmupProvider.future),
@@ -76,6 +103,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
+        _ensurePlayerHistoryEntry();
         unawaited(_reconcileLocalLibrary());
       }
     });
@@ -219,9 +247,16 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _setSelectedIndex(int index, {bool recordHistory = true}) {
     if (index == _selectedIndex) {
+      if (index == _playerIndex) {
+        _schedulePlayerHistoryEntry();
+      }
       return;
     }
 
+    final leavingPlayer = _isPlayerSelected && index != _playerIndex;
+    if (leavingPlayer) {
+      _removePlayerHistoryEntry();
+    }
     _releaseFocusForViewChange();
     setState(() {
       _rootBackCount = 0;
@@ -234,6 +269,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       }
       _selectedIndex = index;
     });
+    if (index == _playerIndex) {
+      _schedulePlayerHistoryEntry();
+    }
   }
 
   void _openPlayer() {
@@ -241,6 +279,9 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   void _openSearch() {
+    if (_isPlayerSelected) {
+      _removePlayerHistoryEntry();
+    }
     _releaseFocusForViewChange();
     setState(() {
       _viewHistory.clear();
@@ -345,6 +386,7 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   void dispose() {
+    _removePlayerHistoryEntry();
     unawaited(_externalAudioSubscription?.cancel());
     _incomingTrackLinkSubscription?.close();
     _libraryNavigationController.dispose();
@@ -368,11 +410,80 @@ class _HomePageState extends ConsumerState<HomePage> {
       return false;
     }
 
+    final leavingPlayer = _isPlayerSelected && target != _playerIndex;
+    if (leavingPlayer) {
+      _removePlayerHistoryEntry();
+    }
     _releaseFocusForViewChange();
     setState(() {
       _selectedIndex = target;
     });
+    if (target == _playerIndex) {
+      _schedulePlayerHistoryEntry();
+    }
     return true;
+  }
+
+  void _schedulePlayerHistoryEntry() {
+    if (_playerHistoryRegistrationScheduled ||
+        _playerHistoryEntry != null ||
+        !_isPlayerSelected) {
+      return;
+    }
+    _playerHistoryRegistrationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _playerHistoryRegistrationScheduled = false;
+      if (mounted) {
+        _ensurePlayerHistoryEntry();
+      }
+    });
+  }
+
+  void _ensurePlayerHistoryEntry() {
+    if (_playerHistoryEntry != null || !_isPlayerSelected) {
+      return;
+    }
+    final route = ModalRoute.of(context);
+    if (route == null) {
+      _schedulePlayerHistoryEntry();
+      return;
+    }
+
+    late final LocalHistoryEntry entry;
+    entry = LocalHistoryEntry(
+      impliesAppBarDismissal: false,
+      onRemove: () => _handlePlayerHistoryRemoval(entry),
+    );
+    _playerHistoryEntry = entry;
+    route.addLocalHistoryEntry(entry);
+    // Rebuild PopScope with canPop enabled only after the route owns the local
+    // entry. A Back event racing the first frame still uses the explicit Home
+    // fallback in _handleSystemBack.
+    setState(() {});
+  }
+
+  void _handlePlayerHistoryRemoval(LocalHistoryEntry entry) {
+    if (identical(_playerHistoryEntry, entry)) {
+      _playerHistoryEntry = null;
+    }
+    if (!mounted || _ignorePlayerHistoryRemoval || !_isPlayerSelected) {
+      return;
+    }
+    _handleSystemBack();
+  }
+
+  void _removePlayerHistoryEntry() {
+    final entry = _playerHistoryEntry;
+    if (entry == null) {
+      return;
+    }
+    _playerHistoryEntry = null;
+    _ignorePlayerHistoryRemoval = true;
+    try {
+      entry.remove();
+    } finally {
+      _ignorePlayerHistoryRemoval = false;
+    }
   }
 
   @override
@@ -380,10 +491,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesAndroidNavigation;
     final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
-    final systemBottomInset = math.max(
-      MediaQuery.viewPaddingOf(context).bottom,
-      MediaQuery.paddingOf(context).bottom,
-    );
+    final systemBottomInset = _shellSystemBottomInset(context);
     final miniPlayerHeight = miniPlayerHeightFor(context);
     final bottomNavigationHeight = useSideNavigation
         ? 0.0
@@ -454,7 +562,10 @@ class _HomePageState extends ConsumerState<HomePage> {
       includeSemantics: false,
       onKeyEvent: _handleDesktopPlaybackKey,
       child: PopScope(
-        canPop: false,
+        // The player is represented as local route history so native Android
+        // Back (including predictive Back) cannot discard the app's root
+        // route. Browsing roots keep the existing guarded exit behavior.
+        canPop: _isPlayerSelected && _playerHistoryEntry != null,
         onPopInvokedWithResult: (didPop, _) {
           if (!didPop) {
             _handleSystemBack();
@@ -567,6 +678,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                         onDestinationSelected: _selectIndex,
                                         destinations: destinations,
                                         glassyCompact: _usesAndroidNavigation,
+                                        systemBottomInset: systemBottomInset,
                                       ),
                                     ),
                                   ),
@@ -670,12 +782,14 @@ class _BottomNavigation extends StatelessWidget {
     required this.onDestinationSelected,
     required this.destinations,
     required this.glassyCompact,
+    required this.systemBottomInset,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onDestinationSelected;
   final List<_AppDestination> destinations;
   final bool glassyCompact;
+  final double systemBottomInset;
 
   static double baseHeight({required bool glassyCompact}) =>
       glassyCompact ? 72.0 : 78.0;
@@ -683,10 +797,6 @@ class _BottomNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final systemBottomInset = math.max(
-      MediaQuery.viewPaddingOf(context).bottom,
-      MediaQuery.paddingOf(context).bottom,
-    );
     final content = SafeArea(
       top: false,
       bottom: false,
@@ -1210,11 +1320,19 @@ class _HomeView extends ConsumerWidget {
     final strings = ref.watch(appStringsProvider);
     final history = ref.watch(historyProvider);
     final playlists = ref.watch(playlistsControllerProvider);
+    final catalogPlaylists = ref.watch(catalogPlaylistsProvider);
     final hasHistory = history.value?.isNotEmpty ?? false;
-    final hasPlaylists = playlists.value?.isNotEmpty ?? false;
+    final hasPlaylists =
+        catalogPlaylists.value?.isNotEmpty ??
+        playlists.value?.isNotEmpty ??
+        false;
     final recommendationsState = ref.watch(homeRecommendationsProvider);
     final recommendations =
         recommendationsState.value ?? const <HomeRecommendationSection>[];
+    final hasPersonalizedContinue = recommendations.any(
+      (section) => section.isContinueListening,
+    );
+    final showLegacyHistory = hasHistory && !hasPersonalizedContinue;
     final libraryTracks =
         ref.watch(libraryTracksProvider).value ?? const <LocalTrack>[];
 
@@ -1238,7 +1356,9 @@ class _HomeView extends ConsumerWidget {
               tooltip: strings.refreshHomeRecommendations,
               onPressed: recommendationsState.isLoading
                   ? null
-                  : () => ref.invalidate(homeRecommendationsProvider),
+                  : () => unawaited(
+                      ref.read(homeRecommendationsProvider.notifier).refresh(),
+                    ),
               icon: recommendationsState.isLoading
                   ? SizedBox.square(
                       dimension: 20,
@@ -1250,11 +1370,15 @@ class _HomeView extends ConsumerWidget {
                   : const Icon(Icons.refresh_rounded),
             ),
           ),
+          SizedBox.square(
+            dimension: 48,
+            child: YouTubeMusicAccountButton(strings: strings),
+          ),
         ],
       ),
       body: CustomScrollView(
         slivers: [
-          if (hasHistory)
+          if (showLegacyHistory)
             SliverToBoxAdapter(
               child: _HomeRecentSection(
                 history: history,
@@ -1269,31 +1393,26 @@ class _HomeView extends ConsumerWidget {
               ),
             ),
           if (hasPlaylists) ...[
-            if (hasHistory)
+            if (showLegacyHistory)
               const SliverToBoxAdapter(child: SizedBox(height: 12)),
             SliverToBoxAdapter(
               child: _HomePlaylistSection(
-                playlists: playlists,
+                catalogPlaylists: catalogPlaylists,
+                legacyPlaylists: playlists,
                 libraryTracks: libraryTracks,
                 strings: strings,
                 onPlaylistSelected: onOpenPlaylist,
               ),
             ),
           ],
-          if (recommendations.isNotEmpty && (hasHistory || hasPlaylists))
+          if (recommendations.isNotEmpty && (showLegacyHistory || hasPlaylists))
             const SliverToBoxAdapter(child: SizedBox(height: 12)),
           for (final section in recommendations)
             SliverToBoxAdapter(
               child: _HomeRemoteRecommendationSection(
                 section: section,
+                libraryTracks: libraryTracks,
                 onOpenPlayer: onOpenPlayer,
-                onTrackSelected: (track, queue) {
-                  final playFuture = ref
-                      .read(playerControllerProvider.notifier)
-                      .playRemote(track, queue: queue);
-                  onOpenPlayer();
-                  unawaited(playFuture);
-                },
               ),
             ),
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
@@ -1306,19 +1425,18 @@ class _HomeView extends ConsumerWidget {
 class _HomeRemoteRecommendationSection extends ConsumerWidget {
   const _HomeRemoteRecommendationSection({
     required this.section,
+    required this.libraryTracks,
     required this.onOpenPlayer,
-    required this.onTrackSelected,
   });
 
   final HomeRecommendationSection section;
+  final List<LocalTrack> libraryTracks;
   final VoidCallback onOpenPlayer;
-  final void Function(TrackInfo track, List<TrackInfo> queue) onTrackSelected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final expandedCards = MediaQuery.sizeOf(context).width >= 700;
     final strings = ref.watch(appStringsProvider);
-    final trackQueue = section.tracks;
     final cardWidth = expandedCards ? 176.0 : 148.0;
     return _HomeSection(
       key: ValueKey('home-recommendations-section-${section.title}'),
@@ -1338,12 +1456,15 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
           itemBuilder: (context, index) {
             final item = section.items[index];
             return switch (item) {
-              HomeRecommendationTrackItem(:final track) =>
-                _RecommendedTrackCard(
-                  track: track,
-                  width: cardWidth,
-                  onTap: () => onTrackSelected(track, trackQueue),
+              HomeRecommendationTrackItem() => _RecommendedTrackCard(
+                track: item.track,
+                localArtworkSource: _localArtworkSourceForRecommendation(item),
+                fallbackArtworkSource: _fallbackArtworkSourceForRecommendation(
+                  item,
                 ),
+                width: cardWidth,
+                onTap: _trackTap(item, ref),
+              ),
               HomeRecommendationCollectionItem(:final collection) =>
                 _RecommendedCollectionCard(
                   collection: collection,
@@ -1356,6 +1477,183 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  VoidCallback? _trackTap(HomeRecommendationTrackItem selected, WidgetRef ref) {
+    final localTrack = _localTrackForRecommendation(selected);
+    if (section.personalizedKind != null) {
+      final recommendationQueue = section.items
+          .whereType<HomeRecommendationTrackItem>()
+          .map(
+            (item) => RecommendationPlaybackItem(
+              track: item.track,
+              localTrack: _localTrackForRecommendation(item),
+            ),
+          )
+          .toList(growable: false);
+      final selectedPlayback = RecommendationPlaybackItem(
+        track: selected.track,
+        localTrack: localTrack,
+      );
+      final sourceId =
+          section.queueSourceId ??
+          'personalized-home:${section.personalizedKind!.name}';
+      return () {
+        final player = ref.read(playerControllerProvider.notifier);
+        RecommendationQueueExtender? queueExtender;
+        final service = ref.read(youtubeMusicSearchProvider);
+        final link = const BStreamTrackLinkCodec().tryFromTrack(selected.track);
+        if (service is YouTubeMusicRelated && link != null) {
+          queueExtender = _buildPersonalizedQueueExtender(
+            related: service as YouTubeMusicRelated,
+            seedVideoId: link.videoId,
+            initialQueue: recommendationQueue,
+          );
+        }
+        final playFuture = player.playRecommendation(
+          selectedPlayback,
+          queue: recommendationQueue,
+          queueSourceId: sourceId,
+          queueExtender: queueExtender,
+        );
+        onOpenPlayer();
+        unawaited(playFuture);
+      };
+    }
+    if (localTrack != null) {
+      return () {
+        final localQueue = section.items
+            .whereType<HomeRecommendationTrackItem>()
+            .map(_localTrackForRecommendation)
+            .whereType<LocalTrack>()
+            .toList(growable: false);
+        final playFuture = ref
+            .read(playerControllerProvider.notifier)
+            .playLocal(
+              localTrack,
+              queue: localQueue,
+              useNativeQueue: false,
+              queueSourceId: section.queueSourceId,
+            );
+        onOpenPlayer();
+        unawaited(playFuture);
+      };
+    }
+    if (selected.track.url.trim().isEmpty) {
+      return null;
+    }
+    return () {
+      final remoteQueue = section.items
+          .whereType<HomeRecommendationTrackItem>()
+          .map((item) => item.track)
+          .where((track) => track.url.trim().isNotEmpty)
+          .toList(growable: false);
+      final playFuture = ref
+          .read(playerControllerProvider.notifier)
+          .playRemote(
+            selected.track,
+            queue: remoteQueue,
+            queueSourceId: section.queueSourceId,
+          );
+      onOpenPlayer();
+      unawaited(playFuture);
+    };
+  }
+
+  RecommendationQueueExtender _buildPersonalizedQueueExtender({
+    required YouTubeMusicRelated related,
+    required String seedVideoId,
+    required List<RecommendationPlaybackItem> initialQueue,
+  }) {
+    final expanded = List<RecommendationPlaybackItem>.of(initialQueue);
+    const linkCodec = BStreamTrackLinkCodec();
+    final seenVideoIds = initialQueue
+        .map((item) => linkCodec.tryFromTrack(item.track)?.videoId)
+        .whereType<String>()
+        .toSet();
+    final requestedContinuations = <String>{};
+    String? continuation;
+    var needsInitialPage = true;
+    var exhausted = false;
+
+    return () async {
+      if (exhausted) {
+        return List<RecommendationPlaybackItem>.unmodifiable(expanded);
+      }
+
+      final previousLength = expanded.length;
+      // A continuation can occasionally contain only duplicates from the
+      // visible shelf. Follow a small bounded number of pages so one sparse
+      // response does not falsely end the radio.
+      for (var request = 0; request < 3; request++) {
+        if (!needsInitialPage) {
+          final token = continuation;
+          if (token == null ||
+              token.isEmpty ||
+              !requestedContinuations.add(token)) {
+            exhausted = true;
+            break;
+          }
+        }
+        final page = needsInitialPage
+            ? await related.getNext(seedVideoId, radio: true, limit: 30)
+            : await related.getNextContinuation(continuation!, limit: 30);
+        needsInitialPage = false;
+        final nextContinuation = page.continuation?.trim();
+        continuation = nextContinuation == null || nextContinuation.isEmpty
+            ? null
+            : nextContinuation;
+        for (final song in page.songs) {
+          if (!seenVideoIds.add(song.videoId)) {
+            continue;
+          }
+          expanded.add(
+            RecommendationPlaybackItem(track: trackInfoFromInnerTubeSong(song)),
+          );
+        }
+        if (continuation == null) {
+          exhausted = true;
+        }
+        if (expanded.length > previousLength || exhausted) {
+          break;
+        }
+      }
+      return List<RecommendationPlaybackItem>.unmodifiable(expanded);
+    };
+  }
+
+  LocalTrack? _localTrackForRecommendation(HomeRecommendationTrackItem item) {
+    final localTrackId = item.localTrackId?.trim();
+    final recommendationId = item.track.id.trim();
+    for (final track in libraryTracks) {
+      final sourceId = track.sourceId?.trim();
+      if ((localTrackId != null &&
+              localTrackId.isNotEmpty &&
+              track.id == localTrackId) ||
+          (recommendationId.isNotEmpty && sourceId == recommendationId)) {
+        return track;
+      }
+    }
+    return null;
+  }
+
+  String? _localArtworkSourceForRecommendation(
+    HomeRecommendationTrackItem item,
+  ) {
+    final localTrack = _localTrackForRecommendation(item);
+    return _firstHomeArtworkSource([localTrack?.thumbnailPath]);
+  }
+
+  String? _fallbackArtworkSourceForRecommendation(
+    HomeRecommendationTrackItem item,
+  ) {
+    final localTrack = _localTrackForRecommendation(item);
+    return _firstHomeArtworkSource([
+      localTrack?.thumbnailUrl,
+      localTrack?.catalogThumbnailUrl,
+      item.track.thumbnailUrl,
+      item.track.catalogThumbnailUrl,
+    ]);
   }
 }
 
@@ -1414,13 +1712,15 @@ class _HomeRecentSection extends StatelessWidget {
 
 class _HomePlaylistSection extends StatelessWidget {
   const _HomePlaylistSection({
-    required this.playlists,
+    required this.catalogPlaylists,
+    required this.legacyPlaylists,
     required this.libraryTracks,
     required this.strings,
     required this.onPlaylistSelected,
   });
 
-  final AsyncValue<List<Playlist>> playlists;
+  final AsyncValue<List<CatalogPlaylist>> catalogPlaylists;
+  final AsyncValue<List<Playlist>> legacyPlaylists;
   final List<LocalTrack> libraryTracks;
   final AppStrings strings;
   final ValueChanged<String> onPlaylistSelected;
@@ -1432,9 +1732,9 @@ class _HomePlaylistSection extends StatelessWidget {
     final tracksById = {for (final track in libraryTracks) track.id: track};
     return _HomeSection(
       title: strings.myPlaylists,
-      child: playlists.when(
-        data: (items) {
-          final visible = items.take(10).toList(growable: false);
+      child: catalogPlaylists.when(
+        data: (catalogs) {
+          final visible = catalogs.take(10).toList(growable: false);
           if (visible.isEmpty) {
             return _HomeEmptyText(strings.noLocalPlaylists);
           }
@@ -1451,22 +1751,26 @@ class _HomePlaylistSection extends StatelessWidget {
               itemCount: visible.length,
               separatorBuilder: (_, _) => const SizedBox(width: 10),
               itemBuilder: (context, index) {
-                final playlist = visible[index];
-                final playlistTracks = playlist.trackIds
-                    .map((id) => tracksById[id])
-                    .whereType<LocalTrack>()
+                final catalog = visible[index];
+                final playlist = catalog.playlist;
+                final activeEntries = catalog.entries
+                    .where((entry) => !entry.isDeleted)
                     .toList(growable: false);
                 return _HomePlaylistCard(
                   playlist: playlist,
                   strings: strings,
                   subtitle: strings.songCountWithDuration(
-                    playlistTracks.length,
+                    activeEntries.length,
                     sumKnownDurations(
-                      playlistTracks.map((track) => track.duration),
+                      activeEntries.map(
+                        (entry) =>
+                            tracksById[entry.localTrackId]?.duration ??
+                            entry.track.duration,
+                      ),
                     ),
                   ),
-                  thumbnailSources: _homePlaylistThumbnailSources(
-                    playlist,
+                  thumbnailSources: _homeCatalogPlaylistThumbnailSources(
+                    catalog,
                     tracksById,
                   ),
                   width: cardWidth,
@@ -1476,8 +1780,70 @@ class _HomePlaylistSection extends StatelessWidget {
             ),
           );
         },
-        loading: () => const _HomeLoadingShelf(),
-        error: (error, _) => _HomeEmptyText(error.toString()),
+        loading: () => legacyPlaylists.hasValue
+            ? _legacyHomePlaylistShelf(
+                context,
+                playlists: legacyPlaylists.value ?? const <Playlist>[],
+                tracksById: tracksById,
+                strings: strings,
+                cardWidth: cardWidth,
+              )
+            : const _HomeLoadingShelf(),
+        error: (error, _) => legacyPlaylists.hasValue
+            ? _legacyHomePlaylistShelf(
+                context,
+                playlists: legacyPlaylists.value ?? const <Playlist>[],
+                tracksById: tracksById,
+                strings: strings,
+                cardWidth: cardWidth,
+              )
+            : _HomeEmptyText(error.toString()),
+      ),
+    );
+  }
+
+  Widget _legacyHomePlaylistShelf(
+    BuildContext context, {
+    required List<Playlist> playlists,
+    required Map<String, LocalTrack> tracksById,
+    required AppStrings strings,
+    required double cardWidth,
+  }) {
+    final visible = playlists.take(10).toList(growable: false);
+    if (visible.isEmpty) return _HomeEmptyText(strings.noLocalPlaylists);
+    return SizedBox(
+      key: const ValueKey('home-playlist-shelf'),
+      height: _homeShelfHeight(
+        context,
+        cardWidth: cardWidth,
+        minimumHeight: MediaQuery.sizeOf(context).width >= 700 ? 240 : 212,
+      ),
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        scrollDirection: Axis.horizontal,
+        itemCount: visible.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
+        itemBuilder: (context, index) {
+          final playlist = visible[index];
+          final playlistTracks = playlist.trackIds
+              .map((id) => tracksById[id])
+              .whereType<LocalTrack>()
+              .toList(growable: false);
+          return _HomePlaylistCard(
+            playlist: playlist,
+            strings: strings,
+            subtitle: strings.songCountWithDuration(
+              playlistTracks.length,
+              sumKnownDurations(playlistTracks.map((track) => track.duration)),
+            ),
+            thumbnailSources: _homePlaylistThumbnailSources(
+              playlist,
+              tracksById,
+            ),
+            width: cardWidth,
+            onTap: () => onPlaylistSelected(playlist.id),
+          );
+        },
       ),
     );
   }
@@ -1513,15 +1879,25 @@ class _RecommendedTrackCard extends StatelessWidget {
     required this.track,
     required this.width,
     required this.onTap,
+    this.localArtworkSource,
+    this.fallbackArtworkSource,
   });
 
   final TrackInfo track;
+  final String? localArtworkSource;
+  final String? fallbackArtworkSource;
   final double width;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final remoteArtworkSource =
+        fallbackArtworkSource ??
+        _firstHomeArtworkSource([
+          track.thumbnailUrl,
+          track.catalogThumbnailUrl,
+        ]);
     return SizedBox(
       key: ValueKey('home-recommendation-${track.id}'),
       width: width,
@@ -1540,7 +1916,10 @@ class _RecommendedTrackCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _HomeArtwork(
-                  source: track.thumbnailUrl ?? track.catalogThumbnailUrl,
+                  source: localArtworkSource ?? remoteArtworkSource,
+                  fallbackSource: localArtworkSource == null
+                      ? null
+                      : remoteArtworkSource,
                   surfaceKey: ValueKey(
                     'home-recommendation-artwork-${track.id}',
                   ),
@@ -1591,7 +1970,7 @@ class _RecommendedCollectionCard extends StatelessWidget {
     final theme = Theme.of(context);
     final rawSubtitle = collection.subtitle?.trim();
     final subtitle = rawSubtitle == null || rawSubtitle.isEmpty
-        ? (collection.isMix ? strings.mix : strings.playlist)
+        ? _collectionKindLabel(collection, strings)
         : rawSubtitle;
     return SizedBox(
       key: ValueKey('home-collection-${collection.browseId}'),
@@ -1668,7 +2047,7 @@ class _RecommendedCollectionCard extends StatelessWidget {
   }
 
   void _openCollection(BuildContext context, String subtitle) {
-    final kind = collection.isMix ? strings.mix : strings.playlist;
+    final kind = _collectionKindLabel(collection, strings);
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => RemoteCollectionDetailPage(
@@ -1677,13 +2056,26 @@ class _RecommendedCollectionCard extends StatelessWidget {
           artworkSource: collection.thumbnailUrl,
           metadata: subtitle == kind ? const [] : [kind],
           queueSourceId: 'home-collection:${collection.browseId}',
-          tracksProvider: homeCollectionTracksProvider(collection.browseId),
+          tracksProvider: collection.isAlbum
+              ? homeAlbumTracksProvider(collection.browseId)
+              : homeCollectionTracksProvider(collection.browseId),
           emptyMessage: strings.homeCollectionEmpty,
           errorMessage: strings.homeCollectionLoadError,
           onOpenPlayer: onOpenPlayer,
         ),
       ),
     );
+  }
+
+  String _collectionKindLabel(
+    HomeRecommendationCollection collection,
+    AppStrings strings,
+  ) {
+    return switch (collection.kind) {
+      HomeRecommendationCollectionKind.mix => strings.mix,
+      HomeRecommendationCollectionKind.playlist => strings.playlist,
+      HomeRecommendationCollectionKind.album => strings.album,
+    };
   }
 }
 
@@ -1843,9 +2235,14 @@ class _HomePlaylistCard extends StatelessWidget {
 }
 
 class _HomeArtwork extends StatelessWidget {
-  const _HomeArtwork({required this.source, required this.surfaceKey});
+  const _HomeArtwork({
+    required this.source,
+    required this.surfaceKey,
+    this.fallbackSource,
+  });
 
   final String? source;
+  final String? fallbackSource;
   final Key surfaceKey;
 
   @override
@@ -1854,6 +2251,7 @@ class _HomeArtwork extends StatelessWidget {
       surfaceKey: surfaceKey,
       child: ProportionalArtwork(
         source: source,
+        fallbackSource: fallbackSource,
         cacheWidth: 640,
         fallback: const _HomeImageFallback(icon: Icons.music_note_rounded),
       ),
@@ -2011,6 +2409,39 @@ List<String> _homePlaylistThumbnailSources(
   ].take(4).toList(growable: false);
 }
 
+List<String> _homeCatalogPlaylistThumbnailSources(
+  CatalogPlaylist catalog,
+  Map<String, LocalTrack> tracksById,
+) {
+  final sources = catalog.entries
+      .where((entry) => !entry.isDeleted)
+      .map((entry) {
+        final local = tracksById[entry.localTrackId];
+        return local == null
+            ? _normalizedHomeArtworkSource(entry.track.thumbnailUrl)
+            : _homeTrackThumbnailSource(local) ??
+                  _normalizedHomeArtworkSource(entry.track.thumbnailUrl);
+      })
+      .whereType<String>()
+      .toSet()
+      .toList(growable: false);
+  return _rotatedHomeArtworkSources(sources, catalog.playlist.id);
+}
+
+String? _normalizedHomeArtworkSource(String? source) {
+  final normalized = source?.trim();
+  return normalized == null || normalized.isEmpty ? null : normalized;
+}
+
+List<String> _rotatedHomeArtworkSources(List<String> sources, String seed) {
+  if (sources.length <= 1) return sources;
+  final start = seed.hashCode.abs() % sources.length;
+  return <String>[
+    ...sources.skip(start),
+    ...sources.take(start),
+  ].take(4).toList(growable: false);
+}
+
 String? _homeTrackThumbnailSource(LocalTrack track) {
   final source = track.thumbnailPath ?? track.thumbnailUrl;
   final normalized = source?.trim();
@@ -2027,6 +2458,16 @@ String? _homeTrackThumbnailSource(LocalTrack track) {
     return null;
   }
   return file.path;
+}
+
+String? _firstHomeArtworkSource(Iterable<String?> candidates) {
+  for (final candidate in candidates) {
+    final normalized = candidate?.trim();
+    if (normalized != null && normalized.isNotEmpty) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 double _homeShelfHeight(

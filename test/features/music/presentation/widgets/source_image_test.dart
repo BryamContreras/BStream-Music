@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +34,55 @@ void main() {
 
     expect(find.text('fallback'), findsOneWidget);
   });
+
+  testWidgets(
+    'SourceImage keeps downloaded artwork when its remote fallback is offline',
+    (tester) async {
+      final directory = Directory.systemTemp.createTempSync(
+        'bstream-source-image-',
+      );
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        PaintingBinding.instance.imageCache
+          ..clear()
+          ..clearLiveImages();
+        directory.deleteSync(recursive: true);
+      });
+      final artwork = File('${directory.path}/downloaded-cover.png');
+      artwork.writeAsBytesSync(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        ),
+        flush: true,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SourceImage(
+            source: artwork.path,
+            // The remote equivalent is intentionally unavailable; local
+            // artwork must win before any network request is attempted.
+            fallbackSource: 'https://offline.invalid/remote-cover.jpg',
+            fallback: const Text('fallback'),
+          ),
+        ),
+      );
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.text('fallback'), findsNothing);
+      final image = tester.widget<Image>(find.byType(Image));
+      final provider = image.image as ResizeImage;
+      expect(provider.imageProvider, isA<FileImage>());
+      expect((provider.imageProvider as FileImage).file.path, artwork.path);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'ProportionalArtwork decodes one bounded image without a blur copy',

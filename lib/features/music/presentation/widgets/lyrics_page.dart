@@ -9,12 +9,20 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../platform_channels/android_screen_channel.dart';
 import '../../../../services/lyrics/lyrics_romanization_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
+import '../../../../services/player/player_service.dart';
 import '../../domain/entities/lyrics.dart';
 import '../providers/music_providers.dart';
 import 'lyrics_animation_transition.dart';
 import 'mini_player.dart';
 import 'playback_gradient_background.dart';
 import 'playback_progress_line.dart';
+import 'source_image.dart';
+
+bool _usesMobileLyricsLayout(BuildContext context) =>
+    switch (Theme.of(context).platform) {
+      TargetPlatform.android || TargetPlatform.iOS => true,
+      _ => false,
+    };
 
 ({double inactive, double active, double plain}) _lyricsTypographyFor(
   BuildContext context,
@@ -96,7 +104,8 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
       MediaQuery.viewPaddingOf(context).bottom,
       MediaQuery.paddingOf(context).bottom,
     );
-    final miniPlayerHeight = miniPlayerHeightFor(context);
+    final mobileLayout = _usesMobileLyricsLayout(context);
+    final miniPlayerHeight = mobileLayout ? 0.0 : miniPlayerHeightFor(context);
     _syncLookup(lookup);
 
     return Scaffold(
@@ -171,17 +180,18 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
               ),
             ),
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: systemBottomInset,
-            child: SizedBox(
-              height: miniPlayerHeight,
-              child: MiniPlayer(
-                onOpenPlayer: () => Navigator.of(context).pop(),
+          if (!mobileLayout)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: systemBottomInset,
+              child: SizedBox(
+                height: miniPlayerHeight,
+                child: MiniPlayer(
+                  onOpenPlayer: () => Navigator.of(context).pop(),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -633,6 +643,21 @@ class _LyricsHeader extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final currentLookup = lookup;
+    final mobileLayout = _usesMobileLyricsLayout(context);
+    final playback = ref.watch(
+      playerControllerProvider.select((player) {
+        final snapshot = player.value;
+        return (
+          status: snapshot?.status,
+          thumbnailUrl: snapshot?.thumbnailUrl,
+          hasTrack:
+              snapshot?.title?.trim().isNotEmpty == true &&
+              snapshot?.status != PlayerStatus.idle &&
+              snapshot?.status != PlayerStatus.failed,
+        );
+      }),
+    );
+    final isPlaying = playback.status == PlayerStatus.playing;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -641,14 +666,29 @@ class _LyricsHeader extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(8, 8, 12, 6),
           child: Row(
             children: [
-              IconButton(
-                key: const ValueKey('lyrics-back-button'),
-                tooltip: strings.back,
-                icon: const Icon(Icons.arrow_back_rounded),
-                color: AppColors.downloadAccentFor(context),
-                onPressed: () => Navigator.of(context).maybePop(),
-              ),
-              const SizedBox(width: 4),
+              if (!mobileLayout) ...[
+                IconButton(
+                  key: const ValueKey('lyrics-back-button'),
+                  tooltip: strings.back,
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  color: AppColors.downloadAccentFor(context),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+                const SizedBox(width: 4),
+              ],
+              if (mobileLayout) ...[
+                _LyricsHeaderArtwork(
+                  source: playback.thumbnailUrl,
+                  onTap: () => Navigator.of(context).maybePop(),
+                  semanticsLabel: currentLookup == null
+                      ? strings.choose('Portada de la canción', 'Track artwork')
+                      : strings.choose(
+                          'Portada de ${currentLookup.title}',
+                          'Artwork for ${currentLookup.title}',
+                        ),
+                ),
+                const SizedBox(width: 10),
+              ],
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -677,11 +717,84 @@ class _LyricsHeader extends ConsumerWidget {
                   ],
                 ),
               ),
+              if (mobileLayout)
+                SizedBox.square(
+                  dimension: 48,
+                  child: IconButton(
+                    key: const ValueKey('lyrics-playback-control'),
+                    tooltip: isPlaying ? strings.pause : strings.play,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 48,
+                      height: 48,
+                    ),
+                    color: Colors.white,
+                    disabledColor: Colors.white.withValues(alpha: 0.36),
+                    iconSize: isPlaying ? 36 : 40,
+                    onPressed: playback.hasTrack
+                        ? () => ref
+                              .read(playerControllerProvider.notifier)
+                              .togglePlayPause()
+                        : null,
+                    icon: Icon(
+                      isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
         const _LyricsHeaderProgress(),
       ],
+    );
+  }
+}
+
+class _LyricsHeaderArtwork extends StatelessWidget {
+  const _LyricsHeaderArtwork({
+    required this.source,
+    required this.onTap,
+    required this.semanticsLabel,
+  });
+
+  final String? source;
+  final VoidCallback? onTap;
+  final String semanticsLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = ColoredBox(
+      key: const ValueKey('lyrics-header-artwork-fallback'),
+      color: Colors.white.withValues(alpha: 0.08),
+      child: Icon(
+        Icons.music_note_rounded,
+        size: 22,
+        color: Colors.white.withValues(alpha: 0.68),
+      ),
+    );
+    return Semantics(
+      image: true,
+      button: onTap != null,
+      label: semanticsLabel,
+      onTap: onTap,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: ClipRRect(
+          key: const ValueKey('lyrics-header-artwork'),
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox.square(
+            dimension: 42,
+            child: SourceImage(
+              source: source,
+              fallback: fallback,
+              cacheWidth: 192,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1109,13 +1222,14 @@ class _LyricsOffsetControls extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final accent = AppColors.downloadAccentFor(context);
-    final surface = AppColors.menuBackgroundFor(context);
+    final opaqueSurface = AppColors.menuBackgroundFor(context);
     final border = AppColors.menuBorderFor(context);
     final subtleTextAccent = Color.alphaBlend(
       accent.withValues(alpha: 0.08),
       AppColors.menuForegroundFor(context),
     );
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final surface = opaqueSurface.withValues(alpha: isDark ? 0.62 : 0.72);
     final seconds = offset.inMilliseconds / 1000;
     final formatted =
         '${seconds >= 0 ? '+' : ''}${seconds.toStringAsFixed(2)} s';
@@ -1136,8 +1250,8 @@ class _LyricsOffsetControls extends ConsumerWidget {
             boxShadow: [
               BoxShadow(
                 color: isDark
-                    ? const Color(0x80000000)
-                    : const Color(0x30000000),
+                    ? const Color(0x48000000)
+                    : const Color(0x20000000),
                 blurRadius: 12,
                 offset: Offset(0, 3),
               ),

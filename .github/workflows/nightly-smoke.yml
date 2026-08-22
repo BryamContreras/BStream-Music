@@ -1,0 +1,126 @@
+name: Nightly native smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-native-smoke
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: "3.44.0"
+  YT_DLP_VERSION: "2026.07.04"
+  YT_DLP_ANDROID_SHA256: "495be29ff4d9d4e9be7eabdfef225221e5d5282e77f2f505abc6dca80349f3fd"
+  YT_DLP_WINDOWS_SHA256: "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8"
+  DENO_VERSION: "2.9.4"
+  DENO_WINDOWS_X64_SHA256: "68ed08b05c56cf887e9aa509947dc3f468f7e12f47a13e5c1abd51d46d1453ef"
+
+jobs:
+  windows-native:
+    name: Windows crossfade and live playback
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Set up Rust for Windows SMTC
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Prepare checksum-pinned desktop tools
+        shell: pwsh
+        run: |
+          $tools = Join-Path $PWD "windows/tools"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          $ytDlp = Join-Path $tools "yt-dlp.exe"
+          Invoke-WebRequest `
+            -Uri "https://github.com/yt-dlp/yt-dlp/releases/download/$env:YT_DLP_VERSION/yt-dlp.exe" `
+            -OutFile $ytDlp
+          $ytHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ytDlp).Hash.ToLowerInvariant()
+          if ($ytHash -ne $env:YT_DLP_WINDOWS_SHA256) {
+            throw "yt-dlp checksum mismatch: $ytHash"
+          }
+
+          $denoArchive = Join-Path $env:RUNNER_TEMP "deno-windows-x64.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/denoland/deno/releases/download/v$env:DENO_VERSION/deno-x86_64-pc-windows-msvc.zip" `
+            -OutFile $denoArchive
+          $denoHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $denoArchive).Hash.ToLowerInvariant()
+          if ($denoHash -ne $env:DENO_WINDOWS_X64_SHA256) {
+            throw "Deno checksum mismatch: $denoHash"
+          }
+          Expand-Archive -LiteralPath $denoArchive -DestinationPath $tools -Force
+
+      - name: Run native crossfade smoke
+        run: flutter test integration_test/crossfade_native_test.dart -d windows
+
+      - name: Run live YouTube playback smoke
+        run: >-
+          flutter test integration_test/youtube_explode_playback_test.dart
+          -d windows
+          --dart-define=BSTREAM_LIVE_TESTS=true
+
+  android-native:
+    name: Android native crossfade
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run native crossfade smoke in an Android emulator
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: >-
+            -no-snapshot-save -no-window -gpu swiftshader_indirect
+            -noaudio -no-boot-anim -camera-back none
+          script: >-
+            flutter test integration_test/crossfade_native_test.dart
+            -d emulator-5554

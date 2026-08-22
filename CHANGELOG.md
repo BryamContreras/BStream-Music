@@ -1,8 +1,83 @@
 # Changelog
 
-## 1.2.5+125 — 2026-08-20
+## 1.2.5+125 — updated 2026-08-22
 
 ### Added
+
+- Optional YouTube Music account sign-in with an isolated browser, encrypted
+  on-device session storage, account/channel selection, a Home avatar, and an
+  explicit warning that the integration is unofficial and unaffiliated with
+  Google. BStream never receives or stores the account password.
+- Bidirectional local/YouTube Music playlist synchronization with stable IDs,
+  occurrence-safe duplicates, private-by-default remote creation, three-way
+  merging, bounded automatic retries, and explicit conflict review.
+- A per-account first-sync confirmation keeps every local playlist untouched
+  until the user explicitly chooses **Keep and sync**; choosing **Not now**
+  performs no remote reads or writes and can be revisited from the account menu.
+- Account-free Home personalization backed by qualified local listening
+  history. BStream combines YouTube Music `/next`, related shelves, generated
+  mixes, and exact artist pages into **Because you listened**, **Your mixes**,
+  **New for you**, and **Discovery for you** sections.
+- Persistent anonymous InnerTube visitor data, related-result caches, and an
+  instant stale-while-revalidate Home feed so recommendations survive restarts
+  while still refreshing in the background.
+- Privacy controls to pause recommendation learning or clear listening signals
+  and personalized caches without deleting downloads, favorites, or playlists.
+- A bounded InnerTube retry policy, crash-safe download-directory migration
+  journal, playback-history retention, and CI security/size gates for release
+  artifacts and dependencies.
+
+### Improved
+
+- Synced playlists can retain remote songs without downloading them. Playback
+  prefers an available download and falls back to the matching stream, while
+  imported artwork and metadata remain visible offline when locally cached.
+- Playlist rows show a compact cloud before the artist only when no usable
+  downloaded audio exists; cached artwork and empty files do not count as a
+  download.
+- Removing a synchronized playlist is local-only by default; deleting it from
+  YouTube Music requires a separate confirmation and an editable playlist from
+  the active account. Ambiguous writes are never blindly repeated.
+- YouTube Music artist browse identifiers now survive search, playback,
+  downloads, database migrations, and app restarts, allowing new-release
+  recommendations to use exact artist identities instead of name guesses.
+- Listening history now qualifies a play only after 40 percent or 30 seconds,
+  whichever comes first, and covers both remote streams and catalog-backed
+  downloads without counting seeks or accidental taps.
+- Personalized AutoMix cards now load their real YouTube Music radio queue,
+  and recommendation shelves remain navigable with Previous/Next even when
+  downloaded and streaming entries appear together or start with one item.
+- Active streams now retry the complete `youtube_explode_dart` → yt-dlp chain
+  twice with bounded backoff after transient connection loss. Duplicate player
+  errors share one retry budget, user navigation cancels stale attempts, and a
+  terminal TikTok LIVE request advances to the next ready item without looping.
+- Player playback, queue navigation, retry, prefetch, history, and crossfade
+  responsibilities are split into focused coordinators instead of one
+  3,600-line controller. Stale queue work and native option races are now
+  generation-aware.
+- Optional native services initialize after the first frame and retry only the
+  failed integration. Japanese romanization loads its dictionary lazily from a
+  compressed asset and releases the expanded worker after an idle timeout.
+- Android runtime yt-dlp updates are stable-channel by default and must match
+  the official release checksum and the version reported by the executable;
+  invalid copies fall back to the bundled verified binary.
+- Backup restore validates entry counts, individual and expanded sizes,
+  compression ratio, duplicate paths, manifest, and SQLite schema before
+  replacing active data.
+
+### Fixed
+
+- Mobile Lyrics no longer duplicates the mini-player; its header artwork acts
+  as Back and the larger Play/Pause control remains reachable at narrow widths.
+- The mini-player stays attached to bottom navigation when the software
+  keyboard opens instead of retaining an extra system-navigation inset.
+- Back from a player opened through a notification or launcher entry now
+  returns to Home instead of closing the application; Queue retains its own
+  nested Back behavior.
+
+### Initial 1.2.5 release — 2026-08-20
+
+#### Added
 
 - Dual-deck crossfade playback on Android and desktop with a persistent,
   accessible whole-second duration control from 1 through 15 seconds.
@@ -15,7 +90,7 @@
 - Desktop Space-key Play/Pause handling for both player surfaces while leaving
   Search and other focused editable fields untouched.
 
-### Improved
+#### Improved
 
 - YouTube audio resolution now follows a deterministic client ladder, retries
   solver-dependent clients only when needed, validates the exact selected
@@ -43,7 +118,7 @@
   present only their compatibility names: BStream Music, MetroList,
   Harmony/RiMusic, and Soundiiz.
 
-### Fixed
+#### Fixed
 
 - Legacy no-animation lyrics preferences now migrate to Smooth, and the
   redundant play control was removed from the lyrics header on every platform.

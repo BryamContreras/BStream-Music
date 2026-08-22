@@ -63,6 +63,49 @@ void main() {
     expect(strings.readyForRemotePlayback, 'Lista para reproducción remota');
     expect(strings.lastCommand, 'Último comando');
   });
+
+  test('privacy and recommendation labels are localized', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(spanish.privacyAndRecommendations, 'Privacidad y recomendaciones');
+    expect(spanish.recommendationHistory, 'Historial de recomendaciones');
+    expect(
+      spanish.clearRecommendationHistory,
+      'Borrar historial y recomendaciones',
+    );
+    expect(english.privacyAndRecommendations, 'Privacy and recommendations');
+    expect(english.recommendationHistory, 'Recommendation history');
+    expect(
+      english.clearRecommendationHistory,
+      'Clear history and recommendations',
+    );
+  });
+
+  test(
+    'YouTube Music disclosure explains every synchronization side effect',
+    () {
+      const spanish = AppStrings(AppLanguage.spanish);
+      const english = AppStrings(AppLanguage.english);
+
+      expect(
+        spanish.youtubeMusicUnofficialDisclosure,
+        allOf(
+          contains('crear playlists privadas'),
+          contains('Favoritos permanece sólo en BStream'),
+          contains('Tú decides por separado'),
+        ),
+      );
+      expect(
+        english.youtubeMusicUnofficialDisclosure,
+        allOf(
+          contains('create private playlists'),
+          contains('Favorites remains local to BStream'),
+          contains('You separately control'),
+        ),
+      );
+    },
+  );
 }
 
 const _mojibakeMarkers = <String, String>{

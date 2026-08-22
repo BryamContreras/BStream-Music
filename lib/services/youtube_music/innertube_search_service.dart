@@ -4,10 +4,12 @@ import 'dart:io';
 
 import 'innertube_exceptions.dart';
 import 'innertube_models.dart';
+import 'innertube_retry_policy.dart';
 import 'innertube_transport.dart';
 
 export 'innertube_exceptions.dart';
 export 'innertube_models.dart';
+export 'innertube_retry_policy.dart';
 export 'innertube_transport.dart';
 
 /// Maximum number of songs resolved for an album, playlist, or generated mix.
@@ -16,6 +18,18 @@ export 'innertube_transport.dart';
 /// pages opt into this separate bound so a large response is not truncated by
 /// the discovery limit.
 const int innerTubeDetailResultLimit = 100;
+
+/// Optional persistence boundary for YouTube's anonymous visitor identifier.
+///
+/// Implementations belong to the application layer (for example backed by
+/// SharedPreferences); this service deliberately remains storage-agnostic.
+abstract interface class InnerTubeVisitorDataStore {
+  Future<String?> read();
+
+  Future<void> write(String visitorData);
+
+  Future<void> clear();
+}
 
 abstract interface class YouTubeMusicSearch {
   Future<List<InnerTubeSong>> searchSongs(String query, {int limit = 20});
@@ -54,6 +68,40 @@ abstract interface class YouTubeMusicAlbumLookup {
   });
 }
 
+abstract interface class YouTubeMusicRelated {
+  /// Resolves YouTube Music's watch-next queue for [videoId].
+  ///
+  /// When [radio] is true the service requests `RDAMVM<videoId>` and
+  /// transparently falls back to a plain watch-next request when the generated
+  /// radio is empty or contains only the seed.
+  Future<InnerTubeNextPage> getNext(
+    String videoId, {
+    bool radio = false,
+    int limit = innerTubeDetailResultLimit,
+  });
+
+  Future<InnerTubeNextPage> getNextContinuation(
+    String continuation, {
+    int limit = innerTubeDetailResultLimit,
+  });
+
+  /// Follows the browse endpoint advertised by [getNext].
+  Future<InnerTubeRelatedPage> getRelated(String browseId, {int limit = 20});
+
+  Future<InnerTubeRelatedPage> getRelatedContinuation(
+    String continuation, {
+    int limit = 20,
+  });
+}
+
+abstract interface class YouTubeMusicArtistLookup {
+  /// Returns albums and singles exposed on a YouTube Music artist page.
+  Future<List<InnerTubeAlbum>> getArtistReleases(
+    String artistBrowseId, {
+    int limit = 20,
+  });
+}
+
 class InnerTubeSearchService
     implements
         YouTubeMusicSearch,
@@ -61,22 +109,31 @@ class InnerTubeSearchService
         YouTubeMusicTrackLookup,
         YouTubeMusicHome,
         YouTubeMusicCollectionLookup,
-        YouTubeMusicAlbumLookup {
+        YouTubeMusicAlbumLookup,
+        YouTubeMusicRelated,
+        YouTubeMusicArtistLookup {
   factory InnerTubeSearchService({
     InnerTubeTransport? transport,
+    InnerTubeVisitorDataStore? visitorDataStore,
     InnerTubeSearchParser parser = const InnerTubeSearchParser(),
     InnerTubeAlbumParser albumParser = const InnerTubeAlbumParser(),
     InnerTubeHomeParser homeParser = const InnerTubeHomeParser(),
     InnerTubePlayerParser playerParser = const InnerTubePlayerParser(),
+    InnerTubeNextParser nextParser = const InnerTubeNextParser(),
+    InnerTubeRelatedParser relatedParser = const InnerTubeRelatedParser(),
     InnerTubeBootstrapParser bootstrapParser = const InnerTubeBootstrapParser(),
     Uri? endpoint,
     Uri? browseEndpoint,
     Uri? playerEndpoint,
+    Uri? nextEndpoint,
     Uri? bootstrapUri,
     String language = 'es-419',
     String region = 'NI',
     String userAgent = defaultUserAgent,
     Duration requestTimeout = const Duration(seconds: 10),
+    InnerTubeRetryPolicy retryPolicy = const InnerTubeRetryPolicy(),
+    InnerTubeRetryDelay retryDelay = defaultInnerTubeRetryDelay,
+    InnerTubeRetryClock retryClock = defaultInnerTubeRetryClock,
   }) {
     final normalizedLanguage = language.trim();
     final normalizedRegion = region.trim().toUpperCase();
@@ -101,10 +158,13 @@ class InnerTubeSearchService
     return InnerTubeSearchService._(
       transport:
           transport ?? IoInnerTubeTransport(connectionTimeout: requestTimeout),
+      visitorDataStore: visitorDataStore,
       parser: parser,
       albumParser: albumParser,
       homeParser: homeParser,
       playerParser: playerParser,
+      nextParser: nextParser,
+      relatedParser: relatedParser,
       bootstrapParser: bootstrapParser,
       endpoint:
           endpoint ?? Uri.parse('https://music.youtube.com/youtubei/v1/search'),
@@ -114,61 +174,88 @@ class InnerTubeSearchService
       playerEndpoint:
           playerEndpoint ??
           Uri.parse('https://music.youtube.com/youtubei/v1/player'),
+      nextEndpoint:
+          nextEndpoint ??
+          Uri.parse('https://music.youtube.com/youtubei/v1/next'),
       bootstrapUri: bootstrapUri ?? Uri.parse('https://music.youtube.com/'),
       language: normalizedLanguage,
       region: normalizedRegion,
       userAgent: normalizedUserAgent,
       requestTimeout: requestTimeout,
+      retryPolicy: retryPolicy,
+      retryDelay: retryDelay,
+      retryClock: retryClock,
     );
   }
 
   InnerTubeSearchService._({
     required InnerTubeTransport transport,
+    required InnerTubeVisitorDataStore? visitorDataStore,
     required InnerTubeSearchParser parser,
     required InnerTubeAlbumParser albumParser,
     required InnerTubeHomeParser homeParser,
     required InnerTubePlayerParser playerParser,
+    required InnerTubeNextParser nextParser,
+    required InnerTubeRelatedParser relatedParser,
     required InnerTubeBootstrapParser bootstrapParser,
     required Uri endpoint,
     required Uri browseEndpoint,
     required Uri playerEndpoint,
+    required Uri nextEndpoint,
     required Uri bootstrapUri,
     required String language,
     required String region,
     required String userAgent,
     required Duration requestTimeout,
+    required InnerTubeRetryPolicy retryPolicy,
+    required InnerTubeRetryDelay retryDelay,
+    required InnerTubeRetryClock retryClock,
   }) : this._initialized(
          transport,
+         visitorDataStore,
          parser,
          albumParser,
          homeParser,
          playerParser,
+         nextParser,
+         relatedParser,
          bootstrapParser,
          endpoint,
          browseEndpoint,
          playerEndpoint,
+         nextEndpoint,
          bootstrapUri,
          language,
          region,
          userAgent,
          requestTimeout,
+         retryPolicy,
+         retryDelay,
+         retryClock,
        );
 
   InnerTubeSearchService._initialized(
     this._transport,
+    this._visitorDataStore,
     this._parser,
     this._albumParser,
     this._homeParser,
     this._playerParser,
+    this._nextParser,
+    this._relatedParser,
     this._bootstrapParser,
     this._endpoint,
     this._browseEndpoint,
     this._playerEndpoint,
+    this._nextEndpoint,
     this._bootstrapUri,
     this._language,
     this._region,
     this._userAgent,
     this._requestTimeout,
+    this._retryPolicy,
+    this._retryDelay,
+    this._retryClock,
   );
 
   static const int maxResults = 20;
@@ -185,22 +272,30 @@ class InnerTubeSearchService
       'Chrome/140.0.0.0 Safari/537.36';
 
   final InnerTubeTransport _transport;
+  final InnerTubeVisitorDataStore? _visitorDataStore;
   final InnerTubeSearchParser _parser;
   final InnerTubeAlbumParser _albumParser;
   final InnerTubeHomeParser _homeParser;
   final InnerTubePlayerParser _playerParser;
+  final InnerTubeNextParser _nextParser;
+  final InnerTubeRelatedParser _relatedParser;
   final InnerTubeBootstrapParser _bootstrapParser;
   final Uri _endpoint;
   final Uri _browseEndpoint;
   final Uri _playerEndpoint;
+  final Uri _nextEndpoint;
   final Uri _bootstrapUri;
   final String _language;
   final String _region;
   final String _userAgent;
   final Duration _requestTimeout;
+  final InnerTubeRetryPolicy _retryPolicy;
+  final InnerTubeRetryDelay _retryDelay;
+  final InnerTubeRetryClock _retryClock;
 
   bool _disposed = false;
   Future<InnerTubeConfiguration>? _configurationFuture;
+  Future<InnerTubeConfiguration>? _freshConfigurationFuture;
 
   @override
   Future<List<InnerTubeSong>> searchSongs(
@@ -254,8 +349,7 @@ class InnerTubeSearchService
     var configuration = await _configuration();
     var response = await _requestSearch(query, filter, configuration);
     if (_needsFreshConfiguration(response.statusCode)) {
-      _configurationFuture = null;
-      configuration = await _configuration();
+      configuration = await _freshConfiguration();
       response = await _requestSearch(query, filter, configuration);
     }
 
@@ -299,8 +393,7 @@ class InnerTubeSearchService
       browseId: 'FEmusic_home',
     );
     if (_needsFreshConfiguration(response.statusCode)) {
-      _configurationFuture = null;
-      configuration = await _configuration();
+      configuration = await _freshConfiguration();
       response = await _requestBrowse(configuration, browseId: 'FEmusic_home');
     }
 
@@ -332,8 +425,7 @@ class InnerTubeSearchService
           continuation: continuation,
         );
         if (_needsFreshConfiguration(response.statusCode)) {
-          _configurationFuture = null;
-          configuration = await _configuration();
+          configuration = await _freshConfiguration();
           response = await _requestBrowse(
             configuration,
             continuation: continuation,
@@ -486,8 +578,7 @@ class InnerTubeSearchService
     var configuration = await _configuration();
     var response = await _requestBrowse(configuration, browseId: browseId);
     if (_needsFreshConfiguration(response.statusCode)) {
-      _configurationFuture = null;
-      configuration = await _configuration();
+      configuration = await _freshConfiguration();
       response = await _requestBrowse(configuration, browseId: browseId);
     }
 
@@ -496,6 +587,7 @@ class InnerTubeSearchService
     final seenVideoIds = <String>{};
     String? fallbackAlbumTitle;
     var fallbackAlbumArtists = const <String>[];
+    var fallbackAlbumArtistBrowseIds = const <String?>[];
 
     void addPage(Object? payload) {
       final List<InnerTubeSong> pageSongs;
@@ -505,9 +597,11 @@ class InnerTubeSearchService
           limit: maxDetailResults,
           fallbackAlbumTitle: fallbackAlbumTitle,
           fallbackAlbumArtists: fallbackAlbumArtists,
+          fallbackAlbumArtistBrowseIds: fallbackAlbumArtistBrowseIds,
         );
         fallbackAlbumTitle = page.albumTitle;
         fallbackAlbumArtists = page.albumArtists;
+        fallbackAlbumArtistBrowseIds = page.albumArtistBrowseIds;
         pageSongs = page.songs;
       } else {
         pageSongs = _parser.parseDetailSongs(payload, limit: maxDetailResults);
@@ -535,8 +629,7 @@ class InnerTubeSearchService
           continuation: continuation,
         );
         if (_needsFreshConfiguration(response.statusCode)) {
-          _configurationFuture = null;
-          configuration = await _configuration();
+          configuration = await _freshConfiguration();
           response = await _requestBrowse(
             configuration,
             continuation: continuation,
@@ -582,8 +675,7 @@ class InnerTubeSearchService
     var configuration = await _configuration();
     var response = await _requestPlayer(normalizedVideoId, configuration);
     if (_needsFreshConfiguration(response.statusCode)) {
-      _configurationFuture = null;
-      configuration = await _configuration();
+      configuration = await _freshConfiguration();
       response = await _requestPlayer(normalizedVideoId, configuration);
     }
 
@@ -601,6 +693,176 @@ class InnerTubeSearchService
       );
     }
     return _playerParser.parse(decoded, expectedVideoId: normalizedVideoId);
+  }
+
+  @override
+  Future<InnerTubeNextPage> getNext(
+    String videoId, {
+    bool radio = false,
+    int limit = maxDetailResults,
+  }) async {
+    _ensureActive();
+    final normalizedVideoId = _validateVideoId(videoId);
+    _validateDetailResultLimit(limit);
+
+    final requestedPlaylistId = radio ? 'RDAMVM$normalizedVideoId' : null;
+    final page = await _loadNextPage(
+      videoId: normalizedVideoId,
+      playlistId: requestedPlaylistId,
+      limit: limit,
+    );
+    if (!radio || page.songs.length > 1) {
+      return page;
+    }
+
+    return _loadNextPage(videoId: normalizedVideoId, limit: limit);
+  }
+
+  @override
+  Future<InnerTubeNextPage> getNextContinuation(
+    String continuation, {
+    int limit = maxDetailResults,
+  }) async {
+    _ensureActive();
+    final normalizedContinuation = _validateContinuation(continuation);
+    _validateDetailResultLimit(limit);
+    return _loadNextPage(continuation: normalizedContinuation, limit: limit);
+  }
+
+  Future<InnerTubeNextPage> _loadNextPage({
+    String? videoId,
+    String? playlistId,
+    String? continuation,
+    required int limit,
+  }) async {
+    var configuration = await _configuration();
+    var response = await _requestNext(
+      configuration,
+      videoId: videoId,
+      playlistId: playlistId,
+      continuation: continuation,
+    );
+    if (_needsFreshConfiguration(response.statusCode)) {
+      configuration = await _freshConfiguration();
+      response = await _requestNext(
+        configuration,
+        videoId: videoId,
+        playlistId: playlistId,
+        continuation: continuation,
+      );
+    }
+    return _nextParser.parse(_decodeDetailResponse(response), limit: limit);
+  }
+
+  @override
+  Future<InnerTubeRelatedPage> getRelated(
+    String browseId, {
+    int limit = maxResults,
+  }) async {
+    _ensureActive();
+    final normalizedBrowseId = _validateRelatedBrowseId(browseId);
+    _validateResultLimit(limit);
+    return _loadRelatedPage(browseId: normalizedBrowseId, limit: limit);
+  }
+
+  @override
+  Future<InnerTubeRelatedPage> getRelatedContinuation(
+    String continuation, {
+    int limit = maxResults,
+  }) async {
+    _ensureActive();
+    final normalizedContinuation = _validateContinuation(continuation);
+    _validateResultLimit(limit);
+    return _loadRelatedPage(continuation: normalizedContinuation, limit: limit);
+  }
+
+  Future<InnerTubeRelatedPage> _loadRelatedPage({
+    String? browseId,
+    String? continuation,
+    required int limit,
+  }) async {
+    var configuration = await _configuration();
+    var response = await _requestBrowse(
+      configuration,
+      browseId: browseId,
+      continuation: continuation,
+    );
+    if (_needsFreshConfiguration(response.statusCode)) {
+      configuration = await _freshConfiguration();
+      response = await _requestBrowse(
+        configuration,
+        browseId: browseId,
+        continuation: continuation,
+      );
+    }
+    return _relatedParser.parse(_decodeDetailResponse(response), limit: limit);
+  }
+
+  @override
+  Future<List<InnerTubeAlbum>> getArtistReleases(
+    String artistBrowseId, {
+    int limit = maxResults,
+  }) async {
+    _ensureActive();
+    final normalizedBrowseId = artistBrowseId.trim();
+    if (!_artistBrowseIdPattern.hasMatch(normalizedBrowseId)) {
+      throw ArgumentError.value(
+        artistBrowseId,
+        'artistBrowseId',
+        'Must be a valid YouTube Music artist browse ID.',
+      );
+    }
+    _validateResultLimit(limit);
+
+    var configuration = await _configuration();
+    var response = await _requestBrowse(
+      configuration,
+      browseId: normalizedBrowseId,
+    );
+    if (_needsFreshConfiguration(response.statusCode)) {
+      configuration = await _freshConfiguration();
+      response = await _requestBrowse(
+        configuration,
+        browseId: normalizedBrowseId,
+      );
+    }
+    return _albumParser.parse(_decodeDetailResponse(response), limit: limit);
+  }
+
+  String _validateVideoId(String videoId) {
+    final normalizedVideoId = videoId.trim();
+    if (!_videoIdPattern.hasMatch(normalizedVideoId)) {
+      throw ArgumentError.value(
+        videoId,
+        'videoId',
+        'Must be an 11-character YouTube video ID.',
+      );
+    }
+    return normalizedVideoId;
+  }
+
+  String _validateContinuation(String continuation) {
+    final normalized = continuation.trim();
+    if (normalized.isEmpty || normalized.length > 4096) {
+      throw ArgumentError.value(
+        continuation,
+        'continuation',
+        'Must be a non-empty YouTube continuation token.',
+      );
+    }
+    return normalized;
+  }
+
+  String _validateRelatedBrowseId(String browseId) {
+    final normalized = browseId.trim();
+    if (!_relatedBrowseIdPattern.hasMatch(normalized)) {
+      throw ArgumentError.value(
+        browseId,
+        'browseId',
+        'Must be a valid YouTube Music related browse ID.',
+      );
+    }
+    return normalized;
   }
 
   Future<InnerTubeHttpResponse> _requestSearch(
@@ -629,9 +891,8 @@ class InnerTubeSearchService
       'params': filter,
     };
 
-    late final InnerTubeHttpResponse response;
-    try {
-      response = await _transport.postJson(
+    return _sendWithRetry(
+      () => _transport.postJson(
         uri,
         headers: <String, String>{
           HttpHeaders.acceptHeader: 'application/json',
@@ -645,18 +906,8 @@ class InnerTubeSearchService
         },
         body: body,
         timeout: _requestTimeout,
-      );
-    } on TimeoutException {
-      throw const InnerTubeTimeoutException();
-    } on SocketException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on HttpException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on FormatException catch (error) {
-      throw InnerTubeFormatException(error.message);
-    }
-
-    return response;
+      ),
+    );
   }
 
   Future<InnerTubeHttpResponse> _requestPlayer(
@@ -683,9 +934,8 @@ class InnerTubeSearchService
       'videoId': videoId,
     };
 
-    late final InnerTubeHttpResponse response;
-    try {
-      response = await _transport.postJson(
+    return _sendWithRetry(
+      () => _transport.postJson(
         uri,
         headers: <String, String>{
           HttpHeaders.acceptHeader: 'application/json',
@@ -699,18 +949,65 @@ class InnerTubeSearchService
         },
         body: body,
         timeout: _requestTimeout,
-      );
-    } on TimeoutException {
-      throw const InnerTubeTimeoutException();
-    } on SocketException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on HttpException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on FormatException catch (error) {
-      throw InnerTubeFormatException(error.message);
-    }
+      ),
+    );
+  }
 
-    return response;
+  Future<InnerTubeHttpResponse> _requestNext(
+    InnerTubeConfiguration configuration, {
+    String? videoId,
+    String? playlistId,
+    String? continuation,
+  }) async {
+    if ((videoId == null) == (continuation == null)) {
+      throw ArgumentError(
+        'Exactly one of videoId or continuation must be provided.',
+      );
+    }
+    if (videoId == null && playlistId != null) {
+      throw ArgumentError('A radio playlist requires a video ID.');
+    }
+    final uri = _nextEndpoint.replace(
+      queryParameters: <String, String>{
+        ..._nextEndpoint.queryParameters,
+        'key': configuration.apiKey,
+        'prettyPrint': 'false',
+      },
+    );
+    final body = <String, Object>{
+      'context': <String, Object>{
+        'client': <String, Object>{
+          'clientName': configuration.clientName,
+          'clientVersion': configuration.clientVersion,
+          'hl': _language,
+          'gl': _region,
+          'visitorData': configuration.visitorData,
+        },
+      },
+      'videoId': ?videoId,
+      'playlistId': ?playlistId,
+      'continuation': ?continuation,
+      if (videoId != null) 'isAudioOnly': true,
+      if (videoId != null) 'params': 'wAEB',
+    };
+
+    return _sendWithRetry(
+      () => _transport.postJson(
+        uri,
+        headers: <String, String>{
+          HttpHeaders.acceptHeader: 'application/json',
+          HttpHeaders.contentTypeHeader: 'application/json; charset=UTF-8',
+          'Origin': 'https://music.youtube.com',
+          HttpHeaders.refererHeader: 'https://music.youtube.com/',
+          HttpHeaders.userAgentHeader: _userAgent,
+          'X-YouTube-Client-Name': configuration.contextClientName,
+          'X-YouTube-Client-Version': configuration.clientVersion,
+          'X-Goog-Visitor-Id': configuration.visitorData,
+        },
+        body: body,
+        timeout: _requestTimeout,
+      ),
+    );
   }
 
   Future<InnerTubeHttpResponse> _requestBrowse(
@@ -744,8 +1041,8 @@ class InnerTubeSearchService
       'continuation': ?continuation,
     };
 
-    try {
-      return await _transport.postJson(
+    return _sendWithRetry(
+      () => _transport.postJson(
         uri,
         headers: <String, String>{
           HttpHeaders.acceptHeader: 'application/json',
@@ -759,16 +1056,8 @@ class InnerTubeSearchService
         },
         body: body,
         timeout: _requestTimeout,
-      );
-    } on TimeoutException {
-      throw const InnerTubeTimeoutException();
-    } on SocketException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on HttpException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on FormatException catch (error) {
-      throw InnerTubeFormatException(error.message);
-    }
+      ),
+    );
   }
 
   bool _needsFreshConfiguration(int statusCode) {
@@ -777,47 +1066,181 @@ class InnerTubeSearchService
         statusCode == HttpStatus.forbidden;
   }
 
-  Future<InnerTubeConfiguration> _configuration() {
-    return _configurationFuture ??= _loadConfiguration().catchError((
-      Object error,
-    ) {
-      _configurationFuture = null;
-      throw error;
-    });
+  Future<InnerTubeHttpResponse> _sendWithRetry(
+    Future<InnerTubeHttpResponse> Function() send,
+  ) async {
+    Object? lastError;
+    StackTrace? lastStackTrace;
+    for (var attempt = 1; attempt <= _retryPolicy.maxAttempts; attempt++) {
+      _ensureActive();
+      InnerTubeHttpResponse? response;
+      try {
+        response = await send();
+      } on Object catch (error, stackTrace) {
+        if (!_isRetryableTransportError(error)) {
+          Error.throwWithStackTrace(_translateRequestError(error), stackTrace);
+        }
+        lastError = error;
+        lastStackTrace = stackTrace;
+      }
+
+      if (response != null &&
+          (!_retryPolicy.shouldRetryStatus(response.statusCode) ||
+              attempt == _retryPolicy.maxAttempts)) {
+        return response;
+      }
+
+      if (attempt == _retryPolicy.maxAttempts) {
+        final error = lastError;
+        if (error != null) {
+          Error.throwWithStackTrace(
+            _translateRequestError(error),
+            lastStackTrace ?? StackTrace.current,
+          );
+        }
+        return response!;
+      }
+
+      final delay = _retryPolicy.delayBeforeRetry(
+        retryNumber: attempt,
+        response: response,
+        now: _retryClock(),
+      );
+      if (delay > Duration.zero) {
+        await _retryDelay(delay);
+      }
+      _ensureActive();
+    }
+    throw StateError('InnerTube retry loop ended without a result.');
   }
 
-  Future<InnerTubeConfiguration> _loadConfiguration() async {
-    late final InnerTubeHttpResponse response;
-    try {
-      final uri = _bootstrapUri.replace(
-        queryParameters: <String, String>{
-          ..._bootstrapUri.queryParameters,
-          'hl': _language,
-          'gl': _region,
-        },
-      );
-      response = await _transport.get(
+  bool _isRetryableTransportError(Object error) {
+    return error is TimeoutException ||
+        error is SocketException ||
+        error is HttpException ||
+        error is InnerTubeTimeoutException ||
+        error is InnerTubeTransportException;
+  }
+
+  Object _translateRequestError(Object error) {
+    if (error is InnerTubeException) {
+      return error;
+    }
+    if (error is TimeoutException) {
+      return const InnerTubeTimeoutException();
+    }
+    if (error is SocketException || error is HttpException) {
+      return InnerTubeTransportException(error);
+    }
+    if (error is FormatException) {
+      return InnerTubeFormatException(error.message);
+    }
+    return error;
+  }
+
+  Future<InnerTubeConfiguration> _configuration() {
+    return _configurationFuture ??= _guardConfigurationLoad(
+      _loadConfiguration(preferPersistedVisitorData: true),
+    );
+  }
+
+  Future<InnerTubeConfiguration> _freshConfiguration() {
+    final existing = _freshConfigurationFuture;
+    if (existing != null) {
+      return existing;
+    }
+    final load = _guardConfigurationLoad(
+      _loadConfiguration(preferPersistedVisitorData: false),
+    );
+    _configurationFuture = load;
+    _freshConfigurationFuture = load;
+    load.then<void>(
+      (_) {
+        if (identical(_freshConfigurationFuture, load)) {
+          _freshConfigurationFuture = null;
+        }
+      },
+      onError: (Object _, StackTrace _) {
+        if (identical(_freshConfigurationFuture, load)) {
+          _freshConfigurationFuture = null;
+        }
+      },
+    );
+    return load;
+  }
+
+  Future<InnerTubeConfiguration> _guardConfigurationLoad(
+    Future<InnerTubeConfiguration> load,
+  ) {
+    late final Future<InnerTubeConfiguration> guarded;
+    guarded = load.catchError((Object error) {
+      if (identical(_configurationFuture, guarded)) {
+        _configurationFuture = null;
+      }
+      throw error;
+    });
+    return guarded;
+  }
+
+  Future<InnerTubeConfiguration> _loadConfiguration({
+    required bool preferPersistedVisitorData,
+  }) async {
+    final uri = _bootstrapUri.replace(
+      queryParameters: <String, String>{
+        ..._bootstrapUri.queryParameters,
+        'hl': _language,
+        'gl': _region,
+      },
+    );
+    final response = await _sendWithRetry(
+      () => _transport.get(
         uri,
         headers: <String, String>{
           HttpHeaders.acceptHeader: 'text/html,application/xhtml+xml',
           HttpHeaders.userAgentHeader: _userAgent,
         },
         timeout: _requestTimeout,
-      );
-    } on TimeoutException {
-      throw const InnerTubeTimeoutException();
-    } on SocketException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on HttpException catch (error) {
-      throw InnerTubeTransportException(error);
-    } on FormatException catch (error) {
-      throw InnerTubeFormatException(error.message);
-    }
+      ),
+    );
     if (response.statusCode < HttpStatus.ok ||
         response.statusCode >= HttpStatus.multipleChoices) {
       throw InnerTubeHttpException(response.statusCode, response.body);
     }
-    return _bootstrapParser.parse(response.body);
+    final bootstrapConfiguration = _bootstrapParser.parse(response.body);
+    final store = _visitorDataStore;
+    if (store == null) {
+      return bootstrapConfiguration;
+    }
+
+    String? persistedVisitorData;
+    if (preferPersistedVisitorData) {
+      try {
+        final stored = (await store.read())?.trim();
+        if (stored != null && stored.isNotEmpty && stored.length <= 4096) {
+          persistedVisitorData = stored;
+        }
+      } on Object {
+        // Persistence is an optional optimization. A storage failure must not
+        // make catalog requests unusable.
+      }
+    }
+
+    final visitorData =
+        persistedVisitorData ?? bootstrapConfiguration.visitorData;
+    if (persistedVisitorData == null) {
+      try {
+        await store.write(visitorData);
+      } on Object {
+        // Continue with the fresh bootstrap identity when persistence fails.
+      }
+    }
+    return InnerTubeConfiguration(
+      apiKey: bootstrapConfiguration.apiKey,
+      clientVersion: bootstrapConfiguration.clientVersion,
+      visitorData: visitorData,
+      clientName: bootstrapConfiguration.clientName,
+      contextClientName: bootstrapConfiguration.contextClientName,
+    );
   }
 
   void dispose() {
@@ -852,6 +1275,12 @@ class InnerTubeSearchService
   );
   static final RegExp _collectionBrowseIdPattern = RegExp(
     r'^VL[A-Za-z0-9_-]{1,200}$',
+  );
+  static final RegExp _relatedBrowseIdPattern = RegExp(
+    r'^[A-Za-z0-9_-]{2,200}$',
+  );
+  static final RegExp _artistBrowseIdPattern = RegExp(
+    r'^(?:UC|MPLA)[A-Za-z0-9_-]{2,200}$',
   );
 }
 
@@ -990,6 +1419,7 @@ class InnerTubeSearchParser {
     }
 
     final artists = <String>[];
+    final artistBrowseIds = <String?>[];
     String? album;
     Duration? duration;
     for (final run in metadataRuns) {
@@ -1000,8 +1430,15 @@ class InnerTubeSearchParser {
       final pageType = _browsePageType(run);
       if (pageType == 'MUSIC_PAGE_TYPE_ARTIST') {
         final artistText = _artistText(run['text']);
-        if (artistText != null && !artists.contains(artistText)) {
-          artists.add(artistText);
+        if (artistText != null) {
+          final existingIndex = artists.indexOf(artistText);
+          final browseId = _browseId(run);
+          if (existingIndex < 0) {
+            artists.add(artistText);
+            artistBrowseIds.add(browseId);
+          } else if (artistBrowseIds[existingIndex] == null) {
+            artistBrowseIds[existingIndex] = browseId;
+          }
         }
       } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
         album = text;
@@ -1021,6 +1458,7 @@ class InnerTubeSearchParser {
           break;
         }
         artists.add(text);
+        artistBrowseIds.add(null);
         break;
       }
     }
@@ -1029,6 +1467,7 @@ class InnerTubeSearchParser {
       videoId: videoId,
       title: title,
       artists: artists,
+      artistBrowseIds: artistBrowseIds,
       album: album,
       duration: duration,
       thumbnailUrl: _thumbnailUrl(renderer),
@@ -1048,6 +1487,7 @@ class InnerTubeSearchParser {
 
     final metadataRuns = _runs(renderer['subtitle']).toList(growable: false);
     final artists = <String>[];
+    final artistBrowseIds = <String?>[];
     String? album;
     Duration? duration;
     for (final run in metadataRuns) {
@@ -1058,8 +1498,15 @@ class InnerTubeSearchParser {
       final pageType = _browsePageType(run);
       if (pageType == 'MUSIC_PAGE_TYPE_ARTIST') {
         final artistText = _artistText(run['text']);
-        if (artistText != null && !artists.contains(artistText)) {
-          artists.add(artistText);
+        if (artistText != null) {
+          final existingIndex = artists.indexOf(artistText);
+          final browseId = _browseId(run);
+          if (existingIndex < 0) {
+            artists.add(artistText);
+            artistBrowseIds.add(browseId);
+          } else if (artistBrowseIds[existingIndex] == null) {
+            artistBrowseIds[existingIndex] = browseId;
+          }
         }
       } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
         album = text;
@@ -1077,6 +1524,7 @@ class InnerTubeSearchParser {
           continue;
         }
         artists.add(text);
+        artistBrowseIds.add(null);
         break;
       }
     }
@@ -1085,6 +1533,7 @@ class InnerTubeSearchParser {
       videoId: videoId,
       title: title,
       artists: artists,
+      artistBrowseIds: artistBrowseIds,
       album: album,
       duration: duration,
       thumbnailUrl: _thumbnailUrl(renderer),
@@ -1207,16 +1656,31 @@ class InnerTubeSearchParser {
     return _text(musicConfig['pageType']);
   }
 
+  String? _browseId(Map<dynamic, dynamic> run) {
+    final navigation = run['navigationEndpoint'];
+    if (navigation is! Map) {
+      return null;
+    }
+    final browse = navigation['browseEndpoint'];
+    if (browse is! Map) {
+      return null;
+    }
+    final browseId = _text(browse['browseId']);
+    if (browseId == null || browseId.length > 256) {
+      return null;
+    }
+    return browseId;
+  }
+
   String? _thumbnailUrl(Map<dynamic, dynamic> renderer) {
     final thumbnail = renderer['thumbnail'] ?? renderer['thumbnailRenderer'];
     if (thumbnail is! Map) {
       return null;
     }
     final musicThumbnail = thumbnail['musicThumbnailRenderer'];
-    if (musicThumbnail is! Map) {
-      return null;
-    }
-    final thumbnailData = musicThumbnail['thumbnail'];
+    final thumbnailData = musicThumbnail is Map
+        ? musicThumbnail['thumbnail']
+        : thumbnail;
     if (thumbnailData is! Map) {
       return null;
     }
@@ -1393,6 +1857,7 @@ class InnerTubeAlbumParser {
     required int limit,
     String? fallbackAlbumTitle,
     List<String> fallbackAlbumArtists = const [],
+    List<String?> fallbackAlbumArtistBrowseIds = const [],
   }) {
     _validateSongLimit(limit);
     if (payload is! Map) {
@@ -1405,13 +1870,19 @@ class InnerTubeAlbumParser {
     final headerAlbumTitle = header == null
         ? null
         : _textFromRenderer(header['title']);
-    final headerAlbumArtists = header == null
-        ? const <String>[]
+    final headerAlbumArtistMetadata = header == null
+        ? const _InnerTubeArtists(names: [], browseIds: [])
         : _headerArtists(header);
     final albumTitle = headerAlbumTitle ?? fallbackAlbumTitle;
-    final albumArtists = headerAlbumArtists.isEmpty
+    final albumArtists = headerAlbumArtistMetadata.names.isEmpty
         ? fallbackAlbumArtists
-        : headerAlbumArtists;
+        : headerAlbumArtistMetadata.names;
+    final albumArtistBrowseIds = headerAlbumArtistMetadata.names.isEmpty
+        ? _alignedArtistBrowseIds(
+            fallbackAlbumArtists,
+            fallbackAlbumArtistBrowseIds,
+          )
+        : headerAlbumArtistMetadata.browseIds;
     final trackShelf = _findAlbumTrackShelf(payload);
     final songs = _songParser.parseDetailSongs(
       trackShelf ?? payload,
@@ -1420,18 +1891,33 @@ class InnerTubeAlbumParser {
     return _InnerTubeAlbumSongPage(
       albumTitle: albumTitle,
       albumArtists: List.unmodifiable(albumArtists),
+      albumArtistBrowseIds: List.unmodifiable(albumArtistBrowseIds),
       songs: List.unmodifiable(
         songs.map((song) {
-          final artists = song.artists
-              .map(_songParser._artistText)
-              .whereType<String>()
-              .toList(growable: false);
+          final artists = <String>[];
+          final artistBrowseIds = <String?>[];
+          for (var index = 0; index < song.artists.length; index += 1) {
+            final artist = _songParser._artistText(song.artists[index]);
+            if (artist == null) {
+              continue;
+            }
+            artists.add(artist);
+            artistBrowseIds.add(
+              index < song.artistBrowseIds.length
+                  ? song.artistBrowseIds[index]
+                  : null,
+            );
+          }
           final resolvedArtists = artists.isEmpty ? albumArtists : artists;
+          final resolvedArtistBrowseIds = artists.isEmpty
+              ? albumArtistBrowseIds
+              : artistBrowseIds;
           final songAlbum = song.album ?? albumTitle;
           return InnerTubeSong(
             videoId: song.videoId,
             title: song.title,
             artists: resolvedArtists,
+            artistBrowseIds: resolvedArtistBrowseIds,
             album: songAlbum,
             duration: song.duration,
             thumbnailUrl: song.thumbnailUrl,
@@ -1449,7 +1935,9 @@ class InnerTubeAlbumParser {
         ? const <Map<dynamic, dynamic>>[]
         : _songParser._columnRuns(columns.first).toList(growable: false);
     final title = _songParser._firstText(titleRuns);
-    final browseId = _findAlbumBrowseId(renderer);
+    final browseId =
+        _findAlbumBrowseId(renderer['navigationEndpoint']) ??
+        _findAlbumBrowseId(titleRuns);
     if (title == null || browseId == null) {
       return null;
     }
@@ -1463,6 +1951,7 @@ class InnerTubeAlbumParser {
       browseId: browseId,
       title: title,
       artists: metadata.artists,
+      artistBrowseIds: metadata.artistBrowseIds,
       year: metadata.year,
       type: metadata.type,
       thumbnailUrl: _songParser._thumbnailUrl(renderer),
@@ -1472,7 +1961,9 @@ class InnerTubeAlbumParser {
 
   InnerTubeAlbum? _parseTwoRowAlbum(Map<dynamic, dynamic> renderer) {
     final title = _textFromRenderer(renderer['title']);
-    final browseId = _findAlbumBrowseId(renderer);
+    final browseId =
+        _findAlbumBrowseId(renderer['navigationEndpoint']) ??
+        _findAlbumBrowseId(renderer['title']);
     if (title == null || browseId == null) {
       return null;
     }
@@ -1481,6 +1972,7 @@ class InnerTubeAlbumParser {
       browseId: browseId,
       title: title,
       artists: metadata.artists,
+      artistBrowseIds: metadata.artistBrowseIds,
       year: metadata.year,
       type: metadata.type,
       thumbnailUrl: _songParser._thumbnailUrl(renderer),
@@ -1490,6 +1982,7 @@ class InnerTubeAlbumParser {
 
   _InnerTubeAlbumMetadata _parseMetadata(Iterable<Map<dynamic, dynamic>> runs) {
     final artists = <String>[];
+    final artistBrowseIds = <String?>[];
     final untypedText = <String>[];
     String? year;
     for (final run in runs) {
@@ -1500,8 +1993,15 @@ class InnerTubeAlbumParser {
       final pageType = _songParser._browsePageType(run);
       if (pageType == 'MUSIC_PAGE_TYPE_ARTIST') {
         final artistText = _songParser._artistText(run['text']);
-        if (artistText != null && !artists.contains(artistText)) {
-          artists.add(artistText);
+        if (artistText != null) {
+          final existingIndex = artists.indexOf(artistText);
+          final browseId = _songParser._browseId(run);
+          if (existingIndex < 0) {
+            artists.add(artistText);
+            artistBrowseIds.add(browseId);
+          } else if (artistBrowseIds[existingIndex] == null) {
+            artistBrowseIds[existingIndex] = browseId;
+          }
         }
       } else if (_yearPattern.hasMatch(text) && year == null) {
         year = text;
@@ -1518,11 +2018,13 @@ class InnerTubeAlbumParser {
       for (final candidate in untypedText.skip(1)) {
         if (!artists.contains(candidate)) {
           artists.add(candidate);
+          artistBrowseIds.add(null);
         }
       }
     }
     return _InnerTubeAlbumMetadata(
       artists: List.unmodifiable(artists),
+      artistBrowseIds: List.unmodifiable(artistBrowseIds),
       year: year,
       type: type,
     );
@@ -1684,16 +2186,23 @@ class InnerTubeAlbumParser {
     );
   }
 
-  List<String> _headerArtists(Map<dynamic, dynamic> header) {
+  _InnerTubeArtists _headerArtists(Map<dynamic, dynamic> header) {
     final artists = <String>[];
+    final artistBrowseIds = <String?>[];
 
     void visit(Object? node) {
       if (node is Map) {
         final text = _songParser._artistText(node['text']);
         if (text != null &&
-            _songParser._browsePageType(node) == 'MUSIC_PAGE_TYPE_ARTIST' &&
-            !artists.contains(text)) {
-          artists.add(text);
+            _songParser._browsePageType(node) == 'MUSIC_PAGE_TYPE_ARTIST') {
+          final existingIndex = artists.indexOf(text);
+          final browseId = _songParser._browseId(node);
+          if (existingIndex < 0) {
+            artists.add(text);
+            artistBrowseIds.add(browseId);
+          } else if (artistBrowseIds[existingIndex] == null) {
+            artistBrowseIds[existingIndex] = browseId;
+          }
         }
         for (final value in node.values) {
           visit(value);
@@ -1707,7 +2216,10 @@ class InnerTubeAlbumParser {
 
     visit(header);
     if (artists.isNotEmpty) {
-      return List.unmodifiable(artists);
+      return _InnerTubeArtists(
+        names: List.unmodifiable(artists),
+        browseIds: List.unmodifiable(artistBrowseIds),
+      );
     }
 
     for (final key in const <String>[
@@ -1725,10 +2237,24 @@ class InnerTubeAlbumParser {
           continue;
         }
         artists.add(text);
-        return List.unmodifiable(artists);
+        artistBrowseIds.add(null);
+        return _InnerTubeArtists(
+          names: List.unmodifiable(artists),
+          browseIds: List.unmodifiable(artistBrowseIds),
+        );
       }
     }
-    return const [];
+    return const _InnerTubeArtists(names: [], browseIds: []);
+  }
+
+  List<String?> _alignedArtistBrowseIds(
+    List<String> artists,
+    List<String?> browseIds,
+  ) {
+    if (artists.length == browseIds.length) {
+      return browseIds;
+    }
+    return List<String?>.filled(artists.length, null);
   }
 
   String? _textFromRenderer(Object? renderer) {
@@ -1805,11 +2331,13 @@ class _InnerTubeAlbumRenderer {
 class _InnerTubeAlbumMetadata {
   const _InnerTubeAlbumMetadata({
     required this.artists,
+    required this.artistBrowseIds,
     required this.year,
     required this.type,
   });
 
   final List<String> artists;
+  final List<String?> artistBrowseIds;
   final String? year;
   final String? type;
 }
@@ -1819,11 +2347,20 @@ class _InnerTubeAlbumSongPage {
     required this.songs,
     required this.albumTitle,
     required this.albumArtists,
+    required this.albumArtistBrowseIds,
   });
 
   final List<InnerTubeSong> songs;
   final String? albumTitle;
   final List<String> albumArtists;
+  final List<String?> albumArtistBrowseIds;
+}
+
+class _InnerTubeArtists {
+  const _InnerTubeArtists({required this.names, required this.browseIds});
+
+  final List<String> names;
+  final List<String?> browseIds;
 }
 
 class _InnerTubeSongRenderer {
@@ -2119,6 +2656,466 @@ class InnerTubeHomeParser {
     }
     final joined = pieces.join().trim();
     return joined.isEmpty ? null : joined;
+  }
+}
+
+class InnerTubeNextParser {
+  const InnerTubeNextParser({this._songParser = const InnerTubeSearchParser()});
+
+  final InnerTubeSearchParser _songParser;
+
+  InnerTubeNextPage parse(
+    Object? payload, {
+    int limit = innerTubeDetailResultLimit,
+  }) {
+    if (limit < 1 || limit > InnerTubeSearchService.maxDetailResults) {
+      throw RangeError.range(
+        limit,
+        1,
+        InnerTubeSearchService.maxDetailResults,
+        'limit',
+      );
+    }
+    if (payload is! Map) {
+      throw const InnerTubeFormatException(
+        'YouTube Music next response must be a JSON object.',
+      );
+    }
+
+    final panel = _findPlaylistPanel(payload);
+    final songs = <InnerTubeSong>[];
+    final seenVideoIds = <String>{};
+    if (panel != null) {
+      for (final renderer in _playlistPanelVideoRenderers(panel)) {
+        final song = _parsePlaylistPanelSong(renderer);
+        if (song == null || !seenVideoIds.add(song.videoId)) {
+          continue;
+        }
+        songs.add(song);
+        if (songs.length == limit) {
+          break;
+        }
+      }
+    }
+
+    return InnerTubeNextPage(
+      songs: songs,
+      continuation: _findContinuation(panel ?? payload),
+      relatedBrowseId: _findRelatedBrowseId(payload),
+      automixPlaylistId: _findAutomixPlaylistId(payload),
+    );
+  }
+
+  Map<dynamic, dynamic>? _findPlaylistPanel(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'playlistPanelRenderer',
+        'playlistPanelContinuation',
+      ]) {
+        final panel = node[key];
+        if (panel is Map) {
+          return panel;
+        }
+      }
+      for (final value in node.values) {
+        final panel = _findPlaylistPanel(value);
+        if (panel != null) {
+          return panel;
+        }
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final panel = _findPlaylistPanel(value);
+        if (panel != null) {
+          return panel;
+        }
+      }
+    }
+    return null;
+  }
+
+  Iterable<Map<dynamic, dynamic>> _playlistPanelVideoRenderers(
+    Object? node,
+  ) sync* {
+    if (node is Map) {
+      final renderer = node['playlistPanelVideoRenderer'];
+      if (renderer is Map) {
+        yield renderer;
+      }
+      for (final value in node.values) {
+        yield* _playlistPanelVideoRenderers(value);
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        yield* _playlistPanelVideoRenderers(value);
+      }
+    }
+  }
+
+  InnerTubeSong? _parsePlaylistPanelSong(Map<dynamic, dynamic> renderer) {
+    final titleRuns = _songParser
+        ._runs(renderer['title'])
+        .toList(growable: false);
+    final title = _songParser._firstText(titleRuns);
+    final videoId =
+        _songParser._text(renderer['videoId']) ??
+        _songParser._watchVideoId(titleRuns) ??
+        _songParser._findWatchVideoId(renderer['navigationEndpoint']);
+    if (title == null || videoId == null) {
+      return null;
+    }
+
+    final metadataRuns = <Map<dynamic, dynamic>>[
+      ..._songParser._runs(renderer['longBylineText']),
+      ..._songParser._runs(renderer['shortBylineText']),
+      ..._songParser._runs(renderer['subtitle']),
+    ];
+    final artists = <String>[];
+    final artistBrowseIds = <String?>[];
+    String? album;
+    Duration? duration = _songParser._parseDuration(
+      _songParser._text(renderer['lengthText']) ?? '',
+    );
+    for (final run in metadataRuns) {
+      final text = _songParser._text(run['text']);
+      if (text == null) {
+        continue;
+      }
+      final pageType = _songParser._browsePageType(run);
+      if (pageType == 'MUSIC_PAGE_TYPE_ARTIST') {
+        final artist = _songParser._artistText(run['text']);
+        if (artist != null) {
+          final existingIndex = artists.indexOf(artist);
+          final browseId = _songParser._browseId(run);
+          if (existingIndex < 0) {
+            artists.add(artist);
+            artistBrowseIds.add(browseId);
+          } else if (artistBrowseIds[existingIndex] == null) {
+            artistBrowseIds[existingIndex] = browseId;
+          }
+        }
+      } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
+        album = text;
+      }
+      duration ??= _songParser._parseDuration(text);
+    }
+    if (artists.isEmpty) {
+      for (final run in metadataRuns) {
+        final text = _songParser._artistText(run['text']);
+        if (text == null ||
+            _songParser._isSeparator(text) ||
+            _songParser._parseDuration(text) != null ||
+            _songParser._browsePageType(run) == 'MUSIC_PAGE_TYPE_ALBUM') {
+          continue;
+        }
+        artists.add(text);
+        artistBrowseIds.add(null);
+        break;
+      }
+    }
+
+    return InnerTubeSong(
+      videoId: videoId,
+      title: title,
+      artists: artists,
+      artistBrowseIds: artistBrowseIds,
+      album: album,
+      duration: duration,
+      thumbnailUrl: _songParser._thumbnailUrl(renderer),
+    );
+  }
+
+  String? _findContinuation(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'nextRadioContinuationData',
+        'nextContinuationData',
+        'reloadContinuationData',
+        'continuationCommand',
+      ]) {
+        final data = node[key];
+        if (data is! Map) {
+          continue;
+        }
+        final continuation = _songParser._text(
+          data['continuation'] ?? data['token'],
+        );
+        if (continuation != null) {
+          return continuation;
+        }
+      }
+      for (final value in node.values) {
+        final continuation = _findContinuation(value);
+        if (continuation != null) {
+          return continuation;
+        }
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final continuation = _findContinuation(value);
+        if (continuation != null) {
+          return continuation;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _findRelatedBrowseId(Object? node) {
+    if (node is Map) {
+      final browse = node['browseEndpoint'];
+      if (browse is Map) {
+        final browseId = _songParser._text(browse['browseId']);
+        final configs = browse['browseEndpointContextSupportedConfigs'];
+        final musicConfig = configs is Map
+            ? configs['browseEndpointContextMusicConfig']
+            : null;
+        final pageType = musicConfig is Map
+            ? _songParser._text(musicConfig['pageType'])
+            : null;
+        if (browseId != null &&
+            (browseId.startsWith('MPTR') ||
+                (pageType?.contains('RELATED') ?? false))) {
+          return browseId;
+        }
+      }
+      for (final value in node.values) {
+        final browseId = _findRelatedBrowseId(value);
+        if (browseId != null) {
+          return browseId;
+        }
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final browseId = _findRelatedBrowseId(value);
+        if (browseId != null) {
+          return browseId;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _findAutomixPlaylistId(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'automixPreviewVideoRenderer',
+        'automixPlaylistVideoRenderer',
+      ]) {
+        final automix = node[key];
+        final playlistId = _findPlaylistId(automix);
+        if (playlistId != null) {
+          return playlistId;
+        }
+      }
+      for (final value in node.values) {
+        final playlistId = _findAutomixPlaylistId(value);
+        if (playlistId != null) {
+          return playlistId;
+        }
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final playlistId = _findAutomixPlaylistId(value);
+        if (playlistId != null) {
+          return playlistId;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _findPlaylistId(Object? node) {
+    if (node is Map) {
+      for (final endpointName in const <String>[
+        'watchPlaylistEndpoint',
+        'watchEndpoint',
+      ]) {
+        final endpoint = node[endpointName];
+        if (endpoint is Map) {
+          final playlistId = _songParser._text(endpoint['playlistId']);
+          if (playlistId != null && playlistId.startsWith('RD')) {
+            return playlistId;
+          }
+        }
+      }
+      for (final value in node.values) {
+        final playlistId = _findPlaylistId(value);
+        if (playlistId != null) {
+          return playlistId;
+        }
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final playlistId = _findPlaylistId(value);
+        if (playlistId != null) {
+          return playlistId;
+        }
+      }
+    }
+    return null;
+  }
+}
+
+class InnerTubeRelatedParser {
+  const InnerTubeRelatedParser({
+    this._songParser = const InnerTubeSearchParser(),
+    this._albumParser = const InnerTubeAlbumParser(),
+    this._homeParser = const InnerTubeHomeParser(),
+  });
+
+  final InnerTubeSearchParser _songParser;
+  final InnerTubeAlbumParser _albumParser;
+  final InnerTubeHomeParser _homeParser;
+
+  InnerTubeRelatedPage parse(Object? payload, {int limit = 20}) {
+    if (limit < 1 || limit > InnerTubeSearchService.maxResults) {
+      throw RangeError.range(
+        limit,
+        1,
+        InnerTubeSearchService.maxResults,
+        'limit',
+      );
+    }
+    if (payload is! Map) {
+      throw const InnerTubeFormatException(
+        'YouTube Music related response must be a JSON object.',
+      );
+    }
+
+    final songs = _songParser.parse(payload, limit: limit);
+    final albums = _albumParser.parse(payload, limit: limit);
+    final artists = <InnerTubeArtist>[];
+    final seenArtistBrowseIds = <String>{};
+    final collections = <InnerTubeHomeCollection>[];
+    final seenCollectionBrowseIds = <String>{};
+    for (final renderer in _twoRowRenderers(payload)) {
+      final isSong = _songParser._parseTwoRowSong(renderer) != null;
+      final isAlbum = _albumParser._parseTwoRowAlbum(renderer) != null;
+      final artist = _parseArtist(renderer);
+      if (artist != null && seenArtistBrowseIds.add(artist.browseId)) {
+        artists.add(artist);
+      }
+      if (!isSong && !isAlbum && artist == null) {
+        final collection = _homeParser._parseCollection(renderer);
+        if (collection != null &&
+            seenCollectionBrowseIds.add(collection.browseId)) {
+          collections.add(collection);
+        }
+      }
+    }
+
+    return InnerTubeRelatedPage(
+      songs: songs,
+      albums: albums,
+      artists: artists.take(limit).toList(growable: false),
+      collections: collections.take(limit).toList(growable: false),
+      continuation: _findContinuation(payload),
+    );
+  }
+
+  Iterable<Map<dynamic, dynamic>> _twoRowRenderers(Object? node) sync* {
+    if (node is Map) {
+      final twoRow = node['musicTwoRowItemRenderer'];
+      if (twoRow is Map) {
+        yield twoRow;
+      }
+      for (final value in node.values) {
+        yield* _twoRowRenderers(value);
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        yield* _twoRowRenderers(value);
+      }
+    }
+  }
+
+  InnerTubeArtist? _parseArtist(Map<dynamic, dynamic> renderer) {
+    final titleRuns = _songParser
+        ._runs(renderer['title'])
+        .toList(growable: false);
+    final name = _songParser._firstText(titleRuns);
+    if (name == null) {
+      return null;
+    }
+    final browseId =
+        _directArtistBrowseId(renderer['navigationEndpoint']) ??
+        _artistBrowseIdFromRuns(titleRuns);
+    if (browseId == null) {
+      return null;
+    }
+    return InnerTubeArtist(
+      browseId: browseId,
+      name: name,
+      thumbnailUrl: _songParser._thumbnailUrl(renderer),
+    );
+  }
+
+  String? _artistBrowseIdFromRuns(Iterable<Map<dynamic, dynamic>> runs) {
+    for (final run in runs) {
+      final browseId = _directArtistBrowseId(run['navigationEndpoint']);
+      if (browseId != null) {
+        return browseId;
+      }
+    }
+    return null;
+  }
+
+  String? _directArtistBrowseId(Object? endpoint) {
+    if (endpoint is! Map) {
+      return null;
+    }
+    final browse = endpoint['browseEndpoint'];
+    if (browse is! Map) {
+      return null;
+    }
+    final browseId = _songParser._text(browse['browseId']);
+    if (browseId == null) {
+      return null;
+    }
+    final configs = browse['browseEndpointContextSupportedConfigs'];
+    final musicConfig = configs is Map
+        ? configs['browseEndpointContextMusicConfig']
+        : null;
+    final pageType = musicConfig is Map
+        ? _songParser._text(musicConfig['pageType'])
+        : null;
+    return pageType == 'MUSIC_PAGE_TYPE_ARTIST' ? browseId : null;
+  }
+
+  String? _findContinuation(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'nextContinuationData',
+        'reloadContinuationData',
+        'continuationCommand',
+      ]) {
+        final data = node[key];
+        if (data is! Map) {
+          continue;
+        }
+        final continuation = _songParser._text(
+          data['continuation'] ?? data['token'],
+        );
+        if (continuation != null) {
+          return continuation;
+        }
+      }
+      for (final value in node.values) {
+        final continuation = _findContinuation(value);
+        if (continuation != null) {
+          return continuation;
+        }
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final continuation = _findContinuation(value);
+        if (continuation != null) {
+          return continuation;
+        }
+      }
+    }
+    return null;
   }
 }
 

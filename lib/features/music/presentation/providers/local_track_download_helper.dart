@@ -130,6 +130,7 @@ class LocalTrackDownloadHelper {
     final existing = await findExistingLocalTrack(metadataTrack);
     if (existing != null) {
       final enriched = await _enrichExistingTrack(existing, metadataTrack);
+      await _linkCatalogDownload(metadataTrack, enriched);
       return LocalTrackDownloadResult(
         track: enriched,
         remoteTrack: metadataTrack,
@@ -142,6 +143,7 @@ class LocalTrackDownloadHelper {
       // the downloader. Recheck immediately before starting the transfer.
       final matching = await _findMatchingLocalTrack(metadataTrack);
       if (matching != null && await _isUsableAudioFile(matching.filePath)) {
+        await _linkCatalogDownload(metadataTrack, matching);
         return LocalTrackDownloadResult(
           track: matching,
           remoteTrack: metadataTrack,
@@ -163,6 +165,34 @@ class LocalTrackDownloadHelper {
     return allowConcurrentDownload
         ? limitedDownload()
         : _serializeDownload(limitedDownload);
+  }
+
+  Future<void> _linkCatalogDownload(
+    TrackInfo remoteTrack,
+    LocalTrack localTrack,
+  ) async {
+    final videoId = remoteTrack.id.trim();
+    if (videoId.isEmpty) return;
+    try {
+      final changed = await _ref
+          .read(databaseServiceProvider)
+          .linkCatalogDownload(videoId: videoId, localTrackId: localTrack.id);
+      if (changed > 0) {
+        _ref
+          ..invalidate(catalogPlaylistsProvider)
+          ..invalidate(catalogPlaylistProvider);
+        await _ref
+            .read(playlistsControllerProvider.notifier)
+            .reloadFromRepository();
+        _ref
+            .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+            .requestAutomaticSync();
+      }
+    } catch (error, stackTrace) {
+      // Downloaded audio remains valid. The catalog can repair this optional
+      // link later from the persisted sourceId without redownloading media.
+      debugPrint('Catalog download linking failed: $error\n$stackTrace');
+    }
   }
 
   LocalTrackDownloadResult _asCoalescedReuse(LocalTrackDownloadResult result) {
@@ -224,6 +254,7 @@ class LocalTrackDownloadHelper {
         duration: metadataTrack.duration,
         album: metadataTrack.album,
         artists: _artistsForPersistence(metadataTrack),
+        artistBrowseIds: metadataTrack.artistBrowseIds,
         metadataSource: metadataTrack.metadataSource,
         sourceId: metadataTrack.id.trim().isEmpty ? null : metadataTrack.id,
         lastPlayedAt: staleMatch?.lastPlayedAt,
@@ -231,6 +262,7 @@ class LocalTrackDownloadHelper {
       );
 
       await _ref.read(libraryRepositoryProvider).saveLocalTrack(localTrack);
+      await _linkCatalogDownload(metadataTrack, localTrack);
       await _commitSavedThumbnail(savedThumbnail);
       _ref.invalidate(libraryTracksProvider);
 
@@ -358,6 +390,12 @@ class LocalTrackDownloadHelper {
         : existingArtists.isNotEmpty
         ? existingArtists
         : incomingArtists;
+    final nextArtistBrowseIds =
+        incomingIsCanonical && metadata.artistBrowseIds.isNotEmpty
+        ? metadata.artistBrowseIds
+        : existing.artistBrowseIds.isNotEmpty
+        ? existing.artistBrowseIds
+        : metadata.artistBrowseIds;
     final nextAlbum = incomingIsCanonical
         ? _preferredMetadataText(metadata.album, existing.album)
         : _preferredMetadataText(existing.album, metadata.album);
@@ -428,6 +466,7 @@ class LocalTrackDownloadHelper {
           : existing.duration ?? metadata.duration,
       album: nextAlbum,
       artists: nextArtists,
+      artistBrowseIds: nextArtistBrowseIds,
       metadataSource: incomingIsCanonical
           ? TrackMetadataSource.youtubeMusic
           : existing.metadataSource,
@@ -476,11 +515,24 @@ class LocalTrackDownloadHelper {
         left.duration == right.duration &&
         left.album == right.album &&
         _sameStrings(left.artists, right.artists) &&
+        _sameNullableStrings(left.artistBrowseIds, right.artistBrowseIds) &&
         left.metadataSource == right.metadataSource &&
         left.sourceId == right.sourceId;
   }
 
   bool _sameStrings(List<String> left, List<String> right) {
+    if (left.length != right.length) {
+      return false;
+    }
+    for (var index = 0; index < left.length; index++) {
+      if (left[index] != right[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _sameNullableStrings(List<String?> left, List<String?> right) {
     if (left.length != right.length) {
       return false;
     }

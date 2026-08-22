@@ -35,6 +35,7 @@ void main() {
       title: 'Die With A Smile',
       artist: 'stale scalar value',
       artists: const ['Lady Gaga', 'Bruno Mars'],
+      artistBrowseIds: const ['UC-LadyGaga', null],
       album: 'MAYHEM',
       duration: const Duration(minutes: 4, seconds: 12),
       thumbnailUrl: 'https://i.ytimg.com/vi/DlFXDl_ROAM/hq720.jpg',
@@ -47,6 +48,8 @@ void main() {
 
     expect(track.artist, 'Lady Gaga, Bruno Mars');
     expect(track.artists, const ['Lady Gaga', 'Bruno Mars']);
+    expect(track.artistBrowseIds, const ['UC-LadyGaga', null]);
+    expect(encoded['artist_browse_ids'], const ['UC-LadyGaga', null]);
     expect(track.album, 'MAYHEM');
     expect(track.duration, const Duration(minutes: 4, seconds: 12));
     expect(

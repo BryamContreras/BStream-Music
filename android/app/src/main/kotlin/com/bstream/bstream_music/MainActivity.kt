@@ -19,7 +19,10 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
 import java.util.UUID
@@ -59,6 +62,7 @@ class MainActivity : AudioServiceActivity() {
     private var youtubeDlInitialized = false
     private var updateRunning = false
     private var updateCompleted = false
+    private var lastUpdateFailureAtElapsedRealtime: Long? = null
     private val progressEmissionLock = Object()
     private val progressEmissions = mutableMapOf<String, ProgressEmission>()
     private var pendingFileExportResult: MethodChannel.Result? = null
@@ -1075,27 +1079,32 @@ class MainActivity : AudioServiceActivity() {
             BUNDLED_YTDLP_VERSION_KEY,
             null,
         )
-        if (
-            handledBundledVersion == BuildConfig.BUNDLED_YTDLP_VERSION &&
-            ytdlpFile.isFile
-        ) {
-            return false
-        }
-
-        val recordedVersions = listOfNotNull(
-            preferences.getString(YTDLP_VERSION_KEY, null),
-            preferences.getString(YTDLP_VERSION_NAME_KEY, null),
+        val recordedVersion = preferences.getString(YTDLP_VERSION_KEY, null)
+        val verifiedVersion = preferences.getString(VERIFIED_YTDLP_VERSION_KEY, null)
+        val verifiedSha256 = preferences.getString(VERIFIED_YTDLP_SHA256_KEY, null)
+        val actualSha256 = YtDlpUpdatePolicy.sha256(
+            ytdlpFile,
+            YTDLP_MAX_BINARY_BYTES,
         )
-        val keepExistingUpdate = ytdlpFile.isFile && recordedVersions.any { version ->
-            isYtDlpVersionAtLeast(version, BuildConfig.BUNDLED_YTDLP_VERSION)
-        }
-        if (keepExistingUpdate) {
+        val keepExistingVerifiedCopy =
+            actualSha256 != null &&
+                actualSha256.equals(verifiedSha256, ignoreCase = true) &&
+                YtDlpUpdatePolicy.executableMatchesRelease(recordedVersion, verifiedVersion.orEmpty()) &&
+                YtDlpUpdatePolicy.isVersionAtLeast(
+                    verifiedVersion,
+                    BuildConfig.BUNDLED_YTDLP_VERSION,
+                )
+        if (keepExistingVerifiedCopy) {
             Log.i(
                 TAG,
-                "Keeping installed yt-dlp ${recordedVersions.joinToString()} " +
+                "Keeping verified installed yt-dlp $verifiedVersion " +
                     "over bundled ${BuildConfig.BUNDLED_YTDLP_VERSION}",
             )
             return false
+        }
+
+        if (handledBundledVersion == BuildConfig.BUNDLED_YTDLP_VERSION && ytdlpFile.isFile) {
+            Log.w(TAG, "Replacing an unverified or modified persisted yt-dlp copy")
         }
 
         if (ytdlpDir.exists() && !ytdlpDir.deleteRecursively()) {
@@ -1104,12 +1113,23 @@ class MainActivity : AudioServiceActivity() {
         preferences.edit()
             .remove(YTDLP_VERSION_KEY)
             .remove(YTDLP_VERSION_NAME_KEY)
+            .remove(VERIFIED_YTDLP_VERSION_KEY)
+            .remove(VERIFIED_YTDLP_SHA256_KEY)
             .commit()
         Log.i(TAG, "Preparing bundled yt-dlp ${BuildConfig.BUNDLED_YTDLP_VERSION}")
         return true
     }
 
     private fun finishBundledYoutubeDlUpgrade(usingBundledVersion: Boolean) {
+        if (usingBundledVersion) {
+            val actualSha256 = YtDlpUpdatePolicy.sha256(
+                File(youtubeDlDirectory(), YoutubeDL.ytdlpBin),
+                YTDLP_MAX_BINARY_BYTES,
+            )
+            if (!actualSha256.equals(BuildConfig.BUNDLED_YTDLP_SHA256, ignoreCase = true)) {
+                throw IllegalStateException("La copia incluida de yt-dlp no supero su verificacion.")
+            }
+        }
         val editor = applicationContext
             .getSharedPreferences(YTDLP_SHARED_PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -1118,6 +1138,8 @@ class MainActivity : AudioServiceActivity() {
             editor
                 .putString(YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
                 .putString(YTDLP_VERSION_NAME_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .putString(VERIFIED_YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .putString(VERIFIED_YTDLP_SHA256_KEY, BuildConfig.BUNDLED_YTDLP_SHA256)
         }
         if (!editor.commit()) {
             Log.w(TAG, "No se pudo guardar la version incluida de yt-dlp")
@@ -1131,28 +1153,6 @@ class MainActivity : AudioServiceActivity() {
         )
     }
 
-    private fun isYtDlpVersionAtLeast(candidate: String, required: String): Boolean {
-        val candidateParts = parseYtDlpVersion(candidate) ?: return false
-        val requiredParts = parseYtDlpVersion(required) ?: return false
-        val partCount = maxOf(candidateParts.size, requiredParts.size)
-        for (index in 0 until partCount) {
-            val candidatePart = candidateParts.getOrElse(index) { 0L }
-            val requiredPart = requiredParts.getOrElse(index) { 0L }
-            if (candidatePart != requiredPart) {
-                return candidatePart > requiredPart
-            }
-        }
-        return true
-    }
-
-    private fun parseYtDlpVersion(value: String): List<Long>? {
-        return YTDLP_DATE_VERSION_REGEX.find(value)
-            ?.value
-            ?.split('.')
-            ?.mapNotNull(String::toLongOrNull)
-            ?.takeIf { it.size >= 3 }
-    }
-
     private fun updateYoutubeDlBlocking(): Boolean {
         synchronized(updateLock) {
             if (updateCompleted) {
@@ -1164,30 +1164,183 @@ class MainActivity : AudioServiceActivity() {
                     return true
                 }
             }
+            val now = SystemClock.elapsedRealtime()
+            if (!YtDlpUpdatePolicy.canAttemptUpdate(
+                    nowElapsedMilliseconds = now,
+                    lastFailureElapsedMilliseconds = lastUpdateFailureAtElapsedRealtime,
+                    failureCooldownMilliseconds = YTDLP_UPDATE_FAILURE_COOLDOWN_MS,
+                )
+            ) {
+                Log.i(TAG, "Skipping yt-dlp update during the failure cooldown")
+                return false
+            }
             updateRunning = true
         }
 
+        var accepted = false
         return try {
-            val status = YoutubeDL.getInstance()
-                .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.NIGHTLY)
+            val channel = YtDlpUpdatePolicy.channel(
+                allowNightly = BuildConfig.ALLOW_NIGHTLY_YTDLP_UPDATES,
+            )
+            val youtubeDl = YoutubeDL.getInstance()
+            val status = youtubeDl.updateYoutubeDL(applicationContext, channel)
+            val verification = verifyRuntimeYoutubeDl(youtubeDl, channel)
+            if (verification == null || !recordVerifiedYoutubeDl(verification)) {
+                Log.w(
+                    TAG,
+                    "Rejected unverified runtime yt-dlp from ${channel.apiUrl}; " +
+                        "restoring bundled ${BuildConfig.BUNDLED_YTDLP_VERSION}",
+                )
+                restoreBundledYoutubeDl()
+                return false
+            }
             Log.i(
                 TAG,
-                "yt-dlp update status: $status, " +
-                    "version=${YoutubeDL.getInstance().versionName(applicationContext)}",
+                "yt-dlp update status: $status, source=${channel.apiUrl}, " +
+                    "version=${verification.version}, sha256=${verification.sha256}",
             )
             synchronized(updateLock) {
                 updateCompleted = true
+                lastUpdateFailureAtElapsedRealtime = null
             }
+            accepted = true
             true
         } catch (error: Throwable) {
             Log.w(TAG, "No se pudo actualizar yt-dlp", error)
+            try {
+                restoreBundledYoutubeDl()
+            } catch (restoreError: Throwable) {
+                error.addSuppressed(restoreError)
+                Log.e(TAG, "No se pudo restaurar la copia incluida de yt-dlp", restoreError)
+            }
             false
         } finally {
             synchronized(updateLock) {
+                if (!accepted) {
+                    lastUpdateFailureAtElapsedRealtime = SystemClock.elapsedRealtime()
+                }
                 updateRunning = false
                 updateLock.notifyAll()
             }
         }
+    }
+
+    /**
+     * Verifies the release metadata and checksum before executing the freshly
+     * downloaded zipapp. SHA2-256SUMS is fetched from the exact official
+     * release selected by the updater. This protects against corruption and
+     * mismatched assets, but is not presented as an independent publisher
+     * signature because the manifest and asset share the same release host.
+     */
+    private fun verifyRuntimeYoutubeDl(
+        youtubeDl: YoutubeDL,
+        channel: YoutubeDL.UpdateChannel,
+    ): RuntimeYtDlpVerification? {
+        val metadataVersion = youtubeDl.version(applicationContext)
+        val metadataName = youtubeDl.versionName(applicationContext)
+        val releaseVersion = YtDlpUpdatePolicy.coherentReleaseVersion(
+            metadataVersion = metadataVersion,
+            metadataName = metadataName,
+            requiredVersion = BuildConfig.BUNDLED_YTDLP_VERSION,
+        ) ?: run {
+            Log.w(TAG, "yt-dlp release metadata is invalid or inconsistent")
+            return null
+        }
+        val manifestUrl = YtDlpUpdatePolicy.checksumManifestUrl(
+            channel,
+            releaseVersion,
+        ) ?: return null
+        val manifest = downloadBoundedText(manifestUrl, YTDLP_CHECKSUM_MANIFEST_MAX_BYTES)
+            ?: run {
+                Log.w(TAG, "Could not download the official yt-dlp checksum manifest")
+                return null
+            }
+        val expectedSha256 = YtDlpUpdatePolicy.checksumForAsset(manifest)
+            ?: run {
+                Log.w(TAG, "The yt-dlp checksum manifest has no unambiguous yt-dlp entry")
+                return null
+            }
+        val ytdlpFile = File(youtubeDlDirectory(), YoutubeDL.ytdlpBin)
+        val actualSha256 = YtDlpUpdatePolicy.sha256(
+            ytdlpFile,
+            YTDLP_MAX_BINARY_BYTES,
+        )
+        if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
+            Log.w(TAG, "The downloaded yt-dlp checksum does not match its release manifest")
+            return null
+        }
+
+        val executableVersion = probeYoutubeDlVersion(youtubeDl)
+        if (!YtDlpUpdatePolicy.executableMatchesRelease(executableVersion, releaseVersion)) {
+            Log.w(TAG, "The downloaded yt-dlp executable reports an inconsistent version")
+            return null
+        }
+        return RuntimeYtDlpVerification(releaseVersion, actualSha256!!)
+    }
+
+    private fun probeYoutubeDlVersion(youtubeDl: YoutubeDL): String? {
+        val request = YoutubeDLRequest(emptyList<String>())
+            .addOption("--ignore-config")
+            .addOption("--version")
+        val response = youtubeDl.execute(request)
+        if (response.exitCode != 0) {
+            return null
+        }
+        val lines = response.out
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .toList()
+        return lines.singleOrNull()
+    }
+
+    private fun downloadBoundedText(url: String, maximumBytes: Int): String? {
+        val connection = URL(url).openConnection() as? HttpURLConnection ?: return null
+        return try {
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = YTDLP_CHECKSUM_CONNECT_TIMEOUT_MS
+            connection.readTimeout = YTDLP_CHECKSUM_READ_TIMEOUT_MS
+            connection.setRequestProperty("Accept", "text/plain, application/octet-stream")
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            connection.setRequestProperty("User-Agent", "BStream-Music-Android")
+            val status = connection.responseCode
+            val resolvedUrl = connection.url
+            if (status !in 200..299 ||
+                resolvedUrl.protocol != "https" ||
+                resolvedUrl.host !in YTDLP_CHECKSUM_ALLOWED_HOSTS ||
+                connection.contentLengthLong > maximumBytes
+            ) {
+                return null
+            }
+            val output = ByteArrayOutputStream()
+            connection.inputStream.buffered().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) {
+                        break
+                    }
+                    total += count
+                    if (total > maximumBytes) {
+                        return null
+                    }
+                    output.write(buffer, 0, count)
+                }
+            }
+            output.toString(StandardCharsets.UTF_8.name())
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun recordVerifiedYoutubeDl(verification: RuntimeYtDlpVerification): Boolean {
+        return applicationContext
+            .getSharedPreferences(YTDLP_SHARED_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(VERIFIED_YTDLP_VERSION_KEY, verification.version)
+            .putString(VERIFIED_YTDLP_SHA256_KEY, verification.sha256)
+            .commit()
     }
 
     private fun restoreBundledYoutubeDl() {
@@ -1198,12 +1351,21 @@ class MainActivity : AudioServiceActivity() {
                 throw IllegalStateException("No se pudo limpiar la copia de yt-dlp.")
             }
             YoutubeDL.init_ytdlp(applicationContext, ytdlpDir)
+            val restoredSha256 = YtDlpUpdatePolicy.sha256(
+                File(ytdlpDir, YoutubeDL.ytdlpBin),
+                YTDLP_MAX_BINARY_BYTES,
+            )
+            if (!restoredSha256.equals(BuildConfig.BUNDLED_YTDLP_SHA256, ignoreCase = true)) {
+                throw IllegalStateException("La copia restaurada de yt-dlp no supero su verificacion.")
+            }
             applicationContext
                 .getSharedPreferences(YTDLP_SHARED_PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
                 .putString(YTDLP_VERSION_NAME_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
                 .putString(BUNDLED_YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .putString(VERIFIED_YTDLP_VERSION_KEY, BuildConfig.BUNDLED_YTDLP_VERSION)
+                .putString(VERIFIED_YTDLP_SHA256_KEY, BuildConfig.BUNDLED_YTDLP_SHA256)
                 .commit()
             Log.w(
                 TAG,
@@ -1212,6 +1374,7 @@ class MainActivity : AudioServiceActivity() {
         } finally {
             synchronized(updateLock) {
                 updateCompleted = false
+                lastUpdateFailureAtElapsedRealtime = SystemClock.elapsedRealtime()
             }
         }
     }
@@ -1553,6 +1716,18 @@ class MainActivity : AudioServiceActivity() {
         private const val YTDLP_VERSION_KEY = "dlpVersion"
         private const val YTDLP_VERSION_NAME_KEY = "dlpVersionName"
         private const val BUNDLED_YTDLP_VERSION_KEY = "bstreamBundledYtDlpVersion"
+        private const val VERIFIED_YTDLP_VERSION_KEY = "bstreamVerifiedYtDlpVersion"
+        private const val VERIFIED_YTDLP_SHA256_KEY = "bstreamVerifiedYtDlpSha256"
+        private const val YTDLP_MAX_BINARY_BYTES = 32L * 1024L * 1024L
+        private const val YTDLP_CHECKSUM_MANIFEST_MAX_BYTES = 128 * 1024
+        private const val YTDLP_CHECKSUM_CONNECT_TIMEOUT_MS = 5000
+        private const val YTDLP_CHECKSUM_READ_TIMEOUT_MS = 10000
+        private const val YTDLP_UPDATE_FAILURE_COOLDOWN_MS = 2L * 60L * 1000L
+        private val YTDLP_CHECKSUM_ALLOWED_HOSTS = setOf(
+            "github.com",
+            "release-assets.githubusercontent.com",
+            "objects.githubusercontent.com",
+        )
         private const val PROGRESS_MIN_INTERVAL_MS = 200L
         private const val PROGRESS_MIN_DELTA = 0.01f
         private const val PROGRESS_TEMPLATE =
@@ -1575,8 +1750,6 @@ class MainActivity : AudioServiceActivity() {
             Regex("""\[download]\s+([0-9]+(?:\.[0-9]+)?)%""")
         private val STANDARD_ETA_REGEX =
             Regex("""ETA\s+((?:[0-9]+:)?[0-9]{1,2}:[0-9]{2})""")
-        private val YTDLP_DATE_VERSION_REGEX =
-            Regex("""\d{4}\.\d{1,2}\.\d{1,2}(?:\.\d+)?""")
         private val DEFINITIVE_EXTRACTION_ERRORS = listOf(
             "private video",
             "video unavailable",
@@ -1648,6 +1821,11 @@ class MainActivity : AudioServiceActivity() {
     private data class ExternalAudioRequest(
         val id: String,
         val intent: Intent,
+    )
+
+    private data class RuntimeYtDlpVerification(
+        val version: String,
+        val sha256: String,
     )
 
     private class ManagedPlaybackSupersededException : IllegalStateException(
