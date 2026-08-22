@@ -35,6 +35,8 @@ class PlayerPanel extends ConsumerStatefulWidget {
 class _PlayerPanelState extends ConsumerState<PlayerPanel> {
   static const _mobileArtworkMaxReduction = 20.0;
   static const _mobileArtworkComfortHeight = 680.0;
+  static const _mobileFrameComfortHeight = 820.0;
+  static const _mobileFrameCompressionRange = 100.0;
 
   bool _showPlaybackQueue = false;
 
@@ -119,10 +121,20 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           MediaQuery.viewPaddingOf(context).bottom,
           MediaQuery.paddingOf(context).bottom,
         );
+        final mobileFrameCompactness = mobile
+            ? ((_mobileFrameComfortHeight -
+                          (outer.maxHeight - systemBottomInset)) /
+                      _mobileFrameCompressionRange)
+                  .clamp(0.0, 1.0)
+            : 0.0;
         final heightCompactness = AppPlatform.isDesktop
             ? ((680.0 - outer.maxHeight) / 140.0).clamp(0.0, 1.0)
             : 0.0;
-        final regularTopPadding = wide ? (showSideQueue ? 12.0 : 20.0) : 10.0;
+        final regularTopPadding = wide
+            ? (showSideQueue ? 12.0 : 20.0)
+            : mobile
+            ? lerpDouble(10, 14, mobileFrameCompactness)!
+            : 10.0;
         final regularBottomPadding = mobile
             ? 16.0 + systemBottomInset
             : wide
@@ -167,7 +179,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                           onOpenSearch: widget.onOpenSearch,
                           queueVisible: showSideQueue,
                           onToggleQueue: () {
-                            if (AppPlatform.isAndroid) {
+                            if (mobile) {
                               unawaited(_openMobilePlaybackQueue(context));
                               return;
                             }
@@ -204,6 +216,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   url: snapshot.thumbnailUrl,
                                   maxExtent: artworkExtent,
                                   isFavorite: isFavorite,
+                                  shadowCompactness: mobileFrameCompactness,
                                 ),
                               );
                               final gap = mobile
@@ -817,11 +830,13 @@ class _LargeArtwork extends StatefulWidget {
     required this.url,
     required this.maxExtent,
     required this.isFavorite,
+    required this.shadowCompactness,
   });
 
   final String? url;
   final double maxExtent;
   final bool isFavorite;
+  final double shadowCompactness;
 
   @override
   State<_LargeArtwork> createState() => _LargeArtworkState();
@@ -872,7 +887,10 @@ class _LargeArtworkState extends State<_LargeArtwork> {
               ),
               child: SizedBox.expand(
                 key: ValueKey(_transitionId),
-                child: _PlayerArtworkSurface(url: source),
+                child: _PlayerArtworkSurface(
+                  url: source,
+                  compactness: widget.shadowCompactness,
+                ),
               ),
             ),
             if (widget.isFavorite)
@@ -897,70 +915,83 @@ class _LargeArtworkState extends State<_LargeArtwork> {
 }
 
 class _PlayerArtworkSurface extends StatelessWidget {
-  const _PlayerArtworkSurface({required this.url});
+  const _PlayerArtworkSurface({required this.url, required this.compactness});
 
   final String? url;
+  final double compactness;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final isDark = colors.brightness == Brightness.dark;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.67 : 0.2),
-            blurRadius: 42,
-            spreadRadius: 6,
-            offset: const Offset(0, 18),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final artworkExtent = constraints.biggest.shortestSide;
+        final shadow = BoxShadow(
+          color: Colors.black.withValues(alpha: isDark ? 0.67 : 0.2),
+          // Keep the roomy-player shadow unchanged while scaling its visual
+          // footprint with both the cover and the available frame height.
+          // On short phones this avoids the halo occupying the metadata area
+          // after the artwork itself has already been compacted.
+          blurRadius: lerpDouble(42, artworkExtent * 0.095, compactness)!,
+          spreadRadius: lerpDouble(6, artworkExtent * 0.006, compactness)!,
+          offset: Offset(
+            0,
+            lerpDouble(18, artworkExtent * 0.036, compactness)!,
           ),
-        ],
-      ),
-      child: Stack(
-        fit: StackFit.expand,
-        clipBehavior: Clip.none,
-        children: [
-          ClipRRect(
+        );
+        return DecoratedBox(
+          key: const ValueKey('player-artwork-surface'),
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: AppColors.downloadGradientFor(context),
-                    ),
-                  ),
-                  child: url == null
-                      ? Icon(
-                          Icons.music_note_rounded,
-                          size: 108,
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onPrimaryContainer,
-                        )
-                      : ColoredBox(
-                          color: colors.surfaceContainerHighest,
-                          child: ProportionalArtwork(
-                            source: url,
-                            fallback: Icon(
+            boxShadow: [shadow],
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            clipBehavior: Clip.none,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: AppColors.downloadGradientFor(context),
+                        ),
+                      ),
+                      child: url == null
+                          ? Icon(
                               Icons.music_note_rounded,
                               size: 108,
                               color: Theme.of(
                                 context,
                               ).colorScheme.onPrimaryContainer,
+                            )
+                          : ColoredBox(
+                              color: colors.surfaceContainerHighest,
+                              child: ProportionalArtwork(
+                                source: url,
+                                fallback: Icon(
+                                  Icons.music_note_rounded,
+                                  size: 108,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onPrimaryContainer,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -1317,6 +1348,7 @@ TrackInfo _shareTrackForSnapshot(
         duration: localTrack.duration,
         album: localTrack.album,
         artists: localTrack.artists,
+        artistBrowseIds: localTrack.artistBrowseIds,
         metadataSource: localTrack.metadataSource,
       );
     }
@@ -2122,6 +2154,7 @@ class _PlayerMenu extends ConsumerWidget {
     final localTracks = await ref
         .read(libraryRepositoryProvider)
         .getLocalTracks();
+    final catalogPlaylists = await ref.read(catalogPlaylistsProvider.future);
     if (!context.mounted) {
       return;
     }
@@ -2133,6 +2166,7 @@ class _PlayerMenu extends ConsumerWidget {
           title: strings.choosePlaylist,
           playlists: playlists,
           tracks: localTracks,
+          catalogPlaylists: catalogPlaylists,
         );
       },
     );
@@ -2140,20 +2174,21 @@ class _PlayerMenu extends ConsumerWidget {
       return;
     }
 
-    var trackId = currentTrackId;
     if (snapshot.isRemote) {
       final sourceUrl = snapshot.sourceUrl;
       if (sourceUrl == null || sourceUrl.trim().isEmpty) {
         return;
       }
       try {
-        final localTrack = await ref
-            .read(downloadControllerProvider.notifier)
-            .downloadAudioForLibrary(
+        final added = await ref
+            .read(playlistsControllerProvider.notifier)
+            .addRemoteTrackToPlaylist(
+              playlistId,
               _trackInfoFromSnapshot(sourceUrl, ref),
-              onDownloadStarted: () => _showDownloadingMessage(context),
             );
-        trackId = localTrack.id;
+        if (added == null) {
+          return;
+        }
       } catch (error) {
         if (!context.mounted) {
           return;
@@ -2166,26 +2201,17 @@ class _PlayerMenu extends ConsumerWidget {
       if (!context.mounted) {
         return;
       }
+    } else {
+      await ref
+          .read(playlistsControllerProvider.notifier)
+          .addTrackToPlaylist(playlistId, currentTrackId);
     }
-
-    await ref
-        .read(playlistsControllerProvider.notifier)
-        .addTrackToPlaylist(playlistId, trackId);
     if (!context.mounted) {
       return;
     }
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(strings.songAddedToPlaylist)));
-  }
-
-  void _showDownloadingMessage(BuildContext context) {
-    if (!context.mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(strings.downloading)));
   }
 
   TrackInfo _trackInfoFromSnapshot(String sourceUrl, WidgetRef ref) {

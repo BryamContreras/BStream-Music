@@ -1,5 +1,10 @@
 part of 'music_providers.dart';
 
+final settingsControllerProvider =
+    AsyncNotifierProvider<SettingsController, SettingsState>(
+      SettingsController.new,
+    );
+
 const supportedCrossfadeDurations = <Duration>[
   Duration(seconds: 1),
   Duration(seconds: 2),
@@ -51,6 +56,7 @@ class SettingsState {
     this.lyricsAnimationStyle = LyricsAnimationStyle.smooth,
     this.lyricsRomanizationEnabled = false,
     this.lyricsRomanizationLanguages = defaultLyricsRomanizationLanguages,
+    this.recommendationHistoryEnabled = true,
     this.crossfadeEnabled = false,
     this.crossfadeDuration = defaultCrossfadeDuration,
     this.ytDlpPath,
@@ -65,6 +71,7 @@ class SettingsState {
   final LyricsAnimationStyle lyricsAnimationStyle;
   final bool lyricsRomanizationEnabled;
   final Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages;
+  final bool recommendationHistoryEnabled;
   final bool crossfadeEnabled;
   final Duration crossfadeDuration;
   final String? ytDlpPath;
@@ -79,6 +86,7 @@ class SettingsState {
     LyricsAnimationStyle? lyricsAnimationStyle,
     bool? lyricsRomanizationEnabled,
     Set<LyricsRomanizationLanguage>? lyricsRomanizationLanguages,
+    bool? recommendationHistoryEnabled,
     bool? crossfadeEnabled,
     Duration? crossfadeDuration,
     String? ytDlpPath,
@@ -95,6 +103,8 @@ class SettingsState {
           lyricsRomanizationEnabled ?? this.lyricsRomanizationEnabled,
       lyricsRomanizationLanguages:
           lyricsRomanizationLanguages ?? this.lyricsRomanizationLanguages,
+      recommendationHistoryEnabled:
+          recommendationHistoryEnabled ?? this.recommendationHistoryEnabled,
       crossfadeEnabled: crossfadeEnabled ?? this.crossfadeEnabled,
       crossfadeDuration: crossfadeDuration ?? this.crossfadeDuration,
       ytDlpPath: ytDlpPath ?? this.ytDlpPath,
@@ -105,6 +115,8 @@ class SettingsState {
 
 class SettingsController extends AsyncNotifier<SettingsState> {
   static const _downloadDirectoryKey = 'settings.downloadDirectory';
+  static const _downloadDirectoryMigrationJournalKey =
+      'settings.downloadDirectoryMigration.v1';
   static const _languageKey = 'settings.language';
   static const _themeModeKey = 'settings.themeMode';
   static const _accentKey = 'settings.accent';
@@ -114,12 +126,15 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       'settings.lyricsRomanizationEnabled';
   static const _lyricsRomanizationLanguagesKey =
       'settings.lyricsRomanizationLanguages';
+  static const _recommendationHistoryEnabledKey =
+      'settings.recommendationHistoryEnabled';
   static const _crossfadeEnabledKey = 'settings.crossfadeEnabled';
   static const _crossfadeSecondsKey = 'settings.crossfadeSeconds';
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
   Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
   Future<void> _lyricsRomanizationWriteTail = Future<void>.value();
+  Future<void> _recommendationHistoryWriteTail = Future<void>.value();
   Future<void> _crossfadeWriteTail = Future<void>.value();
 
   @override
@@ -153,33 +168,116 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final lyricsRomanizationLanguages = LyricsRomanizationLanguage.fromCodes(
       prefs.getStringList(_lyricsRomanizationLanguagesKey),
     );
+    final recommendationHistoryEnabled =
+        prefs.getBool(_recommendationHistoryEnabledKey) ?? true;
     final crossfadeSeconds = prefs.getInt(_crossfadeSecondsKey);
     final crossfadeDuration = crossfadeDurationFromStoredSeconds(
       crossfadeSeconds,
     );
     final crossfadeEnabled = prefs.getBool(_crossfadeEnabledKey) ?? false;
     final storedDirectory = prefs.getString(_downloadDirectoryKey);
-    var downloadDirectory = _migrateLegacyDownloadDirectory(
-      prefs.getString(_downloadDirectoryKey) ?? defaultDirectory,
-      defaultDirectory: defaultDirectory,
+    final encodedMigrationJournal = prefs.getString(
+      _downloadDirectoryMigrationJournalKey,
     );
-    if (AppPlatform.isAndroid &&
-        storedDirectory != null &&
-        storedDirectory != downloadDirectory) {
-      await _copyMediaRootIfNeeded(storedDirectory, downloadDirectory);
-      await ref
-          .read(databaseServiceProvider)
-          .rewriteLocalTrackMediaRoot(
-            mediaRoot: downloadDirectory,
-            oldMediaRoot: storedDirectory,
-          );
+    var pendingMigration = DownloadDirectoryMigrationJournal.tryDecode(
+      encodedMigrationJournal,
+    );
+    if (encodedMigrationJournal != null && pendingMigration == null) {
+      await prefs.remove(_downloadDirectoryMigrationJournalKey);
     }
-    if (AppPlatform.isAndroid &&
-        !await _isAndroidWritableDownloadDirectory(downloadDirectory)) {
-      downloadDirectory = defaultDirectory;
+
+    // A journal is untrusted persisted input. Validate its canonical source
+    // relationship before entering the exclusive migration phase so a stale,
+    // hand-edited, or corrupted journal cannot brick Settings on every start.
+    // Recoverable I/O failures after a valid migration starts still keep the
+    // journal and are handled by the migrator's idempotent resume path.
+    final journalToValidate = pendingMigration;
+    if (journalToValidate != null) {
+      try {
+        final migrator = const DownloadDirectoryMigrator();
+        final paths = await migrator.validatePaths(
+          sourceRoot: journalToValidate.sourceRoot,
+          targetRoot: journalToValidate.targetRoot,
+        );
+        await migrator.validateReferenceSourceRoot(
+          referenceSourceRoot: journalToValidate.referenceSourceRoot,
+          canonicalSourceRoot: paths.sourceRoot,
+        );
+      } on ArgumentError catch (error) {
+        debugPrint('Discarding an invalid download migration journal: $error');
+        await prefs.remove(_downloadDirectoryMigrationJournalKey);
+        pendingMigration = null;
+      }
+    }
+
+    late String downloadDirectory;
+    final migrationToRecover = pendingMigration;
+    if (migrationToRecover != null) {
+      final coordinator = ref.read(libraryOperationCoordinatorProvider);
+      downloadDirectory = await coordinator.runExclusive(
+        LibraryMaintenancePhase.migratingDirectory,
+        () => _migrateDownloadDirectory(
+          prefs: prefs,
+          oldDirectory: migrationToRecover.sourceRoot,
+          newDirectory: migrationToRecover.targetRoot,
+          stopPlayer: false,
+          recoveringJournal: true,
+          referenceSourceDirectory: migrationToRecover.referenceSourceRoot,
+        ),
+      );
+    } else {
+      final candidateDirectory = _migrateLegacyDownloadDirectory(
+        storedDirectory ?? defaultDirectory,
+        defaultDirectory: defaultDirectory,
+      );
+      var canMigrateStoredDirectory = storedDirectory != null;
+      try {
+        downloadDirectory = DownloadDirectoryMigrator.normalizeAbsoluteRoot(
+          candidateDirectory,
+          parameterName: 'downloadDirectory',
+        );
+      } on ArgumentError catch (error) {
+        // A download root persisted by an older or hand-edited installation is
+        // untrusted input. In particular, never pass a filesystem root into
+        // migration: falling back must only create BStream's default folders.
+        debugPrint(
+          'Discarding an invalid persisted download directory: $error',
+        );
+        downloadDirectory = DownloadDirectoryMigrator.normalizeAbsoluteRoot(
+          defaultDirectory,
+          parameterName: 'defaultDownloadDirectory',
+        );
+        canMigrateStoredDirectory = false;
+      }
+      if (AppPlatform.isAndroid &&
+          !await _isAndroidWritableDownloadDirectory(downloadDirectory)) {
+        downloadDirectory = DownloadDirectoryMigrator.normalizeAbsoluteRoot(
+          defaultDirectory,
+          parameterName: 'defaultDownloadDirectory',
+        );
+      }
+      if (canMigrateStoredDirectory &&
+          !DownloadDirectoryMigrator.rootsEqual(
+            storedDirectory!,
+            downloadDirectory,
+          )) {
+        final coordinator = ref.read(libraryOperationCoordinatorProvider);
+        downloadDirectory = await coordinator.runExclusive(
+          LibraryMaintenancePhase.migratingDirectory,
+          () => _migrateDownloadDirectory(
+            prefs: prefs,
+            oldDirectory: storedDirectory,
+            newDirectory: downloadDirectory,
+            stopPlayer: false,
+          ),
+        );
+      }
     }
     await _ensureMediaDirectories(downloadDirectory);
-    await prefs.setString(_downloadDirectoryKey, downloadDirectory);
+    await const DownloadDirectoryMigrator().cleanupStaleArtifacts(
+      downloadDirectory,
+    );
+    await _writeDownloadDirectoryPreference(prefs, downloadDirectory);
     final downloader = ref.read(ytDlpDownloaderServiceProvider);
 
     if (downloader is DesktopDownloaderService) {
@@ -192,6 +290,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         lyricsAnimationStyle: lyricsAnimationStyle,
         lyricsRomanizationEnabled: lyricsRomanizationEnabled,
         lyricsRomanizationLanguages: lyricsRomanizationLanguages,
+        recommendationHistoryEnabled: recommendationHistoryEnabled,
         crossfadeEnabled: crossfadeEnabled,
         crossfadeDuration: crossfadeDuration,
         ytDlpPath: await downloader.getYtDlpPath(),
@@ -208,6 +307,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       lyricsAnimationStyle: lyricsAnimationStyle,
       lyricsRomanizationEnabled: lyricsRomanizationEnabled,
       lyricsRomanizationLanguages: lyricsRomanizationLanguages,
+      recommendationHistoryEnabled: recommendationHistoryEnabled,
       crossfadeEnabled: crossfadeEnabled,
       crossfadeDuration: crossfadeDuration,
     );
@@ -232,112 +332,173 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         !await _isAndroidWritableDownloadDirectory(normalized)) {
       normalized = defaultDirectory;
     }
+    normalized = DownloadDirectoryMigrator.normalizeAbsoluteRoot(
+      normalized,
+      parameterName: 'path',
+    );
 
     final current = await future;
     final oldDirectory = current.downloadDirectory.trim();
-    if (oldDirectory.isEmpty || oldDirectory == normalized) {
+    if (oldDirectory.isEmpty ||
+        DownloadDirectoryMigrator.rootsEqual(oldDirectory, normalized)) {
       await _ensureMediaDirectories(normalized);
-      await prefs.setString(_downloadDirectoryKey, normalized);
-      state = AsyncData(current.copyWith(downloadDirectory: normalized));
+      await _writeDownloadDirectoryPreference(prefs, normalized);
+      final latest = state.asData?.value ?? await future;
+      state = AsyncData(latest.copyWith(downloadDirectory: normalized));
       return;
     }
 
-    final oldAudioDir = Directory(p.join(oldDirectory, 'audio'));
-    final oldThumbDir = Directory(p.join(oldDirectory, 'thumbnails'));
-    final newAudioDir = Directory(p.join(normalized, 'audio'));
-    final newThumbDir = Directory(p.join(normalized, 'thumbnails'));
-
-    await _ensureMediaDirectories(normalized);
-
-    final hasOldAudio = await oldAudioDir.exists();
-    final hasOldThumbs = await oldThumbDir.exists();
-
-    if (hasOldAudio || hasOldThumbs) {
-      final player = ref.read(playerControllerProvider.notifier);
-      await player.stop();
-
-      final stagingRoot = Directory(
-        p.join(
-          (await getTemporaryDirectory()).path,
-          'bstream_migrate_${DateTime.now().millisecondsSinceEpoch}',
-        ),
-      );
-      await stagingRoot.create(recursive: true);
-
-      try {
-        if (hasOldAudio) {
-          await _copyDirectoryContents(
-            source: oldAudioDir,
-            target: Directory(p.join(stagingRoot.path, 'audio')),
-          );
-        }
-        if (hasOldThumbs) {
-          await _copyDirectoryContents(
-            source: oldThumbDir,
-            target: Directory(p.join(stagingRoot.path, 'thumbnails')),
-          );
-        }
-
-        final db = ref.read(databaseServiceProvider);
-        await db.withDatabase((database) async {
-          if (hasOldAudio) {
-            final stagingAudio = Directory(p.join(stagingRoot.path, 'audio'));
-            await _verifyCopiedFiles(oldAudioDir, stagingAudio);
-            await stagingAudio.rename(newAudioDir.path);
-          }
-          if (hasOldThumbs) {
-            final stagingThumbs = Directory(
-              p.join(stagingRoot.path, 'thumbnails'),
-            );
-            await _verifyCopiedFiles(oldThumbDir, stagingThumbs);
-            await stagingThumbs.rename(newThumbDir.path);
-          }
-
-          await db.rewriteLocalTrackMediaRoot(
-            mediaRoot: normalized,
-            oldMediaRoot: oldDirectory,
-          );
-        });
-
-        if (hasOldAudio && await oldAudioDir.exists()) {
-          await oldAudioDir.delete(recursive: true);
-        }
-        if (hasOldThumbs && await oldThumbDir.exists()) {
-          await oldThumbDir.delete(recursive: true);
-        }
-      } catch (error) {
-        if (await stagingRoot.exists()) {
-          await stagingRoot.delete(recursive: true);
-        }
-        rethrow;
-      }
-    }
-
-    await prefs.setString(_downloadDirectoryKey, normalized);
+    normalized = await _migrateDownloadDirectory(
+      prefs: prefs,
+      oldDirectory: oldDirectory,
+      newDirectory: normalized,
+      stopPlayer: true,
+    );
     ref
       ..invalidate(libraryTracksProvider)
       ..invalidate(historyProvider)
       ..invalidate(playlistsControllerProvider);
-    state = AsyncData(current.copyWith(downloadDirectory: normalized));
+    final latest = state.asData?.value ?? await future;
+    state = AsyncData(latest.copyWith(downloadDirectory: normalized));
   }
 
-  Future<void> _verifyCopiedFiles(
-    Directory source,
-    Directory destination,
-  ) async {
-    final sourceFiles = <String>{};
-    await for (final entity in source.list(recursive: true)) {
-      if (entity is File) {
-        sourceFiles.add(p.relative(entity.path, from: source.path));
+  Future<String> _migrateDownloadDirectory({
+    required SharedPreferences prefs,
+    required String oldDirectory,
+    required String newDirectory,
+    required bool stopPlayer,
+    bool recoveringJournal = false,
+    String? referenceSourceDirectory,
+  }) async {
+    final migrator = const DownloadDirectoryMigrator();
+    final paths = await migrator.validatePaths(
+      sourceRoot: oldDirectory,
+      targetRoot: newDirectory,
+    );
+    final referenceSourceRoot = await migrator.validateReferenceSourceRoot(
+      referenceSourceRoot: referenceSourceDirectory ?? oldDirectory,
+      canonicalSourceRoot: paths.sourceRoot,
+    );
+    await _writeDownloadDirectoryMigrationJournal(
+      prefs,
+      paths,
+      referenceSourceRoot: referenceSourceRoot,
+    );
+
+    try {
+      if (stopPlayer && await migrator.hasManagedContent(paths.sourceRoot)) {
+        await ref.read(playerControllerProvider.notifier).stop();
       }
+
+      final database = ref.read(databaseServiceProvider);
+      LocalTrackMediaRootRewrite? databaseRewrite;
+      final result = await migrator.migrate(
+        sourceRoot: paths.sourceRoot,
+        targetRoot: paths.targetRoot,
+        commitReferences: (committedPaths) async {
+          // The durable journal records an arbitrary user-selected target.
+          // Database paths commit first and the visible preference commits
+          // last; startup can therefore resume every interruption point.
+          databaseRewrite = await database
+              .rewriteLocalTrackMediaRootWithSnapshot(
+                mediaRoot: committedPaths.targetRoot,
+                oldMediaRoot: referenceSourceRoot,
+                canonicalOldMediaRoot: committedPaths.sourceRoot,
+              );
+          await _writeDownloadDirectoryPreference(
+            prefs,
+            committedPaths.targetRoot,
+          );
+        },
+        rollbackReferences: (_) async {
+          Object? firstError;
+          StackTrace? firstStackTrace;
+          final rewrite = databaseRewrite;
+          if (rewrite != null) {
+            try {
+              // Restore only rows changed by this operation. A broad target to
+              // source rewrite could corrupt tracks that already belonged to
+              // the destination before migration started.
+              await database.restoreLocalTrackMediaPaths(rewrite);
+            } catch (error, stackTrace) {
+              firstError = error;
+              firstStackTrace = stackTrace;
+            }
+          }
+          try {
+            await _writeDownloadDirectoryPreference(prefs, referenceSourceRoot);
+          } catch (error, stackTrace) {
+            firstError ??= error;
+            firstStackTrace ??= stackTrace;
+          }
+          if (firstError != null) {
+            Error.throwWithStackTrace(firstError, firstStackTrace!);
+          }
+        },
+      );
+      await _clearDownloadDirectoryMigrationJournal(prefs);
+      return result.targetRoot;
+    } catch (error, stackTrace) {
+      // A regular failure with a complete rollback has no work to resume. A
+      // failed rollback, or any failure while recovering an earlier crash,
+      // keeps the journal so startup cannot forget the selected target.
+      if (!recoveringJournal && error is! DownloadDirectoryMigrationException) {
+        try {
+          await _removeDownloadDirectoryMigrationJournal(prefs);
+        } catch (journalError) {
+          throw DownloadDirectoryMigrationException(
+            cause: error,
+            rollbackErrors: <Object>[journalError],
+          );
+        }
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
-    for (final relative in sourceFiles) {
-      final destFile = File(p.join(destination.path, relative));
-      if (!await destFile.exists()) {
-        throw StateError(
-          'La migración falló: falta el archivo $relative en el destino.',
-        );
-      }
+  }
+
+  Future<void> _writeDownloadDirectoryMigrationJournal(
+    SharedPreferences prefs,
+    DownloadDirectoryMigrationPaths paths, {
+    required String referenceSourceRoot,
+  }) async {
+    final journal = DownloadDirectoryMigrationJournal(
+      sourceRoot: paths.sourceRoot,
+      targetRoot: paths.targetRoot,
+      referenceSourceRoot: referenceSourceRoot,
+    );
+    if (!await prefs.setString(
+      _downloadDirectoryMigrationJournalKey,
+      journal.encode(),
+    )) {
+      throw StateError('No se pudo preparar la migración de descargas.');
+    }
+  }
+
+  Future<void> _removeDownloadDirectoryMigrationJournal(
+    SharedPreferences prefs,
+  ) async {
+    if (!await prefs.remove(_downloadDirectoryMigrationJournalKey)) {
+      throw StateError('No se pudo cerrar la migración de descargas.');
+    }
+  }
+
+  Future<void> _clearDownloadDirectoryMigrationJournal(
+    SharedPreferences prefs,
+  ) async {
+    try {
+      await prefs.remove(_downloadDirectoryMigrationJournalKey);
+    } catch (_) {
+      // A stale success journal is safe: recovery is idempotent and simply
+      // reaffirms the already committed target on the next startup.
+    }
+  }
+
+  Future<void> _writeDownloadDirectoryPreference(
+    SharedPreferences prefs,
+    String path,
+  ) async {
+    if (!await prefs.setString(_downloadDirectoryKey, path)) {
+      throw StateError('No se pudo guardar el directorio de descargas.');
     }
   }
 
@@ -466,6 +627,38 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await setLyricsRomanizationLanguages(selected);
   }
 
+  Future<void> setRecommendationHistoryEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.recommendationHistoryEnabled == enabled) {
+      return;
+    }
+    state = AsyncData(current.copyWith(recommendationHistoryEnabled: enabled));
+    final write = _recommendationHistoryWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_recommendationHistoryEnabledKey, enabled);
+    });
+    _recommendationHistoryWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> clearRecommendationHistory() async {
+    final player = ref.read(playerControllerProvider.notifier);
+    final database = ref.read(databaseServiceProvider);
+    final coordinator = ref.read(libraryOperationCoordinatorProvider);
+    await coordinator.runWithGate(() async {
+      await player.resetRecommendationHistoryTracking();
+      await database.clearRecommendationHistory();
+    });
+    ref
+      ..invalidate(historyProvider)
+      // Drop the in-memory artist-release cache together with SQLite data.
+      // A later qualifying listen creates a completely fresh engine.
+      ..invalidate(personalizedHomeFeedSourceProvider)
+      ..invalidate(homeRecommendationsProvider);
+  }
+
   Future<void> setCrossfadeEnabled(bool enabled) async {
     final current = state.asData?.value ?? await future;
     if (current.crossfadeEnabled == enabled) {
@@ -503,23 +696,44 @@ class SettingsController extends AsyncNotifier<SettingsState> {
 
   Future<File> createBackupFile() async {
     final current = await future;
-    return ref
-        .read(backupServiceProvider)
-        .createBackupFile(mediaRoot: current.downloadDirectory);
+    final player = ref.read(playerControllerProvider.notifier);
+    await player.suspendRecommendationHistoryTracking();
+    try {
+      return await ref
+          .read(backupServiceProvider)
+          .createBackupFile(mediaRoot: current.downloadDirectory);
+    } finally {
+      await player.resumeRecommendationHistoryTracking();
+    }
   }
 
   Future<void> restoreBackupFile(String backupPath) async {
     final current = await future;
-    await ref
-        .read(backupServiceProvider)
-        .restoreBackupFile(
-          backupPath: backupPath,
-          mediaRoot: current.downloadDirectory,
-        );
-    ref
-      ..invalidate(libraryTracksProvider)
-      ..invalidate(historyProvider)
-      ..invalidate(playlistsControllerProvider);
+    final player = ref.read(playerControllerProvider.notifier);
+    final database = ref.read(databaseServiceProvider);
+    await player.suspendRecommendationHistoryTracking();
+    database.advanceRecommendationGeneration();
+    try {
+      await ref
+          .read(backupServiceProvider)
+          .restoreBackupFile(
+            backupPath: backupPath,
+            mediaRoot: current.downloadDirectory,
+          );
+    } finally {
+      // The restore operation advances the epoch while it still owns the
+      // maintenance barrier. Advance it once more before rebuilding providers
+      // so work from the previous source can never publish into the restored
+      // database during the hand-off.
+      database.advanceRecommendationGeneration();
+      await player.resumeRecommendationHistoryTracking();
+      ref
+        ..invalidate(libraryTracksProvider)
+        ..invalidate(historyProvider)
+        ..invalidate(playlistsControllerProvider)
+        ..invalidate(personalizedHomeFeedSourceProvider)
+        ..invalidate(homeRecommendationsProvider);
+    }
   }
 
   Future<void> setYtDlpPath(String path) async {
@@ -528,12 +742,11 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       return;
     }
     await downloader.setYtDlpPath(path);
-    final current = await future;
+    final ytDlpPath = await downloader.getYtDlpPath();
+    final hasYtDlp = await downloader.hasYtDlp();
+    final latest = state.asData?.value ?? await future;
     state = AsyncData(
-      current.copyWith(
-        ytDlpPath: await downloader.getYtDlpPath(),
-        hasYtDlp: await downloader.hasYtDlp(),
-      ),
+      latest.copyWith(ytDlpPath: ytDlpPath, hasYtDlp: hasYtDlp),
     );
   }
 
@@ -544,13 +757,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     }
     final ytDlpPath = await downloader.getYtDlpPath();
     await downloader.setYtDlpPath(ytDlpPath);
-
-    final current = await future;
+    final hasYtDlp = await downloader.hasYtDlp();
+    final latest = state.asData?.value ?? await future;
     state = AsyncData(
-      current.copyWith(
-        ytDlpPath: ytDlpPath,
-        hasYtDlp: await downloader.hasYtDlp(),
-      ),
+      latest.copyWith(ytDlpPath: ytDlpPath, hasYtDlp: hasYtDlp),
     );
   }
 
@@ -626,45 +836,5 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     }
     await Directory(p.join(rootPath, 'audio')).create(recursive: true);
     await Directory(p.join(rootPath, 'thumbnails')).create(recursive: true);
-  }
-
-  Future<void> _copyMediaRootIfNeeded(
-    String sourceRoot,
-    String targetRoot,
-  ) async {
-    if (sourceRoot.trim().isEmpty ||
-        targetRoot.trim().isEmpty ||
-        sourceRoot == targetRoot) {
-      return;
-    }
-
-    for (final folder in const ['audio', 'thumbnails']) {
-      await _copyDirectoryContents(
-        source: Directory(p.join(sourceRoot, folder)),
-        target: Directory(p.join(targetRoot, folder)),
-      );
-    }
-  }
-
-  Future<void> _copyDirectoryContents({
-    required Directory source,
-    required Directory target,
-  }) async {
-    if (!await source.exists()) {
-      return;
-    }
-
-    await target.create(recursive: true);
-    await for (final entity in source.list(recursive: true)) {
-      if (entity is! File) {
-        continue;
-      }
-      final relative = p.relative(entity.path, from: source.path);
-      final destination = File(p.join(target.path, relative));
-      await destination.parent.create(recursive: true);
-      if (!await destination.exists()) {
-        await entity.copy(destination.path);
-      }
-    }
   }
 }

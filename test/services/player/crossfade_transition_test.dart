@@ -4,6 +4,96 @@ import 'package:bstream_music/services/player/crossfade_transition.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('crossfadeConfigurationDecision', () {
+    test('defers disable only while both decks are audible', () {
+      final decision = crossfadeConfigurationDecision(
+        currentEnabled: true,
+        overlapActive: true,
+        requestedEnabled: false,
+      );
+
+      expect(decision.enabled, isTrue);
+      expect(decision.disableAfterHandoff, isTrue);
+      expect(decision.action, CrossfadeConfigurationAction.deferDisable);
+    });
+
+    test('reset and start checks are backend-neutral', () {
+      expect(
+        crossfadeConfigurationDecision(
+          currentEnabled: true,
+          overlapActive: false,
+          requestedEnabled: false,
+        ).action,
+        CrossfadeConfigurationAction.reset,
+      );
+      expect(
+        crossfadeConfigurationDecision(
+          currentEnabled: true,
+          overlapActive: false,
+          requestedEnabled: true,
+        ).action,
+        CrossfadeConfigurationAction.checkStart,
+      );
+    });
+  });
+
+  group('crossfadeStartDuration', () {
+    test('starts inside the configured window and clamps short remainder', () {
+      final normal = crossfadeStartDuration(
+        enabled: true,
+        disposed: false,
+        overlapActive: false,
+        promotionInProgress: false,
+        sourcePrepared: true,
+        standbyReady: true,
+        playing: true,
+        trackDuration: const Duration(seconds: 100),
+        position: const Duration(seconds: 95),
+        configuredDuration: const Duration(seconds: 5),
+      );
+      final late = crossfadeStartDuration(
+        enabled: true,
+        disposed: false,
+        overlapActive: false,
+        promotionInProgress: false,
+        sourcePrepared: true,
+        standbyReady: true,
+        playing: true,
+        trackDuration: const Duration(seconds: 100),
+        position: const Duration(seconds: 97),
+        configuredDuration: const Duration(seconds: 5),
+      );
+
+      expect(normal, const Duration(seconds: 5));
+      expect(late, const Duration(seconds: 3));
+    });
+
+    test('rejects unsafe, inactive and already-running transitions', () {
+      Duration? decide({
+        bool enabled = true,
+        bool overlapActive = false,
+        bool playing = true,
+        Duration position = const Duration(seconds: 95),
+      }) => crossfadeStartDuration(
+        enabled: enabled,
+        disposed: false,
+        overlapActive: overlapActive,
+        promotionInProgress: false,
+        sourcePrepared: true,
+        standbyReady: true,
+        playing: playing,
+        trackDuration: const Duration(seconds: 100),
+        position: position,
+        configuredDuration: const Duration(seconds: 5),
+      );
+
+      expect(decide(enabled: false), isNull);
+      expect(decide(overlapActive: true), isNull);
+      expect(decide(playing: false), isNull);
+      expect(decide(position: const Duration(milliseconds: 99700)), isNull);
+    });
+  });
+
   group('crossfadeGains', () {
     test('returns the expected gains at 0, 50, and 100 percent', () {
       final start = crossfadeGains(masterVolume: 0.8, progress: 0);

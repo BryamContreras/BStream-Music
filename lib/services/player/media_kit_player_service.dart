@@ -258,26 +258,22 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
       throw ArgumentError.value(duration, 'duration', 'Must be positive.');
     }
     _crossfadeDuration = duration;
-    if (!enabled && _crossfadeRamp != null) {
-      _disableCrossfadeAfterHandoff = true;
-      return;
-    }
-    if (enabled) {
-      // A quick off -> on while the two decks are already audible cancels the
-      // deferred disable without interrupting the handoff in progress.
-      _disableCrossfadeAfterHandoff = false;
-    }
-    if (_crossfadeEnabled == enabled) {
-      if (enabled) {
+    final decision = crossfadeConfigurationDecision(
+      currentEnabled: _crossfadeEnabled,
+      overlapActive: _crossfadeRamp != null,
+      requestedEnabled: enabled,
+    );
+    _crossfadeEnabled = decision.enabled;
+    _disableCrossfadeAfterHandoff = decision.disableAfterHandoff;
+    switch (decision.action) {
+      case CrossfadeConfigurationAction.checkStart:
         _maybeStartCrossfade();
-      }
-      return;
-    }
-    _crossfadeEnabled = enabled;
-    _disableCrossfadeAfterHandoff = false;
-    if (!enabled) {
-      _crossfadeGeneration++;
-      await _resetCrossfadeState(restoreActiveVolume: true);
+      case CrossfadeConfigurationAction.reset:
+        _crossfadeGeneration++;
+        await _resetCrossfadeState(restoreActiveVolume: true);
+      case CrossfadeConfigurationAction.none:
+      case CrossfadeConfigurationAction.deferDisable:
+        return;
     }
   }
 
@@ -519,27 +515,19 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
   }
 
   void _maybeStartCrossfade() {
-    if (!_crossfadeEnabled ||
-        _disposed ||
-        _crossfadeRamp != null ||
-        _crossfadePromotionInProgress ||
-        _preparedCrossfadeSource == null ||
-        _standbyPlayer == null ||
-        _snapshot.status != PlayerStatus.playing) {
-      return;
-    }
-    final duration = _snapshot.duration;
-    if (duration == null || duration <= Duration.zero) {
-      return;
-    }
-    final remaining = duration - _snapshot.position;
-    if (remaining > _crossfadeDuration ||
-        remaining < const Duration(milliseconds: 350)) {
-      return;
-    }
-    final effectiveDuration = remaining < _crossfadeDuration
-        ? remaining
-        : _crossfadeDuration;
+    final effectiveDuration = crossfadeStartDuration(
+      enabled: _crossfadeEnabled,
+      disposed: _disposed,
+      overlapActive: _crossfadeRamp != null,
+      promotionInProgress: _crossfadePromotionInProgress,
+      sourcePrepared: _preparedCrossfadeSource != null,
+      standbyReady: _standbyPlayer != null,
+      playing: _snapshot.status == PlayerStatus.playing,
+      trackDuration: _snapshot.duration,
+      position: _snapshot.position,
+      configuredDuration: _crossfadeDuration,
+    );
+    if (effectiveDuration == null) return;
     final generation = _crossfadeGeneration;
     unawaited(_runCrossfade(generation, effectiveDuration));
   }

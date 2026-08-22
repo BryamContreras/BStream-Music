@@ -9,6 +9,28 @@ import 'package:image/image.dart' as image;
 
 void main() {
   test(
+    'reports a failed bind and allows a later initialization retry',
+    () async {
+      var attempts = 0;
+      final service = NotificationArtworkService(
+        serverBinder: () {
+          attempts++;
+          if (attempts == 1) {
+            return Future<HttpServer>.error(StateError('socket unavailable'));
+          }
+          return HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        },
+      );
+      addTearDown(service.dispose);
+
+      await expectLater(service.initialize(), throwsStateError);
+      await service.initialize();
+
+      expect(attempts, 2);
+    },
+  );
+
+  test(
     'serves a cached square center crop without processing during uriFor',
     () async {
       final root = await Directory.systemTemp.createTemp(

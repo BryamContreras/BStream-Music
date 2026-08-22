@@ -121,7 +121,21 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
   DateTime? _lastPositionUpdate;
 
   static Future<void> ensureInitialized() async {
-    await _ensureHandler();
+    await _recoverableHandler();
+  }
+
+  static Future<_DesktopAudioHandler> _recoverableHandler() async {
+    final initialization = _ensureHandler();
+    try {
+      return await initialization;
+    } catch (_) {
+      // AudioService initialization can fail transiently while Android is
+      // restoring the process. Do not permanently cache a rejected Future.
+      if (identical(_handlerInitialization, initialization)) {
+        _handlerInitialization = null;
+      }
+      rethrow;
+    }
   }
 
   static Future<_DesktopAudioHandler> _ensureHandler() {
@@ -150,21 +164,24 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
 
   @override
   Future<void> initialize(DesktopMediaSessionCallbacks callbacks) async {
+    _callbacks = callbacks;
     try {
-      final handler = await _ensureHandler();
+      final handler = await _recoverableHandler();
       if (_disposed) {
         handler.publishIdle();
         return;
       }
-      _callbacks = callbacks;
       handler.attach(callbacks);
       _handler = handler;
       final latestState = _latestState;
       if (latestState != null) {
         await _sync(latestState, force: true);
       }
-    } catch (error) {
-      debugPrint('Desktop audio service could not be initialized: $error');
+    } catch (error, stackTrace) {
+      debugPrint(
+        'Desktop audio service could not be initialized: $error\n$stackTrace',
+      );
+      rethrow;
     }
   }
 

@@ -118,6 +118,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   final _downloadPathFocusNode = FocusNode();
   final _tiktokLiveFocusNode = FocusNode();
   bool _backupBusy = false;
+  bool _recommendationClearBusy = false;
   _SettingsRoute _route = _SettingsRoute.root;
 
   @override
@@ -464,6 +465,52 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
           ],
         ),
         _SettingsGroup(
+          title: strings.privacyAndRecommendations,
+          children: [
+            _SettingsEntryCard(
+              key: const ValueKey('settings-card-recommendation-history'),
+              icon: Icons.auto_awesome_rounded,
+              title: strings.recommendationHistory,
+              subtitle: state.recommendationHistoryEnabled
+                  ? strings.recommendationHistoryEnabled
+                  : strings.recommendationHistoryDisabled,
+              onTap: _recommendationClearBusy || _backupBusy
+                  ? null
+                  : () => ref
+                        .read(settingsControllerProvider.notifier)
+                        .setRecommendationHistoryEnabled(
+                          !state.recommendationHistoryEnabled,
+                        ),
+              trailing: Switch.adaptive(
+                key: const ValueKey('recommendation-history-switch'),
+                value: state.recommendationHistoryEnabled,
+                onChanged: _recommendationClearBusy || _backupBusy
+                    ? null
+                    : ref
+                          .read(settingsControllerProvider.notifier)
+                          .setRecommendationHistoryEnabled,
+              ),
+            ),
+            const SizedBox(height: appCardGap),
+            _SettingsEntryCard(
+              key: const ValueKey('settings-card-clear-recommendations'),
+              icon: Icons.delete_sweep_outlined,
+              title: strings.clearRecommendationHistory,
+              subtitle: strings.clearRecommendationHistorySummary,
+              accent: Theme.of(context).colorScheme.error,
+              onTap: _recommendationClearBusy || _backupBusy
+                  ? null
+                  : _clearRecommendationHistory,
+              trailing: _recommendationClearBusy
+                  ? const SizedBox.square(
+                      dimension: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    )
+                  : null,
+            ),
+          ],
+        ),
+        _SettingsGroup(
           title: strings.storage,
           children: [
             _SettingsEntryCard(
@@ -547,6 +594,49 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     if (!_downloadPathFocusNode.hasFocus &&
         _downloadPathController.text != state.downloadDirectory) {
       _downloadPathController.text = state.downloadDirectory;
+    }
+  }
+
+  Future<void> _clearRecommendationHistory() async {
+    if (_recommendationClearBusy || _backupBusy) {
+      return;
+    }
+    final strings = ref.read(appStringsProvider);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('recommendation-history-clear-confirmation'),
+        title: Text(strings.clearRecommendationHistoryTitle),
+        content: Text(strings.clearRecommendationHistoryMessage),
+        actions: [
+          TextButton(
+            key: const ValueKey('recommendation-history-clear-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.cancel),
+          ),
+          FilledButton(
+            key: const ValueKey('recommendation-history-clear-confirm'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(strings.clearRecommendationHistory),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) {
+      return;
+    }
+    setState(() => _recommendationClearBusy = true);
+    try {
+      await ref
+          .read(settingsControllerProvider.notifier)
+          .clearRecommendationHistory();
+      if (mounted) {
+        _showSnackBar(strings.recommendationHistoryCleared);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _recommendationClearBusy = false);
+      }
     }
   }
 
@@ -1489,6 +1579,21 @@ class _AboutApplicationSettings extends StatelessWidget {
         ),
         const SizedBox(height: appCardGap),
         _SettingsEntryCard(
+          key: const ValueKey('settings-about-whats-new'),
+          icon: Icons.auto_awesome_rounded,
+          title: strings.choose(
+            'Novedades de ${AppConstants.appVersion}',
+            "What's new in ${AppConstants.appVersion}",
+          ),
+          subtitle: strings.choose(
+            'Cuenta de YouTube Music, playlists sincronizadas y '
+                'reproducci\u00f3n m\u00e1s robusta',
+            'YouTube Music account, synchronized playlists, and more robust playback',
+          ),
+          onTap: () => _showWhatsNew(context),
+        ),
+        const SizedBox(height: appCardGap),
+        _SettingsEntryCard(
           key: const ValueKey('settings-about-support'),
           icon: Icons.favorite_outline_rounded,
           title: strings.supportDevelopmentTitle,
@@ -1504,6 +1609,75 @@ class _AboutApplicationSettings extends StatelessWidget {
           onTap: onGitHub,
         ),
       ],
+    );
+  }
+
+  Future<void> _showWhatsNew(BuildContext context) async {
+    final highlights = strings.isEnglish
+        ? const <String>[
+            'Secure YouTube Music sign-in with an explicit confirmation before the first playlist sync.',
+            'Bidirectional playlists that keep streaming-only songs and prefer downloaded audio automatically.',
+            'Personalized Home recommendations, growing queues, and bounded stream recovery after connection loss.',
+            'A cloud marks songs without local audio, and Back from an externally opened player safely returns Home.',
+          ]
+        : const <String>[
+            'Inicio de sesi\u00f3n seguro en YouTube Music y confirmaci\u00f3n '
+                'expl\u00edcita antes de la primera sincronizaci\u00f3n.',
+            'Playlists bidireccionales que conservan canciones en streaming '
+                'y prefieren autom\u00e1ticamente el audio descargado.',
+            'Recomendaciones personalizadas, colas extensibles y '
+                'recuperaci\u00f3n controlada cuando se pierde la conexi\u00f3n.',
+            'Una nube identifica canciones sin audio local y Volver desde un reproductor externo regresa de forma segura a Inicio.',
+          ];
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('settings-about-whats-new-dialog'),
+        title: Text(
+          strings.choose(
+            'Novedades de ${AppConstants.appVersion}',
+            "What's new in ${AppConstants.appVersion}",
+          ),
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var index = 0; index < highlights.length; index++)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == highlights.length - 1 ? 0 : 14,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          child: Icon(
+                            Icons.check_circle_outline_rounded,
+                            size: 18,
+                            color: Theme.of(dialogContext).colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(highlights[index])),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const ValueKey('settings-about-whats-new-close'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(strings.close),
+          ),
+        ],
+      ),
     );
   }
 }

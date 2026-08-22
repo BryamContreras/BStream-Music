@@ -7,14 +7,18 @@ import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
+import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
+import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/lyrics.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
+import 'package:bstream_music/features/music/domain/entities/playlist_entry.dart';
 import 'package:bstream_music/features/music/domain/entities/search_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/download_progress_panel.dart';
@@ -28,6 +32,7 @@ import 'package:bstream_music/main.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/recommendations/recommendations.dart';
 import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
@@ -43,6 +48,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   const pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
+  final keyboardNavigationInsets = ValueVariant<double>(<double>{0, 24});
 
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -591,6 +597,70 @@ void main() {
   });
 
   testWidgets(
+    'android keyboard keeps mini player attached to bottom navigation',
+    (tester) async {
+      final navigationInset = keyboardNavigationInsets.currentValue!;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = FakeViewPadding(bottom: navigationInset);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding()
+          ..resetViewInsets();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Cancion durante busqueda',
+              artist: 'BStream Music',
+              trackId: 'android-keyboard-mini-player-track',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.byKey(const ValueKey('bottom-navigation-item-1')));
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      await tester.pump();
+
+      final glass = find.byKey(const ValueKey('bottom-navigation-glass'));
+      final content = find.byKey(const ValueKey('bottom-navigation-content'));
+      final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+      expect(tester.getSize(content).height, 72);
+      expect(
+        tester.getBottomLeft(miniPlayer).dy,
+        closeTo(tester.getTopLeft(glass).dy, 0.1),
+      );
+      expect(tester.getSize(glass).height, closeTo(72, 0.1));
+      expect(tester.getBottomLeft(glass).dy, closeTo(500, 0.1));
+      expect(find.byType(TextField), findsOneWidget);
+      expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+    variant: keyboardNavigationInsets,
+  );
+
+  testWidgets(
     'android player shell opens and closes as one continuous transition',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -739,6 +809,154 @@ void main() {
       expect(
         find.byKey(const ValueKey('shell-background-player')),
         findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'android Back from an initially restored player falls back to Home',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          testHome: const HomePage(
+            initialDestination: HomeInitialDestination.player,
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Reentrada desde notificacion',
+              artist: 'BStream Music',
+              trackId: 'notification-reentry-track',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final player = find.byKey(const ValueKey('player-view'));
+      expect(player, findsOneWidget);
+      // The restored player starts without HomePage's tab history, but it must
+      // still expose one safe local route entry to Android Back.
+      expect(Navigator.of(tester.element(player)).canPop(), isTrue);
+
+      final handled = await tester.binding.handlePopRoute();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(handled, isTrue);
+      expect(
+        find.byKey(const ValueKey('shell-background-browsing')),
+        findsOneWidget,
+      );
+      expect(find.text('Inicio'), findsWidgets);
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'android direct player pop consumes local history instead of app root',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+      await tester.pumpWidget(
+        _testApp(
+          testHome: const HomePage(
+            initialDestination: HomeInitialDestination.player,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final player = find.byKey(const ValueKey('player-view'));
+      Navigator.of(tester.element(player)).pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(HomePage), findsOneWidget);
+      expect(find.text('Inicio'), findsWidgets);
+      expect(
+        find.byKey(const ValueKey('shell-background-browsing')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'android queue Back is consumed before restored player falls back Home',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          testHome: const HomePage(
+            initialDestination: HomeInitialDestination.player,
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Reentrada con cola',
+              artist: 'BStream Music',
+              trackId: 'notification-queue-track',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(find.textContaining('Cola de'), findsOneWidget);
+
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(find.textContaining('Cola de'), findsNothing);
+      expect(find.byKey(const ValueKey('player-view')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('shell-background-player')),
+        findsOneWidget,
+      );
+
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Inicio'), findsWidgets);
+      expect(
+        find.byKey(const ValueKey('shell-background-browsing')),
+        findsOneWidget,
       );
       expect(tester.takeException(), isNull);
       debugDefaultTargetPlatformOverride = null;
@@ -1059,6 +1277,79 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'home playlist cards include streamed and unavailable catalog entries',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final now = DateTime.utc(2026, 8, 22);
+      final playlist = Playlist(
+        id: 'synced-playlist',
+        name: 'Viaje sincronizado',
+        trackIds: const <String>[],
+        createdAt: now,
+        updatedAt: now,
+        localRevision: 1,
+      );
+      final catalog = CatalogPlaylist(
+        playlist: playlist,
+        entries: <PlaylistEntry>[
+          PlaylistEntry(
+            id: 'remote-entry',
+            playlistId: playlist.id,
+            track: CatalogTrack.youtube(
+              videoId: 'video-remote',
+              title: 'Canción remota',
+              artists: const <String>['Artista'],
+              duration: const Duration(minutes: 3, seconds: 7),
+              thumbnailUrl: 'https://i.ytimg.com/vi/video-remote/hqdefault.jpg',
+            ),
+            remoteVideoId: 'video-remote',
+            setVideoId: 'set-remote',
+            position: 0,
+            origin: PlaylistEntryOrigin.remote,
+            createdAt: now,
+            updatedAt: now,
+          ),
+          PlaylistEntry(
+            id: 'unavailable-entry',
+            playlistId: playlist.id,
+            track: const CatalogTrack(
+              key: 'youtube-unavailable:set-missing',
+              provider: CatalogProvider.legacy,
+              providerId: 'set-missing',
+              title: 'Contenido no disponible',
+            ),
+            setVideoId: 'set-missing',
+            position: 1,
+            origin: PlaylistEntryOrigin.remote,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          libraryRepository: _homeCardsRepository(),
+          catalogPlaylists: <CatalogPlaylist>[catalog],
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(find.text('Viaje sincronizado'), findsOneWidget);
+      expect(find.text('2 canciones · 3:07 min'), findsOneWidget);
+      final playlistImage = find.descendant(
+        of: find.byKey(const ValueKey('home-playlist-artwork-synced-playlist')),
+        matching: find.byType(SourceImage),
+      );
+      expect(
+        tester.widget<SourceImage>(playlistImage).source,
+        'https://i.ytimg.com/vi/video-remote/hqdefault.jpg',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('home hides the complete recent section when history is empty', (
     tester,
   ) async {
@@ -1296,7 +1587,14 @@ void main() {
 
       final homeScroll = find.byType(CustomScrollView);
       await tester.drag(homeScroll, const Offset(0, -600));
-      await tester.pumpAndSettle();
+      await _pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey('home-recommendations-section-Novedades'))
+            .evaluate()
+            .isNotEmpty,
+        reason: 'the Novedades shelf to enter the viewport',
+      );
       expect(
         find.byKey(const ValueKey('home-recommendations-section-Novedades')),
         findsOneWidget,
@@ -1307,13 +1605,24 @@ void main() {
       );
 
       await tester.drag(homeScroll, const Offset(0, 600));
-      await tester.pumpAndSettle();
+      await _pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey('home-recommendation-recommended-2'))
+            .evaluate()
+            .isNotEmpty,
+        reason: 'the selected recommendation to return to the viewport',
+      );
 
       final selected = find.byKey(
         const ValueKey('home-recommendation-recommended-2'),
       );
       await tester.drag(homeScroll, const Offset(0, -250));
-      await tester.pumpAndSettle();
+      await _pumpUntil(
+        tester,
+        () => selected.evaluate().isNotEmpty,
+        reason: 'the selected recommendation to remain mounted',
+      );
       await tester.tap(selected);
       await tester.pump();
 
@@ -1328,6 +1637,283 @@ void main() {
         player.lastRemoteQueue,
         isNot(contains(sections.last.tracks.single)),
       );
+    },
+  );
+
+  testWidgets(
+    'personalized Continue replaces legacy recent and plays its local section queue',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final player = _RecordingHomePlayerController();
+      final repository = _homeCardsRepository();
+      final feed = PersonalizedRecommendationFeed(
+        generatedAt: DateTime.utc(2026),
+        sections: [
+          PersonalizedRecommendationSection(
+            kind: PersonalizedSectionKind.continueListening,
+            title: 'Engine title',
+            items: [
+              PersonalizedTrackItem(
+                trackId: 'home-card-track',
+                videoId: 'LocalVideo01',
+                title: 'Cancion reciente',
+                artists: const ['Artista reciente'],
+                source: PlaybackEventSource.downloaded,
+              ),
+              PersonalizedTrackItem(
+                trackId: 'RemoteNext1',
+                videoId: 'RemoteNext1',
+                title: 'Siguiente recomendada',
+                artists: const ['Artista remoto'],
+              ),
+            ],
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          libraryRepository: repository,
+          playerController: player,
+          personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(
+        find.byKey(
+          const ValueKey('home-recommendations-section-Seguir escuchando'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('home-recent-shelf')), findsNothing);
+
+      final homeScroll = find.byType(CustomScrollView);
+      await tester.drag(homeScroll, const Offset(0, -500));
+      final localRecommendation = find.byKey(
+        const ValueKey('home-recommendation-LocalVideo01'),
+      );
+      await _pumpUntil(
+        tester,
+        () => localRecommendation.evaluate().isNotEmpty,
+        reason: 'the local recommendation to enter the viewport',
+      );
+      await tester.tap(localRecommendation);
+      await tester.pump();
+
+      expect(player.localPlayCalls, 1);
+      expect(player.lastLocalTrack?.id, 'home-card-track');
+      expect(player.lastLocalQueue?.map((track) => track.id), [
+        'home-card-track',
+      ]);
+      expect(
+        player.lastLocalQueueSourceId,
+        'personalized-home:continueListening',
+      );
+      expect(player.lastRecommendationQueue?.map((item) => item.track.id), [
+        'LocalVideo01',
+        'RemoteNext1',
+      ]);
+      expect(
+        player.lastRecommendationQueue?.first.localTrack?.id,
+        'home-card-track',
+      );
+      expect(player.lastRecommendationQueue?[1].localTrack, isNull);
+      expect(player.remotePlayCalls, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'personalized home prefers downloaded artwork for a streaming recommendation',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final directory = io.Directory.systemTemp.createTempSync(
+        'bstream-home-offline-artwork-',
+      );
+      final artwork = io.File(p.join(directory.path, 'downloaded-cover.png'));
+      artwork.writeAsBytesSync(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        ),
+        flush: true,
+      );
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        PaintingBinding.instance.imageCache
+          ..clear()
+          ..clearLiveImages();
+        if (directory.existsSync()) {
+          directory.deleteSync(recursive: true);
+        }
+      });
+      final repository = _homeCardsRepository();
+      final downloaded = repository.localTracks.single.copyWith(
+        sourceId: 'OfflineVid1',
+        thumbnailPath: artwork.path,
+      );
+      repository.localTracks[0] = downloaded;
+      repository.history[0] = downloaded;
+      final feed = PersonalizedRecommendationFeed(
+        generatedAt: DateTime.utc(2026),
+        sections: [
+          PersonalizedRecommendationSection(
+            kind: PersonalizedSectionKind.becauseYouListened,
+            title: 'Offline artwork',
+            items: [
+              PersonalizedTrackItem(
+                trackId: 'streaming-event-id',
+                videoId: 'OfflineVid1',
+                title: 'Disponible sin conexion',
+                artists: const ['Artista local'],
+                thumbnailUrl: 'https://offline.invalid/remote-cover.jpg',
+              ),
+            ],
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          libraryRepository: repository,
+          personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -500));
+      await tester.pump();
+
+      final artworkSurface = find.byKey(
+        const ValueKey('home-recommendation-artwork-OfflineVid1'),
+      );
+      expect(artworkSurface, findsOneWidget);
+      final proportionalArtwork = tester.widget<ProportionalArtwork>(
+        find.descendant(
+          of: artworkSurface,
+          matching: find.byType(ProportionalArtwork),
+        ),
+      );
+      expect(proportionalArtwork.source, artwork.path);
+      expect(
+        proportionalArtwork.fallbackSource,
+        'https://i.ytimg.com/vi/OfflineVid1/hq720.jpg',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('a one-song personalized shelf grows a related queue for Next', (
+    tester,
+  ) async {
+    _configureMobileHomeViewport(tester);
+    final player = _RecordingHomePlayerController();
+    final related = _FakeRecommendationRelatedSearch();
+    final feed = PersonalizedRecommendationFeed(
+      generatedAt: DateTime.utc(2026),
+      sections: [
+        PersonalizedRecommendationSection(
+          kind: PersonalizedSectionKind.discovery,
+          title: 'Discovery',
+          items: [
+            PersonalizedTrackItem(
+              trackId: 'VideoSeed01',
+              videoId: 'VideoSeed01',
+              title: 'Semilla',
+              artists: const ['Artista'],
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      _testApp(
+        playerController: player,
+        personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+        youtubeMusicSearch: related,
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    final homeScroll = find.byType(CustomScrollView);
+    await tester.drag(homeScroll, const Offset(0, -500));
+    final seedRecommendation = find.byKey(
+      const ValueKey('home-recommendation-VideoSeed01'),
+    );
+    await _pumpUntil(
+      tester,
+      () => seedRecommendation.evaluate().isNotEmpty,
+      reason: 'the discovery seed to enter the viewport',
+    );
+    await tester.tap(seedRecommendation);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(related.nextVideoIds, ['VideoSeed01']);
+    expect(player.recommendationSyncCalls, 1);
+    expect(player.lastSyncedRecommendationQueue?.map((item) => item.track.id), [
+      'VideoSeed01',
+      'NextSong001',
+    ]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'a seven-song Because shelf also receives a related continuation queue',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final player = _RecordingHomePlayerController();
+      final related = _FakeRecommendationRelatedSearch();
+      final feed = PersonalizedRecommendationFeed(
+        generatedAt: DateTime.utc(2026),
+        sections: [
+          PersonalizedRecommendationSection(
+            kind: PersonalizedSectionKind.becauseYouListened,
+            title: 'Because',
+            seedTitle: 'Semilla',
+            items: [
+              for (var index = 0; index < 7; index++)
+                PersonalizedTrackItem(
+                  trackId: index == 0 ? 'VideoSeed01' : 'VisibleSong0$index',
+                  videoId: index == 0 ? 'VideoSeed01' : 'VisibleSong0$index',
+                  title: 'Visible $index',
+                  artists: const ['Artista'],
+                ),
+            ],
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          playerController: player,
+          personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+          youtubeMusicSearch: related,
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      final homeScroll = find.byType(CustomScrollView);
+      await tester.drag(homeScroll, const Offset(0, -500));
+      final seedRecommendation = find.byKey(
+        const ValueKey('home-recommendation-VideoSeed01'),
+      );
+      await _pumpUntil(
+        tester,
+        () => seedRecommendation.evaluate().isNotEmpty,
+        reason: 'the Because seed to enter the viewport',
+      );
+      await tester.tap(seedRecommendation);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(related.nextVideoIds, ['VideoSeed01']);
+      expect(player.recommendationSyncCalls, 1);
+      expect(player.lastSyncedRecommendationQueue, hasLength(8));
+      expect(
+        player.lastSyncedRecommendationQueue?.last.track.id,
+        'NextSong001',
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -1472,12 +2058,26 @@ void main() {
       const ValueKey('home-collection-open-$browseId'),
     );
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
-    await tester.pumpAndSettle();
+    await _pumpUntil(
+      tester,
+      () => mixCard.evaluate().isNotEmpty,
+      reason: 'the mix card to enter the viewport',
+    );
     expect(mixCard, findsOneWidget);
     expect(find.text('Mix para relajarse'), findsOneWidget);
 
     await tester.tap(mixCard);
-    await tester.pumpAndSettle();
+    await _pumpUntil(
+      tester,
+      () =>
+          collectionCalls == 1 &&
+          find
+              .byKey(const ValueKey('remote-collection-detail'))
+              .evaluate()
+              .isNotEmpty &&
+          find.text('Mix para relajarse').evaluate().length == 2,
+      reason: 'the loaded mix detail to be rendered',
+    );
 
     expect(collectionCalls, 1);
     expect(player.remotePlayCalls, 0);
@@ -2224,6 +2824,7 @@ void main() {
 
     final detail = find.byKey(const ValueKey('settings-detail-about'));
     final version = find.byKey(const ValueKey('settings-about-version'));
+    final whatsNew = find.byKey(const ValueKey('settings-about-whats-new'));
     final support = find.byKey(const ValueKey('settings-about-support'));
     final github = find.byKey(const ValueKey('settings-about-github'));
     expect(detail, findsOneWidget);
@@ -2232,20 +2833,40 @@ void main() {
     expect(find.text('Acerca de la aplicación'), findsOneWidget);
     expect(find.text('Versión'), findsOneWidget);
     expect(find.text(AppConstants.appVersion), findsOneWidget);
+    expect(
+      find.text('Novedades de ${AppConstants.appVersion}'),
+      findsOneWidget,
+    );
     expect(find.text('Apoyar el desarrollo'), findsOneWidget);
     expect(find.text('Repositorio de GitHub'), findsOneWidget);
     expect(find.text('Código fuente y contribuciones'), findsOneWidget);
-    for (final row in [version, support, github]) {
+    for (final row in [version, whatsNew, support, github]) {
       expect(find.descendant(of: detail, matching: row), findsOneWidget);
     }
     expect(
       tester.getTopLeft(version).dy,
+      lessThan(tester.getTopLeft(whatsNew).dy),
+    );
+    expect(
+      tester.getTopLeft(whatsNew).dy,
       lessThan(tester.getTopLeft(support).dy),
     );
     expect(
       tester.getTopLeft(support).dy,
       lessThan(tester.getTopLeft(github).dy),
     );
+    await tester.ensureVisible(whatsNew);
+    await tester.tap(whatsNew);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-about-whats-new-dialog')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Playlists bidireccionales'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('settings-about-whats-new-close')),
+    );
+    await tester.pumpAndSettle();
     await tester.ensureVisible(support);
     await tester.tap(support);
     await tester.pump();
@@ -2260,6 +2881,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('settings-detail-back')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      card,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.byKey(const ValueKey('settings-card-about')), findsOneWidget);
     expect(find.byKey(const ValueKey('settings-about-version')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -2418,6 +3044,7 @@ void main() {
     expect(find.byKey(const ValueKey('settings-detail-about')), findsOneWidget);
     const rowKeys = [
       'settings-about-version',
+      'settings-about-whats-new',
       'settings-about-support',
       'settings-about-github',
     ];
@@ -2959,7 +3586,7 @@ void main() {
   ) async {
     final libraryRepository = _FakeLibraryRepository();
     final navigationController = LibraryNavigationController();
-    addTearDown(navigationController.dispose);
+    addTearDown(() => _disposeLibraryHarness(tester, navigationController));
     final track = LocalTrack(
       id: 'playlist-route-track',
       title: 'Cancion de playlist',
@@ -2983,6 +3610,19 @@ void main() {
         overrides: [
           downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
           playerServiceProvider.overrideWithValue(_FakePlayerService()),
+          playlistsControllerProvider.overrideWith(
+            () => _RepositoryPlaylistsController(libraryRepository),
+          ),
+          catalogPlaylistsProvider.overrideWith(
+            (ref) async => _testCatalogPlaylists(libraryRepository),
+          ),
+          catalogPlaylistProvider.overrideWith(
+            (ref, playlistId) async => _testCatalogPlaylist(
+              libraryRepository,
+              playlistId,
+              useLegacyDetailFallback: true,
+            ),
+          ),
           libraryRepositoryProvider.overrideWithValue(libraryRepository),
         ],
         child: MaterialApp(
@@ -3000,12 +3640,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     navigationController.openPlaylist('persistent-playlist');
     await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
     expect(find.text('Filtrar canciones'), findsOneWidget);
 
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
     await tester.pump();
     await tester.pumpWidget(libraryView());
     await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
 
     expect(find.text('Filtrar canciones'), findsOneWidget);
     expect(find.text('Cancion de playlist'), findsOneWidget);
@@ -3037,7 +3679,7 @@ void main() {
           _librarySelectionTrack('selection-c', 'Cancion C'),
         ]);
       final navigationController = LibraryNavigationController();
-      addTearDown(navigationController.dispose);
+      addTearDown(() => _disposeLibraryHarness(tester, navigationController));
 
       await tester.pumpWidget(
         _libraryPanelTestApp(
@@ -3178,7 +3820,7 @@ void main() {
       );
     final navigationController = LibraryNavigationController()
       ..openPlaylist('source-playlist');
-    addTearDown(navigationController.dispose);
+    addTearDown(() => _disposeLibraryHarness(tester, navigationController));
 
     await tester.pumpWidget(
       _libraryPanelTestApp(
@@ -3187,6 +3829,7 @@ void main() {
       ),
     );
     await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
     await _selectLibraryTracks(tester, ['remove-a', 'remove-c']);
 
     await tester.tap(
@@ -3714,6 +4357,19 @@ void main() {
               ),
             ),
           ),
+          playlistsControllerProvider.overrideWith(
+            () => _RepositoryPlaylistsController(repository),
+          ),
+          catalogPlaylistsProvider.overrideWith(
+            (ref) async => _testCatalogPlaylists(repository),
+          ),
+          catalogPlaylistProvider.overrideWith(
+            (ref, playlistId) async => _testCatalogPlaylist(
+              repository,
+              playlistId,
+              useLegacyDetailFallback: true,
+            ),
+          ),
           libraryRepositoryProvider.overrideWithValue(repository),
         ],
         child: const MaterialApp(
@@ -3882,9 +4538,11 @@ void main() {
   testWidgets(
     'desktop playback queue fits minimum window and changes selected song',
     (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(960, 600);
       addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();
       });
@@ -3968,6 +4626,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(player.playedLocalIds.last, 'desktop-queue-2');
       expect(container.read(playbackQueueProvider).currentIndex, 1);
+      debugDefaultTargetPlatformOverride = null;
     },
     skip: !io.Platform.isWindows,
   );
@@ -4323,6 +4982,29 @@ Future<void> _selectLibraryTracks(
   }
 }
 
+Future<void> _disposeLibraryHarness(
+  WidgetTester tester,
+  LibraryNavigationController controller,
+) async {
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pump();
+  controller.dispose();
+}
+
+Future<void> _pumpUntil(
+  WidgetTester tester,
+  bool Function() condition, {
+  required String reason,
+  int maxPumps = 20,
+  Duration interval = const Duration(milliseconds: 50),
+}) async {
+  for (var pump = 0; pump < maxPumps; pump++) {
+    await tester.pump(interval);
+    if (condition()) return;
+  }
+  fail('Timed out waiting for $reason.');
+}
+
 Widget _libraryPanelTestApp({
   required _FakeLibraryRepository repository,
   LibraryNavigationController? navigationController,
@@ -4339,6 +5021,19 @@ Widget _libraryPanelTestApp({
     overrides: [
       downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
       playerServiceProvider.overrideWithValue(_FakePlayerService()),
+      playlistsControllerProvider.overrideWith(
+        () => _RepositoryPlaylistsController(repository),
+      ),
+      catalogPlaylistsProvider.overrideWith(
+        (ref) async => _testCatalogPlaylists(repository),
+      ),
+      catalogPlaylistProvider.overrideWith(
+        (ref, playlistId) async => _testCatalogPlaylist(
+          repository,
+          playlistId,
+          useLegacyDetailFallback: true,
+        ),
+      ),
       libraryRepositoryProvider.overrideWithValue(repository),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
@@ -4427,9 +5122,18 @@ Widget _testApp({
   FutureOr<List<HomeRecommendationSection>> Function()?
   homeRecommendationsLoader,
   Future<List<TrackInfo>> Function(String browseId)? homeCollectionLoader,
+  PersonalizedHomeFeedSource? personalizedHomeFeedSource,
   IncomingTrackLinkService? incomingTrackLinkService,
   YouTubeMusicSearch? youtubeMusicSearch,
+  List<CatalogPlaylist>? catalogPlaylists,
+  Widget? testHome,
 }) {
+  final resolvedLibraryRepository =
+      libraryRepository ?? _FakeLibraryRepository();
+  final testCatalogRepository =
+      resolvedLibraryRepository is _FakeLibraryRepository
+      ? resolvedLibraryRepository
+      : null;
   return ProviderScope(
     overrides: [
       if (settingsController != null)
@@ -4441,7 +5145,10 @@ Widget _testApp({
       ),
       if (playerController != null)
         playerControllerProvider.overrideWith(() => playerController),
-      homeRecommendationsProvider.overrideWith((ref) {
+      personalizedHomeFeedSourceProvider.overrideWithValue(
+        personalizedHomeFeedSource,
+      ),
+      youtubeMusicHomeRecommendationsProvider.overrideWith((ref) {
         final loader = homeRecommendationsLoader;
         if (loader != null) {
           return loader();
@@ -4469,11 +5176,46 @@ Widget _testApp({
       ),
       if (youtubeMusicSearch != null)
         youtubeMusicSearchProvider.overrideWithValue(youtubeMusicSearch),
-      libraryRepositoryProvider.overrideWithValue(
-        libraryRepository ?? _FakeLibraryRepository(),
-      ),
+      if (testCatalogRepository != null)
+        playlistsControllerProvider.overrideWith(
+          () => _RepositoryPlaylistsController(testCatalogRepository),
+        ),
+      if (testCatalogRepository != null)
+        catalogPlaylistsProvider.overrideWith(
+          (ref) async => _testCatalogPlaylists(
+            testCatalogRepository,
+            additionalCatalogs: catalogPlaylists,
+          ),
+        )
+      else if (catalogPlaylists != null)
+        catalogPlaylistsProvider.overrideWith((ref) async => catalogPlaylists),
+      if (testCatalogRepository != null)
+        catalogPlaylistProvider.overrideWith(
+          (ref, playlistId) async => _testCatalogPlaylist(
+            testCatalogRepository,
+            playlistId,
+            additionalCatalogs: catalogPlaylists,
+            useLegacyDetailFallback: true,
+          ),
+        )
+      else if (catalogPlaylists != null)
+        catalogPlaylistProvider.overrideWith(
+          (ref, playlistId) async => catalogPlaylists
+              .where((catalog) => catalog.playlist.id == playlistId)
+              .firstOrNull,
+        ),
+      libraryRepositoryProvider.overrideWithValue(resolvedLibraryRepository),
     ],
-    child: const BStreamMusicApp(),
+    child: testHome == null
+        ? const BStreamMusicApp()
+        : MaterialApp(
+            theme: ThemeData(
+              useMaterial3: true,
+              platform: TargetPlatform.android,
+              extensions: const [AppAccentTheme(accent: AppAccent.green)],
+            ),
+            home: testHome,
+          ),
   );
 }
 
@@ -4820,11 +5562,19 @@ class _FakePlayerService implements PlayerService {
 class _RecordingHomePlayerController extends PlayerController {
   int remotePlayCalls = 0;
   int historyPlayCalls = 0;
+  int localPlayCalls = 0;
   TrackInfo? lastRemoteTrack;
   List<TrackInfo>? lastRemoteQueue;
   String? lastRemoteQueueSourceId;
   LocalTrack? lastHistoryTrack;
   List<LocalTrack>? lastHistoryQueue;
+  LocalTrack? lastLocalTrack;
+  List<LocalTrack>? lastLocalQueue;
+  String? lastLocalQueueSourceId;
+  List<RecommendationPlaybackItem>? lastRecommendationQueue;
+  String? lastRecommendationQueueSourceId;
+  int recommendationSyncCalls = 0;
+  List<RecommendationPlaybackItem>? lastSyncedRecommendationQueue;
 
   @override
   Future<PlayerSnapshot> build() async {
@@ -4855,6 +5605,74 @@ class _RecordingHomePlayerController extends PlayerController {
   }
 
   @override
+  Future<void> playLocal(
+    LocalTrack track, {
+    List<LocalTrack>? queue,
+    bool useNativeQueue = true,
+    String? queueSourceId,
+  }) async {
+    localPlayCalls++;
+    lastLocalTrack = track;
+    lastLocalQueue = queue == null ? null : List.unmodifiable(queue);
+    lastLocalQueueSourceId = queueSourceId;
+    state = AsyncData(
+      PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: track.title,
+        artist: track.artist,
+        trackId: track.id,
+        sourceUrl: track.filePath,
+        duration: track.duration,
+      ),
+    );
+  }
+
+  @override
+  Future<void> playRecommendation(
+    RecommendationPlaybackItem selected, {
+    required List<RecommendationPlaybackItem> queue,
+    String? queueSourceId,
+    RecommendationQueueExtender? queueExtender,
+  }) async {
+    lastRecommendationQueue = List.unmodifiable(queue);
+    lastRecommendationQueueSourceId = queueSourceId;
+    final local = selected.localTrack;
+    if (local != null) {
+      await playLocal(
+        local,
+        queue: queue
+            .map((item) => item.localTrack)
+            .whereType<LocalTrack>()
+            .toList(),
+        useNativeQueue: false,
+        queueSourceId: queueSourceId,
+      );
+    } else {
+      await playRemote(
+        selected.track,
+        queue: queue.map((item) => item.track).toList(growable: false),
+        queueSourceId: queueSourceId,
+      );
+    }
+    if (queueExtender != null) {
+      final expanded = await queueExtender();
+      if (expanded.length > queue.length) {
+        await syncRecommendationQueueSource(queueSourceId ?? '', expanded);
+      }
+    }
+  }
+
+  @override
+  Future<bool> syncRecommendationQueueSource(
+    String sourceId,
+    List<RecommendationPlaybackItem> items,
+  ) async {
+    recommendationSyncCalls++;
+    lastSyncedRecommendationQueue = List.unmodifiable(items);
+    return true;
+  }
+
+  @override
   Future<void> playFromHistory(
     LocalTrack track, {
     List<LocalTrack>? fallbackQueue,
@@ -4874,6 +5692,24 @@ class _RecordingHomePlayerController extends PlayerController {
         duration: track.duration,
       ),
     );
+  }
+}
+
+class _StaticPersonalizedHomeFeedSource implements PersonalizedHomeFeedSource {
+  const _StaticPersonalizedHomeFeedSource(this.feed);
+
+  final PersonalizedRecommendationFeed feed;
+
+  @override
+  Future<CachedPersonalizedRecommendationFeed?> loadCachedFeed() async {
+    return CachedPersonalizedRecommendationFeed(feed: feed, isExpired: false);
+  }
+
+  @override
+  Future<PersonalizedRecommendationFeed> refresh({
+    bool forceNetwork = false,
+  }) async {
+    return feed;
   }
 }
 
@@ -4919,6 +5755,68 @@ final class _FakeYouTubeMusicTrackLookup
   }) async => const <InnerTubeSong>[];
 }
 
+final class _FakeRecommendationRelatedSearch
+    implements YouTubeMusicSearch, YouTubeMusicRelated {
+  final List<String> nextVideoIds = <String>[];
+
+  @override
+  Future<InnerTubeNextPage> getNext(
+    String videoId, {
+    bool radio = false,
+    int limit = innerTubeDetailResultLimit,
+  }) async {
+    nextVideoIds.add(videoId);
+    return InnerTubeNextPage(
+      songs: [
+        InnerTubeSong(
+          videoId: videoId,
+          title: 'Semilla',
+          artists: const ['Artista'],
+        ),
+        InnerTubeSong(
+          videoId: 'NextSong001',
+          title: 'Siguiente',
+          artists: const ['Otro artista'],
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<InnerTubeNextPage> getNextContinuation(
+    String continuation, {
+    int limit = innerTubeDetailResultLimit,
+  }) async => InnerTubeNextPage(songs: const []);
+
+  @override
+  Future<InnerTubeRelatedPage> getRelated(
+    String browseId, {
+    int limit = 20,
+  }) async => InnerTubeRelatedPage(
+    songs: const [],
+    albums: const [],
+    artists: const [],
+    collections: const [],
+  );
+
+  @override
+  Future<InnerTubeRelatedPage> getRelatedContinuation(
+    String continuation, {
+    int limit = 20,
+  }) async => InnerTubeRelatedPage(
+    songs: const [],
+    albums: const [],
+    artists: const [],
+    collections: const [],
+  );
+
+  @override
+  Future<List<InnerTubeSong>> searchSongs(
+    String query, {
+    int limit = 20,
+  }) async => const [];
+}
+
 final class _StalledYouTubeMusicTrackLookup
     implements YouTubeMusicSearch, YouTubeMusicTrackLookup {
   @override
@@ -4930,6 +5828,288 @@ final class _StalledYouTubeMusicTrackLookup
     String query, {
     int limit = 20,
   }) async => const <InnerTubeSong>[];
+}
+
+/// Test-only bridge for legacy fixtures created before playlists moved to the
+/// occurrence-based catalog. It keeps widget tests deterministic and prevents
+/// them from opening the process-wide SQLite database.
+class _RepositoryPlaylistsController extends PlaylistsController {
+  _RepositoryPlaylistsController(this.repository);
+
+  final _FakeLibraryRepository repository;
+  var _createdPlaylistCount = 0;
+
+  @override
+  Future<List<Playlist>> build() async =>
+      List<Playlist>.unmodifiable(repository.playlists);
+
+  @override
+  Future<void> create(String name) async {
+    final normalized = name.trim();
+    if (normalized.isEmpty) return;
+    final now = DateTime(
+      2026,
+      1,
+      1,
+    ).add(Duration(seconds: _createdPlaylistCount));
+    _createdPlaylistCount += 1;
+    await repository.savePlaylist(
+      Playlist(
+        id: 'test-created-${_createdPlaylistCount - 1}',
+        name: normalized,
+        trackIds: const <String>[],
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+    _publish();
+  }
+
+  @override
+  Future<int> addTracksToPlaylist(
+    String playlistId,
+    Iterable<String> trackIds,
+  ) async {
+    final index = repository.playlists.indexWhere(
+      (playlist) => playlist.id == playlistId,
+    );
+    if (index < 0) return 0;
+    final availableIds = repository.localTracks
+        .map((track) => track.id)
+        .toSet();
+    final current = repository.playlists[index];
+    final nextIds = current.trackIds.toList(growable: true);
+    final additions = trackIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty && availableIds.contains(id))
+        .where((id) => !nextIds.contains(id))
+        .toList(growable: false);
+    if (additions.isEmpty) return 0;
+    nextIds.addAll(additions);
+    repository.playlists[index] = current.copyWith(
+      trackIds: nextIds,
+      updatedAt: DateTime(2026, 1, 2),
+    );
+    _publish();
+    return additions.length;
+  }
+
+  @override
+  Future<int> removeTracksFromPlaylist(
+    String playlistId,
+    Iterable<String> trackIds,
+  ) async {
+    final index = repository.playlists.indexWhere(
+      (playlist) => playlist.id == playlistId,
+    );
+    if (index < 0) return 0;
+    final removedIds = trackIds.map((id) => id.trim()).toSet();
+    final current = repository.playlists[index];
+    final nextIds = current.trackIds
+        .where((id) => !removedIds.contains(id))
+        .toList(growable: false);
+    final removedCount = current.trackIds.length - nextIds.length;
+    if (removedCount == 0) return 0;
+    repository.playlists[index] = current.copyWith(
+      trackIds: nextIds,
+      updatedAt: DateTime(2026, 1, 2),
+    );
+    _publish();
+    return removedCount;
+  }
+
+  @override
+  Future<void> removeTracksFromAllPlaylists(Iterable<String> trackIds) async {
+    final removedIds = trackIds.map((id) => id.trim()).toSet();
+    var changed = false;
+    for (var index = 0; index < repository.playlists.length; index++) {
+      final current = repository.playlists[index];
+      final nextIds = current.trackIds
+          .where((id) => !removedIds.contains(id))
+          .toList(growable: false);
+      if (nextIds.length == current.trackIds.length) continue;
+      repository.playlists[index] = current.copyWith(
+        trackIds: nextIds,
+        updatedAt: DateTime(2026, 1, 2),
+      );
+      changed = true;
+    }
+    if (changed) _publish();
+  }
+
+  @override
+  Future<void> renamePlaylist(String playlistId, String name) async {
+    final normalized = name.trim();
+    final index = repository.playlists.indexWhere(
+      (playlist) => playlist.id == playlistId,
+    );
+    if (index < 0 || normalized.isEmpty) return;
+    final current = repository.playlists[index];
+    repository.playlists[index] = current.copyWith(
+      name: normalized,
+      updatedAt: DateTime(2026, 1, 2),
+    );
+    _publish();
+  }
+
+  @override
+  Future<PlaylistDeleteOptions> playlistDeleteOptions(String playlistId) async {
+    return const PlaylistDeleteOptions(
+      isYouTubeMusicLinked: false,
+      canDeleteFromYouTubeMusic: false,
+    );
+  }
+
+  @override
+  Future<void> deletePlaylist(
+    String playlistId, {
+    PlaylistDeleteScope scope = PlaylistDeleteScope.localOnly,
+  }) async {
+    await repository.deletePlaylist(playlistId);
+    _publish();
+  }
+
+  @override
+  Future<bool> toggleFavorite(String trackId) async {
+    final normalized = trackId.trim();
+    if (normalized.isEmpty) return false;
+    var index = repository.playlists.indexWhere(
+      (playlist) => playlist.isFavorites,
+    );
+    if (index < 0) {
+      repository.playlists.add(
+        Playlist(
+          id: Playlist.favoritesId,
+          name: 'Favoritos',
+          trackIds: const <String>[],
+          createdAt: DateTime(2026),
+          updatedAt: DateTime(2026),
+        ),
+      );
+      index = repository.playlists.length - 1;
+    }
+    final current = repository.playlists[index];
+    final wasFavorite = current.trackIds.contains(normalized);
+    repository.playlists[index] = current.copyWith(
+      trackIds: wasFavorite
+          ? current.trackIds
+                .where((id) => id != normalized)
+                .toList(growable: false)
+          : <String>[...current.trackIds, normalized],
+      updatedAt: DateTime(2026, 1, 2),
+    );
+    _publish();
+    return !wasFavorite;
+  }
+
+  @override
+  Future<void> reloadFromRepository({bool syncActiveQueue = true}) async {
+    _publish();
+  }
+
+  void _publish() {
+    state = AsyncData(List<Playlist>.unmodifiable(repository.playlists));
+    ref
+      ..invalidate(catalogPlaylistsProvider)
+      ..invalidate(catalogPlaylistProvider);
+  }
+}
+
+List<CatalogPlaylist> _testCatalogPlaylists(
+  _FakeLibraryRepository repository, {
+  List<CatalogPlaylist>? additionalCatalogs,
+}) {
+  final byId = <String, CatalogPlaylist>{
+    for (final catalog in additionalCatalogs ?? const <CatalogPlaylist>[])
+      catalog.playlist.id: catalog,
+  };
+  for (final playlist in repository.playlists) {
+    byId.putIfAbsent(
+      playlist.id,
+      () => _legacyCatalogPlaylist(repository, playlist),
+    );
+  }
+  return List<CatalogPlaylist>.unmodifiable(byId.values);
+}
+
+CatalogPlaylist? _testCatalogPlaylist(
+  _FakeLibraryRepository repository,
+  String playlistId, {
+  List<CatalogPlaylist>? additionalCatalogs,
+  bool useLegacyDetailFallback = false,
+}) {
+  for (final catalog in additionalCatalogs ?? const <CatalogPlaylist>[]) {
+    if (catalog.playlist.id == playlistId) return catalog;
+  }
+  final playlist = repository.playlists
+      .where((candidate) => candidate.id == playlistId)
+      .firstOrNull;
+  if (playlist == null) return null;
+  return useLegacyDetailFallback
+      ? CatalogPlaylist(playlist: playlist, entries: const <PlaylistEntry>[])
+      : _legacyCatalogPlaylist(repository, playlist);
+}
+
+CatalogPlaylist _legacyCatalogPlaylist(
+  _FakeLibraryRepository repository,
+  Playlist playlist,
+) {
+  final tracksById = <String, LocalTrack>{
+    for (final track in repository.localTracks) track.id: track,
+  };
+  final entries = <PlaylistEntry>[];
+  for (var index = 0; index < playlist.trackIds.length; index++) {
+    final trackId = playlist.trackIds[index];
+    final local = tracksById[trackId];
+    final sourceId = local?.sourceId?.trim();
+    final artists = local == null
+        ? const <String>[]
+        : local.artists.isEmpty
+        ? <String>[local.artist]
+        : local.artists;
+    final catalogTrack = local == null
+        ? CatalogTrack(
+            key: 'legacy:$trackId',
+            provider: CatalogProvider.legacy,
+            providerId: trackId,
+            title: trackId,
+          )
+        : sourceId != null && sourceId.isNotEmpty
+        ? CatalogTrack.youtube(
+            videoId: sourceId,
+            title: local.title,
+            artists: artists,
+            artistBrowseIds: local.artistBrowseIds,
+            album: local.album,
+            duration: local.duration,
+            thumbnailUrl: local.catalogThumbnailUrl ?? local.thumbnailUrl,
+            sourceUrl: local.sourceUrl,
+          )
+        : CatalogTrack.local(
+            localTrackId: local.id,
+            title: local.title,
+            artists: artists,
+            artistBrowseIds: local.artistBrowseIds,
+            album: local.album,
+            duration: local.duration,
+            thumbnailUrl: local.catalogThumbnailUrl ?? local.thumbnailUrl,
+            sourceUrl: local.sourceUrl,
+          );
+    entries.add(
+      PlaylistEntry(
+        id: 'test-legacy-${playlist.id}-$index-$trackId',
+        playlistId: playlist.id,
+        track: catalogTrack,
+        localTrackId: local?.id,
+        remoteVideoId: sourceId == null || sourceId.isEmpty ? null : sourceId,
+        position: index,
+        origin: PlaylistEntryOrigin.legacy,
+        createdAt: playlist.createdAt,
+        updatedAt: playlist.updatedAt,
+      ),
+    );
+  }
+  return CatalogPlaylist(playlist: playlist, entries: entries);
 }
 
 class _FakeLibraryRepository implements LibraryRepository {

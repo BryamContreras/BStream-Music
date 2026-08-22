@@ -17,6 +17,7 @@ class LocalTrackModel extends LocalTrack {
     super.duration,
     super.album,
     super.artists,
+    super.artistBrowseIds,
     super.metadataSource,
     super.sourceId,
     super.lastPlayedAt,
@@ -37,6 +38,7 @@ class LocalTrackModel extends LocalTrack {
       duration: _duration(map['duration_seconds']),
       album: map['album'] as String?,
       artists: _artists(map['artists_json'], map['artist'] as String),
+      artistBrowseIds: _artistBrowseIds(map['artist_browse_ids_json']),
       metadataSource: _metadataSource(map['metadata_source']),
       sourceId: map['source_id'] as String?,
       lastPlayedAt: _date(map['last_played_at']),
@@ -58,6 +60,7 @@ class LocalTrackModel extends LocalTrack {
       duration: track.duration,
       album: track.album,
       artists: track.artists,
+      artistBrowseIds: track.artistBrowseIds,
       metadataSource: track.metadataSource,
       sourceId: track.sourceId,
       lastPlayedAt: track.lastPlayedAt,
@@ -78,6 +81,7 @@ class LocalTrackModel extends LocalTrack {
       'duration_seconds': duration?.inSeconds,
       'album': album,
       'artists_json': jsonEncode(artists),
+      'artist_browse_ids_json': jsonEncode(artistBrowseIds),
       'metadata_source': metadataSource.name,
       'source_id': sourceId,
       'added_at': addedAt.toIso8601String(),
@@ -138,6 +142,23 @@ class LocalTrackModel extends LocalTrack {
       (source) => source.name == name,
       orElse: () => TrackMetadataSource.youtube,
     );
+  }
+
+  static List<String?> _artistBrowseIds(Object? value) {
+    try {
+      final decoded = value is String ? jsonDecode(value) : value;
+      if (decoded is List) {
+        return List<String?>.unmodifiable(
+          decoded.map((entry) {
+            final id = entry?.toString().trim();
+            return id == null || id.isEmpty ? null : id;
+          }),
+        );
+      }
+    } catch (_) {
+      // Malformed optional recommendation metadata must not hide a download.
+    }
+    return const [];
   }
 
   static bool _isPlaceholderArtist(String value) {

@@ -41,7 +41,7 @@ class JustAudioPlayerService
     // main() starts this before the Android UI is shown. Keep this best-effort
     // warmup for tests and alternate entry points that construct the service
     // directly; image generation itself is deferred to Android's request.
-    unawaited(_notificationArtworkService.initialize());
+    unawaited(_initializeNotificationArtworkSafely());
     // The stock stream can publish five timeline snapshots per second for the
     // whole lifetime of the foreground service. Four updates per second keeps
     // short tracks smooth, while the 500 ms ceiling bounds background work for
@@ -308,6 +308,19 @@ class JustAudioPlayerService
   StreamSubscription<PlayerException>? _crossfadeErrorSubscription;
   bool _disposed = false;
 
+  Future<void> _initializeNotificationArtworkSafely() async {
+    try {
+      await _notificationArtworkService.initialize();
+    } catch (error, stackTrace) {
+      developer.log(
+        'Optional notification artwork initialization failed',
+        name: 'BStreamPlayback',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
   @override
   Stream<PlayerSnapshot> get snapshotStream => _snapshotController.stream;
 
@@ -329,25 +342,22 @@ class JustAudioPlayerService
       throw ArgumentError.value(duration, 'duration', 'Must be positive.');
     }
     _crossfadeDuration = duration;
-    if (!enabled && _crossfadeRamp != null) {
-      // Once both tracks are audible, completing the current handoff avoids a
-      // jump back to the outgoing item. The setting applies at the boundary.
-      _disableCrossfadeAfterHandoff = true;
-      return;
-    }
-    if (enabled) {
-      _disableCrossfadeAfterHandoff = false;
-    }
-    if (_crossfadeEnabled == enabled) {
-      if (enabled) {
+    final decision = crossfadeConfigurationDecision(
+      currentEnabled: _crossfadeEnabled,
+      overlapActive: _crossfadeRamp != null,
+      requestedEnabled: enabled,
+    );
+    _crossfadeEnabled = decision.enabled;
+    _disableCrossfadeAfterHandoff = decision.disableAfterHandoff;
+    switch (decision.action) {
+      case CrossfadeConfigurationAction.checkStart:
         _maybeStartCrossfade();
-      }
-      return;
-    }
-    _crossfadeEnabled = enabled;
-    if (!enabled) {
-      _crossfadeGeneration++;
-      await _resetCrossfadeState(restorePrimaryVolume: true);
+      case CrossfadeConfigurationAction.reset:
+        _crossfadeGeneration++;
+        await _resetCrossfadeState(restorePrimaryVolume: true);
+      case CrossfadeConfigurationAction.none:
+      case CrossfadeConfigurationAction.deferDisable:
+        return;
     }
   }
 
@@ -551,27 +561,19 @@ class JustAudioPlayerService
   }
 
   void _maybeStartCrossfade() {
-    if (!_crossfadeEnabled ||
-        _disposed ||
-        _crossfadeRamp != null ||
-        _crossfadePromotionInProgress ||
-        _preparedCrossfadeSource == null ||
-        _crossfadePlayer == null ||
-        _snapshot.status != PlayerStatus.playing) {
-      return;
-    }
-    final duration = _usableDuration(_snapshot.duration);
-    if (duration == null) {
-      return;
-    }
-    final remaining = duration - _snapshot.position;
-    if (remaining > _crossfadeDuration ||
-        remaining < const Duration(milliseconds: 350)) {
-      return;
-    }
-    final effectiveDuration = remaining < _crossfadeDuration
-        ? remaining
-        : _crossfadeDuration;
+    final effectiveDuration = crossfadeStartDuration(
+      enabled: _crossfadeEnabled,
+      disposed: _disposed,
+      overlapActive: _crossfadeRamp != null,
+      promotionInProgress: _crossfadePromotionInProgress,
+      sourcePrepared: _preparedCrossfadeSource != null,
+      standbyReady: _crossfadePlayer != null,
+      playing: _snapshot.status == PlayerStatus.playing,
+      trackDuration: _usableDuration(_snapshot.duration),
+      position: _snapshot.position,
+      configuredDuration: _crossfadeDuration,
+    );
+    if (effectiveDuration == null) return;
     unawaited(_runCrossfade(_crossfadeGeneration, effectiveDuration));
   }
 

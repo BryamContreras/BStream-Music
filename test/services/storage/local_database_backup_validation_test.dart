@@ -55,6 +55,30 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test(
+    'accepts an early v8 backup without conflict messages and repairs it',
+    () async {
+      await service.initialize();
+      await service.close();
+      final legacy = await databaseFactoryFfi.openDatabase(databasePath);
+      await legacy.execute(
+        'ALTER TABLE playlist_sync_conflicts DROP COLUMN message',
+      );
+      await legacy.close();
+
+      await expectLater(
+        service.validateBackupDatabase(databasePath),
+        completes,
+      );
+
+      await service.initialize();
+      final columns = (await (await service.database).rawQuery(
+        'PRAGMA table_info(playlist_sync_conflicts)',
+      )).map((row) => row['name']).toSet();
+      expect(columns, contains('message'));
+    },
+  );
 }
 
 class _TestLocalDatabaseService extends LocalDatabaseService {

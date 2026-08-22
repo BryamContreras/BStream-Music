@@ -5,6 +5,18 @@ import 'dart:io';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+Future<void> _immediateRetryDelay(Duration _) async {}
+
+DateTime _fixedRetryClock() => DateTime.utc(2026, 8, 22, 12);
+
+Future<void> _waitUntil(bool Function() predicate) async {
+  for (var attempt = 0; attempt < 100; attempt++) {
+    if (predicate()) return;
+    await Future<void>.delayed(Duration.zero);
+  }
+  throw StateError('Condition was not reached.');
+}
+
 void main() {
   group('InnerTubeSearchService', () {
     late _FakeInnerTubeTransport transport;
@@ -15,6 +27,8 @@ void main() {
 
     InnerTubeSearchService createService({
       Duration requestTimeout = const Duration(seconds: 2),
+      InnerTubeRetryDelay retryDelay = _immediateRetryDelay,
+      InnerTubeRetryClock retryClock = _fixedRetryClock,
     }) {
       final service = InnerTubeSearchService(
         transport: transport,
@@ -26,10 +40,69 @@ void main() {
         region: 'ni',
         userAgent: 'BStreamMusic/InnerTubeTest',
         requestTimeout: requestTimeout,
+        retryDelay: retryDelay,
+        retryClock: retryClock,
       );
       addTearDown(service.dispose);
       return service;
     }
+
+    test('retries transient catalog failures and preserves request', () async {
+      transport.responses.addAll([
+        const InnerTubeHttpResponse(
+          statusCode: HttpStatus.internalServerError,
+          body: 'temporary one',
+        ),
+        const InnerTubeHttpResponse(
+          statusCode: HttpStatus.tooManyRequests,
+          body: 'temporary two',
+          headers: {'retry-after': '3'},
+        ),
+        InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: jsonEncode(_searchPayload(const [])),
+        ),
+      ]);
+      final delays = <Duration>[];
+      final service = createService(
+        retryDelay: (delay) async {
+          delays.add(delay);
+        },
+      );
+
+      expect(await service.searchSongs('retry me'), isEmpty);
+
+      expect(transport.requests, hasLength(3));
+      expect(
+        transport.requests.map((request) => request.body['query']),
+        everyElement('retry me'),
+      );
+      expect(delays, const [Duration(milliseconds: 350), Duration(seconds: 3)]);
+    });
+
+    test(
+      'bounds transport retries and keeps the typed terminal error',
+      () async {
+        transport.error = const SocketException('offline');
+        final delays = <Duration>[];
+        final service = createService(
+          retryDelay: (delay) async {
+            delays.add(delay);
+          },
+        );
+
+        await expectLater(
+          service.searchSongs('offline'),
+          throwsA(isA<InnerTubeTransportException>()),
+        );
+
+        expect(transport.requests, hasLength(3));
+        expect(delays, const [
+          Duration(milliseconds: 350),
+          Duration(seconds: 1),
+        ]);
+      },
+    );
 
     test('sends a WEB_REMIX search restricted to songs', () async {
       transport.response = InnerTubeHttpResponse(
@@ -202,6 +275,44 @@ void main() {
         isTrue,
       );
     });
+
+    test(
+      'coalesces a fresh bootstrap across concurrent rejected calls',
+      () async {
+        transport.responses.addAll([
+          const InnerTubeHttpResponse(
+            statusCode: HttpStatus.forbidden,
+            body: '{"error":"stale one"}',
+          ),
+          const InnerTubeHttpResponse(
+            statusCode: HttpStatus.forbidden,
+            body: '{"error":"stale two"}',
+          ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(_searchPayload(const [])),
+          ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(_searchPayload(const [])),
+          ),
+        ]);
+        final freshGate = Completer<void>();
+        transport.freshBootstrapGate = freshGate;
+        final service = createService();
+
+        final first = service.searchSongs('one');
+        final second = service.searchSongs('two');
+        await _waitUntil(() => transport.getRequests.length == 2);
+        expect(transport.requests, hasLength(2));
+
+        freshGate.complete();
+        await Future.wait([first, second]);
+
+        expect(transport.getRequests, hasLength(2));
+        expect(transport.requests, hasLength(4));
+      },
+    );
 
     test(
       'refreshes bootstrap once when the client config is rejected',
@@ -961,6 +1072,14 @@ void main() {
           statusCode: HttpStatus.tooManyRequests,
           body: '{"error":"slow down continuation"}',
         ),
+        const InnerTubeHttpResponse(
+          statusCode: HttpStatus.tooManyRequests,
+          body: '{"error":"slow down continuation"}',
+        ),
+        const InnerTubeHttpResponse(
+          statusCode: HttpStatus.tooManyRequests,
+          body: '{"error":"slow down continuation"}',
+        ),
       ]);
       final service = createService();
 
@@ -976,7 +1095,7 @@ void main() {
               ),
         ),
       );
-      expect(transport.requests, hasLength(2));
+      expect(transport.requests, hasLength(4));
     });
 
     for (final scenario in <(String, Object)>[
@@ -999,6 +1118,9 @@ void main() {
       test(
         'keeps initial home sections after ${scenario.$1} failure',
         () async {
+          final continuationOutcomes = scenario.$1 == 'invalid JSON'
+              ? <Object>[scenario.$2]
+              : <Object>[scenario.$2, scenario.$2, scenario.$2];
           transport.responses.addAll([
             InnerTubeHttpResponse(
               statusCode: HttpStatus.ok,
@@ -1017,7 +1139,7 @@ void main() {
                 ], continuation: 'optional-continuation'),
               ),
             ),
-            scenario.$2,
+            ...continuationOutcomes,
           ]);
           final service = createService();
 
@@ -1025,7 +1147,10 @@ void main() {
 
           expect(sections.single.title, 'Initial fallback');
           expect(sections.single.songs.single.videoId, 'initial-fallback');
-          expect(transport.requests, hasLength(2));
+          expect(
+            transport.requests,
+            hasLength(1 + continuationOutcomes.length),
+          );
         },
       );
     }
@@ -1039,6 +1164,8 @@ void main() {
           ),
         ),
         TimeoutException('fixture continuation timeout'),
+        TimeoutException('fixture continuation timeout'),
+        TimeoutException('fixture continuation timeout'),
       ]);
       final service = createService();
 
@@ -1046,7 +1173,7 @@ void main() {
         service.getHome(maxSections: 2),
         throwsA(isA<InnerTubeTimeoutException>()),
       );
-      expect(transport.requests, hasLength(2));
+      expect(transport.requests, hasLength(4));
     });
 
     test(
@@ -1388,7 +1515,13 @@ void main() {
               ),
         ),
       );
-      expect(transport.requests.single.body['browseId'], 'VLPLcollection123');
+      expect(transport.requests, hasLength(3));
+      expect(
+        transport.requests.every(
+          (request) => request.body['browseId'] == 'VLPLcollection123',
+        ),
+        isTrue,
+      );
     });
 
     test(
@@ -1588,7 +1721,11 @@ void main() {
               ),
         ),
       );
-      expect(transport.requests.single.uri.path, '/browse');
+      expect(transport.requests, hasLength(3));
+      expect(
+        transport.requests.every((request) => request.uri.path == '/browse'),
+        isTrue,
+      );
     });
   });
 
@@ -2847,6 +2984,7 @@ class _FakeInnerTubeTransport implements InnerTubeTransport {
   final List<Object> responses = [];
   Object? error;
   Object? bootstrapError;
+  Completer<void>? freshBootstrapGate;
   final List<_RecordedRequest> requests = [];
   final List<_RecordedGetRequest> getRequests = [];
   int closeCount = 0;
@@ -2866,6 +3004,9 @@ class _FakeInnerTubeTransport implements InnerTubeTransport {
     );
     if (bootstrapError != null) {
       throw bootstrapError!;
+    }
+    if (getRequests.length > 1) {
+      await freshBootstrapGate?.future;
     }
     return bootstrapResponse;
   }

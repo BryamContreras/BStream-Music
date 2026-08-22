@@ -1,3 +1,4 @@
+import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -37,6 +38,7 @@ void main() {
           thumbnailPath: r'C:\Music\missing-artwork.jpg',
           addedAt: DateTime(2026),
         );
+        final catalogPlaylist = _artworkCatalogPlaylist(track);
 
         await tester.pumpWidget(
           ProviderScope(
@@ -45,6 +47,14 @@ void main() {
               playlistsControllerProvider.overrideWith(
                 _ArtworkPlaylistsController.new,
               ),
+              catalogPlaylistsProvider.overrideWith(
+                (ref) async => const <CatalogPlaylist>[],
+              ),
+              catalogPlaylistProvider.overrideWith((ref, playlistId) async {
+                return playlistId == catalogPlaylist.playlist.id
+                    ? catalogPlaylist
+                    : null;
+              }),
               tiktokLiveControllerProvider.overrideWith(
                 _IdleTikTokLiveController.new,
               ),
@@ -135,6 +145,9 @@ void main() {
           playlistsControllerProvider.overrideWith(
             _EmptyPlaylistsController.new,
           ),
+          catalogPlaylistsProvider.overrideWith(
+            (ref) async => const <CatalogPlaylist>[],
+          ),
           tiktokLiveControllerProvider.overrideWith(
             _IdleTikTokLiveController.new,
           ),
@@ -186,6 +199,9 @@ void main() {
           ),
           playlistsControllerProvider.overrideWith(
             _EmptyPlaylistsController.new,
+          ),
+          catalogPlaylistsProvider.overrideWith(
+            (ref) async => const <CatalogPlaylist>[],
           ),
           tiktokLiveControllerProvider.overrideWith(() => liveController),
           playerControllerProvider.overrideWith(_IdlePlayerController.new),
@@ -329,6 +345,9 @@ Widget _libraryHarness({bool disableAnimations = false}) {
     overrides: [
       libraryTracksProvider.overrideWith((ref) async => const <LocalTrack>[]),
       playlistsControllerProvider.overrideWith(_EmptyPlaylistsController.new),
+      catalogPlaylistsProvider.overrideWith(
+        (ref) async => const <CatalogPlaylist>[],
+      ),
       tiktokLiveControllerProvider.overrideWith(_IdleTikTokLiveController.new),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
@@ -363,6 +382,18 @@ class _ArtworkPlaylistsController extends PlaylistsController {
       updatedAt: DateTime(2026),
     ),
   ];
+}
+
+CatalogPlaylist _artworkCatalogPlaylist(LocalTrack track) {
+  final timestamp = DateTime(2026);
+  final playlist = Playlist(
+    id: 'artwork-size',
+    name: 'A deliberately long playlist name for responsive layout',
+    trackIds: <String>[track.id],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  );
+  return CatalogPlaylist(playlist: playlist, entries: const []);
 }
 
 class _IdleTikTokLiveController extends TikTokLiveController {

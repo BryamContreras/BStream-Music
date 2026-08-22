@@ -13,6 +13,34 @@ Current version: **1.2.5+125**.
 
 ## What's new in 1.2.5
 
+- Sign in to YouTube Music from an isolated account view without BStream
+  intercepting or storing the Google password. Session data is encrypted on
+  the device, the first playlist sync requires a separate confirmation, and
+  the Home avatar exposes channel selection, sync, conflicts, and logout.
+- Synchronize local and YouTube Music playlists by stable identities with a
+  conservative three-way merge. Local playlists are retained, remote copies
+  are private by default, Favorites remains local, and remote deletion always
+  requires a separate explicit confirmation.
+- Keep streaming-only songs and duplicate occurrences inside imported
+  playlists. Playback uses a valid downloaded file first and falls back to the
+  matching stream; a small cloud beside the artist identifies entries without
+  usable local audio.
+- Learn account-free Home recommendations from qualified local playback
+  history using YouTube Music `/next`, related shelves, mixes, and exact artist
+  releases. History can be disabled or cleared without removing the library.
+- Retry an interrupted active stream through the complete direct resolver and
+  yt-dlp chain with bounded backoff, while recommendation queues grow as their
+  end approaches and stale navigation work is cancelled.
+- Split the former 3,600-line player controller into focused queue, retry,
+  prefetch, crossfade, identity, and history coordinators. Database v8 adds the
+  hybrid playlist catalog, bounded history retention, and crash-safe media
+  migration.
+- Open the full player safely from a notification or launcher entry: Back now
+  returns to Home even when no previous in-app destination exists, while Queue
+  still consumes its own Back action first.
+- Mount the interface before optional native startup services, retry only a
+  failed service, harden backup/restore budgets and schema checks, and verify
+  Android yt-dlp updates against the official checksum and executable version.
 - Resolve YouTube manifests through a reinforced `youtube_explode_dart` client
   ladder, including EJS challenge solving with bundled QuickJS on Android or
   Deno on desktop and optional Android PO-token generation. yt-dlp remains the
@@ -35,13 +63,20 @@ Current version: **1.2.5+125**.
   typing in Search or another editable field.
 - Use consistent compact cards and larger artwork across Library and Settings,
   a wider desktop playback queue, and smoother Search and navigation changes.
-- Remove the obsolete no-animation lyrics option, default legacy preferences
-  safely to Smooth, and omit the redundant play button from the lyrics header.
+- Remove the obsolete no-animation lyrics option and default legacy preferences
+  safely to Smooth. On mobile, Lyrics uses its artwork as Back, provides a
+  larger Play/Pause action in the header, and does not duplicate the mini-player.
 
 ## Main features
 
 ### Search, downloads, and library
 
+- Optional YouTube Music account sign-in and bidirectional playlist sync. New
+  local playlists are created remotely as private playlists, imported remote
+  playlists may contain streaming-only entries, and Favorites stays local.
+- Synced playlist playback is download-first: BStream uses a valid local copy
+  when available and falls back to streaming the same catalog entry when the
+  file is missing or cannot be opened.
 - InnerTube search tabs for Songs, Videos, and Albums, with up to 20 results,
   artwork, metadata, and album queues loaded only when selected.
 - If InnerTube fails, yt-dlp keeps discovery available as generic YouTube
@@ -54,7 +89,9 @@ Current version: **1.2.5+125**.
 - Direct YouTube playback and downloads try a maintained, deterministic
   `youtube_explode_dart` client ladder first. Solver-dependent retries use the
   bundled QuickJS runtime and optional PO tokens on Android or Deno on desktop;
-  yt-dlp is the final fallback when direct candidates fail. Native M4A/AAC,
+  yt-dlp is the final fallback when direct candidates fail. If an active stream
+  loses connectivity, BStream retries that complete resolver chain twice with
+  bounded backoff; navigation cancels obsolete attempts. Native M4A/AAC,
   WebM/Opus, and other available audio containers remain unconverted. Stale
   A -> B -> C preparations are cancelled, stalled transfers time out, and the
   managed playback fallback cache is bounded to 12 files (128 MiB total/64 MiB
@@ -135,6 +172,14 @@ Current version: **1.2.5+125**.
 - Home displays up to 10 recently played items and 10 playlists. Recent items
   restore their last valid source playlist and fall back safely when that
   playlist no longer exists.
+- Without requiring an account, Home learns only from qualified local playback
+  events and combines YouTube Music related candidates with BStream's own
+  ranking. Personalized shelves include **Because you listened**, **Your
+  mixes**, **New for you**, and **Discovery for you**; the previous feed is
+  shown instantly while a fresh one is prepared in the background.
+- Recommendation learning can be paused or its local history and caches can be
+  cleared from Privacy settings without removing downloads, favorites, or
+  playlists.
 - Subtle gradients, translucent cards, and shared visual controls.
 - Spanish and English selectable from Settings.
 - An Application information section in Settings opens an organized About the

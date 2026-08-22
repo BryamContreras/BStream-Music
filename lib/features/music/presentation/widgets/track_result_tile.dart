@@ -331,6 +331,7 @@ class _TrackResultMenu extends ConsumerWidget {
     final localTracks = await ref
         .read(libraryRepositoryProvider)
         .getLocalTracks();
+    final catalogPlaylists = await ref.read(catalogPlaylistsProvider.future);
     if (!context.mounted) {
       return;
     }
@@ -342,6 +343,7 @@ class _TrackResultMenu extends ConsumerWidget {
           title: strings.choosePlaylist,
           playlists: playlists,
           tracks: localTracks,
+          catalogPlaylists: catalogPlaylists,
         );
       },
     );
@@ -350,22 +352,12 @@ class _TrackResultMenu extends ConsumerWidget {
     }
 
     try {
-      final localTrack = await ref
-          .read(downloadControllerProvider.notifier)
-          .downloadAudioForLibrary(
-            track,
-            onDownloadStarted: () {
-              if (!context.mounted) {
-                return;
-              }
-              ScaffoldMessenger.of(context)
-                ..hideCurrentSnackBar()
-                ..showSnackBar(SnackBar(content: Text(strings.downloading)));
-            },
-          );
-      await ref
+      final added = await ref
           .read(playlistsControllerProvider.notifier)
-          .addTrackToPlaylist(playlistId, localTrack.id);
+          .addRemoteTrackToPlaylist(playlistId, track);
+      if (added == null) {
+        throw StateError(strings.homeCollectionLoadError);
+      }
       if (!context.mounted) {
         return;
       }

@@ -490,6 +490,75 @@ void main() {
     },
   );
 
+  testWidgets(
+    'short Android frames compact the artwork shadow and pad the header',
+    (tester) async {
+      _configureView(tester, const Size(430, 900));
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      BoxShadow artworkShadow() {
+        final surface = tester.widget<DecoratedBox>(
+          find.byKey(const ValueKey('player-artwork-surface')),
+        );
+        return (surface.decoration as BoxDecoration).boxShadow!.single;
+      }
+
+      final artwork = find.byKey(const ValueKey('player-large-artwork'));
+      final header = find.byKey(const ValueKey('player-header'));
+      final longShadow = artworkShadow();
+      expect(tester.getRect(header).top, closeTo(10, 0.1));
+      expect(longShadow.blurRadius, 42);
+      expect(longShadow.spreadRadius, 6);
+      expect(longShadow.offset.dy, 18);
+
+      tester.view
+        ..physicalSize = const Size(360, 720)
+        ..padding = const FakeViewPadding(bottom: 24);
+      await tester.pump();
+
+      final shortArtworkWidth = tester.getSize(artwork).width;
+      final shortShadow = artworkShadow();
+      expect(tester.getRect(header).top, closeTo(14, 0.1));
+      expect(
+        tester.getRect(find.byKey(const ValueKey('player-tab-title'))).top,
+        greaterThan(tester.getRect(header).top),
+      );
+      expect(shortShadow.blurRadius / shortArtworkWidth, closeTo(0.095, 0.001));
+      expect(
+        shortShadow.spreadRadius / shortArtworkWidth,
+        closeTo(0.006, 0.001),
+      );
+      expect(shortShadow.offset.dy / shortArtworkWidth, closeTo(0.036, 0.001));
+      expect(
+        shortShadow.blurRadius +
+            shortShadow.spreadRadius +
+            shortShadow.offset.dy,
+        lessThan(
+          longShadow.blurRadius +
+              longShadow.spreadRadius +
+              longShadow.offset.dy,
+        ),
+      );
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('player-volume-control')))
+            .bottom,
+        lessThanOrEqualTo(720 - 24.0 + 0.1),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('player errors keep normal artwork and use scroll as fallback', (
     tester,
   ) async {

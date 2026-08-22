@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
@@ -27,9 +28,17 @@ void main() {
         container.dispose();
         await player.dispose();
       });
-      final tracks = List.generate(6, (index) => _track(index));
+      // A short fixture keeps the real monotonic qualification threshold
+      // practical while still proving that hundreds of position snapshots do
+      // not count as listening time or create duplicate writes.
+      final tracks = List.generate(
+        6,
+        (index) => _track(index, duration: const Duration(milliseconds: 25)),
+      );
 
+      await container.read(settingsControllerProvider.future);
       await container.read(playerControllerProvider.future);
+      await _drainEvents();
       await container
           .read(playerControllerProvider.notifier)
           .playLocal(
@@ -45,7 +54,10 @@ void main() {
           _playingSnapshot(tracks.first, position: Duration(seconds: index)),
         );
       }
-      await _drainEvents();
+      await _waitUntil(
+        () => library.playedTrackIds.lastOrNull == tracks.first.id,
+        reason: 'The initial qualified playback was not recorded.',
+      );
       expect(library.playedTrackIds, ['track-0']);
 
       // On Android the native queue advances while Flutter is backgrounded.
@@ -161,68 +173,104 @@ void main() {
     },
   );
 
-  test('failure storms perform one recovery per remote play request', () async {
-    final player = _LifecyclePlayerService();
-    final audioResolver = _LifecycleAudioResolver();
-    final container = _container(
-      player,
-      library: _LifecycleLibraryRepository(),
-      audioResolver: audioResolver,
-    );
-    addTearDown(() async {
-      container.dispose();
-      await player.dispose();
-    });
-    final tracks = List.generate(8, _remoteTrack);
-
-    await container.read(playerControllerProvider.future);
-    final controller = container.read(playerControllerProvider.notifier);
-    await controller.playRemote(tracks.first, queue: tracks);
-
-    for (var index = 0; index < tracks.length; index++) {
-      if (index > 0) {
-        await controller.playQueueIndex(index);
-      }
-      final track = tracks[index];
-      for (var duplicate = 0; duplicate < 100; duplicate++) {
-        player.emit(
-          PlayerSnapshot(
-            status: PlayerStatus.failed,
-            title: track.title,
-            artist: track.artist,
-            trackId: track.id,
-            sourceUrl: track.url,
-            isRemote: true,
-            errorMessage: 'HTTP 403 attempt $duplicate',
-          ),
-        );
-      }
-      await _waitUntil(
-        () => audioResolver.infoCalls == index + 1,
-        reason: 'Recovery for ${track.id} did not run.',
+  test(
+    'failure storms share one bounded retry budget per remote play request',
+    () async {
+      final player = _LifecyclePlayerService();
+      final audioResolver = _LifecycleAudioResolver(
+        failFirstRetryPerRequest: true,
       );
-      await _drainEvents();
-      expect(audioResolver.infoCalls, index + 1);
-    }
+      final retryDelay = _ControlledLifecycleRetryDelay();
+      final container = _container(
+        player,
+        library: _LifecycleLibraryRepository(),
+        audioResolver: audioResolver,
+        retryDelay: retryDelay.call,
+      );
+      addTearDown(() async {
+        container.dispose();
+        await player.dispose();
+      });
+      final tracks = List.generate(8, _remoteTrack);
 
-    expect(player.playedRemote, hasLength(tracks.length * 2));
-    expect(player.activeSnapshotListeners, 1);
-    expect(player.maximumSnapshotListeners, 1);
-    expect(container.read(playerControllerProvider).hasError, isFalse);
-  });
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playRemote(tracks.first, queue: tracks);
+
+      for (var index = 0; index < tracks.length; index++) {
+        if (index > 0) {
+          await controller.playQueueIndex(index);
+        }
+        final track = tracks[index];
+        for (var duplicate = 0; duplicate < 100; duplicate++) {
+          player.emit(
+            PlayerSnapshot(
+              status: PlayerStatus.failed,
+              title: track.title,
+              artist: track.artist,
+              trackId: track.id,
+              sourceUrl: track.url,
+              isRemote: true,
+              errorMessage: 'HTTP 403 attempt $duplicate',
+            ),
+          );
+        }
+        final previousAttempts = index * 2;
+        await _waitUntil(
+          () => retryDelay.durations.length == previousAttempts + 1,
+          reason: 'The first retry for ${track.id} did not enter backoff.',
+        );
+        retryDelay.releaseNext();
+        await _waitUntil(
+          () =>
+              audioResolver.infoCalls == previousAttempts + 1 &&
+              retryDelay.durations.length == previousAttempts + 2,
+          reason: 'The final retry for ${track.id} did not enter backoff.',
+        );
+        retryDelay.releaseNext();
+        await _waitUntil(
+          () =>
+              audioResolver.infoCalls == (index + 1) * 2 &&
+              player.playedRemote.length == (index + 1) * 2,
+          reason: 'The bounded recovery for ${track.id} did not finish.',
+        );
+        await _drainEvents();
+        expect(audioResolver.infoCalls, (index + 1) * 2);
+        expect(retryDelay.durations, hasLength((index + 1) * 2));
+      }
+
+      expect(player.playedRemote, hasLength(tracks.length * 2));
+      expect(retryDelay.durations, [
+        for (var index = 0; index < tracks.length; index++) ...const [
+          Duration(seconds: 2),
+          Duration(seconds: 5),
+        ],
+      ]);
+      expect(player.activeSnapshotListeners, 1);
+      expect(player.maximumSnapshotListeners, 1);
+      expect(container.read(playerControllerProvider).hasError, isFalse);
+    },
+  );
 }
 
 ProviderContainer _container(
   _LifecyclePlayerService player, {
   required _LifecycleLibraryRepository library,
   AudioStreamResolver? audioResolver,
+  RemotePlaybackRetryDelay? retryDelay,
 }) {
   return ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
+      settingsControllerProvider.overrideWith(_LifecycleSettingsController.new),
       libraryRepositoryProvider.overrideWithValue(library),
+      playbackHistorySinkProvider.overrideWithValue(
+        _LifecyclePlaybackHistorySink(library),
+      ),
       if (audioResolver != null)
         audioStreamResolverProvider.overrideWithValue(audioResolver),
+      if (retryDelay != null)
+        remotePlaybackRetryDelayProvider.overrideWithValue(retryDelay),
       localTrackFileProbeProvider.overrideWithValue(
         (_) async => LocalTrackFileAvailability.present,
       ),
@@ -230,14 +278,42 @@ ProviderContainer _container(
   );
 }
 
-LocalTrack _track(int index) {
+class _LifecycleSettingsController extends SettingsController {
+  @override
+  Future<SettingsState> build() async => const SettingsState(
+    downloadDirectory: '/tmp/bstream-lifecycle-test',
+    language: AppLanguage.spanish,
+    recommendationHistoryEnabled: true,
+  );
+}
+
+class _LifecyclePlaybackHistorySink implements PlaybackHistorySink {
+  const _LifecyclePlaybackHistorySink(this.library);
+
+  final _LifecycleLibraryRepository library;
+
+  @override
+  Future<void> persist(PlaybackHistoryWrite write) async {
+    final localTrackId = write.track.localTrackId;
+    if (!write.isInitialQualification || localTrackId == null) {
+      return;
+    }
+    await library.markPlayed(
+      localTrackId,
+      write.event.playedAt,
+      playlistId: write.track.playlistId,
+    );
+  }
+}
+
+LocalTrack _track(int index, {Duration duration = const Duration(minutes: 6)}) {
   return LocalTrack(
     id: 'track-$index',
     title: 'Track $index',
     artist: 'BStream Music',
     filePath: 'track-$index.m4a',
     addedAt: DateTime(2026),
-    duration: const Duration(minutes: 6),
+    duration: duration,
   );
 }
 
@@ -453,12 +529,38 @@ class _LifecycleLibraryRepository implements LibraryRepository {
   Future<void> savePlaylist(Playlist playlist) async {}
 }
 
+class _ControlledLifecycleRetryDelay {
+  final List<Duration> durations = [];
+  final List<Completer<void>> _gates = [];
+  int _nextGate = 0;
+
+  Future<void> call(Duration duration) {
+    durations.add(duration);
+    final gate = Completer<void>();
+    _gates.add(gate);
+    return gate.future;
+  }
+
+  void releaseNext() {
+    if (_nextGate >= _gates.length) {
+      throw StateError('No lifecycle retry delay is waiting.');
+    }
+    _gates[_nextGate++].complete();
+  }
+}
+
 class _LifecycleAudioResolver implements AudioStreamResolver {
+  _LifecycleAudioResolver({this.failFirstRetryPerRequest = false});
+
+  final bool failFirstRetryPerRequest;
   int infoCalls = 0;
 
   @override
   Future<AudioStreamResolution> resolve(TrackInfo track) async {
     infoCalls++;
+    if (failFirstRetryPerRequest && infoCalls.isOdd) {
+      throw const SocketException('HTTP 503 on the first bounded retry');
+    }
     final uri = Uri.parse(track.url);
     final id = uri.queryParameters['v'] ?? 'unknown';
     return AudioStreamResolution(

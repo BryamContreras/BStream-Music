@@ -20,6 +20,7 @@ class TrackInfo {
     this.viewCount,
     this.httpHeaders,
     this.artists = const [],
+    this.artistBrowseIds = const [],
     this.metadataSource = TrackMetadataSource.youtube,
   });
 
@@ -44,6 +45,13 @@ class TrackInfo {
   final int? viewCount;
   final Map<String, String>? httpHeaders;
   final List<String> artists;
+
+  /// YouTube Music artist browse identifiers aligned with [artists].
+  ///
+  /// Entries can be null when the catalog response only exposes an artist
+  /// name. Keeping the positional list lets recommendation code use exact
+  /// artist pages without guessing from display text.
+  final List<String?> artistBrowseIds;
   final TrackMetadataSource metadataSource;
 
   TrackInfo copyWith({
@@ -65,6 +73,7 @@ class TrackInfo {
     int? viewCount,
     Map<String, String>? httpHeaders,
     List<String>? artists,
+    List<String?>? artistBrowseIds,
     TrackMetadataSource? metadataSource,
   }) {
     return TrackInfo(
@@ -86,6 +95,7 @@ class TrackInfo {
       viewCount: viewCount ?? this.viewCount,
       httpHeaders: httpHeaders ?? this.httpHeaders,
       artists: artists ?? this.artists,
+      artistBrowseIds: artistBrowseIds ?? this.artistBrowseIds,
       metadataSource: metadataSource ?? this.metadataSource,
     );
   }

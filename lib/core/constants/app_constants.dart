@@ -4,7 +4,7 @@ class AppConstants {
   static const appName = 'BStream Music';
   static const appVersion = '1.2.5';
   static const databaseName = 'bstream_music.db';
-  static const databaseVersion = 5;
+  static const databaseVersion = 8;
   static const androidYtdlChannel = 'bstream_music/ytdl';
   static const androidYtdlProgressChannel = 'bstream_music/ytdl_progress';
   static const androidFileExportChannel = 'bstream_music/file_export';

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/constants/app_constants.dart';
 import 'core/platform/app_platform.dart';
+import 'core/startup/app_startup_coordinator.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
 import 'features/music/presentation/pages/home_page.dart';
@@ -11,7 +14,24 @@ import 'features/music/presentation/providers/music_providers.dart';
 import 'services/player/notification_artwork_service.dart';
 import 'services/media_session/audio_service_desktop_media_session.dart';
 
-Future<void> main() async {
+void main() {
+  launchBStreamMusicApp();
+}
+
+typedef AppStartupScheduler = void Function(VoidCallback callback);
+
+void _scheduleStartupAfterFirstFrame(VoidCallback callback) {
+  WidgetsBinding.instance.addPostFrameCallback((_) => callback());
+}
+
+@visibleForTesting
+AppStartupCoordinator launchBStreamMusicApp({
+  bool? initializeAndroidServices,
+  OptionalStartupOperation? initializeNotificationArtwork,
+  OptionalStartupOperation? initializeAudioService,
+  void Function(Widget application)? runApplication,
+  AppStartupScheduler? scheduleStartup,
+}) {
   WidgetsFlutterBinding.ensureInitialized();
   // Keep artwork memory bounded across long sessions with many searches and
   // queue transitions. The default Flutter image cache allows 100 MiB and
@@ -19,14 +39,29 @@ Future<void> main() async {
   final imageCache = PaintingBinding.instance.imageCache;
   imageCache.maximumSize = 100;
   imageCache.maximumSizeBytes = 48 * 1024 * 1024;
-  if (AppPlatform.isAndroid) {
-    // Bind the lightweight loopback endpoint before the first queue is built.
-    // Artwork download/cropping remains deferred until Android requests it,
-    // so playback preparation never waits for image work.
-    await NotificationArtworkService.instance.initialize();
-    await AudioServiceDesktopMediaSession.ensureInitialized();
-  }
-  runApp(const ProviderScope(child: BStreamMusicApp()));
+  final shouldInitializeAndroidServices =
+      initializeAndroidServices ?? AppPlatform.isAndroid;
+  final startup = AppStartupCoordinator(
+    operations: shouldInitializeAndroidServices
+        ? <OptionalStartupService, OptionalStartupOperation>{
+            OptionalStartupService.notificationArtwork:
+                initializeNotificationArtwork ??
+                NotificationArtworkService.instance.initialize,
+            OptionalStartupService.audioService:
+                initializeAudioService ??
+                AudioServiceDesktopMediaSession.ensureInitialized,
+          }
+        : const <OptionalStartupService, OptionalStartupOperation>{},
+  );
+
+  // The UI is intentionally mounted before optional Android integrations are
+  // attempted. Transient failures retry in the background with a bounded
+  // backoff, without trapping the user on a blank launch screen.
+  (runApplication ?? runApp)(const ProviderScope(child: BStreamMusicApp()));
+  (scheduleStartup ?? _scheduleStartupAfterFirstFrame)(() {
+    unawaited(startup.initialize());
+  });
+  return startup;
 }
 
 class BStreamMusicApp extends ConsumerWidget {

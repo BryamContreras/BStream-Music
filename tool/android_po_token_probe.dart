@@ -7,12 +7,13 @@ import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtu
 import 'package:bstream_music/services/downloader/adapters/youtube_explode/youtube_explode_runtime.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
-typedef _ClientEntry = ({String name, YoutubeApiClient client, bool requireWatchPage});
+typedef _ClientEntry = ({
+  String name,
+  YoutubeApiClient client,
+  bool requireWatchPage,
+});
 
-const _defaultVideoIds = <String>[
-  'dQw4w9WgXcQ',
-  'kJQP7kiw5Fk',
-];
+const _defaultVideoIds = <String>['dQw4w9WgXcQ', 'kJQP7kiw5Fk'];
 
 typedef _AttemptResult = ({
   String clientName,
@@ -55,7 +56,9 @@ Future<void> main(List<String> args) async {
 
   final channel = AndroidYtdlChannel();
 
-  print('# ANDROID_PO_TOKEN_CHAIN_BENCHMARK | ${DateTime.now().toIso8601String()}');
+  print(
+    '# ANDROID_PO_TOKEN_CHAIN_BENCHMARK | ${DateTime.now().toIso8601String()}',
+  );
   print('# Video IDs: ${videoIds.join(", ")}');
   print('#');
   print('# Columns:');
@@ -76,7 +79,9 @@ Future<void> main(List<String> args) async {
   print('#  selected[yes/no/final]');
   print('#  chainTotalMs');
   print('');
-  print('videoId|clientName|watchPage|solver|elapsedMs|audioStreams|totalStreams|container|codec|bitrate|error|rateLimited|fallback|fallbackReason|selected|chainMs');
+  print(
+    'videoId|clientName|watchPage|solver|elapsedMs|audioStreams|totalStreams|container|codec|bitrate|error|rateLimited|fallback|fallbackReason|selected|chainMs',
+  );
 
   final allResults = <_ChainResult>[];
 
@@ -91,14 +96,21 @@ Future<void> main(List<String> args) async {
 
   print('');
   print('# SUMMARY');
-  print('# outcome|videoId|totalMs|clientsAttempted|streamsSelected|selectedClient');
+  print(
+    '# outcome|videoId|totalMs|clientsAttempted|streamsSelected|selectedClient',
+  );
   for (final r in allResults) {
     final selectedName = r.selected?.clientName ?? 'none';
-    print('# ${r.outcome}|${r.videoId}|${r.totalMs}|${r.attempts.length}|${r.selected != null ? 1 : 0}|$selectedName');
+    print(
+      '# ${r.outcome}|${r.videoId}|${r.totalMs}|${r.attempts.length}|${r.selected != null ? 1 : 0}|$selectedName',
+    );
   }
 }
 
-Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) async {
+Future<_ChainResult> _probeChain(
+  String videoId,
+  AndroidYtdlChannel channel,
+) async {
   final totalStopwatch = Stopwatch()..start();
   final attempts = <_AttemptResult>[];
   _AttemptResult? selected;
@@ -113,7 +125,9 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
     final coldTokenStopwatch = Stopwatch()..start();
     final coldToken = await channel.getPoTokens(videoId);
     coldTokenStopwatch.stop();
-    print('# [PO] cold=${coldTokenStopwatch.elapsedMilliseconds}ms available=${coldToken != null}');
+    print(
+      '# [PO] cold=${coldTokenStopwatch.elapsedMilliseconds}ms available=${coldToken != null}',
+    );
 
     if (coldToken != null) {
       final warmStopwatch = Stopwatch()..start();
@@ -123,10 +137,26 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
     }
 
     final orderedClients = <_ClientEntry>[
-      (name: 'androidSdkless', client: YoutubeApiClient.androidSdkless, requireWatchPage: false),
-      (name: 'visionOS', client: youtubeVisionOsClient, requireWatchPage: false),
-      (name: 'visionOS+watch', client: youtubeVisionOsClient, requireWatchPage: true),
-      (name: 'safari+po', client: YoutubeApiClient.safari, requireWatchPage: true),
+      (
+        name: 'androidSdkless',
+        client: YoutubeApiClient.androidSdkless,
+        requireWatchPage: false,
+      ),
+      (
+        name: 'visionOS',
+        client: youtubeVisionOsClient,
+        requireWatchPage: false,
+      ),
+      (
+        name: 'visionOS+watch',
+        client: youtubeVisionOsClient,
+        requireWatchPage: true,
+      ),
+      (
+        name: 'safari+po',
+        client: YoutubeApiClient.safari,
+        requireWatchPage: true,
+      ),
     ];
 
     for (var i = 0; i < orderedClients.length; i++) {
@@ -141,7 +171,9 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
 
       final clientToUse = requireWatchPage ? solverClient : fastClient;
 
-      print('# [ATTEMPT] $videoId | $clientName | watchPage=$requireWatchPage | solver=$requireWatchPage | chainPos=$i');
+      print(
+        '# [ATTEMPT] $videoId | $clientName | watchPage=$requireWatchPage | solver=$requireWatchPage | chainPos=$i',
+      );
 
       final attemptStopwatch = Stopwatch()..start();
       try {
@@ -176,11 +208,17 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
             fallbackTriggered: false,
             fallbackReason: null,
           );
-          print('# [SELECTED] $clientName succeeded in ${attemptStopwatch.elapsedMilliseconds}ms with ${audioOnly.length} audio streams');
+          print(
+            '# [SELECTED] $clientName succeeded in ${attemptStopwatch.elapsedMilliseconds}ms with ${audioOnly.length} audio streams',
+          );
           break;
         } else {
-          final noAudioReason = audioOnly.isEmpty ? 'no-audio-streams' : 'no-direct-url';
-          print('# [SKIP] $clientName returned ${manifest.streams.length} streams but $noAudioReason in ${attemptStopwatch.elapsedMilliseconds}ms');
+          final noAudioReason = audioOnly.isEmpty
+              ? 'no-audio-streams'
+              : 'no-direct-url';
+          print(
+            '# [SKIP] $clientName returned ${manifest.streams.length} streams but $noAudioReason in ${attemptStopwatch.elapsedMilliseconds}ms',
+          );
           attempts.add((
             clientName: clientName,
             usedWatchPage: requireWatchPage,
@@ -199,7 +237,9 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
         }
       } on RequestLimitExceededException {
         attemptStopwatch.stop();
-        print('# [RATELIMIT] $clientName got RequestLimitExceeded after ${attemptStopwatch.elapsedMilliseconds}ms');
+        print(
+          '# [RATELIMIT] $clientName got RequestLimitExceeded after ${attemptStopwatch.elapsedMilliseconds}ms',
+        );
         attempts.add((
           clientName: clientName,
           usedWatchPage: requireWatchPage,
@@ -217,10 +257,15 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
         ));
         rateLimited = true;
         if (requireWatchPage) {
-          print('# [BACKOFF] rate limit on requireWatchPage client, skipping remaining watch-page clients');
+          print(
+            '# [BACKOFF] rate limit on requireWatchPage client, skipping remaining watch-page clients',
+          );
           var skipIdx = i + 1;
-          while (skipIdx < orderedClients.length && orderedClients[skipIdx].requireWatchPage) {
-            print('# [SKIP] skipping ${orderedClients[skipIdx].name} (requireWatchPage backoff)');
+          while (skipIdx < orderedClients.length &&
+              orderedClients[skipIdx].requireWatchPage) {
+            print(
+              '# [SKIP] skipping ${orderedClients[skipIdx].name} (requireWatchPage backoff)',
+            );
             attempts.add((
               clientName: orderedClients[skipIdx].name,
               usedWatchPage: orderedClients[skipIdx].requireWatchPage,
@@ -243,7 +288,9 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
       } catch (error, stackTrace) {
         attemptStopwatch.stop();
         final errorMsg = error.toString().replaceAll(RegExp(r'[\r\n|]+'), ' ');
-        print('# [ERROR] $clientName threw $errorMsg after ${attemptStopwatch.elapsedMilliseconds}ms');
+        print(
+          '# [ERROR] $clientName threw $errorMsg after ${attemptStopwatch.elapsedMilliseconds}ms',
+        );
         print('#   $stackTrace');
         attempts.add((
           clientName: clientName,
@@ -258,7 +305,9 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
           error: errorMsg,
           isRateLimited: false,
           fallbackTriggered: !isLastClient,
-          fallbackReason: errorMsg.length > 60 ? errorMsg.substring(0, 60) : errorMsg,
+          fallbackReason: errorMsg.length > 60
+              ? errorMsg.substring(0, 60)
+              : errorMsg,
         ));
         if (!isLastClient) continue;
       }
@@ -269,8 +318,8 @@ Future<_ChainResult> _probeChain(String videoId, AndroidYtdlChannel channel) asy
     final outcome = selected != null
         ? 'success'
         : rateLimited
-            ? 'rate-limited'
-            : 'no-streams';
+        ? 'rate-limited'
+        : 'no-streams';
 
     return _ChainResult(
       videoId: videoId,
@@ -292,8 +341,8 @@ void _printChainResult(_ChainResult result) {
     final selectedFlag = result.selected?.clientName == a.clientName
         ? 'selected'
         : isLast
-            ? 'final'
-            : 'no';
+        ? 'final'
+        : 'no';
     print(
       '${result.videoId}|${a.clientName}|${a.usedWatchPage ? "yes" : "no"}|'
       '${a.usedSolver ? "yes" : "no"}|${a.elapsedMs}|${a.audioStreams}|'

@@ -3,13 +3,22 @@ import 'dart:collection';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
-// `romanize` uses Kuromoji internally but does not expose its Japanese tokens.
-// Reusing that tokenizer lets us retain linguistic word boundaries instead of
-// inserting arbitrary spaces after romanization.
-import 'package:kuromoji/kuromoji.dart';
+import 'package:flutter/services.dart';
 import 'package:romanize/romanize.dart';
 
 import '../../features/music/domain/entities/lyrics.dart';
+import 'kuromoji_asset_tokenizer.dart';
+
+const _kuromojiDictionaryAsset = 'assets/dictionaries/kuromoji-ipadic.bin.bz2';
+
+typedef KuromojiDictionaryAssetLoader = Future<Uint8List> Function();
+typedef LyricsWorkerIdleTimerFactory =
+    Timer Function(Duration duration, void Function() callback);
+
+Timer _createLyricsWorkerIdleTimer(
+  Duration duration,
+  void Function() callback,
+) => Timer(duration, callback);
 
 class RomanizedLyricsView {
   const RomanizedLyricsView({
@@ -25,13 +34,22 @@ class LyricsRomanizationService {
   LyricsRomanizationService({
     this.maximumCacheEntries = 8,
     Duration workerRequestTimeout = const Duration(seconds: 45),
+    Duration workerIdleTimeout = const Duration(minutes: 5),
     int maximumPendingRequests = 12,
+    KuromojiDictionaryAssetLoader? kuromojiDictionaryAssetLoader,
+    LyricsWorkerIdleTimerFactory? workerIdleTimerFactory,
   }) : assert(maximumCacheEntries > 0),
        assert(workerRequestTimeout > Duration.zero),
+       assert(workerIdleTimeout > Duration.zero),
        assert(maximumPendingRequests > 0),
        _worker = _LyricsRomanizationWorker(
          requestTimeout: workerRequestTimeout,
+         idleTimeout: workerIdleTimeout,
          maximumPendingRequests: maximumPendingRequests,
+         dictionaryAssetLoader:
+             kuromojiDictionaryAssetLoader ?? _loadKuromojiDictionaryAsset,
+         idleTimerFactory:
+             workerIdleTimerFactory ?? _createLyricsWorkerIdleTimer,
        );
 
   final int maximumCacheEntries;
@@ -120,11 +138,17 @@ class LyricsRomanizationService {
 class _LyricsRomanizationWorker {
   _LyricsRomanizationWorker({
     required this.requestTimeout,
+    required this.idleTimeout,
     required this.maximumPendingRequests,
+    required this.dictionaryAssetLoader,
+    required this.idleTimerFactory,
   });
 
   final Duration requestTimeout;
+  final Duration idleTimeout;
   final int maximumPendingRequests;
+  final KuromojiDictionaryAssetLoader dictionaryAssetLoader;
+  final LyricsWorkerIdleTimerFactory idleTimerFactory;
   final Map<int, _PendingRomanizationRequest> _pending = {};
   RawReceivePort? _responsePort;
   RawReceivePort? _errorPort;
@@ -134,48 +158,130 @@ class _LyricsRomanizationWorker {
   Completer<SendPort>? _ready;
   int _nextRequestId = 0;
   int _generation = 0;
+  int? _dictionarySentGeneration;
+  Future<void>? _dictionarySendFuture;
+  Timer? _idleTimer;
+  int _activeCalls = 0;
   bool _disposed = false;
 
   Future<List<String>> romanize(List<String> codes, List<String> texts) async {
     if (_disposed) {
       throw StateError('Lyrics romanization worker has been disposed.');
     }
-    for (var attempt = 0; attempt < 2; attempt++) {
-      final start = _startFuture ??= _start();
-      late final _WorkerConnection connection;
-      try {
-        connection = await start;
-      } catch (_) {
-        if (identical(_startFuture, start)) {
-          _startFuture = null;
+    _idleTimer?.cancel();
+    _idleTimer = null;
+    _activeCalls++;
+    try {
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final start = _startFuture ??= _start();
+        late final _WorkerConnection connection;
+        try {
+          connection = await start;
+        } catch (_) {
+          if (identical(_startFuture, start)) {
+            _startFuture = null;
+          }
+          rethrow;
         }
-        rethrow;
+        if (_disposed) {
+          throw StateError('Lyrics romanization worker has been disposed.');
+        }
+        if (connection.generation != _generation ||
+            !identical(_startFuture, start)) {
+          continue;
+        }
+        if (_requiresJapaneseTokenizer(codes.toSet(), texts)) {
+          try {
+            await _ensureJapaneseDictionary(connection);
+          } catch (_) {
+            if (connection.generation != _generation ||
+                !identical(_startFuture, start)) {
+              continue;
+            }
+            rethrow;
+          }
+        }
+        if (_pending.length >= maximumPendingRequests) {
+          throw StateError('Lyrics romanization worker is busy.');
+        }
+        final requestId = _nextRequestId++;
+        final completer = Completer<List<String>>();
+        final pending = _PendingRomanizationRequest(
+          completer,
+          generation: connection.generation,
+        );
+        pending.timer = Timer(
+          requestTimeout,
+          () => _handleRequestTimeout(requestId, connection.generation),
+        );
+        _pending[requestId] = pending;
+        connection.commands.send(<Object>[requestId, codes, texts]);
+        return await completer.future;
       }
-      if (_disposed) {
-        throw StateError('Lyrics romanization worker has been disposed.');
-      }
-      if (connection.generation != _generation ||
-          !identical(_startFuture, start)) {
-        continue;
-      }
-      if (_pending.length >= maximumPendingRequests) {
-        throw StateError('Lyrics romanization worker is busy.');
-      }
-      final requestId = _nextRequestId++;
-      final completer = Completer<List<String>>();
-      final pending = _PendingRomanizationRequest(
-        completer,
-        generation: connection.generation,
-      );
-      pending.timer = Timer(
-        requestTimeout,
-        () => _handleRequestTimeout(requestId, connection.generation),
-      );
-      _pending[requestId] = pending;
-      connection.commands.send(<Object>[requestId, codes, texts]);
-      return completer.future;
+      throw StateError('Lyrics romanization worker restarted repeatedly.');
+    } finally {
+      _activeCalls--;
+      _scheduleIdleTermination();
     }
-    throw StateError('Lyrics romanization worker restarted repeatedly.');
+  }
+
+  void _scheduleIdleTermination() {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+    if (_disposed ||
+        _activeCalls != 0 ||
+        _pending.isNotEmpty ||
+        _isolate == null) {
+      return;
+    }
+    _idleTimer = idleTimerFactory(idleTimeout, _terminateWorkerIfIdle);
+  }
+
+  void _terminateWorkerIfIdle() {
+    _idleTimer = null;
+    if (_disposed ||
+        _activeCalls != 0 ||
+        _pending.isNotEmpty ||
+        _isolate == null) {
+      return;
+    }
+    _generation++;
+    _dictionarySentGeneration = null;
+    _dictionarySendFuture = null;
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _startFuture = null;
+    _ready = null;
+    _closePorts();
+  }
+
+  Future<void> _ensureJapaneseDictionary(_WorkerConnection connection) {
+    if (_dictionarySentGeneration == connection.generation) {
+      return Future<void>.value();
+    }
+    final active = _dictionarySendFuture;
+    if (active != null) {
+      return active;
+    }
+    late final Future<void> send;
+    send =
+        () async {
+          final bytes = await dictionaryAssetLoader();
+          if (_disposed || connection.generation != _generation) {
+            throw StateError('Lyrics romanization worker restarted.');
+          }
+          connection.commands.send(<Object>[
+            _dictionaryCommand,
+            TransferableTypedData.fromList(<Uint8List>[bytes]),
+          ]);
+          _dictionarySentGeneration = connection.generation;
+        }().whenComplete(() {
+          if (identical(_dictionarySendFuture, send)) {
+            _dictionarySendFuture = null;
+          }
+        });
+    _dictionarySendFuture = send;
+    return send;
   }
 
   Future<_WorkerConnection> _start() async {
@@ -215,6 +321,8 @@ class _LyricsRomanizationWorker {
       exitPort.close();
       if (generation == _generation) {
         _generation++;
+        _dictionarySentGeneration = null;
+        _dictionarySendFuture = null;
         _isolate = null;
         _ready = null;
         _responsePort = null;
@@ -318,7 +426,11 @@ class _LyricsRomanizationWorker {
       ready.completeError(error, stackTrace);
     }
     _failAll(error, stackTrace);
+    _idleTimer?.cancel();
+    _idleTimer = null;
     _generation++;
+    _dictionarySentGeneration = null;
+    _dictionarySendFuture = null;
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
     _startFuture = null;
@@ -345,7 +457,11 @@ class _LyricsRomanizationWorker {
       return;
     }
     _disposed = true;
+    _idleTimer?.cancel();
+    _idleTimer = null;
     _generation++;
+    _dictionarySentGeneration = null;
+    _dictionarySendFuture = null;
     final error = StateError('Lyrics romanization worker has been disposed.');
     final ready = _ready;
     if (_isolate != null && ready != null && !ready.isCompleted) {
@@ -389,8 +505,18 @@ class _WorkerConnection {
 
 void _lyricsRomanizationWorkerEntry(SendPort responses) async {
   final commands = ReceivePort();
+  Uint8List? japaneseDictionaryArchive;
   responses.send(commands.sendPort);
   await for (final message in commands) {
+    if (message is List<Object?> &&
+        message.length == 2 &&
+        message[0] == _dictionaryCommand &&
+        message[1] is TransferableTypedData) {
+      japaneseDictionaryArchive = (message[1] as TransferableTypedData)
+          .materialize()
+          .asUint8List();
+      continue;
+    }
     if (message is! List<Object?> || message.length != 3) {
       continue;
     }
@@ -401,7 +527,13 @@ void _lyricsRomanizationWorkerEntry(SendPort responses) async {
     try {
       final codes = (message[1] as List<Object?>).cast<String>();
       final texts = (message[2] as List<Object?>).cast<String>();
-      final result = await _romanizeLyricsPayload(<Object>[codes, texts]);
+      final result = await _romanizeLyricsPayload(<Object>[
+        codes,
+        texts,
+      ], japaneseDictionaryArchive: japaneseDictionaryArchive);
+      if (_requiresJapaneseTokenizer(codes.toSet(), texts)) {
+        japaneseDictionaryArchive = null;
+      }
       responses.send(<Object>[requestId, true, result]);
     } catch (error, stackTrace) {
       responses.send(<Object>[
@@ -414,20 +546,18 @@ void _lyricsRomanizationWorkerEntry(SendPort responses) async {
   }
 }
 
-Future<List<String>> _romanizeLyricsPayload(List<Object> payload) async {
+Future<List<String>> _romanizeLyricsPayload(
+  List<Object> payload, {
+  Uint8List? japaneseDictionaryArchive,
+}) async {
   final languageCodes = (payload[0] as List<Object?>).cast<String>().toSet();
   final texts = (payload[1] as List<Object?>).cast<String>();
-  final hasHan = texts.any(_containsHan);
-  final hasJapaneseContext = texts.any(_containsKana);
-  final needsJapaneseTokenizer =
-      languageCodes.contains(LyricsRomanizationLanguage.japanese.code) &&
-      (hasJapaneseContext ||
-          (hasHan &&
-              !languageCodes.contains(
-                LyricsRomanizationLanguage.chinese.code,
-              )));
+  final needsJapaneseTokenizer = _requiresJapaneseTokenizer(
+    languageCodes,
+    texts,
+  );
   final japaneseTokenizer = needsJapaneseTokenizer
-      ? await _loadJapaneseTokenizer()
+      ? await _loadJapaneseTokenizer(japaneseDictionaryArchive)
       : null;
   final selectedRomanizers = TextRomanizer.romanizers
       .where((romanizer) => languageCodes.contains(romanizer.language))
@@ -566,22 +696,44 @@ List<bool> _japaneseContextByPart(List<RomanizedText> parts) {
   return result;
 }
 
-typedef _JapaneseTokenizer = List<Map<String, dynamic>> Function(String input);
+typedef _JapaneseTokenizer = JapaneseTokenizer;
 
 Future<_JapaneseTokenizer?>? _japaneseTokenizerFuture;
 
-Future<_JapaneseTokenizer?> _loadJapaneseTokenizer() =>
-    _japaneseTokenizerFuture ??= () async {
-      try {
-        final tokenizer = await TokenizerBuilder().build();
-        return tokenizer.tokenize;
-      } catch (_) {
-        // Kana can still be romanized if the optional dictionary fails to
-        // load. Unknown Kanji is intentionally left untouched by that
-        // fallback.
-        return null;
-      }
-    }();
+Future<_JapaneseTokenizer?> _loadJapaneseTokenizer(
+  Uint8List? dictionaryArchive,
+) => _japaneseTokenizerFuture ??= () async {
+  try {
+    if (dictionaryArchive == null) {
+      return null;
+    }
+    return buildKuromojiTokenizer(dictionaryArchive);
+  } catch (_) {
+    // Kana can still be romanized if the optional dictionary fails to
+    // load. Unknown Kanji is intentionally left untouched by that
+    // fallback.
+    return null;
+  }
+}();
+
+Future<Uint8List> _loadKuromojiDictionaryAsset() async {
+  final data = await rootBundle.load(_kuromojiDictionaryAsset);
+  return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+}
+
+bool _requiresJapaneseTokenizer(Set<String> languageCodes, List<String> texts) {
+  if (!languageCodes.contains(LyricsRomanizationLanguage.japanese.code)) {
+    return false;
+  }
+  final hasJapaneseContext = texts.any(_containsKana);
+  if (hasJapaneseContext) {
+    return true;
+  }
+  return texts.any(_containsHan) &&
+      !languageCodes.contains(LyricsRomanizationLanguage.chinese.code);
+}
+
+const _dictionaryCommand = 'kuromoji-dictionary';
 
 String _romanizeJapaneseTokens(
   String input,

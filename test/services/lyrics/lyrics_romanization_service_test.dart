@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:bstream_music/features/music/domain/entities/lyrics.dart';
 import 'package:bstream_music/services/lyrics/lyrics_romanization_service.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test(
     'romanizes every supported script without changing lyric structure',
     () async {
@@ -136,6 +141,99 @@ void main() {
 
     expect(result.single, 'watashi ha ongaku ga suki desu\u3002 kimi mo\uff1f');
   });
+
+  test('loads the Kuromoji asset lazily and only once per worker', () async {
+    var assetLoads = 0;
+    final service = LyricsRomanizationService(
+      kuromojiDictionaryAssetLoader: () async {
+        assetLoads++;
+        final data = await rootBundle.load(
+          'assets/dictionaries/kuromoji-ipadic.bin.bz2',
+        );
+        return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      },
+    );
+    addTearDown(service.dispose);
+
+    await service.romanizePreview(
+      const ['\uc548\ub155\ud558\uc138\uc694'],
+      const {LyricsRomanizationLanguage.korean},
+    );
+    expect(assetLoads, 0);
+
+    await service.romanizePreview(
+      const ['\u79c1\u306f\u97f3\u697d\u304c\u597d\u304d\u3067\u3059'],
+      const {LyricsRomanizationLanguage.japanese},
+    );
+    await service.romanizePreview(
+      const ['\u541b\u3082\u597d\u304d\u3067\u3059'],
+      const {LyricsRomanizationLanguage.japanese},
+    );
+
+    expect(assetLoads, 1);
+  });
+
+  test(
+    'releases an idle worker without evicting results and restarts lazily',
+    () async {
+      var assetLoads = 0;
+      final idleDurations = <Duration>[];
+      final idleTimers = <_ManualTimer>[];
+      final dictionaryRequested = Completer<void>();
+      final dictionaryBytes = Completer<Uint8List>();
+      final service = LyricsRomanizationService(
+        workerIdleTimeout: const Duration(minutes: 7),
+        workerIdleTimerFactory: (duration, callback) {
+          idleDurations.add(duration);
+          final timer = _ManualTimer(callback);
+          idleTimers.add(timer);
+          return timer;
+        },
+        kuromojiDictionaryAssetLoader: () async {
+          assetLoads++;
+          if (!dictionaryRequested.isCompleted) {
+            dictionaryRequested.complete();
+          }
+          // The worker deliberately falls back to direct Kana romanization for
+          // this invalid tiny archive. It still exercises lazy asset transfer.
+          return dictionaryBytes.future;
+        },
+      );
+      addTearDown(service.dispose);
+      const languages = <LyricsRomanizationLanguage>{
+        LyricsRomanizationLanguage.japanese,
+      };
+      const firstSource = <String>['\u3053\u3093\u306b\u3061\u306f'];
+
+      final firstFuture = service.romanizePreview(firstSource, languages);
+      await dictionaryRequested.future;
+      expect(idleTimers, isEmpty);
+      dictionaryBytes.complete(Uint8List.fromList(const <int>[1, 2, 3]));
+      final first = await firstFuture;
+
+      expect(first.single, isNot(firstSource.single));
+      expect(assetLoads, 1);
+      expect(idleDurations, const <Duration>[Duration(minutes: 7)]);
+      expect(idleTimers.single.isActive, isTrue);
+
+      idleTimers.single.fire();
+
+      final cached = service.romanizePreview(firstSource, languages);
+      expect(identical(cached, firstFuture), isTrue);
+      expect(await cached, first);
+      expect(assetLoads, 1);
+      expect(idleTimers, hasLength(1));
+
+      final restarted = await service.romanizePreview(const <String>[
+        '\u3055\u3088\u3046\u306a\u3089',
+      ], languages);
+
+      expect(restarted.single, isNot('\u3055\u3088\u3046\u306a\u3089'));
+      expect(assetLoads, 2);
+      expect(idleTimers, hasLength(2));
+      expect(idleTimers.last.isActive, isTrue);
+    },
+  );
 
   test('keeps Chinese context after a Japanese phrase on one line', () async {
     final service = LyricsRomanizationService();
@@ -274,4 +372,32 @@ void main() {
     await expectLater(overflow, throwsA(isA<StateError>()));
     expect((await first).single, isNot('안녕하세요'));
   });
+}
+
+class _ManualTimer implements Timer {
+  _ManualTimer(this._callback);
+
+  final void Function() _callback;
+  bool _active = true;
+  int _tick = 0;
+
+  void fire() {
+    if (!_active) {
+      return;
+    }
+    _active = false;
+    _tick++;
+    _callback();
+  }
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  int get tick => _tick;
+
+  @override
+  void cancel() {
+    _active = false;
+  }
 }

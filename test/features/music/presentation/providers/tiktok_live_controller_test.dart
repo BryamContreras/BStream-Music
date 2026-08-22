@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
@@ -8,6 +9,8 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/music_repository.dart';
 import 'package:bstream_music/features/music/domain/usecases/search_tracks.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
+import 'package:bstream_music/services/downloader/fallback_audio_resolver.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -153,6 +156,61 @@ void main() {
       expect(harness.player.lastLocalTrack, same(localTrack));
       expect(harness.player.lastLocalQueue, [same(localTrack)]);
       expect(harness.player.lastUseNativeQueue, isFalse);
+      expect(
+        harness.player.lastLocalQueueSourceId,
+        PlayerController.liveQueueSourceId,
+      );
+    },
+  );
+
+  test(
+    'library LIVE skips a failed download and plays only the next ready track',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final downloadedTrack = LocalTrack(
+        id: 'local-ready',
+        title: 'Cancion lista',
+        artist: 'Artista LIVE',
+        filePath: r'C:\music\local-ready.m4a',
+        addedAt: DateTime(2026),
+        sourceUrl: 'https://www.youtube.com/watch?v=lista',
+        duration: const Duration(minutes: 3),
+      );
+      final harness = _LiveHarness(
+        search: (query) async => [_remoteTrack(query)],
+        download: (track) async {
+          if (track.id == 'fallara') {
+            throw StateError('La descarga fallo por falta de conexion.');
+          }
+          return LocalTrackDownloadResult(
+            track: downloadedTrack,
+            remoteTrack: track,
+            reusedExisting: false,
+          );
+        },
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      await harness.controller.setSaveRequestsToLibrary(true);
+      harness.service.emit(_playEvent('fallara'));
+      harness.service.emit(_playEvent('lista'));
+
+      await _waitUntil(() {
+        final queue = harness.liveState.liveQueue;
+        return queue.length == 2 &&
+            queue.first.status == LiveQueueItemStatus.failed &&
+            queue.last.isReady &&
+            harness.player.localPlayCalls == 1;
+      });
+
+      final queue = harness.liveState.liveQueue;
+      expect(queue.first.localTrack, isNull);
+      expect(queue.last.localTrack, same(downloadedTrack));
+      expect(harness.downloadHelper.calls, 2);
+      expect(harness.player.localPlayCalls, 1);
+      expect(harness.player.lastLocalTrack, same(downloadedTrack));
+      expect(harness.player.lastLocalQueue, [same(downloadedTrack)]);
       expect(
         harness.player.lastLocalQueueSourceId,
         PlayerController.liveQueueSourceId,
@@ -321,6 +379,110 @@ void main() {
       expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
         'funciona',
       ]);
+    },
+  );
+
+  test(
+    'a late LIVE request advances past an exhausted remote without reopening it',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final liveService = _FakeTikTokLiveCommandService();
+      final playerService = _LiveAppendPlayerService();
+      final playerController = _TrackingLivePlayerController();
+      final primary = _LiveAppendAudioResolver(
+        source: AudioStreamSource.youtubeExplode,
+        succeeds: (trackId, call) =>
+            trackId == 'live-a' ? call == 1 : trackId == 'live-b',
+      );
+      final fallback = _LiveAppendAudioResolver(
+        source: AudioStreamSource.ytDlp,
+        succeeds: (_, _) => false,
+      );
+      final retryDurations = <Duration>[];
+      final repository = _SearchMusicRepository(
+        (query) async => [_remoteTrack(query)],
+      );
+      final container = ProviderContainer(
+        overrides: [
+          tiktokLiveCommandServiceProvider.overrideWithValue(liveService),
+          searchTracksProvider.overrideWithValue(SearchTracks(repository)),
+          playerServiceProvider.overrideWithValue(playerService),
+          playerControllerProvider.overrideWith(() => playerController),
+          audioStreamResolverProvider.overrideWithValue(
+            FallbackAudioResolver([primary, fallback]),
+          ),
+          remotePlaybackRetryDelayProvider.overrideWithValue((duration) async {
+            retryDurations.add(duration);
+          }),
+          remotePlaybackCacheProvider.overrideWithValue(
+            RemotePlaybackCache(policy: RemotePlaybackCachePolicy.disabled),
+          ),
+          settingsControllerProvider.overrideWith(
+            _LiveAppendSettingsController.new,
+          ),
+          playbackHistorySinkProvider.overrideWithValue(
+            const _NoopPlaybackHistorySink(),
+          ),
+        ],
+      );
+      addTearDown(() async {
+        container.dispose();
+        await liveService.close();
+        await playerService.close();
+      });
+
+      await container.read(playerControllerProvider.future);
+      await container.read(tiktokLiveControllerProvider.future);
+      liveService.emit(_playEvent('live-a'));
+      await _waitUntil(
+        () =>
+            container
+                    .read(tiktokLiveControllerProvider)
+                    .requireValue
+                    .liveQueue
+                    .singleOrNull
+                    ?.isReady ==
+                true &&
+            playerService.playedRemoteIds.length == 1,
+      );
+
+      playerService.failCurrent('HTTP 503 while travelling');
+      await _waitUntil(
+        () =>
+            container.read(playerControllerProvider).hasError &&
+            primary.callsFor('live-a') == 3 &&
+            fallback.callsFor('live-a') == 3,
+      );
+
+      expect(playerController.publicRemoteStarts, ['live-a']);
+      expect(playerService.playedRemoteIds, ['live-a']);
+      expect(retryDurations, const [
+        Duration(seconds: 2),
+        Duration(seconds: 5),
+      ]);
+
+      liveService.emit(_playEvent('live-b'));
+      await _waitUntil(
+        () =>
+            playerController.remoteQueueSyncCalls == 1 &&
+            playerService.playedRemoteIds.length == 2,
+      );
+
+      final live = container.read(tiktokLiveControllerProvider).requireValue;
+      expect(live.liveQueue, hasLength(2));
+      expect(live.liveQueue.every((item) => item.isReady), isTrue);
+      expect(playerController.publicRemoteStarts, ['live-a']);
+      expect(playerController.remoteQueueSyncCalls, 1);
+      expect(primary.callsFor('live-a'), 3);
+      expect(fallback.callsFor('live-a'), 3);
+      expect(primary.callsFor('live-b'), 1);
+      expect(fallback.callsFor('live-b'), 0);
+      expect(playerService.playedRemoteIds, ['live-a', 'live-b']);
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(
+        container.read(playerControllerProvider).requireValue.trackId,
+        'live-b',
+      );
     },
   );
 
@@ -574,6 +736,7 @@ class _LiveHarness {
   _LiveHarness({
     required Future<List<TrackInfo>> Function(String) search,
     LocalTrackDownloadResult? downloadResult,
+    Future<LocalTrackDownloadResult> Function(TrackInfo)? download,
     Duration searchDeadline = const Duration(seconds: 30),
     Set<String> silentlyFailRemoteTrackIds = const {},
     Future<void>? downloadGate,
@@ -590,6 +753,7 @@ class _LiveHarness {
           (ref) => _CountingLocalTrackDownloadHelper(
             ref,
             result: downloadResult,
+            download: download,
             beforeResult: downloadGate,
           ),
         ),
@@ -667,10 +831,12 @@ class _CountingLocalTrackDownloadHelper extends LocalTrackDownloadHelper {
   _CountingLocalTrackDownloadHelper(
     super.ref, {
     this.result,
+    this.download,
     this.beforeResult,
   });
 
   final LocalTrackDownloadResult? result;
+  final Future<LocalTrackDownloadResult> Function(TrackInfo)? download;
   final Future<void>? beforeResult;
   int calls = 0;
 
@@ -688,6 +854,10 @@ class _CountingLocalTrackDownloadHelper extends LocalTrackDownloadHelper {
     final wait = beforeResult;
     if (wait != null) {
       await wait;
+    }
+    final download = this.download;
+    if (download != null) {
+      return download(track);
     }
     return result ??
         (throw StateError('Remote-only LIVE mode must not download tracks.'));
@@ -778,4 +948,162 @@ class _RecordingPlayerController extends PlayerController {
       ),
     );
   }
+}
+
+class _TrackingLivePlayerController extends PlayerController {
+  final List<String> publicRemoteStarts = [];
+  int remoteQueueSyncCalls = 0;
+
+  @override
+  Future<void> playRemote(
+    TrackInfo track, {
+    List<TrackInfo>? queue,
+    String? queueSourceId,
+  }) {
+    publicRemoteStarts.add(track.id);
+    return super.playRemote(track, queue: queue, queueSourceId: queueSourceId);
+  }
+
+  @override
+  Future<bool> syncRemoteQueueSource(String sourceId, List<TrackInfo> tracks) {
+    remoteQueueSyncCalls++;
+    return super.syncRemoteQueueSource(sourceId, tracks);
+  }
+}
+
+class _LiveAppendSettingsController extends SettingsController {
+  @override
+  Future<SettingsState> build() async {
+    return const SettingsState(
+      downloadDirectory: '/tmp/bstream-live-append-test',
+      language: AppLanguage.spanish,
+      recommendationHistoryEnabled: false,
+    );
+  }
+}
+
+class _NoopPlaybackHistorySink implements PlaybackHistorySink {
+  const _NoopPlaybackHistorySink();
+
+  @override
+  Future<void> persist(PlaybackHistoryWrite write) async {}
+}
+
+class _LiveAppendAudioResolver implements AudioStreamResolver {
+  _LiveAppendAudioResolver({required this.source, required this.succeeds});
+
+  final AudioStreamSource source;
+  final bool Function(String trackId, int call) succeeds;
+  final Map<String, int> _calls = {};
+
+  int callsFor(String trackId) => _calls[trackId] ?? 0;
+
+  @override
+  Future<AudioStreamResolution> resolve(TrackInfo track) async {
+    final call = (_calls[track.id] ?? 0) + 1;
+    _calls[track.id] = call;
+    if (!succeeds(track.id, call)) {
+      throw SocketException('${source.name} offline for ${track.id}');
+    }
+    return AudioStreamResolution(
+      source: source,
+      streamUrl: 'https://media.example/${track.id}-$call.m4a',
+      streamExtension: 'm4a',
+      streamMimeType: 'audio/mp4',
+      videoId: track.id,
+    );
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
+class _LiveAppendPlayerService extends PlayerService {
+  final _snapshots = StreamController<PlayerSnapshot>.broadcast();
+  PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
+  final List<String> playedRemoteIds = [];
+
+  @override
+  Stream<PlayerSnapshot> get snapshotStream => _snapshots.stream;
+
+  @override
+  PlayerSnapshot get currentSnapshot => _snapshot;
+
+  @override
+  bool get supportsLocalQueueReplacement => false;
+
+  @override
+  Future<void> playRemote(TrackInfo track) async {
+    playedRemoteIds.add(track.id);
+    _snapshot = PlayerSnapshot(
+      status: PlayerStatus.playing,
+      title: track.title,
+      artist: track.artist,
+      trackId: track.id,
+      sourceUrl: track.url,
+      duration: track.duration,
+      isRemote: true,
+    );
+    _snapshots.add(_snapshot);
+  }
+
+  void failCurrent(String message) {
+    _snapshot = _snapshot.copyWith(
+      status: PlayerStatus.failed,
+      errorMessage: message,
+    );
+    _snapshots.add(_snapshot);
+  }
+
+  @override
+  Future<void> playLocal(LocalTrack track) async {
+    throw UnsupportedError('Local playback is not expected.');
+  }
+
+  @override
+  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
+    throw UnsupportedError('Local playback is not expected.');
+  }
+
+  @override
+  Future<void> replaceLocalQueue(
+    List<LocalTrack> tracks,
+    int preferredIndex,
+  ) async {}
+
+  @override
+  Future<void> pause() async {}
+
+  @override
+  Future<void> resume() async {}
+
+  @override
+  Future<void> togglePlayPause() async {}
+
+  @override
+  Future<void> stop() async {
+    _snapshot = _snapshot.copyWith(status: PlayerStatus.stopped);
+    _snapshots.add(_snapshot);
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    _snapshot = _snapshot.copyWith(position: position);
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {
+    _snapshot = _snapshot.copyWith(volume: volume);
+  }
+
+  @override
+  Future<void> setShuffleEnabled(bool enabled) async {}
+
+  @override
+  Future<void> setRepeatMode(PlaybackRepeatMode mode) async {}
+
+  @override
+  Future<void> dispose() => close();
+
+  Future<void> close() => _snapshots.close();
 }

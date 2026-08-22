@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
@@ -10,6 +11,62 @@ import '../../core/constants/app_constants.dart';
 import 'backup_restore_transaction.dart';
 import 'library_operation_coordinator.dart';
 import 'local_database_service.dart';
+
+const int _backupMaxEntries = 25000;
+const int _backupMaxExpandedBytes = 16 * 1024 * 1024 * 1024;
+const int _backupMaxSingleEntryBytes = 8 * 1024 * 1024 * 1024;
+const int _backupMaxExpansionRatio = 200;
+const int _backupMinimumExpansionAllowance = 64 * 1024 * 1024;
+
+/// Validates declared ZIP sizes before any backup entry is expanded to disk.
+///
+/// Media files in BStream backups are stored without compression, while the
+/// database and manifest are compressed. The generous ratio allowance keeps
+/// legitimate libraries compatible but rejects tiny ZIP bombs before they can
+/// consume storage or inodes on a phone.
+void validateBackupArchiveBudget({
+  required int archiveBytes,
+  required Iterable<int> entrySizes,
+  int maxEntries = _backupMaxEntries,
+  int maxExpandedBytes = _backupMaxExpandedBytes,
+  int maxSingleEntryBytes = _backupMaxSingleEntryBytes,
+  int maxExpansionRatio = _backupMaxExpansionRatio,
+  int minimumExpansionAllowance = _backupMinimumExpansionAllowance,
+}) {
+  if (archiveBytes <= 0 ||
+      maxEntries <= 0 ||
+      maxExpandedBytes <= 0 ||
+      maxSingleEntryBytes <= 0 ||
+      maxExpansionRatio <= 0 ||
+      minimumExpansionAllowance < 0) {
+    throw const FormatException('El presupuesto del respaldo no es valido.');
+  }
+
+  var count = 0;
+  var expandedBytes = 0;
+  for (final size in entrySizes) {
+    if (size < 0 || size > maxSingleEntryBytes) {
+      throw const FormatException(
+        'Un archivo del respaldo excede el limite permitido.',
+      );
+    }
+    count++;
+    expandedBytes += size;
+    if (count > maxEntries || expandedBytes > maxExpandedBytes) {
+      throw const FormatException('El respaldo excede los limites permitidos.');
+    }
+  }
+
+  final ratioAllowance = archiveBytes * maxExpansionRatio;
+  final allowedByCompression = ratioAllowance > minimumExpansionAllowance
+      ? ratioAllowance
+      : minimumExpansionAllowance;
+  if (expandedBytes > allowedByCompression) {
+    throw const FormatException(
+      'El respaldo tiene una relacion de compresion no segura.',
+    );
+  }
+}
 
 class BackupService {
   const BackupService(this._databaseService, this._coordinator);
@@ -36,10 +93,19 @@ class BackupService {
   }) {
     return _coordinator.runExclusive(
       LibraryMaintenancePhase.preparingRestore,
-      () => _restoreBackupFileInternal(
-        backupPath: backupPath,
-        mediaRoot: mediaRoot,
-      ),
+      () async {
+        try {
+          await _restoreBackupFileInternal(
+            backupPath: backupPath,
+            mediaRoot: mediaRoot,
+          );
+        } finally {
+          // This runs before the coordinator releases waiting readers. Any
+          // recommendation request queued against the previous database epoch
+          // is rejected when its gate opens.
+          _databaseService.advanceRecommendationGeneration();
+        }
+      },
     );
   }
 
@@ -321,42 +387,226 @@ Future<void> _extractBackupArchive({
   required String backupPath,
   required String outputPath,
 }) async {
-  const maxEntries = 100000;
-  const maxExpandedBytes = 64 * 1024 * 1024 * 1024;
+  await _preflightBackupArchive(backupPath);
 
   final input = InputFileStream(backupPath);
-  final archive = ZipDecoder().decodeStream(input);
-  var entryCount = 0;
-  var expandedBytes = 0;
+  Archive? archive;
   try {
+    archive = ZipDecoder().decodeStream(input);
+    final files = <ArchiveFile>[];
     for (final entry in archive) {
-      if (entry.isDirectory || entry.isSymbolicLink) {
-        continue;
-      }
-      entryCount++;
-      expandedBytes += entry.size;
-      if (entryCount > maxEntries || expandedBytes > maxExpandedBytes) {
+      if (entry.isSymbolicLink) {
         throw const FormatException(
-          'El respaldo excede los límites permitidos.',
+          'El respaldo no puede contener enlaces simbolicos.',
         );
       }
+      if (entry.isDirectory) {
+        continue;
+      }
+      files.add(entry);
+    }
+    validateBackupArchiveBudget(
+      archiveBytes: await File(backupPath).length(),
+      entrySizes: files.map((entry) => entry.size),
+    );
 
+    final approvedEntries = <String, ({String relative, ArchiveFile entry})>{};
+    for (final entry in files) {
       final relative = _safeBackupEntryName(entry.name);
       if (relative == null) {
         continue;
       }
+      final canonicalKey = _canonicalBackupDestinationKey(relative);
+      if (approvedEntries.containsKey(canonicalKey)) {
+        throw FormatException(
+          'El respaldo contiene una entrada duplicada: $relative',
+        );
+      }
+      approvedEntries[canonicalKey] = (relative: relative, entry: entry);
+    }
+
+    for (final approved in approvedEntries.values) {
+      final relative = approved.relative;
+      final entry = approved.entry;
       final destination = File(p.join(outputPath, relative));
       await destination.parent.create(recursive: true);
-      final output = OutputFileStream(destination.path);
+      final output = _BoundedBackupOutputStream(
+        OutputFileStream(destination.path),
+        maximumBytes: entry.size,
+      );
       try {
         entry.writeContent(output);
       } finally {
         await output.close();
       }
+      if (await destination.length() != entry.size) {
+        throw FormatException(
+          'El respaldo contiene un archivo truncado: $relative',
+        );
+      }
     }
   } finally {
-    await archive.clear();
+    await archive?.clear();
     await input.close();
+  }
+}
+
+/// Reads central-directory metadata without expanding any entry.
+///
+/// [ZipDecoder] materializes symbolic-link contents while constructing an
+/// [Archive]. Rejecting those entries and enforcing declared budgets here is
+/// therefore intentionally a separate pass that runs first. It also sees
+/// exact duplicate headers that [Archive] would otherwise collapse by name.
+Future<void> _preflightBackupArchive(String backupPath) async {
+  final input = InputFileStream(backupPath);
+  try {
+    final directory = ZipDirectory()..read(input);
+    if (directory.filePosition < 0) {
+      throw const FormatException('El archivo no es un respaldo ZIP valido.');
+    }
+    if (directory.numberOfThisDisk != 0 ||
+        directory.diskWithTheStartOfTheCentralDirectory != 0 ||
+        directory.totalCentralDirectoryEntriesOnThisDisk !=
+            directory.totalCentralDirectoryEntries) {
+      throw const FormatException(
+        'Los respaldos ZIP divididos no son compatibles.',
+      );
+    }
+
+    final headers = directory.fileHeaders;
+    if (headers.length != directory.totalCentralDirectoryEntries) {
+      throw const FormatException(
+        'El directorio del respaldo ZIP esta incompleto.',
+      );
+    }
+    validateBackupArchiveBudget(
+      archiveBytes: await File(backupPath).length(),
+      // Count directories and ignored entries too. They still consume parser
+      // memory even though BStream never writes them to the extraction root.
+      entrySizes: headers.map((header) => header.uncompressedSize),
+    );
+
+    final approvedPaths = <String>{};
+    for (final header in headers) {
+      if (_isZipSymbolicLink(header)) {
+        throw const FormatException(
+          'El respaldo no puede contener enlaces simbolicos.',
+        );
+      }
+      if (_isZipDirectory(header)) {
+        continue;
+      }
+
+      final relative = _safeBackupEntryName(header.filename);
+      if (relative == null) {
+        continue;
+      }
+      if ((header.generalPurposeBitFlag & 0x1) != 0) {
+        throw const FormatException(
+          'El respaldo no puede contener archivos cifrados.',
+        );
+      }
+      if (header.compressionMethod != ZipFile.zipCompressionStore &&
+          header.compressionMethod != ZipFile.zipCompressionDeflate &&
+          header.compressionMethod != ZipFile.zipCompressionBZip2) {
+        throw FormatException(
+          'El respaldo usa una compresion ZIP no compatible: '
+          '${header.compressionMethod}',
+        );
+      }
+
+      final canonicalKey = _canonicalBackupDestinationKey(relative);
+      if (!approvedPaths.add(canonicalKey)) {
+        throw FormatException(
+          'El respaldo contiene una entrada duplicada: $relative',
+        );
+      }
+    }
+  } finally {
+    await input.close();
+  }
+}
+
+bool _isZipDirectory(ZipFileHeader header) {
+  return header.filename.endsWith('/') || header.filename.endsWith(r'\');
+}
+
+bool _isZipSymbolicLink(ZipFileHeader header) {
+  const unixCreator = 3;
+  const unixFileTypeMask = 0xf000;
+  const unixSymbolicLink = 0xa000;
+  return header.versionMadeBy >> 8 == unixCreator &&
+      ((header.externalFileAttributes >> 16) & unixFileTypeMask) ==
+          unixSymbolicLink;
+}
+
+String _canonicalBackupDestinationKey(String relative) {
+  // Use portable, case-insensitive ZIP identity on every platform. A backup
+  // created on Android may later be restored on Windows, where case-only
+  // variants would target the same file.
+  return p.posix.normalize(relative.replaceAll(r'\', '/')).toLowerCase();
+}
+
+class _BoundedBackupOutputStream extends OutputStream {
+  _BoundedBackupOutputStream(this._output, {required this.maximumBytes})
+    : super(byteOrder: _output.byteOrder);
+
+  final OutputFileStream _output;
+  final int maximumBytes;
+  int _writtenBytes = 0;
+
+  @override
+  int get length => _output.length;
+
+  @override
+  bool get isOpen => _output.isOpen;
+
+  @override
+  void clear() {
+    _output.clear();
+  }
+
+  @override
+  Future<void> close() => _output.close();
+
+  @override
+  void closeSync() => _output.closeSync();
+
+  @override
+  void flush() => _output.flush();
+
+  @override
+  void writeByte(int value) {
+    _reserve(1);
+    _output.writeByte(value);
+  }
+
+  @override
+  void writeBytes(List<int> bytes, {int? length}) {
+    final byteCount = length ?? bytes.length;
+    if (byteCount < 0 || byteCount > bytes.length) {
+      throw RangeError.range(byteCount, 0, bytes.length, 'length');
+    }
+    _reserve(byteCount);
+    _output.writeBytes(bytes, length: byteCount);
+  }
+
+  @override
+  void writeStream(InputStream stream) {
+    _reserve(stream.length);
+    _output.writeStream(stream);
+  }
+
+  @override
+  Uint8List subset(int start, [int? end]) => _output.subset(start, end);
+
+  void _reserve(int byteCount) {
+    if (_writtenBytes + byteCount > maximumBytes) {
+      throw const FormatException(
+        'Un archivo del respaldo excede el tamano declarado.',
+      );
+    }
+    _writtenBytes += byteCount;
   }
 }
 

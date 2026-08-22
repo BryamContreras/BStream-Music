@@ -179,8 +179,3 @@ class SearchController extends AsyncNotifier<SearchState> {
     }
   }
 }
-
-final settingsControllerProvider =
-    AsyncNotifierProvider<SettingsController, SettingsState>(
-      SettingsController.new,
-    );

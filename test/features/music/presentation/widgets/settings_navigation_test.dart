@@ -5,6 +5,7 @@ import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/lyrics/lyrics_romanization_service.dart';
@@ -13,6 +14,9 @@ import 'package:bstream_music/services/sharing/incoming_track_link_service.dart'
 import 'package:bstream_music/services/storage/library_csv_import_service.dart';
 import 'package:bstream_music/services/storage/library_csv_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
+import 'package:bstream_music/services/youtube_music/auth/youtube_music_account_client.dart';
+import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_models.dart';
+import 'package:bstream_music/services/youtube_music/auth/youtube_music_session_store.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -134,6 +138,94 @@ void main() {
     expect(crossfadeDurationFromStoredSeconds(16), defaultCrossfadeDuration);
     expect(crossfadeDurationFromStoredSeconds(7), const Duration(seconds: 7));
   });
+
+  test('recommendation history preference defaults on and persists', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(
+          _PersistingCrossfadeSettingsController.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final initial = await container.read(settingsControllerProvider.future);
+    expect(initial.recommendationHistoryEnabled, isTrue);
+
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setRecommendationHistoryEnabled(false);
+    final preferences = await SharedPreferences.getInstance();
+    expect(
+      preferences.getBool('settings.recommendationHistoryEnabled'),
+      isFalse,
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value
+          ?.recommendationHistoryEnabled,
+      isFalse,
+    );
+  });
+
+  testWidgets(
+    'privacy controls toggle learning and confirm clearing personalized data',
+    (tester) async {
+      _configureView(tester, const Size(430, 900));
+      final navigationController = SettingsNavigationController();
+      final controller = _TrackingSettingsController();
+      addTearDown(navigationController.dispose);
+
+      await tester.pumpWidget(
+        _settingsHarness(
+          navigationController: navigationController,
+          settingsControllerBuilder: () => controller,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final historyCard = find.byKey(
+        const ValueKey('settings-card-recommendation-history'),
+      );
+      final clearCard = find.byKey(
+        const ValueKey('settings-card-clear-recommendations'),
+      );
+      expect(historyCard, findsOneWidget);
+      expect(clearCard, findsOneWidget);
+
+      await tester.ensureVisible(historyCard);
+      await tester.tap(
+        find.byKey(const ValueKey('recommendation-history-switch')),
+      );
+      await tester.pump();
+      expect(controller.recommendationEnabledChanges, [false]);
+
+      await tester.ensureVisible(clearCard);
+      await tester.tap(clearCard);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('recommendation-history-clear-confirmation')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('recommendation-history-clear-cancel')),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.clearCalls, 0);
+
+      await tester.tap(clearCard);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('recommendation-history-clear-confirm')),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.clearCalls, 1);
+      expect(find.text('Historial y recomendaciones eliminados.'), findsOne);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'appearance opens as a detail page and returns to settings root',
@@ -1068,8 +1160,15 @@ void main() {
     );
     expect(tester.takeException(), isNull);
 
-    await tester.ensureVisible(
+    await tester.scrollUntilVisible(
       find.byKey(const ValueKey('settings-card-storage')),
+      240,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('settings-root')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('settings-card-storage')));
@@ -1404,9 +1503,15 @@ Widget _settingsHarness({
   List<Override> overrides = const [],
   bool disableAnimations = false,
   bool active = true,
+  SettingsController Function()? settingsControllerBuilder,
 }) {
   return ProviderScope(
-    overrides: [..._providerOverrides(), ...overrides],
+    overrides: [
+      ..._providerOverrides(
+        settingsControllerBuilder: settingsControllerBuilder,
+      ),
+      ...overrides,
+    ],
     child: MaterialApp(
       builder: disableAnimations
           ? (context, child) => MediaQuery(
@@ -1434,7 +1539,8 @@ Widget _homeHarness({bool disableAnimations = false}) {
       ),
       historyProvider.overrideWith((ref) async => const <LocalTrack>[]),
       libraryTracksProvider.overrideWith((ref) async => const <LocalTrack>[]),
-      homeRecommendationsProvider.overrideWith(
+      personalizedHomeFeedSourceProvider.overrideWithValue(null),
+      youtubeMusicHomeRecommendationsProvider.overrideWith(
         (ref) async => const <HomeRecommendationSection>[],
       ),
       playlistsControllerProvider.overrideWith(_EmptyPlaylistsController.new),
@@ -1463,11 +1569,21 @@ final class _EmptyIncomingTrackLinkService implements IncomingTrackLinkService {
   Stream<Uri> get links => const Stream<Uri>.empty();
 }
 
-List<Override> _providerOverrides() {
+List<Override> _providerOverrides({
+  SettingsController Function()? settingsControllerBuilder,
+}) {
   return [
-    settingsControllerProvider.overrideWith(_FixedSettingsController.new),
+    settingsControllerProvider.overrideWith(
+      settingsControllerBuilder ?? _FixedSettingsController.new,
+    ),
     appStringsProvider.overrideWithValue(const AppStrings(AppLanguage.spanish)),
     tiktokLiveControllerProvider.overrideWith(_IdleTikTokLiveController.new),
+    youtubeMusicSessionStoreProvider.overrideWithValue(
+      const _AnonymousYouTubeMusicSessionStore(),
+    ),
+    youtubeMusicAccountClientProvider.overrideWithValue(
+      const UnconfiguredYouTubeMusicAccountClient(),
+    ),
   ];
 }
 
@@ -1545,6 +1661,23 @@ class _PersistingCrossfadeSettingsController extends SettingsController {
   );
 }
 
+class _TrackingSettingsController extends _FixedSettingsController {
+  final List<bool> recommendationEnabledChanges = <bool>[];
+  int clearCalls = 0;
+
+  @override
+  Future<void> setRecommendationHistoryEnabled(bool enabled) async {
+    recommendationEnabledChanges.add(enabled);
+    final current = await future;
+    state = AsyncData(current.copyWith(recommendationHistoryEnabled: enabled));
+  }
+
+  @override
+  Future<void> clearRecommendationHistory() async {
+    clearCalls += 1;
+  }
+}
+
 class _PreviewLyricsRomanizationService extends LyricsRomanizationService {
   @override
   Future<List<String>> romanizePreview(
@@ -1560,6 +1693,19 @@ class _IdleTikTokLiveController extends TikTokLiveController {
     status: TikTokLiveStatus.idle,
     message: 'Listo para conectar.',
   );
+}
+
+class _AnonymousYouTubeMusicSessionStore implements YouTubeMusicSessionStore {
+  const _AnonymousYouTubeMusicSessionStore();
+
+  @override
+  Future<void> delete() async {}
+
+  @override
+  Future<YouTubeMusicSessionCredential?> read() async => null;
+
+  @override
+  Future<void> write(YouTubeMusicSessionCredential credential) async {}
 }
 
 class _EmptyPlaylistsController extends PlaylistsController {

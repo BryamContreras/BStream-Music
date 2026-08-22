@@ -12,12 +12,16 @@ import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../services/player/player_service.dart';
+import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
+import '../../domain/entities/playlist_entry.dart';
+import '../providers/local_audio_availability.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'now_playing_equalizer.dart';
 import 'playlist_picker_dialog.dart';
+import 'playlist_track_subtitle.dart';
 import 'scrolled_under_tab_frame.dart';
 import 'source_image.dart';
 import 'track_play_button.dart';
@@ -170,6 +174,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   Widget build(BuildContext context) {
     final tracks = ref.watch(libraryTracksProvider);
     final playlists = ref.watch(playlistsControllerProvider);
+    final catalogPlaylists = ref.watch(catalogPlaylistsProvider);
     final liveQueue = _supportsTikTokLive
         ? ref.watch(tiktokLiveControllerProvider)
         : null;
@@ -210,6 +215,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
           _LibraryRouteType.root => _LibraryRootView(
             tracks: tracks,
             playlists: playlists,
+            catalogPlaylists: catalogPlaylists,
             strings: strings,
             onOpenDownloads: _openDownloads,
             liveQueue: liveQueue,
@@ -282,62 +288,116 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                   onBack: _goRoot,
                 );
               }
-              return tracks.when(
-                data: (libraryTracks) {
-                  final byId = {
-                    for (final track in libraryTracks) track.id: track,
-                  };
-                  final playlistTracks = playlist.trackIds
-                      .map((id) => byId[id])
-                      .whereType<LocalTrack>()
-                      .toList(growable: false);
-                  return _TrackListView(
-                    title: playlist.isFavorites
-                        ? strings.favorites
-                        : playlist.name,
-                    subtitle: strings.songCountWithDuration(
-                      playlistTracks.length,
-                      sumKnownDurations(
-                        playlistTracks.map((track) => track.duration),
-                      ),
-                    ),
-                    tracks: _filteredTracks(playlistTracks),
-                    queueTracks: playlistTracks,
-                    filterController: _filterController,
-                    onBack: _goRoot,
-                    onOpenPlayer: widget.onOpenPlayer,
-                    mode: _TrackListMode.playlist,
-                    playlist: playlist,
-                    playlistId: playlist.id,
-                    selectionEnabled: enablesTrackSelection,
-                    selectionBusy: _selectionActionInProgress,
-                    selectedTrackIds: _selectedTrackIds,
-                    onSelectTrack: _selectTrack,
-                    onToggleTrack: _toggleTrackSelection,
-                    onClearSelection: _clearTrackSelection,
-                    onAddSelected: (context) => _addSelectedTracksToPlaylist(
-                      context,
-                      allTracks: libraryTracks,
-                      currentPlaylistId: playlist.id,
-                    ),
-                    onDeleteSelected: (context) =>
-                        _removeSelectedTracksFromPlaylist(
-                          context,
-                          playlist,
-                          playlistTracks,
+              return ref
+                  .watch(catalogPlaylistProvider(playlist.id))
+                  .when(
+                    data: (catalogPlaylist) {
+                      if (catalogPlaylist == null) {
+                        return _PanelError(
+                          error: strings.playlistMissing,
+                          onBack: _goRoot,
+                          title: playlist.isFavorites
+                              ? strings.favorites
+                              : playlist.name,
+                        );
+                      }
+                      return tracks.when(
+                        data: (libraryTracks) {
+                          final allItems = _catalogDisplayItems(
+                            catalogPlaylist,
+                            libraryTracks,
+                          );
+                          // A legacy backup can briefly expose playlist.trackIds
+                          // before its v8 catalog entries are repaired. Keep the
+                          // old local-only view as a recovery path instead of
+                          // presenting an empty playlist.
+                          if (allItems.isEmpty &&
+                              playlist.trackIds.isNotEmpty) {
+                            final byId = <String, LocalTrack>{
+                              for (final track in libraryTracks)
+                                track.id: track,
+                            };
+                            final playlistTracks = playlist.trackIds
+                                .map((id) => byId[id])
+                                .whereType<LocalTrack>()
+                                .toList(growable: false);
+                            return _TrackListView(
+                              title: playlist.isFavorites
+                                  ? strings.favorites
+                                  : playlist.name,
+                              subtitle: strings.songCountWithDuration(
+                                playlistTracks.length,
+                                sumKnownDurations(
+                                  playlistTracks.map((track) => track.duration),
+                                ),
+                              ),
+                              tracks: _filteredTracks(playlistTracks),
+                              queueTracks: playlistTracks,
+                              filterController: _filterController,
+                              onBack: _goRoot,
+                              onOpenPlayer: widget.onOpenPlayer,
+                              mode: _TrackListMode.playlist,
+                              playlist: playlist,
+                              playlistId: playlist.id,
+                              selectionEnabled: enablesTrackSelection,
+                              selectionBusy: _selectionActionInProgress,
+                              selectedTrackIds: _selectedTrackIds,
+                              onSelectTrack: _selectTrack,
+                              onToggleTrack: _toggleTrackSelection,
+                              onClearSelection: _clearTrackSelection,
+                              onAddSelected: (context) =>
+                                  _addSelectedTracksToPlaylist(
+                                    context,
+                                    allTracks: libraryTracks,
+                                    currentPlaylistId: playlist.id,
+                                  ),
+                              onDeleteSelected: (context) =>
+                                  _removeSelectedTracksFromPlaylist(
+                                    context,
+                                    playlist,
+                                    playlistTracks,
+                                  ),
+                            );
+                          }
+                          return _CatalogTrackListView(
+                            title: playlist.isFavorites
+                                ? strings.favorites
+                                : playlist.name,
+                            subtitle: strings.songCountWithDuration(
+                              allItems.length,
+                              sumKnownDurations(
+                                allItems.map((item) => item.duration),
+                              ),
+                            ),
+                            items: _filteredCatalogItems(allItems),
+                            queueItems: allItems,
+                            filterController: _filterController,
+                            onBack: _goRoot,
+                            onOpenPlayer: widget.onOpenPlayer,
+                            playlist: playlist,
+                          );
+                        },
+                        loading: () =>
+                            const _PanelLoading(key: ValueKey('playlist-load')),
+                        error: (error, _) => _PanelError(
+                          error: error,
+                          onBack: _goRoot,
+                          title: playlist.isFavorites
+                              ? strings.favorites
+                              : playlist.name,
                         ),
+                      );
+                    },
+                    loading: () =>
+                        const _PanelLoading(key: ValueKey('playlist-load')),
+                    error: (error, _) => _PanelError(
+                      error: error,
+                      onBack: _goRoot,
+                      title: playlist.isFavorites
+                          ? strings.favorites
+                          : playlist.name,
+                    ),
                   );
-                },
-                loading: () =>
-                    const _PanelLoading(key: ValueKey('playlist-load')),
-                error: (error, _) => _PanelError(
-                  error: error,
-                  onBack: _goRoot,
-                  title: playlist.isFavorites
-                      ? strings.favorites
-                      : playlist.name,
-                ),
-              );
             },
             loading: () => const _PanelLoading(key: ValueKey('playlists-load')),
             error: (error, _) => _PanelError(
@@ -479,6 +539,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
               !playlist.isFavorites && playlist.id != currentPlaylistId,
         )
         .toList(growable: false);
+    final catalogPlaylists = await ref.read(catalogPlaylistsProvider.future);
     if (!mounted) {
       return;
     }
@@ -497,6 +558,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
         title: ref.read(appStringsProvider).choosePlaylist,
         playlists: playlists,
         tracks: allTracks,
+        catalogPlaylists: catalogPlaylists,
       ),
     );
     if (playlistId == null || !mounted) {
@@ -691,6 +753,23 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
         .toList(growable: false);
   }
 
+  List<_CatalogDisplayItem> _filteredCatalogItems(
+    List<_CatalogDisplayItem> items,
+  ) {
+    final query = _filter.trim().toLowerCase();
+    if (query.isEmpty) {
+      return items;
+    }
+    return items
+        .where(
+          (item) =>
+              item.title.toLowerCase().contains(query) ||
+              item.artist.toLowerCase().contains(query) ||
+              (item.album?.toLowerCase().contains(query) ?? false),
+        )
+        .toList(growable: false);
+  }
+
   Future<void> _showCreateDialog(BuildContext context) async {
     final strings = ref.read(appStringsProvider);
     final rawName = await showDialog<String>(
@@ -756,6 +835,7 @@ class _LibraryRootView extends StatelessWidget {
   const _LibraryRootView({
     required this.tracks,
     required this.playlists,
+    required this.catalogPlaylists,
     required this.liveQueue,
     required this.strings,
     required this.onOpenDownloads,
@@ -766,6 +846,7 @@ class _LibraryRootView extends StatelessWidget {
 
   final AsyncValue<List<LocalTrack>> tracks;
   final AsyncValue<List<Playlist>> playlists;
+  final AsyncValue<List<CatalogPlaylist>> catalogPlaylists;
   final AsyncValue<TikTokLiveState>? liveQueue;
   final AppStrings strings;
   final VoidCallback onOpenDownloads;
@@ -776,6 +857,10 @@ class _LibraryRootView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final localTracks = tracks.value ?? const <LocalTrack>[];
+    final catalogsById = <String, CatalogPlaylist>{
+      for (final catalog in catalogPlaylists.value ?? const <CatalogPlaylist>[])
+        catalog.playlist.id: catalog,
+    };
 
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('library-tab-header-surface'),
@@ -870,6 +955,7 @@ class _LibraryRootView extends StatelessWidget {
             data: (items) => _PlaylistList(
               playlists: items,
               libraryTracks: localTracks,
+              catalogPlaylists: catalogsById,
               strings: strings,
               onOpenPlaylist: onOpenPlaylist,
             ),
@@ -1176,6 +1262,428 @@ class _LiveQueueStatusIcon extends StatelessWidget {
             : Icon(icon, color: color, size: 28),
       ),
     );
+  }
+}
+
+class _CatalogDisplayItem {
+  const _CatalogDisplayItem({required this.entry, this.playback});
+
+  final PlaylistEntry entry;
+  final CatalogPlaybackItem? playback;
+
+  LocalTrack? get localTrack => playback?.localTrack;
+  bool get isPlayable => playback != null;
+  String get title => localTrack?.title ?? entry.track.title;
+  String get artist {
+    final localArtist = localTrack?.artist.trim();
+    if (localArtist != null && localArtist.isNotEmpty) {
+      return localArtist;
+    }
+    return entry.track.artists.join(', ');
+  }
+
+  String? get album => localTrack?.album ?? entry.track.album;
+  Duration? get duration => localTrack?.duration ?? entry.track.duration;
+  String? get artworkSource {
+    final localPath = localTrack?.thumbnailPath?.trim();
+    if (localPath != null && localPath.isNotEmpty) {
+      return localPath;
+    }
+    final localUrl = localTrack?.thumbnailUrl?.trim();
+    if (localUrl != null && localUrl.isNotEmpty) {
+      return localUrl;
+    }
+    final catalogUrl = entry.track.thumbnailUrl?.trim();
+    return catalogUrl == null || catalogUrl.isEmpty ? null : catalogUrl;
+  }
+
+  String? get artworkFallbackSource {
+    final primary = artworkSource;
+    final candidates = <String?>[
+      localTrack?.thumbnailUrl,
+      entry.track.thumbnailUrl,
+    ];
+    for (final candidate in candidates) {
+      final normalized = candidate?.trim();
+      if (normalized != null &&
+          normalized.isNotEmpty &&
+          normalized != primary) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+
+  bool matchesSnapshot(PlayerSnapshot? snapshot) {
+    final trackId = snapshot?.trackId;
+    return trackId != null &&
+        (trackId == playback?.localTrack?.id ||
+            trackId == playback?.remoteTrack?.id);
+  }
+}
+
+List<_CatalogDisplayItem> _catalogDisplayItems(
+  CatalogPlaylist playlist,
+  Iterable<LocalTrack> libraryTracks,
+) {
+  final playbackByEntry = <String, CatalogPlaybackItem>{
+    for (final item in catalogPlaylistPlaybackItems(playlist, libraryTracks))
+      item.entryId: item,
+  };
+  final entries = playlist.entries.where((entry) => !entry.isDeleted).toList()
+    ..sort((left, right) {
+      final byPosition = left.position.compareTo(right.position);
+      return byPosition != 0 ? byPosition : left.id.compareTo(right.id);
+    });
+  return List<_CatalogDisplayItem>.unmodifiable(
+    entries.map(
+      (entry) => _CatalogDisplayItem(
+        entry: entry,
+        playback: playbackByEntry[entry.id],
+      ),
+    ),
+  );
+}
+
+List<String> _catalogPlaylistThumbnailSources(List<_CatalogDisplayItem> items) {
+  return items
+      .map((item) => item.artworkSource)
+      .whereType<String>()
+      .where((source) => source.trim().isNotEmpty)
+      .toSet()
+      .take(4)
+      .toList(growable: false);
+}
+
+class _CatalogTrackListView extends ConsumerWidget {
+  const _CatalogTrackListView({
+    required this.title,
+    required this.subtitle,
+    required this.items,
+    required this.queueItems,
+    required this.filterController,
+    required this.onBack,
+    required this.onOpenPlayer,
+    required this.playlist,
+  });
+
+  final String title;
+  final String subtitle;
+  final List<_CatalogDisplayItem> items;
+  final List<_CatalogDisplayItem> queueItems;
+  final TextEditingController filterController;
+  final VoidCallback onBack;
+  final VoidCallback onOpenPlayer;
+  final Playlist playlist;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final strings = ref.watch(appStringsProvider);
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: _DetailHeader(
+              key: const ValueKey('library-detail-header'),
+              title: title,
+              subtitle: subtitle,
+              onBack: onBack,
+              trailing: playlist.isFavorites
+                  ? null
+                  : _PlaylistMenu(playlist: playlist, onBack: onBack),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: TextField(
+              controller: filterController,
+              decoration: InputDecoration(
+                hintText: strings.filterSongs,
+                prefixIcon: const Icon(Icons.search_rounded),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: items.isEmpty
+                ? Center(
+                    child: Text(
+                      strings.noSongsToShow,
+                      style: TextStyle(
+                        color: AppColors.contentSubtitleFor(context),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) => Padding(
+                      padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                      child: _CatalogTrackTile(
+                        key: ValueKey(
+                          'library-catalog-entry-${items[index].entry.id}',
+                        ),
+                        item: items[index],
+                        queueItems: queueItems,
+                        playlist: playlist,
+                        onOpenPlayer: onOpenPlayer,
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CatalogTrackTile extends ConsumerStatefulWidget {
+  const _CatalogTrackTile({
+    required this.item,
+    required this.queueItems,
+    required this.playlist,
+    required this.onOpenPlayer,
+    super.key,
+  });
+
+  final _CatalogDisplayItem item;
+  final List<_CatalogDisplayItem> queueItems;
+  final Playlist playlist;
+  final VoidCallback onOpenPlayer;
+
+  @override
+  ConsumerState<_CatalogTrackTile> createState() => _CatalogTrackTileState();
+}
+
+class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final strings = ref.watch(appStringsProvider);
+    final snapshot = ref.watch(playerControllerProvider).value;
+    final queue = ref.watch(playbackQueueProvider);
+    final isCurrent = _isCurrentOccurrence(snapshot, queue);
+    final isPlaying = isCurrent && snapshot?.status == PlayerStatus.playing;
+    final localTrack = widget.item.localTrack;
+    final isDownloaded =
+        localTrack != null &&
+        ref
+            .watch(localTrackAudioAvailabilityProvider(localTrack))
+            .maybeWhen(data: (available) => available, orElse: () => true);
+    final borderRadius = BorderRadius.circular(appCardRadius);
+    final baseColor = appListCardSurface(context);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        decoration: BoxDecoration(
+          color: _hovered
+              ? Color.alphaBlend(
+                  colors.onSurface.withValues(alpha: 0.075),
+                  baseColor,
+                )
+              : baseColor,
+          borderRadius: borderRadius,
+          border: Border.all(
+            color: _hovered ? colors.primary : appListCardBorder(context),
+            width: _hovered ? 1.4 : 1,
+          ),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: ListTile(
+            minTileHeight: _libraryArtworkRowMinHeight,
+            minVerticalPadding: 7,
+            contentPadding: _libraryOverviewContentPadding,
+            horizontalTitleGap: 10,
+            shape: RoundedRectangleBorder(borderRadius: borderRadius),
+            leading: Stack(
+              children: <Widget>[
+                _LocalArtwork(
+                  source: widget.item.artworkSource,
+                  fallbackSource: widget.item.artworkFallbackSource,
+                ),
+                if (isDownloaded)
+                  Positioned(
+                    right: 1,
+                    bottom: 1,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: colors.surface.withValues(alpha: 0.9),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(2),
+                        child: Icon(
+                          Icons.download_done_rounded,
+                          size: 14,
+                          color: colors.primary,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (isCurrent)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: NowPlayingEqualizer(isPlaying: isPlaying),
+                    ),
+                  ),
+              ],
+            ),
+            title: Text(
+              widget.item.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
+                color: AppColors.contentTitleFor(context),
+              ),
+            ),
+            subtitle: PlaylistTrackSubtitle(
+              artist: widget.item.artist,
+              duration: formatDuration(widget.item.duration),
+              isDownloaded: isDownloaded,
+              streamOnlyLabel: strings.streamOnlySong,
+              cloudKey: ValueKey(
+                'library-catalog-cloud-${widget.item.entry.id}',
+              ),
+              textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.contentSubtitleFor(context),
+              ),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                TrackPlayButton(
+                  key: ValueKey('library-catalog-play-${widget.item.entry.id}'),
+                  tooltip: widget.item.isPlayable
+                      ? isPlaying
+                            ? strings.pause
+                            : strings.play
+                      : strings.choose(
+                          'Canción no disponible en YouTube Music',
+                          'Song unavailable on YouTube Music',
+                        ),
+                  isPlaying: isPlaying,
+                  onPressed: widget.item.isPlayable ? _togglePlayback : null,
+                ),
+                SizedBox.square(
+                  dimension: 44,
+                  child: PopupMenuButton<_TrackMenuAction>(
+                    key: ValueKey(
+                      'library-catalog-menu-${widget.item.entry.id}',
+                    ),
+                    tooltip: strings.moreOptions,
+                    icon: const Icon(Icons.more_vert_rounded),
+                    onSelected: (action) async {
+                      if (action == _TrackMenuAction.removeFromPlaylist) {
+                        await ref
+                            .read(playlistsControllerProvider.notifier)
+                            .removeCatalogEntry(
+                              widget.playlist.id,
+                              widget.item.entry.id,
+                            );
+                      }
+                    },
+                    itemBuilder: (context) =>
+                        <PopupMenuEntry<_TrackMenuAction>>[
+                          PopupMenuItem<_TrackMenuAction>(
+                            value: _TrackMenuAction.removeFromPlaylist,
+                            child: Row(
+                              children: <Widget>[
+                                const Icon(Icons.playlist_remove_rounded),
+                                const SizedBox(width: 12),
+                                Text(
+                                  widget.playlist.isFavorites
+                                      ? strings.removeFromFavorites
+                                      : strings.removeFromPlaylist,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                  ),
+                ),
+              ],
+            ),
+            onTap: widget.item.isPlayable ? _openOrPlay : null,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _togglePlayback() async {
+    if (!widget.item.isPlayable) return;
+    final snapshot = ref.read(playerControllerProvider).value;
+    final queue = ref.read(playbackQueueProvider);
+    final player = ref.read(playerControllerProvider.notifier);
+    if (_isCurrentOccurrence(snapshot, queue)) {
+      if (snapshot?.status == PlayerStatus.playing) {
+        await player.pause();
+        return;
+      }
+      if (snapshot?.status == PlayerStatus.paused) {
+        await player.resume();
+        return;
+      }
+    }
+    await _play(player);
+  }
+
+  Future<void> _openOrPlay() async {
+    if (!widget.item.isPlayable) return;
+    final snapshot = ref.read(playerControllerProvider).value;
+    final queue = ref.read(playbackQueueProvider);
+    final alreadyLoaded =
+        _isCurrentOccurrence(snapshot, queue) &&
+        (snapshot?.status == PlayerStatus.loading ||
+            snapshot?.status == PlayerStatus.playing ||
+            snapshot?.status == PlayerStatus.paused);
+    if (alreadyLoaded) {
+      widget.onOpenPlayer();
+      return;
+    }
+    final player = ref.read(playerControllerProvider.notifier);
+    final future = _play(player);
+    widget.onOpenPlayer();
+    await future;
+  }
+
+  Future<void> _play(PlayerController player) {
+    final playback = widget.item.playback;
+    if (playback == null) return Future<void>.value();
+    return player.playCatalogPlaylist(
+      playback,
+      queue: widget.queueItems
+          .map((item) => item.playback)
+          .whereType<CatalogPlaybackItem>()
+          .toList(growable: false),
+      playlistId: widget.playlist.id,
+    );
+  }
+
+  bool _isCurrentOccurrence(
+    PlayerSnapshot? snapshot,
+    PlaybackQueueState queue,
+  ) {
+    final currentLogicalEntryId =
+        queue.currentIndex >= 0 && queue.currentIndex < queue.entries.length
+        ? queue.entries[queue.currentIndex].logicalEntryId
+        : null;
+    return currentLogicalEntryId != null
+        ? currentLogicalEntryId == widget.item.entry.id
+        : widget.item.matchesSnapshot(snapshot);
   }
 }
 
@@ -1520,7 +2028,13 @@ class _PlaylistMenu extends ConsumerWidget {
                   color: menuIconColor,
                 ),
                 const SizedBox(width: 12),
-                Text(strings.renamePlaylist),
+                Expanded(
+                  child: Text(
+                    strings.renamePlaylist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1530,7 +2044,13 @@ class _PlaylistMenu extends ConsumerWidget {
               children: [
                 Icon(Icons.delete_outline_rounded, color: menuIconColor),
                 const SizedBox(width: 12),
-                Text(strings.deletePlaylist),
+                Expanded(
+                  child: Text(
+                    strings.deletePlaylist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1582,39 +2102,80 @@ class _PlaylistMenu extends ConsumerWidget {
 
   Future<void> _deletePlaylist(BuildContext context, WidgetRef ref) async {
     final strings = ref.read(appStringsProvider);
-    final confirmed = await showDialog<bool>(
+    final controller = ref.read(playlistsControllerProvider.notifier);
+    final options = await controller.playlistDeleteOptions(playlist.id);
+    if (!context.mounted) return;
+    final scope = await showDialog<PlaylistDeleteScope>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
+        final linked = options.isYouTubeMusicLinked;
+        final canDeleteRemote = options.canDeleteFromYouTubeMusic;
         return AlertDialog(
           title: Text(strings.deletePlaylist),
-          content: Text(strings.confirmDeletePlaylist),
+          content: Text(
+            linked
+                ? canDeleteRemote
+                      ? strings.confirmDeleteSyncedPlaylist
+                      : strings.confirmDeleteReadOnlySyncedPlaylist
+                : strings.confirmDeletePlaylist,
+          ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: Text(strings.cancel),
             ),
-            FilledButton.icon(
-              icon: const Icon(Icons.delete_outline_rounded),
-              label: Text(strings.delete),
-              onPressed: () => Navigator.of(context).pop(true),
-            ),
+            if (linked)
+              TextButton(
+                key: const Key('playlist-delete-local-only'),
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                ).pop(PlaylistDeleteScope.localOnly),
+                child: Text(strings.removePlaylistFromBStream),
+              )
+            else
+              FilledButton.icon(
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: Text(strings.delete),
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                ).pop(PlaylistDeleteScope.localOnly),
+              ),
+            if (canDeleteRemote)
+              FilledButton.icon(
+                key: const Key('playlist-delete-youtube-too'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(dialogContext).colorScheme.error,
+                  foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+                ),
+                icon: const Icon(Icons.delete_forever_outlined),
+                label: Text(strings.deletePlaylistFromYouTubeMusic),
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                ).pop(PlaylistDeleteScope.youtubeMusicToo),
+              ),
           ],
         );
       },
     );
-    if (confirmed != true) {
+    if (scope == null) {
       return;
     }
 
-    await ref
-        .read(playlistsControllerProvider.notifier)
-        .deletePlaylist(playlist.id);
+    await controller.deletePlaylist(playlist.id, scope: scope);
     if (!context.mounted) {
       return;
     }
     onBack();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ref.read(appStringsProvider).playlistDeleted)),
+      SnackBar(
+        content: Text(
+          scope == PlaylistDeleteScope.youtubeMusicToo
+              ? ref
+                    .read(appStringsProvider)
+                    .youtubeMusicPlaylistDeletionScheduled
+              : ref.read(appStringsProvider).playlistDeleted,
+        ),
+      ),
     );
   }
 }
@@ -1736,12 +2297,14 @@ class _PlaylistList extends StatelessWidget {
   const _PlaylistList({
     required this.playlists,
     required this.libraryTracks,
+    required this.catalogPlaylists,
     required this.strings,
     required this.onOpenPlaylist,
   });
 
   final List<Playlist> playlists;
   final List<LocalTrack> libraryTracks;
+  final Map<String, CatalogPlaylist> catalogPlaylists;
   final AppStrings strings;
   final ValueChanged<String> onOpenPlaylist;
 
@@ -1769,16 +2332,26 @@ class _PlaylistList extends StatelessWidget {
             .map((id) => tracksById[id])
             .whereType<LocalTrack>()
             .toList(growable: false);
+        final catalog = catalogPlaylists[playlist.id];
+        final catalogItems = catalog == null
+            ? const <_CatalogDisplayItem>[]
+            : _catalogDisplayItems(catalog, libraryTracks);
+        final itemCount = catalog == null
+            ? playlistTracks.length
+            : catalogItems.length;
+        final duration = catalog == null
+            ? sumKnownDurations(playlistTracks.map((track) => track.duration))
+            : sumKnownDurations(catalogItems.map((item) => item.duration));
+        final thumbnailSources = catalog == null
+            ? _playlistThumbnailSources(playlist, tracksById)
+            : _catalogPlaylistThumbnailSources(catalogItems);
         return Padding(
           padding: const EdgeInsets.fromLTRB(6, 0, 6, appCardGap),
           child: _PlaylistRow(
             key: ValueKey('library-playlist-${playlist.id}'),
             playlist: playlist,
-            thumbnailSources: _playlistThumbnailSources(playlist, tracksById),
-            subtitle: strings.songCountWithDuration(
-              playlistTracks.length,
-              sumKnownDurations(playlistTracks.map((track) => track.duration)),
-            ),
+            thumbnailSources: thumbnailSources,
+            subtitle: strings.songCountWithDuration(itemCount, duration),
             strings: strings,
             onTap: () => onOpenPlaylist(playlist.id),
           ),
@@ -2191,6 +2764,9 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     final menuButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
     final menuItemIconColor = AppColors.menuIconFor(context);
+    final localAudioAvailable = ref
+        .watch(localTrackAudioAvailabilityProvider(track))
+        .maybeWhen(data: (available) => available, orElse: () => true);
     final borderRadius = BorderRadius.circular(appCardRadius);
     final baseColor = AppColors.cardSurfaceFor(context);
     final borderColor = selected
@@ -2273,11 +2849,14 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                   color: AppColors.contentTitleFor(context),
                 ),
               ),
-              subtitle: Text(
-                '${track.artist}  -  ${formatDuration(track.duration)}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              subtitle: PlaylistTrackSubtitle(
+                artist: track.artist,
+                duration: formatDuration(track.duration),
+                isDownloaded:
+                    mode != _TrackListMode.playlist || localAudioAvailable,
+                streamOnlyLabel: strings.streamOnlySong,
+                cloudKey: ValueKey('library-legacy-cloud-${track.id}'),
+                textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: AppColors.contentSubtitleFor(context),
                 ),
               ),
@@ -2767,9 +3346,10 @@ Future<void> _deleteFileBestEffort(String path) async {
 }
 
 class _LocalArtwork extends StatelessWidget {
-  const _LocalArtwork({required this.source, super.key});
+  const _LocalArtwork({required this.source, this.fallbackSource, super.key});
 
   final String? source;
+  final String? fallbackSource;
 
   @override
   Widget build(BuildContext context) {
@@ -2784,6 +3364,7 @@ class _LocalArtwork extends StatelessWidget {
           ),
           child: ProportionalArtwork(
             source: source,
+            fallbackSource: fallbackSource,
             cacheWidth: 256,
             fallback: Icon(
               Icons.audiotrack_rounded,

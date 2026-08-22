@@ -130,7 +130,7 @@ void main() {
         url: 'https://www.youtube.com/watch?v=fallback001',
       );
       for (final category in SearchCategory.values) {
-        final failure = StateError('${category.name} unavailable');
+        final failure = InnerTubeException('${category.name} unavailable');
         final catalog = _FakeYouTubeMusicSearch(
           error: category == SearchCategory.songs ? failure : null,
           videoError: category == SearchCategory.videos ? failure : null,
@@ -306,7 +306,9 @@ void main() {
     });
 
     test('falls back to normal YouTube search when catalog fails', () async {
-      final catalog = _FakeYouTubeMusicSearch(error: StateError('offline'));
+      final catalog = _FakeYouTubeMusicSearch(
+        error: const InnerTubeException('offline'),
+      );
       const fallback = TrackInfo(
         id: 'fallback',
         title: 'YouTube result',
@@ -327,6 +329,26 @@ void main() {
       expect(downloader.searchQueries, ['catalog request fails']);
       expect(results, const [fallback]);
     });
+
+    test(
+      'does not hide programming errors behind the yt-dlp fallback',
+      () async {
+        final failure = StateError('parser invariant was violated');
+        final catalog = _FakeYouTubeMusicSearch(error: failure);
+        final downloader = _FakeDownloaderService(searchResults: const []);
+        final dataSource = RemoteMusicDataSource(
+          downloader,
+          youtubeMusicSearch: catalog,
+        );
+
+        await expectLater(dataSource.search('query'), throwsA(same(failure)));
+        await expectLater(
+          dataSource.searchCategory('query', SearchCategory.songs),
+          throwsA(same(failure)),
+        );
+        expect(downloader.searchQueries, isEmpty);
+      },
+    );
 
     test(
       'falls back when InnerTube only returns unrelated suggestions',

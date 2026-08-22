@@ -8,12 +8,14 @@ class SourceImage extends StatefulWidget {
   const SourceImage({
     required this.source,
     required this.fallback,
+    this.fallbackSource,
     this.fit = BoxFit.cover,
     this.cacheWidth = _maximumDecodedDimension,
     super.key,
   });
 
   final String? source;
+  final String? fallbackSource;
   final BoxFit fit;
   final int cacheWidth;
   final Widget fallback;
@@ -63,20 +65,21 @@ class _SourceImageState extends State<SourceImage> {
   @override
   Widget build(BuildContext context) {
     final normalized = widget.source?.trim();
+    final fallback = _resolvedFallback(normalized);
     if (normalized == null || normalized.isEmpty) {
-      return widget.fallback;
+      return fallback;
     }
     if (isNetworkImageSource(normalized)) {
       return _networkArtwork(
         candidates: youtubeThumbnailCandidates(normalized),
         fit: widget.fit,
-        fallback: widget.fallback,
+        fallback: fallback,
       );
     }
 
     final file = imageFileFromSource(normalized);
     if (file == null) {
-      return widget.fallback;
+      return fallback;
     }
 
     if (_localSource != normalized || _localExists == null) {
@@ -84,19 +87,36 @@ class _SourceImageState extends State<SourceImage> {
     }
     return FutureBuilder<bool>(
       future: _localExists,
-      initialData: false,
       builder: (context, snapshot) {
-        if (snapshot.data != true) {
+        if (snapshot.connectionState != ConnectionState.done) {
           return widget.fallback;
+        }
+        if (snapshot.data != true) {
+          return fallback;
         }
         return Image.file(
           file,
           fit: widget.fit,
           gaplessPlayback: true,
           cacheWidth: widget.cacheWidth,
-          errorBuilder: (_, _, _) => widget.fallback,
+          errorBuilder: (_, _, _) => fallback,
         );
       },
+    );
+  }
+
+  Widget _resolvedFallback(String? primarySource) {
+    final normalizedFallback = widget.fallbackSource?.trim();
+    if (normalizedFallback == null ||
+        normalizedFallback.isEmpty ||
+        normalizedFallback == primarySource) {
+      return widget.fallback;
+    }
+    return SourceImage(
+      source: normalizedFallback,
+      fit: widget.fit,
+      cacheWidth: widget.cacheWidth,
+      fallback: widget.fallback,
     );
   }
 
@@ -132,23 +152,22 @@ class ProportionalArtwork extends StatelessWidget {
   const ProportionalArtwork({
     required this.source,
     required this.fallback,
+    this.fallbackSource,
     this.cacheWidth = SourceImage._maximumDecodedDimension,
     super.key,
   });
 
   final String? source;
+  final String? fallbackSource;
   final Widget fallback;
   final int cacheWidth;
 
   @override
   Widget build(BuildContext context) {
     final normalized = source?.trim();
-    if (normalized == null || normalized.isEmpty) {
-      return fallback;
-    }
-
     return SourceImage(
       source: normalized,
+      fallbackSource: fallbackSource,
       fit: BoxFit.cover,
       cacheWidth: cacheWidth,
       fallback: fallback,

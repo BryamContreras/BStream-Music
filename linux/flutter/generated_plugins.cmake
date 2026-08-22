@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  flutter_secure_storage_linux
   gtk
   media_kit_libs_linux
   url_launcher_linux

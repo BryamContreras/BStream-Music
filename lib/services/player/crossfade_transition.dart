@@ -8,6 +8,89 @@ class CrossfadeGains {
   final double incoming;
 }
 
+enum CrossfadeConfigurationAction { none, checkStart, reset, deferDisable }
+
+class CrossfadeConfigurationDecision {
+  const CrossfadeConfigurationDecision({
+    required this.enabled,
+    required this.disableAfterHandoff,
+    required this.action,
+  });
+
+  final bool enabled;
+  final bool disableAfterHandoff;
+  final CrossfadeConfigurationAction action;
+}
+
+/// Resolves enable/disable changes identically for every playback backend.
+///
+/// Disabling after both decks became audible is intentionally deferred until
+/// promotion; resetting at that point would jump back to the outgoing track.
+CrossfadeConfigurationDecision crossfadeConfigurationDecision({
+  required bool currentEnabled,
+  required bool overlapActive,
+  required bool requestedEnabled,
+}) {
+  if (!requestedEnabled && overlapActive) {
+    return CrossfadeConfigurationDecision(
+      enabled: currentEnabled,
+      disableAfterHandoff: true,
+      action: CrossfadeConfigurationAction.deferDisable,
+    );
+  }
+  if (currentEnabled == requestedEnabled) {
+    return CrossfadeConfigurationDecision(
+      enabled: currentEnabled,
+      disableAfterHandoff: false,
+      action: requestedEnabled
+          ? CrossfadeConfigurationAction.checkStart
+          : CrossfadeConfigurationAction.none,
+    );
+  }
+  return CrossfadeConfigurationDecision(
+    enabled: requestedEnabled,
+    disableAfterHandoff: false,
+    action: requestedEnabled
+        ? CrossfadeConfigurationAction.none
+        : CrossfadeConfigurationAction.reset,
+  );
+}
+
+/// Returns the overlap duration when a prepared second deck should start.
+///
+/// Keeping this gate shared prevents JustAudio and MediaKit from drifting on
+/// short tracks, late position ticks, or minimum handoff safety windows.
+Duration? crossfadeStartDuration({
+  required bool enabled,
+  required bool disposed,
+  required bool overlapActive,
+  required bool promotionInProgress,
+  required bool sourcePrepared,
+  required bool standbyReady,
+  required bool playing,
+  required Duration? trackDuration,
+  required Duration position,
+  required Duration configuredDuration,
+  Duration minimumRemaining = const Duration(milliseconds: 350),
+}) {
+  if (!enabled ||
+      disposed ||
+      overlapActive ||
+      promotionInProgress ||
+      !sourcePrepared ||
+      !standbyReady ||
+      !playing ||
+      trackDuration == null ||
+      trackDuration <= Duration.zero) {
+    return null;
+  }
+  final remaining = trackDuration - position;
+  if (remaining > configuredDuration || remaining < minimumRemaining) {
+    return null;
+  }
+  return remaining < configuredDuration ? remaining : configuredDuration;
+}
+
 CrossfadeGains crossfadeGains({
   required double masterVolume,
   required double progress,

@@ -14,6 +14,7 @@ class LocalTrack {
     this.duration,
     this.album,
     this.artists = const [],
+    this.artistBrowseIds = const [],
     this.metadataSource = TrackMetadataSource.youtube,
     this.sourceId,
     this.lastPlayedAt,
@@ -33,6 +34,7 @@ class LocalTrack {
   final Duration? duration;
   final String? album;
   final List<String> artists;
+  final List<String?> artistBrowseIds;
   final TrackMetadataSource metadataSource;
   final String? sourceId;
   final DateTime? lastPlayedAt;
@@ -54,6 +56,7 @@ class LocalTrack {
     Duration? duration,
     String? album,
     List<String>? artists,
+    List<String?>? artistBrowseIds,
     TrackMetadataSource? metadataSource,
     String? sourceId,
     DateTime? lastPlayedAt,
@@ -73,6 +76,7 @@ class LocalTrack {
       duration: duration ?? this.duration,
       album: album ?? this.album,
       artists: artists ?? this.artists,
+      artistBrowseIds: artistBrowseIds ?? this.artistBrowseIds,
       metadataSource: metadataSource ?? this.metadataSource,
       sourceId: sourceId ?? this.sourceId,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,

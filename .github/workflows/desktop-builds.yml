@@ -33,32 +33,55 @@ env:
 
 jobs:
   quality:
-    name: Format, analyze, and test
+    # Stable candidate for the required status check on protected branches.
+    name: Required quality gate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
       - name: Resolve dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Verify formatting
-        run: dart format --output=none --set-exit-if-changed lib test
+        run: >-
+          dart format --output=none --set-exit-if-changed
+          lib test integration_test tool
 
       - name: Analyze source
         run: flutter analyze
 
       - name: Run tests
-        run: flutter test
+        run: flutter test --coverage
+
+      - name: Test Android yt-dlp update policy
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+          archive: false
 
   metadata:
     name: Read app metadata
@@ -68,18 +91,28 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Read version from pubspec
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          app_version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' pubspec.yaml)"
-          if [[ -z "$app_version" ]]; then
-            echo "Could not read the application version from pubspec.yaml" >&2
+          pubspec_version="$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+)[[:space:]]*(#.*)?$/\1/p' pubspec.yaml)"
+          if [[ ! "$pubspec_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(\+[0-9]+)?$ ]]; then
+            echo "pubspec.yaml must contain one stable X.Y.Z version with an optional numeric build suffix" >&2
             exit 1
           fi
+          app_version="${BASH_REMATCH[1]}"
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            expected_tag="v$app_version"
+            if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+              echo "Release tag '$GITHUB_REF_NAME' must exactly match pubspec version '$expected_tag'" >&2
+              exit 1
+            fi
+          fi
+
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
 
   android:
@@ -97,17 +130,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
@@ -138,7 +171,7 @@ jobs:
       - name: Resolve dependencies
         run: |
           flutter clean
-          flutter pub get
+          flutter pub get --enforce-lockfile
 
       - name: Build ARMv7, ARMv8, and x86_64 APKs
         run: >-
@@ -211,8 +244,15 @@ jobs:
           cp "$arm64" "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk"
           cp "$x64" "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk"
 
+      - name: Enforce Android artifact size budgets
+        run: |
+          # About 10% above the measured 1.2.5 artifacts, including IPADIC.
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk" 49
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk" 51
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 51
+
       - name: Upload Android ARMv7 APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BStream-Music-${{ env.APP_VERSION }}-Android-armeabi-v7a
           path: dist/BStream-Music-${{ env.APP_VERSION }}-Android-armeabi-v7a.apk
@@ -221,7 +261,7 @@ jobs:
           archive: false
 
       - name: Upload Android ARMv8 APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BStream-Music-${{ env.APP_VERSION }}-Android-arm64-v8a
           path: dist/BStream-Music-${{ env.APP_VERSION }}-Android-arm64-v8a.apk
@@ -230,7 +270,7 @@ jobs:
           archive: false
 
       - name: Upload Android x86_64 APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BStream-Music-${{ env.APP_VERSION }}-Android-x86_64
           path: dist/BStream-Music-${{ env.APP_VERSION }}-Android-x86_64.apk
@@ -248,10 +288,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
@@ -264,7 +304,7 @@ jobs:
           rustup target add x86_64-pc-windows-msvc
 
       - name: Resolve dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Prepare yt-dlp and Deno
         shell: pwsh
@@ -401,6 +441,12 @@ jobs:
           $installer = Join-Path $PWD "dist/BStream-Music-$env:APP_VERSION-Windows-x64-Setup.exe"
           if (!(Test-Path -LiteralPath $installer)) { throw "The Windows installer was not generated." }
 
+      - name: Enforce Windows installer size budget
+        shell: pwsh
+        run: >-
+          dart run tool/check_artifact_size.dart
+          "dist/BStream-Music-$env:APP_VERSION-Windows-x64-Setup.exe" 88
+
       - name: Smoke-test Windows installer
         shell: pwsh
         run: |
@@ -465,7 +511,7 @@ jobs:
           if ($uninstall.ExitCode -ne 0) { throw "Uninstaller smoke test failed with exit code $($uninstall.ExitCode)." }
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BStream-Music-${{ env.APP_VERSION }}-Windows-x64-Setup
           path: dist/BStream-Music-${{ env.APP_VERSION }}-Windows-x64-Setup.exe
@@ -483,7 +529,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Linux build and packaging dependencies
         run: |
@@ -502,14 +548,14 @@ jobs:
             unzip
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
       - name: Resolve dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Prepare yt-dlp and Deno
         shell: bash
@@ -587,8 +633,13 @@ jobs:
             "$APP_VERSION" \
             "$PWD/dist"
 
+      - name: Enforce Linux installer size budgets
+        run: |
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-linux-amd64.deb" 108
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-linux-x86_64.rpm" 121
+
       - name: Upload Debian installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BStream-Music-${{ env.APP_VERSION }}-Linux-DEB-amd64
           path: dist/BStream-Music-${{ env.APP_VERSION }}-linux-amd64.deb
@@ -597,7 +648,7 @@ jobs:
           archive: false
 
       - name: Upload RPM installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BStream-Music-${{ env.APP_VERSION }}-Linux-RPM-x86_64
           path: dist/BStream-Music-${{ env.APP_VERSION }}-linux-x86_64.rpm
@@ -619,13 +670,15 @@ jobs:
           - runner: macos-26
             arch: arm64
             host_arch: arm64
+            max_mib: 134
           - runner: macos-26-intel
             arch: x64
             host_arch: x86_64
+            max_mib: 140
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Verify runner architecture
         shell: bash
@@ -638,14 +691,14 @@ jobs:
           fi
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
       - name: Resolve dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Prepare yt-dlp and Deno
         shell: bash
@@ -812,8 +865,14 @@ jobs:
             "${{ matrix.host_arch }}" \
             "$YT_DLP_MACOS_SHA256"
 
+      - name: Enforce macOS installer size budget
+        run: >-
+          dart run tool/check_artifact_size.dart
+          "dist/BStream-Music-$APP_VERSION-macOS-${{ matrix.arch }}.pkg"
+          ${{ matrix.max_mib }}
+
       - name: Upload macOS installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: BStream-Music-${{ env.APP_VERSION }}-macOS-${{ matrix.arch }}
           path: dist/BStream-Music-${{ env.APP_VERSION }}-macOS-${{ matrix.arch }}.pkg
