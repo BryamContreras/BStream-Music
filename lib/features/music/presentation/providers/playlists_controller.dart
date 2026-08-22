@@ -88,11 +88,15 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     );
   }
 
-  /// Adds a catalog entry without forcing an audio download first.
+  /// Adds a catalog entry and queues a download for user-created playlist
+  /// additions. Account synchronization uses the catalog/database ports
+  /// directly, so it never invokes this method and therefore never downloads
+  /// every imported song implicitly.
   Future<PlaylistEntry?> addRemoteTrackToPlaylist(
     String playlistId,
-    TrackInfo track,
-  ) async {
+    TrackInfo track, {
+    bool download = true,
+  }) async {
     final videoId = _youtubeVideoId(track);
     if (videoId == null) {
       return null;
@@ -117,6 +121,13 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
           ),
           now: DateTime.now(),
         );
+    if (download) {
+      // Queueing is deliberately non-blocking: adding the entry remains
+      // immediate even when resolution or the network takes a while.
+      unawaited(
+        ref.read(downloadControllerProvider.notifier).downloadAudio(track),
+      );
+    }
     await _reloadCatalogState();
     await _syncActivePlaybackQueueById(playlistId);
     _requestYouTubeMusicSync();

@@ -177,6 +177,22 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         // source with the network stream.
         return;
       }
+      // A remote-to-remote handoff can briefly publish the outgoing native
+      // item as stopped (or as a local/idle snapshot) before the replacement
+      // source is ready.  That snapshot belongs to the previous selection;
+      // allowing it through would move `_queueIndex` back and cancel the new
+      // resolver, making the Next button appear to do nothing until the old
+      // song completes.  Keep the pending selection authoritative until the
+      // backend identifies that same queue entry/track.
+      final pendingRemote = _pendingRemoteSnapshot;
+      final activeRemote = _playingRemoteTrack;
+      if (!internalRemoteTransition &&
+          pendingRemote != null &&
+          !_snapshotMatchesPending(snapshot, pendingRemote) &&
+          !(activeRemote != null &&
+              _isCachedRemoteSnapshot(snapshot, activeRemote))) {
+        return;
+      }
       final queueIndexChanged = _syncQueueIndexFromSnapshot(snapshot);
       if (snapshot.isRemote) {
         _activePlaybackIsRemote = true;
@@ -3055,7 +3071,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (pending != null && !_snapshotMatchesPending(snapshot, pending)) {
       return pending.copyWith(
         volume: snapshot.volume,
-        thumbnailUrl: snapshot.thumbnailUrl ?? pending.thumbnailUrl,
+        // Never borrow artwork from the outgoing snapshot while the new
+        // remote item is loading; doing so leaves the player showing the
+        // previous cover during a mixed local/stream transition.
+        thumbnailUrl: pending.thumbnailUrl ?? snapshot.thumbnailUrl,
         shuffleEnabled: _shuffleEnabled,
         repeatMode: _repeatMode,
       );

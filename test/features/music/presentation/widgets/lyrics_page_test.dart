@@ -461,6 +461,26 @@ void main() {
     },
   );
 
+  testWidgets('lyrics background adds only a subtle theme accent tint', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+    );
+
+    final tint = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('lyrics-accent-tint')),
+    );
+    final decoration = tint.decoration;
+    expect(decoration, isA<BoxDecoration>());
+    final color = (decoration as BoxDecoration).color;
+    expect(color, isNotNull);
+    expect(color!.a, closeTo(0.075, 0.001));
+  });
+
   testWidgets('reduced motion skips lyrics animation builders', (tester) async {
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(

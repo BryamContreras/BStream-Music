@@ -106,6 +106,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     );
     final mobileLayout = _usesMobileLyricsLayout(context);
     final miniPlayerHeight = mobileLayout ? 0.0 : miniPlayerHeightFor(context);
+    final accent = AppColors.downloadAccentFor(context);
     _syncLookup(lookup);
 
     return Scaffold(
@@ -116,6 +117,14 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
           const PlayerPlaybackGradientBackground(),
           const DecoratedBox(
             decoration: BoxDecoration(color: Color(0x52000000)),
+          ),
+          DecoratedBox(
+            key: const ValueKey('lyrics-accent-tint'),
+            decoration: BoxDecoration(
+              // Keep the artwork-derived gradient dominant; this is only a
+              // restrained accent wash so Letras follows the active theme.
+              color: accent.withValues(alpha: 0.075),
+            ),
           ),
           SafeArea(
             bottom: false,

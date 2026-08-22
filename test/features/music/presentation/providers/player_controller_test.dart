@@ -206,6 +206,56 @@ void main() {
   );
 
   test(
+    'a stale outgoing snapshot cannot cancel a manual remote Next transition',
+    () async {
+      final player = _StaleOutgoingRemotePlayerService();
+      final container = _container(player);
+      addTearDown(container.dispose);
+      final first = _queuedRemoteTrack('stale-transition-first');
+      final second = _queuedRemoteTrack('stale-transition-second');
+
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playRecommendation(
+        RecommendationPlaybackItem(track: first),
+        queue: [
+          RecommendationPlaybackItem(track: first),
+          RecommendationPlaybackItem(track: second),
+        ],
+        queueSourceId: 'personalized-home:stale-transition',
+      );
+
+      final next = controller.playNext();
+      await player.outgoingSnapshotEmitted;
+      expect(
+        container.read(playbackQueueProvider).currentIndex,
+        1,
+        reason: 'The outgoing stopped snapshot must not revert the queue.',
+      );
+      expect(
+        container.read(playerControllerProvider).value?.title,
+        'Track stale-transition-second',
+      );
+      expect(
+        container.read(playerControllerProvider).value?.thumbnailUrl,
+        second.thumbnailUrl,
+      );
+
+      player.releaseReplacement();
+      await next;
+      expect(player.playedRemote.map((track) => track.id), [
+        first.id,
+        second.id,
+      ]);
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(
+        container.read(playerControllerProvider).value?.title,
+        'Track stale-transition-second',
+      );
+    },
+  );
+
+  test(
     'a catalog playlist preserves entry identity and plays local then remote',
     () async {
       final player = _FakePlayerService();
@@ -4873,6 +4923,31 @@ class _BlockingRemotePlayerService extends _FakePlayerService {
     startedRemoteIds.add(track.id);
     if (_blockedIds.contains(track.id)) {
       await _gates[track.id]!.future;
+    }
+    await super.playRemote(track);
+  }
+}
+
+class _StaleOutgoingRemotePlayerService extends _FakePlayerService {
+  final Completer<void> _outgoingSnapshotEmitted = Completer<void>();
+  final Completer<void> _releaseReplacement = Completer<void>();
+
+  Future<void> get outgoingSnapshotEmitted => _outgoingSnapshotEmitted.future;
+
+  void releaseReplacement() {
+    if (!_releaseReplacement.isCompleted) {
+      _releaseReplacement.complete();
+    }
+  }
+
+  @override
+  Future<void> playRemote(TrackInfo track) async {
+    if (playedRemote.isNotEmpty) {
+      emit(
+        currentSnapshot.copyWith(status: PlayerStatus.stopped, isRemote: false),
+      );
+      _outgoingSnapshotEmitted.complete();
+      await _releaseReplacement.future;
     }
     await super.playRemote(track);
   }
