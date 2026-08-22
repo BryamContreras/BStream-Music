@@ -29,12 +29,13 @@ void main() {
 
     expect(find.text('Unofficial integration'), findsOneWidget);
     expect(find.textContaining('not affiliated with Google'), findsOneWidget);
-    expect(find.textContaining('may create private playlists'), findsOneWidget);
-    expect(find.textContaining('Favorites remains local'), findsOneWidget);
+    expect(find.textContaining('never stores your password'), findsOneWidget);
     expect(
-      find.textContaining('You separately control whether'),
+      find.textContaining('may change, block, or restrict'),
       findsOneWidget,
     );
+    expect(find.textContaining('Favorites remains local'), findsNothing);
+    expect(find.textContaining('required session cookies'), findsNothing);
     expect(find.text('Cancel'), findsOneWidget);
     expect(find.text('I understand, continue'), findsOneWidget);
     expect(

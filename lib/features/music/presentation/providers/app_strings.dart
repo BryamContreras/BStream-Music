@@ -46,22 +46,11 @@ class AppStrings {
       choose('Integración no oficial', 'Unofficial integration');
   String get youtubeMusicUnofficialDisclosure => choose(
     'La integración con YouTube Music utiliza interfaces no oficiales y no '
-        'está afiliada con Google. BStream abrirá la página real de Google '
-        'para iniciar sesión. BStream no guarda tu contraseña, pero para '
-        'mantener la sesión guardará cifradas en este dispositivo las cookies '
-        'necesarias. YouTube puede cambiar, bloquear o restringir esta función. '
-        'Al continuar, la primera sincronización puede crear playlists privadas '
-        'en tu cuenta y modificar tus playlists de YouTube Music. Favoritos '
-        'permanece sólo en BStream. Tú decides por separado si una playlist '
-        'borrada localmente también debe eliminarse de YouTube Music.',
+        'está afiliada con Google. BStream no guarda tu contraseña. YouTube '
+        'puede cambiar, bloquear o restringir esta función.',
     'The YouTube Music integration uses unofficial interfaces and is not '
-        'affiliated with Google. BStream will open Google’s real sign-in page. '
-        'BStream never stores your password, but it will securely store the '
-        'required session cookies on this device. YouTube may change, block, '
-        'or restrict this feature. By continuing, the first sync may create '
-        'private playlists in your account and modify your YouTube Music '
-        'playlists. Favorites remains local to BStream. You separately control '
-        'whether a playlist deleted locally is also deleted from YouTube Music.',
+        'affiliated with Google. BStream never stores your password. YouTube '
+        'may change, block, or restrict this feature.',
   );
   String get understandAndContinue =>
       choose('Entiendo y continuar', 'I understand, continue');

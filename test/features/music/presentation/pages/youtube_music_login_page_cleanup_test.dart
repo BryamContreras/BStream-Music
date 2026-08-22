@@ -33,7 +33,7 @@ void main() {
     expect(find.text('prepare-2'), findsOneWidget);
   });
 
-  testWidgets('login page stays open until WebView cleanup is verified', (
+  testWidgets('login page closes even when WebView cleanup needs a retry', (
     tester,
   ) async {
     var storagePasses = 0;
@@ -53,15 +53,10 @@ void main() {
     await tester.tap(find.byKey(const Key('youtube-music-login-close')));
     await tester.pumpAndSettle();
 
-    expect(storagePasses, 1);
-    expect(find.text('Reintentar limpieza y cerrar'), findsOneWidget);
-    expect(find.text('home-marker'), findsNothing);
-
-    await tester.tap(find.text('Reintentar limpieza y cerrar'));
     await tester.pumpAndSettle();
 
-    expect(storagePasses, 2);
     expect(find.text('home-marker'), findsOneWidget);
+    expect(storagePasses, greaterThanOrEqualTo(1));
   });
 }
 

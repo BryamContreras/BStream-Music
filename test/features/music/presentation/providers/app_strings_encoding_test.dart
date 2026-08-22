@@ -83,7 +83,7 @@ void main() {
   });
 
   test(
-    'YouTube Music disclosure explains every synchronization side effect',
+    'YouTube Music disclosure stays brief and explains the access risk',
     () {
       const spanish = AppStrings(AppLanguage.spanish);
       const english = AppStrings(AppLanguage.english);
@@ -91,18 +91,26 @@ void main() {
       expect(
         spanish.youtubeMusicUnofficialDisclosure,
         allOf(
-          contains('crear playlists privadas'),
-          contains('Favoritos permanece sólo en BStream'),
-          contains('Tú decides por separado'),
+          contains('no oficiales'),
+          contains('no guarda tu contraseña'),
+          contains('cambiar, bloquear o restringir'),
         ),
       );
       expect(
         english.youtubeMusicUnofficialDisclosure,
         allOf(
-          contains('create private playlists'),
-          contains('Favorites remains local to BStream'),
-          contains('You separately control'),
+          contains('unofficial'),
+          contains('never stores your password'),
+          contains('may change, block, or restrict'),
         ),
+      );
+      expect(
+        spanish.youtubeMusicUnofficialDisclosure,
+        isNot(contains('Favoritos')),
+      );
+      expect(
+        english.youtubeMusicUnofficialDisclosure,
+        isNot(contains('Favorites')),
       );
     },
   );

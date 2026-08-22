@@ -65,13 +65,12 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
   String? _windowsWebViewDataRoot;
   String? _windowsWebViewSessionDirectory;
   Future<YouTubeMusicWebCleanupResult>? _cleanupFuture;
+  Future<void>? _cleanupRecoveryFuture;
   YouTubeMusicWebCleanupResult? _verifiedCleanup;
   var _prepared = false;
   var _preparing = false;
   var _busy = false;
   var _tearingDown = false;
-  var _cleanupFailed = false;
-  bool? _pendingPopResult;
   var _allowPop = false;
   String _visibleHost = 'accounts.google.com';
   String? _errorMessage;
@@ -236,17 +235,9 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
     }
     if (_tearingDown) {
       return _LoginStatusView(
-        icon: _cleanupFailed
-            ? Icons.security_update_warning_outlined
-            : Icons.cleaning_services_outlined,
-        message: _cleanupFailed
-            ? 'No se pudo borrar por completo la sesión temporal del '
-                  'WebView. BStream no cerrará esta pantalla hasta verificar '
-                  'la limpieza.'
-            : 'Cerrando y limpiando la sesión temporal…',
-        showProgress: !_cleanupFailed,
-        actionLabel: _cleanupFailed ? 'Reintentar limpieza y cerrar' : null,
-        onAction: _cleanupFailed ? _retryCleanupAndClose : null,
+        icon: Icons.cleaning_services_outlined,
+        message: 'Cerrando y limpiando la sesión temporal…',
+        showProgress: true,
       );
     }
     final error = _errorMessage ?? authState.message;
@@ -417,10 +408,7 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
 
   Future<void> _handleBack() async {
     if (_busy) return;
-    if (_tearingDown) {
-      if (_cleanupFailed) await _retryCleanupAndClose();
-      return;
-    }
+    if (_tearingDown) return;
     try {
       if (_prepared && await _webAuthPort.canGoBack()) {
         await _webAuthPort.goBack();
@@ -438,12 +426,10 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
   }
 
   Future<void> _finishAndPop(bool result) async {
-    if (_tearingDown && !_cleanupFailed) return;
-    _pendingPopResult = result;
+    if (_tearingDown) return;
     if (mounted) {
       setState(() {
         _tearingDown = true;
-        _cleanupFailed = false;
         _busy = true;
         _errorMessage = null;
       });
@@ -452,23 +438,26 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
       await WidgetsBinding.instance.endOfFrame;
     }
 
-    final cleanup = await _cleanup();
+    final cleanup = await _cleanup().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => const YouTubeMusicWebCleanupResult(
+        cookiesCleared: false,
+        webStorageCleared: false,
+        cacheCleared: false,
+      ),
+    );
     if (!mounted) return;
     if (!cleanup.completed) {
-      setState(() {
-        _cleanupFailed = true;
-        _busy = false;
-      });
-      return;
+      // Never trap the user in the login route because a platform WebView
+      // store is temporarily locked. The session is already closed; retry
+      // cleanup after the route is gone and dispose the private profile when
+      // the platform releases its handles.
+      unawaited(_ensureCleanupRecovery());
     }
     setState(() => _allowPop = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) Navigator.of(context).pop(result);
     });
-  }
-
-  Future<void> _retryCleanupAndClose() async {
-    await _finishAndPop(_pendingPopResult ?? false);
   }
 
   Future<YouTubeMusicWebCleanupResult> _cleanup() async {
@@ -584,9 +573,24 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
     }
   }
 
+  Future<void> _ensureCleanupRecovery() {
+    final existing = _cleanupRecoveryFuture;
+    if (existing != null) return existing;
+    final operation = _cleanupBeforeEnvironmentDispose();
+    _cleanupRecoveryFuture = operation;
+    unawaited(
+      operation.whenComplete(() {
+        if (identical(_cleanupRecoveryFuture, operation)) {
+          _cleanupRecoveryFuture = null;
+        }
+      }),
+    );
+    return operation;
+  }
+
   @override
   void dispose() {
-    unawaited(_cleanupBeforeEnvironmentDispose());
+    unawaited(_ensureCleanupRecovery());
     super.dispose();
   }
 }
