@@ -570,10 +570,12 @@ void main() {
       toolDirectories: const [],
       processResolutionTimeout: const Duration(seconds: 1),
       // Keep a generous scheduler margin: this test validates that activity
-      // renews the watchdog, not that Windows can deliver 15 ms timers while
-      // the full Flutter suite is loading other isolates.
-      processIdleTimeout: const Duration(milliseconds: 150),
-      processDownloadTotalTimeout: const Duration(seconds: 1),
+      // renews the watchdog, not that a busy CI runner can deliver 30 ms
+      // timers precisely while the full Flutter suite is loading isolates.
+      // The dedicated idle-timeout test above still exercises the short
+      // failure window; this one must leave room for scheduler jitter.
+      processIdleTimeout: const Duration(milliseconds: 500),
+      processDownloadTotalTimeout: const Duration(seconds: 2),
       processStarter: (_, _) async {
         progressTimer = Timer.periodic(const Duration(milliseconds: 30), (
           timer,
