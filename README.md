@@ -19,12 +19,12 @@ Current version: **1.2.5+125**.
   the Home avatar exposes channel selection, sync, conflicts, and logout.
 - Synchronize local and YouTube Music playlists by stable identities with a
   conservative three-way merge. Local playlists are retained, remote copies
-  are private by default, Favorites remains local, and remote deletion always
-  requires a separate explicit confirmation.
+  are private by default, and BStream Favorites is synchronized with YouTube
+  Music's **Liked Music** collection. Remote deletion always requires a
+  separate explicit confirmation.
 - Keep streaming-only songs and duplicate occurrences inside imported
   playlists. Playback uses a valid downloaded file first and falls back to the
-  matching stream; a small cloud beside the artist identifies entries without
-  usable local audio.
+  matching stream.
 - Learn account-free Home recommendations from qualified local playback
   history using YouTube Music `/next`, related shelves, mixes, and exact artist
   releases. History can be disabled or cleared without removing the library.
@@ -73,7 +73,9 @@ Current version: **1.2.5+125**.
 
 - Optional YouTube Music account sign-in and bidirectional playlist sync. New
   local playlists are created remotely as private playlists, imported remote
-  playlists may contain streaming-only entries, and Favorites stays local.
+  playlists may contain streaming-only entries, and BStream Favorites maps to
+  YouTube Music's **Liked Music** collection. The system playlist “Episodes for
+  later” is intentionally excluded.
 - Synced playlist playback is download-first: BStream uses a valid local copy
   when available and falls back to streaming the same catalog entry when the
   file is missing or cannot be opened.
@@ -123,6 +125,10 @@ Current version: **1.2.5+125**.
   applications can recognize: YouTube Music when the track came from the
   InnerTube catalog, otherwise the regular YouTube watch URL. Local-only files
   without a YouTube identity are intentionally not shared.
+- Android can also offer BStream when opening public YouTube/YouTube Music
+  links. Video links open the player directly; playlist and album links open a
+  catalog view with Play and Add to playlist actions. Unsupported or unsafe
+  URLs are ignored.
 - Lyrics offer three persistent animation styles (Smooth by default),
   Normal/Centered alignment, optional per-script romanization, and a live
   preview in Appearance settings.
@@ -361,18 +367,21 @@ Install `yt-dlp` with `winget`:
 winget install yt-dlp.yt-dlp
 ```
 
-The Windows WebView login also needs the NuGet CLI at build time. If a build
-reports `NUGET-NOTFOUND` or `NUGET-NOTFOUND install Microsoft.Web.WebView2`,
-run this once from the repository root, then clear Flutter's generated CMake
-cache before rebuilding:
+The Windows WebView login needs the NuGet CLI at build time. The project now
+bootstraps the pinned, checksum-verified CLI automatically during CMake
+configuration, so the normal command is enough:
 
 ```powershell
-$nuget = .\tool\ensure_nuget.ps1
-$env:Path = "$(Split-Path -Parent $nuget);$env:Path"
 flutter clean
 flutter pub get --enforce-lockfile
 flutter build windows --release
 ```
+
+If an older generated build still reports `NUGET-NOTFOUND`, delete
+`build/windows` once and rerun `flutter run -d windows`; CMake will install the
+same pinned tool automatically. The bootstrap also works around the hidden
+`AppData` path bug in `smtc_windows` 1.1.0, which otherwise appears as a
+misleading `Get-Item C:\\Users\\...\\AppData` error.
 
 The script downloads NuGet `6.12.2` from the official distribution endpoint,
 verifies its SHA-256, and stores it under the user/runner tool directory. A
@@ -502,11 +511,10 @@ The workflow verifies all three APK signatures before uploading the artifacts.
 - Android/macOS use `sqflite`; Windows and Linux use `sqflite_common_ffi`.
 - Incremental migrations preserve existing libraries.
 - Favorites are implemented as a reserved local playlist (`bstream:favorites`),
-  so no separate table is required. They are intentionally not synchronized
-  with YouTube Music's special **Liked Music** collection: adding or removing a
-  favorite changes BStream only, and login will not import that collection as a
-  duplicate playlist. Regular user playlists are the ones synchronized after
-  account consent.
+  so no separate table is required. After account consent, it is bound to
+  YouTube Music's special **Liked Music** collection (LM/VLLM): likes and
+  unlikes use the same conservative playlist sync engine, without importing a
+  duplicate playlist. “Episodes for later” is ignored during account bootstrap.
 - ZIP backups contain the database, `audio/`, `thumbnails/`, and a manifest.
 - The Storage page separates local ZIP backup transfer from portable CSV
   transfer. BStream CSV preserves playlist membership and order; importing can
