@@ -114,9 +114,7 @@ class _MarqueeTextState extends State<MarqueeText>
         // Move only the part that does not fit. Including an extra gap here
         // would move the sole copy past the viewport and leave empty space at
         // the right edge when it reaches the end.
-        final overflow = available.isFinite
-            ? painter.width - available
-            : 0.0;
+        final overflow = available.isFinite ? painter.width - available : 0.0;
         _scheduleMetrics(overflow > 0 ? overflow : 0);
         _scheduleVisibilityCheck();
 
@@ -174,10 +172,7 @@ class _MarqueeTextState extends State<MarqueeText>
                         child: child,
                       );
                     },
-                    child: _buildLabel(
-                      painter.width,
-                      painter.height,
-                    ),
+                    child: _buildLabel(painter.width, painter.height),
                   ),
                 ),
               ],

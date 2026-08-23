@@ -3985,7 +3985,13 @@ void main() {
       player.emit(
         const PlayerSnapshot(status: PlayerStatus.stopped, trackId: 'track-1'),
       );
-      await _flushCompletion();
+      await _waitUntil(
+        () => repository.playMarks.any(
+          (mark) =>
+              mark.trackId == 'track-2' && mark.playlistId == 'recent-playlist',
+        ),
+        reason: 'The automatic next track was not recorded in its playlist.',
+      );
 
       expect(player.playedLocalIds, ['track-1', 'track-2']);
       expect(container.read(playbackQueueProvider).currentIndex, 2);
@@ -4042,7 +4048,14 @@ void main() {
           position: Duration(seconds: 2),
         ),
       );
-      await _flushCompletion();
+      await _waitUntil(
+        () => repository.playMarks.any(
+          (mark) =>
+              mark.trackId == 'track-2' &&
+              mark.playlistId == 'background-playlist',
+        ),
+        reason: 'The native background transition was not recorded.',
+      );
 
       expect(container.read(playbackQueueProvider).currentIndex, 1);
       expect(repository.playMarks, [

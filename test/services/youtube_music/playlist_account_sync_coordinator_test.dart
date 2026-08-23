@@ -155,51 +155,56 @@ void main() {
     expect(gateway.createCount, 0);
   });
 
-  test('first sync materializes Favorites when the local library is empty', () async {
-    final sandbox = await Directory.systemTemp.createTemp(
-      'bstream-account-sync-empty-favorites-',
-    );
-    final database = _TestDatabase(p.join(sandbox.path, 'library.db'));
-    addTearDown(() async {
-      await database.close();
-      await sandbox.delete(recursive: true);
-    });
-    final now = DateTime.utc(2026, 8, 22, 12);
-    final repository = CatalogPlaylistRepositoryImpl(database);
-    final store = SqlitePlaylistSyncStore(
-      database,
-      conflictIdFactory: () => 'empty-favorites-conflict',
-    );
-    final gateway = _AccountGateway()
-      ..includeLikedMusic = true
-      ..includeRegularRemote = false;
-    final engine = PlaylistSyncEngine(
-      store: store,
-      gateway: gateway,
-      merger: PlaylistThreeWayMerger(itemIdFactory: () => 'empty-favorites-entry'),
-      mutationTokenFactory: () => 'empty-favorites-mutation',
-      clock: () => now,
-    );
-    final coordinator = PlaylistAccountSyncCoordinator(
-      playlists: repository,
-      store: store,
-      engine: engine,
-      catalogGateway: gateway,
-      localPlaylistIdFactory: () => 'unused-import',
-      clock: () => now,
-    );
+  test(
+    'first sync materializes Favorites when the local library is empty',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'bstream-account-sync-empty-favorites-',
+      );
+      final database = _TestDatabase(p.join(sandbox.path, 'library.db'));
+      addTearDown(() async {
+        await database.close();
+        await sandbox.delete(recursive: true);
+      });
+      final now = DateTime.utc(2026, 8, 22, 12);
+      final repository = CatalogPlaylistRepositoryImpl(database);
+      final store = SqlitePlaylistSyncStore(
+        database,
+        conflictIdFactory: () => 'empty-favorites-conflict',
+      );
+      final gateway = _AccountGateway()
+        ..includeLikedMusic = true
+        ..includeRegularRemote = false;
+      final engine = PlaylistSyncEngine(
+        store: store,
+        gateway: gateway,
+        merger: PlaylistThreeWayMerger(
+          itemIdFactory: () => 'empty-favorites-entry',
+        ),
+        mutationTokenFactory: () => 'empty-favorites-mutation',
+        clock: () => now,
+      );
+      final coordinator = PlaylistAccountSyncCoordinator(
+        playlists: repository,
+        store: store,
+        engine: engine,
+        catalogGateway: gateway,
+        localPlaylistIdFactory: () => 'unused-import',
+        clock: () => now,
+      );
 
-    final result = await coordinator.syncAll('account');
+      final result = await coordinator.syncAll('account');
 
-    expect(result.importedRemoteCount, 0);
-    expect(
-      (await repository.getCatalogPlaylists()).map((playlist) => playlist.id),
-      contains(Playlist.favoritesId),
-    );
-    final bindings = await store.listBindings(accountKey: 'account');
-    expect(bindings, hasLength(1));
-    expect(bindings.single.key.playlistId, Playlist.favoritesId);
-  });
+      expect(result.importedRemoteCount, 0);
+      expect(
+        (await repository.getCatalogPlaylists()).map((playlist) => playlist.id),
+        contains(Playlist.favoritesId),
+      );
+      final bindings = await store.listBindings(accountKey: 'account');
+      expect(bindings, hasLength(1));
+      expect(bindings.single.key.playlistId, Playlist.favoritesId);
+    },
+  );
 
   test(
     'an incomplete shelf summary cannot downgrade known edit access',
