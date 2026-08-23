@@ -491,7 +491,7 @@ void main() {
   );
 
   testWidgets(
-    'short Android frames compact the artwork shadow and pad the header',
+    'short Android frames compact the artwork shadow and balance the header',
     (tester) async {
       _configureView(tester, const Size(430, 900));
 
@@ -528,7 +528,7 @@ void main() {
 
       final shortArtworkWidth = tester.getSize(artwork).width;
       final shortShadow = artworkShadow();
-      expect(tester.getRect(header).top, closeTo(14, 0.1));
+      expect(tester.getRect(header).top, closeTo(12, 0.1));
       expect(
         tester.getRect(find.byKey(const ValueKey('player-tab-title'))).top,
         greaterThan(tester.getRect(header).top),
@@ -713,8 +713,19 @@ void main() {
         expect(longTitle.gap, closeTo(shortTitle.gap, 0.1));
         if (variant.platform == TargetPlatform.android) {
           expect(longTitle.artwork, shortTitle.artwork);
-          expect(shortTitle.artworkTitleGap, closeTo(22, 0.1));
-          expect(longTitle.artworkTitleGap, closeTo(22, 0.1));
+          final compactness = ((820 - variant.size.height) / 100).clamp(
+            0.0,
+            1.0,
+          );
+          final expectedArtworkTitleGap = 22 + (4 * compactness);
+          expect(
+            shortTitle.artworkTitleGap,
+            closeTo(expectedArtworkTitleGap, 0.1),
+          );
+          expect(
+            longTitle.artworkTitleGap,
+            closeTo(expectedArtworkTitleGap, 0.1),
+          );
           expect(
             longTitle.artworkTitleGap,
             closeTo(shortTitle.artworkTitleGap, 0.1),
