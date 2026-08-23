@@ -57,6 +57,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   final _CrossfadePreparationCoordinator _crossfadePreparation =
       _CrossfadePreparationCoordinator();
   Future<void>? _nextNavigationInFlight;
+  DateTime? _nextNavigationStartedAt;
+  static const _nextNavigationMaxWait = Duration(milliseconds: 900);
   int _queueNavigationGeneration = 0;
   final RecommendationQueueExtensionCoordinator _recommendationExtension =
       RecommendationQueueExtensionCoordinator();
@@ -772,6 +774,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     TrackInfo track, {
     bool automaticTransition = false,
   }) async {
+    final wasRemotePlayback = _activePlaybackIsRemote;
     _activePlaybackIsRemote = true;
     _explicitlyStopped = false;
     _remotePrefetch.invalidate();
@@ -795,6 +798,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       final service = ref.read(playerServiceProvider);
       final previousSnapshot = service.currentSnapshot;
       final replacingRemoteSource =
+          wasRemotePlayback ||
           previousSnapshot.isRemote ||
           previousSnapshot.trackId?.startsWith(_remoteCacheTrackIdPrefix) ==
               true;
@@ -837,6 +841,17 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
                 )) {
               return;
             }
+            final loaded = service.currentSnapshot;
+            if (!_cachedPlaybackActivated(
+              loaded,
+              cachedSource.track,
+              cachedSource.queueEntryId,
+            )) {
+              throw const PlayerException(
+                'La fuente almacenada no reemplazó la canción activa.',
+                code: 'cached_source_not_active',
+              );
+            }
             _clearPendingRemoteSnapshot(requestId);
             unawaited(_warmUpcomingRemoteTracks(requestId));
             return;
@@ -866,7 +881,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       if (cachedTrack != null) {
         final loadAttemptId = _beginRemoteLoadAttempt();
         try {
-          await ref.read(playerServiceProvider).playLocal(cachedTrack);
+          final service = ref.read(playerServiceProvider);
+          await service.playLocal(cachedTrack);
           if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
               !_isCurrentRemoteSelection(
                 track,
@@ -874,6 +890,16 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
                 pendingSnapshot.queueEntryId,
               )) {
             return;
+          }
+          // A cancelled/replaced just_audio mutation can complete normally
+          // without changing its snapshot. Do not clear the pending remote
+          // item in that case or the old song remains on screen until it ends.
+          final loaded = service.currentSnapshot;
+          if (!_cachedPlaybackActivated(loaded, track)) {
+            throw const PlayerException(
+              'La fuente almacenada no reemplazó la canción activa.',
+              code: 'cached_source_not_active',
+            );
           }
           _clearPendingRemoteSnapshot(requestId);
           unawaited(_warmUpcomingRemoteTracks(requestId));
@@ -935,6 +961,17 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
                   pendingSnapshot.queueEntryId,
                 )) {
               return;
+            }
+            final loaded = service.currentSnapshot;
+            if (!_cachedPlaybackActivated(
+              loaded,
+              cachedSource.track,
+              cachedSource.queueEntryId,
+            )) {
+              throw const PlayerException(
+                'La fuente almacenada no reemplazó la canción activa.',
+                code: 'cached_source_not_active',
+              );
             }
             _clearPendingRemoteSnapshot(requestId);
             unawaited(_warmUpcomingRemoteTracks(requestId));
@@ -1045,7 +1082,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       if (cachedPlayableTrack != null) {
         final loadAttemptId = _beginRemoteLoadAttempt();
         try {
-          await ref.read(playerServiceProvider).playLocal(cachedPlayableTrack);
+          final service = ref.read(playerServiceProvider);
+          await service.playLocal(cachedPlayableTrack);
           if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
               !_isCurrentRemoteSelection(
                 playableTrack,
@@ -1053,6 +1091,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
                 pendingSnapshot.queueEntryId,
               )) {
             return;
+          }
+          final loaded = service.currentSnapshot;
+          if (!_cachedPlaybackActivated(loaded, playableTrack)) {
+            throw const PlayerException(
+              'La fuente almacenada no reemplazó la canción activa.',
+              code: 'cached_source_not_active',
+            );
           }
           _clearPendingRemoteSnapshot(requestId);
           unawaited(_warmUpcomingRemoteTracks(requestId));
@@ -1076,7 +1121,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
       final loadAttemptId = _beginRemoteLoadAttempt();
       try {
-        await ref.read(playerServiceProvider).playRemote(playableTrack);
+        final service = ref.read(playerServiceProvider);
+        await service.playRemote(playableTrack);
         if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
             !_isCurrentRemoteSelection(
               playableTrack,
@@ -1434,6 +1480,28 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     return PlaybackIdentity.snapshotBelongsToTrack(snapshot, track);
   }
 
+  bool _cachedPlaybackActivated(
+    PlayerSnapshot snapshot,
+    TrackInfo track, [
+    String? expectedQueueEntryId,
+  ]) {
+    final hasIdentity =
+        snapshot.trackId?.trim().isNotEmpty == true ||
+        snapshot.sourceUrl?.trim().isNotEmpty == true ||
+        snapshot.queueEntryId?.trim().isNotEmpty == true;
+    if (!hasIdentity) {
+      return true;
+    }
+    if (!_snapshotBelongsToTrack(snapshot, track)) {
+      return false;
+    }
+    final actualQueueEntryId = snapshot.queueEntryId?.trim();
+    return expectedQueueEntryId == null ||
+        actualQueueEntryId == null ||
+        actualQueueEntryId.isEmpty ||
+        actualQueueEntryId == expectedQueueEntryId;
+  }
+
   bool _shouldRefreshRemoteFailure(PlayerSnapshot snapshot) {
     return _shouldRefreshRemoteErrorMessage(snapshot.errorMessage);
   }
@@ -1475,18 +1543,19 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (queueEntryId == null || queueEntryId.isEmpty) {
       return false;
     }
-    final current = _playingRemoteTrack;
     final pending = _pendingRemoteSnapshot;
-    if (pending != null &&
-        pending.queueEntryId != queueEntryId &&
-        _remoteRetry.recoveryQueueEntryId != pending.queueEntryId &&
-        (current == null ||
-            !_isRemoteRetryInFlight(
-              current,
-              _playRequestId,
-              pending.queueEntryId,
-            ))) {
-      return false;
+    if (pending != null && pending.queueEntryId != queueEntryId) {
+      final current = _playingRemoteTrack;
+      final recoveryInFlight = _isRemoteRecoveryInFlight(
+        _playRequestId,
+        pending.queueEntryId,
+      );
+      final retryInFlight =
+          current != null &&
+          _isRemoteRetryInFlight(current, _playRequestId, pending.queueEntryId);
+      if (!recoveryInFlight && !retryInFlight) {
+        return false;
+      }
     }
     for (var index = 0; index < _queue.length; index++) {
       if (_queue[index].remote != null &&
@@ -1507,6 +1576,20 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     final queueEntryId = snapshot.queueEntryId;
     if (queueEntryId == null || queueEntryId.isEmpty) {
       return false;
+    }
+    final pending = _pendingRemoteSnapshot;
+    if (pending != null && pending.queueEntryId != queueEntryId) {
+      final current = _playingRemoteTrack;
+      final recoveryInFlight = _isRemoteRecoveryInFlight(
+        _playRequestId,
+        pending.queueEntryId,
+      );
+      final retryInFlight =
+          current != null &&
+          _isRemoteRetryInFlight(current, _playRequestId, pending.queueEntryId);
+      if (!recoveryInFlight && !retryInFlight) {
+        return false;
+      }
     }
     for (var index = 0; index < _queue.length; index++) {
       if (_queue[index].remote != null &&
@@ -2539,6 +2622,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     // the logical index before that obsolete operation starts new I/O.
     _queueNavigationGeneration++;
     _nextNavigationInFlight = null;
+    _nextNavigationStartedAt = null;
     _hybridLocalFallbackEntryId = null;
     _pendingHybridLocalFailureEntryId = null;
   }
@@ -2546,7 +2630,20 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Future<void> playNext({bool automatic = false}) {
     final inFlight = _nextNavigationInFlight;
     if (inFlight != null) {
-      return inFlight;
+      final startedAt = _nextNavigationStartedAt;
+      if (startedAt == null ||
+          DateTime.now().difference(startedAt) < _nextNavigationMaxWait) {
+        return inFlight;
+      }
+      // A stalled resolver must not make the Next button unusable until the
+      // current song ends. Invalidate the old transition; its generation and
+      // play-request checks will make any late completion harmless.
+      _queueNavigationGeneration++;
+      _nextNavigationInFlight = null;
+      _nextNavigationStartedAt = null;
+      _playRequestId++;
+      _pendingRemoteSnapshot = null;
+      _remoteRetry.resetForSelection();
     }
 
     final generation = _queueNavigationGeneration;
@@ -2555,9 +2652,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       navigationGeneration: generation,
     );
     _nextNavigationInFlight = operation;
+    _nextNavigationStartedAt = DateTime.now();
     return operation.whenComplete(() {
       if (identical(_nextNavigationInFlight, operation)) {
         _nextNavigationInFlight = null;
+        _nextNavigationStartedAt = null;
       }
     });
   }

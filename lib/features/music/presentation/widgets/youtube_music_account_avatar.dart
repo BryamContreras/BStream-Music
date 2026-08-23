@@ -27,7 +27,7 @@ class YouTubeMusicAccountAvatar extends StatelessWidget {
       child: Center(
         child: Icon(
           profile == null ? Icons.person_outline : Icons.person,
-          size: size * 0.55,
+          size: size * 0.62,
         ),
       ),
     );

@@ -11,11 +11,13 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
+import '../../../../core/widgets/marquee_text.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../platform_channels/android_external_audio_channel.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
+import '../../../../services/sharing/youtube_music_link.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/remote_music_datasource.dart';
 import '../../domain/entities/catalog_playlist.dart';
@@ -29,6 +31,7 @@ import '../widgets/library_panel.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/playback_gradient_background.dart';
 import '../widgets/player_panel.dart';
+import '../widgets/playlist_picker_dialog.dart';
 import '../widgets/scrolled_under_tab_frame.dart';
 import '../widgets/settings_panel.dart';
 import '../widgets/source_image.dart';
@@ -80,8 +83,11 @@ class _HomePageState extends ConsumerState<HomePage> {
   StreamSubscription<ExternalAudioRequest>? _externalAudioSubscription;
   ProviderSubscription<AsyncValue<BStreamTrackLink>>?
   _incomingTrackLinkSubscription;
+  ProviderSubscription<AsyncValue<YouTubeMusicLink>>?
+  _incomingYouTubeMusicLinkSubscription;
   Future<void> _externalAudioWork = Future<void>.value();
   Future<void> _incomingTrackLinkWork = Future<void>.value();
+  Future<void> _incomingYouTubeMusicLinkWork = Future<void>.value();
   final Set<String> _startedExternalAudioRequests = <String>{};
   final Set<String> _reportedIncompleteExternalFolders = <String>{};
   LocalHistoryEntry? _playerHistoryEntry;
@@ -121,6 +127,12 @@ class _HomePageState extends ConsumerState<HomePage> {
         .listenManual<AsyncValue<BStreamTrackLink>>(
           incomingTrackLinkProvider,
           (_, next) => next.whenData(_queueIncomingTrackLink),
+          fireImmediately: true,
+        );
+    _incomingYouTubeMusicLinkSubscription = ref
+        .listenManual<AsyncValue<YouTubeMusicLink>>(
+          incomingYouTubeMusicLinkProvider,
+          (_, next) => next.whenData(_queueIncomingYouTubeMusicLink),
           fireImmediately: true,
         );
   }
@@ -175,6 +187,125 @@ class _HomePageState extends ConsumerState<HomePage> {
     await ref
         .read(playerControllerProvider.notifier)
         .playRemote(track, queueSourceId: 'shared-link:${link.videoId}');
+  }
+
+  void _queueIncomingYouTubeMusicLink(YouTubeMusicLink link) {
+    _incomingYouTubeMusicLinkWork = _incomingYouTubeMusicLinkWork
+        .then((_) => _handleIncomingYouTubeMusicLink(link))
+        .catchError((Object error, StackTrace stackTrace) {
+          debugPrint('Could not open YouTube Music link: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        });
+  }
+
+  Future<void> _handleIncomingYouTubeMusicLink(YouTubeMusicLink link) async {
+    if (!mounted) return;
+    if (link.isTrack && link.videoId != null) {
+      await _handleIncomingTrackLink(BStreamTrackLink(videoId: link.videoId!));
+      return;
+    }
+    final collectionId = link.collectionId;
+    if (collectionId == null || collectionId.isEmpty) return;
+    final strings = ref.read(appStringsProvider);
+    final isAlbum = link.kind == YouTubeMusicLinkKind.album;
+    final title = switch (link.kind) {
+      YouTubeMusicLinkKind.album => strings.album,
+      YouTubeMusicLinkKind.mix => strings.mix,
+      _ => strings.playlist,
+    };
+    final tracksProvider = isAlbum
+        ? homeAlbumTracksProvider(collectionId)
+        : homeCollectionTracksProvider(collectionId);
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => RemoteCollectionDetailPage(
+          title: title,
+          subtitle: strings.youtubeMusic,
+          artworkSource: null,
+          metadata: const [],
+          queueSourceId: 'incoming-youtube:${link.kind.name}:$collectionId',
+          tracksProvider: tracksProvider,
+          emptyMessage: strings.homeCollectionEmpty,
+          errorMessage: strings.homeCollectionLoadError,
+          onOpenPlayer: _openPlayer,
+          onAddToPlaylist: _addRemoteTracksToPlaylist,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addRemoteTracksToPlaylist(
+    BuildContext context,
+    List<TrackInfo> tracks, {
+    String? initialPlaylistName,
+  }) async {
+    if (tracks.isEmpty || !context.mounted) return;
+    final strings = ref.read(appStringsProvider);
+    String? playlistId;
+    if (initialPlaylistName != null) {
+      final rawName = await showDialog<String>(
+        context: context,
+        builder: (_) => CreatePlaylistDialog(
+          strings: strings,
+          initialName: initialPlaylistName,
+        ),
+      );
+      final name = rawName?.trim();
+      if (!mounted || name == null || name.isEmpty) {
+        return;
+      }
+      final created = await ref
+          .read(playlistsControllerProvider.notifier)
+          .create(name);
+      playlistId = created?.id;
+      if (!mounted || playlistId == null) {
+        return;
+      }
+    }
+    final playlists = (await ref.read(
+      playlistsControllerProvider.future,
+    )).where((playlist) => !playlist.isFavorites).toList(growable: false);
+    if (!context.mounted) return;
+    if (playlistId == null && playlists.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(strings.createPlaylistFirst)));
+      return;
+    }
+    final localTracks = await ref
+        .read(libraryRepositoryProvider)
+        .getLocalTracks();
+    final catalogs = await ref.read(catalogPlaylistsProvider.future);
+    if (!context.mounted) return;
+    playlistId ??= await showDialog<String>(
+      context: context,
+      builder: (_) => PlaylistPickerDialog(
+        title: strings.choosePlaylist,
+        playlists: playlists,
+        tracks: localTracks,
+        catalogPlaylists: catalogs,
+      ),
+    );
+    if (playlistId == null || !context.mounted) return;
+    var added = 0;
+    try {
+      for (final track in tracks) {
+        final entry = await ref
+            .read(playlistsControllerProvider.notifier)
+            .addRemoteTrackToPlaylist(playlistId, track);
+        if (entry != null) added += 1;
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(strings.error)));
+      return;
+    }
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(strings.songsAddedToPlaylist(added))),
+    );
   }
 
   void _queueExternalAudioRequest(ExternalAudioRequest request) {
@@ -389,6 +520,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _removePlayerHistoryEntry();
     unawaited(_externalAudioSubscription?.cancel());
     _incomingTrackLinkSubscription?.close();
+    _incomingYouTubeMusicLinkSubscription?.close();
     _libraryNavigationController.dispose();
     _settingsNavigationController.dispose();
     _desktopPlaybackShortcutFocus.dispose();
@@ -654,6 +786,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                                     onOpenPlayer: _openPlayer,
                                     onOpenSearch: _openSearch,
                                     onOpenPlaylist: _openPlaylistFromHome,
+                                    onAddRemoteTracksToPlaylist:
+                                        _addRemoteTracksToPlaylist,
                                   ),
                                 ),
                                 if (!useSideNavigation)
@@ -1132,6 +1266,7 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.onOpenPlayer,
     required this.onOpenSearch,
     required this.onOpenPlaylist,
+    required this.onAddRemoteTracksToPlaylist,
   });
 
   final int selectedIndex;
@@ -1146,6 +1281,7 @@ class _PersistentCurrentViews extends StatefulWidget {
   final VoidCallback onOpenPlayer;
   final VoidCallback onOpenSearch;
   final ValueChanged<String> onOpenPlaylist;
+  final AddRemoteTracksToPlaylist onAddRemoteTracksToPlaylist;
 
   @override
   State<_PersistentCurrentViews> createState() =>
@@ -1174,6 +1310,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             child: _HomeView(
               onOpenPlayer: widget.onOpenPlayer,
               onOpenPlaylist: widget.onOpenPlaylist,
+              onAddRemoteTracksToPlaylist: widget.onAddRemoteTracksToPlaylist,
             ),
           ),
         if (_visitedIndexes.contains(widget.searchIndex))
@@ -1181,7 +1318,10 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             key: const ValueKey('search-view'),
             selected: widget.selectedIndex == widget.searchIndex,
             bottomPadding: widget.contentBottomPadding,
-            child: SearchView(onOpenPlayer: widget.onOpenPlayer),
+            child: SearchView(
+              onOpenPlayer: widget.onOpenPlayer,
+              onAddToPlaylist: widget.onAddRemoteTracksToPlaylist,
+            ),
           ),
         if (_visitedIndexes.contains(widget.playerIndex))
           _PersistentViewSlot(
@@ -1310,10 +1450,15 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
 }
 
 class _HomeView extends ConsumerWidget {
-  const _HomeView({required this.onOpenPlayer, required this.onOpenPlaylist});
+  const _HomeView({
+    required this.onOpenPlayer,
+    required this.onOpenPlaylist,
+    required this.onAddRemoteTracksToPlaylist,
+  });
 
   final VoidCallback onOpenPlayer;
   final ValueChanged<String> onOpenPlaylist;
+  final AddRemoteTracksToPlaylist onAddRemoteTracksToPlaylist;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1359,11 +1504,13 @@ class _HomeView extends ConsumerWidget {
                   : () => unawaited(
                       ref.read(homeRecommendationsProvider.notifier).refresh(),
                     ),
+              iconSize: 30,
+              padding: const EdgeInsets.all(6),
               icon: recommendationsState.isLoading
                   ? SizedBox.square(
-                      dimension: 20,
+                      dimension: 26,
                       child: CircularProgressIndicator(
-                        strokeWidth: 2,
+                        strokeWidth: 2.4,
                         semanticsLabel: strings.refreshingHomeRecommendations,
                       ),
                     )
@@ -1413,6 +1560,7 @@ class _HomeView extends ConsumerWidget {
                 section: section,
                 libraryTracks: libraryTracks,
                 onOpenPlayer: onOpenPlayer,
+                onAddRemoteTracksToPlaylist: onAddRemoteTracksToPlaylist,
               ),
             ),
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
@@ -1427,11 +1575,13 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
     required this.section,
     required this.libraryTracks,
     required this.onOpenPlayer,
+    required this.onAddRemoteTracksToPlaylist,
   });
 
   final HomeRecommendationSection section;
   final List<LocalTrack> libraryTracks;
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist onAddRemoteTracksToPlaylist;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1471,6 +1621,7 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
                   strings: strings,
                   width: cardWidth,
                   onOpenPlayer: onOpenPlayer,
+                  onAddRemoteTracksToPlaylist: onAddRemoteTracksToPlaylist,
                 ),
             };
           },
@@ -1892,6 +2043,7 @@ class _RecommendedTrackCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final track = this.track;
     final remoteArtworkSource =
         fallbackArtworkSource ??
         _firstHomeArtworkSource([
@@ -1925,10 +2077,8 @@ class _RecommendedTrackCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text(
+                MarqueeText(
                   track.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
@@ -1936,11 +2086,11 @@ class _RecommendedTrackCard extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   track.artist,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
@@ -1957,12 +2107,14 @@ class _RecommendedCollectionCard extends StatelessWidget {
     required this.strings,
     required this.width,
     required this.onOpenPlayer,
+    required this.onAddRemoteTracksToPlaylist,
   });
 
   final HomeRecommendationCollection collection;
   final AppStrings strings;
   final double width;
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist onAddRemoteTracksToPlaylist;
 
   @override
   Widget build(BuildContext context) {
@@ -2020,10 +2172,8 @@ class _RecommendedCollectionCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text(
+                  MarqueeText(
                     collection.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
@@ -2031,11 +2181,11 @@ class _RecommendedCollectionCard extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
@@ -2062,6 +2212,7 @@ class _RecommendedCollectionCard extends StatelessWidget {
           emptyMessage: strings.homeCollectionEmpty,
           errorMessage: strings.homeCollectionLoadError,
           onOpenPlayer: onOpenPlayer,
+          onAddToPlaylist: onAddRemoteTracksToPlaylist,
         ),
       ),
     );
@@ -2128,10 +2279,8 @@ class _RecentTrackCard extends ConsumerWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Text(
+                MarqueeText(
                   track.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
@@ -2139,11 +2288,11 @@ class _RecentTrackCard extends ConsumerWidget {
                 const SizedBox(height: 2),
                 Text(
                   track.artist,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
@@ -2208,10 +2357,8 @@ class _HomePlaylistCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Text(
+                MarqueeText(
                   playlist.isFavorites ? strings.favorites : playlist.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
@@ -2219,11 +2366,11 @@ class _HomePlaylistCard extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),

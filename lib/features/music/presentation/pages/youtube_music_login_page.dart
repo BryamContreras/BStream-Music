@@ -72,6 +72,7 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
   var _busy = false;
   var _tearingDown = false;
   var _allowPop = false;
+  var _safeRedirectInFlight = false;
   String _visibleHost = 'accounts.google.com';
   String? _errorMessage;
 
@@ -143,6 +144,13 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
         }
         _webAuthPort = InAppWebViewYouTubeMusicWebAuthPort(
           cookieManager: cookieManager,
+          // Each Windows login gets a brand-new WebView2 profile. There is no
+          // prior cookie jar to clear before the controller is attached; the
+          // profile directory itself is the isolation/cleanup boundary.
+          authenticationCookieCleaner:
+              defaultTargetPlatform == TargetPlatform.windows
+              ? () async => true
+              : null,
           // WebStorageManager.deleteAllData and clearAllCache are not
           // implemented by flutter_inappwebview_windows 0.6. The Windows
           // surface instead uses an InPrivate controller in a brand-new,
@@ -267,11 +275,15 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
           initialSettings: YouTubeMusicLoginPage.secureWebViewSettings(),
           onWebViewCreated: _webAuthPort.attachController,
           shouldOverrideUrlLoading: _shouldOverrideNavigation,
-          onLoadStart: (controller, url) => _publishVisibleUrl(url),
+          onLoadStart: (controller, url) {
+            _logNavigation('load-start', url);
+            _publishVisibleUrl(url);
+          },
           onLoadStop: (controller, url) {
+            _logNavigation('load-stop', url);
             _publishVisibleUrl(url);
             final uri = url == null ? null : Uri.tryParse(url.toString());
-            if (_webAuthPort.navigationPolicy.isYouTubeMusicDocument(uri)) {
+            if (_webAuthPort.navigationPolicy.isYouTubeAuthDocument(uri)) {
               unawaited(_completeAuthentication());
             }
           },
@@ -308,10 +320,30 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
   ) async {
     final rawUrl = action.request.url;
     final uri = rawUrl == null ? null : Uri.tryParse(rawUrl.toString());
+    if (action.isForMainFrame) {
+      final policy = _webAuthPort.navigationPolicy;
+      if (policy.safeIntentDestination(rawUrl?.toString()) != null ||
+          policy.isSafeAuthContinuation(uri)) {
+        final destination = policy.safeIntentDestination(rawUrl?.toString());
+        _logNavigation(
+          'handoff',
+          destination ?? uri,
+          decision: 'redirect-to-music',
+        );
+        unawaited(_resumeAfterGoogleHandOff(controller));
+        return NavigationActionPolicy.CANCEL;
+      }
+    }
     final decision = _webAuthPort.navigationPolicy.evaluate(
       uri,
       isMainFrame: action.isForMainFrame,
     );
+    if (kDebugMode && action.isForMainFrame && uri != null) {
+      debugPrint(
+        'YouTube Music login navigation: ${uri.scheme}://${uri.host}${uri.path} '
+        '-> ${decision.name}',
+      );
+    }
     if (decision == YouTubeMusicNavigationDecision.cancel &&
         action.isForMainFrame &&
         mounted) {
@@ -326,6 +358,30 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
         : NavigationActionPolicy.CANCEL;
   }
 
+  Future<void> _resumeAfterGoogleHandOff(
+    InAppWebViewController controller,
+  ) async {
+    if (_safeRedirectInFlight || !mounted || _tearingDown) return;
+    _safeRedirectInFlight = true;
+    try {
+      if (mounted) setState(() => _errorMessage = null);
+      await controller.loadUrl(
+        urlRequest: URLRequest(
+          url: InAppWebViewYouTubeMusicWebAuthPort.musicUrl,
+        ),
+      );
+    } on Object {
+      if (mounted) {
+        setState(() {
+          _errorMessage =
+              'No se pudo volver a YouTube Music después de la verificación.';
+        });
+      }
+    } finally {
+      _safeRedirectInFlight = false;
+    }
+  }
+
   void _publishVisibleUrl(WebUri? value) {
     final uri = value == null ? null : Uri.tryParse(value.toString());
     if (uri == null ||
@@ -338,6 +394,16 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
       _visibleHost = uri.host.toLowerCase();
       _errorMessage = null;
     });
+  }
+
+  void _logNavigation(String phase, Object? value, {String? decision}) {
+    if (!kDebugMode || value == null) return;
+    final uri = Uri.tryParse(value.toString());
+    if (uri == null) return;
+    debugPrint(
+      'YouTube Music login $phase: ${uri.scheme}://${uri.host}${uri.path}'
+      '${decision == null ? '' : ' -> $decision'}',
+    );
   }
 
   Future<void> _completeAuthentication() async {
@@ -383,8 +449,16 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
         setState(() => _errorMessage = authState.message);
       }
     } on YouTubeMusicWebAuthException catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          'YouTube Music auth completion failed: ${error.runtimeType}',
+        );
+      }
       if (mounted) setState(() => _errorMessage = error.message);
     } on Object {
+      if (kDebugMode) {
+        debugPrint('YouTube Music auth completion failed: unknown-error');
+      }
       if (mounted) {
         setState(() {
           _errorMessage =

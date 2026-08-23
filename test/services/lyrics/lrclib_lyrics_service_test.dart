@@ -2318,6 +2318,137 @@ void main() {
   );
 
   test(
+    'prefers a synchronized artist-prefixed LRCLIB title over plain lyrics',
+    () async {
+      transport
+        ..enqueue(_jsonResponse(HttpStatus.notFound, {'message': 'missing'}))
+        ..enqueue(
+          _jsonResponse(HttpStatus.ok, [
+            _record(
+              id: 12,
+              trackName: 'Jacaranda Gris',
+              artistName: 'Musibu',
+              duration: 216,
+              plainLyrics: 'Plain only',
+            ),
+            _record(
+              id: 13,
+              trackName: 'Musibu - Jacaranda Gris',
+              artistName: 'Musibu',
+              duration: 216,
+              syncedLyrics: '[00:01.00]Synced',
+            ),
+          ]),
+        );
+      final service = createService();
+
+      final result = await service.findLyrics(
+        const LyricsLookup(
+          title: 'Jacaranda Gris',
+          artist: 'Musibu',
+          duration: Duration(seconds: 216),
+        ),
+      );
+
+      expect(result?.providerId, '13');
+      expect(result?.hasSyncedLyrics, isTrue);
+    },
+  );
+
+  test(
+    'continues after an exact plain mirror to find synchronized search lyrics',
+    () async {
+      transport.responder = (uri) {
+        if (uri.path.endsWith('/get')) {
+          return _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 21,
+              trackName: 'Jacaranda Gris',
+              artistName: 'Musibu',
+              duration: 216,
+              plainLyrics: 'Plain mirror',
+            ),
+          );
+        }
+        return _jsonResponse(HttpStatus.ok, [
+          _record(
+            id: 22,
+            trackName: 'Musibu - Jacaranda Gris',
+            artistName: 'Musibu',
+            duration: 216,
+            syncedLyrics: '[00:01.00]Synced mirror',
+          ),
+        ]);
+      };
+      final service = createService(delay: (_) async {});
+
+      final result = await service.findLyrics(
+        const LyricsLookup(
+          title: 'Jacaranda Gris',
+          artist: 'Musibu',
+          duration: Duration(seconds: 216),
+        ),
+      );
+
+      expect(result?.providerId, '22');
+      expect(result?.hasSyncedLyrics, isTrue);
+      expect(
+        transport.requests.where((r) => r.uri.path.endsWith('/search')),
+        isNotEmpty,
+      );
+    },
+  );
+
+  test(
+    'prefers a close synchronized mirror when search also returns the plain exact title',
+    () async {
+      transport.responder = (uri) {
+        if (uri.path.endsWith('/get')) {
+          return _jsonResponse(
+            HttpStatus.ok,
+            _record(
+              id: 31,
+              trackName: 'Jacaranda Gris',
+              artistName: 'Musibu',
+              duration: 216,
+              plainLyrics: 'Plain exact mirror',
+            ),
+          );
+        }
+        return _jsonResponse(HttpStatus.ok, [
+          _record(
+            id: 32,
+            trackName: 'Jacaranda Gris',
+            artistName: 'Musibu',
+            duration: 216,
+            plainLyrics: 'Plain search mirror',
+          ),
+          _record(
+            id: 33,
+            trackName: 'Musibu - Jacaranda Gris',
+            artistName: 'Musibu',
+            duration: 216,
+            syncedLyrics: '[00:01.00]Synchronized mirror',
+          ),
+        ]);
+      };
+      final service = createService(delay: (_) async {});
+
+      final result = await service.findLyrics(
+        const LyricsLookup(
+          title: 'Jacaranda Gris',
+          artist: 'Musibu',
+          duration: Duration(seconds: 215),
+        ),
+      );
+
+      expect(result?.providerId, '33');
+      expect(result?.hasSyncedLyrics, isTrue);
+    },
+  );
+
+  test(
     'rejects a large duration mismatch and continues to broad search',
     () async {
       final delays = <Duration>[];
@@ -2676,6 +2807,9 @@ void main() {
           ),
         ),
       );
+      // A plain exact record is retained as a fallback while the bounded
+      // search checks whether LRCLIB has a synchronized mirror.
+      transport.enqueue(_jsonResponse(HttpStatus.ok, <Object>[]));
       final firstResult = await first;
       final simultaneousResult = await simultaneous;
       expect(identical(firstResult, simultaneousResult), isTrue);
@@ -2692,11 +2826,12 @@ void main() {
           ),
         ),
       );
+      transport.enqueue(_jsonResponse(HttpStatus.ok, <Object>[]));
       final refreshed = await service.findLyrics(_lookup());
 
       expect(firstResult?.providerId, '80');
       expect(refreshed?.providerId, '81');
-      expect(transport.requests, hasLength(2));
+      expect(transport.requests, hasLength(4));
     },
   );
 
@@ -2715,6 +2850,7 @@ void main() {
           ),
         ),
       )
+      ..enqueue(_jsonResponse(HttpStatus.ok, <Object>[]))
       ..enqueue(
         _jsonResponse(
           HttpStatus.ok,
@@ -2726,7 +2862,8 @@ void main() {
             plainLyrics: 'Updated',
           ),
         ),
-      );
+      )
+      ..enqueue(_jsonResponse(HttpStatus.ok, <Object>[]));
     final service = createService(
       clock: () => now,
       cacheTtl: const Duration(minutes: 15),
@@ -2738,7 +2875,7 @@ void main() {
 
     expect(first?.providerId, '60');
     expect(refreshed?.providerId, '61');
-    expect(transport.requests, hasLength(2));
+    expect(transport.requests, hasLength(4));
   });
 
   test(
@@ -2763,6 +2900,7 @@ void main() {
             ),
           ),
         )
+        ..enqueue(_jsonResponse(HttpStatus.ok, <Object>[]))
         ..enqueue(
           _jsonResponse(
             HttpStatus.ok,
@@ -2775,6 +2913,7 @@ void main() {
             ),
           ),
         )
+        ..enqueue(_jsonResponse(HttpStatus.ok, <Object>[]))
         ..enqueue(
           _jsonResponse(
             HttpStatus.ok,
@@ -2787,6 +2926,7 @@ void main() {
             ),
           ),
         )
+        ..enqueue(_jsonResponse(HttpStatus.ok, <Object>[]))
         ..enqueue(
           _jsonResponse(
             HttpStatus.ok,
@@ -2798,7 +2938,8 @@ void main() {
               plainLyrics: 'First lyrics refreshed',
             ),
           ),
-        );
+        )
+        ..enqueue(_jsonResponse(HttpStatus.ok, <Object>[]));
       final service = createService(delay: (_) async {}, maxCacheEntries: 2);
 
       expect((await service.findLyrics(lookup('First')))?.providerId, '1');
@@ -2806,7 +2947,7 @@ void main() {
       expect((await service.findLyrics(lookup('Third')))?.providerId, '3');
       expect((await service.findLyrics(lookup('First')))?.providerId, '4');
 
-      expect(transport.requests, hasLength(4));
+      expect(transport.requests, hasLength(8));
     },
   );
 
@@ -2824,7 +2965,8 @@ void main() {
             plainLyrics: 'Recovered',
           ),
         ),
-      );
+      )
+      ..enqueue(_jsonResponse(HttpStatus.ok, <Object>[]));
     final service = createService();
 
     await expectLater(
@@ -2834,7 +2976,7 @@ void main() {
     final recovered = await service.findLyrics(_lookup());
 
     expect(recovered?.providerId, '70');
-    expect(transport.requests, hasLength(2));
+    expect(transport.requests, hasLength(3));
   });
 
   test('reports malformed JSON as a format error', () async {

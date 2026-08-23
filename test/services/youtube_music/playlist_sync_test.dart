@@ -114,6 +114,46 @@ void main() {
       );
     });
 
+    test('Liked Music order and title churn does not create a conflict', () {
+      final base = _snapshot('Liked Music', <PlaylistSyncItem>[
+        _item('A', localId: 'a', setId: 'sa'),
+        _item('B', localId: 'b', setId: 'sb'),
+        _item('C', localId: 'c', setId: 'sc'),
+      ]);
+      final local = _snapshot('Liked Music', <PlaylistSyncItem>[
+        _item('B', localId: 'b'),
+        _item('A', localId: 'a'),
+        _item('C', localId: 'c'),
+        _item('D', localId: 'd'),
+      ]);
+      final remote = _snapshot('Liked Music', <PlaylistSyncItem>[
+        _item('A', setId: 'sa'),
+        _item('C', setId: 'sc'),
+        _item('B', setId: 'sb'),
+        _item('E', setId: 'se'),
+      ]);
+
+      final result = merger.merge(
+        base: base,
+        local: local,
+        remote: remote,
+        ignoreTitleConflicts: true,
+        ignoreOrderConflicts: true,
+      );
+
+      expect(result.hasConflicts, isFalse);
+      expect(
+        result.snapshot!.items.map((item) => item.videoId).toSet(),
+        <String>{
+          _video('A'),
+          _video('B'),
+          _video('C'),
+          _video('D'),
+          _video('E'),
+        },
+      );
+    });
+
     test('local-only entries remain local and outside remote projection', () {
       final localOnly = PlaylistSyncItem(
         localItemId: 'local-file',
@@ -138,6 +178,183 @@ void main() {
 
   group('PlaylistSyncEngine', () {
     final now = DateTime.utc(2026, 8, 22, 12);
+
+    test(
+      'Favorites use like endpoints instead of editing the LM playlist',
+      () async {
+        final base = _snapshot('Liked Music', <PlaylistSyncItem>[
+          _item('A', localId: 'a', setId: 'set-a'),
+        ]);
+        final local = _snapshot('Favoritos', <PlaylistSyncItem>[
+          _item('A', localId: 'a', setId: 'set-a'),
+          _item('B', localId: 'b'),
+        ]);
+        final remoteBefore = _snapshot('Liked Music', <PlaylistSyncItem>[
+          _item('A', setId: 'set-a'),
+        ]);
+        final remoteAfter = _snapshot('Liked Music', <PlaylistSyncItem>[
+          _item('B', setId: 'set-b'),
+          _item('A', setId: 'set-a'),
+        ]);
+        final key = const PlaylistSyncKey(
+          accountKey: 'account',
+          playlistId: 'bstream:favorites',
+        );
+        final store = _MemoryStore(
+          PlaylistSyncWork(
+            binding: PlaylistSyncBinding(
+              key: key,
+              remotePlaylistId: 'LM',
+              mode: PlaylistSyncMode.automatic,
+              localRevisionAtBase: 2,
+              createdAt: now,
+              updatedAt: now,
+            ),
+            base: base,
+            local: local,
+            localRevision: 2,
+            localDeleted: false,
+          ),
+        );
+        final gateway = _FakeLikedGateway()
+          ..fetches.addAll(<PlaylistSyncSnapshot?>[remoteBefore, remoteAfter]);
+
+        final result = await _engine(store, gateway, now).sync(key);
+
+        expect(result.disposition, PlaylistSyncDisposition.synchronized);
+        expect(gateway.likedMutationCount, 1);
+        expect(gateway.mutationCount, 0);
+        expect(
+          gateway.likedDesired!.items.map((item) => item.videoId),
+          contains(_video('B')),
+        );
+        expect(store.work.intent, isNull);
+      },
+    );
+
+    test('Favorites ignore server reordering after a like', () async {
+      final a = _item('A', localId: 'a', setId: 'set-a');
+      final b = _item('B', localId: 'b', setId: 'set-b');
+      final key = const PlaylistSyncKey(
+        accountKey: 'account',
+        playlistId: 'bstream:favorites',
+      );
+      final store = _MemoryStore(
+        PlaylistSyncWork(
+          binding: PlaylistSyncBinding(
+            key: key,
+            remotePlaylistId: 'LM',
+            mode: PlaylistSyncMode.automatic,
+            localRevisionAtBase: 1,
+            createdAt: now,
+            updatedAt: now,
+          ),
+          base: _snapshot('Liked Music', <PlaylistSyncItem>[a, b]),
+          local: _snapshot('Favoritos', <PlaylistSyncItem>[a, b]),
+          localRevision: 1,
+          localDeleted: false,
+        ),
+      );
+      final gateway = _FakeLikedGateway()
+        ..fetches.add(_snapshot('Liked Music', <PlaylistSyncItem>[b, a]));
+
+      final result = await _engine(store, gateway, now).sync(key);
+
+      expect(result.disposition, PlaylistSyncDisposition.synchronized);
+      expect(gateway.likedMutationCount, 0);
+      expect(gateway.mutationCount, 0);
+    });
+
+    test(
+      'an ambiguous favorite like is confirmed despite server reordering',
+      () async {
+        final a = _item('A', localId: 'a', setId: 'set-a');
+        final b = _item('B', localId: 'b', setId: 'set-b');
+        final desired = _snapshot('Favoritos', <PlaylistSyncItem>[a, b]);
+        final key = const PlaylistSyncKey(
+          accountKey: 'account',
+          playlistId: 'bstream:favorites',
+        );
+        final store = _MemoryStore(
+          PlaylistSyncWork(
+            binding: PlaylistSyncBinding(
+              key: key,
+              remotePlaylistId: 'LM',
+              mode: PlaylistSyncMode.automatic,
+              localRevisionAtBase: 2,
+              createdAt: now,
+              updatedAt: now,
+            ),
+            base: _snapshot('Liked Music', <PlaylistSyncItem>[a]),
+            local: desired,
+            localRevision: 2,
+            localDeleted: false,
+            intent: _ambiguousIntent(desired, now),
+          ),
+        );
+        final gateway = _FakeLikedGateway()
+          ..fetches.add(_snapshot('Liked Music', <PlaylistSyncItem>[b, a]));
+
+        final result = await _engine(store, gateway, now).sync(key);
+
+        expect(result.disposition, PlaylistSyncDisposition.synchronized);
+        expect(gateway.likedMutationCount, 0);
+        expect(gateway.mutationCount, 0);
+        expect(store.work.intent, isNull);
+      },
+    );
+
+    test(
+      'a legacy Favorites conflict is repaired with like endpoints',
+      () async {
+        final a = _item('A', localId: 'a', setId: 'set-a');
+        final b = _item('B', localId: 'b');
+        final key = const PlaylistSyncKey(
+          accountKey: 'account',
+          playlistId: 'bstream:favorites',
+        );
+        final local = _snapshot('Favoritos', <PlaylistSyncItem>[a, b]);
+        final store = _MemoryStore(
+          PlaylistSyncWork(
+            binding: PlaylistSyncBinding(
+              key: key,
+              remotePlaylistId: 'LM',
+              mode: PlaylistSyncMode.automatic,
+              localRevisionAtBase: 2,
+              createdAt: now,
+              updatedAt: now,
+            ),
+            base: _snapshot('Liked Music', <PlaylistSyncItem>[a]),
+            local: local,
+            localRevision: 2,
+            localDeleted: false,
+            intent: PlaylistSyncIntent(
+              key: key,
+              requestedLocalRevision: 2,
+              reason: 'conflict_remoteNotEditable',
+              status: PlaylistSyncIntentStatus.conflict,
+              desiredSnapshot: local,
+              mutationToken: 'old-token',
+              attemptCount: 0,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          ),
+        );
+        final gateway = _FakeLikedGateway()
+          ..fetches.addAll(<PlaylistSyncSnapshot?>[
+            _snapshot('Liked Music', <PlaylistSyncItem>[a]),
+            _snapshot('Liked Music', <PlaylistSyncItem>[a, b]),
+          ]);
+
+        final result = await _engine(store, gateway, now).sync(key);
+
+        expect(result.disposition, PlaylistSyncDisposition.synchronized);
+        expect(gateway.likedMutationCount, 1);
+        expect(gateway.mutationCount, 0);
+        expect(store.work.intent, isNull);
+      },
+    );
 
     test('offline fetch is deferred without a mutation', () async {
       final store = _MemoryStore(_work());
@@ -892,6 +1109,29 @@ class _FakeGateway implements YouTubeMusicPlaylistGateway {
   }) async {
     mutationCount += 1;
     return mutationReceipt;
+  }
+}
+
+class _FakeLikedGateway extends _FakeGateway
+    implements YouTubeMusicLikedMusicGateway {
+  int likedMutationCount = 0;
+  PlaylistSyncSnapshot? likedObserved;
+  PlaylistSyncSnapshot? likedDesired;
+
+  @override
+  Future<RemoteMutationReceipt> applyLikedMusicState({
+    required String accountKey,
+    required PlaylistSyncSnapshot observed,
+    required PlaylistSyncSnapshot desired,
+    required String mutationToken,
+  }) async {
+    likedMutationCount += 1;
+    likedObserved = observed;
+    likedDesired = desired;
+    return const RemoteMutationReceipt(
+      status: RemoteMutationStatus.acknowledged,
+      remotePlaylistId: 'LM',
+    );
   }
 }
 

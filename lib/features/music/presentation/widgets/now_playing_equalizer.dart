@@ -2,12 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// Compact segmented equalizer shared by the library and playback queue.
+/// Compact segmented equalizer shared by artwork cards and playback queues.
 class NowPlayingEqualizer extends StatefulWidget {
   const NowPlayingEqualizer({
     required this.isPlaying,
-    this.width = 44,
-    this.height = 14,
+    this.width = 48,
+    this.height = 18,
     super.key,
   });
 
@@ -17,6 +17,82 @@ class NowPlayingEqualizer extends StatefulWidget {
 
   @override
   State<NowPlayingEqualizer> createState() => _NowPlayingEqualizerState();
+}
+
+/// Bottom-aligned artwork overlay used by track cards.
+///
+/// This widget is intentionally a [Positioned] so every card uses the same
+/// placement and the equalizer never changes the artwork's layout size.
+class NowPlayingEqualizerOverlay extends StatelessWidget {
+  const NowPlayingEqualizerOverlay({
+    required this.isPlaying,
+    this.width = 48,
+    this.height = 18,
+    this.bottom = 0,
+    super.key,
+  });
+
+  final bool isPlaying;
+  final double width;
+  final double height;
+  final double bottom;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: bottom,
+      child: Center(
+        child: NowPlayingEqualizer(
+          isPlaying: isPlaying,
+          width: width,
+          height: height,
+        ),
+      ),
+    );
+  }
+}
+
+/// Adds the paused equalizer treatment to collection artwork while it is
+/// hovered, without taking part in the card's layout.
+class HoverEqualizerArtwork extends StatefulWidget {
+  const HoverEqualizerArtwork({
+    required this.child,
+    this.width = 48,
+    this.height = 18,
+    super.key,
+  });
+
+  final Widget child;
+  final double width;
+  final double height;
+
+  @override
+  State<HoverEqualizerArtwork> createState() => _HoverEqualizerArtworkState();
+}
+
+class _HoverEqualizerArtworkState extends State<HoverEqualizerArtwork> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Stack(
+        children: [
+          widget.child,
+          if (_hovered)
+            NowPlayingEqualizerOverlay(
+              isPlaying: false,
+              width: widget.width,
+              height: widget.height,
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
@@ -107,7 +183,7 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
 
   @override
   Widget build(BuildContext context) {
-    final indicatorColor = Theme.of(context).colorScheme.onSurface;
+    final indicatorColor = Theme.of(context).colorScheme.primary;
     return Semantics(
       label: widget.isPlaying ? 'Reproduciendo' : 'Reproducción pausada',
       child: SizedBox(
@@ -142,7 +218,7 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
               children: [
                 for (var column = 0; column < levels.length; column++)
                   SizedBox(
-                    width: 1.9,
+                    width: 2.4,
                     height: widget.height,
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -153,8 +229,8 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
                           segment++
                         )
                           Container(
-                            width: 1.9,
-                            height: 2.1,
+                            width: 2.4,
+                            height: 2.7,
                             decoration: BoxDecoration(
                               color: indicatorColor.withValues(
                                 alpha: _segmentCount - segment <= levels[column]

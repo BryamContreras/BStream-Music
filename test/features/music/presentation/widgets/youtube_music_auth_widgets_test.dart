@@ -60,10 +60,13 @@ void main() {
 
     expect(find.text('Synchronize playlists'), findsOneWidget);
     expect(find.textContaining('3 local playlists will stay'), findsOneWidget);
-    expect(find.textContaining('Favorites will remain local'), findsOneWidget);
+    expect(
+      find.textContaining('Favorites will sync with YouTube Music'),
+      findsOneWidget,
+    );
     expect(find.textContaining('created as private playlists'), findsOneWidget);
     expect(
-      find.textContaining('Remote playlists will be imported'),
+      find.textContaining('remote playlists are imported here'),
       findsOneWidget,
     );
     expect(find.text('Keep and synchronize'), findsOneWidget);

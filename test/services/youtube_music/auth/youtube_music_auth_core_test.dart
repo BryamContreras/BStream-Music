@@ -90,6 +90,90 @@ void main() {
         policy.evaluate(null, isMainFrame: true),
         YouTubeMusicNavigationDecision.cancel,
       );
+      expect(
+        policy.evaluate(
+          Uri.parse('https://accounts.google.com.evil.example/'),
+          isMainFrame: true,
+        ),
+        YouTubeMusicNavigationDecision.cancel,
+      );
+      expect(
+        policy.evaluate(
+          Uri.parse('https://accounts.google.com/'),
+          isMainFrame: true,
+        ),
+        YouTubeMusicNavigationDecision.allow,
+      );
+      expect(
+        policy.evaluate(
+          Uri.parse('https://accounts-login.google.com/'),
+          isMainFrame: true,
+        ),
+        YouTubeMusicNavigationDecision.allow,
+      );
+      expect(
+        policy.evaluate(
+          Uri.parse('https://accounts.google.com./'),
+          isMainFrame: true,
+        ),
+        YouTubeMusicNavigationDecision.allow,
+      );
+      expect(
+        policy.evaluate(
+          Uri.parse('https://accounts.google.com.ni/accounts/SetSID'),
+          isMainFrame: true,
+        ),
+        YouTubeMusicNavigationDecision.allow,
+      );
+      expect(
+        policy.evaluate(
+          Uri.parse('https://accounts.google.com.evil/'),
+          isMainFrame: true,
+        ),
+        YouTubeMusicNavigationDecision.cancel,
+      );
+      expect(
+        policy.evaluate(Uri.parse('about:blank'), isMainFrame: true),
+        YouTubeMusicNavigationDecision.allow,
+      );
+    });
+
+    test('recovers only the exact Google hand-off intents', () {
+      expect(
+        policy.safeIntentDestination(
+          'intent://play.google.com/store/apps/details?id=com.google.android.apps.music'
+          '#Intent;scheme=https;end',
+        ),
+        Uri.parse(
+          'https://play.google.com/store/apps/details?id=com.google.android.apps.music',
+        ),
+      );
+      expect(
+        policy.safeIntentDestination(
+          'intent://accounts.youtube.com/accounts/SetSID?continue=https%3A%2F%2Fmusic.youtube.com%2F'
+          '#Intent;scheme=https;end',
+        ),
+        Uri.parse(
+          'https://accounts.youtube.com/accounts/SetSID?continue=https%3A%2F%2Fmusic.youtube.com%2F',
+        ),
+      );
+      expect(
+        policy.safeIntentDestination(
+          'intent://evil.example/#Intent;scheme=https;end',
+        ),
+        isNull,
+      );
+      expect(policy.safeIntentDestination('https://play.google.com/'), isNull);
+      expect(
+        policy.isSafeAuthContinuation(Uri.parse('https://play.google.com/')),
+        isTrue,
+      );
+      expect(
+        policy.isSafeAuthContinuation(
+          Uri.parse('https://passwords.google.com/'),
+        ),
+        isTrue,
+      );
     });
 
     test('allows HTTPS CDN subframes without weakening the main frame', () {
@@ -126,6 +210,29 @@ void main() {
         policy.isYouTubeMusicDocument(
           Uri.parse('https://user@music.youtube.com/'),
         ),
+        isFalse,
+      );
+    });
+
+    test('recognizes the exact YouTube hand-off documents', () {
+      expect(
+        policy.isYouTubeAuthDocument(
+          Uri.parse('https://www.youtube.com/watch?v=abc'),
+        ),
+        isTrue,
+      );
+      expect(
+        policy.isYouTubeAuthDocument(Uri.parse('https://youtube.com/')),
+        isTrue,
+      );
+      expect(
+        policy.isYouTubeAuthDocument(
+          Uri.parse('https://www.youtube.com.evil.example/'),
+        ),
+        isFalse,
+      );
+      expect(
+        policy.isYouTubeAuthDocument(Uri.parse('http://www.youtube.com/')),
         isFalse,
       );
     });
@@ -183,6 +290,7 @@ void main() {
       expect(restored.apiKey, 'test_api_key');
       expect(restored.clientVersion, '1.20260822.00.00');
       expect(restored.clientName, 'WEB_REMIX');
+      expect(restored.region, 'MX');
       expect(restored.profile.displayName, 'Cuenta de prueba');
       expect(restored.validatedAt, credential.validatedAt);
       for (final output in <String>[
@@ -317,4 +425,5 @@ YouTubeMusicSessionCredential _credential() => YouTubeMusicSessionCredential(
   apiKey: 'test_api_key',
   clientVersion: '1.20260822.00.00',
   clientName: 'WEB_REMIX',
+  region: 'mx',
 );

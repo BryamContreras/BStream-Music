@@ -8,8 +8,10 @@ import 'package:flutter/services.dart';
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
+import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/local_track.dart';
@@ -206,6 +208,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 wide: wide,
                                 mobile: mobile,
                                 compactness: verticalCompactness,
+                                mobileFrameCompactness: mobileFrameCompactness,
                               );
                               final artworkExtent = mobile
                                   ? _mobileArtworkExtent(
@@ -379,6 +382,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     required bool wide,
     required bool mobile,
     required double compactness,
+    required double mobileFrameCompactness,
   }) {
     late final double regularExtent;
     if (stackedDesktop) {
@@ -395,7 +399,13 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       regularExtent = math
           .min(
             constraints.maxWidth - (mobile ? 8 : 16),
-            constraints.maxHeight * (mobile ? 0.46 : 0.56),
+            // The single-line title frees a little vertical room. Use more of
+            // it on tall phones while retaining the compact short-phone
+            // fraction so the lower controls remain reachable.
+            constraints.maxHeight *
+                (mobile
+                    ? lerpDouble(0.50, 0.47, mobileFrameCompactness)!
+                    : 0.56),
           )
           .clamp(mobile ? 180.0 : 210.0, 400.0)
           .toDouble();
@@ -695,7 +705,7 @@ class _PlaybackQueuePanel extends ConsumerWidget {
   }
 }
 
-class _PlaybackQueueTile extends StatelessWidget {
+class _PlaybackQueueTile extends StatefulWidget {
   const _PlaybackQueueTile({
     required this.entry,
     required this.isCurrent,
@@ -709,90 +719,98 @@ class _PlaybackQueueTile extends StatelessWidget {
   final VoidCallback? onTap;
 
   @override
+  State<_PlaybackQueueTile> createState() => _PlaybackQueueTileState();
+}
+
+class _PlaybackQueueTileState extends State<_PlaybackQueueTile> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
+    final entry = widget.entry;
+    final isCurrent = widget.isCurrent;
+    final isPlaying = widget.isPlaying;
     final colors = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Material(
-        color: isCurrent
-            ? colors.onSurface.withValues(alpha: 0.1)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            child: Row(
-              children: [
-                SizedBox.square(
-                  dimension: 46,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: ColoredBox(
-                          color: const Color(0xFF202520),
-                          child: entry.thumbnailUrl == null
-                              ? const Icon(Icons.music_note_rounded, size: 22)
-                              : SourceImage(
-                                  source: entry.thumbnailUrl,
-                                  fit: BoxFit.cover,
-                                  cacheWidth: 256,
-                                  fallback: const Icon(
-                                    Icons.music_note_rounded,
-                                    size: 22,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Material(
+          color: isCurrent || _hovered
+              ? colors.onSurface.withValues(alpha: 0.1)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: widget.onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(
+                children: [
+                  SizedBox.square(
+                    dimension: 46,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(appArtworkRadius),
+                          child: ColoredBox(
+                            color: const Color(0xFF202520),
+                            child: entry.thumbnailUrl == null
+                                ? const Icon(Icons.music_note_rounded, size: 22)
+                                : SourceImage(
+                                    source: entry.thumbnailUrl,
+                                    fit: BoxFit.cover,
+                                    cacheWidth: 256,
+                                    fallback: const Icon(
+                                      Icons.music_note_rounded,
+                                      size: 22,
+                                    ),
                                   ),
-                                ),
-                        ),
-                      ),
-                      if (isCurrent)
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          child: Center(
-                            child: NowPlayingEqualizer(
-                              key: ValueKey('queue-now-playing-${entry.id}'),
-                              isPlaying: isPlaying,
-                              width: 42,
-                              height: 14,
-                            ),
                           ),
                         ),
-                    ],
+                        if (isCurrent || _hovered)
+                          NowPlayingEqualizerOverlay(
+                            key: ValueKey('queue-now-playing-${entry.id}'),
+                            isPlaying: isPlaying,
+                            width: 46,
+                            height: 18,
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        entry.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: isCurrent
-                              ? FontWeight.w900
-                              : FontWeight.w700,
-                          color: AppColors.contentTitleFor(context),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          entry.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: isCurrent
+                                ? FontWeight.w900
+                                : FontWeight.w700,
+                            color: AppColors.contentTitleFor(context),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        entry.artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppColors.contentSubtitleFor(context),
+                        const SizedBox(height: 2),
+                        Text(
+                          entry.artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: AppColors.contentSubtitleFor(context),
+                              ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -946,7 +964,7 @@ class _PlayerArtworkSurface extends StatelessWidget {
         return DecoratedBox(
           key: const ValueKey('player-artwork-surface'),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(appArtworkRadius),
             boxShadow: [shadow],
           ),
           child: Stack(
@@ -954,7 +972,7 @@ class _PlayerArtworkSurface extends StatelessWidget {
             clipBehavior: Clip.none,
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(appArtworkRadius),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -1061,31 +1079,25 @@ class _PlayerControls extends ConsumerWidget {
       color: AppColors.contentSubtitleFor(context),
     );
     final titleArtistGap = lerpDouble(6, 4, compactness)!;
-    final maxTitleLines = compact ? 2 : 3;
 
     Widget metadata() => SizedBox(
       width: double.infinity,
-      child: Stack(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          MarqueeText(
+            key: const ValueKey('player-track-title'),
+            snapshot.title ?? strings.noPlayback,
+            style: titleStyle,
+          ),
+          SizedBox(
+            key: const ValueKey('player-title-artist-gap'),
+            height: titleArtistGap,
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 104),
-                child: Text(
-                  key: const ValueKey('player-track-title'),
-                  snapshot.title ?? strings.noPlayback,
-                  maxLines: maxTitleLines,
-                  overflow: TextOverflow.ellipsis,
-                  style: titleStyle,
-                ),
-              ),
-              SizedBox(
-                key: const ValueKey('player-title-artist-gap'),
-                height: titleArtistGap,
-              ),
-              Padding(
-                padding: const EdgeInsets.only(right: 104),
+              Expanded(
                 child: Text(
                   key: const ValueKey('player-track-artist'),
                   snapshot.artist ?? 'BStream Music',
@@ -1094,39 +1106,26 @@ class _PlayerControls extends ConsumerWidget {
                   style: artistStyle,
                 ),
               ),
+              _PlayerShareButton(
+                snapshot: snapshot,
+                savedTrackId: savedTrackId,
+                strings: strings,
+              ),
+              _PlayerFavoriteButton(
+                snapshot: snapshot,
+                isFavorite: isFavorite,
+                savedTrackId: savedTrackId,
+                strings: strings,
+              ),
             ],
-          ),
-          Positioned(
-            top: 0,
-            right: 0,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _PlayerShareButton(
-                  snapshot: snapshot,
-                  savedTrackId: savedTrackId,
-                  strings: strings,
-                ),
-                _PlayerFavoriteButton(
-                  snapshot: snapshot,
-                  isFavorite: isFavorite,
-                  savedTrackId: savedTrackId,
-                  strings: strings,
-                ),
-              ],
-            ),
           ),
         ],
       ),
     );
 
     // The Android body is bottom-aligned so its playback actions stay close to
-    // the system inset. Reserve the tallest metadata height while also letting
-    // the real metadata contribute its measured height. CJK fallback fonts can
-    // be taller than the Latin placeholder; constraining the real content with
-    // Positioned.fill would make a two-line title overflow that reservation.
-    // Keeping both children non-positioned makes the Stack use their maximum
-    // height, while unused placeholder height remains before the timeline.
+    // the system inset. Reserve one title line while the real text metrics are
+    // measured; long titles now slide horizontally instead of wrapping.
     final stableMetadata = mobile
         ? SizedBox(
             key: const ValueKey('player-stable-metadata'),
@@ -1140,11 +1139,7 @@ class _PlayerControls extends ConsumerWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          List<String>.filled(maxTitleLines, 'A').join('\n'),
-                          maxLines: maxTitleLines,
-                          style: titleStyle,
-                        ),
+                        Text('A', maxLines: 1, style: titleStyle),
                         SizedBox(height: titleArtistGap),
                         Text('A', maxLines: 1, style: artistStyle),
                       ],
@@ -2250,7 +2245,7 @@ Future<void> _toggleFavoriteForSnapshot({
   if (trackId == null && !snapshot.isRemote) {
     trackId = currentTrackId;
   }
-  if (trackId == null && isFavorite) {
+  if (trackId == null && isFavorite && !snapshot.isRemote) {
     trackId = currentTrackId;
   }
 
@@ -2264,29 +2259,35 @@ Future<void> _toggleFavoriteForSnapshot({
       final canonical = ref
           .read(playerControllerProvider.notifier)
           .currentRemoteTrackFor(sourceUrl);
-      final localTrack = await ref
-          .read(downloadControllerProvider.notifier)
-          .downloadAudioForLibrary(
-            canonical ??
-                TrackInfo(
-                  id: snapshot.trackId ?? sourceUrl,
-                  title: snapshot.title ?? strings.noTitle,
-                  artist: snapshot.artist ?? strings.unknownArtist,
-                  url: sourceUrl,
-                  thumbnailUrl: snapshot.thumbnailUrl,
-                  duration: snapshot.duration,
-                  album: snapshot.album,
-                ),
-            onDownloadStarted: () {
-              if (!context.mounted) {
-                return;
-              }
-              ScaffoldMessenger.of(context)
-                ..hideCurrentSnackBar()
-                ..showSnackBar(SnackBar(content: Text(strings.downloading)));
-            },
+      final remote =
+          canonical ??
+          TrackInfo(
+            id: snapshot.trackId ?? sourceUrl,
+            title: snapshot.title ?? strings.noTitle,
+            artist: snapshot.artist ?? strings.unknownArtist,
+            url: sourceUrl,
+            thumbnailUrl: snapshot.thumbnailUrl,
+            duration: snapshot.duration,
+            album: snapshot.album,
           );
-      trackId = localTrack.id;
+      // Remote tracks are added to Favorites first. Downloading is a
+      // best-effort follow-up, so a network failure cannot lose the like.
+      final isNowFavorite = await ref
+          .read(playlistsControllerProvider.notifier)
+          .toggleFavoriteRemote(remote);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              isNowFavorite
+                  ? strings.addedToFavorites
+                  : strings.removedFromFavorites,
+            ),
+          ),
+        );
+      return;
     } catch (error) {
       if (!context.mounted) {
         return;

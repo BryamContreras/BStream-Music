@@ -29,6 +29,11 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
     WebUri('https://youtube.com/'),
     musicUrl,
   ];
+  static final List<WebUri> _youtubeAuthDocumentUrls = <WebUri>[
+    musicUrl,
+    WebUri('https://www.youtube.com/'),
+    WebUri('https://youtube.com/'),
+  ];
 
   static const String _configurationScript = r'''
 (() => {
@@ -53,7 +58,8 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
     delegatedPageId: read('DELEGATED_SESSION_ID'),
     apiKey: read('INNERTUBE_API_KEY'),
     clientVersion: read('INNERTUBE_CLIENT_VERSION') ?? client.clientVersion,
-    clientName: read('INNERTUBE_CLIENT_NAME') ?? client.clientName
+    clientName: read('INNERTUBE_CLIENT_NAME') ?? client.clientName,
+    region: read('GL') ?? read('GEO') ?? client.gl ?? client.country
   });
 })()
 ''';
@@ -111,7 +117,7 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
 
   @override
   Future<YouTubeMusicWebAuthData> waitForAuthenticatedSession({
-    int maximumAttempts = 20,
+    int maximumAttempts = 30,
     Duration retryDelay = const Duration(milliseconds: 500),
   }) async {
     if (maximumAttempts <= 0 || retryDelay.isNegative) {
@@ -123,7 +129,18 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
       final currentUri = currentUrl == null
           ? null
           : Uri.tryParse(currentUrl.toString());
-      if (navigationPolicy.isYouTubeMusicDocument(currentUri)) {
+      if (navigationPolicy.isYouTubeAuthDocument(currentUri)) {
+        // Keep account validation on the Music WEB_REMIX document. Google can
+        // finish verification on www.youtube.com first; reading that page's
+        // generic WEB config can produce a valid-looking but unusable
+        // account context.
+        if (!navigationPolicy.isYouTubeMusicDocument(currentUri)) {
+          await controller.loadUrl(urlRequest: URLRequest(url: musicUrl));
+          if (attempt + 1 < maximumAttempts) {
+            await Future<void>.delayed(retryDelay);
+          }
+          continue;
+        }
         final authData = await _tryReadAuthData(controller);
         if (authData != null) return authData;
       }
@@ -147,6 +164,7 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
       final apiKey = _nonEmptyString(config['apiKey']);
       final clientVersion = _nonEmptyString(config['clientVersion']);
       final clientName = _nonEmptyString(config['clientName']);
+      final region = _nonEmptyString(config['region']);
       if (visitorData == null ||
           authUser == null ||
           apiKey == null ||
@@ -155,19 +173,31 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
         return null;
       }
 
-      final cookies = await _effectiveCookieManager.getCookies(
+      final values = <String, String>{};
+      // Read the Music origin first, exactly like Metrolist. CookieManager
+      // already includes domain cookies in this view; querying www/youtube as
+      // well can surface a second value for the same cookie name during the
+      // Google hand-off and falsely make a valid session look ambiguous.
+      var cookies = await _effectiveCookieManager.getCookies(
         url: musicUrl,
         webViewController: controller,
       );
-      final values = <String, String>{};
+      if (!cookies.any((cookie) => _isSigningCookie(cookie.name))) {
+        for (final origin in _youtubeAuthDocumentUrls.skip(1)) {
+          final fallbackCookies = await _effectiveCookieManager.getCookies(
+            url: origin,
+            webViewController: controller,
+          );
+          if (fallbackCookies.any((cookie) => _isSigningCookie(cookie.name))) {
+            cookies = fallbackCookies;
+            break;
+          }
+        }
+      }
       for (final cookie in cookies) {
         if (!_isYouTubeDomain(cookie.domain)) continue;
         final value = cookie.value?.toString();
         if (value == null || value.isEmpty) continue;
-        final previous = values[cookie.name];
-        if (previous != null && previous != value) {
-          throw const FormatException('Ambiguous YouTube Music cookie.');
-        }
         if (_isSigningCookie(cookie.name) && cookie.isSecure == false) {
           throw const FormatException('Insecure YouTube Music cookie.');
         }
@@ -178,7 +208,10 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
       final identity = YouTubeMusicAuthIdentity.fromJson(<String, Object?>{
         'visitorData': visitorData,
         'authUser': authUser,
-        'dataSyncId': _nonEmptyString(config['dataSyncId']),
+        // Google may append a transport suffix after `||`. Metrolist keeps
+        // only the account/channel portion; sending the suffix as
+        // onBehalfOfUser makes account_menu reject otherwise valid sessions.
+        'dataSyncId': _normalizeDataSyncId(config['dataSyncId']),
         'delegatedPageId': _nonEmptyString(config['delegatedPageId']),
       });
       return YouTubeMusicWebAuthData(
@@ -187,6 +220,7 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
         apiKey: apiKey,
         clientVersion: clientVersion,
         clientName: clientName,
+        region: region,
       );
     } on FormatException {
       return null;
@@ -212,6 +246,12 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
     if (value == null) return null;
     final normalized = value.toString().trim();
     return normalized.isEmpty ? null : normalized;
+  }
+
+  String? _normalizeDataSyncId(Object? value) {
+    final normalized = _nonEmptyString(value);
+    if (normalized == null) return null;
+    return normalized.split('||').first.trim();
   }
 
   bool _isSigningCookie(String name) =>
@@ -366,7 +406,8 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
       // deletion primitive because it is more reliable than deleting cookies
       // one by one (especially HttpOnly/domain cookies).
       try {
-        if (await cookieManager.deleteAllCookies()) {
+        await cookieManager.deleteAllCookies();
+        if (await _authenticationCookiesAreGone(cookieManager)) {
           return true;
         }
       } on Object {
@@ -392,15 +433,21 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
 
       // Platform deletion booleans differ when a cookie disappears
       // concurrently. Read-back from every trusted origin is authoritative.
-      for (final url in _authenticationCookieUrls) {
-        if ((await cookieManager.getCookies(url: url)).isNotEmpty) {
-          return false;
-        }
-      }
-      return true;
+      return _authenticationCookiesAreGone(cookieManager);
     } on Object {
       return false;
     }
+  }
+
+  Future<bool> _authenticationCookiesAreGone(
+    CookieManager cookieManager,
+  ) async {
+    for (final url in _authenticationCookieUrls) {
+      if ((await cookieManager.getCookies(url: url)).isNotEmpty) {
+        return false;
+      }
+    }
+    return true;
   }
 
   CookieManager get _effectiveCookieManager =>

@@ -104,6 +104,9 @@ class BStreamMusicApp extends ConsumerWidget {
         iconButtonSize: iconButtonSize,
         textButtonHeight: textButtonHeight,
       ),
+      builder: (context, child) => ScrollNotificationObserver(
+        child: child ?? const SizedBox.shrink(),
+      ),
       home: const HomePage(),
     );
   }

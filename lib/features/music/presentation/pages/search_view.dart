@@ -3,20 +3,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/marquee_text.dart';
 import '../../domain/entities/search_result.dart';
 import '../providers/music_providers.dart';
 import '../widgets/search_input.dart';
 import '../widgets/scrolled_under_tab_frame.dart';
+import '../widgets/now_playing_equalizer.dart';
 import '../widgets/source_image.dart';
 import '../widgets/track_result_tile.dart';
 import 'remote_collection_detail_page.dart';
 
 class SearchView extends ConsumerWidget {
-  const SearchView({required this.onOpenPlayer, super.key});
+  const SearchView({
+    required this.onOpenPlayer,
+    this.onAddToPlaylist,
+    super.key,
+  });
 
   static const _headingTransitionDuration = Duration(milliseconds: 220);
 
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist? onAddToPlaylist;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -109,6 +116,7 @@ class SearchView extends ConsumerWidget {
             results: results,
             strings: strings,
             onOpenPlayer: onOpenPlayer,
+            onAddToPlaylist: onAddToPlaylist,
           ),
         ],
       ),
@@ -121,11 +129,13 @@ class _SearchResultsSliver extends StatelessWidget {
     required this.results,
     required this.strings,
     required this.onOpenPlayer,
+    required this.onAddToPlaylist,
   });
 
   final AsyncValue<SearchState> results;
   final AppStrings strings;
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist? onAddToPlaylist;
 
   @override
   Widget build(BuildContext context) {
@@ -145,6 +155,7 @@ class _SearchResultsSliver extends StatelessWidget {
           state: state,
           strings: strings,
           onOpenPlayer: onOpenPlayer,
+          onAddToPlaylist: onAddToPlaylist,
         );
       },
       loading: () => const SliverFillRemaining(
@@ -181,6 +192,7 @@ class _SearchCategoryResultsSliver extends StatefulWidget {
     required this.state,
     required this.strings,
     required this.onOpenPlayer,
+    required this.onAddToPlaylist,
   });
 
   static const _transitionDuration = Duration(milliseconds: 240);
@@ -188,6 +200,7 @@ class _SearchCategoryResultsSliver extends StatefulWidget {
   final SearchState state;
   final AppStrings strings;
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist? onAddToPlaylist;
 
   @override
   State<_SearchCategoryResultsSliver> createState() =>
@@ -260,6 +273,7 @@ class _SearchCategoryResultsSliverState
               state: widget.state,
               strings: widget.strings,
               onOpenPlayer: widget.onOpenPlayer,
+              onAddToPlaylist: widget.onAddToPlaylist,
             ),
           ),
         ),
@@ -273,11 +287,13 @@ class _SearchCategoryResultsBody extends StatelessWidget {
     required this.state,
     required this.strings,
     required this.onOpenPlayer,
+    required this.onAddToPlaylist,
   });
 
   final SearchState state;
   final AppStrings strings;
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist? onAddToPlaylist;
 
   @override
   Widget build(BuildContext context) {
@@ -312,6 +328,7 @@ class _SearchCategoryResultsBody extends StatelessWidget {
               album: page.albums[index],
               strings: strings,
               onOpenPlayer: onOpenPlayer,
+              onAddToPlaylist: onAddToPlaylist,
             ),
             if (index < page.albums.length - 1) const SizedBox(height: 6),
           ],
@@ -550,12 +567,14 @@ class _AlbumResultTile extends StatefulWidget {
     required this.album,
     required this.strings,
     required this.onOpenPlayer,
+    this.onAddToPlaylist,
     super.key,
   });
 
   final SearchAlbum album;
   final AppStrings strings;
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist? onAddToPlaylist;
 
   @override
   State<_AlbumResultTile> createState() => _AlbumResultTileState();
@@ -616,16 +635,20 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
                 ),
                 child: Row(
                   children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: SizedBox.square(
-                        dimension: 62,
-                        child: ProportionalArtwork(
-                          source: album.thumbnailUrl,
-                          cacheWidth: 256,
-                          fallback: const ColoredBox(
-                            color: Color(0xFF202520),
-                            child: Icon(Icons.album_rounded),
+                    HoverEqualizerArtwork(
+                      width: 52,
+                      height: 18,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(appArtworkRadius),
+                        child: SizedBox.square(
+                          dimension: 62,
+                          child: ProportionalArtwork(
+                            source: album.thumbnailUrl,
+                            cacheWidth: 256,
+                            fallback: const ColoredBox(
+                              color: Color(0xFF202520),
+                              child: Icon(Icons.album_rounded),
+                            ),
                           ),
                         ),
                       ),
@@ -636,10 +659,8 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
+                          MarqueeText(
                             album.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.titleSmall
                                 ?.copyWith(
                                   color: AppColors.contentTitleFor(context),
@@ -649,12 +670,12 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
                           const SizedBox(height: 2),
                           Text(
                             artist,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(
                                   color: AppColors.contentSubtitleFor(context),
                                 ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                           if (details.isNotEmpty) ...[
                             const SizedBox(height: 2),
@@ -708,6 +729,7 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
           emptyMessage: widget.strings.albumWithoutSongs,
           errorMessage: widget.strings.albumLoadError,
           onOpenPlayer: widget.onOpenPlayer,
+          onAddToPlaylist: widget.onAddToPlaylist,
         ),
       ),
     );

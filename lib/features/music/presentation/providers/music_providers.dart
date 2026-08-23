@@ -44,6 +44,7 @@ import '../../../../services/recommendations/recommendations.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/sharing/incoming_track_link_service.dart';
 import '../../../../services/sharing/track_share_service.dart';
+import '../../../../services/sharing/youtube_music_link.dart';
 import '../../../../services/storage/backup_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
@@ -220,6 +221,40 @@ final incomingTrackLinkProvider = StreamProvider<BStreamTrackLink>((
     }
     final now = DateTime.now();
     final identity = link.videoId;
+    if (identity == previousIdentity &&
+        previousAt != null &&
+        now.difference(previousAt) <= const Duration(seconds: 2)) {
+      continue;
+    }
+    previousIdentity = identity;
+    previousAt = now;
+    yield link;
+  }
+});
+
+/// Public YouTube/YouTube Music links received from Android intents.
+///
+/// This is deliberately separate from [incomingTrackLinkProvider] so older
+/// `bstreammusic://` links keep their exact compatibility contract while
+/// regular YouTube links can also be offered to BStream by the operating
+/// system.
+final incomingYouTubeMusicLinkProvider = StreamProvider<YouTubeMusicLink>((
+  ref,
+) async* {
+  final source = ref.watch(incomingTrackLinkServiceProvider);
+  const codec = YouTubeMusicLinkCodec();
+  String? previousIdentity;
+  DateTime? previousAt;
+
+  await for (final uri in source.links) {
+    final link = codec.tryDecode(uri);
+    if (link == null) continue;
+    final identity = [
+      link.kind.name,
+      link.videoId ?? '',
+      link.collectionId ?? '',
+    ].join(':');
+    final now = DateTime.now();
     if (identity == previousIdentity &&
         previousAt != null &&
         now.difference(previousAt) <= const Duration(seconds: 2)) {
@@ -536,8 +571,16 @@ final libraryOperationCoordinatorProvider =
     });
 
 final youtubeMusicSearchProvider = Provider<YouTubeMusicSearch>((ref) {
+  final deviceCountry = PlatformDispatcher.instance.locale.countryCode
+      ?.trim()
+      .toUpperCase();
+  final region =
+      deviceCountry != null && RegExp(r'^[A-Z]{2}$').hasMatch(deviceCountry)
+      ? deviceCountry
+      : 'US';
   final service = InnerTubeSearchService(
     visitorDataStore: const SharedPreferencesInnerTubeVisitorDataStore(),
+    region: region,
   );
   ref.onDispose(service.dispose);
   return service;

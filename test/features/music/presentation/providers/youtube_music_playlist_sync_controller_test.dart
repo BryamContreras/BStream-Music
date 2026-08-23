@@ -50,6 +50,15 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(coordinator.triggers, hasLength(1));
+
+      final manual = await container
+          .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+          .syncNow();
+      expect(manual, isNotNull);
+      expect(coordinator.triggers, <PlaylistSyncTrigger>[
+        PlaylistSyncTrigger.appStart,
+        PlaylistSyncTrigger.manual,
+      ]);
     },
   );
 

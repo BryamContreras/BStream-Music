@@ -416,7 +416,6 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               subtitle:
                   '${strings.themeModeLabel(state.themeMode)} · '
                   '${strings.accentLabel(state.accent)}',
-              accent: state.accent.seedColor,
               onTap: () => _openRoute(_SettingsRoute.appearance),
             ),
             const SizedBox(height: appCardGap),
@@ -1516,10 +1515,7 @@ class _SettingsEntryCard extends StatelessWidget {
                           subtitle,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colors.onSurfaceVariant,
-                            height: 1.25,
-                          ),
+                          style: appListCardSubtitleStyle(context),
                         ),
                       ],
                     ),
@@ -2013,7 +2009,10 @@ class _LyricsAppearanceSettings extends StatelessWidget {
                   key: const ValueKey('lyrics-romanization-toggle'),
                   value: romanizationEnabled,
                   title: Text(strings.romanizeLyrics),
-                  subtitle: Text(strings.romanizeLyricsSummary),
+                  subtitle: Text(
+                    strings.romanizeLyricsSummary,
+                    style: appListCardSubtitleStyle(context),
+                  ),
                   secondary: const Icon(Icons.translate_rounded),
                   onChanged: onRomanizationEnabledChanged,
                 ),
@@ -2555,6 +2554,7 @@ class _SleepTimerSettings extends StatelessWidget {
                 state.isActive
                     ? strings.sleepTimerRemaining(state.remaining)
                     : strings.sleepTimerOff,
+                style: appListCardSubtitleStyle(context),
               ),
             ),
             AnimatedSize(
@@ -2652,7 +2652,10 @@ class _CrossfadeSettings extends StatelessWidget {
                 strings.crossfade,
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
-              subtitle: Text(strings.crossfadeSummary),
+              subtitle: Text(
+                strings.crossfadeSummary,
+                style: appListCardSubtitleStyle(context),
+              ),
             ),
             AnimatedSwitcher(
               key: const ValueKey('settings-crossfade-options-transition'),

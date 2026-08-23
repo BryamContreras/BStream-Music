@@ -62,6 +62,8 @@ class _YouTubeMusicAccountButtonState
       child: IconButton(
         key: const Key('home-youtube-music-account'),
         tooltip: tooltip,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 48, height: 48),
         onPressed: isRestoring
             ? null
             : () async {
@@ -74,11 +76,11 @@ class _YouTubeMusicAccountButtonState
         icon: Stack(
           alignment: Alignment.center,
           children: <Widget>[
-            YouTubeMusicAccountAvatar(profile: state.profile, size: 36),
+            YouTubeMusicAccountAvatar(profile: state.profile, size: 40),
             if (isRestoring || playlistSync.isSyncing)
               const SizedBox.square(
-                dimension: 42,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                dimension: 46,
+                child: CircularProgressIndicator(strokeWidth: 2.2),
               ),
           ],
         ),

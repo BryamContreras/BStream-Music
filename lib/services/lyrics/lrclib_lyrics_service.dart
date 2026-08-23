@@ -347,6 +347,7 @@ class LrclibLyricsService implements LyricsService {
     }
 
     var broadAttempted = false;
+    var exactPlainCandidate = false;
     final duration = lookup.duration;
     if (duration != null &&
         duration > Duration.zero &&
@@ -364,8 +365,23 @@ class LrclibLyricsService implements LyricsService {
           if (exact != null) {
             final validated = _bestMatch(lookup, identities, [exact]);
             final document = validated?.record.toDocument(_parser);
-            if (document?.hasContent ?? false) {
-              return document;
+            // `/get` can return a valid plain-lyrics mirror while `/search`
+            // contains the synchronized LRCLIB record for the same song
+            // (common for releases whose metadata differs by a prefix such as
+            // "Artist - Title"). Keep the exact candidate as a fallback, but
+            // continue through the bounded search budget unless it is already
+            // synchronized.
+            if (validated != null && document != null) {
+              // Instrumental records are complete even without lyric lines;
+              // there is no synchronized alternative to discover for them.
+              if (document.instrumental) {
+                return document;
+              }
+              if (document.hasSyncedLyrics) {
+                return document;
+              }
+              exactPlainCandidate = true;
+              remember(validated);
             }
           }
         } else if (exactResponse != null &&
@@ -397,7 +413,10 @@ class LrclibLyricsService implements LyricsService {
       }
     }
 
-    for (final identity in identities) {
+    final structuredIdentities = exactPlainCandidate
+        ? identities.take(1)
+        : identities;
+    for (final identity in structuredIdentities) {
       final structuredLimit = broadAttempted
           ? _maxLookupRequests
           : _maxLookupRequests - 1;
@@ -420,7 +439,11 @@ class LrclibLyricsService implements LyricsService {
       remember(structuredMatch);
     }
 
-    if (!broadAttempted) {
+    // A plain exact response gets one structured search to find LRCLIB's
+    // synchronized metadata variant. Avoid a second broad request when the
+    // exact fallback is already valid; this keeps the lookup bounded and
+    // avoids unnecessary traffic for ordinary plain-only records.
+    if (!broadAttempted && !exactPlainCandidate) {
       final broadIdentity = _broadSearchIdentity(identities);
       final broad = await requestSearch({'q': _broadQuery(broadIdentity)});
       if (broad != null) {

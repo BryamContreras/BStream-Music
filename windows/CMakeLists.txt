@@ -34,6 +34,39 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 add_definitions(-DUNICODE -D_UNICODE)
 add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
+# Windows plugins invoke NuGet from CMake, while smtc_windows 1.1.0 also
+# needs a small compatibility patch for hidden AppData paths.  Bootstrap the
+# pinned, SHA-256-verified NuGet executable during configuration so a plain
+# `flutter run -d windows` behaves the same as CI.  The script is idempotent;
+# it only downloads on the first build and leaves newer smtc versions alone.
+if(WIN32)
+  set(BSTREAM_NUGET_DIR "$ENV{LOCALAPPDATA}/BStream Music/tools")
+  set(BSTREAM_WINDOWS_BOOTSTRAP
+      "${CMAKE_CURRENT_SOURCE_DIR}/../tool/ensure_windows_build_dependencies.ps1")
+  if(EXISTS "${BSTREAM_WINDOWS_BOOTSTRAP}")
+    execute_process(
+      COMMAND powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
+              -File "${BSTREAM_WINDOWS_BOOTSTRAP}"
+              -RepositoryRoot "${CMAKE_CURRENT_SOURCE_DIR}/.."
+              -InstallDirectory "${BSTREAM_NUGET_DIR}"
+      RESULT_VARIABLE BSTREAM_BOOTSTRAP_RESULT
+      OUTPUT_VARIABLE BSTREAM_BOOTSTRAP_OUTPUT
+      ERROR_VARIABLE BSTREAM_BOOTSTRAP_ERROR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_STRIP_TRAILING_WHITESPACE)
+    if(NOT BSTREAM_BOOTSTRAP_RESULT EQUAL 0)
+      message(FATAL_ERROR
+        "Windows build dependency bootstrap failed: ${BSTREAM_BOOTSTRAP_ERROR}")
+    endif()
+    # find_program() in flutter_inappwebview_windows searches this CMake path.
+    list(PREPEND CMAKE_PROGRAM_PATH "${BSTREAM_NUGET_DIR}")
+    set(ENV{PATH} "${BSTREAM_NUGET_DIR};$ENV{PATH}")
+    set(ENV{NUGET_EXE} "${BSTREAM_NUGET_DIR}/nuget.exe")
+    set(ENV{NUGET_EXECUTABLE} "${BSTREAM_NUGET_DIR}/nuget.exe")
+    unset(NUGET CACHE)
+  endif()
+endif()
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

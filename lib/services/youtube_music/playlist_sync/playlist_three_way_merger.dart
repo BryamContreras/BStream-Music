@@ -21,6 +21,8 @@ class PlaylistThreeWayMerger {
     required PlaylistSyncSnapshot? base,
     required PlaylistSyncSnapshot local,
     required PlaylistSyncSnapshot remote,
+    bool ignoreTitleConflicts = false,
+    bool ignoreOrderConflicts = false,
   }) {
     if (base == null) {
       return PlaylistMergeResult.merged(_initialUnion(local, remote));
@@ -29,7 +31,8 @@ class PlaylistThreeWayMerger {
     final conflicts = <PlaylistSyncConflict>[];
     final localTitleChanged = local.title != base.title;
     final remoteTitleChanged = remote.title != base.title;
-    if (localTitleChanged &&
+    if (!ignoreTitleConflicts &&
+        localTitleChanged &&
         remoteTitleChanged &&
         local.title != remote.title) {
       conflicts.add(
@@ -73,7 +76,8 @@ class PlaylistThreeWayMerger {
         .toList(growable: false);
     final localReordered = !_sameOrder(localKeptOrder, baseKeptOrder);
     final remoteReordered = !_sameOrder(remoteKeptOrder, baseKeptOrder);
-    if (localReordered &&
+    if (!ignoreOrderConflicts &&
+        localReordered &&
         remoteReordered &&
         !_sameOrder(localKeptOrder, remoteKeptOrder)) {
       conflicts.add(

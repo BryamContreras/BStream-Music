@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.View
 import android.view.WindowManager
 import com.ryanheise.audioservice.AudioServiceActivity
 import com.yausername.youtubedl_android.YoutubeDL
@@ -78,6 +79,14 @@ class MainActivity : AudioServiceActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // This app never stores or autofills account passwords.  Disable the
+        // Android Autofill save prompt for the whole activity, including the
+        // embedded Google sign-in WebView.  Session cookies are captured only
+        // after the account flow succeeds and are kept in secure storage.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.decorView.importantForAutofill =
+                View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
         if (!handleExternalAudioIntent(intent)) {
             requestNotificationPermissionIfNeeded()
         }

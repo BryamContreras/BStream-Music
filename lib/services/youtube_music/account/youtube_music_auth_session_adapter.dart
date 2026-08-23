@@ -1,3 +1,5 @@
+import 'dart:ui' show PlatformDispatcher;
+
 import '../auth/youtube_music_auth_header_factory.dart';
 import '../auth/youtube_music_auth_models.dart' as auth;
 import 'youtube_music_account_transport.dart';
@@ -78,7 +80,7 @@ Map<String, Object?> buildYouTubeMusicAccountClientContext({
   required String clientName,
   required auth.YouTubeMusicAuthIdentity identity,
   String language = 'es-419',
-  String region = 'NI',
+  String? region,
   String? userAgent,
 }) {
   final normalizedVersion = _requiredContextValue(
@@ -86,10 +88,12 @@ Map<String, Object?> buildYouTubeMusicAccountClientContext({
     'clientVersion',
   );
   final normalizedLanguage = _requiredContextValue(language, 'language');
-  final normalizedRegion = _requiredContextValue(
-    region,
-    'region',
-  ).toUpperCase();
+  // Prefer the country from the authenticated page. Older credentials do
+  // not contain it, so use the device locale rather than a Nicaragua-only
+  // default; YouTube will still apply its own account-side region rules.
+  final normalizedRegion =
+      _normalizeRegion(region) ??
+      _normalizeRegion(PlatformDispatcher.instance.locale.countryCode);
   final normalizedClientName = _requiredContextValue(clientName, 'clientName');
   final dataSyncId = identity.dataSyncId?.trim();
   final normalizedUserAgent = userAgent?.trim();
@@ -98,7 +102,9 @@ Map<String, Object?> buildYouTubeMusicAccountClientContext({
       'clientName': normalizedClientName,
       'clientVersion': normalizedVersion,
       'hl': normalizedLanguage,
-      'gl': normalizedRegion,
+      ...?normalizedRegion == null
+          ? null
+          : <String, Object?>{'gl': normalizedRegion},
       'visitorData': identity.visitorData,
       if (normalizedUserAgent != null && normalizedUserAgent.isNotEmpty)
         'userAgent': normalizedUserAgent,
@@ -137,6 +143,13 @@ YouTubeMusicSessionHeaders _headersForCredential({
   return YouTubeMusicSessionHeaders(<String, String>{
     'Accept': 'application/json',
     'Content-Type': 'application/json',
+    // Match the headers emitted by YouTube Music's WEB_REMIX client.  These
+    // are public request metadata, not account secrets, and are required by
+    // some account endpoints after the Google hand-off.
+    'X-Goog-Api-Format-Version': '1',
+    'Referer': 'https://music.youtube.com/',
+    'Accept-Language': _webRemixAcceptLanguage(credential.region),
+    'User-Agent': _webRemixUserAgent,
     ...additionalHeaders,
     'X-YouTube-Client-Name': credential.clientName,
     'X-YouTube-Client-Version': credential.clientVersion,
@@ -145,10 +158,32 @@ YouTubeMusicSessionHeaders _headersForCredential({
   }, apiKey: credential.apiKey);
 }
 
+const String _webRemixUserAgent =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/140.0.0.0 Safari/537.36';
+
+String _webRemixAcceptLanguage(String? region) {
+  // Keep the UI language independent from the account's country.  The page
+  // region is sent in the InnerTube context (`gl`), while this header remains
+  // a normal browser language preference usable worldwide.
+  final language = PlatformDispatcher.instance.locale.languageCode
+      .trim()
+      .toLowerCase();
+  final normalizedLanguage = RegExp(r'^[a-z]{2,3}$').hasMatch(language)
+      ? language
+      : 'en';
+  final normalizedRegion = _normalizeRegion(region);
+  final primary = normalizedRegion == null
+      ? normalizedLanguage
+      : '$normalizedLanguage-${normalizedRegion.toLowerCase()}';
+  return '$primary,$normalizedLanguage;q=0.9';
+}
+
 Map<String, Object?> buildYouTubeMusicAccountClientContextFromWebAuthData(
   auth.YouTubeMusicWebAuthData authData, {
   String language = 'es-419',
-  String region = 'NI',
+  String? region,
   String? userAgent,
 }) {
   return buildYouTubeMusicAccountClientContext(
@@ -156,7 +191,7 @@ Map<String, Object?> buildYouTubeMusicAccountClientContextFromWebAuthData(
     clientName: authData.clientName,
     identity: authData.identity,
     language: language,
-    region: region,
+    region: region ?? authData.region,
     userAgent: userAgent,
   );
 }
@@ -164,7 +199,7 @@ Map<String, Object?> buildYouTubeMusicAccountClientContextFromWebAuthData(
 Map<String, Object?> buildYouTubeMusicAccountClientContextFromCredential(
   auth.YouTubeMusicSessionCredential credential, {
   String language = 'es-419',
-  String region = 'NI',
+  String? region,
   String? userAgent,
 }) {
   return buildYouTubeMusicAccountClientContext(
@@ -172,7 +207,7 @@ Map<String, Object?> buildYouTubeMusicAccountClientContextFromCredential(
     clientName: credential.clientName,
     identity: credential.identity,
     language: language,
-    region: region,
+    region: region ?? credential.region,
     userAgent: userAgent,
   );
 }
@@ -196,6 +231,7 @@ auth.YouTubeMusicSessionCredential _ephemeralCredential(
     apiKey: authData.apiKey,
     clientVersion: authData.clientVersion,
     clientName: authData.clientName,
+    region: authData.region,
   );
 }
 
@@ -230,6 +266,19 @@ String _requiredContextValue(String value, String name) {
       value,
       name,
       'Must be a bounded non-empty value.',
+    );
+  }
+  return normalized;
+}
+
+String? _normalizeRegion(String? value) {
+  final normalized = value?.trim().toUpperCase();
+  if (normalized == null || normalized.isEmpty) return null;
+  if (!RegExp(r'^[A-Z]{2}$').hasMatch(normalized)) {
+    throw ArgumentError.value(
+      value,
+      'region',
+      'Must be an ISO-3166 alpha-2 code.',
     );
   }
   return normalized;

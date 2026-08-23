@@ -110,6 +110,7 @@ class YouTubeMusicWebAuthData {
     required String apiKey,
     required String clientVersion,
     required String clientName,
+    String? region,
   }) => YouTubeMusicWebAuthData._(
     cookieHeader: cookieHeader,
     identity: identity,
@@ -124,6 +125,7 @@ class YouTubeMusicWebAuthData {
       'clientName',
       maximumLength: 64,
     ),
+    region: _optionalRegion(region),
   );
 
   const YouTubeMusicWebAuthData._({
@@ -132,6 +134,7 @@ class YouTubeMusicWebAuthData {
     required this.apiKey,
     required this.clientVersion,
     required this.clientName,
+    this.region,
   });
 
   final String cookieHeader;
@@ -139,6 +142,10 @@ class YouTubeMusicWebAuthData {
   final String apiKey;
   final String clientVersion;
   final String clientName;
+
+  /// YouTube's country context (`gl`) captured from the authenticated page.
+  /// It is optional for credentials created by older app versions.
+  final String? region;
 
   @override
   String toString() => 'YouTubeMusicWebAuthData([REDACTED])';
@@ -178,6 +185,7 @@ class YouTubeMusicSessionCredential {
     required String apiKey,
     required String clientVersion,
     required String clientName,
+    String? region,
   }) => YouTubeMusicSessionCredential._(
     cookieHeader: cookieHeader,
     identity: identity,
@@ -194,6 +202,7 @@ class YouTubeMusicSessionCredential {
       'clientName',
       maximumLength: 64,
     ),
+    region: _optionalRegion(region),
   );
 
   const YouTubeMusicSessionCredential._({
@@ -204,6 +213,7 @@ class YouTubeMusicSessionCredential {
     required this.apiKey,
     required this.clientVersion,
     required this.clientName,
+    this.region,
   });
 
   static const schemaVersion = 1;
@@ -216,6 +226,7 @@ class YouTubeMusicSessionCredential {
   final String apiKey;
   final String clientVersion;
   final String clientName;
+  final String? region;
 
   String encode() {
     final encoded = jsonEncode(<String, Object?>{
@@ -225,6 +236,7 @@ class YouTubeMusicSessionCredential {
         'apiKey': apiKey,
         'clientVersion': clientVersion,
         'clientName': clientName,
+        if (region != null) 'region': region,
       },
       'identity': identity.toJson(),
       'profile': profile.toJson(),
@@ -284,6 +296,9 @@ class YouTubeMusicSessionCredential {
         maximumLength: 128,
       ),
       clientName: _requiredString(clientJson, 'clientName', maximumLength: 64),
+      region: _optionalRegion(
+        _optionalString(clientJson, 'region', maximumLength: 8),
+      ),
     );
   }
 
@@ -339,6 +354,15 @@ String _requiredProtocolValue(
       normalized.length > maximumLength ||
       !RegExp(r'^[0-9A-Za-z._-]+$').hasMatch(normalized)) {
     throw FormatException('Invalid YouTube Music $name.');
+  }
+  return normalized;
+}
+
+String? _optionalRegion(String? value) {
+  final normalized = value?.trim().toUpperCase();
+  if (normalized == null || normalized.isEmpty) return null;
+  if (!RegExp(r'^[A-Z]{2}$').hasMatch(normalized)) {
+    throw FormatException('Invalid YouTube Music region.');
   }
   return normalized;
 }

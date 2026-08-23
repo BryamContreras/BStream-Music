@@ -3,13 +3,53 @@ import 'dart:async';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/playlist_picker_dialog.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
+
 void main() {
+  testWidgets('create playlist dialog prefills, edits and cancels safely', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => ElevatedButton(
+            onPressed: () async {
+              await showDialog<String>(
+                context: context,
+                builder: (_) => const CreatePlaylistDialog(
+                  strings: AppStrings(AppLanguage.spanish),
+                  initialName: 'Album de contrato',
+                ),
+              );
+            },
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(
+      find.byKey(const ValueKey('create-playlist-name')),
+    );
+    expect(field.controller!.text, 'Album de contrato');
+
+    await tester.enterText(
+      find.byKey(const ValueKey('create-playlist-name')),
+      'Mi colección',
+    );
+    await tester.tap(find.byKey(const ValueKey('create-playlist-cancel')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('create-playlist-name')), findsNothing);
+  });
+
   testWidgets(
     'renders collection metadata and tracks without starting playback',
     (tester) async {
@@ -51,6 +91,10 @@ void main() {
       expect(find.textContaining('2 canciones'), findsOneWidget);
       expect(find.text('Primera cancion'), findsOneWidget);
       expect(find.text('Segunda cancion'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('remote-collection-mini-player')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('track-result-play-song-1')),
         findsOneWidget,
@@ -116,6 +160,84 @@ void main() {
     expect(player.lastQueue, _tracks);
     expect(player.lastQueueSourceId, 'album:MPRE-contract');
     expect(playerOpens, 0);
+  });
+
+  testWidgets('mini player stays above gesture and three-button navigation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => _tracks,
+      retry: (_, _) => null,
+    );
+
+    for (final bottomInset in [0.0, 24.0]) {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: MediaQueryData(
+            size: const Size(360, 800),
+            devicePixelRatio: 1,
+            padding: EdgeInsets.only(bottom: bottomInset),
+            viewPadding: EdgeInsets.only(bottom: bottomInset),
+          ),
+          child: _detailApp(
+            player: _RecordingPlayerController(),
+            tracksProvider: tracksProvider,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final mini = tester.getRect(
+        find.byKey(const ValueKey('remote-collection-mini-player')),
+      );
+      final miniPlayer = tester.getRect(
+        find.byKey(const ValueKey('mini-player-container')),
+      );
+      expect(mini.bottom, 800);
+      expect(miniPlayer.bottom, 800 - bottomInset);
+      expect(
+        miniPlayer.height,
+        miniPlayerHeightFor(
+          tester.element(find.byKey(const ValueKey('mini-player-container'))),
+        ),
+      );
+    }
+  });
+
+  testWidgets('collection header exposes Add to playlist for link imports', (
+    tester,
+  ) async {
+    var addedTracks = <TrackInfo>[];
+    String? receivedPlaylistName;
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => _tracks,
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: tracksProvider,
+        onAddToPlaylist: (context, tracks, {initialPlaylistName}) async {
+          addedTracks = tracks;
+          receivedPlaylistName = initialPlaylistName;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('remote-collection-add-to-playlist')),
+    );
+    await tester.pump();
+    expect(addedTracks, _tracks);
+    expect(receivedPlaylistName, 'Album de contrato');
   });
 
   testWidgets(
@@ -433,7 +555,10 @@ void main() {
     expect(playButton, findsOneWidget);
     expect(menuButton, findsOneWidget);
     expect(tester.getRect(playButton).shortestSide, greaterThanOrEqualTo(48));
-    expect(tester.getRect(menuButton).shortestSide, greaterThanOrEqualTo(48));
+    // The menu keeps a 48dp vertical touch target while remaining visually
+    // narrow like the other playlist/result cards.
+    expect(tester.getRect(menuButton).height, greaterThanOrEqualTo(48));
+    expect(tester.getRect(menuButton).width, greaterThanOrEqualTo(36));
     expect(tester.takeException(), isNull);
   });
 }
@@ -442,6 +567,7 @@ Widget _detailApp({
   required _RecordingPlayerController player,
   required FutureProvider<List<TrackInfo>> tracksProvider,
   VoidCallback? onOpenPlayer,
+  AddRemoteTracksToPlaylist? onAddToPlaylist,
   String title = 'Album de contrato',
   String subtitle = 'Artista principal',
   List<String> metadata = const ['Album', '2026'],
@@ -472,6 +598,7 @@ Widget _detailApp({
         emptyMessage: 'La coleccion esta vacia.',
         errorMessage: 'No se pudo cargar la coleccion.',
         onOpenPlayer: onOpenPlayer ?? _noop,
+        onAddToPlaylist: onAddToPlaylist,
         metadata: metadata,
       ),
     ),

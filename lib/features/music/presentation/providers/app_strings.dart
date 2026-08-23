@@ -40,6 +40,7 @@ class AppStrings {
       choose('Refrescando recomendaciones', 'Refreshing recommendations');
   String get youtubeMusicAccount =>
       choose('Cuenta de YouTube Music', 'YouTube Music account');
+  String get youtubeMusic => choose('YouTube Music', 'YouTube Music');
   String get signInToYouTubeMusic =>
       choose('Iniciar sesión en YouTube Music', 'Sign in to YouTube Music');
   String get youtubeMusicUnofficialTitle =>
@@ -72,16 +73,14 @@ class AppStrings {
                 : 'Your $localPlaylistCount local playlists will stay',
           );
     return choose(
-      '$localPreservation en BStream y Favoritos permanecerá sólo '
-          'en este dispositivo. Las playlists locales que aún no estén '
-          'vinculadas se crearán como privadas en YouTube Music. Las playlists '
-          'remotas se importarán en BStream. Esta primera sincronización no '
-          'elimina tus playlists locales.',
-      '$localPreservation in BStream, and Favorites will remain local to '
-          'this device. Local playlists that are not linked yet will be created '
-          'as private playlists in YouTube Music. Remote playlists will be '
-          'imported into BStream. This first sync does not delete your local '
-          'playlists.',
+      '$localPreservation en BStream. Favoritos se vinculará con "Me gusta" '
+          'de YouTube Music; las playlists locales aún no vinculadas se crearán '
+          'como privadas y las remotas se importarán aquí. Esta primera '
+          'sincronización no elimina tus playlists locales.',
+      '$localPreservation in BStream. Favorites will sync with YouTube Music '
+          'Liked Music; unlinked local playlists are created as private playlists '
+          'and remote playlists are imported here. This first sync does not '
+          'delete your local playlists.',
     );
   }
 
@@ -96,6 +95,14 @@ class AppStrings {
       choose('Sincronizando playlists…', 'Syncing playlists…');
   String get playlistsSynchronized =>
       choose('Playlists sincronizadas', 'Playlists synchronized');
+  String playlistsImported(int count) => choose(
+    count == 1
+        ? 'Se importó 1 playlist de YouTube Music.'
+        : 'Se importaron $count playlists de YouTube Music.',
+    count == 1
+        ? 'Imported 1 playlist from YouTube Music.'
+        : 'Imported $count playlists from YouTube Music.',
+  );
   String get resolvePlaylistSyncConflicts =>
       choose('Resolver conflictos', 'Resolve conflicts');
   String get playlistSyncConflictWarning => choose(

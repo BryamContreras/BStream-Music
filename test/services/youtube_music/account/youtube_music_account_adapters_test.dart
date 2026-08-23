@@ -34,6 +34,13 @@ void main() {
       expect(values['X-Goog-Visitor-Id'], 'visitor-data');
       expect(values['X-YouTube-Client-Name'], 'WEB_REMIX');
       expect(values['X-YouTube-Client-Version'], '1.test');
+      expect(values['X-Goog-Api-Format-Version'], '1');
+      expect(values['Referer'], 'https://music.youtube.com/');
+      expect(values['User-Agent'], contains('Mozilla/5.0'));
+      expect(
+        values['Accept-Language'],
+        matches(RegExp(r'^[a-z]{2,3}(?:-[a-z]{2})?,[a-z]{2,3};q=0\.9$')),
+      );
       expect(headers.apiKey, 'test_api_key');
       expect(headers.toString(), isNot(contains('test-session-value')));
     });
@@ -109,6 +116,24 @@ void main() {
       expect(client['gl'], 'NI');
       expect(user['onBehalfOfUser'], 'UC-main||sync');
     });
+
+    test(
+      'does not force a Nicaragua region when the page did not provide one',
+      () {
+        final context = buildYouTubeMusicAccountClientContext(
+          clientVersion: '1.test',
+          clientName: 'WEB_REMIX',
+          identity: const auth.YouTubeMusicAuthIdentity(
+            visitorData: 'visitor-data',
+            authUser: '0',
+          ),
+        );
+
+        final client = context['client']! as Map<String, Object?>;
+        expect(client['gl'], isNot('NI'));
+        expect(client['gl'], matches(r'^[A-Z]{2}$'));
+      },
+    );
   });
 
   group('IO account transport safety', () {

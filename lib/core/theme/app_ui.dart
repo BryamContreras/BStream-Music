@@ -41,6 +41,9 @@ const double appContentMaxWidth = 760.0;
 /// Border radius shared by all list cards across the app.
 const double appCardRadius = 6.0;
 
+/// Shared radius for square artwork across search, library, player and lyrics.
+const double appArtworkRadius = 4.0;
+
 /// Border radius used for bottom navigation items.
 const double appNavItemRadius = 16.0;
 
@@ -70,9 +73,10 @@ TextStyle appListCardTitleStyle(BuildContext context) {
 /// Shared text style for the subtitle text inside a list card.
 TextStyle appListCardSubtitleStyle(BuildContext context) {
   final colors = Theme.of(context).colorScheme;
-  return Theme.of(
-    context,
-  ).textTheme.bodySmall!.copyWith(color: colors.onSurfaceVariant, height: 1.25);
+  return Theme.of(context).textTheme.bodyMedium!.copyWith(
+    color: colors.onSurfaceVariant,
+    height: 1.25,
+  );
 }
 
 /// Shared text style for secondary labels (e.g. "Command permissions",

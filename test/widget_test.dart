@@ -5,6 +5,7 @@ import 'dart:io' as io;
 import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/marquee_text.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
@@ -380,7 +381,7 @@ void main() {
       expect(playerArtist, findsOneWidget);
       expect(playerTrack, findsOneWidget);
       expect(playerArtwork, findsOneWidget);
-      expect(tester.widget<Text>(playerTitle).data, 'Pista persistente');
+      expect(tester.widget<MarqueeText>(playerTitle).text, 'Pista persistente');
       expect(tester.widget<Text>(playerArtist).data, 'Artista persistente');
       expect(
         tester.widget<ProportionalArtwork>(playerArtwork).source,
@@ -445,7 +446,7 @@ void main() {
         identical(retainedPlayerArtwork, tester.element(playerArtwork)),
         isTrue,
       );
-      expect(tester.widget<Text>(playerTitle).data, 'Pista persistente');
+      expect(tester.widget<MarqueeText>(playerTitle).text, 'Pista persistente');
       expect(tester.widget<Text>(playerArtist).data, 'Artista persistente');
       expect(
         tester.widget<ProportionalArtwork>(playerArtwork).source,
@@ -4105,7 +4106,7 @@ void main() {
       find.byKey(const ValueKey('player-tab-title')),
     );
     expect(playerTabTitle.style?.color, playerTheme.colorScheme.onSurface);
-    final trackTitle = tester.widget<Text>(
+    final trackTitle = tester.widget<MarqueeText>(
       find.byKey(const ValueKey('player-track-title')),
     );
     expect(trackTitle.style?.color, AppColors.playbackTitleFor(playerContext));
@@ -5844,25 +5845,25 @@ class _RepositoryPlaylistsController extends PlaylistsController {
       List<Playlist>.unmodifiable(repository.playlists);
 
   @override
-  Future<void> create(String name) async {
+  Future<Playlist?> create(String name) async {
     final normalized = name.trim();
-    if (normalized.isEmpty) return;
+    if (normalized.isEmpty) return null;
     final now = DateTime(
       2026,
       1,
       1,
     ).add(Duration(seconds: _createdPlaylistCount));
     _createdPlaylistCount += 1;
-    await repository.savePlaylist(
-      Playlist(
-        id: 'test-created-${_createdPlaylistCount - 1}',
-        name: normalized,
-        trackIds: const <String>[],
-        createdAt: now,
-        updatedAt: now,
-      ),
+    final playlist = Playlist(
+      id: 'test-created-${_createdPlaylistCount - 1}',
+      name: normalized,
+      trackIds: const <String>[],
+      createdAt: now,
+      updatedAt: now,
     );
+    await repository.savePlaylist(playlist);
     _publish();
+    return playlist;
   }
 
   @override

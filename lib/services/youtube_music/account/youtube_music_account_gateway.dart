@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'youtube_music_account_models.dart';
 import 'youtube_music_account_parser.dart';
@@ -11,6 +12,8 @@ abstract final class YouTubeMusicAccountEndpoints {
   static const String createPlaylist = 'playlist/create';
   static const String editPlaylist = 'browse/edit_playlist';
   static const String deletePlaylist = 'playlist/delete';
+  static const String like = 'like/like';
+  static const String removeLike = 'like/removelike';
 }
 
 /// Authenticated, storage-independent YouTube Music account gateway.
@@ -276,6 +279,42 @@ class YouTubeMusicAccountGateway {
     );
   }
 
+  /// Sets the authenticated account's like state for one video.
+  ///
+  /// This is intentionally separate from playlist edits: YouTube Music's
+  /// `LM`/`VLLM` collection is a projection of these likes and rejects
+  /// `browse/edit_playlist` mutations for many accounts/channels.
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>> likeVideo(
+    String videoId,
+  ) {
+    return _mutate<RemotePlaylistMutationApplied>(
+      endpoint: YouTubeMusicAccountEndpoints.like,
+      operation: 'likeVideo',
+      body: _body(<String, Object?>{
+        'target': <String, Object?>{
+          'videoId': _requiredValue(videoId, 'videoId'),
+        },
+      }),
+      parseSuccess: (_) => const RemotePlaylistMutationApplied(),
+    );
+  }
+
+  /// Removes the authenticated account's like for one video.
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>> removeLike(
+    String videoId,
+  ) {
+    return _mutate<RemotePlaylistMutationApplied>(
+      endpoint: YouTubeMusicAccountEndpoints.removeLike,
+      operation: 'removeLike',
+      body: _body(<String, Object?>{
+        'target': <String, Object?>{
+          'videoId': _requiredValue(videoId, 'videoId'),
+        },
+      }),
+      parseSuccess: (_) => const RemotePlaylistMutationApplied(),
+    );
+  }
+
   Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>>
   movePlaylistEntry({
     required String playlistId,
@@ -383,6 +422,11 @@ class YouTubeMusicAccountGateway {
         if (_isSuccess(response.statusCode)) {
           return response;
         }
+        developer.log(
+          'YouTube Music account read rejected: endpoint=$endpoint '
+          'status=${response.statusCode} attempt=$attempt',
+          name: 'bstream.youtube_music.auth',
+        );
         if (attempt < _readRetryPolicy.maxAttempts &&
             _readRetryPolicy.shouldRetryStatus(response.statusCode)) {
           await _retryDelay(_readRetryPolicy.delayForRetry(attempt));
@@ -393,6 +437,11 @@ class YouTubeMusicAccountGateway {
           statusCode: response.statusCode,
         );
       } on YouTubeMusicAccountTransportException catch (error) {
+        developer.log(
+          'YouTube Music account transport failed: endpoint=$endpoint '
+          'delivery=${error.delivery} retryable=${error.retryableForRead}',
+          name: 'bstream.youtube_music.auth',
+        );
         if (attempt < _readRetryPolicy.maxAttempts && error.retryableForRead) {
           await _retryDelay(_readRetryPolicy.delayForRetry(attempt));
           continue;

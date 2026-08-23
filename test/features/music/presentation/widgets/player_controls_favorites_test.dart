@@ -1,4 +1,5 @@
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/marquee_text.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -413,8 +414,8 @@ void main() {
         );
         final title = find.byKey(const ValueKey('player-track-title'));
         final artist = find.byKey(const ValueKey('player-track-artist'));
-        final titleText = tester.widget<Text>(title);
-        expect(titleText.maxLines, 2);
+        final titleText = tester.widget<MarqueeText>(title);
+        expect(titleText.text, contains('夜空'));
         expect(
           find.ancestor(of: title, matching: find.byType(Positioned)),
           findsNothing,
@@ -679,16 +680,22 @@ void main() {
           final artistFinder = find.byKey(
             const ValueKey('player-track-artist'),
           );
-          final titleWidget = tester.widget<Text>(titleFinder);
+          final titleWidget = tester.widget<MarqueeText>(titleFinder);
           final titleRect = tester.getRect(titleFinder);
           final artistRect = tester.getRect(artistFinder);
           final shareRect = tester.getRect(
             find.byKey(const ValueKey('player-share-control')),
           );
 
-          expect(titleWidget.maxLines, 2);
-          expect(titleRect.right, lessThanOrEqualTo(shareRect.left));
+          expect(titleWidget.text, title);
           expect(artistRect.right, lessThanOrEqualTo(shareRect.left));
+          expect(
+            tester
+                .getRect(find.byKey(const ValueKey('player-favorite-control')))
+                .center
+                .dy,
+            closeTo(artistRect.center.dy, 0.1),
+          );
           expect(tester.takeException(), isNull);
           final artworkRect = tester.getRect(
             find.byKey(const ValueKey('player-large-artwork')),
@@ -709,7 +716,7 @@ void main() {
           'reproductor sin separar de forma artificial el nombre del artista',
         );
 
-        expect(longTitle.titleHeight, greaterThan(shortTitle.titleHeight));
+        expect(longTitle.titleHeight, closeTo(shortTitle.titleHeight, 0.1));
         expect(longTitle.gap, closeTo(shortTitle.gap, 0.1));
         if (variant.platform == TargetPlatform.android) {
           expect(longTitle.artwork, shortTitle.artwork);

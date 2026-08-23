@@ -129,6 +129,37 @@ void main() {
   );
 
   test(
+    'nonfatal channel discovery errors do not block account validation',
+    () async {
+      final store = _FakeSessionStore();
+      final client = _FakeAccountClient(
+        profile: _profile('channel-a'),
+        channelError: const YouTubeMusicAccountException(
+          YouTubeMusicAccountFailureKind.invalidResponse,
+          'The optional channel list is unavailable.',
+        ),
+      );
+      final container = _container(store: store, client: client);
+      addTearDown(container.dispose);
+      container.read(youtubeMusicAuthControllerProvider);
+      await _settle();
+
+      final controller = container.read(
+        youtubeMusicAuthControllerProvider.notifier,
+      );
+      controller.beginLogin();
+      await controller.submitWebAuthentication(_authData());
+
+      expect(
+        container.read(youtubeMusicAuthControllerProvider).phase,
+        YouTubeMusicAuthPhase.authenticated,
+      );
+      expect(client.validationCalls, 1);
+      expect(store.writes, hasLength(1));
+    },
+  );
+
+  test(
     'requires explicit selection and validates the switched channel',
     () async {
       final store = _FakeSessionStore();

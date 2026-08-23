@@ -43,7 +43,14 @@ class PlaylistSyncEngine {
     if (!_isPersistenceAllowed()) {
       return _sessionChangedResult();
     }
-    if (work.intent?.status == PlaylistSyncIntentStatus.conflict) {
+    // The old implementation treated YouTube's LM projection like an
+    // editable playlist and could leave a permanent conflict after the
+    // server rejected that write. Favorites now use the like/removelike API,
+    // so let the set-based reconciliation repair that legacy state instead
+    // of requiring the user to choose a side again. Ordinary playlists keep
+    // the explicit conflict freeze.
+    if (work.intent?.status == PlaylistSyncIntentStatus.conflict &&
+        !_isFavoritesKey(key)) {
       return const PlaylistSyncResult(
         disposition: PlaylistSyncDisposition.conflict,
         message:
@@ -118,6 +125,8 @@ class PlaylistSyncEngine {
             base: null,
             local: PlaylistSyncSnapshot(title: '', items: const []),
             remote: remote,
+            ignoreTitleConflicts: _isFavoritesKey(key),
+            ignoreOrderConflicts: _isFavoritesKey(key),
           )
           .snapshot!;
       return _commit(work, adoptedRemote, remote);
@@ -225,14 +234,19 @@ class PlaylistSyncEngine {
     final pendingDesired = work.intent?.desiredSnapshot;
     if (work.intent?.status == PlaylistSyncIntentStatus.ambiguous &&
         pendingDesired != null) {
-      if (remote.semanticallyEquals(pendingDesired)) {
+      final pendingMatchesRemote = _isFavoritesKey(key)
+          ? _sameFavoriteSet(remote, pendingDesired)
+          : remote.semanticallyEquals(pendingDesired);
+      if (pendingMatchesRemote) {
         // A download can become available, or the user can otherwise edit the
         // local playlist, while the previous write is awaiting read-back.
         // Preserve local-only metadata when its remote projection is still the
         // verified desired state. If its content diverged, establish only the
         // verified remote base and atomically queue the newer local revision;
         // never overwrite the local rows or reuse the ambiguous token.
-        final verifiedBase = _alignVerifiedItems(pendingDesired, remote);
+        final verifiedBase = _isFavoritesKey(key)
+            ? _alignFavoritesItems(pendingDesired, remote)
+            : _alignVerifiedItems(pendingDesired, remote);
         if (verifiedBase == null) {
           return _recordAlignmentConflict(
             work: work,
@@ -243,7 +257,10 @@ class PlaylistSyncEngine {
                 'ocurrencias no pudieron verificarse de forma segura.',
           );
         }
-        if (!work.local.semanticallyEquals(pendingDesired)) {
+        final localStillMatchesPending = _isFavoritesKey(key)
+            ? _sameFavoriteSet(work.local, pendingDesired)
+            : work.local.semanticallyEquals(pendingDesired);
+        if (!localStillMatchesPending) {
           try {
             await _store.commitVerifiedBaseWithNewerLocal(
               key: work.binding.key,
@@ -270,7 +287,9 @@ class PlaylistSyncEngine {
                 'm\u00e1s recientes siguen pendientes.',
           );
         }
-        final aligned = _alignVerifiedItems(work.local, remote);
+        final aligned = _isFavoritesKey(key)
+            ? _alignFavoritesItems(work.local, remote)
+            : _alignVerifiedItems(work.local, remote);
         if (aligned == null) {
           return _recordAlignmentConflict(
             work: work,
@@ -316,6 +335,11 @@ class PlaylistSyncEngine {
           : work.base,
       local: work.local,
       remote: remote,
+      // YouTube's Liked Music collection is server-ordered and can reorder
+      // itself after every like. Treating that churn as a playlist conflict
+      // would make each subsequent local like require manual resolution.
+      ignoreTitleConflicts: _isFavoritesKey(key),
+      ignoreOrderConflicts: _isFavoritesKey(key),
     );
     if (merge.hasConflicts) {
       for (final conflict in merge.conflicts) {
@@ -335,8 +359,14 @@ class PlaylistSyncEngine {
     }
     final merged = merge.snapshot!;
     final desiredRemote = merged.remoteProjection;
-    if (remote.semanticallyEquals(desiredRemote)) {
-      final aligned = _alignVerifiedItems(merged, remote);
+    final isFavorites = _isFavoritesKey(key);
+    final remoteMatchesDesired = isFavorites
+        ? _sameFavoriteSet(remote, desiredRemote)
+        : remote.semanticallyEquals(desiredRemote);
+    if (remoteMatchesDesired) {
+      final aligned = isFavorites
+          ? _alignFavoritesItems(merged, remote)
+          : _alignVerifiedItems(merged, remote);
       if (aligned == null) {
         return _recordAlignmentConflict(
           work: work,
@@ -348,6 +378,20 @@ class PlaylistSyncEngine {
         );
       }
       return _commit(work, aligned, remote);
+    }
+    final likedGateway = _gateway is YouTubeMusicLikedMusicGateway
+        ? _gateway as YouTubeMusicLikedMusicGateway
+        : null;
+    if (isFavorites && likedGateway != null) {
+      return _applyLikedMusicMutation(
+        work: work,
+        merged: merged,
+        desiredRemote: desiredRemote,
+        remote: remote,
+        remotePlaylistId: remotePlaylistId,
+        mutationToken: work.intent?.mutationToken ?? _mutationTokenFactory(),
+        gateway: likedGateway,
+      );
     }
     if (!remote.isEditable || !work.binding.isEditable) {
       final conflict = const PlaylistSyncConflict(
@@ -715,6 +759,72 @@ class PlaylistSyncEngine {
     );
   }
 
+  Future<PlaylistSyncResult> _applyLikedMusicMutation({
+    required PlaylistSyncWork work,
+    required PlaylistSyncSnapshot merged,
+    required PlaylistSyncSnapshot desiredRemote,
+    required PlaylistSyncSnapshot remote,
+    required String remotePlaylistId,
+    required String mutationToken,
+    required YouTubeMusicLikedMusicGateway gateway,
+  }) async {
+    if (!_isPersistenceAllowed()) {
+      return _sessionChangedResult();
+    }
+    RemoteMutationReceipt receipt;
+    try {
+      receipt = await gateway.applyLikedMusicState(
+        accountKey: work.binding.key.accountKey,
+        observed: remote,
+        desired: desiredRemote,
+        mutationToken: mutationToken,
+      );
+    } catch (error) {
+      return _verifyAfterMutation(
+        work: work,
+        merged: merged,
+        desiredRemote: desiredRemote,
+        remotePlaylistId: remotePlaylistId,
+        mutationToken: mutationToken,
+        mutationError: error,
+        favorites: true,
+      );
+    }
+    if (receipt.status == RemoteMutationStatus.rejected) {
+      if (!_isPersistenceAllowed()) {
+        return _sessionChangedResult();
+      }
+      final conflict = PlaylistSyncConflict(
+        kind: PlaylistSyncConflictKind.remoteNotEditable,
+        message:
+            receipt.message ?? 'YouTube Music rechazó el cambio de favoritos.',
+      );
+      await _store.recordConflict(
+        key: work.binding.key,
+        conflict: conflict,
+        base: work.base,
+        local: work.local,
+        remote: remote,
+        now: _clock(),
+      );
+      return PlaylistSyncResult(
+        disposition: PlaylistSyncDisposition.conflict,
+        conflicts: <PlaylistSyncConflict>[conflict],
+      );
+    }
+    return _verifyAfterMutation(
+      work: work,
+      merged: merged,
+      desiredRemote: desiredRemote,
+      remotePlaylistId: receipt.remotePlaylistId ?? remotePlaylistId,
+      mutationToken: mutationToken,
+      mutationError: receipt.status == RemoteMutationStatus.ambiguous
+          ? receipt.message
+          : null,
+      favorites: true,
+    );
+  }
+
   Future<PlaylistSyncResult> _verifyAfterMutation({
     required PlaylistSyncWork work,
     required PlaylistSyncSnapshot merged,
@@ -722,6 +832,7 @@ class PlaylistSyncEngine {
     required String remotePlaylistId,
     required String mutationToken,
     required Object? mutationError,
+    bool favorites = false,
   }) async {
     if (!_isPersistenceAllowed()) {
       await _recordAmbiguous(
@@ -761,31 +872,39 @@ class PlaylistSyncEngine {
       );
       return _sessionChangedResult();
     }
-    if (verified != null && verified.semanticallyEquals(desiredRemote)) {
-      final aligned = _alignVerifiedItems(merged, verified);
-      if (aligned == null) {
-        await _recordAmbiguous(
-          work: work,
-          desired: desiredRemote,
+    final verifiedSnapshot = verified;
+    if (verifiedSnapshot != null) {
+      final verifiedMatches = favorites
+          ? _sameFavoriteSet(verifiedSnapshot, desiredRemote)
+          : verifiedSnapshot.semanticallyEquals(desiredRemote);
+      if (verifiedMatches) {
+        final aligned = favorites
+            ? _alignFavoritesItems(merged, verifiedSnapshot)
+            : _alignVerifiedItems(merged, verifiedSnapshot);
+        if (aligned == null) {
+          await _recordAmbiguous(
+            work: work,
+            desired: desiredRemote,
+            mutationToken: mutationToken,
+            error:
+                mutationError ??
+                'El contenido remoto coincide, pero no sus ocurrencias.',
+          );
+          return const PlaylistSyncResult(
+            disposition: PlaylistSyncDisposition.deferred,
+            message:
+                'La escritura qued\u00f3 pendiente de verificaci\u00f3n segura.',
+          );
+        }
+        return _commit(
+          work,
+          aligned,
+          verifiedSnapshot,
+          remoteMutation: true,
+          ambiguityDesired: desiredRemote,
           mutationToken: mutationToken,
-          error:
-              mutationError ??
-              'El contenido remoto coincide, pero no sus ocurrencias.',
-        );
-        return const PlaylistSyncResult(
-          disposition: PlaylistSyncDisposition.deferred,
-          message:
-              'La escritura qued\u00f3 pendiente de verificaci\u00f3n segura.',
         );
       }
-      return _commit(
-        work,
-        aligned,
-        verified,
-        remoteMutation: true,
-        ambiguityDesired: desiredRemote,
-        mutationToken: mutationToken,
-      );
     }
     await _recordAmbiguous(
       work: work,
@@ -933,6 +1052,76 @@ class PlaylistSyncEngine {
     } on Object {
       return false;
     }
+  }
+
+  bool _isFavoritesKey(PlaylistSyncKey key) =>
+      key.playlistId == 'bstream:favorites';
+
+  bool _sameFavoriteSet(PlaylistSyncSnapshot left, PlaylistSyncSnapshot right) {
+    final leftCounts = _favoriteCounts(left);
+    final rightCounts = _favoriteCounts(right);
+    if (leftCounts.length != rightCounts.length) {
+      return false;
+    }
+    for (final entry in leftCounts.entries) {
+      if (rightCounts[entry.key] != entry.value) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Map<String, int> _favoriteCounts(PlaylistSyncSnapshot snapshot) {
+    final counts = <String, int>{};
+    for (final item in snapshot.items) {
+      final videoId = item.videoId?.trim();
+      if (videoId == null || videoId.isEmpty) {
+        continue;
+      }
+      counts[videoId] = (counts[videoId] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  PlaylistSyncSnapshot? _alignFavoritesItems(
+    PlaylistSyncSnapshot merged,
+    PlaylistSyncSnapshot verified,
+  ) {
+    if (!_sameFavoriteSet(merged, verified)) {
+      return null;
+    }
+    final verifiedByVideo = <String, List<PlaylistSyncItem>>{};
+    for (final item in verified.items) {
+      final videoId = item.videoId?.trim();
+      if (videoId == null || videoId.isEmpty) {
+        continue;
+      }
+      verifiedByVideo
+          .putIfAbsent(videoId, () => <PlaylistSyncItem>[])
+          .add(item);
+    }
+    final aligned = <PlaylistSyncItem>[];
+    for (final item in merged.items) {
+      final videoId = item.videoId?.trim();
+      if (videoId == null || videoId.isEmpty) {
+        aligned.add(item);
+        continue;
+      }
+      final candidates = verifiedByVideo[videoId];
+      if (candidates == null || candidates.isEmpty) {
+        return null;
+      }
+      final remoteItem = candidates.removeAt(0);
+      aligned.add(item.copyWith(setVideoId: remoteItem.setVideoId));
+    }
+    return PlaylistSyncSnapshot(
+      remotePlaylistId: verified.remotePlaylistId,
+      title: merged.title,
+      items: aligned,
+      remoteRevision: verified.remoteRevision,
+      isEditable: verified.isEditable,
+      privacy: verified.privacy,
+    );
   }
 
   PlaylistSyncResult _sessionChangedResult() => const PlaylistSyncResult(

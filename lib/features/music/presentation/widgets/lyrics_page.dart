@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_ui.dart';
 import '../../../../platform_channels/android_screen_channel.dart';
 import '../../../../services/lyrics/lyrics_romanization_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
@@ -790,10 +791,10 @@ class _LyricsHeaderArtwork extends StatelessWidget {
       onTap: onTap,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(appArtworkRadius),
         child: ClipRRect(
           key: const ValueKey('lyrics-header-artwork'),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(appArtworkRadius),
           child: SizedBox.square(
             dimension: 42,
             child: SourceImage(

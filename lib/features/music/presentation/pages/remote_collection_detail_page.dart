@@ -7,8 +7,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
+import '../widgets/mini_player.dart';
 import '../widgets/source_image.dart';
 import '../widgets/track_result_tile.dart';
+
+typedef AddRemoteTracksToPlaylist =
+    Future<void> Function(
+      BuildContext context,
+      List<TrackInfo> tracks, {
+      String? initialPlaylistName,
+    });
 
 class RemoteCollectionDetailPage extends ConsumerWidget {
   const RemoteCollectionDetailPage({
@@ -20,6 +28,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
     required this.emptyMessage,
     required this.errorMessage,
     required this.onOpenPlayer,
+    this.onAddToPlaylist,
     this.metadata = const [],
     this.fallbackIcon = Icons.queue_music_rounded,
     super.key,
@@ -33,6 +42,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
   final String emptyMessage;
   final String errorMessage;
   final VoidCallback onOpenPlayer;
+  final AddRemoteTracksToPlaylist? onAddToPlaylist;
   final List<String> metadata;
   final IconData fallbackIcon;
 
@@ -44,6 +54,9 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
       AsyncData(:final value) => value,
       _ => const <TrackInfo>[],
     };
+    final resolvedArtworkSource =
+        artworkSource ?? (tracks.isEmpty ? null : tracks.first.thumbnailUrl);
+    final miniPlayerHeight = miniPlayerHeightFor(context);
 
     return Scaffold(
       key: const ValueKey('remote-collection-detail'),
@@ -64,16 +77,24 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
             child: _CollectionHeader(
               title: title,
               subtitle: subtitle,
-              artworkSource: artworkSource,
+              artworkSource: resolvedArtworkSource,
               metadata: metadata,
               fallbackIcon: fallbackIcon,
               trackCount: tracksState is AsyncData<List<TrackInfo>>
                   ? tracks.length
                   : null,
               playLabel: strings.play,
+              addToPlaylistLabel: strings.addToPlaylist,
               songsLabel: strings.collectionSongCount,
               canPlay: tracks.isNotEmpty,
               onPlay: () => _play(context, ref, tracks.first, tracks),
+              onAddToPlaylist: onAddToPlaylist == null || tracks.isEmpty
+                  ? null
+                  : () => onAddToPlaylist!(
+                      context,
+                      tracks,
+                      initialPlaylistName: title,
+                    ),
             ),
           ),
           switch (tracksState) {
@@ -134,6 +155,20 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
           },
         ],
       ),
+      // This route has its own Scaffold, outside HomePage's shell. Reserve
+      // the gesture/three-button navigation area here without duplicating it
+      // while the keyboard is visible.
+      bottomNavigationBar: ColoredBox(
+        key: const ValueKey('remote-collection-mini-player'),
+        color: Theme.of(context).colorScheme.surface,
+        child: SafeArea(
+          top: false,
+          child: SizedBox(
+            height: miniPlayerHeight,
+            child: MiniPlayer(onOpenPlayer: () => _openPlayer(context)),
+          ),
+        ),
+      ),
     );
   }
 
@@ -179,9 +214,11 @@ class _CollectionHeader extends StatelessWidget {
     required this.fallbackIcon,
     required this.trackCount,
     required this.playLabel,
+    required this.addToPlaylistLabel,
     required this.songsLabel,
     required this.canPlay,
     required this.onPlay,
+    required this.onAddToPlaylist,
   });
 
   final String title;
@@ -191,9 +228,11 @@ class _CollectionHeader extends StatelessWidget {
   final IconData fallbackIcon;
   final int? trackCount;
   final String playLabel;
+  final String addToPlaylistLabel;
   final String Function(int count) songsLabel;
   final bool canPlay;
   final VoidCallback onPlay;
+  final VoidCallback? onAddToPlaylist;
 
   @override
   Widget build(BuildContext context) {
@@ -269,12 +308,29 @@ class _CollectionHeader extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 18),
-            FilledButton.icon(
-              key: const ValueKey('remote-collection-play'),
-              onPressed: canPlay ? onPlay : null,
-              style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
-              icon: const Icon(Icons.play_arrow_rounded),
-              label: Text(playLabel),
+            Wrap(
+              alignment: wide ? WrapAlignment.start : WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  key: const ValueKey('remote-collection-play'),
+                  onPressed: canPlay ? onPlay : null,
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: Text(playLabel),
+                ),
+                if (onAddToPlaylist != null)
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('remote-collection-add-to-playlist'),
+                    onPressed: onAddToPlaylist,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    icon: const Icon(Icons.playlist_add_rounded),
+                    label: Text(addToPlaylistLabel),
+                  ),
+              ],
             ),
           ],
         );

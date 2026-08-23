@@ -11,6 +11,7 @@ import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
+import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
@@ -776,60 +777,13 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     final strings = ref.read(appStringsProvider);
     final rawName = await showDialog<String>(
       context: context,
-      builder: (_) => _CreatePlaylistDialog(strings: strings),
+      builder: (_) => CreatePlaylistDialog(strings: strings),
     );
     final name = rawName?.trim();
     if (!mounted || name == null || name.isEmpty) {
       return;
     }
     await ref.read(playlistsControllerProvider.notifier).create(name);
-  }
-}
-
-class _CreatePlaylistDialog extends StatefulWidget {
-  const _CreatePlaylistDialog({required this.strings});
-
-  final AppStrings strings;
-
-  @override
-  State<_CreatePlaylistDialog> createState() => _CreatePlaylistDialogState();
-}
-
-class _CreatePlaylistDialogState extends State<_CreatePlaylistDialog> {
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.strings.newPlaylist),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: InputDecoration(hintText: widget.strings.name),
-        onSubmitted: _closeWithName,
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(''),
-          child: Text(widget.strings.cancel),
-        ),
-        FilledButton.icon(
-          icon: const Icon(Icons.check_rounded),
-          label: Text(widget.strings.create),
-          onPressed: () => _closeWithName(_controller.text),
-        ),
-      ],
-    );
-  }
-
-  void _closeWithName(String value) {
-    Navigator.of(context).pop(value.trim());
   }
 }
 
@@ -1072,6 +1026,7 @@ class _LiveQueueTile extends ConsumerWidget {
     final statusColor = _statusColor(context, isCurrent: isCurrent);
     final playButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final playIconSize = AppPlatform.isAndroid ? 30.0 : 26.0;
+    final subtitleStyle = appListCardSubtitleStyle(context);
 
     final shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(8),
@@ -1091,10 +1046,8 @@ class _LiveQueueTile extends ConsumerWidget {
         shape: shape,
         tileColor: Colors.transparent,
         leading: _LocalArtwork(source: _thumbnailSource),
-        title: Text(
+        title: MarqueeText(
           item.displayTitle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
             fontWeight: FontWeight.w700,
             color: AppColors.contentTitleFor(context),
@@ -1111,9 +1064,7 @@ class _LiveQueueTile extends ConsumerWidget {
                     '${strings.requestedBy}: ${item.requestedBy}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.contentSubtitleFor(context),
-                    ),
+                    style: subtitleStyle,
                   ),
                 ),
                 if (item.requestedByModerator) ...[
@@ -1139,7 +1090,10 @@ class _LiveQueueTile extends ConsumerWidget {
               _statusText(strings, isCurrent: isCurrent),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: statusColor, fontWeight: FontWeight.w700),
+              style: subtitleStyle.copyWith(
+                color: statusColor,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ),
@@ -1357,10 +1311,10 @@ List<String> _catalogPlaylistThumbnailSources(List<_CatalogDisplayItem> items) {
       .toList(growable: false);
 }
 
-Widget _trackMenuItem(IconData icon, String label) {
+Widget _trackMenuItem(BuildContext context, IconData icon, String label) {
   return Row(
     children: <Widget>[
-      Icon(icon),
+      Icon(icon, color: AppColors.menuIconFor(context)),
       const SizedBox(width: 12),
       Expanded(
         child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1553,6 +1507,8 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
         ref
             .watch(localTrackAudioAvailabilityProvider(localTrack))
             .maybeWhen(data: (available) => available, orElse: () => true);
+    final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
+    final menuIconColor = AppColors.menuIconFor(context);
     final borderRadius = BorderRadius.circular(appCardRadius);
     final baseColor = appListCardSurface(context);
     final activeColor = Color.alphaBlend(
@@ -1614,21 +1570,12 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                       ),
                     ),
                   ),
-                if (isCurrent)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: Center(
-                      child: NowPlayingEqualizer(isPlaying: isPlaying),
-                    ),
-                  ),
+                if (isCurrent || _hovered)
+                  NowPlayingEqualizerOverlay(isPlaying: isPlaying),
               ],
             ),
-            title: Text(
+            title: MarqueeText(
               widget.item.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
                 color: isCurrent
@@ -1664,14 +1611,23 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                   isPlaying: isPlaying,
                   onPressed: widget.item.isPlayable ? _togglePlayback : null,
                 ),
-                SizedBox.square(
-                  dimension: 44,
+                SizedBox(
+                  width: 36,
+                  height: 44,
                   child: PopupMenuButton<_TrackMenuAction>(
                     key: ValueKey(
                       'library-catalog-menu-${widget.item.entry.id}',
                     ),
                     tooltip: strings.moreOptions,
-                    icon: const Icon(Icons.more_vert_rounded),
+                    padding: EdgeInsets.zero,
+                    iconSize: menuIconSize,
+                    child: Center(
+                      child: Icon(
+                        Icons.more_vert_rounded,
+                        size: menuIconSize,
+                        color: menuIconColor,
+                      ),
+                    ),
                     onSelected: (action) => _handleAction(context, action),
                     itemBuilder: (context) {
                       final entries = <PopupMenuEntry<_TrackMenuAction>>[];
@@ -1681,6 +1637,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                           PopupMenuItem<_TrackMenuAction>(
                             value: _TrackMenuAction.download,
                             child: _trackMenuItem(
+                              context,
                               Icons.download_rounded,
                               strings.download,
                             ),
@@ -1692,6 +1649,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                           PopupMenuItem<_TrackMenuAction>(
                             value: _TrackMenuAction.addToPlaylist,
                             child: _trackMenuItem(
+                              context,
                               Icons.playlist_add_rounded,
                               strings.addToPlaylist,
                             ),
@@ -1702,6 +1660,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                         PopupMenuItem<_TrackMenuAction>(
                           value: _TrackMenuAction.removeFromPlaylist,
                           child: _trackMenuItem(
+                            context,
                             Icons.playlist_remove_rounded,
                             widget.playlist.isFavorites
                                 ? strings.removeFromFavorites
@@ -2159,15 +2118,23 @@ class _PlaylistMenu extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final buttonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
+    final buttonWidth = AppPlatform.isAndroid ? 36.0 : 40.0;
     final iconSize = AppPlatform.isAndroid ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
-    return SizedBox.square(
-      dimension: buttonSize,
+    return SizedBox(
+      width: buttonWidth,
+      height: buttonSize,
       child: PopupMenuButton<_PlaylistMenuAction>(
         tooltip: strings.moreOptions,
         padding: EdgeInsets.zero,
         iconSize: iconSize,
-        child: Center(child: Icon(Icons.more_vert_rounded, size: iconSize)),
+        child: Center(
+          child: Icon(
+            Icons.more_vert_rounded,
+            size: iconSize,
+            color: menuIconColor,
+          ),
+        ),
         onSelected: (action) => _handleAction(context, ref, action),
         itemBuilder: (context) => [
           PopupMenuItem(
@@ -2636,10 +2603,8 @@ class _CreatePlaylistRow extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
+                  child: MarqueeText(
                     label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: appListCardTitleStyle(context),
                   ),
                 ),
@@ -2679,12 +2644,7 @@ class _LibraryEntry extends StatelessWidget {
         contentPadding: _libraryOverviewContentPadding,
         horizontalTitleGap: 10,
         leading: leading ?? _FolderIcon(icon: icon),
-        title: Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: appListCardTitleStyle(context),
-        ),
+        title: MarqueeText(title, style: appListCardTitleStyle(context)),
         subtitle: Text(
           subtitle,
           maxLines: 2,
@@ -2712,7 +2672,7 @@ class _PlaylistCover extends StatelessWidget {
     final underlay = sources.skip(1).take(3).toList(growable: false);
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(3),
+      borderRadius: BorderRadius.circular(appArtworkRadius),
       child: SizedBox(
         width: _libraryOverviewArtworkSize,
         height: _libraryOverviewArtworkSize,
@@ -2913,6 +2873,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
     final colors = Theme.of(context).colorScheme;
     final menuButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
+    final menuButtonWidth = AppPlatform.isAndroid ? 36.0 : 40.0;
     final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
     final menuItemIconColor = AppColors.menuIconFor(context);
     final localAudioAvailable = ref
@@ -2977,17 +2938,10 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                       right: 1,
                       child: FavoriteStarBadge(iconSize: 15),
                     ),
-                  if (isCurrent)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: Center(
-                        child: NowPlayingEqualizer(
-                          key: ValueKey('now-playing-${track.id}'),
-                          isPlaying: isPlaying,
-                        ),
-                      ),
+                  if (isCurrent || _hovered)
+                    NowPlayingEqualizerOverlay(
+                      key: ValueKey('now-playing-${track.id}'),
+                      isPlaying: isPlaying,
                     ),
                 ],
               ),
@@ -3044,7 +2998,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                           onPressed: () => _togglePlayback(ref),
                         ),
                         SizedBox(
-                          width: menuButtonSize,
+                          width: menuButtonWidth,
                           height: menuButtonSize,
                           child: PopupMenuButton<_TrackMenuAction>(
                             key: ValueKey('library-track-menu-${track.id}'),
@@ -3056,6 +3010,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                               child: Icon(
                                 Icons.more_vert_rounded,
                                 size: menuIconSize,
+                                color: menuItemIconColor,
                               ),
                             ),
                             onSelected: (action) =>
@@ -3130,6 +3085,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                   PopupMenuItem(
                                     value: _TrackMenuAction.download,
                                     child: _trackMenuItem(
+                                      context,
                                       Icons.download_rounded,
                                       strings.download,
                                     ),
@@ -3137,6 +3093,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                 PopupMenuItem(
                                   value: _TrackMenuAction.addToPlaylist,
                                   child: _trackMenuItem(
+                                    context,
                                     Icons.playlist_add_rounded,
                                     strings.addToPlaylist,
                                   ),
@@ -3144,6 +3101,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                 PopupMenuItem(
                                   value: _TrackMenuAction.renameTrack,
                                   child: _trackMenuItem(
+                                    context,
                                     Icons.drive_file_rename_outline_rounded,
                                     strings.rename,
                                   ),
@@ -3151,6 +3109,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                 PopupMenuItem(
                                   value: _TrackMenuAction.toggleFavorite,
                                   child: _trackMenuItem(
+                                    context,
                                     isFavorite
                                         ? Icons.favorite_rounded
                                         : Icons.favorite_border_rounded,
@@ -3163,6 +3122,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                   PopupMenuItem(
                                     value: _TrackMenuAction.removeFromPlaylist,
                                     child: _trackMenuItem(
+                                      context,
                                       Icons.playlist_remove_rounded,
                                       strings.removeFromPlaylist,
                                     ),
@@ -3483,7 +3443,7 @@ class _LocalArtwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(3),
+      borderRadius: BorderRadius.circular(appArtworkRadius),
       child: SizedBox(
         width: 56,
         height: 56,

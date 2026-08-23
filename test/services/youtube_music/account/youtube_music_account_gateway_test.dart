@@ -83,6 +83,28 @@ void main() {
     });
 
     test(
+      'reads saved playlists from the authenticated library carousel',
+      () async {
+        final transport = _FakeAccountTransport(<Object>[
+          _ok(
+            _playlistCarouselFixture(
+              playlistId: 'PL-carousel',
+              title: 'Desde carousel',
+            ),
+          ),
+        ]);
+
+        final collection = await _gateway(transport).getSavedPlaylists();
+
+        expect(
+          collection.playlists.map((playlist) => playlist.playlistId),
+          <String>['PL-carousel'],
+        );
+        expect(collection.isComplete, isTrue);
+      },
+    );
+
+    test(
       'marks a bounded playlist listing as incomplete at page limit',
       () async {
         final transport = _FakeAccountTransport(<Object>[
@@ -346,6 +368,38 @@ void main() {
       expect(request.body['title'], 'Viaje');
       expect(request.body['privacyStatus'], 'UNLISTED');
       expect(request.body['videoIds'], <String>['video-a', 'video-b']);
+    });
+
+    test('liked music mutations use like and removelike endpoints', () async {
+      final transport = _FakeAccountTransport(<Object>[
+        _ok(const <String, Object?>{}),
+        _ok(const <String, Object?>{}),
+      ]);
+      final gateway = _gateway(transport);
+
+      final liked = await gateway.likeVideo('video-like');
+      final unliked = await gateway.removeLike('video-unlike');
+
+      expect(
+        liked,
+        isA<YouTubeMusicMutationSuccess<RemotePlaylistMutationApplied>>(),
+      );
+      expect(
+        unliked,
+        isA<YouTubeMusicMutationSuccess<RemotePlaylistMutationApplied>>(),
+      );
+      expect(transport.requests.map((request) => request.endpoint), <String>[
+        'like/like',
+        'like/removelike',
+      ]);
+      expect(
+        (transport.requests.first.body['target'] as Map)['videoId'],
+        'video-like',
+      );
+      expect(
+        (transport.requests.last.body['target'] as Map)['videoId'],
+        'video-unlike',
+      );
     });
 
     test('encodes add, remove, move, metadata and delete operations', () async {
@@ -676,6 +730,27 @@ Map<String, Object?> _playlistShelfFixture({
     ],
   };
 }
+
+Map<String, Object?> _playlistCarouselFixture({
+  required String playlistId,
+  required String title,
+}) => <String, Object?>{
+  'contents': <Object?>[
+    <String, Object?>{
+      'sectionListRenderer': <String, Object?>{
+        'contents': <Object?>[
+          <String, Object?>{
+            'musicCarouselShelfRenderer': <String, Object?>{
+              'contents': <Object?>[
+                _savedPlaylistItem(playlistId: playlistId, title: title),
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+};
 
 Map<String, Object?> _savedPlaylistItem({
   required String playlistId,

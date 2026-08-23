@@ -7,10 +7,12 @@ import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
+import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/download_result.dart';
 import '../../domain/entities/track_info.dart';
 import 'gradient_progress_bar.dart';
+import 'now_playing_equalizer.dart';
 import 'playlist_picker_dialog.dart';
 import 'source_image.dart';
 import 'track_play_button.dart';
@@ -104,16 +106,25 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               child: Row(
                 children: [
-                  _Thumbnail(url: track.thumbnailUrl),
+                  Stack(
+                    children: [
+                      _Thumbnail(url: track.thumbnailUrl),
+                      if (isCurrent || _hovered)
+                        NowPlayingEqualizerOverlay(
+                          key: ValueKey('track-result-now-playing-$identity'),
+                          isPlaying: isPlaying,
+                          width: 46,
+                          height: 18,
+                        ),
+                    ],
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        MarqueeText(
                           track.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleSmall
                               ?.copyWith(
                                 fontWeight: isCurrent
@@ -125,12 +136,12 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                         const SizedBox(height: 2),
                         Text(
                           '${track.artist}  -  ${formatDuration(track.duration)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(
                                 color: AppColors.contentSubtitleFor(context),
                               ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         if (downloadState != null) ...[
                           const SizedBox(height: 5),
@@ -254,16 +265,24 @@ class _TrackResultMenu extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final compactAndroid = AppPlatform.isAndroid;
     final buttonSize = compactAndroid ? 48.0 : 52.0;
+    final buttonWidth = compactAndroid ? 36.0 : 40.0;
     final iconSize = compactAndroid ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
 
-    return SizedBox.square(
-      dimension: buttonSize,
+    return SizedBox(
+      width: buttonWidth,
+      height: buttonSize,
       child: PopupMenuButton<_TrackResultAction>(
         tooltip: strings.moreOptions,
         padding: EdgeInsets.zero,
         iconSize: iconSize,
-        child: Center(child: Icon(Icons.more_vert_rounded, size: iconSize)),
+        child: Center(
+          child: Icon(
+            Icons.more_vert_rounded,
+            size: iconSize,
+            color: menuIconColor,
+          ),
+        ),
         onSelected: (action) {
           switch (action) {
             case _TrackResultAction.download:
@@ -383,7 +402,7 @@ class _Thumbnail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(appArtworkRadius),
       child: SizedBox(
         width: 56,
         height: 56,

@@ -10,7 +10,10 @@ import 'youtube_music_playlist_gateway.dart';
 /// Account mutations remain one-shot: an uncertain result is returned to the
 /// engine for reconciliation and is never repeated here.
 final class YouTubeMusicAccountPlaylistGateway
-    implements YouTubeMusicPlaylistGateway, YouTubeMusicPlaylistCatalogGateway {
+    implements
+        YouTubeMusicPlaylistGateway,
+        YouTubeMusicPlaylistCatalogGateway,
+        YouTubeMusicLikedMusicGateway {
   factory YouTubeMusicAccountPlaylistGateway({
     required account.YouTubeMusicAccountGateway accountGateway,
     required String accountKey,
@@ -58,22 +61,29 @@ final class YouTubeMusicAccountPlaylistGateway
     // Shelf renderers frequently omit edit markers even for playlists owned
     // by the active account. Treat that absence as unknown; the detail header
     // mapped by fetchPlaylist is authoritative before any write is attempted.
-    return collection.playlists
-        // YT Music's system Liked Music playlist is represented by LM/VLLM.
-        // BStream Favorites deliberately stays local, so importing LM as a
-        // second ordinary playlist would violate that policy and confuse the
-        // first-sync disclosure.
-        .where((playlist) => !_isLikedMusicPlaylistId(playlist.playlistId))
-        .map(
-          (playlist) => RemotePlaylistSummary(
-            remotePlaylistId: playlist.playlistId,
-            remoteBrowseId: playlist.browseId,
-            title: playlist.title,
-            isEditable: true,
-            privacy: _privacyName(playlist.visibility),
-          ),
-        )
-        .toList(growable: false);
+    // LM and VLLM are two browse forms of the same system collection. Keep one
+    // canonical summary so the coordinator can bind it to BStream Favorites
+    // instead of importing a duplicate ordinary playlist.
+    final mapped = <String, RemotePlaylistSummary>{};
+    for (final playlist in collection.playlists) {
+      if (_isEpisodesForLaterPlaylist(playlist)) {
+        continue;
+      }
+      final remoteId = _canonicalPlaylistId(playlist.playlistId);
+      final liked = _isLikedMusicPlaylistId(remoteId);
+      mapped.putIfAbsent(
+        remoteId,
+        () => RemotePlaylistSummary(
+          remotePlaylistId: remoteId,
+          remoteBrowseId: playlist.browseId,
+          title: playlist.title,
+          isEditable: true,
+          privacy: _privacyName(playlist.visibility),
+          isLikedMusic: liked,
+        ),
+      );
+    }
+    return mapped.values.toList(growable: false);
   }
 
   @override
@@ -475,6 +485,72 @@ final class YouTubeMusicAccountPlaylistGateway
   }
 
   @override
+  Future<RemoteMutationReceipt> applyLikedMusicState({
+    required String accountKey,
+    required PlaylistSyncSnapshot observed,
+    required PlaylistSyncSnapshot desired,
+    required String mutationToken,
+  }) async {
+    _verifyAccount(accountKey);
+    _verifySession();
+    final remotePlaylistId = _normalized(observed.remotePlaylistId);
+    if (remotePlaylistId == null) {
+      return const RemoteMutationReceipt(
+        status: RemoteMutationStatus.rejected,
+        message: 'La colección de favoritos no tiene un identificador válido.',
+      );
+    }
+
+    final observedIds = _likedVideoIds(observed);
+    final desiredIds = _likedVideoIds(desired);
+    final removals = observedIds.difference(desiredIds).toList(growable: false);
+    final additions = desiredIds
+        .difference(observedIds)
+        .toList(growable: false);
+    var wrote = false;
+
+    // The like endpoints are one-shot. If an operation is ambiguous or a
+    // later operation fails, stop immediately and let the engine fetch LM
+    // again before deciding whether another mutation is safe.
+    for (final videoId in removals) {
+      final result = await _guardMutation(() async {
+        _verifySession();
+        return _accountGateway.removeLike(videoId);
+      });
+      _verifySession();
+      final stopped = _stoppedReceipt(
+        result,
+        priorWrite: wrote,
+        onStatusCode: _notifyAuthenticationExpired,
+      );
+      if (stopped != null) {
+        return stopped;
+      }
+      wrote = true;
+    }
+    for (final videoId in additions) {
+      final result = await _guardMutation(() async {
+        _verifySession();
+        return _accountGateway.likeVideo(videoId);
+      });
+      _verifySession();
+      final stopped = _stoppedReceipt(
+        result,
+        priorWrite: wrote,
+        onStatusCode: _notifyAuthenticationExpired,
+      );
+      if (stopped != null) {
+        return stopped;
+      }
+      wrote = true;
+    }
+    return RemoteMutationReceipt(
+      status: RemoteMutationStatus.acknowledged,
+      remotePlaylistId: _canonicalPlaylistId(remotePlaylistId),
+    );
+  }
+
+  @override
   Future<RemoteMutationReceipt> deletePlaylist({
     required String accountKey,
     required PlaylistSyncSnapshot observed,
@@ -548,7 +624,12 @@ final class YouTubeMusicAccountPlaylistGateway
           track: _toCatalogTrack(remote.playlistId, entry),
         ),
       ),
-      isEditable: summary.isEditable,
+      // The LM collection is mutated through like/removelike rather than the
+      // ordinary playlist edit surface. Keep it writable in the sync model so
+      // the dedicated gateway can apply local like changes.
+      isEditable: _isLikedMusicPlaylistId(remote.playlistId)
+          ? true
+          : summary.isEditable,
       privacy: _privacyName(summary.visibility),
     );
   }
@@ -639,6 +720,11 @@ List<_DesiredOccurrence>? _desiredOccurrences(PlaylistSyncSnapshot desired) {
   }
   return occurrences;
 }
+
+Set<String> _likedVideoIds(PlaylistSyncSnapshot snapshot) => snapshot.items
+    .map((item) => _normalized(item.videoId))
+    .whereType<String>()
+    .toSet();
 
 List<_RemoteOccurrence>? _observedOccurrences(PlaylistSyncSnapshot observed) {
   final occurrences = <_RemoteOccurrence>[];
@@ -850,6 +936,26 @@ String _canonicalPlaylistId(String value) =>
 
 bool _isLikedMusicPlaylistId(String value) =>
     _canonicalPlaylistId(value.trim()).toUpperCase() == 'LM';
+
+bool _isEpisodesForLaterPlaylist(account.RemotePlaylistSummary playlist) {
+  final title = playlist.title
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9áéíóúüñ]+', caseSensitive: false), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (title == 'episodes for later' ||
+      title == 'episodios para despues' ||
+      title == 'episodios para después') {
+    return true;
+  }
+  final hasEpisode = title.contains('episode') || title.contains('episodio');
+  final hasLater =
+      title.contains('later') ||
+      title.contains('despues') ||
+      title.contains('después') ||
+      title.contains('after');
+  return hasEpisode && hasLater;
+}
 
 String? _normalized(String? value) {
   final normalized = value?.trim();

@@ -67,7 +67,7 @@ void main() {
       expect(track.sourceUrl, 'https://music.youtube.com/watch?v=same-video');
     });
 
-    test('never exposes LM or VLLM for playlist bootstrap imports', () async {
+    test('exposes Liked Music once and excludes Episodes for later', () async {
       final accountGateway = _FakeAccountGateway()
         ..savedPlaylists = account.RemotePlaylistCollection(
           playlists: const <account.RemotePlaylistSummary>[
@@ -78,6 +78,10 @@ void main() {
             account.RemotePlaylistSummary(
               playlistId: 'VLLM',
               title: 'Liked Music browse form',
+            ),
+            account.RemotePlaylistSummary(
+              playlistId: 'EPISODES_LATER',
+              title: 'Episodios para después',
             ),
             account.RemotePlaylistSummary(
               playlistId: 'PL-road',
@@ -94,8 +98,9 @@ void main() {
 
       expect(
         summaries.map((summary) => summary.remotePlaylistId),
-        const <String>['PL-road'],
+        const <String>['LM', 'PL-road'],
       );
+      expect(summaries.first.isLikedMusic, isTrue);
     });
 
     test(
@@ -211,6 +216,37 @@ void main() {
         'same-video',
       ]);
     });
+
+    test(
+      'Liked Music uses account like endpoints, not playlist edits',
+      () async {
+        final accountGateway = _FakeAccountGateway();
+        final gateway = _adapter(accountGateway);
+        final observed = PlaylistSyncSnapshot(
+          remotePlaylistId: 'LM',
+          title: 'Liked Music',
+          items: <PlaylistSyncItem>[_syncItem(videoId: 'video-a')],
+        );
+        final desired = PlaylistSyncSnapshot(
+          remotePlaylistId: 'LM',
+          title: 'Favoritos',
+          items: <PlaylistSyncItem>[_syncItem(videoId: 'video-b')],
+        );
+
+        final receipt = await gateway.applyLikedMusicState(
+          accountKey: _accountKey,
+          observed: observed,
+          desired: desired,
+          mutationToken: 'like-token',
+        );
+
+        expect(receipt.status, RemoteMutationStatus.acknowledged);
+        expect(accountGateway.removedLikeVideoIds, <String>['video-a']);
+        expect(accountGateway.likedVideoIds, <String>['video-b']);
+        expect(accountGateway.addedVideoIds, isEmpty);
+        expect(accountGateway.removedSetVideoIds, isEmpty);
+      },
+    );
 
     test(
       'preserves a created remote ID when the session changes after ACK',
@@ -581,6 +617,8 @@ final class _FakeAccountGateway implements account.YouTubeMusicAccountGateway {
         >
       >[];
   final List<String> addedVideoIds = <String>[];
+  final List<String> likedVideoIds = <String>[];
+  final List<String> removedLikeVideoIds = <String>[];
   final List<String> removedSetVideoIds = <String>[];
   final List<_Move> moves = <_Move>[];
   final List<String> renamedTitles = <String>[];
@@ -646,6 +684,28 @@ final class _FakeAccountGateway implements account.YouTubeMusicAccountGateway {
     required account.RemotePlaylistEntry entry,
   }) async {
     removedSetVideoIds.add(entry.setVideoId!);
+    return const account.YouTubeMusicMutationSuccess<
+      account.RemotePlaylistMutationApplied
+    >(account.RemotePlaylistMutationApplied());
+  }
+
+  @override
+  Future<
+    account.YouTubeMusicMutationResult<account.RemotePlaylistMutationApplied>
+  >
+  likeVideo(String videoId) async {
+    likedVideoIds.add(videoId);
+    return const account.YouTubeMusicMutationSuccess<
+      account.RemotePlaylistMutationApplied
+    >(account.RemotePlaylistMutationApplied());
+  }
+
+  @override
+  Future<
+    account.YouTubeMusicMutationResult<account.RemotePlaylistMutationApplied>
+  >
+  removeLike(String videoId) async {
+    removedLikeVideoIds.add(videoId);
     return const account.YouTubeMusicMutationSuccess<
       account.RemotePlaylistMutationApplied
     >(account.RemotePlaylistMutationApplied());

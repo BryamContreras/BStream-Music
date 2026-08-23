@@ -4,10 +4,72 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/image_source.dart';
+import '../../../../core/widgets/marquee_text.dart';
 import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
+import '../providers/app_strings.dart';
 import 'source_image.dart';
+
+/// The shared playlist-name form used by the Library and collection actions.
+/// An optional initial name is only a suggestion; the user can edit or clear
+/// it before confirming.
+class CreatePlaylistDialog extends StatefulWidget {
+  const CreatePlaylistDialog({
+    required this.strings,
+    this.initialName = '',
+    super.key,
+  });
+
+  final AppStrings strings;
+  final String initialName;
+
+  @override
+  State<CreatePlaylistDialog> createState() => _CreatePlaylistDialogState();
+}
+
+class _CreatePlaylistDialogState extends State<CreatePlaylistDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialName,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.strings.newPlaylist),
+      content: TextField(
+        key: const ValueKey('create-playlist-name'),
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(hintText: widget.strings.name),
+        onSubmitted: _closeWithName,
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('create-playlist-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(widget.strings.cancel),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('create-playlist-confirm'),
+          icon: const Icon(Icons.check_rounded),
+          label: Text(widget.strings.create),
+          onPressed: () => _closeWithName(_controller.text),
+        ),
+      ],
+    );
+  }
+
+  void _closeWithName(String value) {
+    Navigator.of(context).pop(value.trim());
+  }
+}
 
 class PlaylistPickerDialog extends StatelessWidget {
   const PlaylistPickerDialog({
@@ -93,10 +155,8 @@ class _PlaylistOption extends StatelessWidget {
         _PlaylistOptionCover(sources: thumbnailSources),
         const SizedBox(width: 12),
         Expanded(
-          child: Text(
+          child: MarqueeText(
             playlist.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.w800,
               color: AppColors.contentTitleFor(context),

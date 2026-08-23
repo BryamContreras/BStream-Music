@@ -367,6 +367,7 @@ List<Map<String, Object?>> _savedPlaylistContainers(Object? root) {
     for (final key in const <String>[
       'gridContinuation',
       'musicShelfContinuation',
+      'musicCarouselShelfContinuation',
     ]) {
       final container = _asMap(continuationContents[key]);
       if (container != null) {
@@ -374,14 +375,35 @@ List<Map<String, Object?>> _savedPlaylistContainers(Object? root) {
       }
     }
     if (continuations.isNotEmpty) {
-      return continuations;
+      // A browse response can carry continuation branches for several
+      // shelves. Prefer branches that actually contain playlist cards; this
+      // keeps unrelated shelves from stealing the pagination token while
+      // still accepting the carousel used by the current YT Music library.
+      final playlistBranches = continuations
+          .where(_savedPlaylistContainerHasVerifiableCard)
+          .toList(growable: false);
+      return playlistBranches.isNotEmpty ? playlistBranches : continuations;
     }
   }
 
-  return <Map<String, Object?>>[
+  final containers = <Map<String, Object?>>[
     ..._renderers(root, 'gridRenderer'),
     ..._renderers(root, 'musicShelfRenderer'),
   ];
+  final carousels = _renderers(
+    root,
+    'musicCarouselShelfRenderer',
+  ).where(_savedPlaylistContainerHasVerifiableCard).toList(growable: false);
+  containers.addAll(carousels);
+  return containers;
+}
+
+bool _savedPlaylistContainerHasVerifiableCard(Map<String, Object?> container) {
+  final collections = _savedPlaylistCollections(container);
+  return _directRenderers(
+    collections,
+    _savedPlaylistRendererNames,
+  ).any(_isVerifiablePlaylistSummary);
 }
 
 Iterable<_RendererCollection> _playlistEntryCollections(

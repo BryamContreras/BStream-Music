@@ -52,6 +52,7 @@ class YouTubeMusicAuthCoordinator {
       apiKey: authData.apiKey,
       clientVersion: authData.clientVersion,
       clientName: authData.clientName,
+      region: authData.region,
     );
   }
 
@@ -84,6 +85,7 @@ class YouTubeMusicAuthCoordinator {
       apiKey: normalized.apiKey,
       clientVersion: normalized.clientVersion,
       clientName: normalized.clientName,
+      region: normalized.region,
     );
     return credential;
   }

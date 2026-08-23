@@ -179,7 +179,14 @@ class YouTubeMusicAuthController extends Notifier<YouTubeMusicAuthState> {
       try {
         channels = await coordinator.discoverChannels(normalized);
       } on YouTubeMusicAccountException catch (error) {
-        if (error.kind != YouTubeMusicAccountFailureKind.transient) rethrow;
+        // Channel enumeration is an optional UX enhancement. Some accounts
+        // (and some Google hand-offs) expose a valid profile before the
+        // accounts-list endpoint is available. Do not reject an otherwise
+        // valid login for that secondary request; authentication validation
+        // below remains authoritative and still rejects 401/403.
+        if (error.kind == YouTubeMusicAccountFailureKind.unauthenticated) {
+          rethrow;
+        }
         channels = const <YouTubeMusicAccountChannel>[];
       }
       if (!_isCurrent(generation)) return;

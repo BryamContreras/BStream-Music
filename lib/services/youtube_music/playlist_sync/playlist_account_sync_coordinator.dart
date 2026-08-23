@@ -27,7 +27,9 @@ class PlaylistAccountSyncResult {
 ///
 /// It never matches names and never treats absence during the initial import as
 /// a deletion. Local unbound playlists become private remote playlists, while
-/// unbound remote playlists receive a new local UUID. Favorites stay local.
+/// unbound remote playlists receive a new local UUID. YouTube Music's system
+/// Liked Music collection is bound to BStream's reserved Favorites playlist
+/// and is never imported as a second local playlist.
 class PlaylistAccountSyncCoordinator {
   const PlaylistAccountSyncCoordinator({
     required CatalogPlaylistRepository playlists,
@@ -126,8 +128,20 @@ class PlaylistAccountSyncCoordinator {
       final locals = await _playlists.getCatalogPlaylists();
       _ensurePersistenceAllowed();
       for (final local in locals) {
-        if (local.id == Playlist.favoritesId ||
-            globallyBoundLocalIds.contains(local.id)) {
+        final isFavorites = local.id == Playlist.favoritesId;
+        RemotePlaylistSummary? likedSummary;
+        if (isFavorites) {
+          for (final remote in remotes) {
+            if (remote.isLikedMusic) {
+              likedSummary = remote;
+              break;
+            }
+          }
+        }
+        if ((!isFavorites && globallyBoundLocalIds.contains(local.id)) ||
+            (isFavorites &&
+                (bindingByLocal.containsKey(local.id) ||
+                    likedSummary == null))) {
           continue;
         }
         final key = PlaylistSyncKey(
@@ -136,29 +150,90 @@ class PlaylistAccountSyncCoordinator {
         );
         final binding = PlaylistSyncBinding(
           key: key,
+          remotePlaylistId: likedSummary?.remotePlaylistId,
+          remoteBrowseId: likedSummary?.remoteBrowseId,
           mode: newBindingMode,
-          privacy: 'PRIVATE',
+          isEditable: likedSummary?.isEditable ?? true,
+          privacy: likedSummary?.privacy ?? 'PRIVATE',
           localRevisionAtBase: 0,
+          lastRemoteSeenAt: likedSummary == null ? null : now,
           createdAt: now,
           updatedAt: now,
         );
         _ensurePersistenceAllowed();
         await _store.upsertBinding(binding, canCommit: _isPersistenceAllowed);
-        await _store.enqueueIntent(
-          key: key,
-          requestedLocalRevision: local.localRevision,
-          reason: 'bootstrap_create_private_remote',
-          now: now,
-          canCommit: _isPersistenceAllowed,
-        );
+        if (likedSummary == null) {
+          await _store.enqueueIntent(
+            key: key,
+            requestedLocalRevision: local.localRevision,
+            reason: 'bootstrap_create_private_remote',
+            now: now,
+            canCommit: _isPersistenceAllowed,
+          );
+        }
         bindingByLocal[local.id] = binding;
-        globallyBoundLocalIds.add(local.id);
+        if (binding.remotePlaylistId != null) {
+          bindingByRemote[binding.remotePlaylistId!] = binding;
+        }
+        if (!isFavorites) {
+          globallyBoundLocalIds.add(local.id);
+        }
         linkedLocalCount += 1;
       }
 
       for (final remote in remotes) {
         _ensurePersistenceAllowed();
         if (bindingByRemote.containsKey(remote.remotePlaylistId)) {
+          continue;
+        }
+        if (remote.isLikedMusic) {
+          // LM/VLLM is YouTube Music's system "Liked Music" collection. It
+          // maps to the reserved local Favorites playlist, never to a newly
+          // generated local playlist.
+          final existingFavorite = bindingByLocal[Playlist.favoritesId];
+          if (existingFavorite == null) {
+            // Favorites is a reserved playlist, but older/empty libraries may
+            // not have a row for it yet.  The binding table has a foreign key
+            // to playlists, so materialize the shell before inserting the
+            // account binding.  Without this, a first sync on an empty
+            // library fails with a SQLite foreign-key error and the user only
+            // sees the generic "could not synchronize" message.
+            final localFavorites = await _playlists.getCatalogPlaylist(
+              Playlist.favoritesId,
+            );
+            if (localFavorites == null) {
+              await _playlists.createCatalogPlaylist(
+                id: Playlist.favoritesId,
+                name: 'Favorites',
+                now: now,
+              );
+            }
+            final key = PlaylistSyncKey(
+              accountKey: normalizedAccount,
+              playlistId: Playlist.favoritesId,
+            );
+            final binding = PlaylistSyncBinding(
+              key: key,
+              remotePlaylistId: remote.remotePlaylistId,
+              remoteBrowseId: remote.remoteBrowseId,
+              mode: newBindingMode,
+              isEditable: remote.isEditable,
+              privacy: remote.privacy,
+              localRevisionAtBase: 0,
+              lastRemoteSeenAt: now,
+              createdAt: now,
+              updatedAt: now,
+            );
+            await _store.upsertBinding(
+              binding,
+              canCommit: _isPersistenceAllowed,
+            );
+            bindingByLocal[Playlist.favoritesId] = binding;
+            bindingByRemote[remote.remotePlaylistId] = binding;
+            linkedLocalCount += 1;
+          } else {
+            bindingByRemote[remote.remotePlaylistId] = existingFavorite;
+          }
           continue;
         }
         final playlistId = _localPlaylistIdFactory();

@@ -7,6 +7,7 @@ class RemotePlaylistSummary {
     this.remoteBrowseId,
     this.isEditable = true,
     this.privacy,
+    this.isLikedMusic = false,
   });
 
   final String remotePlaylistId;
@@ -14,6 +15,11 @@ class RemotePlaylistSummary {
   final String title;
   final bool isEditable;
   final String? privacy;
+
+  /// True for YouTube Music's system "Liked Music" collection (LM/VLLM).
+  /// It is represented locally by BStream's reserved Favorites playlist,
+  /// rather than imported as a second ordinary playlist.
+  final bool isLikedMusic;
 }
 
 abstract interface class YouTubeMusicPlaylistCatalogGateway {
@@ -62,6 +68,21 @@ abstract interface class YouTubeMusicPlaylistGateway {
   Future<RemoteMutationReceipt> deletePlaylist({
     required String accountKey,
     required PlaylistSyncSnapshot observed,
+    required String mutationToken,
+  });
+}
+
+/// Mutation boundary for YouTube Music's special "Liked Music" collection.
+///
+/// Liked Music is not an ordinary editable playlist.  Its membership is the
+/// account's like state and must be changed through the like/removelike
+/// endpoints; calling browse/edit_playlist is rejected by YouTube and would
+/// incorrectly turn every local like into a sync conflict.
+abstract interface class YouTubeMusicLikedMusicGateway {
+  Future<RemoteMutationReceipt> applyLikedMusicState({
+    required String accountKey,
+    required PlaylistSyncSnapshot observed,
+    required PlaylistSyncSnapshot desired,
     required String mutationToken,
   });
 }

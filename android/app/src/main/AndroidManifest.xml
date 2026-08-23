@@ -53,6 +53,22 @@
                     android:scheme="bstreammusic"
                     android:host="track" />
             </intent-filter>
+            <!--
+                 Offer BStream as an option for public YouTube links. This is
+                 intentionally not autoVerify: without a domain-owned
+                 assetlinks.json Android must keep the normal chooser instead
+                 of claiming the link as the system default.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="music.youtube.com" />
+                <data android:scheme="https" android:host="youtube.com" />
+                <data android:scheme="https" android:host="www.youtube.com" />
+                <data android:scheme="https" android:host="m.youtube.com" />
+                <data android:scheme="https" android:host="youtu.be" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

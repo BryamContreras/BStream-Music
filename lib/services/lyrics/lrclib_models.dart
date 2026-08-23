@@ -77,8 +77,20 @@ class LrclibScoredRecord {
   final LrclibRecord record;
   final double score;
 
+  // LRCLIB often keeps a plain exact mirror alongside a synchronized upload
+  // whose title includes the artist (for example, "Artist - Title"). Prefer
+  // the synchronized record when the match is still close, instead of
+  // discarding timing merely because one title is a few tokens shorter.
+  static const _syncedPreferenceTolerance = 0.14;
+
   bool isBetterThan(LrclibScoredRecord other) {
     final difference = score - other.score;
+    if (record.hasSyncedLyrics != other.record.hasSyncedLyrics) {
+      if (record.hasSyncedLyrics) {
+        return difference >= -_syncedPreferenceTolerance;
+      }
+      return difference > _syncedPreferenceTolerance;
+    }
     if (difference.abs() > 0.0001) {
       return difference > 0;
     }

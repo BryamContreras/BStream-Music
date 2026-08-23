@@ -7,15 +7,27 @@ final playlistsControllerProvider =
 
 final favoriteTrackIdsProvider = Provider<Set<String>>((ref) {
   final playlists = ref.watch(playlistsControllerProvider).value;
-  if (playlists == null) {
-    return const <String>{};
-  }
+  final ids = <String>{};
   final favorites = playlists
-      .where((playlist) => playlist.isFavorites)
+      ?.where((playlist) => playlist.isFavorites)
       .firstOrNull;
-  return favorites == null
-      ? const <String>{}
-      : Set<String>.unmodifiable(favorites.trackIds);
+  if (favorites != null) {
+    ids.addAll(favorites.trackIds);
+  }
+  final catalog = ref
+      .watch(catalogPlaylistProvider(Playlist.favoritesId))
+      .asData
+      ?.value;
+  if (catalog != null) {
+    for (final entry in catalog.entries) {
+      if (entry.isDeleted) continue;
+      final videoId = entry.videoId;
+      if (videoId != null && videoId.isNotEmpty) ids.add(videoId);
+      final localId = entry.localTrackId;
+      if (localId != null && localId.isNotEmpty) ids.add(localId);
+    }
+  }
+  return Set<String>.unmodifiable(ids);
 });
 
 enum PlaylistDeleteScope { localOnly, youtubeMusicToo }
@@ -42,10 +54,10 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     );
   }
 
-  Future<void> create(String name) async {
+  Future<Playlist?> create(String name) async {
     final normalized = name.trim();
     if (normalized.isEmpty) {
-      return;
+      return null;
     }
     final playlist = await ref
         .read(databaseServiceProvider)
@@ -57,6 +69,7 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     state = AsyncData(_sorted(<Playlist>[playlist, ...?state.value]));
     _invalidateCatalogProviders();
     _requestYouTubeMusicSync();
+    return playlist;
   }
 
   CatalogTrack _catalogTrackForLocal(LocalTrack track) {
@@ -104,6 +117,24 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     final artists = track.artists.isEmpty
         ? <String>[track.artist]
         : track.artists;
+    final database = ref.read(databaseServiceProvider);
+    final catalog = await database.getCatalogPlaylist(playlistId);
+    final existing = catalog?.entries
+        .where(
+          (entry) =>
+              !entry.isDeleted &&
+              (entry.videoId == videoId ||
+                  entry.track.key == 'youtube:$videoId'),
+        )
+        .firstOrNull;
+    if (existing != null) {
+      if (download && existing.localTrackId == null) {
+        unawaited(
+          ref.read(downloadControllerProvider.notifier).downloadAudio(track),
+        );
+      }
+      return existing;
+    }
     final entry = await ref
         .read(databaseServiceProvider)
         .appendCatalogEntry(
@@ -259,9 +290,11 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
         .map((entry) => entry.localTrackId)
         .whereType<String>()
         .toSet();
-    final additions = requestedIds.where(existingIds.add).toList();
-    if (additions.isEmpty) return 0;
-
+    final existingVideoIds = catalog.entries
+        .where((entry) => !entry.isDeleted)
+        .map((entry) => entry.videoId)
+        .whereType<String>()
+        .toSet();
     final localTracks = await ref
         .read(libraryRepositoryProvider)
         .getLocalTracks();
@@ -269,9 +302,22 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
       for (final track in localTracks) track.id: track,
     };
     var added = 0;
-    for (final trackId in additions) {
+    final additions = <String>[];
+    for (final trackId in requestedIds) {
       final track = byId[trackId];
       if (track == null) continue;
+      final sourceId = track.sourceId?.trim();
+      if (existingIds.contains(track.id) ||
+          (sourceId != null &&
+              sourceId.isNotEmpty &&
+              existingVideoIds.contains(sourceId))) {
+        continue;
+      }
+      existingIds.add(track.id);
+      if (sourceId != null && sourceId.isNotEmpty) {
+        existingVideoIds.add(sourceId);
+      }
+      additions.add(trackId);
       await database.appendCatalogEntry(
         playlistId: playlistId,
         entryId: _uuid.v4(),
@@ -352,8 +398,22 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     }
     final favorites = await database.getCatalogPlaylist(Playlist.favoritesId);
     if (favorites == null) return false;
+    final localTracks = await ref
+        .read(libraryRepositoryProvider)
+        .getLocalTracks();
+    final localTrack = localTracks
+        .where((item) => item.id == normalized)
+        .firstOrNull;
+    final sourceId = localTrack?.sourceId?.trim();
     final matching = favorites.entries
-        .where((entry) => !entry.isDeleted && entry.localTrackId == normalized)
+        .where(
+          (entry) =>
+              !entry.isDeleted &&
+              (entry.localTrackId == normalized ||
+                  (sourceId != null &&
+                      sourceId.isNotEmpty &&
+                      entry.videoId == sourceId)),
+        )
         .toList(growable: false);
     final wasFavorite = matching.isNotEmpty;
     if (wasFavorite) {
@@ -365,12 +425,7 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
         );
       }
     } else {
-      final localTracks = await ref
-          .read(libraryRepositoryProvider)
-          .getLocalTracks();
-      final track = localTracks
-          .where((item) => item.id == normalized)
-          .firstOrNull;
+      final track = localTrack;
       if (track == null) return false;
       await database.appendCatalogEntry(
         playlistId: Playlist.favoritesId,
@@ -384,6 +439,71 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     await _syncActivePlaybackQueueById(Playlist.favoritesId);
     _requestYouTubeMusicSync();
     return !wasFavorite;
+  }
+
+  /// Toggles a streamed track in Favorites immediately, then queues its
+  /// download. A failed transfer therefore never removes the user's like.
+  Future<bool> toggleFavoriteRemote(
+    TrackInfo track, {
+    bool download = true,
+  }) async {
+    final videoId = _youtubeVideoId(track);
+    if (videoId == null) return false;
+    final database = ref.read(databaseServiceProvider);
+    final playlists = await database.getCatalogPlaylists();
+    if (!playlists.any((playlist) => playlist.isFavorites)) {
+      await database.createCatalogPlaylist(
+        id: Playlist.favoritesId,
+        name: ref.read(appStringsProvider).favorites,
+        now: DateTime.now(),
+      );
+    }
+    final favorites = await database.getCatalogPlaylist(Playlist.favoritesId);
+    if (favorites == null) return false;
+    final existing = favorites.entries
+        .where((entry) => !entry.isDeleted && entry.videoId == videoId)
+        .toList(growable: false);
+    if (existing.isNotEmpty) {
+      for (final entry in existing) {
+        await database.tombstoneCatalogEntry(
+          playlistId: Playlist.favoritesId,
+          entryId: entry.id,
+          now: DateTime.now(),
+        );
+      }
+      await _reloadCatalogState();
+      await _syncActivePlaybackQueueById(Playlist.favoritesId);
+      _requestYouTubeMusicSync();
+      return false;
+    }
+
+    final artists = track.artists.isEmpty
+        ? <String>[track.artist]
+        : track.artists;
+    await database.appendCatalogEntry(
+      playlistId: Playlist.favoritesId,
+      entryId: _uuid.v4(),
+      track: CatalogTrack.youtube(
+        videoId: videoId,
+        title: track.title,
+        artists: artists,
+        artistBrowseIds: track.artistBrowseIds,
+        album: track.album,
+        duration: track.duration,
+        thumbnailUrl: track.catalogThumbnailUrl ?? track.thumbnailUrl,
+        sourceUrl: track.url,
+      ),
+      now: DateTime.now(),
+    );
+    await _reloadCatalogState();
+    await _syncActivePlaybackQueueById(Playlist.favoritesId);
+    _requestYouTubeMusicSync();
+    if (download) {
+      unawaited(
+        ref.read(downloadControllerProvider.notifier).downloadAudio(track),
+      );
+    }
+    return true;
   }
 
   Future<void> removeTrackFromAllPlaylists(String trackId) async {

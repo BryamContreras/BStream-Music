@@ -223,7 +223,17 @@ class YouTubeMusicPlaylistSyncController
 
   Future<PlaylistAccountSyncResult?> syncNow() async {
     _cancelTimers(resetRetryBudget: true);
-    final runtime = ref.read(youtubeMusicPlaylistSyncRuntimeProvider);
+    YouTubeMusicPlaylistSyncRuntime? runtime = _readRuntime();
+    if (runtime == null) {
+      // The account page can be opened in the same frame that auth finishes.
+      // In that window the runtime provider is rebuilt asynchronously; do not
+      // turn an explicit "Sync now" tap into a silent no-op.
+      final initialization = _sessionInitialization;
+      if (initialization != null) {
+        await initialization;
+        runtime = _readRuntime();
+      }
+    }
     if (runtime == null) return null;
     final operationEpoch = _sessionEpoch;
     final initialization = _sessionInitialization;
@@ -231,14 +241,37 @@ class YouTubeMusicPlaylistSyncController
         _sessionInitializationAccountKey == runtime.accountKey) {
       await initialization;
     }
+    runtime = _readRuntime();
+    if (runtime == null) return null;
     if (!_isCurrent(runtime, operationEpoch)) return null;
     if (!_hasConsent(runtime.accountKey)) {
+      // Keep the manual action reliable even if the in-memory consent marker
+      // was reset while restoring the account. The durable opt-in is the
+      // source of truth; a failed read remains fail-closed and prompts again.
+      var granted = false;
+      try {
+        granted = await ref
+            .read(youtubeMusicPlaylistSyncConsentStoreProvider)
+            .hasConsent(runtime.accountKey);
+      } on Object {
+        granted = false;
+      }
+      runtime = _readRuntime();
+      if (runtime == null || !_isCurrent(runtime, operationEpoch)) return null;
+      if (!granted) {
+        _publishConsentState(
+          status: YouTubeMusicPlaylistSyncConsentStatus.required,
+          accountKey: runtime.accountKey,
+          shouldPrompt: true,
+        );
+        return null;
+      }
+      _consentedAccountKey = runtime.accountKey;
       _publishConsentState(
-        status: YouTubeMusicPlaylistSyncConsentStatus.required,
+        status: YouTubeMusicPlaylistSyncConsentStatus.granted,
         accountKey: runtime.accountKey,
-        shouldPrompt: true,
+        shouldPrompt: false,
       );
-      return null;
     }
     return _enqueue(PlaylistSyncTrigger.manual);
   }
@@ -602,6 +635,8 @@ class YouTubeMusicPlaylistSyncController
                   'pendiente(s).',
               'Sync completed with $conflictCount unresolved conflict(s).',
             )
+          : result.importedRemoteCount > 0
+          ? strings.playlistsImported(result.importedRemoteCount)
           : strings.playlistsSynchronized;
       state = YouTubeMusicPlaylistSyncState(
         phase: bootstrapFailed && result.results.isEmpty
@@ -618,7 +653,16 @@ class YouTubeMusicPlaylistSyncController
         shouldPromptForConsent: state.shouldPromptForConsent,
       );
       return result;
-    } on Object {
+    } on Object catch (error, stackTrace) {
+      // Keep the user-facing message intentionally generic, but retain a
+      // diagnostic breadcrumb in debug builds.  Never print the exception
+      // itself: transport/auth errors can contain request URLs or headers.
+      if (kDebugMode) {
+        debugPrint(
+          'YouTube Music playlist sync failed (${error.runtimeType}).',
+        );
+        debugPrintStack(stackTrace: stackTrace);
+      }
       if (_isCurrent(runtime, operationEpoch)) {
         _scheduleRetry();
         state = YouTubeMusicPlaylistSyncState(
@@ -638,6 +682,9 @@ class YouTubeMusicPlaylistSyncController
       return null;
     }
   }
+
+  YouTubeMusicPlaylistSyncRuntime? _readRuntime() =>
+      ref.read(youtubeMusicPlaylistSyncRuntimeProvider);
 
   bool _isCurrent(YouTubeMusicPlaylistSyncRuntime runtime, int epoch) {
     if (_disposed || epoch != _sessionEpoch) return false;
