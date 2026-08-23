@@ -501,7 +501,12 @@ The workflow verifies all three APK signatures before uploading the artifacts.
 
 - Android/macOS use `sqflite`; Windows and Linux use `sqflite_common_ffi`.
 - Incremental migrations preserve existing libraries.
-- Favorites are implemented as a reserved playlist (`bstream:favorites`), so no separate table is required.
+- Favorites are implemented as a reserved local playlist (`bstream:favorites`),
+  so no separate table is required. They are intentionally not synchronized
+  with YouTube Music's special **Liked Music** collection: adding or removing a
+  favorite changes BStream only, and login will not import that collection as a
+  duplicate playlist. Regular user playlists are the ones synchronized after
+  account consent.
 - ZIP backups contain the database, `audio/`, `thumbnails/`, and a manifest.
 - The Storage page separates local ZIP backup transfer from portable CSV
   transfer. BStream CSV preserves playlist membership and order; importing can
