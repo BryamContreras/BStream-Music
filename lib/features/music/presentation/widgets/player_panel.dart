@@ -133,7 +133,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         final regularTopPadding = wide
             ? (showSideQueue ? 12.0 : 20.0)
             : mobile
-            ? lerpDouble(10, 14, mobileFrameCompactness)!
+            // Keep short phones from pushing the header down while leaving
+            // the roomy layout unchanged. The extra top space is reserved
+            // for the system/header chrome, not the artwork metadata.
+            ? lerpDouble(10, 12, mobileFrameCompactness)!
             : 10.0;
         final regularBottomPadding = mobile
             ? 16.0 + systemBottomInset
@@ -220,7 +223,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 ),
                               );
                               final gap = mobile
-                                  ? 22.0
+                                  ? lerpDouble(22, 26, mobileFrameCompactness)!
                                   : lerpDouble(26, 12, verticalCompactness)!;
                               final maxContentWidth = stackedDesktop
                                   ? showSideQueue
