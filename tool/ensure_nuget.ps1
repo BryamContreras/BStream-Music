@@ -4,6 +4,21 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# CMake invokes this script through the Windows PowerShell host, while CI
+# bootstraps NuGet with PowerShell 7.  Keep the checksum implementation
+# independent of optional PowerShell cmdlets so both hosts behave identically.
+function Get-Sha256([string] $Path) {
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $bytes = $sha256.ComputeHash($stream)
+        return ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $sha256.Dispose()
+    }
+}
+
 # Keep this pinned. The Windows Flutter plugins invoke nuget.exe directly from
 # CMake, so relying on whichever version happens to be on a developer machine
 # makes local builds and hosted runners behave differently.
@@ -24,7 +39,7 @@ $nugetPath = Join-Path $InstallDirectory 'nuget.exe'
 
 $needsDownload = $true
 if (Test-Path -LiteralPath $nugetPath) {
-    $existingHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $nugetPath).Hash.ToLowerInvariant()
+    $existingHash = Get-Sha256 $nugetPath
     $needsDownload = $existingHash -ne $nugetSha256
 }
 
@@ -32,7 +47,7 @@ if ($needsDownload) {
     $downloadPath = Join-Path $InstallDirectory 'nuget.download.exe'
     try {
         Invoke-WebRequest -UseBasicParsing -Uri $downloadUri -OutFile $downloadPath
-        $downloadHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $downloadPath).Hash.ToLowerInvariant()
+        $downloadHash = Get-Sha256 $downloadPath
         if ($downloadHash -ne $nugetSha256) {
             throw "NuGet checksum mismatch. Expected $nugetSha256, got $downloadHash."
         }
