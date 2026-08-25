@@ -1695,6 +1695,9 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Bidirectional playlists that keep streaming-only songs and prefer downloaded audio automatically.',
             'Personalized Home recommendations, growing queues, and bounded stream recovery after connection loss.',
             'A cloud marks songs without local audio, and Back from an externally opened player safely returns Home.',
+            'Surface and mini-player customization.',
+            'Optional lyrics romanization.',
+            'Access to music stored on your device.',
           ]
         : const <String>[
             'Inicio de sesi\u00f3n seguro en YouTube Music y confirmaci\u00f3n '
@@ -1704,6 +1707,9 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Recomendaciones personalizadas, colas extensibles y '
                 'recuperaci\u00f3n controlada cuando se pierde la conexi\u00f3n.',
             'Una nube identifica canciones sin audio local y Volver desde un reproductor externo regresa de forma segura a Inicio.',
+            'Personalizaci\u00f3n de superficies y mini reproductor.',
+            'Romanizaci\u00f3n opcional de letras.',
+            'Acceso a la m\u00fasica local del dispositivo.',
           ];
     await showAppDialog<void>(
       context: context,

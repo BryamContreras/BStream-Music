@@ -3369,6 +3369,15 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Playlists bidireccionales'), findsOneWidget);
+    expect(
+      find.text('Personalizaci\u00f3n de superficies y mini reproductor.'),
+      findsOneWidget,
+    );
+    expect(find.text('Romanizaci\u00f3n opcional de letras.'), findsOneWidget);
+    expect(
+      find.text('Acceso a la m\u00fasica local del dispositivo.'),
+      findsOneWidget,
+    );
     await tester.tap(
       find.byKey(const ValueKey('settings-about-whats-new-close')),
     );
