@@ -628,6 +628,14 @@ final class _FakeAccountGateway implements account.YouTubeMusicAccountGateway {
       savedPlaylists;
 
   @override
+  Future<account.RemoteSubscribedArtistCollection>
+  getSubscribedArtists() async => account.RemoteSubscribedArtistCollection(
+    artists: const <account.RemoteSubscribedArtist>[],
+    termination: account.RemotePaginationTermination.exhausted,
+    pagesFetched: 1,
+  );
+
+  @override
   Future<account.RemotePlaylistSnapshot> getPlaylist(String playlistId) async {
     getPlaylistCalls += 1;
     final statusCode = playlistStatusCode;
@@ -764,6 +772,33 @@ final class _FakeAccountGateway implements account.YouTubeMusicAccountGateway {
   Future<account.RemoteAccountProfile?> getProfile() async => null;
 
   @override
+  Future<Object?> readMusicHomePage({String? continuation}) async =>
+      const <String, Object?>{};
+
+  @override
   Future<account.RemoteAccountDirectory> getAccounts() async =>
       account.RemoteAccountDirectory();
+
+  @override
+  Future<account.RemoteArtistSubscriptionState?> getArtistSubscriptionState(
+    String artistBrowseId,
+  ) async => null;
+
+  @override
+  Future<
+    account.YouTubeMusicMutationResult<account.RemotePlaylistMutationApplied>
+  >
+  subscribeArtist(String channelId) async =>
+      const account.YouTubeMusicMutationSuccess<
+        account.RemotePlaylistMutationApplied
+      >(account.RemotePlaylistMutationApplied());
+
+  @override
+  Future<
+    account.YouTubeMusicMutationResult<account.RemotePlaylistMutationApplied>
+  >
+  unsubscribeArtist(String channelId) async =>
+      const account.YouTubeMusicMutationSuccess<
+        account.RemotePlaylistMutationApplied
+      >(account.RemotePlaylistMutationApplied());
 }

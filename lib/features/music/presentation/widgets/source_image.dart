@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/utils/cached_artwork_image_provider.dart';
 import '../../../../core/utils/image_source.dart';
+import 'device_audio_artwork_image_provider.dart';
 
 /// Renders local paths, file URIs, and HTTP(S) artwork through one shared
 /// fallback policy.
@@ -11,6 +13,7 @@ class SourceImage extends StatefulWidget {
     this.fallbackSource,
     this.fit = BoxFit.cover,
     this.cacheWidth = _maximumDecodedDimension,
+    this.filterQuality = FilterQuality.medium,
     super.key,
   });
 
@@ -18,6 +21,7 @@ class SourceImage extends StatefulWidget {
   final String? fallbackSource;
   final BoxFit fit;
   final int cacheWidth;
+  final FilterQuality filterQuality;
   final Widget fallback;
 
   // Artwork is displayed in bounded cards and player surfaces. Keep the
@@ -51,7 +55,8 @@ class _SourceImageState extends State<SourceImage> {
     final normalized = widget.source?.trim();
     if (normalized == null ||
         normalized.isEmpty ||
-        isNetworkImageSource(normalized)) {
+        isNetworkImageSource(normalized) ||
+        isDeviceAudioArtworkSource(normalized)) {
       _localSource = null;
       _localExists = null;
       return;
@@ -70,10 +75,26 @@ class _SourceImageState extends State<SourceImage> {
       return fallback;
     }
     if (isNetworkImageSource(normalized)) {
+      final sizedSource =
+          sizedGoogleArtworkSource(normalized, widget.cacheWidth) ?? normalized;
       return _networkArtwork(
-        candidates: youtubeThumbnailCandidates(normalized),
+        candidates: youtubeThumbnailCandidates(sizedSource),
         fit: widget.fit,
         fallback: fallback,
+      );
+    }
+
+    final deviceAudioUri = deviceAudioUriFromArtworkSource(normalized);
+    if (deviceAudioUri != null) {
+      return Image(
+        image: DeviceAudioArtworkImageProvider(
+          audioUri: deviceAudioUri,
+          targetWidth: widget.cacheWidth,
+        ),
+        fit: widget.fit,
+        filterQuality: widget.filterQuality,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) => fallback,
       );
     }
 
@@ -97,6 +118,7 @@ class _SourceImageState extends State<SourceImage> {
         return Image.file(
           file,
           fit: widget.fit,
+          filterQuality: widget.filterQuality,
           gaplessPlayback: true,
           cacheWidth: widget.cacheWidth,
           errorBuilder: (_, _, _) => fallback,
@@ -116,6 +138,7 @@ class _SourceImageState extends State<SourceImage> {
       source: normalizedFallback,
       fit: widget.fit,
       cacheWidth: widget.cacheWidth,
+      filterQuality: widget.filterQuality,
       fallback: widget.fallback,
     );
   }
@@ -129,11 +152,14 @@ class _SourceImageState extends State<SourceImage> {
       if (index >= candidates.length) {
         return fallback;
       }
-      return Image.network(
-        candidates[index],
+      return Image(
+        image: ResizeImage(
+          CachedArtworkImageProvider(candidates[index]),
+          width: widget.cacheWidth,
+        ),
         fit: fit,
+        filterQuality: widget.filterQuality,
         gaplessPlayback: true,
-        cacheWidth: widget.cacheWidth,
         errorBuilder: (_, _, _) => buildCandidate(index + 1),
       );
     }
@@ -154,6 +180,7 @@ class ProportionalArtwork extends StatelessWidget {
     required this.fallback,
     this.fallbackSource,
     this.cacheWidth = SourceImage._maximumDecodedDimension,
+    this.filterQuality = FilterQuality.medium,
     super.key,
   });
 
@@ -161,6 +188,7 @@ class ProportionalArtwork extends StatelessWidget {
   final String? fallbackSource;
   final Widget fallback;
   final int cacheWidth;
+  final FilterQuality filterQuality;
 
   @override
   Widget build(BuildContext context) {
@@ -170,6 +198,7 @@ class ProportionalArtwork extends StatelessWidget {
       fallbackSource: fallbackSource,
       fit: BoxFit.cover,
       cacheWidth: cacheWidth,
+      filterQuality: filterQuality,
       fallback: fallback,
     );
   }

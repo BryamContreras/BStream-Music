@@ -51,6 +51,32 @@ final youtubeMusicAuthControllerProvider =
       YouTubeMusicAuthController.new,
     );
 
+/// Shared authenticated account gateway for read/mutation feature adapters.
+///
+/// Keeping this construction in one provider lets Home and artist
+/// subscriptions share the same credential boundary and transport without
+/// exposing the credential through presentation state.
+final youtubeMusicAuthenticatedAccountGatewayProvider =
+    Provider<YouTubeMusicAccountGateway?>((ref) {
+      final authState = ref.watch(youtubeMusicAuthControllerProvider);
+      if (!authState.isAuthenticated) return null;
+      final authController = ref.read(
+        youtubeMusicAuthControllerProvider.notifier,
+      );
+      final credential = authController.credentialForAuthenticatedRequests;
+      if (credential == null) return null;
+      return YouTubeMusicAccountGateway(
+        transport: ref.watch(youtubeMusicAccountTransportProvider),
+        sessionHeaders: CredentialYouTubeMusicSessionHeadersProvider(
+          readCredential: () async =>
+              authController.credentialForAuthenticatedRequests,
+        ),
+        clientContext: buildYouTubeMusicAccountClientContextFromCredential(
+          credential,
+        ),
+      );
+    });
+
 enum YouTubeMusicAuthPhase {
   unsupported,
   restoring,

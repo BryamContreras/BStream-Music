@@ -179,7 +179,7 @@ void main() {
     });
 
     test(
-      'searches videos and albums with canonical filters and one bootstrap',
+      'searches videos, albums and artists with canonical filters and one bootstrap',
       () async {
         transport.responses.addAll([
           InnerTubeHttpResponse(
@@ -214,11 +214,27 @@ void main() {
               ]),
             ),
           ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(
+              _searchPayload([
+                _responsiveArtistRenderer(
+                  browseId: 'UCoasisArtist123',
+                  name: 'Oasis',
+                  thumbnails: const [
+                    ('//img.test/artist-60.jpg', 60),
+                    ('https://img.test/artist-240.jpg', 240),
+                  ],
+                ),
+              ]),
+            ),
+          ),
         ]);
         final service = createService();
 
         final videos = await service.searchVideos('  Oasis Wonderwall  ');
         final albums = await service.searchAlbums('Oasis Wonderwall');
+        final artists = await service.searchArtists('  Oasis  ');
 
         expect(videos.single.videoId, 'video000001');
         expect(videos.single.title, 'Wonderwall video');
@@ -235,8 +251,13 @@ void main() {
         expect(albums.single.playlistId, 'OLAK5uy_albumplaylist123');
         expect(albums.single.thumbnailUrl, 'https://img.test/480.jpg');
 
+        expect(artists, hasLength(1));
+        expect(artists.single.browseId, 'UCoasisArtist123');
+        expect(artists.single.name, 'Oasis');
+        expect(artists.single.thumbnailUrl, 'https://img.test/artist-240.jpg');
+
         expect(transport.getRequests, hasLength(1));
-        expect(transport.requests, hasLength(2));
+        expect(transport.requests, hasLength(3));
         expect(transport.requests[0].body['query'], 'Oasis Wonderwall');
         expect(
           transport.requests[0].body['params'],
@@ -246,6 +267,11 @@ void main() {
         expect(
           transport.requests[1].body['params'],
           'EgWKAQIYAWoMEA4QChADEAQQCRAF',
+        );
+        expect(transport.requests[2].body['query'], 'Oasis');
+        expect(
+          transport.requests[2].body['params'],
+          'EgWKAQIgAWoMEA4QChADEAQQCRAF',
         );
       },
     );
@@ -362,12 +388,17 @@ void main() {
 
       expect(await service.searchVideos('   '), isEmpty);
       expect(await service.searchAlbums('\t'), isEmpty);
+      expect(await service.searchArtists('\n'), isEmpty);
       await expectLater(
         service.searchVideos('hello', limit: 0),
         throwsRangeError,
       );
       await expectLater(
         service.searchAlbums('hello', limit: 21),
+        throwsRangeError,
+      );
+      await expectLater(
+        service.searchArtists('hello', limit: 0),
         throwsRangeError,
       );
 
@@ -812,6 +843,10 @@ void main() {
           browseId: 'VLPLsharedhomecollection',
           playlistId: 'PLsharedhomecollection',
         );
+        final duplicateArtist = _artistRenderer(
+          browseId: 'UCsharedhomeartist',
+          name: 'Shared Home artist',
+        );
         transport.responses.addAll([
           InnerTubeHttpResponse(
             statusCode: HttpStatus.ok,
@@ -829,6 +864,7 @@ void main() {
                       title: 'Initial only',
                       artists: const ['Initial artist'],
                     ),
+                    duplicateArtist,
                   ],
                 ),
               ], continuation: 'home-continuation-1'),
@@ -842,6 +878,7 @@ void main() {
                   title: 'Continued one',
                   items: [
                     duplicateSong,
+                    duplicateArtist,
                     _songRenderer(
                       videoId: 'continued-only',
                       title: 'Continued only',
@@ -905,6 +942,12 @@ void main() {
                 (collection) =>
                     collection.browseId == 'VLPLsharedhomecollection',
               ),
+          hasLength(1),
+        );
+        expect(
+          sections
+              .expand((section) => section.artists)
+              .where((artist) => artist.browseId == 'UCsharedhomeartist'),
           hasLength(1),
         );
         expect(transport.requests, hasLength(2));
@@ -1749,6 +1792,7 @@ void main() {
       expect(result.single.artists, const ['Artist One', 'Artist Two']);
       expect(result.single.artist, 'Artist One, Artist Two');
       expect(result.single.album, 'Album Name');
+      expect(result.single.albumBrowseId, 'MPREalbumResult');
       expect(
         result.single.duration,
         const Duration(hours: 1, minutes: 2, seconds: 3),
@@ -2057,54 +2101,136 @@ void main() {
       expect(twoRow.thumbnailUrl, 'https://img.test/480.jpg');
     });
 
-    test('preserves mixed song and collection order with metadata', () {
+    test(
+      'preserves mixed song, artist, and collection order with metadata',
+      () {
+        final sections = parser.parse(
+          _homePayload([
+            _homeCarousel(
+              title: 'Para ti',
+              items: [
+                _songRenderer(
+                  videoId: 'mixed-song-1',
+                  title: 'First song',
+                  artists: const ['First artist'],
+                ),
+                _artistRenderer(
+                  browseId: 'UCpopularartist123',
+                  name: 'Popular artist',
+                  thumbnails: const [
+                    ('//img.test/artist-120.jpg', 120),
+                    ('https://img.test/artist-480.jpg', 480),
+                  ],
+                ),
+                _collectionRenderer(
+                  title: 'Mix relajante',
+                  subtitle: 'Artista uno, Artista dos',
+                  browseId: 'VLRDmixcollection123',
+                  playlistId: 'RDmixcollection123',
+                  thumbnails: const [
+                    ('//img.test/226.jpg', 226),
+                    ('https://img.test/544.jpg', 544),
+                  ],
+                ),
+                _twoRowSongRenderer(
+                  videoId: 'mixed-song-2',
+                  title: 'Second song',
+                  artists: const ['Second artist'],
+                ),
+              ],
+            ),
+          ]),
+        );
+
+        expect(sections, hasLength(1));
+        expect(sections.single.items, hasLength(4));
+        expect(sections.single.items[0], isA<InnerTubeHomeSongItem>());
+        expect(sections.single.items[1], isA<InnerTubeHomeArtistItem>());
+        expect(sections.single.items[2], isA<InnerTubeHomeCollection>());
+        expect(sections.single.items[3], isA<InnerTubeHomeSongItem>());
+        expect(sections.single.songs.map((song) => song.videoId), [
+          'mixed-song-1',
+          'mixed-song-2',
+        ]);
+
+        final artist = sections.single.artists.single;
+        expect(artist.browseId, 'UCpopularartist123');
+        expect(artist.name, 'Popular artist');
+        expect(artist.thumbnailUrl, 'https://img.test/artist-480.jpg');
+
+        final collection = sections.single.collections.single;
+        expect(collection.title, 'Mix relajante');
+        expect(collection.subtitle, 'Artista uno, Artista dos');
+        expect(collection.browseId, 'VLRDmixcollection123');
+        expect(collection.playlistId, 'RDmixcollection123');
+        expect(collection.thumbnailUrl, 'https://img.test/544.jpg');
+        expect(collection.kind, InnerTubeHomeCollectionKind.mix);
+      },
+    );
+
+    test('deduplicates artists globally while respecting item limits', () {
+      final duplicateArtist = _artistRenderer(
+        browseId: 'UCduplicateartist1',
+        name: 'Duplicate artist',
+      );
       final sections = parser.parse(
         _homePayload([
           _homeCarousel(
-            title: 'Para ti',
+            title: 'First artist shelf',
             items: [
-              _songRenderer(
-                videoId: 'mixed-song-1',
-                title: 'First song',
-                artists: const ['First artist'],
+              duplicateArtist,
+              duplicateArtist,
+              _artistRenderer(
+                browseId: 'UCsecondartist001',
+                name: 'Second artist',
               ),
-              _collectionRenderer(
-                title: 'Mix relajante',
-                subtitle: 'Artista uno, Artista dos',
-                browseId: 'VLRDmixcollection123',
-                playlistId: 'RDmixcollection123',
-                thumbnails: const [
-                  ('//img.test/226.jpg', 226),
-                  ('https://img.test/544.jpg', 544),
-                ],
+              _artistRenderer(
+                browseId: 'UCoveritemlimit1',
+                name: 'Over item limit',
               ),
-              _twoRowSongRenderer(
-                videoId: 'mixed-song-2',
-                title: 'Second song',
-                artists: const ['Second artist'],
+            ],
+          ),
+          _homeCarousel(
+            title: 'Second artist shelf',
+            items: [
+              duplicateArtist,
+              _artistRenderer(
+                browseId: 'UCoveritemlimit1',
+                name: 'Recovered after limit',
+              ),
+            ],
+          ),
+          _homeCarousel(
+            title: 'Over section limit',
+            items: [
+              _artistRenderer(
+                browseId: 'UCoversectionlimit',
+                name: 'Over section limit',
               ),
             ],
           ),
         ]),
+        maxSections: 2,
+        maxItemsPerSection: 2,
       );
 
-      expect(sections, hasLength(1));
-      expect(sections.single.items, hasLength(3));
-      expect(sections.single.items[0], isA<InnerTubeHomeSongItem>());
-      expect(sections.single.items[1], isA<InnerTubeHomeCollection>());
-      expect(sections.single.items[2], isA<InnerTubeHomeSongItem>());
-      expect(sections.single.songs.map((song) => song.videoId), [
-        'mixed-song-1',
-        'mixed-song-2',
+      expect(sections.map((section) => section.title), [
+        'First artist shelf',
+        'Second artist shelf',
       ]);
-
-      final collection = sections.single.collections.single;
-      expect(collection.title, 'Mix relajante');
-      expect(collection.subtitle, 'Artista uno, Artista dos');
-      expect(collection.browseId, 'VLRDmixcollection123');
-      expect(collection.playlistId, 'RDmixcollection123');
-      expect(collection.thumbnailUrl, 'https://img.test/544.jpg');
-      expect(collection.kind, InnerTubeHomeCollectionKind.mix);
+      expect(sections.first.artists.map((artist) => artist.browseId), [
+        'UCduplicateartist1',
+        'UCsecondartist001',
+      ]);
+      expect(sections.last.artists.map((artist) => artist.browseId), [
+        'UCoveritemlimit1',
+      ]);
+      expect(
+        sections
+            .expand((section) => section.artists)
+            .where((artist) => artist.browseId == 'UCduplicateartist1'),
+        hasLength(1),
+      );
     });
 
     test('derives safe collection browse IDs from playlist endpoints', () {
@@ -2304,6 +2430,96 @@ void main() {
       expect(
         () => parser.parse(const []),
         throwsA(isA<InnerTubeFormatException>()),
+      );
+    });
+  });
+
+  group('InnerTubeArtistSearchParser', () {
+    const parser = InnerTubeArtistSearchParser();
+
+    test('parses responsive and two-row artists with stable deduplication', () {
+      final artists = parser.parse(
+        _searchPayload([
+          _responsiveArtistRenderer(
+            browseId: 'UCfirstArtist123',
+            name: 'First artist',
+            thumbnails: const [
+              ('//img.test/first-60.jpg', 60),
+              ('https://img.test/first-240.jpg', 240),
+            ],
+          ),
+          _artistRenderer(
+            browseId: 'MPLAsecondArtist123',
+            name: 'Second artist',
+            thumbnails: const [('https://img.test/second.jpg', 120)],
+            endpointOnTitleOnly: true,
+          ),
+          _responsiveArtistRenderer(
+            browseId: 'UCfirstArtist123',
+            name: 'Duplicate first artist',
+          ),
+        ]),
+      );
+
+      expect(artists, hasLength(2));
+      expect(artists.first.browseId, 'UCfirstArtist123');
+      expect(artists.first.name, 'First artist');
+      expect(artists.first.thumbnailUrl, 'https://img.test/first-240.jpg');
+      expect(artists.last.browseId, 'MPLAsecondArtist123');
+      expect(artists.last.name, 'Second artist');
+      expect(artists.last.thumbnailUrl, 'https://img.test/second.jpg');
+      expect(
+        parser.parse(
+          _searchPayload([
+            _artistRenderer(browseId: 'UCfirstArtist123', name: 'First artist'),
+          ]),
+          limit: 1,
+        ),
+        hasLength(1),
+      );
+    });
+
+    test('does not turn song or album artist credits into artist results', () {
+      final artists = parser.parse(
+        _searchPayload([
+          _songRenderer(
+            videoId: 'artist-song',
+            title: 'A song',
+            artists: const ['Credited artist'],
+          ),
+          _albumRenderer(
+            browseId: 'MPREartistAlbum123',
+            title: 'An album',
+            artists: const ['Album artist'],
+          ),
+          _responsiveArtistRenderer(
+            browseId: 'UCwrongPageType123',
+            name: 'Wrong endpoint',
+            pageType: 'MUSIC_PAGE_TYPE_ALBUM',
+          ),
+        ]),
+      );
+
+      expect(artists, isEmpty);
+    });
+
+    test('validates response roots, browse IDs and limits', () {
+      expect(
+        () => parser.parse(const []),
+        throwsA(isA<InnerTubeFormatException>()),
+      );
+      expect(() => parser.parse(const {}, limit: 0), throwsRangeError);
+      expect(() => parser.parse(const {}, limit: 21), throwsRangeError);
+      expect(
+        parser.parse(
+          _searchPayload([
+            _responsiveArtistRenderer(
+              browseId: 'not-an-artist-id',
+              name: 'Malformed artist',
+            ),
+          ]),
+        ),
+        isEmpty,
       );
     });
   });
@@ -2773,6 +2989,7 @@ Map<String, Object> _songRenderer({
   required String title,
   required List<String> artists,
   String? album,
+  String albumBrowseId = 'MPREalbumResult',
   String? duration,
   List<(String, int)> thumbnails = const [],
   bool durationInFixedColumn = false,
@@ -2789,7 +3006,9 @@ Map<String, Object> _songRenderer({
     if (metadataRuns.isNotEmpty) {
       metadataRuns.add(const {'text': ' • '});
     }
-    metadataRuns.add(_browseRun(album, 'MUSIC_PAGE_TYPE_ALBUM'));
+    metadataRuns.add(
+      _browseRun(album, 'MUSIC_PAGE_TYPE_ALBUM', browseId: albumBrowseId),
+    );
   }
   if (duration != null && !durationInFixedColumn) {
     if (metadataRuns.isNotEmpty) {
@@ -2892,6 +3111,105 @@ Map<String, Object> _legacyNestedArtistSongRenderer({
   return item;
 }
 
+Map<String, Object> _artistRenderer({
+  required String browseId,
+  required String name,
+  List<(String, int)> thumbnails = const [],
+  bool endpointOnTitleOnly = false,
+}) {
+  final endpoint = {
+    'browseEndpoint': {
+      'browseId': browseId,
+      'browseEndpointContextSupportedConfigs': {
+        'browseEndpointContextMusicConfig': {
+          'pageType': 'MUSIC_PAGE_TYPE_ARTIST',
+        },
+      },
+    },
+  };
+  return {
+    'musicTwoRowItemRenderer': {
+      'title': {
+        'runs': [
+          {'text': name, 'navigationEndpoint': endpoint},
+        ],
+      },
+      if (!endpointOnTitleOnly) 'navigationEndpoint': endpoint,
+      if (thumbnails.isNotEmpty)
+        'thumbnailRenderer': {
+          'musicThumbnailRenderer': {
+            'thumbnail': {
+              'thumbnails': [
+                for (final thumbnail in thumbnails)
+                  {
+                    'url': thumbnail.$1,
+                    'width': thumbnail.$2,
+                    'height': thumbnail.$2,
+                  },
+              ],
+            },
+          },
+        },
+    },
+  };
+}
+
+Map<String, Object> _responsiveArtistRenderer({
+  required String browseId,
+  required String name,
+  List<(String, int)> thumbnails = const [],
+  String pageType = 'MUSIC_PAGE_TYPE_ARTIST',
+}) {
+  final endpoint = <String, Object>{
+    'browseEndpoint': {
+      'browseId': browseId,
+      'browseEndpointContextSupportedConfigs': {
+        'browseEndpointContextMusicConfig': {'pageType': pageType},
+      },
+    },
+  };
+  return {
+    'musicResponsiveListItemRenderer': {
+      'flexColumns': [
+        {
+          'musicResponsiveListItemFlexColumnRenderer': {
+            'text': {
+              'runs': [
+                {'text': name},
+              ],
+            },
+          },
+        },
+        {
+          'musicResponsiveListItemFlexColumnRenderer': {
+            'text': {
+              'runs': [
+                {'text': 'Artist'},
+              ],
+            },
+          },
+        },
+      ],
+      'navigationEndpoint': endpoint,
+      if (thumbnails.isNotEmpty)
+        'thumbnail': {
+          'musicThumbnailRenderer': {
+            'thumbnail': {
+              'thumbnails': [
+                for (final thumbnail in thumbnails)
+                  {
+                    'url': thumbnail.$1,
+                    'width': thumbnail.$2,
+                    'height': thumbnail.$2,
+                  },
+              ],
+            },
+          },
+        },
+    },
+  };
+}
+
 Map<String, Object> _twoRowSongRenderer({
   required String videoId,
   required String title,
@@ -2954,11 +3272,16 @@ Map<String, Object> _twoRowSongRenderer({
   };
 }
 
-Map<String, Object> _browseRun(String text, String pageType) {
+Map<String, Object> _browseRun(
+  String text,
+  String pageType, {
+  String? browseId,
+}) {
   return {
     'text': text,
     'navigationEndpoint': {
       'browseEndpoint': {
+        'browseId': ?browseId,
         'browseEndpointContextSupportedConfigs': {
           'browseEndpointContextMusicConfig': {'pageType': pageType},
         },

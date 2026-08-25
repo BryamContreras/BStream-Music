@@ -21,6 +21,20 @@ enum AppThemeMode {
   };
 }
 
+/// Background treatment shared by fixed application chrome such as tab
+/// headings and navigation menus.
+enum SurfaceBackgroundMode {
+  accent,
+  transparent;
+
+  String get code => name;
+
+  static SurfaceBackgroundMode fromCode(String? code) => switch (code) {
+    'transparent' => SurfaceBackgroundMode.transparent,
+    _ => SurfaceBackgroundMode.accent,
+  };
+}
+
 /// Accent palettes are intentionally small and curated so every choice keeps
 /// enough contrast for buttons, tabs, and progress indicators.
 enum AppAccent {
@@ -135,6 +149,32 @@ class AppAccentTheme extends ThemeExtension<AppAccentTheme> {
   @override
   AppAccentTheme lerp(ThemeExtension<AppAccentTheme>? other, double t) {
     if (other is! AppAccentTheme) {
+      return this;
+    }
+    return t < 0.5 ? this : other;
+  }
+}
+
+/// Makes the persisted surface preference available to presentation widgets
+/// without coupling reusable chrome to the settings provider.
+@immutable
+class AppSurfaceTheme extends ThemeExtension<AppSurfaceTheme> {
+  const AppSurfaceTheme({required this.backgroundMode});
+
+  final SurfaceBackgroundMode backgroundMode;
+
+  bool get isTransparent => backgroundMode == SurfaceBackgroundMode.transparent;
+
+  @override
+  AppSurfaceTheme copyWith({SurfaceBackgroundMode? backgroundMode}) {
+    return AppSurfaceTheme(
+      backgroundMode: backgroundMode ?? this.backgroundMode,
+    );
+  }
+
+  @override
+  AppSurfaceTheme lerp(ThemeExtension<AppSurfaceTheme>? other, double t) {
+    if (other is! AppSurfaceTheme) {
       return this;
     }
     return t < 0.5 ? this : other;

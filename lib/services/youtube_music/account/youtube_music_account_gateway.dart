@@ -14,6 +14,32 @@ abstract final class YouTubeMusicAccountEndpoints {
   static const String deletePlaylist = 'playlist/delete';
   static const String like = 'like/like';
   static const String removeLike = 'like/removelike';
+  static const String subscribe = 'subscription/subscribe';
+  static const String unsubscribe = 'subscription/unsubscribe';
+}
+
+abstract interface class YouTubeMusicArtistAccount {
+  Future<RemoteArtistSubscriptionState?> getArtistSubscriptionState(
+    String artistBrowseId,
+  );
+
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>>
+  subscribeArtist(String channelId);
+
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>>
+  unsubscribeArtist(String channelId);
+}
+
+abstract interface class YouTubeMusicSubscribedArtistsAccount {
+  Future<RemoteSubscribedArtistCollection> getSubscribedArtists();
+}
+
+/// Narrow authenticated read port for the YouTube Music Home feed.
+///
+/// The initial browse id is intentionally fixed to `FEmusic_home`; callers
+/// cannot use this boundary to dispatch arbitrary authenticated browse reads.
+abstract interface class YouTubeMusicAccountHome {
+  Future<Object?> readMusicHomePage({String? continuation});
 }
 
 /// Authenticated, storage-independent YouTube Music account gateway.
@@ -21,7 +47,11 @@ abstract final class YouTubeMusicAccountEndpoints {
 /// Reads have bounded transient retries. Mutations are sent exactly once:
 /// uncertain delivery is surfaced as [YouTubeMusicMutationAmbiguous], allowing
 /// the caller to reconcile with a read before deciding whether to retry.
-class YouTubeMusicAccountGateway {
+class YouTubeMusicAccountGateway
+    implements
+        YouTubeMusicArtistAccount,
+        YouTubeMusicSubscribedArtistsAccount,
+        YouTubeMusicAccountHome {
   factory YouTubeMusicAccountGateway({
     required YouTubeMusicAccountTransport transport,
     required YouTubeMusicSessionHeadersProvider sessionHeaders,
@@ -102,6 +132,21 @@ class YouTubeMusicAccountGateway {
     return _parser.parseAccountDirectory(response.body);
   }
 
+  @override
+  Future<Object?> readMusicHomePage({String? continuation}) async {
+    final normalizedContinuation = _optionalContinuation(continuation);
+    final response = await _read(
+      YouTubeMusicAccountEndpoints.browse,
+      _body(<String, Object?>{
+        if (normalizedContinuation == null)
+          'browseId': 'FEmusic_home'
+        else
+          'continuation': normalizedContinuation,
+      }),
+    );
+    return response.body;
+  }
+
   Future<RemotePlaylistCollection> getSavedPlaylists() async {
     final playlists = <String, RemotePlaylistSummary>{};
     final requestedContinuations = <String>{};
@@ -136,6 +181,60 @@ class YouTubeMusicAccountGateway {
       if (pagesFetched >= _maxReadPages) {
         return RemotePlaylistCollection(
           playlists: playlists.values.toList(growable: false),
+          termination: RemotePaginationTermination.pageLimit,
+          pagesFetched: pagesFetched,
+        );
+      }
+
+      requestedContinuations.add(continuation);
+      response = await _read(
+        YouTubeMusicAccountEndpoints.browse,
+        _body(<String, Object?>{'continuation': continuation}),
+      );
+    }
+  }
+
+  /// Reads artists explicitly followed by the active YouTube Music account.
+  ///
+  /// This is deliberately different from the library's "track artists"
+  /// projection: `FEmusic_library_corpus_artists` is the subscriptions shelf,
+  /// so an artist appears here only after a subscribe mutation succeeds.
+  @override
+  Future<RemoteSubscribedArtistCollection> getSubscribedArtists() async {
+    final artists = <String, RemoteSubscribedArtist>{};
+    final requestedContinuations = <String>{};
+    var pagesFetched = 0;
+    var response = await _read(
+      YouTubeMusicAccountEndpoints.browse,
+      _body(const <String, Object?>{
+        'browseId': 'FEmusic_library_corpus_artists',
+      }),
+    );
+
+    while (true) {
+      pagesFetched += 1;
+      for (final artist in _parser.parseSubscribedArtists(response.body)) {
+        artists.putIfAbsent(artist.identity, () => artist);
+      }
+
+      final continuationTokens = _parser
+          .parseSubscribedArtistContinuationTokens(response.body);
+      final continuation = _nextContinuation(
+        continuationTokens,
+        requestedContinuations,
+      );
+      if (continuation == null) {
+        return RemoteSubscribedArtistCollection(
+          artists: artists.values.toList(growable: false),
+          termination: continuationTokens.isNotEmpty
+              ? RemotePaginationTermination.repeatedContinuation
+              : RemotePaginationTermination.exhausted,
+          pagesFetched: pagesFetched,
+        );
+      }
+      if (pagesFetched >= _maxReadPages) {
+        return RemoteSubscribedArtistCollection(
+          artists: artists.values.toList(growable: false),
           termination: RemotePaginationTermination.pageLimit,
           pagesFetched: pagesFetched,
         );
@@ -310,6 +409,51 @@ class YouTubeMusicAccountGateway {
         'target': <String, Object?>{
           'videoId': _requiredValue(videoId, 'videoId'),
         },
+      }),
+      parseSuccess: (_) => const RemotePlaylistMutationApplied(),
+    );
+  }
+
+  @override
+  Future<RemoteArtistSubscriptionState?> getArtistSubscriptionState(
+    String artistBrowseId,
+  ) async {
+    final normalizedBrowseId = _requiredArtistBrowseId(artistBrowseId);
+    final response = await _read(
+      YouTubeMusicAccountEndpoints.browse,
+      _body(<String, Object?>{'browseId': normalizedBrowseId}),
+    );
+    return _parseArtistSubscriptionState(
+      response.body,
+      fallbackChannelId: normalizedBrowseId.startsWith('UC')
+          ? normalizedBrowseId
+          : null,
+    );
+  }
+
+  @override
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>>
+  subscribeArtist(String channelId) {
+    final normalizedChannelId = _requiredChannelId(channelId);
+    return _mutate<RemotePlaylistMutationApplied>(
+      endpoint: YouTubeMusicAccountEndpoints.subscribe,
+      operation: 'subscribeArtist',
+      body: _body(<String, Object?>{
+        'channelIds': <String>[normalizedChannelId],
+      }),
+      parseSuccess: (_) => const RemotePlaylistMutationApplied(),
+    );
+  }
+
+  @override
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>>
+  unsubscribeArtist(String channelId) {
+    final normalizedChannelId = _requiredChannelId(channelId);
+    return _mutate<RemotePlaylistMutationApplied>(
+      endpoint: YouTubeMusicAccountEndpoints.unsubscribe,
+      operation: 'unsubscribeArtist',
+      body: _body(<String, Object?>{
+        'channelIds': <String>[normalizedChannelId],
       }),
       parseSuccess: (_) => const RemotePlaylistMutationApplied(),
     );
@@ -572,6 +716,112 @@ String _requiredPlaylistId(String playlistId) {
     );
   }
   return normalized;
+}
+
+String? _optionalContinuation(String? continuation) {
+  final normalized = continuation?.trim();
+  if (normalized == null || normalized.isEmpty) return null;
+  if (normalized.length > 8192 ||
+      normalized.contains(RegExp(r'[\x00-\x1F\x7F]'))) {
+    throw ArgumentError.value(
+      continuation,
+      'continuation',
+      'Must be a bounded continuation token.',
+    );
+  }
+  return normalized;
+}
+
+String _requiredArtistBrowseId(String artistBrowseId) {
+  final normalized = _requiredValue(artistBrowseId, 'artistBrowseId');
+  if (normalized.length > 256 ||
+      !RegExp(r'^(?:UC|MPLA)[A-Za-z0-9_-]+$').hasMatch(normalized)) {
+    throw ArgumentError.value(
+      artistBrowseId,
+      'artistBrowseId',
+      'Must be a concrete YouTube Music artist browse id.',
+    );
+  }
+  return normalized;
+}
+
+String _requiredChannelId(String channelId) {
+  final normalized = _requiredValue(channelId, 'channelId');
+  if (normalized.length > 256 ||
+      !RegExp(r'^UC[A-Za-z0-9_-]+$').hasMatch(normalized)) {
+    throw ArgumentError.value(
+      channelId,
+      'channelId',
+      'Must be a concrete YouTube channel id.',
+    );
+  }
+  return normalized;
+}
+
+RemoteArtistSubscriptionState? _parseArtistSubscriptionState(
+  Object? node, {
+  String? fallbackChannelId,
+}) {
+  if (node is Map) {
+    for (final rendererName in const <String>[
+      'subscribeButtonRenderer',
+      'musicSubscribeButtonRenderer',
+    ]) {
+      final renderer = node[rendererName];
+      if (renderer is! Map) continue;
+      final channelId = _subscriptionChannelId(renderer) ?? fallbackChannelId;
+      final subscribed = renderer['subscribed'];
+      if (channelId != null && subscribed is bool) {
+        return RemoteArtistSubscriptionState(
+          channelId: channelId,
+          isSubscribed: subscribed,
+        );
+      }
+    }
+    for (final value in node.values) {
+      final result = _parseArtistSubscriptionState(
+        value,
+        fallbackChannelId: fallbackChannelId,
+      );
+      if (result != null) return result;
+    }
+  } else if (node is List) {
+    for (final value in node) {
+      final result = _parseArtistSubscriptionState(
+        value,
+        fallbackChannelId: fallbackChannelId,
+      );
+      if (result != null) return result;
+    }
+  }
+  return null;
+}
+
+String? _subscriptionChannelId(Object? node) {
+  if (node is Map) {
+    final direct = node['channelId']?.toString().trim();
+    if (direct != null && RegExp(r'^UC[A-Za-z0-9_-]+$').hasMatch(direct)) {
+      return direct;
+    }
+    final browse = node['browseEndpoint'];
+    if (browse is Map) {
+      final browseId = browse['browseId']?.toString().trim();
+      if (browseId != null &&
+          RegExp(r'^UC[A-Za-z0-9_-]+$').hasMatch(browseId)) {
+        return browseId;
+      }
+    }
+    for (final value in node.values) {
+      final channelId = _subscriptionChannelId(value);
+      if (channelId != null) return channelId;
+    }
+  } else if (node is List) {
+    for (final value in node) {
+      final channelId = _subscriptionChannelId(value);
+      if (channelId != null) return channelId;
+    }
+  }
+  return null;
 }
 
 String _requiredValue(String value, String name) {

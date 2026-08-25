@@ -10,14 +10,21 @@ import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
+import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
+import '../../domain/entities/local_track.dart';
 import '../providers/music_providers.dart';
 import 'favorite_star_badge.dart';
 import 'playback_progress_line.dart';
+import 'playlist_artwork.dart';
 import 'source_image.dart';
+import 'track_change_transition.dart';
 
-double miniPlayerHeightFor(BuildContext context) {
+double miniPlayerHeightFor(
+  BuildContext context, {
+  MiniPlayerMode mode = MiniPlayerMode.standard,
+}) {
   final compactAndroid = Theme.of(context).platform == TargetPlatform.android;
   final baseHeight = compactAndroid
       ? 61.0
@@ -25,14 +32,37 @@ double miniPlayerHeightFor(BuildContext context) {
       ? 94.0
       : 74.0;
   final textScale = MediaQuery.textScalerOf(context).scale(1.0);
-  return baseHeight + math.max(0.0, (textScale - 1.0) * 35.0);
+  final contentHeight = baseHeight + math.max(0.0, (textScale - 1.0) * 35.0);
+  return contentHeight + _miniPlayerMarginFor(context, mode).vertical;
+}
+
+EdgeInsets _miniPlayerMarginFor(BuildContext context, MiniPlayerMode mode) {
+  if (mode != MiniPlayerMode.capsule) {
+    return EdgeInsets.zero;
+  }
+  final compactAndroid = Theme.of(context).platform == TargetPlatform.android;
+  if (compactAndroid) {
+    return const EdgeInsets.fromLTRB(8, 5, 8, 10);
+  }
+  if (AppPlatform.isDesktop) {
+    return const EdgeInsets.fromLTRB(14, 8, 14, 12);
+  }
+  return const EdgeInsets.fromLTRB(12, 6, 12, 10);
 }
 
 class MiniPlayer extends ConsumerWidget {
-  const MiniPlayer({this.onOpenPlayer, this.onOpenLyrics, super.key});
+  const MiniPlayer({
+    this.onOpenPlayer,
+    this.onOpenLyrics,
+    this.mode = MiniPlayerMode.standard,
+    this.backgroundMode = MiniPlayerBackgroundMode.artwork,
+    super.key,
+  });
 
   final VoidCallback? onOpenPlayer;
   final VoidCallback? onOpenLyrics;
+  final MiniPlayerMode mode;
+  final MiniPlayerBackgroundMode backgroundMode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -45,6 +75,7 @@ class MiniPlayer extends ConsumerWidget {
           title: snapshot?.title,
           artist: snapshot?.artist,
           trackId: snapshot?.trackId,
+          sourceUrl: snapshot?.sourceUrl,
           thumbnailUrl: snapshot?.thumbnailUrl,
           volume: snapshot?.volume ?? 1.0,
           shuffleEnabled: snapshot?.shuffleEnabled ?? false,
@@ -60,6 +91,18 @@ class MiniPlayer extends ConsumerWidget {
       }),
     );
     final strings = ref.watch(appStringsProvider);
+    final localTracks =
+        ref.watch(libraryTracksProvider).value ?? const <LocalTrack>[];
+    final localTrack = _miniLocalTrackForSnapshot(
+      localTracks,
+      trackId: presentation.trackId,
+      sourceUrl: presentation.sourceUrl,
+    );
+    final localArtwork = localTrack == null
+        ? null
+        : preferredLocalTrackArtworkSource(localTrack);
+    final artworkSource = localArtwork?.source ?? presentation.thumbnailUrl;
+    final artworkFallbackSource = localArtwork?.fallbackSource;
     final isFavorite = ref.watch(
       favoriteTrackIdsProvider.select(
         (ids) => ids.contains(presentation.trackId),
@@ -67,9 +110,9 @@ class MiniPlayer extends ConsumerWidget {
     );
     final theme = Theme.of(context);
     final compactAndroid = theme.platform == TargetPlatform.android;
-    final usesDesktopBackground = AppPlatform.isDesktop && !compactAndroid;
+    final usesDesktopLayout = AppPlatform.isDesktop && !compactAndroid;
     final windowsLayout =
-        usesDesktopBackground && MediaQuery.sizeOf(context).width >= 360;
+        usesDesktopLayout && MediaQuery.sizeOf(context).width >= 360;
     final horizontalPadding = compactAndroid
         ? 12.0
         : windowsLayout
@@ -93,6 +136,13 @@ class MiniPlayer extends ConsumerWidget {
         : 34.0;
     final minimumHeight = miniPlayerHeightFor(context);
     final isDark = theme.brightness == Brightness.dark;
+    final capsule = mode == MiniPlayerMode.capsule;
+    final capsuleMargin = _miniPlayerMarginFor(context, mode);
+    final capsuleRadius = compactAndroid
+        ? 28.0
+        : AppPlatform.isDesktop
+        ? 40.0
+        : 32.0;
     final hasTrack =
         presentation.trackId != null &&
         presentation.status != null &&
@@ -102,59 +152,80 @@ class MiniPlayer extends ConsumerWidget {
     final compactErrorText = compactAndroid && presentation.hasError
         ? presentation.errorText ?? strings.playbackError
         : null;
-    final metadata = Row(
+    final visualIdentity = playbackVisualIdentity(
+      trackId: presentation.trackId,
+      sourceUrl: presentation.sourceUrl,
+      title: presentation.title,
+      artist: presentation.artist,
+      thumbnailUrl: artworkSource,
+    );
+    final metadata = TrackChangeTransition(
       key: const ValueKey('mini-player-metadata'),
-      children: [
-        _MiniArtwork(
-          url: hasTrack ? presentation.thumbnailUrl : null,
-          size: artworkSize,
-          isFavorite: isFavorite,
-        ),
-        SizedBox(
-          width: compactAndroid
-              ? 8
-              : windowsLayout
-              ? 10
-              : 12,
-        ),
-        Expanded(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                presentation.title ?? strings.noPlayback,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: windowsLayout ? 16 : null,
-                  fontWeight: windowsLayout ? FontWeight.w900 : FontWeight.w800,
-                  color: AppColors.playbackTitleFor(context),
-                  shadows: isDark
-                      ? const [Shadow(color: Color(0xAA000000), blurRadius: 8)]
-                      : null,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                compactErrorText ?? presentation.artist ?? 'BStream Music',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: windowsLayout ? 13 : null,
-                  color: compactErrorText == null
-                      ? AppColors.contentSubtitleFor(context)
-                      : theme.colorScheme.error,
-                  shadows: compactErrorText == null && isDark
-                      ? const [Shadow(color: Color(0x99000000), blurRadius: 7)]
-                      : null,
-                ),
-              ),
-            ],
+      switcherKey: const ValueKey('mini-player-track-transition'),
+      identity: visualIdentity,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        children: [
+          _MiniArtwork(
+            url: hasTrack ? artworkSource : null,
+            fallbackUrl: artworkFallbackSource,
+            size: artworkSize,
+            isFavorite: isFavorite,
+            circular: capsule,
           ),
-        ),
-      ],
+          SizedBox(
+            width: compactAndroid
+                ? 8
+                : windowsLayout
+                ? 10
+                : 12,
+          ),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                MarqueeText(
+                  key: const ValueKey('mini-player-track-title-marquee'),
+                  presentation.title ?? strings.noPlayback,
+                  pause: const Duration(milliseconds: 1700),
+                  travel: const Duration(milliseconds: 6200),
+                  style: TextStyle(
+                    fontSize: windowsLayout ? 16 : null,
+                    fontWeight: windowsLayout
+                        ? FontWeight.w900
+                        : FontWeight.w800,
+                    color: AppColors.playbackTitleFor(context),
+                    shadows: isDark
+                        ? const [
+                            Shadow(color: Color(0xAA000000), blurRadius: 8),
+                          ]
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  compactErrorText ?? presentation.artist ?? 'BStream Music',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: windowsLayout ? 13 : null,
+                    color: compactErrorText == null
+                        ? AppColors.contentSubtitleFor(context)
+                        : theme.colorScheme.error,
+                    shadows: compactErrorText == null && isDark
+                        ? const [
+                            Shadow(color: Color(0x99000000), blurRadius: 7),
+                          ]
+                        : null,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
     final primaryControl = SizedBox.square(
       dimension: playControlSize,
@@ -246,39 +317,58 @@ class MiniPlayer extends ConsumerWidget {
 
     return Container(
       key: const ValueKey('mini-player-container'),
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        borderRadius: compactAndroid
-            ? const BorderRadius.vertical(top: Radius.circular(10))
-            : BorderRadius.zero,
-      ),
+      margin: capsuleMargin,
+      clipBehavior: backgroundMode == MiniPlayerBackgroundMode.transparent
+          ? Clip.antiAlias
+          : Clip.antiAliasWithSaveLayer,
+      decoration: capsule
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(capsuleRadius),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.08),
+                  blurRadius: compactAndroid ? 6 : 8,
+                  offset: Offset(0, compactAndroid ? 1 : 2),
+                ),
+              ],
+            )
+          : BoxDecoration(
+              borderRadius: compactAndroid
+                  ? const BorderRadius.vertical(top: Radius.circular(10))
+                  : BorderRadius.zero,
+            ),
+      foregroundDecoration: capsule
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(capsuleRadius),
+              border: Border.all(
+                color: AppColors.downloadAccentFor(
+                  context,
+                ).withValues(alpha: isDark ? 0.22 : 0.18),
+                width: 0.5,
+                strokeAlign: BorderSide.strokeAlignInside,
+              ),
+            )
+          : null,
       child: Material(
         key: const ValueKey('mini-player-frame'),
         color: Colors.transparent,
         child: Stack(
           children: [
-            if (usesDesktopBackground)
+            if (backgroundMode == MiniPlayerBackgroundMode.accent)
               Positioned.fill(
-                child: DecoratedBox(
-                  key: const ValueKey('mini-player-desktop-background'),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                      colors: AppColors.desktopMiniPlayerGradientFor(context),
-                    ),
-                  ),
+                child: _MiniAccentBackground(
+                  legacyDesktopKey: usesDesktopLayout,
                 ),
               )
-            else
+            else if (backgroundMode == MiniPlayerBackgroundMode.artwork)
               Positioned.fill(
                 key: const ValueKey('mini-player-artwork-background'),
                 child: _MiniBlurBackground(
-                  url: hasTrack ? presentation.thumbnailUrl : null,
+                  url: hasTrack ? artworkSource : null,
+                  fallbackUrl: artworkFallbackSource,
                 ),
               ),
-            if (!usesDesktopBackground)
+            if (backgroundMode == MiniPlayerBackgroundMode.artwork)
               Positioned.fill(
                 child: DecoratedBox(
                   key: const ValueKey('mini-player-background-overlay'),
@@ -313,30 +403,35 @@ class MiniPlayer extends ConsumerWidget {
                   ),
                 ),
               ),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: compactAndroid ? 11 : 1,
-              child: IgnorePointer(
-                child: CustomPaint(
-                  key: const ValueKey('mini-player-accent-top-border'),
-                  painter: _MiniAccentBorderPainter(
-                    color: AppColors.downloadAccentFor(
-                      context,
-                    ).withValues(alpha: 0.45),
-                    cornerRadius: compactAndroid ? 10 : 0,
+            if (backgroundMode == MiniPlayerBackgroundMode.transparent)
+              const Positioned.fill(child: _MiniGlassBackground()),
+            if (!capsule)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: compactAndroid ? 11 : 1,
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    key: const ValueKey('mini-player-accent-top-border'),
+                    painter: _MiniAccentBorderPainter(
+                      color: AppColors.downloadAccentFor(
+                        context,
+                      ).withValues(alpha: 0.22),
+                      cornerRadius: compactAndroid ? 10 : 0,
+                    ),
                   ),
                 ),
               ),
-            ),
             if (!windowsLayout)
               Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: const _MiniProgress(
-                  key: ValueKey('mini-player-progress'),
+                left: capsule ? 18 : 0,
+                right: capsule ? 18 : 0,
+                bottom: capsule ? 1 : 0,
+                child: _MiniProgress(
+                  key: const ValueKey('mini-player-progress'),
+                  height: 2,
+                  rounded: true,
                 ),
               ),
             InkWell(
@@ -497,7 +592,7 @@ class _MiniAccentBorderPainter extends CustomPainter {
 
   final Color color;
   final double cornerRadius;
-  final double strokeWidth = 1;
+  final double strokeWidth = 0.5;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -853,9 +948,10 @@ IconData _miniVolumeIcon(double volume) {
 }
 
 class _MiniBlurBackground extends StatelessWidget {
-  const _MiniBlurBackground({required this.url});
+  const _MiniBlurBackground({required this.url, required this.fallbackUrl});
 
   final String? url;
+  final String? fallbackUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -863,6 +959,10 @@ class _MiniBlurBackground extends StatelessWidget {
     if (source == null || source.isEmpty) {
       return const _MiniFallbackBackground();
     }
+    final physicalWidth =
+        MediaQuery.sizeOf(context).width *
+        MediaQuery.devicePixelRatioOf(context);
+    final cacheWidth = (physicalWidth * 1.28).ceil().clamp(640, 1280).toInt();
 
     return ImageFiltered(
       imageFilter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
@@ -870,8 +970,10 @@ class _MiniBlurBackground extends StatelessWidget {
         scale: 1.28,
         child: SourceImage(
           source: source,
+          fallbackSource: fallbackUrl,
           fit: BoxFit.cover,
-          cacheWidth: 320,
+          cacheWidth: cacheWidth,
+          filterQuality: FilterQuality.high,
           fallback: const _MiniFallbackBackground(),
         ),
       ),
@@ -879,10 +981,78 @@ class _MiniBlurBackground extends StatelessWidget {
   }
 }
 
+class _MiniAccentBackground extends StatelessWidget {
+  const _MiniAccentBackground({required this.legacyDesktopKey});
+
+  final bool legacyDesktopKey;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      key: legacyDesktopKey
+          ? const ValueKey('mini-player-desktop-background')
+          : const ValueKey('mini-player-accent-background'),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: AppColors.desktopMiniPlayerGradientFor(context),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniGlassBackground extends StatelessWidget {
+  const _MiniGlassBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final accent = AppColors.downloadAccentFor(context);
+    final surface = theme.colorScheme.surface;
+    final surfaceAlpha = isDark ? 0.36 : 0.42;
+
+    Color glassColor(double accentAlpha) => Color.alphaBlend(
+      accent.withValues(alpha: accentAlpha),
+      surface.withValues(alpha: surfaceAlpha),
+    );
+
+    return ClipRect(
+      child: BackdropFilter(
+        key: const ValueKey('mini-player-glass-blur'),
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: DecoratedBox(
+          key: const ValueKey('mini-player-glass-background'),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                glassColor(isDark ? 0.04 : 0.028),
+                glassColor(isDark ? 0.075 : 0.052),
+                glassColor(isDark ? 0.035 : 0.024),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MiniProgress extends ConsumerStatefulWidget {
-  const _MiniProgress({this.interactive = false, super.key});
+  const _MiniProgress({
+    this.interactive = false,
+    this.height = 3,
+    this.rounded = false,
+    super.key,
+  });
 
   final bool interactive;
+  final double height;
+  final bool rounded;
 
   @override
   ConsumerState<_MiniProgress> createState() => _MiniProgressState();
@@ -913,9 +1083,10 @@ class _MiniProgressState extends ConsumerState<_MiniProgress> {
               .toDouble();
 
     if (!widget.interactive) {
-      return PlaybackProgressLine(
+      final line = PlaybackProgressLine(
         value: progress,
         color: progressColor,
+        height: widget.height,
         colorAnimationKey: const ValueKey('mini-progress-color-animation'),
         fillKey: const ValueKey('mini-progress-fill'),
         semanticsLabel: strings.choose(
@@ -923,6 +1094,12 @@ class _MiniProgressState extends ConsumerState<_MiniProgress> {
           'Playback progress',
         ),
       );
+      return widget.rounded
+          ? ClipRRect(
+              borderRadius: BorderRadius.circular(widget.height / 2),
+              child: line,
+            )
+          : line;
     }
 
     final totalMicroseconds = duration?.inMicroseconds ?? 0;
@@ -1091,13 +1268,17 @@ class _MiniFallbackBackground extends StatelessWidget {
 class _MiniArtwork extends StatelessWidget {
   const _MiniArtwork({
     required this.url,
+    required this.fallbackUrl,
     required this.size,
     required this.isFavorite,
+    required this.circular,
   });
 
   final String? url;
+  final String? fallbackUrl;
   final double size;
   final bool isFavorite;
+  final bool circular;
 
   @override
   Widget build(BuildContext context) {
@@ -1108,30 +1289,19 @@ class _MiniArtwork extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(appArtworkRadius),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: url == null
-                        ? Theme.of(context).brightness == Brightness.dark
-                              ? const Color(0xFF1B1B1B)
-                              : const Color(0xFFE5E5E5)
-                        : Theme.of(context).colorScheme.primaryContainer,
-                  ),
-                  child: url == null
-                      ? const Icon(Icons.graphic_eq_rounded)
-                      : ProportionalArtwork(
-                          source: url,
-                          cacheWidth: 256,
-                          fallback: const Icon(Icons.graphic_eq_rounded),
-                        ),
-                ),
-              ],
+          if (circular)
+            ClipOval(
+              key: const ValueKey('mini-player-artwork-circle'),
+              clipBehavior: Clip.antiAliasWithSaveLayer,
+              child: _MiniArtworkImage(url: url, fallbackUrl: fallbackUrl),
+            )
+          else
+            ClipRRect(
+              key: const ValueKey('mini-player-artwork-rounded-rect'),
+              borderRadius: BorderRadius.circular(appArtworkRadius),
+              clipBehavior: Clip.antiAliasWithSaveLayer,
+              child: _MiniArtworkImage(url: url, fallbackUrl: fallbackUrl),
             ),
-          ),
           if (isFavorite)
             const Positioned(
               top: 1,
@@ -1142,4 +1312,59 @@ class _MiniArtwork extends StatelessWidget {
       ),
     );
   }
+}
+
+class _MiniArtworkImage extends StatelessWidget {
+  const _MiniArtworkImage({required this.url, required this.fallbackUrl});
+
+  final String? url;
+  final String? fallbackUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: url == null
+            ? Theme.of(context).brightness == Brightness.dark
+                  ? const Color(0xFF1B1B1B)
+                  : const Color(0xFFE5E5E5)
+            : Theme.of(context).colorScheme.primaryContainer,
+      ),
+      child: url == null
+          ? const Icon(Icons.graphic_eq_rounded)
+          : ProportionalArtwork(
+              source: url,
+              fallbackSource: fallbackUrl,
+              cacheWidth: 256,
+              filterQuality: FilterQuality.high,
+              fallback: const Icon(Icons.graphic_eq_rounded),
+            ),
+    );
+  }
+}
+
+LocalTrack? _miniLocalTrackForSnapshot(
+  List<LocalTrack> tracks, {
+  required String? trackId,
+  required String? sourceUrl,
+}) {
+  final normalizedId = trackId?.trim();
+  if (normalizedId != null && normalizedId.isNotEmpty) {
+    for (final track in tracks) {
+      if (track.id == normalizedId) {
+        return track;
+      }
+    }
+  }
+
+  final normalizedSource = sourceUrl?.trim();
+  if (normalizedSource == null || normalizedSource.isEmpty) {
+    return null;
+  }
+  for (final track in tracks) {
+    if (track.sourceUrl?.trim() == normalizedSource) {
+      return track;
+    }
+  }
+  return null;
 }

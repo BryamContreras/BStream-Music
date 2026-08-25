@@ -5,6 +5,15 @@ import 'app_colors.dart';
 /// Horizontal page margin used by all tab content.
 const double appPagePaddingHorizontal = 12.0;
 
+/// Horizontal inset shared by the fixed tab title and section headings.
+const double appTabTitleHorizontalPadding = 16.0;
+
+/// Breathing room between a fixed tab title and its first section heading.
+const double appTabFirstSectionTopGap = 8.0;
+
+/// Vertical inset inside the fixed tab title surface.
+const double appTabTitleVerticalPadding = 8.0;
+
 /// Horizontal padding applied to horizontal scrolling shelves inside sections.
 const double appShelfPaddingHorizontal = 6.0;
 

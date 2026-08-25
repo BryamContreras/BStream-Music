@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../platform_channels/android_file_export_channel.dart';
@@ -64,6 +65,8 @@ final settingsExternalLauncherProvider = Provider<SettingsExternalLauncher>(
 
 enum _SettingsRoute { root, appearance, lyrics, storage, live, about }
 
+const double _settingsRootCardHorizontalPadding = 6.0;
+
 class SettingsNavigationController extends ChangeNotifier {
   _SettingsPanelState? _state;
   bool _disposed = false;
@@ -102,11 +105,13 @@ class SettingsPanel extends ConsumerStatefulWidget {
   const SettingsPanel({
     this.active = true,
     this.navigationController,
+    this.bottomContentPadding = 0,
     super.key,
   });
 
   final bool active;
   final SettingsNavigationController? navigationController;
+  final double bottomContentPadding;
 
   @override
   ConsumerState<SettingsPanel> createState() => _SettingsPanelState();
@@ -166,7 +171,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         ? Duration.zero
         : const Duration(milliseconds: 220);
 
-    Widget routeFrame(Widget body) {
+    Widget routeFrame(Widget body, {List<Widget>? rootSlivers}) {
       final header = _SettingsHeader(
         route: _route,
         title: _routeTitle(_route, strings),
@@ -188,12 +193,19 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       }
       return ScrolledUnderTabFrame(
         surfaceKey: const ValueKey('settings-tab-header-surface'),
-        headerHorizontalPadding: 6,
+        scrollKey: const ValueKey('settings-root'),
         header: header,
-        body: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: body,
-        ),
+        slivers:
+            rootSlivers ??
+            [
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: body,
+                ),
+              ),
+            ],
       );
     }
 
@@ -204,6 +216,16 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         if (tiktokState != null) {
           _syncTikTokController(tiktokState);
         }
+        final rootSelected = _route == _SettingsRoute.root;
+        final routeBody = rootSelected
+            ? const SizedBox.shrink()
+            : _buildRoute(
+                state: state,
+                sleepTimer: sleepTimer,
+                tiktokLive: tiktokLive,
+                csvTransfer: csvTransfer,
+                strings: strings,
+              );
         return AnimatedSwitcher(
           key: const ValueKey('settings-route-switcher'),
           duration: transitionDuration,
@@ -218,13 +240,15 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
           child: KeyedSubtree(
             key: ValueKey('settings-detail-${_route.name}'),
             child: routeFrame(
-              _buildRoute(
-                state: state,
-                sleepTimer: sleepTimer,
-                tiktokLive: tiktokLive,
-                csvTransfer: csvTransfer,
-                strings: strings,
-              ),
+              routeBody,
+              rootSlivers: rootSelected
+                  ? _buildRootSlivers(
+                      state: state,
+                      sleepTimer: sleepTimer,
+                      tiktokLive: tiktokLive,
+                      strings: strings,
+                    )
+                  : null,
             ),
           ),
         );
@@ -264,7 +288,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   String _routeTitle(_SettingsRoute route, AppStrings strings) {
     return switch (route) {
       _SettingsRoute.root => strings.settings,
-      _SettingsRoute.appearance => strings.themeAndAccentColor,
+      _SettingsRoute.appearance => strings.appearance,
       _SettingsRoute.lyrics => strings.lyricsAppearance,
       _SettingsRoute.storage => strings.storage,
       _SettingsRoute.live => strings.liveConnection,
@@ -279,24 +303,27 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     required LibraryCsvTransferState csvTransfer,
     required AppStrings strings,
   }) {
-    if (_route == _SettingsRoute.root) {
-      return _buildRoot(
-        state: state,
-        sleepTimer: sleepTimer,
-        tiktokLive: tiktokLive,
-        strings: strings,
-      );
-    }
-
     final content = switch (_route) {
       _SettingsRoute.appearance => _AppearanceSettings(
         themeMode: state.themeMode,
         accent: state.accent,
+        surfaceBackgroundMode: state.surfaceBackgroundMode,
+        miniPlayerMode: state.miniPlayerMode,
+        miniPlayerBackgroundMode: state.miniPlayerBackgroundMode,
         strings: strings,
         onThemeModeChanged: (mode) =>
             ref.read(settingsControllerProvider.notifier).setThemeMode(mode),
         onAccentChanged: (accent) =>
             ref.read(settingsControllerProvider.notifier).setAccent(accent),
+        onSurfaceBackgroundModeChanged: (mode) => ref
+            .read(settingsControllerProvider.notifier)
+            .setSurfaceBackgroundMode(mode),
+        onMiniPlayerModeChanged: (mode) => ref
+            .read(settingsControllerProvider.notifier)
+            .setMiniPlayerMode(mode),
+        onMiniPlayerBackgroundModeChanged: (mode) => ref
+            .read(settingsControllerProvider.notifier)
+            .setMiniPlayerBackgroundMode(mode),
       ),
       _SettingsRoute.lyrics => _LyricsAppearanceSettings(
         animationStyle: state.lyricsAnimationStyle,
@@ -362,7 +389,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     };
 
     return ListView(
-      padding: const EdgeInsets.only(bottom: 28),
+      padding: EdgeInsets.only(bottom: widget.bottomContentPadding + 28),
       children: [
         Align(
           alignment: Alignment.topLeft,
@@ -375,7 +402,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     );
   }
 
-  Widget _buildRoot({
+  List<Widget> _buildRootSlivers({
     required SettingsState state,
     required SleepTimerState sleepTimer,
     required AsyncValue<TikTokLiveState>? tiktokLive,
@@ -385,208 +412,234 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     final showDesktopTools =
         AppPlatform.isDesktop &&
         Theme.of(context).platform != TargetPlatform.android;
-    return ListView(
-      key: const ValueKey('settings-root'),
-      padding: const EdgeInsets.only(bottom: 24),
-      children: [
-        _SettingsGroup(
-          title: strings.general,
-          children: [
-            _SettingsEntryCard(
-              key: const ValueKey('settings-card-language'),
-              icon: Icons.language_rounded,
-              title: strings.language,
-              subtitle: state.language == AppLanguage.spanish
-                  ? strings.spanish
-                  : strings.english,
-              onTap: () => _chooseLanguage(
-                currentLanguage: state.language,
-                strings: strings,
-              ),
-            ),
-          ],
+    return [
+      SliverPadding(
+        padding: EdgeInsets.fromLTRB(
+          _settingsRootCardHorizontalPadding,
+          appTabFirstSectionTopGap,
+          _settingsRootCardHorizontalPadding,
+          widget.bottomContentPadding + 24,
         ),
-        _SettingsGroup(
-          title: strings.appearance,
+        sliver: SliverList.list(
           children: [
-            _SettingsEntryCard(
-              key: const ValueKey('settings-card-appearance'),
-              icon: Icons.palette_rounded,
-              title: strings.themeAndAccentColor,
-              subtitle:
-                  '${strings.themeModeLabel(state.themeMode)} · '
-                  '${strings.accentLabel(state.accent)}',
-              onTap: () => _openRoute(_SettingsRoute.appearance),
-            ),
-            const SizedBox(height: appCardGap),
-            _SettingsEntryCard(
-              key: const ValueKey('settings-card-lyrics-appearance'),
-              icon: Icons.lyrics_rounded,
-              title: strings.lyrics,
-              subtitle:
-                  '${strings.lyricsAnimationLabel(state.lyricsAnimationStyle)}'
-                  ' · '
-                  '${state.lyricsTextAlignment == LyricsTextAlignment.centered ? strings.centeredLyricsAlignment : strings.normalLyricsAlignment}',
-              onTap: () => _openRoute(_SettingsRoute.lyrics),
-            ),
-          ],
-        ),
-        _SettingsGroup(
-          title: strings.playback,
-          children: [
-            KeyedSubtree(
-              key: const ValueKey('settings-inline-timer'),
-              child: _SleepTimerSettings(
-                state: sleepTimer,
-                strings: strings,
-                onEnabledChanged: ref
-                    .read(sleepTimerControllerProvider.notifier)
-                    .setEnabled,
-                onDurationSelected: ref
-                    .read(sleepTimerControllerProvider.notifier)
-                    .selectDuration,
-                onCustomDuration: () => _chooseSleepTimerDuration(sleepTimer),
-              ),
-            ),
-            const SizedBox(height: appCardGap),
-            _CrossfadeSettings(
-              key: const ValueKey('settings-inline-crossfade'),
-              enabled: state.crossfadeEnabled,
-              duration: state.crossfadeDuration,
-              strings: strings,
-              onEnabledChanged: ref
-                  .read(settingsControllerProvider.notifier)
-                  .setCrossfadeEnabled,
-              onDurationSelected: ref
-                  .read(settingsControllerProvider.notifier)
-                  .setCrossfadeDuration,
-            ),
-          ],
-        ),
-        _SettingsGroup(
-          title: strings.privacyAndRecommendations,
-          children: [
-            _SettingsEntryCard(
-              key: const ValueKey('settings-card-recommendation-history'),
-              icon: Icons.auto_awesome_rounded,
-              title: strings.recommendationHistory,
-              subtitle: state.recommendationHistoryEnabled
-                  ? strings.recommendationHistoryEnabled
-                  : strings.recommendationHistoryDisabled,
-              onTap: _recommendationClearBusy || _backupBusy
-                  ? null
-                  : () => ref
-                        .read(settingsControllerProvider.notifier)
-                        .setRecommendationHistoryEnabled(
-                          !state.recommendationHistoryEnabled,
-                        ),
-              trailing: Switch.adaptive(
-                key: const ValueKey('recommendation-history-switch'),
-                value: state.recommendationHistoryEnabled,
-                onChanged: _recommendationClearBusy || _backupBusy
-                    ? null
-                    : ref
-                          .read(settingsControllerProvider.notifier)
-                          .setRecommendationHistoryEnabled,
-              ),
-            ),
-            const SizedBox(height: appCardGap),
-            _SettingsEntryCard(
-              key: const ValueKey('settings-card-clear-recommendations'),
-              icon: Icons.delete_sweep_outlined,
-              title: strings.clearRecommendationHistory,
-              subtitle: strings.clearRecommendationHistorySummary,
-              accent: Theme.of(context).colorScheme.error,
-              onTap: _recommendationClearBusy || _backupBusy
-                  ? null
-                  : _clearRecommendationHistory,
-              trailing: _recommendationClearBusy
-                  ? const SizedBox.square(
-                      dimension: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2.4),
-                    )
-                  : null,
-            ),
-          ],
-        ),
-        _SettingsGroup(
-          title: strings.storage,
-          children: [
-            _SettingsEntryCard(
-              key: const ValueKey('settings-card-storage'),
-              icon: Icons.storage_rounded,
-              title: strings.downloadsAndBackup,
-              subtitle: strings.storageSummary,
-              onTap: () => _openRoute(_SettingsRoute.storage),
-            ),
-          ],
-        ),
-        if (tiktokLive != null)
-          _SettingsGroup(
-            title: strings.integrations,
-            children: [
-              _SettingsEntryCard(
-                key: const ValueKey('settings-card-live'),
-                icon: Icons.live_tv_rounded,
-                title: strings.liveConnection,
-                subtitle: liveState?.message ?? strings.liveConnectionSummary,
-                status: switch (liveState?.status) {
-                  TikTokLiveStatus.connected => true,
-                  TikTokLiveStatus.error || TikTokLiveStatus.liveEnded => false,
-                  _ => null,
-                },
-                onTap: () => _openRoute(_SettingsRoute.live),
-              ),
-              const SizedBox(height: appCardGap),
-              _LiveRequestStorageCard(
-                state: liveState,
-                strings: strings,
-                onChanged: (value) => ref
-                    .read(tiktokLiveControllerProvider.notifier)
-                    .setSaveRequestsToLibrary(value),
-              ),
-            ],
-          ),
-        if (showDesktopTools)
-          _SettingsGroup(
-            title: strings.desktopTools,
-            children: [
-              Wrap(
-                key: const ValueKey('settings-inline-tools'),
-                spacing: 18,
-                runSpacing: 14,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _ToolStatus(
-                    label: 'yt-dlp',
-                    available: state.hasYtDlp,
+            _SettingsGroup(
+              titleKey: const ValueKey('settings-first-section-title'),
+              title: strings.general,
+              children: [
+                _SettingsEntryCard(
+                  key: const ValueKey('settings-card-language'),
+                  icon: Icons.language_rounded,
+                  title: strings.language,
+                  subtitle: state.language == AppLanguage.spanish
+                      ? strings.spanish
+                      : strings.english,
+                  onTap: () => _chooseLanguage(
+                    currentLanguage: state.language,
                     strings: strings,
                   ),
-                  FilledButton.icon(
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: Text(strings.verify),
-                    onPressed: () => ref
-                        .read(settingsControllerProvider.notifier)
-                        .refreshToolStatus(),
+                ),
+              ],
+            ),
+            _SettingsGroup(
+              title: strings.appearance,
+              children: [
+                _SettingsEntryCard(
+                  key: const ValueKey('settings-card-appearance'),
+                  icon: Icons.palette_rounded,
+                  title: strings.appearance,
+                  subtitle:
+                      '${strings.themeModeLabel(state.themeMode)} · '
+                      '${strings.accentLabel(state.accent)} · '
+                      '${strings.miniPlayerModeLabel(state.miniPlayerMode)}',
+                  onTap: () => _openRoute(_SettingsRoute.appearance),
+                ),
+                const SizedBox(height: appCardGap),
+                _SettingsEntryCard(
+                  key: const ValueKey('settings-card-lyrics-appearance'),
+                  icon: Icons.lyrics_rounded,
+                  title: strings.lyrics,
+                  subtitle:
+                      '${strings.lyricsAnimationLabel(state.lyricsAnimationStyle)}'
+                      ' · '
+                      '${state.lyricsTextAlignment == LyricsTextAlignment.centered ? strings.centeredLyricsAlignment : strings.normalLyricsAlignment}',
+                  onTap: () => _openRoute(_SettingsRoute.lyrics),
+                ),
+              ],
+            ),
+            _SettingsGroup(
+              title: strings.playback,
+              children: [
+                KeyedSubtree(
+                  key: const ValueKey('settings-inline-timer'),
+                  child: _SleepTimerSettings(
+                    state: sleepTimer,
+                    strings: strings,
+                    onEnabledChanged: ref
+                        .read(sleepTimerControllerProvider.notifier)
+                        .setEnabled,
+                    onDurationSelected: ref
+                        .read(sleepTimerControllerProvider.notifier)
+                        .selectDuration,
+                    onCustomDuration: () =>
+                        _chooseSleepTimerDuration(sleepTimer),
+                  ),
+                ),
+                const SizedBox(height: appCardGap),
+                _CrossfadeSettings(
+                  key: const ValueKey('settings-inline-crossfade'),
+                  enabled: state.crossfadeEnabled,
+                  duration: state.crossfadeDuration,
+                  strings: strings,
+                  onEnabledChanged: ref
+                      .read(settingsControllerProvider.notifier)
+                      .setCrossfadeEnabled,
+                  onDurationSelected: ref
+                      .read(settingsControllerProvider.notifier)
+                      .setCrossfadeDuration,
+                ),
+              ],
+            ),
+            _SettingsGroup(
+              title: strings.privacyAndRecommendations,
+              children: [
+                _SettingsEntryCard(
+                  key: const ValueKey('settings-card-recommendation-history'),
+                  icon: Icons.auto_awesome_rounded,
+                  title: strings.recommendationHistory,
+                  subtitle: state.recommendationHistoryEnabled
+                      ? strings.recommendationHistoryEnabled
+                      : strings.recommendationHistoryDisabled,
+                  onTap: _recommendationClearBusy || _backupBusy
+                      ? null
+                      : () => ref
+                            .read(settingsControllerProvider.notifier)
+                            .setRecommendationHistoryEnabled(
+                              !state.recommendationHistoryEnabled,
+                            ),
+                  trailing: Switch.adaptive(
+                    key: const ValueKey('recommendation-history-switch'),
+                    value: state.recommendationHistoryEnabled,
+                    onChanged: _recommendationClearBusy || _backupBusy
+                        ? null
+                        : ref
+                              .read(settingsControllerProvider.notifier)
+                              .setRecommendationHistoryEnabled,
+                  ),
+                ),
+                const SizedBox(height: appCardGap),
+                _SettingsEntryCard(
+                  key: const ValueKey('settings-card-clear-recommendations'),
+                  icon: Icons.delete_sweep_outlined,
+                  title: strings.clearRecommendationHistory,
+                  subtitle: strings.clearRecommendationHistorySummary,
+                  accent: Theme.of(context).colorScheme.error,
+                  onTap: _recommendationClearBusy || _backupBusy
+                      ? null
+                      : _clearRecommendationHistory,
+                  trailing: _recommendationClearBusy
+                      ? const SizedBox.square(
+                          dimension: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2.4),
+                        )
+                      : null,
+                ),
+              ],
+            ),
+            _SettingsGroup(
+              title: strings.storage,
+              children: [
+                _SettingsEntryCard(
+                  key: const ValueKey('settings-card-storage'),
+                  icon: Icons.storage_rounded,
+                  title: strings.backupAndRestore,
+                  subtitle: strings.storageSummary,
+                  onTap: () => _openRoute(_SettingsRoute.storage),
+                ),
+                const SizedBox(height: appCardGap),
+                _SettingsEntryCard(
+                  key: const ValueKey('storage-local-music-filters'),
+                  icon: Icons.filter_alt_rounded,
+                  title: strings.localMusicFilters,
+                  subtitle: strings.localMusicFiltersSummary(
+                    state.localMusicFilters.length,
+                  ),
+                  onTap: () => _chooseLocalMusicFilters(
+                    filters: state.localMusicFilters,
+                    strings: strings,
+                  ),
+                ),
+              ],
+            ),
+            if (tiktokLive != null)
+              _SettingsGroup(
+                title: strings.integrations,
+                children: [
+                  _SettingsEntryCard(
+                    key: const ValueKey('settings-card-live'),
+                    icon: Icons.live_tv_rounded,
+                    title: strings.liveConnection,
+                    subtitle:
+                        liveState?.message ?? strings.liveConnectionSummary,
+                    status: switch (liveState?.status) {
+                      TikTokLiveStatus.connected => true,
+                      TikTokLiveStatus.error ||
+                      TikTokLiveStatus.liveEnded => false,
+                      _ => null,
+                    },
+                    onTap: () => _openRoute(_SettingsRoute.live),
+                  ),
+                  const SizedBox(height: appCardGap),
+                  _LiveRequestStorageCard(
+                    state: liveState,
+                    strings: strings,
+                    onChanged: (value) => ref
+                        .read(tiktokLiveControllerProvider.notifier)
+                        .setSaveRequestsToLibrary(value),
                   ),
                 ],
               ),
-            ],
-          ),
-        _SettingsGroup(
-          title: strings.applicationInformation,
-          children: [
-            _SettingsEntryCard(
-              key: const ValueKey('settings-card-about'),
-              icon: Icons.info_outline_rounded,
-              title: strings.aboutApplication,
-              subtitle: strings.aboutApplicationSummary,
-              onTap: () => _openRoute(_SettingsRoute.about),
+            if (showDesktopTools)
+              _SettingsGroup(
+                title: strings.desktopTools,
+                children: [
+                  Wrap(
+                    key: const ValueKey('settings-inline-tools'),
+                    spacing: 18,
+                    runSpacing: 14,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _ToolStatus(
+                        label: 'yt-dlp',
+                        available: state.hasYtDlp,
+                        strings: strings,
+                      ),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: Text(strings.verify),
+                        onPressed: () => ref
+                            .read(settingsControllerProvider.notifier)
+                            .refreshToolStatus(),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            _SettingsGroup(
+              title: strings.applicationInformation,
+              children: [
+                _SettingsEntryCard(
+                  key: const ValueKey('settings-card-about'),
+                  icon: Icons.info_outline_rounded,
+                  title: strings.aboutApplication,
+                  subtitle: strings.aboutApplicationSummary,
+                  onTap: () => _openRoute(_SettingsRoute.about),
+                ),
+              ],
             ),
           ],
         ),
-      ],
-    );
+      ),
+    ];
   }
 
   void _syncControllers(SettingsState state) {
@@ -601,9 +654,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       return;
     }
     final strings = ref.read(appStringsProvider);
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         key: const ValueKey('recommendation-history-clear-confirmation'),
         title: Text(strings.clearRecommendationHistoryTitle),
         content: Text(strings.clearRecommendationHistoryMessage),
@@ -643,7 +696,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     required AppLanguage currentLanguage,
     required AppStrings strings,
   }) async {
-    final selected = await showDialog<AppLanguage>(
+    final selected = await showAppDialog<AppLanguage>(
       context: context,
       builder: (_) =>
           _LanguageSelectorDialog(language: currentLanguage, strings: strings),
@@ -654,9 +707,28 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     await ref.read(settingsControllerProvider.notifier).setLanguage(selected);
   }
 
+  Future<void> _chooseLocalMusicFilters({
+    required Set<LocalMusicFilter> filters,
+    required AppStrings strings,
+  }) async {
+    final selected = await showAppDialog<Set<LocalMusicFilter>>(
+      context: context,
+      builder: (_) =>
+          _LocalMusicFiltersDialog(filters: filters, strings: strings),
+    );
+    if (!mounted ||
+        selected == null ||
+        _sameLocalMusicFilters(selected, filters)) {
+      return;
+    }
+    await ref
+        .read(settingsControllerProvider.notifier)
+        .setLocalMusicFilters(selected);
+  }
+
   Future<void> _chooseSleepTimerDuration(SleepTimerState timer) async {
     final strings = ref.read(appStringsProvider);
-    final entered = await showDialog<String>(
+    final entered = await showAppDialog<String>(
       context: context,
       builder: (_) => _SleepTimerDurationDialog(
         initialDuration: timer.selectedDuration,
@@ -813,9 +885,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       return;
     }
     final strings = ref.read(appStringsProvider);
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         key: const ValueKey('backup-import-confirmation'),
         title: Text(strings.replaceLibraryTitle),
         content: Text(strings.replaceLibraryMessage),
@@ -900,7 +972,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       controller.reset();
       final document = await controller.preview(path);
       if (!mounted) return;
-      final confirmed = await showDialog<bool>(
+      final confirmed = await showAppDialog<bool>(
         context: context,
         builder: (dialogContext) => _CsvImportPreviewDialog(
           document: document,
@@ -914,7 +986,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         return;
       }
 
-      await showDialog<void>(
+      await showAppDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (_) =>
@@ -936,7 +1008,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       return;
     }
     final strings = ref.read(appStringsProvider);
-    final profile = await showDialog<LibraryCsvProfile>(
+    final profile = await showAppDialog<LibraryCsvProfile>(
       context: context,
       builder: (dialogContext) => _CsvProfileDialog(
         strings: strings,
@@ -1048,7 +1120,7 @@ class _CsvImportPreviewDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return AppAlertDialog(
       key: const ValueKey('csv-import-preview'),
       scrollable: true,
       title: Text(strings.csvImportTitle),
@@ -1155,7 +1227,7 @@ class _CsvImportProgressDialogState
 
     return PopScope(
       canPop: terminal,
-      child: AlertDialog(
+      child: AppAlertDialog(
         key: const ValueKey('csv-import-progress-dialog'),
         scrollable: true,
         title: Text(
@@ -1316,7 +1388,7 @@ class _CsvProfileDialog extends StatelessWidget {
       (LibraryCsvProfile.harmony, strings.csvProfileHarmony),
       (LibraryCsvProfile.soundiiz, strings.csvProfileSoundiiz),
     ];
-    return AlertDialog(
+    return AppAlertDialog(
       key: const ValueKey('csv-export-profile-dialog'),
       scrollable: true,
       title: Text(strings.chooseCsvProfile),
@@ -1442,7 +1514,8 @@ class _SettingsHeader extends StatelessWidget {
 
 class _SettingsEntryCard extends StatelessWidget {
   const _SettingsEntryCard({
-    required this.icon,
+    this.icon,
+    this.leading,
     required this.title,
     required this.subtitle,
     required this.onTap,
@@ -1450,9 +1523,10 @@ class _SettingsEntryCard extends StatelessWidget {
     this.status,
     this.trailing,
     super.key,
-  });
+  }) : assert(icon != null || leading != null);
 
-  final IconData icon;
+  final IconData? icon;
+  final Widget? leading;
   final String title;
   final String subtitle;
   final VoidCallback? onTap;
@@ -1494,7 +1568,13 @@ class _SettingsEntryCard extends StatelessWidget {
                         color: highlight.withValues(alpha: 0.24),
                       ),
                     ),
-                    child: Icon(icon, color: highlight, size: 24),
+                    child: IconTheme.merge(
+                      data: IconThemeData(color: highlight, size: 24),
+                      child: Center(
+                        child:
+                            leading ?? Icon(icon, color: highlight, size: 24),
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -1625,9 +1705,9 @@ class _AboutApplicationSettings extends StatelessWidget {
                 'recuperaci\u00f3n controlada cuando se pierde la conexi\u00f3n.',
             'Una nube identifica canciones sin audio local y Volver desde un reproductor externo regresa de forma segura a Inicio.',
           ];
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         key: const ValueKey('settings-about-whats-new-dialog'),
         title: Text(
           strings.choose(
@@ -1689,7 +1769,7 @@ class _LanguageSelectorDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return AppAlertDialog(
       key: const ValueKey('settings-language-dialog'),
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -1699,20 +1779,20 @@ class _LanguageSelectorDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _LanguageDialogOption(
+            _SettingsDialogOption(
               key: const ValueKey('settings-language-option-spanish'),
-              language: AppLanguage.spanish,
               selected: language == AppLanguage.spanish,
               icon: Icons.language_rounded,
               label: strings.spanish,
+              onTap: () => Navigator.of(context).pop(AppLanguage.spanish),
             ),
             const SizedBox(height: 8),
-            _LanguageDialogOption(
+            _SettingsDialogOption(
               key: const ValueKey('settings-language-option-english'),
-              language: AppLanguage.english,
               selected: language == AppLanguage.english,
               icon: Icons.translate_rounded,
               label: strings.english,
+              onTap: () => Navigator.of(context).pop(AppLanguage.english),
             ),
           ],
         ),
@@ -1728,19 +1808,21 @@ class _LanguageSelectorDialog extends StatelessWidget {
   }
 }
 
-class _LanguageDialogOption extends StatelessWidget {
-  const _LanguageDialogOption({
-    required this.language,
+class _SettingsDialogOption extends StatelessWidget {
+  const _SettingsDialogOption({
     required this.selected,
-    required this.icon,
+    this.icon,
+    this.leading,
     required this.label,
+    required this.onTap,
     super.key,
-  });
+  }) : assert(icon != null || leading != null);
 
-  final AppLanguage language;
   final bool selected;
-  final IconData icon;
+  final IconData? icon;
+  final Widget? leading;
   final String label;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1762,14 +1844,29 @@ class _LanguageDialogOption extends StatelessWidget {
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: () => Navigator.of(context).pop(language),
+          onTap: onTap,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 56),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Row(
                 children: [
-                  Icon(icon, color: selected ? colors.primary : null),
+                  IconTheme.merge(
+                    data: IconThemeData(
+                      color: selected
+                          ? colors.primary
+                          : colors.onSurfaceVariant,
+                      size: 24,
+                    ),
+                    child:
+                        leading ??
+                        Icon(
+                          icon,
+                          color: selected
+                              ? colors.primary
+                              : colors.onSurfaceVariant,
+                        ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
@@ -1797,20 +1894,256 @@ class _LanguageDialogOption extends StatelessWidget {
   }
 }
 
+class _MiniPlayerModeSelectorDialog extends StatelessWidget {
+  const _MiniPlayerModeSelectorDialog({
+    required this.mode,
+    required this.strings,
+  });
+
+  final MiniPlayerMode mode;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppAlertDialog(
+      key: const ValueKey('settings-mini-player-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(strings.miniPlayer),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SettingsDialogOption(
+              key: const ValueKey('settings-mini-player-option-default'),
+              selected: mode == MiniPlayerMode.standard,
+              leading: const _MiniPlayerStyleIcon(
+                key: ValueKey('settings-mini-player-icon-default'),
+                mode: MiniPlayerMode.standard,
+              ),
+              label: strings.miniPlayerClassic,
+              onTap: () => Navigator.of(context).pop(MiniPlayerMode.standard),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey('settings-mini-player-option-capsule'),
+              selected: mode == MiniPlayerMode.capsule,
+              leading: const _MiniPlayerStyleIcon(
+                key: ValueKey('settings-mini-player-icon-capsule'),
+                mode: MiniPlayerMode.capsule,
+              ),
+              label: strings.miniPlayerCapsule,
+              onTap: () => Navigator.of(context).pop(MiniPlayerMode.capsule),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('settings-mini-player-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+      ],
+    );
+  }
+}
+
+class _SurfaceBackgroundSelectorDialog extends StatelessWidget {
+  const _SurfaceBackgroundSelectorDialog({
+    required this.mode,
+    required this.strings,
+  });
+
+  final SurfaceBackgroundMode mode;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppAlertDialog(
+      key: const ValueKey('settings-surface-background-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(strings.surfaceBackground),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SettingsDialogOption(
+              key: const ValueKey('settings-surface-background-option-accent'),
+              selected: mode == SurfaceBackgroundMode.accent,
+              icon: Icons.format_color_fill_rounded,
+              label: strings.surfaceBackgroundAccent,
+              onTap: () =>
+                  Navigator.of(context).pop(SurfaceBackgroundMode.accent),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-surface-background-option-transparent',
+              ),
+              selected: mode == SurfaceBackgroundMode.transparent,
+              icon: Icons.blur_on_rounded,
+              label: strings.surfaceBackgroundTransparent,
+              onTap: () =>
+                  Navigator.of(context).pop(SurfaceBackgroundMode.transparent),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('settings-surface-background-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniPlayerBackgroundSelectorDialog extends StatelessWidget {
+  const _MiniPlayerBackgroundSelectorDialog({
+    required this.mode,
+    required this.strings,
+  });
+
+  final MiniPlayerBackgroundMode mode;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppAlertDialog(
+      key: const ValueKey('settings-mini-player-background-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(strings.miniPlayerBackground),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-mini-player-background-option-accent',
+              ),
+              selected: mode == MiniPlayerBackgroundMode.accent,
+              icon: Icons.format_color_fill_rounded,
+              label: strings.miniPlayerBackgroundAccent,
+              onTap: () =>
+                  Navigator.of(context).pop(MiniPlayerBackgroundMode.accent),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-mini-player-background-option-artwork',
+              ),
+              selected: mode == MiniPlayerBackgroundMode.artwork,
+              icon: Icons.image_rounded,
+              label: strings.miniPlayerBackgroundArtwork,
+              onTap: () =>
+                  Navigator.of(context).pop(MiniPlayerBackgroundMode.artwork),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-mini-player-background-option-transparent',
+              ),
+              selected: mode == MiniPlayerBackgroundMode.transparent,
+              icon: Icons.blur_on_rounded,
+              label: strings.miniPlayerBackgroundTransparent,
+              onTap: () => Navigator.of(
+                context,
+              ).pop(MiniPlayerBackgroundMode.transparent),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('settings-mini-player-background-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+      ],
+    );
+  }
+}
+
 class _AppearanceSettings extends StatelessWidget {
   const _AppearanceSettings({
     required this.themeMode,
     required this.accent,
+    required this.surfaceBackgroundMode,
+    required this.miniPlayerMode,
+    required this.miniPlayerBackgroundMode,
     required this.strings,
     required this.onThemeModeChanged,
     required this.onAccentChanged,
+    required this.onSurfaceBackgroundModeChanged,
+    required this.onMiniPlayerModeChanged,
+    required this.onMiniPlayerBackgroundModeChanged,
   });
 
   final AppThemeMode themeMode;
   final AppAccent accent;
+  final SurfaceBackgroundMode surfaceBackgroundMode;
+  final MiniPlayerMode miniPlayerMode;
+  final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final AppStrings strings;
   final ValueChanged<AppThemeMode> onThemeModeChanged;
   final ValueChanged<AppAccent> onAccentChanged;
+  final Future<void> Function(SurfaceBackgroundMode)
+  onSurfaceBackgroundModeChanged;
+  final Future<void> Function(MiniPlayerMode) onMiniPlayerModeChanged;
+  final Future<void> Function(MiniPlayerBackgroundMode)
+  onMiniPlayerBackgroundModeChanged;
+
+  Future<void> _chooseMiniPlayerMode(BuildContext context) async {
+    final selected = await showAppDialog<MiniPlayerMode>(
+      context: context,
+      builder: (_) =>
+          _MiniPlayerModeSelectorDialog(mode: miniPlayerMode, strings: strings),
+    );
+    if (!context.mounted || selected == null || selected == miniPlayerMode) {
+      return;
+    }
+    await onMiniPlayerModeChanged(selected);
+  }
+
+  Future<void> _chooseSurfaceBackgroundMode(BuildContext context) async {
+    final selected = await showAppDialog<SurfaceBackgroundMode>(
+      context: context,
+      builder: (_) => _SurfaceBackgroundSelectorDialog(
+        mode: surfaceBackgroundMode,
+        strings: strings,
+      ),
+    );
+    if (!context.mounted ||
+        selected == null ||
+        selected == surfaceBackgroundMode) {
+      return;
+    }
+    await onSurfaceBackgroundModeChanged(selected);
+  }
+
+  Future<void> _chooseMiniPlayerBackgroundMode(BuildContext context) async {
+    final selected = await showAppDialog<MiniPlayerBackgroundMode>(
+      context: context,
+      builder: (_) => _MiniPlayerBackgroundSelectorDialog(
+        mode: miniPlayerBackgroundMode,
+        strings: strings,
+      ),
+    );
+    if (!context.mounted ||
+        selected == null ||
+        selected == miniPlayerBackgroundMode) {
+      return;
+    }
+    await onMiniPlayerBackgroundModeChanged(selected);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1901,9 +2234,149 @@ class _AppearanceSettings extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 24),
+          Text(
+            strings.surfaceEffects,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          _SettingsEntryCard(
+            key: const ValueKey('surface-background-selector'),
+            icon: switch (surfaceBackgroundMode) {
+              SurfaceBackgroundMode.accent => Icons.format_color_fill_rounded,
+              SurfaceBackgroundMode.transparent => Icons.blur_on_rounded,
+            },
+            title: strings.surfaceBackground,
+            subtitle: strings.surfaceBackgroundModeLabel(surfaceBackgroundMode),
+            onTap: () => _chooseSurfaceBackgroundMode(context),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            strings.miniPlayer,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          _SettingsEntryCard(
+            key: const ValueKey('mini-player-mode-selector'),
+            leading: _MiniPlayerStyleIcon(
+              key: const ValueKey('mini-player-mode-selector-icon'),
+              mode: miniPlayerMode,
+            ),
+            title: strings.miniPlayerStyle,
+            subtitle: strings.miniPlayerModeLabel(miniPlayerMode),
+            onTap: () => _chooseMiniPlayerMode(context),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('mini-player-background-selector'),
+            icon: switch (miniPlayerBackgroundMode) {
+              MiniPlayerBackgroundMode.accent =>
+                Icons.format_color_fill_rounded,
+              MiniPlayerBackgroundMode.artwork => Icons.image_rounded,
+              MiniPlayerBackgroundMode.transparent => Icons.blur_on_rounded,
+            },
+            title: strings.miniPlayerBackground,
+            subtitle: strings.miniPlayerBackgroundModeLabel(
+              miniPlayerBackgroundMode,
+            ),
+            onTap: () => _chooseMiniPlayerBackgroundMode(context),
+          ),
         ],
       ),
     );
+  }
+}
+
+class _MiniPlayerStyleIcon extends StatelessWidget {
+  const _MiniPlayerStyleIcon({required this.mode, super.key});
+
+  final MiniPlayerMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: 24,
+      child: CustomPaint(
+        painter: _MiniPlayerStyleIconPainter(
+          mode: mode,
+          color:
+              IconTheme.of(context).color ??
+              Theme.of(context).colorScheme.primary,
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniPlayerStyleIconPainter extends CustomPainter {
+  const _MiniPlayerStyleIconPainter({required this.mode, required this.color});
+
+  final MiniPlayerMode mode;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+    final rect = mode == MiniPlayerMode.capsule
+        ? Rect.fromLTRB(1.5, 5.5, size.width - 1.5, size.height - 5.5)
+        : Rect.fromLTRB(1.5, 4.5, size.width - 1.5, size.height - 3.5);
+
+    if (mode == MiniPlayerMode.capsule) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, Radius.circular(rect.height / 2)),
+        paint,
+      );
+    } else {
+      final radius = 3.5;
+      final path = Path()
+        ..moveTo(rect.left, rect.bottom)
+        ..lineTo(rect.left, rect.top + radius)
+        ..quadraticBezierTo(rect.left, rect.top, rect.left + radius, rect.top)
+        ..lineTo(rect.right - radius, rect.top)
+        ..quadraticBezierTo(rect.right, rect.top, rect.right, rect.top + radius)
+        ..lineTo(rect.right, rect.bottom)
+        ..close();
+      canvas.drawPath(path, paint);
+    }
+
+    final artworkCenter = Offset(rect.left + 4.5, rect.center.dy);
+    if (mode == MiniPlayerMode.capsule) {
+      canvas.drawCircle(artworkCenter, 2.2, paint);
+    } else {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: artworkCenter, width: 4.4, height: 4.4),
+          const Radius.circular(0.8),
+        ),
+        paint,
+      );
+    }
+    canvas
+      ..drawLine(
+        Offset(rect.left + 8.5, rect.center.dy - 1.8),
+        Offset(rect.right - 3, rect.center.dy - 1.8),
+        paint,
+      )
+      ..drawLine(
+        Offset(rect.left + 8.5, rect.center.dy + 2),
+        Offset(rect.right - 7, rect.center.dy + 2),
+        paint,
+      );
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniPlayerStyleIconPainter oldDelegate) {
+    return mode != oldDelegate.mode || color != oldDelegate.color;
   }
 }
 
@@ -2246,11 +2719,21 @@ class _LyricsAnimationPreviewState
                   romanized: romanizedLineAt(1),
                   textAlign: textAlign,
                   romanizationGap: 4,
-                  originalStyle: const TextStyle(
+                  originalStyle: TextStyle(
                     color: Colors.white,
-                    fontSize: 21,
+                    fontSize: 16,
                     height: 1.15,
                     fontWeight: FontWeight.w900,
+                    shadows: [
+                      Shadow(
+                        color: accent.withValues(alpha: 0.30),
+                        blurRadius: 10,
+                      ),
+                      Shadow(
+                        color: accent.withValues(alpha: 0.14),
+                        blurRadius: 24,
+                      ),
+                    ],
                   ),
                   romanizedStyle: TextStyle(
                     color: Colors.white.withValues(alpha: 0.72),
@@ -2480,7 +2963,7 @@ class _SleepTimerDurationDialogState extends State<_SleepTimerDurationDialog> {
   @override
   Widget build(BuildContext context) {
     final strings = widget.strings;
-    return AlertDialog(
+    return AppAlertDialog(
       title: Text(strings.timerDuration),
       content: TextField(
         controller: _controller,
@@ -3153,8 +3636,13 @@ class _PlaybackOptionButton extends StatelessWidget {
 }
 
 class _SettingsGroup extends StatelessWidget {
-  const _SettingsGroup({required this.title, required this.children});
+  const _SettingsGroup({
+    this.titleKey,
+    required this.title,
+    required this.children,
+  });
 
+  final Key? titleKey;
   final String title;
   final List<Widget> children;
 
@@ -3165,7 +3653,18 @@ class _SettingsGroup extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: appSectionTitleStyle(context)),
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal:
+                  appTabTitleHorizontalPadding -
+                  _settingsRootCardHorizontalPadding,
+            ),
+            child: Text(
+              title,
+              key: titleKey,
+              style: appSectionTitleStyle(context),
+            ),
+          ),
           const SizedBox(height: appGroupHeadingGap),
           ...children,
         ],
@@ -3259,6 +3758,169 @@ class _StorageSettings extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+bool _sameLocalMusicFilters(
+  Set<LocalMusicFilter> first,
+  Set<LocalMusicFilter> second,
+) {
+  return first.length == second.length && first.containsAll(second);
+}
+
+class _LocalMusicFiltersDialog extends StatefulWidget {
+  const _LocalMusicFiltersDialog({
+    required this.filters,
+    required this.strings,
+  });
+
+  final Set<LocalMusicFilter> filters;
+  final AppStrings strings;
+
+  @override
+  State<_LocalMusicFiltersDialog> createState() =>
+      _LocalMusicFiltersDialogState();
+}
+
+class _LocalMusicFiltersDialogState extends State<_LocalMusicFiltersDialog> {
+  late final Set<LocalMusicFilter> _filters = widget.filters.toSet();
+
+  void _setFilter(LocalMusicFilter filter, {required bool selected}) {
+    setState(() {
+      if (selected) {
+        _filters.add(filter);
+      } else {
+        _filters.remove(filter);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = widget.strings;
+    return AppAlertDialog(
+      key: const ValueKey('settings-local-music-filters-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(strings.localMusicFilters),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _LocalMusicFilterOption(
+              key: const ValueKey('local-music-filter-whatsapp'),
+              selected: _filters.contains(LocalMusicFilter.hideWhatsAppAudio),
+              icon: Icons.chat_rounded,
+              title: strings.hideWhatsAppAudio,
+              subtitle: strings.hideWhatsAppAudioSummary,
+              onChanged: (selected) => _setFilter(
+                LocalMusicFilter.hideWhatsAppAudio,
+                selected: selected,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _LocalMusicFilterOption(
+              key: const ValueKey('local-music-filter-telegram'),
+              selected: _filters.contains(LocalMusicFilter.hideTelegramAudio),
+              icon: Icons.send_rounded,
+              title: strings.hideTelegramAudio,
+              subtitle: strings.hideTelegramAudioSummary,
+              onChanged: (selected) => _setFilter(
+                LocalMusicFilter.hideTelegramAudio,
+                selected: selected,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _LocalMusicFilterOption(
+              key: const ValueKey('local-music-filter-recordings'),
+              selected: _filters.contains(LocalMusicFilter.hideAudioRecordings),
+              icon: Icons.mic_off_rounded,
+              title: strings.hideAudioRecordings,
+              subtitle: strings.hideAudioRecordingsSummary,
+              onChanged: (selected) => _setFilter(
+                LocalMusicFilter.hideAudioRecordings,
+                selected: selected,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _LocalMusicFilterOption(
+              key: const ValueKey('local-music-filter-short-tracks'),
+              selected: _filters.contains(
+                LocalMusicFilter.hideTracksUnder30Seconds,
+              ),
+              icon: Icons.timer_off_outlined,
+              title: strings.hideTracksUnder30Seconds,
+              subtitle: strings.hideTracksUnder30SecondsSummary,
+              onChanged: (selected) => _setFilter(
+                LocalMusicFilter.hideTracksUnder30Seconds,
+                selected: selected,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('local-music-filters-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+        FilledButton(
+          key: const ValueKey('local-music-filters-apply'),
+          onPressed: () => Navigator.of(
+            context,
+          ).pop(Set<LocalMusicFilter>.unmodifiable(_filters)),
+          child: Text(strings.apply),
+        ),
+      ],
+    );
+  }
+}
+
+class _LocalMusicFilterOption extends StatelessWidget {
+  const _LocalMusicFilterOption({
+    required this.selected,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onChanged,
+    super.key,
+  });
+
+  final bool selected;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: selected
+          ? colors.primaryContainer.withValues(alpha: 0.52)
+          : colors.surfaceContainerHighest.withValues(alpha: 0.56),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(appListCardIconRadius),
+        side: BorderSide(
+          color: selected ? colors.primary : colors.outlineVariant,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: CheckboxListTile.adaptive(
+        value: selected,
+        onChanged: (value) => onChanged(value ?? false),
+        secondary: Icon(
+          icon,
+          color: selected ? colors.primary : colors.onSurfaceVariant,
+        ),
+        title: Text(title),
+        subtitle: Text(subtitle, style: appListCardSubtitleStyle(context)),
+        controlAffinity: ListTileControlAffinity.trailing,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      ),
     );
   }
 }

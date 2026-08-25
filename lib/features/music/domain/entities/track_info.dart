@@ -17,6 +17,7 @@ class TrackInfo {
     this.streamCodec,
     this.extractor,
     this.album,
+    this.albumBrowseId,
     this.viewCount,
     this.httpHeaders,
     this.artists = const [],
@@ -42,6 +43,7 @@ class TrackInfo {
   final String? streamCodec;
   final String? extractor;
   final String? album;
+  final String? albumBrowseId;
   final int? viewCount;
   final Map<String, String>? httpHeaders;
   final List<String> artists;
@@ -70,6 +72,7 @@ class TrackInfo {
     String? streamCodec,
     String? extractor,
     String? album,
+    String? albumBrowseId,
     int? viewCount,
     Map<String, String>? httpHeaders,
     List<String>? artists,
@@ -92,6 +95,7 @@ class TrackInfo {
       streamCodec: streamCodec ?? this.streamCodec,
       extractor: extractor ?? this.extractor,
       album: album ?? this.album,
+      albumBrowseId: albumBrowseId ?? this.albumBrowseId,
       viewCount: viewCount ?? this.viewCount,
       httpHeaders: httpHeaders ?? this.httpHeaders,
       artists: artists ?? this.artists,

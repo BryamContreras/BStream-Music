@@ -192,6 +192,37 @@ void main() {
       expect(validated, [140]);
     });
 
+    test('stops before a second profile after supersession', () async {
+      final calls = <String>[];
+      var current = true;
+      final attempts = [
+        YoutubeManifestAttempt(name: 'first', client: youtubeVisionOsClient),
+        YoutubeManifestAttempt(name: 'second', client: youtubeCurrentIosClient),
+      ];
+
+      await expectLater(
+        resolvePreferredYoutubeAudioStream(
+          videoId: VideoId('abcdefghijk'),
+          attempts: attempts,
+          shouldContinue: () => current,
+          loadManifest: (videoId, client, requireWatchPage) async {
+            calls.add(attempts[calls.length].name);
+            current = false;
+            return StreamManifest([_audioStream(tag: 140)]);
+          },
+        ),
+        throwsA(
+          isA<AudioStreamResolverException>().having(
+            (error) => error.message,
+            'message',
+            contains('superseded'),
+          ),
+        ),
+      );
+
+      expect(calls, ['first']);
+    });
+
     test(
       'continues when the exact selected AAC is 403 after muxed validation',
       () async {

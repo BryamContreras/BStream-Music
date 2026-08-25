@@ -3,12 +3,13 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/image_source.dart';
+import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
 import '../providers/app_strings.dart';
+import 'playlist_artwork.dart';
 import 'source_image.dart';
 
 /// The shared playlist-name form used by the Library and collection actions.
@@ -41,7 +42,7 @@ class _CreatePlaylistDialogState extends State<CreatePlaylistDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return AppAlertDialog(
       title: Text(widget.strings.newPlaylist),
       content: TextField(
         key: const ValueKey('create-playlist-name'),
@@ -95,7 +96,7 @@ class PlaylistPickerDialog extends StatelessWidget {
         .where((playlist) => !playlist.isFavorites)
         .toList(growable: false);
 
-    return AlertDialog(
+    return AppAlertDialog(
       title: Text(
         title,
         style: TextStyle(color: AppColors.contentHeadingFor(context)),
@@ -146,7 +147,7 @@ class _PlaylistOption extends StatelessWidget {
   });
 
   final Playlist playlist;
-  final List<String> thumbnailSources;
+  final List<PlaylistArtworkSource> thumbnailSources;
 
   @override
   Widget build(BuildContext context) {
@@ -171,7 +172,7 @@ class _PlaylistOption extends StatelessWidget {
 class _PlaylistOptionCover extends StatelessWidget {
   const _PlaylistOptionCover({required this.sources});
 
-  final List<String> sources;
+  final List<PlaylistArtworkSource> sources;
 
   @override
   Widget build(BuildContext context) {
@@ -189,7 +190,7 @@ class _PlaylistOptionCover extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _PlaylistOptionImage(source: sources.first),
+            _PlaylistOptionImage(artwork: sources.first, cacheWidth: 96),
             if (underlay.isNotEmpty)
               Positioned(
                 left: 0,
@@ -200,13 +201,16 @@ class _PlaylistOptionCover extends StatelessWidget {
                   decoration: const BoxDecoration(color: Color(0xAA000000)),
                   child: Row(
                     children: [
-                      for (final source in underlay)
+                      for (final artwork in underlay)
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(1),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(2),
-                              child: _PlaylistOptionImage(source: source),
+                              child: _PlaylistOptionImage(
+                                artwork: artwork,
+                                cacheWidth: 64,
+                              ),
                             ),
                           ),
                         ),
@@ -222,15 +226,17 @@ class _PlaylistOptionCover extends StatelessWidget {
 }
 
 class _PlaylistOptionImage extends StatelessWidget {
-  const _PlaylistOptionImage({required this.source});
+  const _PlaylistOptionImage({required this.artwork, required this.cacheWidth});
 
-  final String source;
+  final PlaylistArtworkSource artwork;
+  final int cacheWidth;
 
   @override
   Widget build(BuildContext context) {
     return SourceImage(
-      source: source,
-      cacheWidth: 256,
+      source: artwork.source,
+      fallbackSource: artwork.fallbackSource,
+      cacheWidth: cacheWidth,
       fallback: const _PlaylistOptionFallback(),
     );
   }
@@ -252,60 +258,24 @@ class _PlaylistOptionFallback extends StatelessWidget {
   }
 }
 
-List<String> _playlistThumbnailSources(
+List<PlaylistArtworkSource> _playlistThumbnailSources(
   Playlist playlist,
   Map<String, LocalTrack> tracksById, {
   CatalogPlaylist? catalog,
 }) {
-  final sources =
-      (catalog == null
-              ? playlist.trackIds
-                    .map((id) => tracksById[id])
-                    .whereType<LocalTrack>()
-                    .map(_trackThumbnailSource)
-              : catalog.entries.where((entry) => !entry.isDeleted).map((entry) {
-                  final local = tracksById[entry.localTrackId];
-                  return local == null
-                      ? _normalizedThumbnailSource(entry.track.thumbnailUrl)
-                      : _trackThumbnailSource(local) ??
-                            _normalizedThumbnailSource(
-                              entry.track.thumbnailUrl,
-                            );
-                }))
-          .whereType<String>()
-          .toSet()
-          .toList(growable: false);
-
-  if (sources.length <= 1) {
-    return sources;
-  }
-
-  final start = playlist.id.hashCode.abs() % sources.length;
-  return [
-    ...sources.skip(start),
-    ...sources.take(start),
-  ].take(4).toList(growable: false);
-}
-
-String? _normalizedThumbnailSource(String? value) {
-  final normalized = value?.trim();
-  return normalized == null || normalized.isEmpty ? null : normalized;
-}
-
-String? _trackThumbnailSource(LocalTrack track) {
-  final source = track.thumbnailPath ?? track.thumbnailUrl;
-  final normalized = source?.trim();
-  if (normalized == null || normalized.isEmpty) {
-    return null;
-  }
-
-  if (isNetworkImageSource(normalized)) {
-    return normalized;
-  }
-
-  final file = imageFileFromSource(normalized);
-  if (file == null) {
-    return null;
-  }
-  return file.path;
+  final candidates = catalog == null
+      ? playlist.trackIds
+            .map((id) => tracksById[id])
+            .whereType<LocalTrack>()
+            .map(preferredLocalPlaylistArtworkSource)
+      : catalog.entries.where((entry) => !entry.isDeleted).map((entry) {
+          return preferredCatalogPlaylistArtworkSource(
+            entry.track,
+            localTrack: tracksById[entry.localTrackId],
+          );
+        });
+  return rotatingPlaylistArtworkSources(
+    playlistId: playlist.id,
+    candidates: candidates,
+  );
 }

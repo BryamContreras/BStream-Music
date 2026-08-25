@@ -70,10 +70,16 @@ class MainActivity : AudioServiceActivity() {
     private var pendingFileExportSourcePath: String? = null
     private val externalAudioHandler by lazy { ExternalAudioIntentHandler(this) }
     private val externalAudioExecutor = Executors.newSingleThreadExecutor()
+    // Artwork reads are independent from catalog/intent resolution. Two
+    // workers keep visible rows responsive without creating unbounded metadata
+    // concurrency on slower storage.
+    private val localArtworkExecutor = Executors.newFixedThreadPool(2)
     private var externalAudioSink: EventChannel.EventSink? = null
     private val pendingExternalAudioEvents = ArrayDeque<Map<String, Any?>>()
     private var pendingExternalAudioPermissionRequest: ExternalAudioRequest? = null
     private var audioPermissionRequestInFlight = false
+    private var pendingLocalAudioPermissionResult: MethodChannel.Result? = null
+    private var localAudioPermissionRequestInFlight = false
     private var notificationPermissionRequestInFlight = false
     private var androidPoTokenProvider: AndroidPoTokenProvider? = null
 
@@ -129,6 +135,19 @@ class MainActivity : AudioServiceActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setKeepScreenOn" -> setKeepScreenOn(call, result)
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            LOCAL_AUDIO_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "permissionStatus" -> result.success(localAudioPermissionStatus())
+                "requestPermission" -> requestLocalAudioPermission(result)
+                "queryTracks" -> queryLocalAudioTracks(result)
+                "loadArtwork" -> loadLocalAudioArtwork(call, result)
                 else -> result.notImplemented()
             }
         }
@@ -193,11 +212,19 @@ class MainActivity : AudioServiceActivity() {
                         permissionDenied = !granted,
                     )
                 }
+                completePendingLocalAudioPermission()
+                requestNotificationPermissionIfNeeded()
+            }
+            LOCAL_AUDIO_PERMISSION_REQUEST -> {
+                localAudioPermissionRequestInFlight = false
+                completePendingLocalAudioPermission()
+                requestExternalAudioPermissionIfNeeded()
                 requestNotificationPermissionIfNeeded()
             }
             NOTIFICATION_PERMISSION_REQUEST -> {
                 notificationPermissionRequestInFlight = false
                 requestExternalAudioPermissionIfNeeded()
+                requestLocalAudioPermissionIfNeeded()
             }
         }
     }
@@ -221,6 +248,13 @@ class MainActivity : AudioServiceActivity() {
             runCatching { YoutubeDL.getInstance().destroyProcessById(it) }
         }
         externalAudioExecutor.shutdownNow()
+        localArtworkExecutor.shutdownNow()
+        pendingLocalAudioPermissionResult?.error(
+            "activity_destroyed",
+            "The Android activity was closed before audio permission completed.",
+            null,
+        )
+        pendingLocalAudioPermissionResult = null
         super.onDestroy()
     }
 
@@ -1545,7 +1579,10 @@ class MainActivity : AudioServiceActivity() {
             requestNotificationPermissionIfNeeded()
             return
         }
-        if (audioPermissionRequestInFlight || notificationPermissionRequestInFlight) {
+        if (audioPermissionRequestInFlight ||
+            localAudioPermissionRequestInFlight ||
+            notificationPermissionRequestInFlight
+        ) {
             return
         }
         audioPermissionRequestInFlight = true
@@ -1567,6 +1604,115 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    private fun localAudioPermissionStatus(): String {
+        return if (hasAudioLibraryPermission()) "granted" else "denied"
+    }
+
+    private fun requestLocalAudioPermission(result: MethodChannel.Result) {
+        if (hasAudioLibraryPermission()) {
+            result.success("granted")
+            return
+        }
+        if (pendingLocalAudioPermissionResult != null) {
+            result.error(
+                "permission_request_busy",
+                "An audio permission request is already pending.",
+                null,
+            )
+            return
+        }
+        pendingLocalAudioPermissionResult = result
+        requestLocalAudioPermissionIfNeeded()
+    }
+
+    private fun requestLocalAudioPermissionIfNeeded() {
+        if (pendingLocalAudioPermissionResult == null) {
+            return
+        }
+        if (hasAudioLibraryPermission()) {
+            completePendingLocalAudioPermission()
+            return
+        }
+        if (localAudioPermissionRequestInFlight ||
+            audioPermissionRequestInFlight ||
+            notificationPermissionRequestInFlight
+        ) {
+            return
+        }
+        localAudioPermissionRequestInFlight = true
+        requestPermissions(
+            arrayOf(audioLibraryPermission()),
+            LOCAL_AUDIO_PERMISSION_REQUEST,
+        )
+    }
+
+    private fun completePendingLocalAudioPermission() {
+        val result = pendingLocalAudioPermissionResult ?: return
+        pendingLocalAudioPermissionResult = null
+        result.success(localAudioPermissionStatus())
+    }
+
+    private fun queryLocalAudioTracks(result: MethodChannel.Result) {
+        if (!hasAudioLibraryPermission()) {
+            result.error(
+                "audio_permission_required",
+                "Audio library permission is required.",
+                null,
+            )
+            return
+        }
+        externalAudioExecutor.execute {
+            try {
+                val tracks = externalAudioHandler.queryLibrary()
+                mainHandler.post { result.success(tracks) }
+            } catch (error: Throwable) {
+                Log.e(EXTERNAL_AUDIO_TAG, "Could not query the local audio catalog", error)
+                mainHandler.post {
+                    result.error(
+                        "local_audio_query_failed",
+                        error.message ?: "Could not query the local audio catalog.",
+                        null,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun loadLocalAudioArtwork(call: MethodCall, result: MethodChannel.Result) {
+        if (!hasAudioLibraryPermission()) {
+            result.error(
+                "audio_permission_required",
+                "Audio library permission is required.",
+                null,
+            )
+            return
+        }
+        val audioUri = call.argument<String>("audioUri")?.trim()
+        if (audioUri.isNullOrEmpty()) {
+            result.error("invalid_audio_uri", "The audio URI is missing.", null)
+            return
+        }
+        val targetWidth = (call.argument<Number>("targetWidth")?.toInt() ?: 256)
+            .coerceIn(32, 1280)
+        try {
+            localArtworkExecutor.execute {
+                try {
+                    val bytes = externalAudioHandler.loadArtwork(audioUri, targetWidth)
+                    mainHandler.post { result.success(bytes) }
+                } catch (error: Throwable) {
+                    Log.w(EXTERNAL_AUDIO_TAG, "Could not load local audio artwork", error)
+                    mainHandler.post { result.success(null) }
+                }
+            }
+        } catch (error: Throwable) {
+            result.error(
+                "local_artwork_unavailable",
+                error.message ?: "Local artwork is unavailable.",
+                null,
+            )
+        }
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return
@@ -1578,6 +1724,8 @@ class MainActivity : AudioServiceActivity() {
         }
         if (notificationPermissionRequestInFlight ||
             audioPermissionRequestInFlight ||
+            localAudioPermissionRequestInFlight ||
+            pendingLocalAudioPermissionResult != null ||
             pendingExternalAudioPermissionRequest != null
         ) {
             return
@@ -1706,9 +1854,11 @@ class MainActivity : AudioServiceActivity() {
         private const val FILE_EXPORT_CHANNEL = "bstream_music/file_export"
         private const val SCREEN_CHANNEL = "bstream_music/screen"
         private const val EXTERNAL_AUDIO_CHANNEL = "bstream_music/external_audio"
+        private const val LOCAL_AUDIO_CHANNEL = "bstream_music/local_audio"
         private const val NOTIFICATION_PERMISSION_REQUEST = 4010
         private const val FILE_EXPORT_REQUEST = 4011
         private const val EXTERNAL_AUDIO_PERMISSION_REQUEST = 4012
+        private const val LOCAL_AUDIO_PERMISSION_REQUEST = 4013
         private const val MAX_PENDING_EXTERNAL_AUDIO_EVENTS = 8
         private const val DEFAULT_SEARCH_RESULT_LIMIT = 20
         private const val MAX_SEARCH_RESULT_LIMIT = 50

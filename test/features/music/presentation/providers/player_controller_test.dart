@@ -23,6 +23,7 @@ import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -3220,6 +3221,67 @@ void main() {
   });
 
   test(
+    'qualified playback refreshes personalized Home without reloading generic YouTube Home',
+    () async {
+      final player = _FakePlayerService();
+      final repository = _FakeLibraryRepository();
+      var historyBuilds = 0;
+      var personalizedHomeBuilds = 0;
+      var youtubeHomeBuilds = 0;
+      final container = _container(
+        player,
+        repository: repository,
+        extraOverrides: [
+          historyProvider.overrideWith((ref) async {
+            historyBuilds += 1;
+            return const <LocalTrack>[];
+          }),
+          homeRecommendationsProvider.overrideWith(
+            () => _CountingHomeRecommendationsController(
+              () => personalizedHomeBuilds += 1,
+            ),
+          ),
+          youtubeMusicHomeRecommendationsProvider.overrideWith((ref) async {
+            youtubeHomeBuilds += 1;
+            return const <HomeRecommendationSection>[];
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
+      container
+        ..listen(historyProvider, (_, _) {}, fireImmediately: true)
+        ..listen(homeRecommendationsProvider, (_, _) {}, fireImmediately: true)
+        ..listen(
+          youtubeMusicHomeRecommendationsProvider,
+          (_, _) {},
+          fireImmediately: true,
+        );
+
+      await Future.wait([
+        container.read(historyProvider.future),
+        container.read(homeRecommendationsProvider.future),
+        container.read(youtubeMusicHomeRecommendationsProvider.future),
+      ]);
+      expect(historyBuilds, 1);
+      expect(personalizedHomeBuilds, 1);
+      expect(youtubeHomeBuilds, 1);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(_track(1), queue: [_track(1)]);
+
+      await _waitUntil(() => repository.playMarks.length == 1);
+      await _waitUntil(
+        () => historyBuilds == 2 && personalizedHomeBuilds == 2,
+        reason: 'Qualified playback did not refresh history and Home.',
+      );
+
+      expect(youtubeHomeBuilds, 1);
+    },
+  );
+
+  test(
     'a missing local track is purged instead of being sent to the player',
     () async {
       final player = _FakePlayerService();
@@ -4299,6 +4361,7 @@ ProviderContainer _container(
   SettingsController? settingsController,
   RemotePlaybackRetryDelay? retryDelay,
   List<Duration>? desktopSessionRetryBackoff,
+  List<Override> extraOverrides = const [],
 }) {
   final resolvedRepository = repository ?? _FakeLibraryRepository();
   final catalogDatabase = _FakeCatalogDatabase(resolvedRepository);
@@ -4340,6 +4403,7 @@ ProviderContainer _container(
       localTrackFileProbeProvider.overrideWithValue(
         fileProbe ?? (_) async => LocalTrackFileAvailability.present,
       ),
+      ...extraOverrides,
     ],
   );
 }
@@ -5713,5 +5777,18 @@ class _FakePlaybackHistorySink implements PlaybackHistorySink {
         playlistId: write.track.playlistId,
       );
     }
+  }
+}
+
+class _CountingHomeRecommendationsController
+    extends HomeRecommendationsController {
+  _CountingHomeRecommendationsController(this.onBuild);
+
+  final void Function() onBuild;
+
+  @override
+  Future<List<HomeRecommendationSection>> build() async {
+    onBuild();
+    return const <HomeRecommendationSection>[];
   }
 }

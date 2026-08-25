@@ -235,12 +235,14 @@ Future<AudioOnlyStreamInfo> resolvePreferredYoutubeAudioStream({
   bool jsSolverAvailable = false,
   Iterable<YoutubeManifestAttempt>? attempts,
   YoutubeManifestAttemptCallback? onAttempt,
+  AudioResolverContinuationCallback? shouldContinue,
 }) async {
   final failures = <YoutubeManifestFailure>[];
   final orderedAttempts = attempts ?? defaultYoutubeManifestAttempts;
   var rateLimited = false;
 
   for (final attempt in orderedAttempts) {
+    _ensureYoutubeResolutionIsCurrent(shouldContinue);
     if (attempt.requiresJsSolver && !jsSolverAvailable) {
       continue;
     }
@@ -256,12 +258,15 @@ Future<AudioOnlyStreamInfo> resolvePreferredYoutubeAudioStream({
               attempt.requireWatchPage,
             )
           : await loadManifestForAttempt(videoId, attempt);
+      _ensureYoutubeResolutionIsCurrent(shouldContinue);
       final selected = selectPreferredYoutubeAudioStream(
         manifest.audioOnly,
         requireDirectUrl: requireDirectUrl,
       );
       if (selected != null) {
+        _ensureYoutubeResolutionIsCurrent(shouldContinue);
         await validateSelectedStream?.call(selected);
+        _ensureYoutubeResolutionIsCurrent(shouldContinue);
         onAttempt?.call(attempt, stopwatch.elapsed, null);
         return selected;
       }
@@ -287,6 +292,16 @@ Future<AudioOnlyStreamInfo> resolvePreferredYoutubeAudioStream({
   }
 
   throw YoutubeAudioManifestException(List.unmodifiable(failures));
+}
+
+void _ensureYoutubeResolutionIsCurrent(
+  AudioResolverContinuationCallback? shouldContinue,
+) {
+  if (shouldContinue != null && !shouldContinue()) {
+    throw const AudioStreamResolverException(
+      'Audio stream resolution was superseded.',
+    );
+  }
 }
 
 /// Selects a broadly compatible audio-only YouTube stream.

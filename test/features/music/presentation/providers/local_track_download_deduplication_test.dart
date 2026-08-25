@@ -342,7 +342,7 @@ void main() {
       },
     );
 
-    test('stores the catalog thumbnail when primary artwork fails', () async {
+    test('stores catalog artwork before the video thumbnail', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
       final requestedPaths = <String>[];
@@ -377,7 +377,7 @@ void main() {
         _RealHttpOverrides(),
       );
 
-      expect(requestedPaths, ['/primary.jpg', '/catalog.jpg']);
+      expect(requestedPaths, ['/catalog.jpg']);
       expect(result.track.thumbnailUrl, '$origin/catalog.jpg');
       expect(result.track.catalogThumbnailUrl, '$origin/catalog.jpg');
       expect(result.track.thumbnailPath, isNotNull);
@@ -389,6 +389,76 @@ void main() {
         isTrue,
       );
     });
+
+    test(
+      'repairs legacy local artwork from the catalog without downloading audio',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final requestedPaths = <String>[];
+        const sharpArtwork = [0xFF, 0xD8, 0xFF, 0x10, 0x20, 0xFF, 0xD9];
+        server.listen((request) async {
+          requestedPaths.add(request.uri.path);
+          if (request.uri.path == '/catalog.jpg') {
+            request.response.headers.contentType = ContentType('image', 'jpeg');
+            request.response.add(sharpArtwork);
+          } else {
+            request.response.statusCode = HttpStatus.notFound;
+          }
+          await request.response.close();
+        });
+        final origin = 'http://${server.address.address}:${server.port}';
+        final fixture = await _DownloadFixture.create();
+        addTearDown(fixture.dispose);
+        final audioFile = File(p.join(fixture.tempDirectory.path, 'song.m4a'));
+        await audioFile.writeAsBytes(const [1, 2, 3], flush: true);
+        final softArtwork = File(
+          p.join(fixture.tempDirectory.path, 'legacy-soft.jpg'),
+        );
+        await softArtwork.writeAsBytes(const [
+          0xFF,
+          0xD8,
+          0xFF,
+          0xD9,
+        ], flush: true);
+        final legacy = LocalTrack(
+          id: 'legacy-artwork-track',
+          title: 'Legacy artwork song',
+          artist: 'Catalog artist',
+          filePath: audioFile.path,
+          addedAt: DateTime(2025),
+          sourceUrl: 'https://catalog.example/tracks/legacy-artwork',
+          thumbnailUrl: '$origin/video.jpg',
+          catalogThumbnailUrl: '$origin/catalog.jpg',
+          thumbnailPath: softArtwork.path,
+          duration: const Duration(minutes: 3),
+          // Old rows can have this default even after gaining catalog data.
+          metadataSource: TrackMetadataSource.youtube,
+        );
+        fixture.libraryRepository.localTracks.add(legacy);
+
+        final repaired = await HttpOverrides.runWithHttpOverrides(
+          () => fixture.helper.repairStoredArtwork([legacy]),
+          _RealHttpOverrides(),
+        );
+        final updated = fixture.libraryRepository.localTracks.single;
+
+        expect(repaired, 1);
+        expect(requestedPaths, ['/catalog.jpg']);
+        expect(updated.thumbnailUrl, '$origin/catalog.jpg');
+        expect(updated.thumbnailPath, isNot(softArtwork.path));
+        expect(await File(updated.thumbnailPath!).readAsBytes(), sharpArtwork);
+        expect(await audioFile.readAsBytes(), const [1, 2, 3]);
+        expect(fixture.musicRepository.downloadCalls, 0);
+
+        final secondPass = await HttpOverrides.runWithHttpOverrides(
+          () => fixture.helper.repairStoredArtwork([updated]),
+          _RealHttpOverrides(),
+        );
+        expect(secondPass, 0);
+        expect(requestedPaths, ['/catalog.jpg']);
+      },
+    );
 
     test(
       'rolls back newly downloaded audio and artwork when persistence fails',

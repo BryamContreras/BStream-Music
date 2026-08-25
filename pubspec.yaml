@@ -37,6 +37,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^3.4.2
+  flutter_cache_manager: ^3.4.2
   just_audio: ^0.10.5
   path_provider: ^2.1.5
   path: ^1.9.1
@@ -55,6 +56,7 @@ dependencies:
   media_kit_libs_windows_audio: ^1.0.9
   media_kit_libs_linux: ^1.2.1
   media_kit_libs_macos_audio: ^1.1.4
+  audio_metadata_reader: ^1.7.1
   audio_service: ^0.18.18
   audio_service_mpris: ^0.2.1
   smtc_windows: ^1.1.0

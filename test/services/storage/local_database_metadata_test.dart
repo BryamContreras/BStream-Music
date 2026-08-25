@@ -220,6 +220,50 @@ void main() {
     expect(migrated.metadataSource, TrackMetadataSource.youtube);
   });
 
+  test(
+    'rejects external device audio before opening or writing the database',
+    () async {
+      sqfliteFfiInit();
+      final directory = await Directory.systemTemp.createTemp(
+        'bstream-external-persistence-guard-',
+      );
+      final databasePath = p.join(directory.path, 'library.db');
+      final service = _TestLocalDatabaseService(databasePath);
+      addTearDown(() async {
+        await service.close();
+        if (await directory.exists()) {
+          await directory.delete(recursive: true);
+        }
+      });
+
+      final externalTrack = LocalTrack(
+        id: 'external:content://media/external/audio/media/42',
+        title: 'Device song',
+        artist: 'Device artist',
+        album: 'Device album',
+        filePath: 'content://media/external/audio/media/42',
+        duration: const Duration(minutes: 3),
+        addedAt: DateTime.utc(2026, 8, 25),
+        isExternal: true,
+      );
+
+      await expectLater(
+        service.saveLocalTrack(externalTrack),
+        throwsA(
+          isA<ArgumentError>()
+              .having((error) => error.name, 'name', 'track')
+              .having(
+                (error) => error.message,
+                'message',
+                contains('cannot be persisted in the BStream library'),
+              ),
+        ),
+      );
+      expect(await File(databasePath).exists(), isFalse);
+      expect(await service.getLocalTracks(), isEmpty);
+    },
+  );
+
   test('rewrites and restores only the exact media rows affected', () async {
     sqfliteFfiInit();
     final directory = await Directory.systemTemp.createTemp(

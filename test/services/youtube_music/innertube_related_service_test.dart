@@ -101,6 +101,7 @@ void main() {
       ]);
       expect(page.songs.first.artistBrowseIds, ['UCseedartist1']);
       expect(page.songs.first.album, 'Seed album');
+      expect(page.songs.first.albumBrowseId, 'MPREalbumlink1');
       expect(page.songs.first.duration, const Duration(minutes: 3, seconds: 5));
       expect(
         page.songs.last.duration,
@@ -109,6 +110,25 @@ void main() {
       expect(page.continuation, 'NEXT_TOKEN');
       expect(page.relatedBrowseId, 'MPTRrelated001');
       expect(page.automixPlaylistId, 'RDAMVMseed0000001');
+    });
+
+    test('ignores a non-album browse ID in song metadata', () {
+      final page = parser.parse(
+        _nextPayload(
+          songs: [
+            _playlistPanelSong(
+              videoId: 'seed0000001',
+              title: 'Seed',
+              artist: 'Seed artist',
+              album: 'Seed album',
+              albumBrowseId: 'VLnot-an-album',
+            ),
+          ],
+        ),
+      );
+
+      expect(page.songs.single.album, 'Seed album');
+      expect(page.songs.single.albumBrowseId, isNull);
     });
 
     test('supports playlistPanelContinuation and defensive roots', () {
@@ -272,6 +292,32 @@ void main() {
       expect(transport.posts.single.body['playlistId'], 'RDAMVMseed0000001');
       expect(transport.posts.single.body['isAudioOnly'], isTrue);
       expect(transport.posts.single.body['params'], 'wAEB');
+    });
+
+    test('artist playlist queue can start without a video seed', () async {
+      transport.postResponses.add(
+        _okJson(
+          _nextPayload(
+            songs: [
+              _playlistPanelSong(
+                videoId: 'artist00001',
+                title: 'Artist song',
+                artist: 'Artist',
+              ),
+            ],
+          ),
+        ),
+      );
+      final service = createService();
+
+      final page = await service.getPlaylistNext('RDAOartistPlay123');
+
+      expect(page.songs.single.videoId, 'artist00001');
+      expect(transport.posts, hasLength(1));
+      expect(transport.posts.single.body['playlistId'], 'RDAOartistPlay123');
+      expect(transport.posts.single.body, isNot(contains('videoId')));
+      expect(transport.posts.single.body['isAudioOnly'], isTrue);
+      expect(transport.posts.single.body, isNot(contains('params')));
     });
 
     test(
@@ -598,6 +644,7 @@ Map<String, Object> _playlistPanelSong({
   required String artist,
   String? artistBrowseId,
   String? album,
+  String albumBrowseId = 'MPREalbumlink1',
   String? duration,
 }) {
   return {
@@ -620,7 +667,7 @@ Map<String, Object> _playlistPanelSong({
             _browseRun(
               album,
               pageType: 'MUSIC_PAGE_TYPE_ALBUM',
-              browseId: 'MPREalbumlink1',
+              browseId: albumBrowseId,
             ),
           ],
         ],

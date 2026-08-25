@@ -1,5 +1,43 @@
 import 'dart:io';
 
+const deviceAudioArtworkScheme = 'bstream-local-artwork';
+
+/// Creates a lightweight artwork reference for one device audio URI.
+///
+/// The reference does not contain or extract the embedded image. Android
+/// resolves it only when an artwork widget becomes visible, keeping the local
+/// catalog scan independent from the number and size of embedded covers.
+String? deviceAudioArtworkSourceForUri(String? audioSource) {
+  final normalized = audioSource?.trim();
+  if (normalized == null || normalized.isEmpty) {
+    return null;
+  }
+  return Uri(
+    scheme: deviceAudioArtworkScheme,
+    host: 'audio',
+    queryParameters: <String, String>{'uri': normalized},
+  ).toString();
+}
+
+/// Returns the original device audio URI from an embedded-artwork reference.
+String? deviceAudioUriFromArtworkSource(String? source) {
+  final normalized = source?.trim();
+  if (normalized == null || normalized.isEmpty) {
+    return null;
+  }
+  final uri = Uri.tryParse(normalized);
+  if (uri == null ||
+      uri.scheme != deviceAudioArtworkScheme ||
+      uri.host != 'audio') {
+    return null;
+  }
+  final audioUri = uri.queryParameters['uri']?.trim();
+  return audioUri == null || audioUri.isEmpty ? null : audioUri;
+}
+
+bool isDeviceAudioArtworkSource(String? source) =>
+    deviceAudioUriFromArtworkSource(source) != null;
+
 bool isNetworkImageSource(String? source) {
   final normalized = source?.trim();
   if (normalized == null || normalized.isEmpty) {
@@ -64,6 +102,101 @@ List<String> youtubeThumbnailCandidates(String? source) {
     normalized,
   ];
   return candidates.toSet().toList(growable: false);
+}
+
+/// Returns display/download candidates ordered from the sharpest known
+/// rendition to the original source.
+///
+/// YouTube Music catalog artwork is commonly returned by Google's image CDN
+/// with a small card-sized resize suffix. That size is fine in a search row,
+/// but becomes visibly soft when a downloaded track opens in the full player.
+/// Request a bounded square rendition while preserving the original URL as a
+/// fallback in case a particular CDN resource does not support resizing.
+List<String> artworkSourceCandidates(String? source) {
+  final normalized = source?.trim();
+  if (normalized == null || normalized.isEmpty) {
+    return const [];
+  }
+  if (!isNetworkImageSource(normalized)) {
+    return [normalized];
+  }
+
+  if (youtubeVideoIdFromThumbnailSource(normalized) != null) {
+    return youtubeThumbnailCandidates(normalized);
+  }
+
+  final highResolution = highResolutionGoogleArtworkSource(normalized);
+  if (highResolution == null || highResolution == normalized) {
+    return [normalized];
+  }
+  return [highResolution, normalized];
+}
+
+/// Upgrades a Google/YouTube Music image CDN URL to the largest size decoded
+/// by the app's artwork widgets. Non-CDN artwork is returned unchanged.
+String? highResolutionGoogleArtworkSource(String? source) {
+  final normalized = source?.trim();
+  if (normalized == null || normalized.isEmpty) {
+    return null;
+  }
+  final uri = Uri.tryParse(normalized);
+  if (uri == null || !isNetworkImageSource(normalized)) {
+    return normalized;
+  }
+
+  final host = uri.host.toLowerCase();
+  if (host != 'lh3.googleusercontent.com' &&
+      host != 'yt3.googleusercontent.com' &&
+      host != 'yt3.ggpht.com') {
+    return normalized;
+  }
+
+  const rendition = '=w1280-h1280-l90-rj';
+  final resizedSuffix = RegExp(r'=(?:w\d+-h\d+|s\d+)(?:-[A-Za-z0-9]+)*$');
+  final path = resizedSuffix.hasMatch(uri.path)
+      ? uri.path.replaceFirst(resizedSuffix, rendition)
+      : '${uri.path}$rendition';
+  return uri.replace(path: path).toString();
+}
+
+/// Requests a rendition close to the decoded size used by a widget.
+///
+/// Google image URLs embedded in YouTube Music frequently point at a 120 px
+/// card rendition, while other flows upgrade every image to 1280 px. Both are
+/// poor defaults for a scrolling list. A few stable buckets keep cache reuse
+/// high while avoiding oversized transfers and soft upscaling.
+String? sizedGoogleArtworkSource(String? source, int requestedWidth) {
+  final normalized = source?.trim();
+  if (normalized == null || normalized.isEmpty || requestedWidth <= 0) {
+    return normalized;
+  }
+  final uri = Uri.tryParse(normalized);
+  if (uri == null || !isNetworkImageSource(normalized)) {
+    return normalized;
+  }
+
+  final host = uri.host.toLowerCase();
+  if (host != 'lh3.googleusercontent.com' &&
+      host != 'yt3.googleusercontent.com' &&
+      host != 'yt3.ggpht.com') {
+    return normalized;
+  }
+
+  final target = switch (requestedWidth) {
+    <= 128 => 128,
+    <= 256 => 256,
+    <= 384 => 384,
+    <= 640 => 640,
+    _ => 1280,
+  };
+  final resizedSuffix = RegExp(r'=(?:w\d+-h\d+|s\d+)((?:-[A-Za-z0-9]+)*)$');
+  final match = resizedSuffix.firstMatch(uri.path);
+  final modifiers = match?.group(1);
+  final suffix = '=w$target-h$target${modifiers ?? '-l90-rj'}';
+  final path = match == null
+      ? '${uri.path}$suffix'
+      : uri.path.replaceRange(match.start, match.end, suffix);
+  return uri.replace(path: path).toString();
 }
 
 String? youtubeVideoIdFromThumbnailSource(String? source) {

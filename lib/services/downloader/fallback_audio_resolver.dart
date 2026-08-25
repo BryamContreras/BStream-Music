@@ -42,7 +42,10 @@ class FallbackAudioResolver
       _ensureActive(shouldContinue);
       final resolver = _resolvers[index];
       try {
-        final result = await resolver.resolve(track);
+        final result = resolver is ContinuationAwareAudioStreamResolver
+            ? await (resolver as ContinuationAwareAudioStreamResolver)
+                  .resolveWhileCurrent(track, shouldContinue: shouldContinue)
+            : await resolver.resolve(track);
         _ensureActive(shouldContinue);
         if (result.isUsable) {
           return result;

@@ -14,6 +14,7 @@ TrackInfo trackInfoFromInnerTubeSong(InnerTubeSong song) {
     artists: song.artists,
     artistBrowseIds: song.artistBrowseIds,
     album: song.album,
+    albumBrowseId: song.albumBrowseId,
     duration: song.duration,
     // The catalog shelf commonly exposes only tiny artwork. Prefer the stable
     // video thumbnail without invoking an extractor during discovery.
@@ -34,6 +35,14 @@ SearchAlbum searchAlbumFromInnerTubeAlbum(InnerTubeAlbum album) {
     type: album.type,
     thumbnailUrl: album.thumbnailUrl,
     playlistId: album.playlistId,
+  );
+}
+
+SearchArtist searchArtistFromInnerTubeArtist(InnerTubeArtist artist) {
+  return SearchArtist(
+    browseId: artist.browseId,
+    name: artist.name,
+    thumbnailUrl: artist.thumbnailUrl,
   );
 }
 
@@ -122,6 +131,13 @@ class RemoteMusicDataSource {
             normalizedQuery,
           )).map(searchAlbumFromInnerTubeAlbum).toList(growable: false),
         ),
+        SearchCategory.artists => SearchPage(
+          category: category,
+          backend: SearchBackend.innerTube,
+          artists: (await _artistSearch(musicSearch).searchArtists(
+            normalizedQuery,
+          )).map(searchArtistFromInnerTubeArtist).toList(growable: false),
+        ),
       };
     } catch (error) {
       if (!_isExpectedInnerTubeFailure(error)) {
@@ -157,6 +173,15 @@ class RemoteMusicDataSource {
     }
     throw UnsupportedError(
       'The configured YouTube Music service cannot search this category.',
+    );
+  }
+
+  YouTubeMusicArtistSearch _artistSearch(YouTubeMusicSearch search) {
+    if (search is YouTubeMusicArtistSearch) {
+      return search as YouTubeMusicArtistSearch;
+    }
+    throw UnsupportedError(
+      'The configured YouTube Music service cannot search artists.',
     );
   }
 

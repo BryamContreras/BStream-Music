@@ -273,6 +273,55 @@ class YouTubeMusicAccountParser {
     return _continuationTokensFromCollections(legacy);
   }
 
+  /// Parses only cards owned by the authenticated subscriptions collection.
+  /// Song bylines and unrelated carousel renderers are intentionally ignored.
+  List<RemoteSubscribedArtist> parseSubscribedArtists(Object? root) {
+    final artists = <RemoteSubscribedArtist>[];
+    final seen = <String>{};
+    final containers = _subscribedArtistContainers(root);
+    final collections = containers.isNotEmpty
+        ? containers
+              .expand(_subscribedArtistCollections)
+              .toList(growable: false)
+        : _uniqueLegacyRendererCollection(
+            root,
+            _subscribedArtistRendererNames,
+            _isVerifiableSubscribedArtist,
+          );
+    for (final renderer in _directRenderers(
+      collections,
+      _subscribedArtistRendererNames,
+    )) {
+      final browseId = _artistBrowseId(renderer);
+      final name = _artistTitle(renderer);
+      if (browseId == null || name == null) continue;
+      final channelId = _firstChannelId(renderer);
+      final artist = RemoteSubscribedArtist(
+        browseId: browseId,
+        name: name,
+        channelId: channelId?.startsWith('UC') == true ? channelId : null,
+        thumbnailUrl: _thumbnailUrl(renderer),
+      );
+      if (seen.add(artist.identity)) {
+        artists.add(artist);
+      }
+    }
+    return List<RemoteSubscribedArtist>.unmodifiable(artists);
+  }
+
+  List<String> parseSubscribedArtistContinuationTokens(Object? root) {
+    final containers = _subscribedArtistContainers(root);
+    if (containers.isNotEmpty) {
+      return _continuationTokensFromContainers(containers);
+    }
+    final legacy = _uniqueLegacyRendererCollection(
+      root,
+      _subscribedArtistRendererNames,
+      _isVerifiableSubscribedArtist,
+    );
+    return _continuationTokensFromCollections(legacy);
+  }
+
   /// Playlist-detail continuations are scoped to the playlist shelf. Tokens
   /// from related shelves, menus or other response branches are ignored.
   List<String> parsePlaylistEntryContinuationTokens(Object? root) {
@@ -347,6 +396,11 @@ const List<String> _playlistEntryRendererNames = <String>[
   'playlistPanelVideoRenderer',
 ];
 
+const List<String> _subscribedArtistRendererNames = <String>[
+  'musicTwoRowItemRenderer',
+  'musicResponsiveListItemRenderer',
+];
+
 List<Map<String, Object?>> _playlistEntryContainers(Object? root) {
   final rootMap = _asMap(root);
   final continuationContents = _asMap(rootMap?['continuationContents']);
@@ -398,6 +452,41 @@ List<Map<String, Object?>> _savedPlaylistContainers(Object? root) {
   return containers;
 }
 
+List<Map<String, Object?>> _subscribedArtistContainers(Object? root) {
+  final rootMap = _asMap(root);
+  final continuationContents = _asMap(rootMap?['continuationContents']);
+  if (continuationContents != null) {
+    final candidates = <Map<String, Object?>>[];
+    for (final key in const <String>[
+      'gridContinuation',
+      'musicShelfContinuation',
+      'musicCarouselShelfContinuation',
+    ]) {
+      final container = _asMap(continuationContents[key]);
+      if (container != null) candidates.add(container);
+    }
+    final artistBranches = candidates
+        .where(_subscribedArtistContainerHasVerifiableCard)
+        .toList(growable: false);
+    return artistBranches.isNotEmpty ? artistBranches : candidates;
+  }
+
+  return <Map<String, Object?>>[
+    ..._renderers(root, 'gridRenderer'),
+    ..._renderers(root, 'musicShelfRenderer'),
+    ..._renderers(root, 'musicCarouselShelfRenderer'),
+  ].where(_subscribedArtistContainerHasVerifiableCard).toList(growable: false);
+}
+
+bool _subscribedArtistContainerHasVerifiableCard(
+  Map<String, Object?> container,
+) {
+  return _directRenderers(
+    _subscribedArtistCollections(container),
+    _subscribedArtistRendererNames,
+  ).any(_isVerifiableSubscribedArtist);
+}
+
 bool _savedPlaylistContainerHasVerifiableCard(Map<String, Object?> container) {
   final collections = _savedPlaylistCollections(container);
   return _directRenderers(
@@ -423,6 +512,15 @@ Iterable<_RendererCollection> _savedPlaylistCollections(
     if (values is List) {
       yield values;
     }
+  }
+}
+
+Iterable<_RendererCollection> _subscribedArtistCollections(
+  Map<String, Object?> container,
+) sync* {
+  for (final key in const <String>['items', 'contents']) {
+    final values = container[key];
+    if (values is List) yield values;
   }
 }
 
@@ -493,6 +591,10 @@ bool _isVerifiablePlaylistEntry(Map<String, Object?> renderer) {
           null;
 }
 
+bool _isVerifiableSubscribedArtist(Map<String, Object?> renderer) {
+  return _artistBrowseId(renderer) != null && _artistTitle(renderer) != null;
+}
+
 List<String> _continuationTokensFromContainers(
   Iterable<Map<String, Object?>> containers,
 ) {
@@ -502,6 +604,7 @@ List<String> _continuationTokensFromContainers(
     for (final collection in <_RendererCollection>[
       ..._playlistEntryCollections(container),
       ..._savedPlaylistCollections(container),
+      ..._subscribedArtistCollections(container),
     ]) {
       for (final value in collection) {
         final item = _asMap(value);
@@ -755,6 +858,45 @@ String? _playlistTitle(Map<String, Object?> renderer) {
   if (direct != null) {
     return direct;
   }
+  final flexColumns = renderer['flexColumns'];
+  if (flexColumns is List && flexColumns.isNotEmpty) {
+    return _text(flexColumns.first);
+  }
+  return null;
+}
+
+String? _artistBrowseId(Map<String, Object?> renderer) {
+  final directNavigation = _asMap(renderer['navigationEndpoint']);
+  final directBrowse = _asMap(directNavigation?['browseEndpoint']);
+  final directId = _nonEmptyString(directBrowse?['browseId']);
+  final directPageType = _firstStringForKeys(directBrowse, const <String>[
+    'pageType',
+  ])?.toUpperCase();
+  if (directId != null &&
+      (directPageType?.contains('ARTIST') == true ||
+          directId.startsWith('UC') ||
+          directId.startsWith('MPLA'))) {
+    return directId;
+  }
+  for (final map in _walkMaps(renderer)) {
+    final browse = _asMap(map['browseEndpoint']);
+    final browseId = _nonEmptyString(browse?['browseId']);
+    if (browseId == null) continue;
+    final pageType = _firstStringForKeys(browse, const <String>[
+      'pageType',
+    ])?.toUpperCase();
+    if (pageType?.contains('ARTIST') == true ||
+        browseId.startsWith('UC') ||
+        browseId.startsWith('MPLA')) {
+      return browseId;
+    }
+  }
+  return null;
+}
+
+String? _artistTitle(Map<String, Object?> renderer) {
+  final direct = _firstText(renderer, const <String>['title', 'headline']);
+  if (direct != null) return direct;
   final flexColumns = renderer['flexColumns'];
   if (flexColumns is List && flexColumns.isNotEmpty) {
     return _text(flexColumns.first);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bstream_music/core/errors/app_exception.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
@@ -232,6 +234,7 @@ void main() {
         artist: 'Lady Gaga, Bruno Mars',
         artists: ['Lady Gaga', 'Bruno Mars'],
         album: 'MAYHEM',
+        albumBrowseId: 'MPREb_album_mayhem',
         duration: Duration(minutes: 4, seconds: 12),
         thumbnailUrl: 'https://music.example/canonical.jpg',
         url: 'https://www.youtube.com/watch?v=DlFXDl_ROAM',
@@ -247,6 +250,7 @@ void main() {
       expect(resolved.artist, track.artist);
       expect(resolved.artists, track.artists);
       expect(resolved.album, track.album);
+      expect(resolved.albumBrowseId, track.albumBrowseId);
       expect(resolved.duration, track.duration);
       expect(resolved.thumbnailUrl, track.thumbnailUrl);
       expect(resolved.metadataSource, TrackMetadataSource.youtubeMusic);
@@ -325,6 +329,78 @@ void main() {
     expect(cached.artists, updated.artists);
     expect(cached.album, updated.album);
     expect(cached.streamUrl, 'https://media.example/audio.m4a');
+  });
+
+  test('equivalent YouTube URLs share the same in-flight resolution', () async {
+    final resolver = _FakeAudioResolver(includeStream: true);
+    final container = ProviderContainer(
+      overrides: [audioStreamResolverProvider.overrideWithValue(resolver)],
+    );
+    addTearDown(container.dispose);
+    final controller = container.read(remoteTrackResolverProvider);
+    const shortUrl = TrackInfo(
+      id: 'abcdefghijk',
+      title: 'Track',
+      artist: 'Artist',
+      url: 'https://youtu.be/abcdefghijk',
+    );
+    const watchUrl = TrackInfo(
+      id: 'abcdefghijk',
+      title: 'Track',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+    );
+
+    await controller.resolve(shortUrl);
+    await controller.resolve(watchUrl);
+
+    expect(resolver.resolveCalls, 1);
+  });
+
+  test('an obsolete failure cannot evict a newer forced resolution', () async {
+    final resolver = _ControllableAudioResolver();
+    final container = ProviderContainer(
+      overrides: [audioStreamResolverProvider.overrideWithValue(resolver)],
+    );
+    addTearDown(container.dispose);
+    final controller = container.read(remoteTrackResolverProvider);
+    const track = TrackInfo(
+      id: 'abcdefghijk',
+      title: 'Track',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+    );
+
+    final first = controller.resolve(
+      track,
+      forceRefresh: true,
+      allowStaleStreamFallback: false,
+    );
+    await resolver.waitForCalls(1);
+    final second = controller.resolve(
+      track,
+      forceRefresh: true,
+      allowStaleStreamFallback: false,
+    );
+    await resolver.waitForCalls(2);
+    expect(resolver.resolveCalls, 2);
+
+    final firstFailure = expectLater(first, throwsA(isA<StateError>()));
+    resolver.requests.first.completeError(StateError('obsolete failure'));
+    await firstFailure;
+
+    final third = controller.resolve(track);
+    expect(resolver.resolveCalls, 2);
+    resolver.requests[1].complete(
+      const AudioStreamResolution(
+        source: AudioStreamSource.youtubeExplode,
+        streamUrl: 'https://media.example/current.m4a',
+      ),
+    );
+
+    expect((await second).streamUrl, 'https://media.example/current.m4a');
+    expect((await third).streamUrl, 'https://media.example/current.m4a');
+    expect(resolver.resolveCalls, 2);
   });
 
   test('retries with the fallback when the primary resolver fails', () async {
@@ -439,6 +515,28 @@ class _ManagedFileAudioResolver implements AudioStreamResolver {
       formatId: '140',
       codec: 'mp4a.40.2',
     );
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
+class _ControllableAudioResolver implements AudioStreamResolver {
+  final List<Completer<AudioStreamResolution>> requests = [];
+
+  int get resolveCalls => requests.length;
+
+  Future<void> waitForCalls(int count) async {
+    while (requests.length < count) {
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
+  @override
+  Future<AudioStreamResolution> resolve(TrackInfo track) {
+    final request = Completer<AudioStreamResolution>();
+    requests.add(request);
+    return request.future;
   }
 
   @override

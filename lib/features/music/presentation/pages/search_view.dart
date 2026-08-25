@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -11,12 +14,14 @@ import '../widgets/scrolled_under_tab_frame.dart';
 import '../widgets/now_playing_equalizer.dart';
 import '../widgets/source_image.dart';
 import '../widgets/track_result_tile.dart';
+import 'artist_profile_page.dart';
 import 'remote_collection_detail_page.dart';
 
 class SearchView extends ConsumerWidget {
   const SearchView({
     required this.onOpenPlayer,
     this.onAddToPlaylist,
+    this.bottomContentPadding = 0,
     super.key,
   });
 
@@ -24,6 +29,7 @@ class SearchView extends ConsumerWidget {
 
   final VoidCallback onOpenPlayer;
   final AddRemoteTracksToPlaylist? onAddToPlaylist;
+  final double bottomContentPadding;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -57,69 +63,74 @@ class SearchView extends ConsumerWidget {
               ),
             )
           : null,
-      body: CustomScrollView(
-        key: const ValueKey('search-results-scroll'),
-        slivers: [
-          SliverToBoxAdapter(
-            child: AnimatedPadding(
-              key: const ValueKey('search-input-section-padding'),
-              duration: headingTransitionDuration,
-              curve: Curves.easeOutCubic,
-              padding: EdgeInsets.fromLTRB(0, showHeading ? 0 : 20, 0, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+      scrollKey: const ValueKey('search-results-scroll'),
+      scrollCacheExtent: const ScrollCacheExtent.pixels(800),
+      slivers: [
+        SliverToBoxAdapter(
+          child: AnimatedPadding(
+            key: const ValueKey('search-input-section-padding'),
+            duration: headingTransitionDuration,
+            curve: Curves.easeOutCubic,
+            padding: EdgeInsets.fromLTRB(0, showHeading ? 0 : 20, 0, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  key: const ValueKey('search-input-container'),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: SearchInput(
+                    hintText: strings.searchHint,
+                    tooltip: strings.search,
+                    clearTooltip: strings.clearSearch,
+                    onSubmitted: (query) => ref
+                        .read(searchControllerProvider.notifier)
+                        .submit(query),
+                    onCleared: () =>
+                        ref.read(searchControllerProvider.notifier).clear(),
+                  ),
+                ),
+                if (searchState.hasQuery) ...[
+                  const SizedBox(height: 10),
                   Padding(
-                    key: const ValueKey('search-input-container'),
                     padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: SearchInput(
-                      hintText: strings.searchHint,
-                      tooltip: strings.search,
-                      clearTooltip: strings.clearSearch,
-                      onSubmitted: (query) => ref
+                    child: _SearchCategoryTabs(
+                      categories: searchState.availableCategories,
+                      selectedCategory: searchState.selectedCategory,
+                      strings: strings,
+                      onSelected: (category) => ref
                           .read(searchControllerProvider.notifier)
-                          .submit(query),
-                      onCleared: () =>
-                          ref.read(searchControllerProvider.notifier).clear(),
+                          .selectCategory(category),
                     ),
                   ),
-                  if (searchState.hasQuery) ...[
-                    const SizedBox(height: 10),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: _SearchCategoryTabs(
-                        categories: searchState.availableCategories,
-                        selectedCategory: searchState.selectedCategory,
-                        strings: strings,
-                        onSelected: (category) => ref
-                            .read(searchControllerProvider.notifier)
-                            .selectCategory(category),
-                      ),
-                    ),
-                  ],
-                  if (searchState.fallbackOnly) ...[
-                    const SizedBox(height: 10),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: _FallbackNotice(
-                        message: searchState.primaryError == null
-                            ? strings.searchYtDlpVideoOnly
-                            : strings.searchInnerTubeFallback,
-                      ),
-                    ),
-                  ],
                 ],
-              ),
+                if (searchState.fallbackOnly) ...[
+                  const SizedBox(height: 10),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: _FallbackNotice(
+                      message: searchState.primaryError == null
+                          ? strings.searchYtDlpVideoOnly
+                          : strings.searchInnerTubeFallback,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-          _SearchResultsSliver(
-            results: results,
-            strings: strings,
-            onOpenPlayer: onOpenPlayer,
-            onAddToPlaylist: onAddToPlaylist,
+        ),
+        _SearchResultsSliver(
+          results: results,
+          strings: strings,
+          onOpenPlayer: onOpenPlayer,
+          onAddToPlaylist: onAddToPlaylist,
+        ),
+        SliverToBoxAdapter(
+          child: SizedBox(
+            key: const ValueKey('search-scroll-bottom-reserve'),
+            height: bottomContentPadding + 16,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -177,6 +188,7 @@ class _SearchResultsSliver extends StatelessWidget {
     SearchCategory.songs => Icons.music_note_rounded,
     SearchCategory.videos => Icons.smart_display_rounded,
     SearchCategory.albums => Icons.album_rounded,
+    SearchCategory.artists => Icons.person_rounded,
   };
 
   static String _emptyMessage(AppStrings strings, SearchCategory category) =>
@@ -184,6 +196,7 @@ class _SearchResultsSliver extends StatelessWidget {
         SearchCategory.songs => strings.searchSongsEmpty,
         SearchCategory.videos => strings.searchVideosEmpty,
         SearchCategory.albums => strings.searchAlbumsEmpty,
+        SearchCategory.artists => strings.searchArtistsEmpty,
       };
 }
 
@@ -333,6 +346,14 @@ class _SearchCategoryResultsBody extends StatelessWidget {
             if (index < page.albums.length - 1) const SizedBox(height: 6),
           ],
         ],
+      );
+    }
+
+    if (state.selectedCategory == SearchCategory.artists) {
+      return _ArtistResultsGrid(
+        artists: page.artists,
+        strings: strings,
+        onOpenPlayer: onOpenPlayer,
       );
     }
 
@@ -512,6 +533,159 @@ class _SearchCategoryTab extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ArtistResultsGrid extends StatelessWidget {
+  const _ArtistResultsGrid({
+    required this.artists,
+    required this.strings,
+    required this.onOpenPlayer,
+  });
+
+  final List<SearchArtist> artists;
+  final AppStrings strings;
+  final VoidCallback onOpenPlayer;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 10.0;
+        const targetCardWidth = 126.0;
+        final availableWidth = constraints.maxWidth;
+        final columnCount =
+            ((availableWidth + spacing) / (targetCardWidth + spacing))
+                .floor()
+                .clamp(2, 8);
+        final cardWidth =
+            (availableWidth - spacing * (columnCount - 1)) / columnCount;
+
+        return Wrap(
+          key: const ValueKey('search-artist-results'),
+          spacing: spacing,
+          runSpacing: 12,
+          children: [
+            for (final artist in artists)
+              _ArtistResultCard(
+                key: ValueKey('search-artist-${artist.browseId}'),
+                artist: artist,
+                strings: strings,
+                width: cardWidth,
+                onOpenPlayer: onOpenPlayer,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ArtistResultCard extends ConsumerWidget {
+  const _ArtistResultCard({
+    required this.artist,
+    required this.strings,
+    required this.width,
+    required this.onOpenPlayer,
+    super.key,
+  });
+
+  final SearchArtist artist;
+  final AppStrings strings;
+  final double width;
+  final VoidCallback onOpenPlayer;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = Theme.of(context).colorScheme;
+    final artworkExtent = (width - 16).clamp(76.0, 124.0);
+    final radius = BorderRadius.circular(appCardRadius);
+
+    return SizedBox(
+      width: width,
+      child: Semantics(
+        button: true,
+        label: '${strings.goToArtist}: ${artist.name}',
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: radius,
+          child: InkWell(
+            key: ValueKey('search-artist-open-${artist.browseId}'),
+            borderRadius: radius,
+            onTap: () => _openArtist(context, ref),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: AppColors.cardBorderFor(context),
+                      ),
+                    ),
+                    padding: const EdgeInsets.all(1),
+                    child: ClipOval(
+                      key: ValueKey('search-artist-artwork-${artist.browseId}'),
+                      child: SizedBox.square(
+                        dimension: artworkExtent,
+                        child: SourceImage(
+                          source: artist.thumbnailUrl,
+                          cacheWidth: 384,
+                          fallback: ColoredBox(
+                            color: colors.surfaceContainerHighest,
+                            child: Icon(
+                              Icons.person_rounded,
+                              size: artworkExtent * 0.42,
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    artist.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.contentTitleFor(context),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openArtist(BuildContext context, WidgetRef ref) {
+    final request = (
+      artistBrowseId: artist.browseId,
+      artistName: artist.name,
+      artistThumbnailUrl: artist.thumbnailUrl,
+    );
+    unawaited(
+      ref
+          .read(artistProfileProvider(request).future)
+          .then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+    );
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ArtistProfilePage(
+          artistBrowseId: artist.browseId,
+          artistName: artist.name,
+          artistThumbnailUrl: artist.thumbnailUrl,
+          onOpenPlayer: onOpenPlayer,
         ),
       ),
     );
@@ -741,12 +915,14 @@ String _categoryLabel(AppStrings strings, SearchCategory category) =>
       SearchCategory.songs => strings.searchSongs,
       SearchCategory.videos => strings.searchVideos,
       SearchCategory.albums => strings.searchAlbums,
+      SearchCategory.artists => strings.searchArtists,
     };
 
 IconData _categoryIcon(SearchCategory category) => switch (category) {
   SearchCategory.songs => Icons.music_note_rounded,
   SearchCategory.videos => Icons.smart_display_rounded,
   SearchCategory.albums => Icons.album_rounded,
+  SearchCategory.artists => Icons.person_rounded,
 };
 
 class _SearchEmptyState extends StatelessWidget {

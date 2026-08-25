@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:bstream_music/core/theme/app_colors.dart';
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
@@ -137,6 +138,88 @@ void main() {
     expect(crossfadeDurationFromStoredSeconds(0), defaultCrossfadeDuration);
     expect(crossfadeDurationFromStoredSeconds(16), defaultCrossfadeDuration);
     expect(crossfadeDurationFromStoredSeconds(7), const Duration(seconds: 7));
+  });
+
+  test('mini player mode defaults safely and persists capsule', () async {
+    expect(SurfaceBackgroundMode.fromCode(null), SurfaceBackgroundMode.accent);
+    expect(
+      SurfaceBackgroundMode.fromCode('unknown'),
+      SurfaceBackgroundMode.accent,
+    );
+    expect(
+      SurfaceBackgroundMode.fromCode('transparent'),
+      SurfaceBackgroundMode.transparent,
+    );
+    expect(MiniPlayerMode.fromCode(null), MiniPlayerMode.capsule);
+    expect(MiniPlayerMode.fromCode('unknown'), MiniPlayerMode.capsule);
+    expect(MiniPlayerMode.fromCode('default'), MiniPlayerMode.standard);
+    expect(MiniPlayerMode.fromCode('capsule'), MiniPlayerMode.capsule);
+    expect(
+      MiniPlayerBackgroundMode.fromCode(null),
+      MiniPlayerBackgroundMode.accent,
+    );
+    expect(
+      MiniPlayerBackgroundMode.fromCode('unknown'),
+      MiniPlayerBackgroundMode.accent,
+    );
+    expect(
+      MiniPlayerBackgroundMode.fromCode('artwork'),
+      MiniPlayerBackgroundMode.artwork,
+    );
+    expect(
+      MiniPlayerBackgroundMode.fromCode('transparent'),
+      MiniPlayerBackgroundMode.transparent,
+    );
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(
+          _PersistingCrossfadeSettingsController.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final initial = await container.read(settingsControllerProvider.future);
+    expect(initial.surfaceBackgroundMode, SurfaceBackgroundMode.accent);
+    expect(initial.miniPlayerMode, MiniPlayerMode.capsule);
+    expect(initial.miniPlayerBackgroundMode, MiniPlayerBackgroundMode.accent);
+
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setSurfaceBackgroundMode(SurfaceBackgroundMode.transparent);
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setMiniPlayerMode(MiniPlayerMode.capsule);
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setMiniPlayerBackgroundMode(MiniPlayerBackgroundMode.transparent);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(
+      preferences.getString('settings.surfaceBackgroundMode'),
+      'transparent',
+    );
+    expect(preferences.getString('settings.miniPlayerMode'), 'capsule');
+    expect(
+      preferences.getString('settings.miniPlayerBackgroundMode'),
+      'transparent',
+    );
+    expect(
+      container.read(settingsControllerProvider).value?.surfaceBackgroundMode,
+      SurfaceBackgroundMode.transparent,
+    );
+    expect(
+      container.read(settingsControllerProvider).value?.miniPlayerMode,
+      MiniPlayerMode.capsule,
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value
+          ?.miniPlayerBackgroundMode,
+      MiniPlayerBackgroundMode.transparent,
+    );
   });
 
   test('recommendation history preference defaults on and persists', () async {
@@ -333,6 +416,178 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('appearance selects mini player style and background', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(430, 1000));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+    await tester.pumpAndSettle();
+
+    final selector = find.byKey(const ValueKey('mini-player-mode-selector'));
+    final surfaceBackgroundSelector = find.byKey(
+      const ValueKey('surface-background-selector'),
+    );
+    final backgroundSelector = find.byKey(
+      const ValueKey('mini-player-background-selector'),
+    );
+    expect(selector, findsOneWidget);
+    expect(surfaceBackgroundSelector, findsOneWidget);
+    expect(backgroundSelector, findsOneWidget);
+    expect(find.text('Efectos de superficie'), findsOneWidget);
+    expect(find.text('Mini reproductor'), findsOneWidget);
+    expect(
+      find.descendant(of: selector, matching: find.text('Estilo')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: selector, matching: find.text('Cápsula')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: surfaceBackgroundSelector,
+        matching: find.text('Fondo de las superficies'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: surfaceBackgroundSelector,
+        matching: find.text('Acento'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: backgroundSelector,
+        matching: find.text('Fondo del Mini reproductor'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: backgroundSelector, matching: find.text('Acento')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getTopLeft(selector).dy,
+      greaterThan(tester.getTopLeft(surfaceBackgroundSelector).dy),
+    );
+    expect(
+      tester.getTopLeft(backgroundSelector).dy,
+      greaterThan(tester.getTopLeft(selector).dy),
+    );
+
+    await tester.ensureVisible(surfaceBackgroundSelector);
+    await tester.tap(surfaceBackgroundSelector);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-surface-background-dialog')),
+      findsOneWidget,
+    );
+    expect(find.text('Fondo de las superficies'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('settings-surface-background-option-accent')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('settings-surface-background-option-transparent'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: surfaceBackgroundSelector,
+        matching: find.text('Transparente'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.ensureVisible(selector);
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-dialog')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-option-default')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-icon-default')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-icon-capsule')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('settings-mini-player-option-capsule')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-dialog')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: selector, matching: find.text('Cápsula')),
+      findsOneWidget,
+    );
+
+    await tester.ensureVisible(backgroundSelector);
+    await tester.tap(backgroundSelector);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-background-dialog')),
+      findsOneWidget,
+    );
+    expect(find.text('Fondo del Mini reproductor'), findsWidgets);
+    expect(
+      find.byKey(
+        const ValueKey('settings-mini-player-background-option-accent'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('settings-mini-player-background-option-artwork'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('settings-mini-player-background-option-transparent'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-background-dialog')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: backgroundSelector,
+        matching: find.text('Transparente'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('leaving a settings detail resets only when the tab returns', (
     tester,
@@ -619,6 +874,31 @@ void main() {
     expect(
       find.byKey(const ValueKey('lyrics-animation-preview')),
       findsOneWidget,
+    );
+    final initialActivePreview = tester.widget<Text>(
+      find.byKey(const ValueKey('lyrics-preview-active-line')),
+    );
+    final initialPreviousPreview = tester.widget<Text>(
+      find.byKey(const ValueKey('lyrics-preview-previous-line')),
+    );
+    expect(initialActivePreview.style?.fontSize, 16);
+    expect(initialPreviousPreview.style?.fontSize, 15);
+    expect(
+      initialActivePreview.style!.fontSize! -
+          initialPreviousPreview.style!.fontSize!,
+      1,
+    );
+    final previewAccent = Theme.of(
+      tester.element(find.byKey(const ValueKey('lyrics-preview-active-line'))),
+    ).colorScheme.primary;
+    expect(initialActivePreview.style?.shadows, hasLength(2));
+    expect(
+      initialActivePreview.style?.shadows?[0].color,
+      previewAccent.withValues(alpha: 0.30),
+    );
+    expect(
+      initialActivePreview.style?.shadows?[1].color,
+      previewAccent.withValues(alpha: 0.14),
     );
     expect(
       find.byKey(const ValueKey('lyrics-animation-option-none')),
@@ -907,6 +1187,10 @@ void main() {
     expect(find.byKey(const ValueKey('storage-import-csv')), findsOneWidget);
     expect(find.byKey(const ValueKey('storage-export-backup')), findsOneWidget);
     expect(find.byKey(const ValueKey('storage-export-csv')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('storage-local-music-filters')),
+      findsNothing,
+    );
     expect(find.text('Importar'), findsOneWidget);
     expect(find.text('Exportar'), findsOneWidget);
     expect(
@@ -919,6 +1203,114 @@ void main() {
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets(
+    'storage configures local music filters with a multi-select card',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      _configureView(tester, const Size(430, 1000));
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final navigationController = SettingsNavigationController();
+      addTearDown(navigationController.dispose);
+
+      await tester.pumpWidget(
+        _settingsHarness(navigationController: navigationController),
+      );
+      await tester.pumpAndSettle();
+      final storageSettings = find.byKey(
+        const ValueKey('settings-card-storage'),
+      );
+      await tester.ensureVisible(storageSettings);
+      await tester.pumpAndSettle();
+
+      final filtersCard = find.byKey(
+        const ValueKey('storage-local-music-filters'),
+      );
+      expect(filtersCard, findsOneWidget);
+      expect(
+        find.descendant(
+          of: storageSettings,
+          matching: find.text('Respaldo y Restauración'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(filtersCard).dy,
+        greaterThan(tester.getBottomLeft(storageSettings).dy),
+      );
+      expect(
+        find.descendant(
+          of: filtersCard,
+          matching: find.text('4 filtros activos'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(filtersCard);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('settings-local-music-filters-dialog')),
+        findsOneWidget,
+      );
+      final whatsAppOption = find.byKey(
+        const ValueKey('local-music-filter-whatsapp'),
+      );
+      final shortTrackOption = find.byKey(
+        const ValueKey('local-music-filter-short-tracks'),
+      );
+      final telegramOption = find.byKey(
+        const ValueKey('local-music-filter-telegram'),
+      );
+      final recordingsOption = find.byKey(
+        const ValueKey('local-music-filter-recordings'),
+      );
+      for (final option in [
+        whatsAppOption,
+        telegramOption,
+        recordingsOption,
+        shortTrackOption,
+      ]) {
+        expect(
+          tester
+              .widget<CheckboxListTile>(
+                find.descendant(
+                  of: option,
+                  matching: find.byType(CheckboxListTile),
+                ),
+              )
+              .value,
+          isTrue,
+        );
+      }
+
+      await tester.tap(whatsAppOption);
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('local-music-filters-apply')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: filtersCard,
+          matching: find.text('3 filtros activos'),
+        ),
+        findsOneWidget,
+      );
+      final container = ProviderScope.containerOf(tester.element(filtersCard));
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .requireValue
+            .localMusicFilters,
+        const {
+          LocalMusicFilter.hideTelegramAudio,
+          LocalMusicFilter.hideAudioRecordings,
+          LocalMusicFilter.hideTracksUnder30Seconds,
+        },
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
 
   testWidgets('playback settings and storage fit a 320 px Android phone', (
     tester,
@@ -1540,6 +1932,7 @@ Widget _homeHarness({bool disableAnimations = false}) {
       historyProvider.overrideWith((ref) async => const <LocalTrack>[]),
       libraryTracksProvider.overrideWith((ref) async => const <LocalTrack>[]),
       personalizedHomeFeedSourceProvider.overrideWithValue(null),
+      homeArtistRecommendationSourceProvider.overrideWithValue(null),
       youtubeMusicHomeRecommendationsProvider.overrideWith(
         (ref) async => const <HomeRecommendationSection>[],
       ),
@@ -1621,6 +2014,26 @@ class _FixedSettingsController extends SettingsController {
   }
 
   @override
+  Future<void> setMiniPlayerMode(MiniPlayerMode mode) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(miniPlayerMode: mode));
+  }
+
+  @override
+  Future<void> setSurfaceBackgroundMode(SurfaceBackgroundMode mode) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(surfaceBackgroundMode: mode));
+  }
+
+  @override
+  Future<void> setMiniPlayerBackgroundMode(
+    MiniPlayerBackgroundMode mode,
+  ) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(miniPlayerBackgroundMode: mode));
+  }
+
+  @override
   Future<void> setLyricsAnimationStyle(
     LyricsAnimationStyle lyricsAnimationStyle,
   ) async {
@@ -1637,6 +2050,16 @@ class _FixedSettingsController extends SettingsController {
     final current = await future;
     state = AsyncData(
       current.copyWith(lyricsTextAlignment: lyricsTextAlignment),
+    );
+  }
+
+  @override
+  Future<void> setLocalMusicFilters(Set<LocalMusicFilter> filters) async {
+    final current = await future;
+    state = AsyncData(
+      current.copyWith(
+        localMusicFilters: Set<LocalMusicFilter>.unmodifiable(filters),
+      ),
     );
   }
 

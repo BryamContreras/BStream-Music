@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/widgets/marquee_text.dart';
@@ -12,6 +13,7 @@ import '../../../../services/player/player_service.dart';
 import '../../domain/entities/download_result.dart';
 import '../../domain/entities/track_info.dart';
 import 'gradient_progress_bar.dart';
+import 'glass_popup_menu_button.dart';
 import 'now_playing_equalizer.dart';
 import 'playlist_picker_dialog.dart';
 import 'source_image.dart';
@@ -272,7 +274,7 @@ class _TrackResultMenu extends ConsumerWidget {
     return SizedBox(
       width: buttonWidth,
       height: buttonSize,
-      child: PopupMenuButton<_TrackResultAction>(
+      child: GlassPopupMenuButton<_TrackResultAction>(
         tooltip: strings.moreOptions,
         padding: EdgeInsets.zero,
         iconSize: iconSize,
@@ -355,7 +357,7 @@ class _TrackResultMenu extends ConsumerWidget {
       return;
     }
 
-    final playlistId = await showDialog<String>(
+    final playlistId = await showAppDialog<String>(
       context: context,
       builder: (context) {
         return PlaylistPickerDialog(

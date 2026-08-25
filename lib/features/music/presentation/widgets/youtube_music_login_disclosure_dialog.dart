@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_dialog.dart';
 import '../providers/app_strings.dart';
 import 'youtube_music_auth_strings.dart';
 
@@ -10,7 +11,7 @@ class YouTubeMusicLoginDisclosureDialog extends StatelessWidget {
   final AppStrings? strings;
 
   static Future<bool> show(BuildContext context, {AppStrings? strings}) async {
-    final accepted = await showDialog<bool>(
+    final accepted = await showAppDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => YouTubeMusicLoginDisclosureDialog(strings: strings),
@@ -21,7 +22,7 @@ class YouTubeMusicLoginDisclosureDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = resolveYouTubeMusicAppStrings(context, strings);
-    return AlertDialog(
+    return AppAlertDialog(
       key: const Key('youtube-music-login-disclosure'),
       icon: const Icon(Icons.security_outlined),
       title: Text(text.youtubeMusicUnofficialTitle),

@@ -4,6 +4,19 @@ import 'package:bstream_music/features/music/presentation/providers/app_strings.
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('artist mix labels stay coherent in Spanish and English', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(spanish.artistMix, 'Mix');
+    expect(english.artistMix, 'Mix');
+    expect(
+      spanish.artistMixLoadError,
+      'No se pudo iniciar el mix del artista.',
+    );
+    expect(english.artistMixLoadError, 'The artist mix could not be started.');
+  });
+
   test('first-party Dart sources do not contain UTF-8 mojibake', () {
     final libDirectory = Directory('lib');
     expect(libDirectory.existsSync(), isTrue);
@@ -79,6 +92,122 @@ void main() {
     expect(
       english.clearRecommendationHistory,
       'Clear history and recommendations',
+    );
+  });
+
+  test('local music filter labels are localized', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(spanish.localMusic, 'Música local');
+    expect(spanish.localTab, 'Local');
+    expect(spanish.allLocalSongs, 'Todas las canciones');
+    expect(spanish.localMusicFolders, 'Carpetas');
+    expect(spanish.allowMusicAccess, 'Permitir acceso');
+    expect(spanish.playAll, 'Reproducir todo');
+    expect(spanish.backupAndRestore, 'Respaldo y Restauración');
+    expect(spanish.localMusicFilters, 'Filtros de música local');
+    expect(spanish.localMusicFiltersSummary(0), 'Sin filtros activos');
+    expect(spanish.localMusicFiltersSummary(1), '1 filtro activo');
+    expect(spanish.localMusicFiltersSummary(2), '2 filtros activos');
+    expect(spanish.hideWhatsAppAudio, 'Ocultar audios de WhatsApp');
+    expect(spanish.hideTelegramAudio, 'Ocultar audios de Telegram');
+    expect(spanish.hideAudioRecordings, 'Ocultar grabaciones de audio');
+    expect(
+      spanish.hideTracksUnder30Seconds,
+      'Ocultar canciones de menos de 30 segundos',
+    );
+    expect(english.localMusic, 'Local music');
+    expect(english.localTab, 'Local');
+    expect(english.allLocalSongs, 'All songs');
+    expect(english.localMusicFolders, 'Folders');
+    expect(english.allowMusicAccess, 'Allow access');
+    expect(english.playAll, 'Play all');
+    expect(english.backupAndRestore, 'Backup and restore');
+    expect(english.localMusicFilters, 'Local music filters');
+    expect(english.localMusicFiltersSummary(0), 'No active filters');
+    expect(english.localMusicFiltersSummary(1), '1 active filter');
+    expect(english.localMusicFiltersSummary(2), '2 active filters');
+    expect(english.hideWhatsAppAudio, 'Hide WhatsApp audio');
+    expect(english.hideTelegramAudio, 'Hide Telegram audio');
+    expect(english.hideAudioRecordings, 'Hide audio recordings');
+    expect(
+      english.hideTracksUnder30Seconds,
+      'Hide songs shorter than 30 seconds',
+    );
+  });
+
+  test('surface and mini player appearance labels are localized', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(spanish.surfaceEffects, 'Efectos de superficie');
+    expect(spanish.surfaceBackground, 'Fondo de las superficies');
+    expect(spanish.surfaceBackgroundAccent, 'Acento');
+    expect(spanish.surfaceBackgroundTransparent, 'Transparente');
+    expect(spanish.miniPlayer, 'Mini reproductor');
+    expect(spanish.miniPlayerStyle, 'Estilo');
+    expect(spanish.miniPlayerClassic, 'Clásico');
+    expect(spanish.miniPlayerCapsule, 'Cápsula');
+    expect(spanish.miniPlayerBackground, 'Fondo del Mini reproductor');
+    expect(spanish.miniPlayerBackgroundAccent, 'Acento');
+    expect(spanish.miniPlayerBackgroundArtwork, 'Portada');
+    expect(spanish.miniPlayerBackgroundTransparent, 'Transparente');
+    expect(english.surfaceEffects, 'Surface effects');
+    expect(english.surfaceBackground, 'Surface background');
+    expect(english.surfaceBackgroundAccent, 'Accent');
+    expect(english.surfaceBackgroundTransparent, 'Transparent');
+    expect(english.miniPlayer, 'Mini player');
+    expect(english.miniPlayerStyle, 'Style');
+    expect(english.miniPlayerClassic, 'Classic');
+    expect(english.miniPlayerCapsule, 'Capsule');
+    expect(english.miniPlayerBackground, 'Mini player background');
+    expect(english.miniPlayerBackgroundAccent, 'Accent');
+    expect(english.miniPlayerBackgroundArtwork, 'Artwork');
+    expect(english.miniPlayerBackgroundTransparent, 'Transparent');
+  });
+
+  test('Home greeting labels cover both day periods and named accounts', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(spanish.homeGreeting(hour: 0), 'Buenos días');
+    expect(spanish.homeGreeting(hour: 11), 'Buenos días');
+    expect(
+      spanish.homeGreeting(hour: 12, firstName: 'Ana'),
+      'Buenas tardes, Ana',
+    );
+    expect(spanish.homeGreeting(hour: 23), 'Buenas tardes');
+    expect(spanish.recommendedArtists, 'Artistas recomendados');
+    expect(english.homeGreeting(hour: 11), 'Good morning');
+    expect(
+      english.homeGreeting(hour: 12, firstName: 'Ana'),
+      'Good afternoon, Ana',
+    );
+    expect(english.recommendedArtists, 'Recommended artists');
+  });
+
+  test('artist subscription availability feedback is localized', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(
+      spanish.artistSubscriptionUnavailable,
+      'Este artista no tiene una suscripción disponible.',
+    );
+    expect(
+      english.artistSubscriptionUnavailable,
+      'A subscription is not available for this artist.',
+    );
+    expect(spanish.goToAlbum, 'Ir al álbum');
+    expect(english.goToAlbum, 'Go to album');
+    expect(
+      spanish.albumNavigationUnavailable,
+      'No se pudo encontrar el álbum de esta canción.',
+    );
+    expect(
+      english.albumNavigationUnavailable,
+      'The album for this song could not be found.',
     );
   });
 

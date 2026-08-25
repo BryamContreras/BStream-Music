@@ -6,16 +6,16 @@ const _kLyricsSmoothDuration = Duration(milliseconds: 520);
 const _kLyricsSlideDuration = Duration(milliseconds: 460);
 const _kLyricsHighlightDuration = Duration(milliseconds: 500);
 
-const _kLyricsSmoothInactiveScale = 0.94;
+const _kLyricsSmoothInactiveScale = 0.98;
 const _kLyricsSmoothInactiveOpacity = 0.62;
 
 const _kLyricsSlideOffsetPx = 34.0;
 const _kLyricsSlideInactiveOpacity = 0.70;
 
-const _kLyricsHighlightActiveBackgroundAlpha = 0.20;
-const _kLyricsHighlightActiveShadowAlpha = 0.22;
-const _kLyricsHighlightActiveScale = 1.04;
-const _kLyricsHighlightInactiveScale = 0.94;
+const _kLyricsHighlightActiveBackgroundAlpha = 0.10;
+const _kLyricsHighlightActiveShadowAlpha = 0.16;
+const _kLyricsHighlightActiveScale = 1.01;
+const _kLyricsHighlightInactiveScale = 0.98;
 
 class LyricsAnimationTransition extends StatefulWidget {
   const LyricsAnimationTransition({

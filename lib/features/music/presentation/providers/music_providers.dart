@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart' show VideoId;
 
 import '../../../../core/errors/app_exception.dart';
 import '../../../../core/constants/app_constants.dart';
@@ -91,6 +92,8 @@ import '../../domain/usecases/get_track_info.dart';
 import '../../domain/usecases/search_tracks.dart';
 import 'app_strings.dart';
 import 'lyrics_animation_style.dart';
+import 'mini_player_background_mode.dart';
+import 'mini_player_mode.dart';
 import 'youtube_music_auth_controller.dart';
 import 'player/catalog_playback_item.dart';
 import 'player/catalog_playlist_playback.dart';
@@ -103,6 +106,8 @@ import 'player/remote_playback_retry_coordinator.dart';
 
 export 'app_strings.dart';
 export 'lyrics_animation_style.dart';
+export 'mini_player_background_mode.dart';
+export 'mini_player_mode.dart';
 export 'player/catalog_playback_item.dart';
 export 'player/catalog_playlist_playback.dart';
 export 'player/playback_identity.dart';
@@ -631,6 +636,38 @@ final class HomeRecommendationCollectionItem extends HomeRecommendationItem {
   final HomeRecommendationCollection collection;
 }
 
+class HomeRecommendationArtist {
+  const HomeRecommendationArtist({
+    required this.name,
+    required this.browseId,
+    this.thumbnailUrl,
+    this.seedVideoId,
+  });
+
+  final String name;
+  final String browseId;
+  final String? thumbnailUrl;
+
+  /// A real Home song associated with this artist, when available.
+  ///
+  /// Artist pages can use it as a playback/radio fallback without deriving a
+  /// YouTube identity from display text.
+  final String? seedVideoId;
+}
+
+final class HomeRecommendationArtistItem extends HomeRecommendationItem {
+  const HomeRecommendationArtistItem(this.artist);
+
+  final HomeRecommendationArtist artist;
+}
+
+/// Maximum time Home may spend enriching already-valid artist candidates.
+///
+/// Kept injectable so timeout behavior stays deterministic in provider tests.
+final homeArtistEnrichmentBudgetProvider = Provider<Duration>(
+  (_) => const Duration(seconds: 4),
+);
+
 class HomeRecommendationSection {
   HomeRecommendationSection({
     required String title,
@@ -666,45 +703,870 @@ class HomeRecommendationSection {
   );
 }
 
-/// The unmodified anonymous `FEmusic_home` feed. Personalized sections are
-/// intentionally built and cached separately, then combined by
-/// [homeRecommendationsProvider].
+/// Authenticated Home adapter when a validated YouTube Music session exists.
+///
+/// The adapter retains the catalog-facing [YouTubeMusicHome] contract while
+/// the account gateway owns cookies, authorization headers, and client context.
+final youtubeMusicAuthenticatedHomeProvider = Provider<YouTubeMusicHome?>((
+  ref,
+) {
+  final gateway = ref.watch(youtubeMusicAuthenticatedAccountGatewayProvider);
+  return gateway == null
+      ? null
+      : ytm_account.AuthenticatedYouTubeMusicHome(account: gateway);
+});
+
+/// The preferred `FEmusic_home` feed. A validated account is tried first and
+/// expected authenticated read/format failures fall back once to the existing
+/// anonymous service. Personalized sections are built and cached separately,
+/// then combined by [homeRecommendationsProvider].
 final youtubeMusicHomeRecommendationsProvider =
     FutureProvider<List<HomeRecommendationSection>>(
       (ref) async {
         final search = ref.watch(youtubeMusicSearchProvider);
-        if (search is! YouTubeMusicHome) {
+        final anonymousHome = search is YouTubeMusicHome
+            ? search as YouTubeMusicHome
+            : null;
+        final authenticatedHome = ref.watch(
+          youtubeMusicAuthenticatedHomeProvider,
+        );
+        if (anonymousHome == null && authenticatedHome == null) {
           return const <HomeRecommendationSection>[];
         }
-        final home = search as YouTubeMusicHome;
-        final sections = await home.getHome(
-          maxSections: 5,
-          maxItemsPerSection: 12,
+        final strings = ref.watch(appStringsProvider);
+        final artistEnrichmentBudget = ref.watch(
+          homeArtistEnrichmentBudgetProvider,
         );
-        return List.unmodifiable(
-          sections
-              .map(
-                (section) => HomeRecommendationSection.items(
-                  title: section.title,
-                  queueSourceId: 'youtube-home:${section.title}',
-                  items: section.items
-                      .map(_homeRecommendationItemFromInnerTube)
-                      .whereType<HomeRecommendationItem>()
-                      .toList(growable: false),
-                ),
-              )
-              .where((section) => section.items.isNotEmpty),
-        );
+        late final List<InnerTubeHomeSection> sections;
+        var usedAuthenticatedHome = false;
+        if (authenticatedHome == null) {
+          sections = await anonymousHome!.getHome(
+            maxSections: InnerTubeSearchService.maxHomeSections,
+            maxItemsPerSection: 12,
+          );
+        } else {
+          try {
+            sections = await authenticatedHome.getHome(
+              maxSections: InnerTubeSearchService.maxHomeSections,
+              maxItemsPerSection: 12,
+            );
+            usedAuthenticatedHome = true;
+          } catch (error) {
+            if (anonymousHome == null ||
+                !_isExpectedAuthenticatedHomeFailure(error)) {
+              rethrow;
+            }
+            sections = await anonymousHome.getHome(
+              maxSections: InnerTubeSearchService.maxHomeSections,
+              maxItemsPerSection: 12,
+            );
+          }
+        }
+        final queueSourcePrefix = usedAuthenticatedHome
+            ? 'youtube-account-home'
+            : 'youtube-home';
+        final recommendations = sections
+            .map((section) {
+              final items = section.items
+                  .map(_homeRecommendationItemFromInnerTube)
+                  .whereType<HomeRecommendationItem>()
+                  .toList(growable: false);
+              if (items.isEmpty ||
+                  _isSpecificYourMixesSection(
+                    title: section.title,
+                    items: items,
+                    strings: strings,
+                  )) {
+                return null;
+              }
+              return HomeRecommendationSection.items(
+                title: section.title,
+                queueSourceId: '$queueSourcePrefix:${section.title}',
+                items: items,
+              );
+            })
+            .whereType<HomeRecommendationSection>()
+            .toList(growable: true);
+        final artistItems = <HomeRecommendationItem>[];
+        final seenArtistIds = <String>{};
+        String? artistQueueSourceId;
+        final regularSections = <HomeRecommendationSection>[];
+        for (final section in recommendations) {
+          if (_isHomeArtistOnlySection(section) &&
+              artistQueueSourceId == null) {
+            artistQueueSourceId = section.queueSourceId;
+          }
+          for (final item
+              in section.items.whereType<HomeRecommendationArtistItem>()) {
+            final browseId = item.artist.browseId.trim();
+            final name = item.artist.name.trim();
+            if (_isValidArtistBrowseId(browseId) &&
+                name.isNotEmpty &&
+                seenArtistIds.add(browseId)) {
+              artistItems.add(item);
+            }
+          }
+          final regularItems = section.items
+              .where((item) => item is! HomeRecommendationArtistItem)
+              .toList(growable: false);
+          if (regularItems.isNotEmpty) {
+            regularSections.add(
+              HomeRecommendationSection.items(
+                title: section.title,
+                queueSourceId: section.queueSourceId,
+                items: regularItems,
+              ),
+            );
+          }
+        }
+
+        HomeRecommendationSection? artistSection;
+        if (artistItems.isNotEmpty) {
+          artistSection = HomeRecommendationSection.items(
+            title: usedAuthenticatedHome
+                ? strings.recommendedArtists
+                : strings.popularArtists,
+            queueSourceId:
+                artistQueueSourceId ?? '$queueSourcePrefix:embedded-artists',
+            items: artistItems.take(12).toList(growable: false),
+          );
+        } else {
+          final popularArtists = await _popularArtistsHomeSection(
+            search,
+            sections,
+            strings,
+            fallbackCollections: regularSections
+                .expand((section) => section.items)
+                .whereType<HomeRecommendationCollectionItem>()
+                .map((item) => item.collection)
+                .toList(growable: false),
+            enrichmentBudget: artistEnrichmentBudget,
+            authenticated: usedAuthenticatedHome,
+          );
+          artistSection = popularArtists;
+        }
+        return List.unmodifiable(<HomeRecommendationSection>[
+          ?artistSection,
+          ...regularSections,
+        ]);
       },
       // Home deliberately renders errors as local-only. Avoid Riverpod's
       // automatic retries so a manual refresh remains predictable.
       retry: (_, _) => null,
     );
 
+bool _isExpectedAuthenticatedHomeFailure(Object error) {
+  return error is ytm_account.YouTubeMusicAccountException ||
+      error is InnerTubeException ||
+      error is FormatException ||
+      error is TimeoutException;
+}
+
+Future<HomeRecommendationSection?> _popularArtistsHomeSection(
+  YouTubeMusicSearch search,
+  List<InnerTubeHomeSection> homeSections,
+  AppStrings strings, {
+  required List<HomeRecommendationCollection> fallbackCollections,
+  required Duration enrichmentBudget,
+  required bool authenticated,
+}) async {
+  final enrichmentClock = Stopwatch()..start();
+  Duration remainingBudget() {
+    final remaining = enrichmentBudget - enrichmentClock.elapsed;
+    return remaining > Duration.zero ? remaining : Duration.zero;
+  }
+
+  final seedVideoIds = <String>[];
+  final candidates = <_HomeArtistCandidate>[];
+  final seenCandidateBrowseIds = <String>{};
+  void collectSongCandidates(InnerTubeSong song) {
+    final videoId = song.videoId.trim();
+    if (videoId.isNotEmpty && !seedVideoIds.contains(videoId)) {
+      seedVideoIds.add(videoId);
+    }
+    final artistCount = math.min(
+      song.artists.length,
+      song.artistBrowseIds.length,
+    );
+    for (var index = 0; index < artistCount; index += 1) {
+      final name = song.artists[index].trim();
+      final browseId = song.artistBrowseIds[index]?.trim() ?? '';
+      if (name.isEmpty ||
+          !_isValidArtistBrowseId(browseId) ||
+          !seenCandidateBrowseIds.add(browseId)) {
+        continue;
+      }
+      candidates.add(
+        _HomeArtistCandidate(
+          name: name,
+          browseId: browseId,
+          seedVideoId: videoId,
+        ),
+      );
+    }
+  }
+
+  for (final section in homeSections) {
+    for (final item in section.items) {
+      if (item is InnerTubeHomeSongItem) {
+        collectSongCandidates(item.song);
+      }
+    }
+  }
+
+  // Anonymous Home is the cold-start source of truth. Preserve its server
+  // order so this shelf stays stable between rebuilds, and only inspect a few
+  // of its own collections when the song rows do not provide enough artists.
+  // This deliberately avoids deriving "similar" artists from one arbitrary
+  // Home song through `/next`.
+  if (candidates.length < 6 && search is YouTubeMusicCollectionLookup) {
+    final validCollections = fallbackCollections
+        .where((collection) => _isValidCollectionBrowseId(collection.browseId))
+        .toList(growable: false);
+    final regularCollections = validCollections
+        .where((candidate) => !candidate.isMix)
+        .toList(growable: false);
+    final mixCollections = validCollections
+        .where((candidate) => candidate.isMix)
+        .toList(growable: false);
+    final preferredCollections = <HomeRecommendationCollection>[
+      ...regularCollections,
+      ...mixCollections,
+    ].take(3).toList(growable: false);
+    final availableCollectionBudget = remainingBudget();
+    final collectionBudget = Duration(
+      microseconds: math.min(
+        availableCollectionBudget.inMicroseconds,
+        const Duration(seconds: 2).inMicroseconds,
+      ),
+    );
+    if (preferredCollections.isNotEmpty && collectionBudget > Duration.zero) {
+      final lookup = search as YouTubeMusicCollectionLookup;
+      // Some Home variants expose several narrowly focused collections (one
+      // or two artists each). Resolve at most three in parallel so the shelf
+      // has useful variety without extending the existing total budget.
+      final songBatches = await Future.wait(
+        preferredCollections.map((collection) async {
+          try {
+            return await lookup
+                .getCollectionSongs(collection.browseId, limit: 8)
+                .timeout(collectionBudget);
+          } on Object {
+            return const <InnerTubeSong>[];
+          }
+        }),
+      );
+      for (final songs in songBatches) {
+        for (final song in songs) {
+          collectSongCandidates(song);
+        }
+      }
+    }
+  }
+  if (seedVideoIds.isEmpty && candidates.isEmpty) {
+    return null;
+  }
+
+  final items = <HomeRecommendationItem>[];
+  final seenBrowseIds = <String>{};
+  // Six enriched results already fill the visible mobile shelf comfortably.
+  // Avoid delaying Home merely to append portraits that begin off-screen.
+  final missingCandidates = items.length >= 6
+      ? const <_HomeArtistCandidate>[]
+      : candidates
+            .where((candidate) => !seenBrowseIds.contains(candidate.browseId))
+            .take(math.max(0, 8 - items.length))
+            .toList(growable: false);
+  final hydratedCandidates = await _hydrateHomeArtistCandidates(
+    search,
+    missingCandidates,
+    hydrateProfiles: remainingBudget() > Duration.zero,
+    requestBudget: remainingBudget(),
+  );
+  for (final artist in hydratedCandidates) {
+    if (!seenBrowseIds.add(artist.browseId)) {
+      continue;
+    }
+    items.add(HomeRecommendationArtistItem(artist));
+  }
+
+  if (items.isEmpty) {
+    return null;
+  }
+  final queueSeed = seedVideoIds.firstOrNull;
+  return HomeRecommendationSection.items(
+    title: authenticated ? strings.recommendedArtists : strings.popularArtists,
+    queueSourceId: queueSeed == null
+        ? '${authenticated ? 'youtube-account-home' : 'youtube-home'}:popular-artists'
+        : '${authenticated ? 'youtube-account-home' : 'youtube-home'}:popular-artists:$queueSeed',
+    items: items.take(12).toList(growable: false),
+  );
+}
+
+class _HomeArtistCandidate {
+  const _HomeArtistCandidate({
+    required this.name,
+    required this.browseId,
+    required this.seedVideoId,
+  });
+
+  final String name;
+  final String browseId;
+  final String seedVideoId;
+}
+
+Future<List<HomeRecommendationArtist>> _hydrateHomeArtistCandidates(
+  YouTubeMusicSearch search,
+  List<_HomeArtistCandidate> candidates, {
+  required bool hydrateProfiles,
+  required Duration requestBudget,
+}) async {
+  if (candidates.isEmpty) {
+    return const [];
+  }
+  if (!hydrateProfiles ||
+      requestBudget <= Duration.zero ||
+      search is! YouTubeMusicArtistProfileLookup) {
+    return candidates
+        .map(
+          (candidate) => HomeRecommendationArtist(
+            name: candidate.name,
+            browseId: candidate.browseId,
+            seedVideoId: candidate.seedVideoId,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  final lookup = search as YouTubeMusicArtistProfileLookup;
+  // At most six portraits are requested in one bounded pass. The rest remain
+  // valid circular cards with the local artist placeholder, so Home never
+  // waits through a long sequence of profile timeouts.
+  final profileCandidates = candidates.take(6).toList(growable: false);
+  final results = await Future.wait(
+    profileCandidates.map((candidate) async {
+      try {
+        final profile = await lookup
+            .getArtistProfile(
+              candidate.browseId,
+              fallbackName: candidate.name,
+              songLimit: 1,
+              releaseLimit: 1,
+            )
+            .timeout(requestBudget);
+        final profileName = profile.artist.name.trim();
+        final profileBrowseId = profile.artist.browseId.trim();
+        if (profileName.isNotEmpty &&
+            profileBrowseId == candidate.browseId &&
+            _isValidArtistBrowseId(profileBrowseId)) {
+          return HomeRecommendationArtist(
+            name: profileName,
+            browseId: profileBrowseId,
+            thumbnailUrl: profile.artist.thumbnailUrl,
+            seedVideoId: candidate.seedVideoId,
+          );
+        }
+      } on Object {
+        // The Home endpoint already proved this artist identity.
+      }
+      return HomeRecommendationArtist(
+        name: candidate.name,
+        browseId: candidate.browseId,
+        seedVideoId: candidate.seedVideoId,
+      );
+    }),
+  );
+  final hydrated = <HomeRecommendationArtist>[...results];
+  for (final candidate in candidates.skip(profileCandidates.length)) {
+    hydrated.add(
+      HomeRecommendationArtist(
+        name: candidate.name,
+        browseId: candidate.browseId,
+        seedVideoId: candidate.seedVideoId,
+      ),
+    );
+  }
+  return List.unmodifiable(hydrated);
+}
+
+bool _isValidArtistBrowseId(String browseId) =>
+    RegExp(r'^(?:UC|MPLA)[A-Za-z0-9_-]{2,200}$').hasMatch(browseId.trim());
+
+bool _isValidCollectionBrowseId(String browseId) =>
+    RegExp(r'^VL[A-Za-z0-9_-]{1,200}$').hasMatch(browseId.trim());
+
 abstract interface class PersonalizedHomeFeedSource {
   Future<CachedPersonalizedRecommendationFeed?> loadCachedFeed();
 
   Future<PersonalizedRecommendationFeed> refresh({bool forceNetwork = false});
+}
+
+abstract interface class HomeArtistRecommendationSource {
+  /// Returns artists related to qualified local playback-history seeds and
+  /// whether such history exists.
+  ///
+  /// Implementations must remain cache-only. The personalized feed refresh is
+  /// responsible for filling related candidate pools, so Home never launches
+  /// a duplicate InnerTube request solely for this shelf.
+  Future<HomeArtistRecommendationResult> load({
+    bool refresh = false,
+    bool forceNetwork = false,
+  });
+}
+
+class HomeArtistRecommendationResult {
+  HomeArtistRecommendationResult({
+    required List<HomeRecommendationArtist> artists,
+    required this.hasQualifiedHistory,
+  }) : artists = List<HomeRecommendationArtist>.unmodifiable(artists);
+
+  final List<HomeRecommendationArtist> artists;
+
+  /// Distinguishes a genuine cold start from a temporarily empty related
+  /// cache. Anonymous Home artists must only be used for the former.
+  final bool hasQualifiedHistory;
+}
+
+class RepositoryHomeArtistRecommendationSource
+    implements HomeArtistRecommendationSource {
+  RepositoryHomeArtistRecommendationSource({
+    required this.repository,
+    this.artistLookup,
+    this.seedLimit = 6,
+    this.artistSeedLimit = 3,
+    this.resultLimit = 12,
+    Duration? relatedTtl,
+    DateTime Function()? clock,
+  }) : relatedTtl =
+           relatedTtl ?? const PersonalizedRecommendationConfig().relatedTtl,
+       _clock = clock ?? DateTime.now;
+
+  final RecommendationRepository repository;
+  final YouTubeMusicArtistProfileLookup? artistLookup;
+  final int seedLimit;
+  final int artistSeedLimit;
+  final int resultLimit;
+  final Duration relatedTtl;
+  final DateTime Function() _clock;
+
+  @override
+  Future<HomeArtistRecommendationResult> load({
+    bool refresh = false,
+    bool forceNetwork = false,
+  }) async {
+    // Leave [minListenedMs] at the repository default. Together with the
+    // player's completion rule this admits only qualified listens (normally
+    // 30 seconds), not every track the user merely skipped through.
+    final histories = await Future.wait<List<RecommendationSeed>>([
+      repository.getTopSeeds(limit: seedLimit * 2),
+      repository.getRecentSeeds(limit: seedLimit * 2),
+    ]);
+    final topSeeds = histories[0];
+    final recentSeeds = histories[1];
+    final allSeeds = _uniqueHomeArtistSeeds(<RecommendationSeed>[
+      ...recentSeeds,
+      ...topSeeds,
+    ]);
+    if (allSeeds.isEmpty) {
+      return HomeArtistRecommendationResult(
+        artists: const <HomeRecommendationArtist>[],
+        hasQualifiedHistory: false,
+      );
+    }
+
+    final listenedBrowseIds = <String>{};
+    final listenedNames = <String>{};
+    for (final seed in allSeeds) {
+      for (var index = 0; index < seed.artists.length; index += 1) {
+        final name = _normalizedArtistName(seed.artists[index]);
+        if (name.isNotEmpty) {
+          listenedNames.add(name);
+        }
+        if (index < seed.artistBrowseIds.length) {
+          final browseId = seed.artistBrowseIds[index]?.trim() ?? '';
+          if (_isValidArtistBrowseId(browseId)) {
+            listenedBrowseIds.add(browseId);
+          }
+        }
+      }
+    }
+
+    final seeds = _balancedHomeArtistSeeds(
+      topSeeds: topSeeds,
+      recentSeeds: recentSeeds,
+      limit: seedLimit,
+    );
+    final now = _clock().toUtc();
+    final artistSeeds = seeds
+        .map(_homeRelatedArtistSeed)
+        .whereType<_HomeRelatedArtistSeed>()
+        .take(artistSeedLimit)
+        .toList(growable: false);
+    final cachedStates = await Future.wait(
+      artistSeeds.map(
+        (seed) => _loadRelatedArtistCache(repository, seed, now: now),
+      ),
+    );
+
+    if (refresh && artistLookup != null && artistSeeds.isNotEmpty) {
+      final generation = repository.generation;
+      await Future.wait(
+        List<Future<void>>.generate(artistSeeds.length, (index) async {
+          final cached = cachedStates[index];
+          if (!forceNetwork && cached != null && !cached.isExpired) {
+            return;
+          }
+          final seed = artistSeeds[index];
+          try {
+            final profile = await artistLookup!.getArtistProfile(
+              seed.browseId,
+              fallbackName: seed.name,
+              songLimit: 1,
+              releaseLimit: 1,
+            );
+            final artists = profile.relatedArtists
+                .where(
+                  (artist) =>
+                      _isValidArtistBrowseId(artist.browseId) &&
+                      artist.name.trim().isNotEmpty,
+                )
+                .map(
+                  (artist) => HomeRecommendationArtist(
+                    name: artist.name.trim(),
+                    browseId: artist.browseId.trim(),
+                    thumbnailUrl: artist.thumbnailUrl,
+                    seedVideoId: seed.seed.videoId,
+                  ),
+                )
+                .toList(growable: false);
+            cachedStates[index] = _HomeRelatedArtistCacheState(
+              artists: artists,
+              isExpired: false,
+            );
+            await _saveRelatedArtistCache(
+              repository,
+              seed,
+              artists,
+              now: now,
+              generation: generation,
+              ttl: relatedTtl,
+            );
+          } on Object {
+            // A stale profile shelf remains usable. Track-radio candidates
+            // below are the final fallback when no artist shelf was cached.
+          }
+        }),
+      );
+    }
+
+    final relatedArtistBuckets = <List<HomeRecommendationArtist>>[];
+    for (final cached in cachedStates) {
+      if (cached == null || cached.artists.isEmpty) {
+        continue;
+      }
+      relatedArtistBuckets.add(
+        _filterRecommendedArtists(
+          cached.artists,
+          listenedBrowseIds: listenedBrowseIds,
+          listenedNames: listenedNames,
+        ),
+      );
+    }
+    final relatedArtists = _roundRobinHomeArtists(
+      relatedArtistBuckets,
+      limit: resultLimit,
+    );
+    if (relatedArtists.isNotEmpty) {
+      return HomeArtistRecommendationResult(
+        artists: relatedArtists,
+        hasQualifiedHistory: true,
+      );
+    }
+
+    final pools = await Future.wait(
+      seeds.map(
+        (seed) => repository.getRelatedCandidates(
+          seed.trackKey,
+          ttl: relatedTtl,
+          now: now,
+        ),
+      ),
+    );
+    final radioArtistBuckets = <List<HomeRecommendationArtist>>[];
+    for (var seedIndex = 0; seedIndex < seeds.length; seedIndex += 1) {
+      final seenForSeed = <String>{};
+      final artists = <HomeRecommendationArtist>[];
+      for (
+        var candidateIndex = 0;
+        candidateIndex < pools[seedIndex].length;
+        candidateIndex += 1
+      ) {
+        final candidate = pools[seedIndex][candidateIndex];
+        final rank = candidate.rank >= 0 ? candidate.rank : candidateIndex;
+        if (rank > 12 || candidate.artists.isEmpty) {
+          continue;
+        }
+        // A radio track may credit several collaborators. Only its primary
+        // artist is evidence for this shelf; treating every featured credit
+        // as equally related caused unrelated names to leak into Home.
+        const artistIndex = 0;
+        final name = candidate.artists[artistIndex].trim();
+        final normalizedName = _normalizedArtistName(name);
+        final browseId = artistIndex < candidate.artistBrowseIds.length
+            ? candidate.artistBrowseIds[artistIndex]?.trim() ?? ''
+            : '';
+        if (name.isEmpty ||
+            normalizedName.isEmpty ||
+            !_isValidArtistBrowseId(browseId) ||
+            listenedBrowseIds.contains(browseId) ||
+            listenedNames.contains(normalizedName) ||
+            !seenForSeed.add(browseId)) {
+          continue;
+        }
+        final videoId = candidate.videoId?.trim();
+        artists.add(
+          HomeRecommendationArtist(
+            name: name,
+            browseId: browseId,
+            seedVideoId: videoId == null || videoId.isEmpty ? null : videoId,
+          ),
+        );
+      }
+      if (artists.isNotEmpty) {
+        radioArtistBuckets.add(artists);
+      }
+    }
+    return HomeArtistRecommendationResult(
+      artists: _roundRobinHomeArtists(radioArtistBuckets, limit: resultLimit),
+      hasQualifiedHistory: true,
+    );
+  }
+}
+
+const _relatedArtistCacheSchemaVersion = 1;
+const _relatedArtistCacheKeyPrefix = 'related-artists-v1:';
+
+class _HomeRelatedArtistSeed {
+  const _HomeRelatedArtistSeed({
+    required this.seed,
+    required this.browseId,
+    required this.name,
+  });
+
+  final RecommendationSeed seed;
+  final String browseId;
+  final String name;
+}
+
+class _HomeRelatedArtistCacheState {
+  const _HomeRelatedArtistCacheState({
+    required this.artists,
+    required this.isExpired,
+  });
+
+  final List<HomeRecommendationArtist> artists;
+  final bool isExpired;
+}
+
+_HomeRelatedArtistSeed? _homeRelatedArtistSeed(RecommendationSeed seed) {
+  final count = math.min(seed.artists.length, seed.artistBrowseIds.length);
+  for (var index = 0; index < count; index += 1) {
+    final name = seed.artists[index].trim();
+    final browseId = seed.artistBrowseIds[index]?.trim() ?? '';
+    if (name.isNotEmpty && _isValidArtistBrowseId(browseId)) {
+      return _HomeRelatedArtistSeed(seed: seed, browseId: browseId, name: name);
+    }
+  }
+  return null;
+}
+
+Future<_HomeRelatedArtistCacheState?> _loadRelatedArtistCache(
+  RecommendationRepository repository,
+  _HomeRelatedArtistSeed seed, {
+  required DateTime now,
+}) async {
+  try {
+    final cache = await repository.loadFeed(
+      '$_relatedArtistCacheKeyPrefix${seed.browseId}',
+    );
+    if (cache == null ||
+        cache.payload['schemaVersion'] != _relatedArtistCacheSchemaVersion ||
+        cache.payload['artists'] is! List) {
+      return null;
+    }
+    final artists = <HomeRecommendationArtist>[];
+    for (final value in cache.payload['artists']! as List) {
+      if (value is! Map) continue;
+      final name = value['name']?.toString().trim() ?? '';
+      final browseId = value['browseId']?.toString().trim() ?? '';
+      final thumbnailUrl = value['thumbnailUrl']?.toString().trim();
+      if (name.isEmpty || !_isValidArtistBrowseId(browseId)) continue;
+      artists.add(
+        HomeRecommendationArtist(
+          name: name,
+          browseId: browseId,
+          thumbnailUrl: thumbnailUrl == null || thumbnailUrl.isEmpty
+              ? null
+              : thumbnailUrl,
+          seedVideoId: seed.seed.videoId,
+        ),
+      );
+    }
+    return _HomeRelatedArtistCacheState(
+      artists: List.unmodifiable(artists),
+      isExpired: cache.isExpiredAt(now),
+    );
+  } on Object {
+    return null;
+  }
+}
+
+Future<void> _saveRelatedArtistCache(
+  RecommendationRepository repository,
+  _HomeRelatedArtistSeed seed,
+  List<HomeRecommendationArtist> artists, {
+  required DateTime now,
+  required int generation,
+  required Duration ttl,
+}) async {
+  if (repository.generation != generation) return;
+  try {
+    await repository.saveFeed(
+      RecommendationFeedCache(
+        feedKey: '$_relatedArtistCacheKeyPrefix${seed.browseId}',
+        generatedAt: now,
+        expiresAt: now.add(ttl),
+        payload: <String, Object?>{
+          'schemaVersion': _relatedArtistCacheSchemaVersion,
+          'seedArtistBrowseId': seed.browseId,
+          'artists': artists
+              .map(
+                (artist) => <String, Object?>{
+                  'name': artist.name,
+                  'browseId': artist.browseId,
+                  'thumbnailUrl': artist.thumbnailUrl,
+                },
+              )
+              .toList(growable: false),
+        },
+      ),
+      expectedGeneration: generation,
+    );
+  } on Object {
+    // Recommendations remain usable in memory when optional cache writes fail.
+  }
+}
+
+List<HomeRecommendationArtist> _filterRecommendedArtists(
+  Iterable<HomeRecommendationArtist> artists, {
+  required Set<String> listenedBrowseIds,
+  required Set<String> listenedNames,
+}) {
+  final seen = <String>{};
+  return artists
+      .where((artist) {
+        final browseId = artist.browseId.trim();
+        final name = _normalizedArtistName(artist.name);
+        return _isValidArtistBrowseId(browseId) &&
+            name.isNotEmpty &&
+            !listenedBrowseIds.contains(browseId) &&
+            !listenedNames.contains(name) &&
+            seen.add(browseId);
+      })
+      .toList(growable: false);
+}
+
+List<HomeRecommendationArtist> _roundRobinHomeArtists(
+  List<List<HomeRecommendationArtist>> buckets, {
+  required int limit,
+}) {
+  if (limit <= 0 || buckets.isEmpty) return const [];
+  final result = <HomeRecommendationArtist>[];
+  final positions = List<int>.filled(buckets.length, 0);
+  final seen = <String>{};
+  while (result.length < limit) {
+    var added = false;
+    for (
+      var bucketIndex = 0;
+      bucketIndex < buckets.length && result.length < limit;
+      bucketIndex += 1
+    ) {
+      final bucket = buckets[bucketIndex];
+      while (positions[bucketIndex] < bucket.length) {
+        final artist = bucket[positions[bucketIndex]++];
+        if (!seen.add(artist.browseId.trim())) continue;
+        result.add(artist);
+        added = true;
+        break;
+      }
+    }
+    if (!added) break;
+  }
+  return List.unmodifiable(result);
+}
+
+List<RecommendationSeed> _uniqueHomeArtistSeeds(
+  Iterable<RecommendationSeed> seeds,
+) {
+  final seen = <String>{};
+  return seeds
+      .where((seed) => seed.trackKey.trim().isNotEmpty)
+      .where((seed) => seen.add(seed.trackKey.trim()))
+      .toList(growable: false);
+}
+
+List<RecommendationSeed> _balancedHomeArtistSeeds({
+  required List<RecommendationSeed> topSeeds,
+  required List<RecommendationSeed> recentSeeds,
+  required int limit,
+}) {
+  final result = <RecommendationSeed>[];
+  final seenTracks = <String>{};
+  final seenArtists = <String>{};
+  void add(RecommendationSeed seed) {
+    if (result.length >= limit) {
+      return;
+    }
+    final trackKey = seed.trackKey.trim();
+    if (trackKey.isEmpty || !seenTracks.add(trackKey)) return;
+
+    // Related queues are track-based, but this shelf recommends artists. A
+    // listener who played several songs by the same artist must not give that
+    // artist several independent radios and drown out the newest distinct
+    // taste signal. Keep the newest qualified track for each primary artist.
+    final artistIdentity = _homeArtistSeedIdentity(seed);
+    if (!seenArtists.add(artistIdentity)) return;
+    result.add(seed);
+  }
+
+  // Recent listening is the clearest signal. Fill it with distinct artists
+  // first, then use historical top artists only for remaining capacity.
+  for (final seed in recentSeeds) {
+    add(seed);
+  }
+  for (final seed in topSeeds) {
+    add(seed);
+  }
+  return List<RecommendationSeed>.unmodifiable(result);
+}
+
+String _homeArtistSeedIdentity(RecommendationSeed seed) {
+  final length = math.max(seed.artists.length, seed.artistBrowseIds.length);
+  for (var index = 0; index < length; index += 1) {
+    final browseId = index < seed.artistBrowseIds.length
+        ? seed.artistBrowseIds[index]?.trim() ?? ''
+        : '';
+    if (_isValidArtistBrowseId(browseId)) {
+      return 'id:$browseId';
+    }
+    final name = index < seed.artists.length
+        ? _normalizedArtistName(seed.artists[index])
+        : '';
+    if (name.isNotEmpty) {
+      return 'name:$name';
+    }
+  }
+  return 'track:${seed.trackKey.trim()}';
 }
 
 class EnginePersonalizedHomeFeedSource implements PersonalizedHomeFeedSource {
@@ -745,6 +1607,22 @@ final personalizedHomeFeedSourceProvider =
       return EnginePersonalizedHomeFeedSource(engine);
     });
 
+final homeArtistRecommendationSourceProvider =
+    Provider<HomeArtistRecommendationSource?>((ref) {
+      final database = ref.watch(databaseServiceProvider);
+      final coordinator = ref.watch(libraryOperationCoordinatorProvider);
+      final search = ref.watch(youtubeMusicSearchProvider);
+      return RepositoryHomeArtistRecommendationSource(
+        repository: LocalDatabaseRecommendationRepository(
+          database: database,
+          coordinator: coordinator,
+        ),
+        artistLookup: search is YouTubeMusicArtistProfileLookup
+            ? search as YouTubeMusicArtistProfileLookup
+            : null,
+      );
+    });
+
 final homeRecommendationsProvider =
     AsyncNotifierProvider<
       HomeRecommendationsController,
@@ -757,8 +1635,11 @@ final homeRecommendationsProvider =
 class HomeRecommendationsController
     extends AsyncNotifier<List<HomeRecommendationSection>> {
   PersonalizedHomeFeedSource? _personalizedSource;
+  HomeArtistRecommendationSource? _artistSource;
   List<HomeRecommendationSection> _personalized = const [];
   List<HomeRecommendationSection> _youtubeMusic = const [];
+  HomeRecommendationSection? _historyArtistSection;
+  bool _hasQualifiedArtistHistory = false;
   Future<void>? _refreshInFlight;
   bool _inFlightForcesNetwork = false;
   bool _inFlightRefreshesYouTube = false;
@@ -766,6 +1647,15 @@ class HomeRecommendationsController
 
   @override
   Future<List<HomeRecommendationSection>> build() async {
+    // This controller intentionally reads (rather than watches) the generic
+    // Home FutureProvider so it can retain its last usable combined value.
+    // Observe the account identity explicitly so login, logout, restoration,
+    // and channel-generation changes still rebuild and reject older results.
+    ref.watch(
+      youtubeMusicAuthControllerProvider.select(
+        (auth) => (auth.phase, auth.generation, auth.profile?.channelId),
+      ),
+    );
     final epoch = ++_buildEpoch;
     // A dependency rebuild supersedes any older refresh. Old results are
     // rejected by [epoch], while this build remains free to start a new one.
@@ -774,6 +1664,9 @@ class HomeRecommendationsController
     _inFlightRefreshesYouTube = false;
     final strings = ref.watch(appStringsProvider);
     _personalizedSource = ref.watch(personalizedHomeFeedSourceProvider);
+    _artistSource = ref.watch(homeArtistRecommendationSourceProvider);
+    _historyArtistSection = null;
+    _hasQualifiedArtistHistory = false;
 
     final youtubeState = ref.read(youtubeMusicHomeRecommendationsProvider);
     _youtubeMusic = youtubeState.value ?? const [];
@@ -794,9 +1687,27 @@ class HomeRecommendationsController
     _personalized = cached == null
         ? const []
         : _homeSectionsFromPersonalizedFeed(cached.feed, strings);
+    final artistSource = _artistSource;
+    if (artistSource != null) {
+      try {
+        final result = await artistSource.load();
+        _historyArtistSection = _homeArtistSectionFromHistory(
+          result.artists,
+          strings,
+        );
+        _hasQualifiedArtistHistory = result.hasQualifiedHistory;
+      } on Object {
+        // Artist recommendations are optional; generic Home remains usable.
+      }
+    }
+    if (!ref.mounted || epoch != _buildEpoch) {
+      return const <HomeRecommendationSection>[];
+    }
     final initial = _combineHomeRecommendationSections(
       _personalized,
       _youtubeMusic,
+      historyArtistSection: _historyArtistSection,
+      hasQualifiedArtistHistory: _hasQualifiedArtistHistory,
     );
 
     // Every provider reconstruction represents either app startup or a newly
@@ -895,9 +1806,15 @@ class HomeRecommendationsController
     if (!ref.mounted || expectedEpoch != _buildEpoch) {
       return;
     }
+    final strings = ref.read(appStringsProvider);
     final previous =
         state.asData?.value ??
-        _combineHomeRecommendationSections(_personalized, _youtubeMusic);
+        _combineHomeRecommendationSections(
+          _personalized,
+          _youtubeMusic,
+          historyArtistSection: _historyArtistSection,
+          hasQualifiedArtistHistory: _hasQualifiedArtistHistory,
+        );
     const loadingState = AsyncLoading<List<HomeRecommendationSection>>();
     // ignore: invalid_use_of_internal_member
     state = loadingState.copyWithPrevious(AsyncData(previous));
@@ -911,7 +1828,6 @@ class HomeRecommendationsController
 
     final tasks = <Future<void>>[];
     final source = _personalizedSource;
-    final strings = ref.read(appStringsProvider);
     List<HomeRecommendationSection>? refreshedPersonalized;
     List<HomeRecommendationSection>? refreshedYouTubeMusic;
     if (source != null) {
@@ -945,12 +1861,43 @@ class HomeRecommendationsController
       return;
     }
 
+    HomeRecommendationSection? refreshedHistoryArtistSection;
+    var refreshedHasQualifiedArtistHistory = false;
+    var historyArtistRefreshSucceeded = false;
+    final artistSource = _artistSource;
+    if (artistSource != null) {
+      try {
+        final result = await artistSource.load(
+          refresh: true,
+          forceNetwork: forceNetwork,
+        );
+        refreshedHistoryArtistSection = _homeArtistSectionFromHistory(
+          result.artists,
+          strings,
+        );
+        refreshedHasQualifiedArtistHistory = result.hasQualifiedHistory;
+        historyArtistRefreshSucceeded = true;
+      } on Object {
+        // Retain the last valid shelf if the local recommendation store is
+        // temporarily unavailable.
+      }
+    }
+    if (!ref.mounted || expectedEpoch != _buildEpoch) {
+      return;
+    }
+
     _personalized = refreshedPersonalized ?? _personalized;
     _youtubeMusic = refreshedYouTubeMusic ?? _youtubeMusic;
+    if (historyArtistRefreshSucceeded) {
+      _historyArtistSection = refreshedHistoryArtistSection;
+      _hasQualifiedArtistHistory = refreshedHasQualifiedArtistHistory;
+    }
 
     final combined = _combineHomeRecommendationSections(
       _personalized,
       _youtubeMusic,
+      historyArtistSection: _historyArtistSection,
+      hasQualifiedArtistHistory: _hasQualifiedArtistHistory,
     );
     final error = firstError;
     if (error == null) {
@@ -972,6 +1919,7 @@ List<HomeRecommendationSection> _homeSectionsFromPersonalizedFeed(
 ) {
   return List<HomeRecommendationSection>.unmodifiable(
     feed.sections
+        .where((section) => section.kind != PersonalizedSectionKind.mixes)
         .map((section) {
           final items = section.items
               .map(
@@ -1068,17 +2016,157 @@ HomeRecommendationTrackItem? _homeTrackItemFromPersonalized(
   return HomeRecommendationTrackItem(track, localTrackId: localTrackId);
 }
 
+HomeRecommendationSection? _homeArtistSectionFromHistory(
+  List<HomeRecommendationArtist> artists,
+  AppStrings strings,
+) {
+  if (artists.isEmpty) {
+    return null;
+  }
+  return HomeRecommendationSection.items(
+    title: strings.recommendedArtists,
+    queueSourceId: 'personalized-home:recommended-artists',
+    items: artists
+        .map<HomeRecommendationItem>(HomeRecommendationArtistItem.new)
+        .toList(growable: false),
+  );
+}
+
+String _normalizedArtistName(String value) => value.trim().toLowerCase();
+
+HomeRecommendationSection _reusePopularArtistArtwork(
+  HomeRecommendationSection recommendedArtists,
+  List<HomeRecommendationSection> popularArtistSections,
+) {
+  final popularByBrowseId = <String, HomeRecommendationArtist>{};
+  for (final section in popularArtistSections) {
+    for (final item
+        in section.items.whereType<HomeRecommendationArtistItem>()) {
+      popularByBrowseId.putIfAbsent(item.artist.browseId, () => item.artist);
+    }
+  }
+  return HomeRecommendationSection.items(
+    title: recommendedArtists.title,
+    queueSourceId: recommendedArtists.queueSourceId,
+    items: recommendedArtists.items
+        .map((item) {
+          if (item is! HomeRecommendationArtistItem ||
+              item.artist.thumbnailUrl?.trim().isNotEmpty == true) {
+            return item;
+          }
+          final popular = popularByBrowseId[item.artist.browseId];
+          final thumbnailUrl = popular?.thumbnailUrl?.trim();
+          if (thumbnailUrl == null || thumbnailUrl.isEmpty) {
+            return item;
+          }
+          return HomeRecommendationArtistItem(
+            HomeRecommendationArtist(
+              name: item.artist.name,
+              browseId: item.artist.browseId,
+              thumbnailUrl: thumbnailUrl,
+              seedVideoId: item.artist.seedVideoId,
+            ),
+          );
+        })
+        .toList(growable: false),
+  );
+}
+
+bool _isAuthenticatedHomeArtistSection(HomeRecommendationSection section) =>
+    _isHomeArtistOnlySection(section) &&
+    (section.queueSourceId?.startsWith('youtube-account-home:') ?? false);
+
+HomeRecommendationSection _mergeRecommendedArtistSections(
+  HomeRecommendationSection local,
+  List<HomeRecommendationSection> authenticated,
+) {
+  final buckets = <List<HomeRecommendationArtistItem>>[
+    local.items.whereType<HomeRecommendationArtistItem>().toList(
+      growable: false,
+    ),
+    ...authenticated.map(
+      (section) => section.items
+          .whereType<HomeRecommendationArtistItem>()
+          .toList(growable: false),
+    ),
+  ];
+  final positions = List<int>.filled(buckets.length, 0);
+  final seen = <String>{};
+  final items = <HomeRecommendationItem>[];
+  while (items.length < 12) {
+    var added = false;
+    for (
+      var bucketIndex = 0;
+      bucketIndex < buckets.length && items.length < 12;
+      bucketIndex += 1
+    ) {
+      final bucket = buckets[bucketIndex];
+      while (positions[bucketIndex] < bucket.length) {
+        final item = bucket[positions[bucketIndex]++];
+        if (!seen.add(item.artist.browseId.trim())) continue;
+        items.add(item);
+        added = true;
+        break;
+      }
+    }
+    if (!added) break;
+  }
+  return HomeRecommendationSection.items(
+    title: local.title,
+    queueSourceId: 'personalized-home:recommended-artists+account',
+    items: items,
+  );
+}
+
 List<HomeRecommendationSection> _combineHomeRecommendationSections(
   List<HomeRecommendationSection> personalized,
-  List<HomeRecommendationSection> youtubeMusic,
-) {
+  List<HomeRecommendationSection> youtubeMusic, {
+  HomeRecommendationSection? historyArtistSection,
+  bool hasQualifiedArtistHistory = false,
+}) {
   final seenTracks = <String>{};
   final seenCollections = <String>{};
+  final seenArtists = <String>{};
   final combined = <HomeRecommendationSection>[];
-  for (final section in <HomeRecommendationSection>[
-    ...personalized,
-    ...youtubeMusic,
-  ]) {
+  final artistSections = youtubeMusic
+      .where(_isHomeArtistOnlySection)
+      .toList(growable: false);
+  final regularYouTubeSections = youtubeMusic
+      .where((section) => !_isHomeArtistOnlySection(section))
+      .toList(growable: false);
+  final authenticatedArtistSections = artistSections
+      .where(_isAuthenticatedHomeArtistSection)
+      .toList(growable: false);
+  final personalizedArtists = historyArtistSection == null
+      ? null
+      : _reusePopularArtistArtwork(historyArtistSection, artistSections);
+  final selectedArtistSections = personalizedArtists != null
+      ? <HomeRecommendationSection>[
+          authenticatedArtistSections.isEmpty
+              ? personalizedArtists
+              : _mergeRecommendedArtistSections(
+                  personalizedArtists,
+                  authenticatedArtistSections,
+                ),
+        ]
+      : authenticatedArtistSections.isNotEmpty
+      ? authenticatedArtistSections
+      : hasQualifiedArtistHistory
+      ? const <HomeRecommendationSection>[]
+      : artistSections;
+  final orderedSections = personalized.toList(growable: true);
+  // The artist shelf replaces the removed personalized mixes shelf. Keep it
+  // near the top (after Continue listening when present), while the ordinary
+  // YouTube Music feed remains below all of BStream's existing sections.
+  final continueIndex = orderedSections.indexWhere(
+    (section) => section.isContinueListening,
+  );
+  orderedSections.insertAll(
+    continueIndex < 0 ? 0 : continueIndex + 1,
+    selectedArtistSections,
+  );
+  orderedSections.addAll(regularYouTubeSections);
+  for (final section in orderedSections) {
     final items = <HomeRecommendationItem>[];
     for (final item in section.items) {
       final isNew = switch (item) {
@@ -1087,6 +2175,9 @@ List<HomeRecommendationSection> _combineHomeRecommendationSections(
         ),
         HomeRecommendationCollectionItem(:final collection) =>
           seenCollections.add(collection.browseId.trim()),
+        HomeRecommendationArtistItem(:final artist) => seenArtists.add(
+          artist.browseId.trim(),
+        ),
       };
       if (isNew) {
         items.add(item);
@@ -1107,8 +2198,23 @@ List<HomeRecommendationSection> _combineHomeRecommendationSections(
   return List<HomeRecommendationSection>.unmodifiable(combined);
 }
 
-final homeCollectionTracksProvider =
-    FutureProvider.family<List<TrackInfo>, String>((ref, browseId) async {
+/// Keeps a recently closed remote detail page warm long enough for normal
+/// back-and-forth navigation, without retaining every collection opened during
+/// the whole application session.
+final remoteDetailTracksCacheDurationProvider = Provider<Duration>(
+  (_) => const Duration(minutes: 5),
+);
+
+void _retainRemoteDetailTracks(Ref ref) {
+  final duration = ref.watch(remoteDetailTracksCacheDurationProvider);
+  final cacheLink = ref.keepAlive();
+  final cacheTimer = Timer(duration, cacheLink.close);
+  ref.onDispose(cacheTimer.cancel);
+}
+
+final homeCollectionTracksProvider = FutureProvider.autoDispose
+    .family<List<TrackInfo>, String>((ref, browseId) async {
+      _retainRemoteDetailTracks(ref);
       final normalizedBrowseId = browseId.trim();
       if (normalizedBrowseId.isEmpty) {
         throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');
@@ -1145,27 +2251,26 @@ final homeCollectionTracksProvider =
       return List.unmodifiable(songs.map(trackInfoFromInnerTubeSong));
     });
 
-final homeAlbumTracksProvider = FutureProvider.family<List<TrackInfo>, String>((
-  ref,
-  browseId,
-) async {
-  final normalizedBrowseId = browseId.trim();
-  if (normalizedBrowseId.isEmpty) {
-    throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');
-  }
-  final search = ref.watch(youtubeMusicSearchProvider);
-  if (search is! YouTubeMusicAlbumLookup) {
-    throw UnsupportedError(
-      'The configured YouTube Music service cannot resolve albums.',
-    );
-  }
-  final lookup = search as YouTubeMusicAlbumLookup;
-  final songs = await lookup.getAlbumSongs(
-    normalizedBrowseId,
-    limit: innerTubeDetailResultLimit,
-  );
-  return List.unmodifiable(songs.map(trackInfoFromInnerTubeSong));
-});
+final homeAlbumTracksProvider = FutureProvider.autoDispose
+    .family<List<TrackInfo>, String>((ref, browseId) async {
+      _retainRemoteDetailTracks(ref);
+      final normalizedBrowseId = browseId.trim();
+      if (normalizedBrowseId.isEmpty) {
+        throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');
+      }
+      final search = ref.watch(youtubeMusicSearchProvider);
+      if (search is! YouTubeMusicAlbumLookup) {
+        throw UnsupportedError(
+          'The configured YouTube Music service cannot resolve albums.',
+        );
+      }
+      final lookup = search as YouTubeMusicAlbumLookup;
+      final songs = await lookup.getAlbumSongs(
+        normalizedBrowseId,
+        limit: innerTubeDetailResultLimit,
+      );
+      return List.unmodifiable(songs.map(trackInfoFromInnerTubeSong));
+    });
 
 HomeRecommendationItem? _homeRecommendationItemFromInnerTube(
   InnerTubeHomeItem item,
@@ -1190,7 +2295,49 @@ HomeRecommendationItem? _homeRecommendationItemFromInnerTube(
       ),
     );
   }
+  if (item is InnerTubeHomeArtistItem) {
+    final browseId = item.artist.browseId.trim();
+    final name = item.artist.name.trim();
+    if (!_isValidArtistBrowseId(browseId) || name.isEmpty) {
+      return null;
+    }
+    return HomeRecommendationArtistItem(
+      HomeRecommendationArtist(
+        name: name,
+        browseId: browseId,
+        thumbnailUrl: item.artist.thumbnailUrl,
+      ),
+    );
+  }
   return null;
+}
+
+bool _isHomeMixOnlySection(List<HomeRecommendationItem> items) {
+  return items.isNotEmpty &&
+      items.every(
+        (item) =>
+            item is HomeRecommendationCollectionItem && item.collection.isMix,
+      );
+}
+
+bool _isSpecificYourMixesSection({
+  required String title,
+  required List<HomeRecommendationItem> items,
+  required AppStrings strings,
+}) {
+  final normalizedTitle = title.trim().toLowerCase();
+  final yourMixesTitles = <String>{
+    strings.yourMixes.trim().toLowerCase(),
+    'tus mixes',
+    'your mixes',
+  };
+  return yourMixesTitles.contains(normalizedTitle) &&
+      _isHomeMixOnlySection(items);
+}
+
+bool _isHomeArtistOnlySection(HomeRecommendationSection section) {
+  return section.items.isNotEmpty &&
+      section.items.every((item) => item is HomeRecommendationArtistItem);
 }
 
 final remoteMusicDataSourceProvider = Provider<RemoteMusicDataSource>((ref) {
@@ -1200,8 +2347,9 @@ final remoteMusicDataSourceProvider = Provider<RemoteMusicDataSource>((ref) {
   );
 });
 
-final searchAlbumTracksProvider =
-    FutureProvider.family<List<TrackInfo>, String>((ref, browseId) async {
+final searchAlbumTracksProvider = FutureProvider.autoDispose
+    .family<List<TrackInfo>, String>((ref, browseId) async {
+      _retainRemoteDetailTracks(ref);
       final normalizedBrowseId = browseId.trim();
       if (normalizedBrowseId.isEmpty) {
         throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');

@@ -8,21 +8,30 @@ import 'package:flutter/services.dart';
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_dialog.dart';
+import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
+import '../../../../services/sharing/bstream_track_link.dart';
+import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
+import '../pages/artist_profile_page.dart';
+import '../pages/remote_collection_detail_page.dart';
 import 'favorite_star_badge.dart';
+import 'glass_popup_menu_button.dart';
 import 'lyrics_page.dart';
 import 'now_playing_equalizer.dart';
 import 'playback_gradient_background.dart';
+import 'playlist_artwork.dart';
 import 'playlist_picker_dialog.dart';
 import 'source_image.dart';
+import 'track_change_transition.dart';
 
 class PlayerPanel extends ConsumerStatefulWidget {
   const PlayerPanel({this.onOpenSearch, this.drawBackground = true, super.key});
@@ -41,6 +50,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
   static const _mobileFrameCompressionRange = 100.0;
 
   bool _showPlaybackQueue = false;
+  bool _artistNavigationBusy = false;
+  bool _albumNavigationBusy = false;
+  final Map<String, _AlbumNavigationTarget> _albumNavigationTargets = {};
+  final Set<String> _albumNavigationMisses = {};
 
   @override
   Widget build(BuildContext context) {
@@ -79,11 +92,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     final favoriteTrackIds = ref.watch(favoriteTrackIdsProvider);
     final localTracks =
         ref.watch(libraryTracksProvider).value ?? const <LocalTrack>[];
-    final savedTrackId = _savedTrackIdForSnapshot(
+    final savedTrack = _savedTrackForSnapshot(
       localTracks,
       trackId: presentation.trackId,
       sourceUrl: presentation.sourceUrl,
     );
+    final savedTrackId = savedTrack?.id;
     final currentTrackId = presentation.trackId;
     final isFavorite =
         (currentTrackId != null && favoriteTrackIds.contains(currentTrackId)) ||
@@ -104,10 +118,52 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       shuffleEnabled: presentation.shuffleEnabled,
       repeatMode: presentation.repeatMode,
     );
+    final localArtwork = savedTrack == null
+        ? null
+        : preferredLocalTrackArtworkSource(savedTrack);
+    final artworkSource = localArtwork?.source ?? snapshot.thumbnailUrl;
+    final artworkFallbackSource = localArtwork?.fallbackSource;
+    final visualIdentity = playbackVisualIdentity(
+      trackId: snapshot.trackId,
+      sourceUrl: snapshot.sourceUrl,
+      title: snapshot.title,
+      artist: snapshot.artist,
+      thumbnailUrl: artworkSource,
+    );
     final hasTrack =
         snapshot.title != null ||
         snapshot.artist != null ||
         presentation.hasError;
+    final canOpenArtist =
+        !snapshot.isExternal && snapshot.artist?.trim().isNotEmpty == true;
+    final onOpenArtist = canOpenArtist
+        ? () => unawaited(_openArtist(snapshot, savedTrackId))
+        : null;
+    final albumTrack = snapshot.isExternal
+        ? null
+        : _shareTrackForSnapshot(
+            snapshot,
+            ref,
+            strings,
+            savedTrackId: savedTrackId,
+          );
+    final hasYouTubeMusicMetadata =
+        albumTrack != null && _hasYouTubeMusicCatalogMetadata(albumTrack);
+    final albumTitle = hasYouTubeMusicMetadata
+        ? _preferredAlbumTitle(albumTrack.album, snapshot.album)
+        : null;
+    final albumNavigationKey = !hasYouTubeMusicMetadata
+        ? null
+        : _albumNavigationKey(albumTrack, albumTitle);
+    final onOpenAlbum = albumNavigationKey == null
+        ? null
+        : () => unawaited(
+            _openAlbumForTrack(
+              key: albumNavigationKey,
+              track: albumTrack!,
+              albumTitle: albumTitle,
+            ),
+          );
 
     return LayoutBuilder(
       builder: (context, outer) {
@@ -154,7 +210,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
               child: Stack(
                 children: [
                   if (widget.drawBackground) ...[
-                    _BlurredPlayerBackground(url: snapshot.thumbnailUrl),
+                    _BlurredPlayerBackground(
+                      url: artworkSource,
+                      fallbackUrl: artworkFallbackSource,
+                    ),
                     Positioned.fill(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
@@ -192,6 +251,8 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                               _showPlaybackQueue = !_showPlaybackQueue;
                             });
                           },
+                          onOpenArtist: onOpenArtist,
+                          onOpenAlbum: onOpenAlbum,
                           strings: strings,
                         ),
                         Expanded(
@@ -202,6 +263,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   ? ((620.0 - constraints.maxHeight) / 140.0)
                                         .clamp(0.0, 1.0)
                                   : 0.0;
+                              final artworkCompactness = math.max(
+                                verticalCompactness,
+                                mobileFrameCompactness,
+                              );
                               final regularArtworkExtent = _artworkExtent(
                                 constraints,
                                 stackedDesktop: stackedDesktop,
@@ -219,10 +284,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   : regularArtworkExtent;
                               final artwork = Center(
                                 child: _LargeArtwork(
-                                  url: snapshot.thumbnailUrl,
+                                  url: artworkSource,
+                                  fallbackUrl: artworkFallbackSource,
+                                  identity: visualIdentity,
                                   maxExtent: artworkExtent,
                                   isFavorite: isFavorite,
-                                  shadowCompactness: mobileFrameCompactness,
+                                  shadowCompactness: artworkCompactness,
                                 ),
                               );
                               final gap = mobile
@@ -252,6 +319,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                     ? maxContentWidth
                                     : 520.0,
                                 onOpenLyrics: _openLyrics,
+                                onOpenArtist: onOpenArtist,
                                 strings: strings,
                               );
 
@@ -369,6 +437,116 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     }
   }
 
+  Future<void> _openArtist(
+    PlayerSnapshot snapshot,
+    String? savedTrackId,
+  ) async {
+    if (_artistNavigationBusy) return;
+    _artistNavigationBusy = true;
+    try {
+      final strings = ref.read(appStringsProvider);
+      final target = await _resolveArtistNavigationTarget(
+        snapshot,
+        ref,
+        strings,
+        savedTrackId: savedTrackId,
+      );
+      if (!mounted) return;
+      if (target == null) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text(strings.artistProfileLoadError)),
+          );
+        return;
+      }
+      final request = (
+        artistBrowseId: target.browseId,
+        artistName: target.name,
+        artistThumbnailUrl: null,
+      );
+      unawaited(
+        ref
+            .read(artistProfileProvider(request).future)
+            .then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+      );
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => ArtistProfilePage(
+            artistBrowseId: target.browseId,
+            artistName: target.name,
+            seedVideoId: target.seedVideoId,
+            onOpenPlayer: () {},
+          ),
+        ),
+      );
+    } finally {
+      _artistNavigationBusy = false;
+    }
+  }
+
+  Future<void> _openAlbumForTrack({
+    required String key,
+    required TrackInfo track,
+    required String? albumTitle,
+  }) async {
+    if (_albumNavigationBusy) {
+      return;
+    }
+    final strings = ref.read(appStringsProvider);
+    if (_albumNavigationMisses.contains(key)) {
+      _showAlbumNavigationUnavailable(strings.albumNavigationUnavailable);
+      return;
+    }
+
+    _albumNavigationBusy = true;
+    try {
+      final target =
+          _albumNavigationTargets[key] ??
+          await _resolveAlbumNavigationTarget(
+            track: track,
+            albumTitle: albumTitle,
+            service: ref.read(youtubeMusicSearchProvider),
+          );
+      if (!mounted) return;
+      if (target == null) {
+        _albumNavigationMisses.add(key);
+        _showAlbumNavigationUnavailable(strings.albumNavigationUnavailable);
+        return;
+      }
+      _albumNavigationTargets[key] = target;
+      _hideKeyboard();
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => RemoteCollectionDetailPage(
+            title: target.title,
+            subtitle: target.artist,
+            artworkSource: target.thumbnailUrl,
+            queueSourceId: 'player-album:${target.browseId}',
+            tracksProvider: homeAlbumTracksProvider(target.browseId),
+            emptyMessage: strings.albumWithoutSongs,
+            errorMessage: strings.albumLoadError,
+            fallbackIcon: Icons.album_rounded,
+            metadata: target.metadata,
+            onOpenPlayer: () {},
+          ),
+        ),
+      );
+    } on Object {
+      if (mounted) {
+        _showAlbumNavigationUnavailable(strings.albumNavigationUnavailable);
+      }
+    } finally {
+      _albumNavigationBusy = false;
+    }
+  }
+
+  void _showAlbumNavigationUnavailable(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   void _hideKeyboard() {
     FocusManager.instance.primaryFocus?.unfocus(
       disposition: UnfocusDisposition.scope,
@@ -441,9 +619,13 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
 }
 
 class _BlurredPlayerBackground extends StatelessWidget {
-  const _BlurredPlayerBackground({required this.url});
+  const _BlurredPlayerBackground({
+    required this.url,
+    required this.fallbackUrl,
+  });
 
   final String? url;
+  final String? fallbackUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -460,6 +642,7 @@ class _BlurredPlayerBackground extends StatelessWidget {
             scale: 1.28,
             child: SourceImage(
               source: source,
+              fallbackSource: fallbackUrl,
               fit: BoxFit.cover,
               fallback: const _FallbackBackground(),
             ),
@@ -478,6 +661,8 @@ class _PlayerHeader extends StatelessWidget {
     required this.onOpenSearch,
     required this.queueVisible,
     required this.onToggleQueue,
+    required this.onOpenArtist,
+    required this.onOpenAlbum,
     required this.strings,
   });
 
@@ -487,6 +672,8 @@ class _PlayerHeader extends StatelessWidget {
   final VoidCallback? onOpenSearch;
   final bool queueVisible;
   final VoidCallback onToggleQueue;
+  final VoidCallback? onOpenArtist;
+  final VoidCallback? onOpenAlbum;
   final AppStrings strings;
 
   @override
@@ -509,8 +696,14 @@ class _PlayerHeader extends StatelessWidget {
                     ? colors.primary.withValues(alpha: 0.16)
                     : Colors.transparent,
               ),
-              icon: const Icon(Icons.queue_music_rounded, size: 28),
-              selectedIcon: const Icon(Icons.queue_music_rounded, size: 28),
+              icon: Transform.scale(
+                scaleY: 1.2,
+                child: const Icon(Icons.queue_music_rounded, size: 28),
+              ),
+              selectedIcon: Transform.scale(
+                scaleY: 1.2,
+                child: const Icon(Icons.queue_music_rounded, size: 28),
+              ),
               onPressed: onToggleQueue,
             ),
           ),
@@ -529,13 +722,21 @@ class _PlayerHeader extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  snapshot.artist ?? 'BStream Music',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    color: Theme.of(context).colorScheme.primary,
+                InkWell(
+                  key: const ValueKey('player-header-artist-action'),
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: onOpenArtist,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Text(
+                      snapshot.artist ?? 'BStream Music',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -549,6 +750,8 @@ class _PlayerHeader extends StatelessWidget {
                     isFavorite: isFavorite,
                     savedTrackId: savedTrackId,
                     onOpenSearch: onOpenSearch,
+                    onOpenArtist: onOpenArtist,
+                    onOpenAlbum: onOpenAlbum,
                     strings: strings,
                   ),
           ),
@@ -656,7 +859,7 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                         ),
                       )
                     : ReorderableListView.builder(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
                         itemCount: queue.entries.length,
                         itemBuilder: (context, index) {
                           final entry = queue.entries[index];
@@ -664,7 +867,7 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                           return Padding(
                             key: ValueKey('playback-queue-$index-${entry.id}'),
                             padding: EdgeInsets.only(
-                              bottom: index == queue.entries.length - 1 ? 0 : 2,
+                              bottom: index == queue.entries.length - 1 ? 0 : 4,
                             ),
                             child: ReorderableDelayedDragStartListener(
                               index: index,
@@ -745,11 +948,11 @@ class _PlaybackQueueTileState extends State<_PlaybackQueueTile> {
           child: InkWell(
             onTap: widget.onTap,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
               child: Row(
                 children: [
                   SizedBox.square(
-                    dimension: 46,
+                    dimension: 52,
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
@@ -774,13 +977,13 @@ class _PlaybackQueueTileState extends State<_PlaybackQueueTile> {
                           NowPlayingEqualizerOverlay(
                             key: ValueKey('queue-now-playing-${entry.id}'),
                             isPlaying: isPlaying,
-                            width: 46,
-                            height: 18,
+                            width: 52,
+                            height: 20,
                           ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -790,6 +993,7 @@ class _PlaybackQueueTileState extends State<_PlaybackQueueTile> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
+                            fontSize: 15,
                             fontWeight: isCurrent
                                 ? FontWeight.w900
                                 : FontWeight.w700,
@@ -803,6 +1007,7 @@ class _PlaybackQueueTileState extends State<_PlaybackQueueTile> {
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(
+                                fontSize: 13,
                                 color: AppColors.contentSubtitleFor(context),
                               ),
                         ),
@@ -849,12 +1054,16 @@ class _MobilePlaybackQueuePage extends ConsumerWidget {
 class _LargeArtwork extends StatefulWidget {
   const _LargeArtwork({
     required this.url,
+    required this.fallbackUrl,
+    required this.identity,
     required this.maxExtent,
     required this.isFavorite,
     required this.shadowCompactness,
   });
 
   final String? url;
+  final String? fallbackUrl;
+  final String identity;
   final double maxExtent;
   final bool isFavorite;
   final double shadowCompactness;
@@ -865,27 +1074,37 @@ class _LargeArtwork extends StatefulWidget {
 
 class _LargeArtworkState extends State<_LargeArtwork> {
   String? _lastSource;
+  late String _lastIdentity;
   int _transitionId = 0;
 
   @override
   void initState() {
     super.initState();
     _lastSource = _normalizedSource(widget.url);
+    _lastIdentity = widget.identity;
   }
 
   @override
   void didUpdateWidget(covariant _LargeArtwork oldWidget) {
     super.didUpdateWidget(oldWidget);
     final nextSource = _normalizedSource(widget.url);
-    if (_lastSource != nextSource) {
+    if (_lastSource != nextSource || _lastIdentity != widget.identity) {
+      final shouldAnimate =
+          _lastIdentity != 'idle' && widget.identity != 'idle';
       _lastSource = nextSource;
-      _transitionId += 1;
+      _lastIdentity = widget.identity;
+      if (shouldAnimate) {
+        _transitionId += 1;
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final source = _normalizedSource(widget.url);
+    final transitionDuration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 420);
     return ConstrainedBox(
       key: const ValueKey('player-large-artwork'),
       constraints: BoxConstraints(
@@ -898,7 +1117,9 @@ class _LargeArtworkState extends State<_LargeArtwork> {
           fit: StackFit.expand,
           children: [
             AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
+              key: const ValueKey('player-artwork-track-transition'),
+              duration: transitionDuration,
+              reverseDuration: transitionDuration,
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
               layoutBuilder: (currentChild, previousChildren) => Stack(
@@ -906,10 +1127,12 @@ class _LargeArtworkState extends State<_LargeArtwork> {
                 clipBehavior: Clip.none,
                 children: [...previousChildren, ?currentChild],
               ),
+              transitionBuilder: noDimmingFadeTransitionBuilder,
               child: SizedBox.expand(
                 key: ValueKey(_transitionId),
                 child: _PlayerArtworkSurface(
                   url: source,
+                  fallbackUrl: widget.fallbackUrl,
                   compactness: widget.shadowCompactness,
                 ),
               ),
@@ -936,9 +1159,14 @@ class _LargeArtworkState extends State<_LargeArtwork> {
 }
 
 class _PlayerArtworkSurface extends StatelessWidget {
-  const _PlayerArtworkSurface({required this.url, required this.compactness});
+  const _PlayerArtworkSurface({
+    required this.url,
+    required this.fallbackUrl,
+    required this.compactness,
+  });
 
   final String? url;
+  final String? fallbackUrl;
   final double compactness;
 
   @override
@@ -996,6 +1224,7 @@ class _PlayerArtworkSurface extends StatelessWidget {
                               color: colors.surfaceContainerHighest,
                               child: ProportionalArtwork(
                                 source: url,
+                                fallbackSource: fallbackUrl,
                                 fallback: Icon(
                                   Icons.music_note_rounded,
                                   size: 108,
@@ -1049,6 +1278,7 @@ class _PlayerControls extends ConsumerWidget {
     required this.compactness,
     required this.maxWidth,
     required this.onOpenLyrics,
+    required this.onOpenArtist,
     required this.strings,
   });
 
@@ -1062,6 +1292,7 @@ class _PlayerControls extends ConsumerWidget {
   final double compactness;
   final double maxWidth;
   final VoidCallback onOpenLyrics;
+  final VoidCallback? onOpenArtist;
   final AppStrings strings;
 
   @override
@@ -1079,6 +1310,13 @@ class _PlayerControls extends ConsumerWidget {
       color: AppColors.contentSubtitleFor(context),
     );
     final titleArtistGap = lerpDouble(6, 4, compactness)!;
+    final visualIdentity = playbackVisualIdentity(
+      trackId: snapshot.trackId,
+      sourceUrl: snapshot.sourceUrl,
+      title: snapshot.title,
+      artist: snapshot.artist,
+      thumbnailUrl: snapshot.thumbnailUrl,
+    );
 
     Widget metadata() => SizedBox(
       width: double.infinity,
@@ -1098,25 +1336,35 @@ class _PlayerControls extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
-                child: Text(
-                  key: const ValueKey('player-track-artist'),
-                  snapshot.artist ?? 'BStream Music',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: artistStyle,
+                child: InkWell(
+                  key: const ValueKey('player-track-artist-action'),
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: onOpenArtist,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Text(
+                      key: const ValueKey('player-track-artist'),
+                      snapshot.artist ?? 'BStream Music',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: artistStyle,
+                    ),
+                  ),
                 ),
               ),
-              _PlayerShareButton(
-                snapshot: snapshot,
-                savedTrackId: savedTrackId,
-                strings: strings,
-              ),
-              _PlayerFavoriteButton(
-                snapshot: snapshot,
-                isFavorite: isFavorite,
-                savedTrackId: savedTrackId,
-                strings: strings,
-              ),
+              if (!snapshot.isExternal) ...[
+                _PlayerShareButton(
+                  snapshot: snapshot,
+                  savedTrackId: savedTrackId,
+                  strings: strings,
+                ),
+                _PlayerFavoriteButton(
+                  snapshot: snapshot,
+                  isFavorite: isFavorite,
+                  savedTrackId: savedTrackId,
+                  strings: strings,
+                ),
+              ],
             ],
           ),
         ],
@@ -1158,7 +1406,12 @@ class _PlayerControls extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          stableMetadata,
+          TrackChangeTransition(
+            switcherKey: const ValueKey('player-metadata-track-transition'),
+            identity: visualIdentity,
+            alignment: Alignment.topLeft,
+            child: stableMetadata,
+          ),
           SizedBox(height: lerpDouble(compact ? 22 : 36, 14, compactness)),
           const _Timeline(),
           SizedBox(height: lerpDouble(compact ? 18 : 28, 12, compactness)),
@@ -1366,6 +1619,326 @@ TrackInfo _shareTrackForSnapshot(
     album: snapshot.album,
   );
 }
+
+typedef _ArtistNavigationTarget = ({
+  String browseId,
+  String name,
+  String? seedVideoId,
+});
+
+Future<_ArtistNavigationTarget?> _resolveArtistNavigationTarget(
+  PlayerSnapshot snapshot,
+  WidgetRef ref,
+  AppStrings strings, {
+  required String? savedTrackId,
+}) async {
+  final track = _shareTrackForSnapshot(
+    snapshot,
+    ref,
+    strings,
+    savedTrackId: savedTrackId,
+  );
+  final structuredArtists = track.artists
+      .map((artist) => artist.trim())
+      .where((artist) => artist.isNotEmpty)
+      .toList(growable: false);
+  final fallbackArtist = track.artist.split(',').first.trim();
+  var artistName = structuredArtists.isNotEmpty
+      ? structuredArtists.first
+      : fallbackArtist;
+  if (artistName.isEmpty) return null;
+  var browseId = track.artistBrowseIds.isEmpty
+      ? null
+      : track.artistBrowseIds.first?.trim();
+  final link = const BStreamTrackLinkCodec().tryFromTrack(track);
+  final seedVideoId = link?.videoId;
+  final service = ref.read(youtubeMusicSearchProvider);
+
+  if ((browseId == null || browseId.isEmpty) &&
+      seedVideoId != null &&
+      service is YouTubeMusicTrackLookup) {
+    try {
+      final song = await (service as YouTubeMusicTrackLookup).getSong(
+        seedVideoId,
+      );
+      if (song != null && song.artists.isNotEmpty) {
+        artistName = song.artists.first.trim().isEmpty
+            ? artistName
+            : song.artists.first.trim();
+        browseId = song.artistBrowseIds.isEmpty
+            ? null
+            : song.artistBrowseIds.first?.trim();
+      }
+    } on Object {
+      // A catalog lookup is best effort; the exact-name search below can
+      // still recover browse metadata for older local tracks.
+    }
+  }
+
+  if (browseId == null || browseId.isEmpty) {
+    try {
+      final candidates = await service.searchSongs(artistName, limit: 5);
+      for (final candidate in candidates) {
+        for (var index = 0; index < candidate.artists.length; index += 1) {
+          if (candidate.artists[index].trim().toLowerCase() !=
+              artistName.toLowerCase()) {
+            continue;
+          }
+          final candidateBrowseId = index < candidate.artistBrowseIds.length
+              ? candidate.artistBrowseIds[index]?.trim()
+              : null;
+          if (candidateBrowseId != null && candidateBrowseId.isNotEmpty) {
+            browseId = candidateBrowseId;
+            break;
+          }
+        }
+        if (browseId?.isNotEmpty == true) break;
+      }
+    } on Object {
+      return null;
+    }
+  }
+
+  if (browseId == null || browseId.isEmpty) return null;
+  return (browseId: browseId, name: artistName, seedVideoId: seedVideoId);
+}
+
+typedef _AlbumNavigationTarget = ({
+  String browseId,
+  String title,
+  String artist,
+  String? thumbnailUrl,
+  List<String> metadata,
+});
+
+bool _hasYouTubeMusicCatalogMetadata(TrackInfo track) {
+  return track.metadataSource == TrackMetadataSource.youtubeMusic ||
+      track.artistBrowseIds.any(
+        (browseId) => browseId?.trim().isNotEmpty == true,
+      );
+}
+
+String? _preferredAlbumTitle(String? trackAlbum, String? snapshotAlbum) {
+  for (final candidate in <String?>[trackAlbum, snapshotAlbum]) {
+    final normalized = candidate?.trim();
+    if (normalized != null && normalized.isNotEmpty) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+String _albumNavigationKey(TrackInfo track, String? albumTitle) {
+  final artistBrowseId = track.artistBrowseIds
+      .whereType<String>()
+      .map((value) => value.trim())
+      .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+  final artistIdentity = artistBrowseId.isNotEmpty
+      ? 'id:$artistBrowseId'
+      : 'name:${_normalizeCatalogText(track.artists.isNotEmpty ? track.artists.first : track.artist.split(',').first)}';
+  final normalizedAlbum = _normalizeCatalogText(albumTitle ?? '');
+  final albumIdentity = normalizedAlbum.isNotEmpty
+      ? 'album:$normalizedAlbum'
+      : 'track:${track.id.trim().isNotEmpty ? track.id.trim() : track.url.trim()}';
+  return '$albumIdentity\u0000$artistIdentity';
+}
+
+Future<String?> _resolveAlbumTitleForTrack({
+  required TrackInfo track,
+  required String? albumTitle,
+  required YouTubeMusicSearch service,
+}) async {
+  final knownAlbum = albumTitle?.trim();
+  if (knownAlbum != null && knownAlbum.isNotEmpty) {
+    return knownAlbum;
+  }
+
+  final primaryArtist = track.artists
+      .map((artist) => artist.trim())
+      .firstWhere(
+        (artist) => artist.isNotEmpty,
+        orElse: () => track.artist.split(',').first.trim(),
+      );
+  final queryParts = <String>[track.title.trim(), primaryArtist]
+    ..removeWhere((part) => part.isEmpty);
+  if (queryParts.isEmpty) return null;
+
+  final candidates = await service.searchSongs(queryParts.join(' '), limit: 10);
+  InnerTubeSong? selected;
+  final videoId = track.id.trim();
+  if (videoId.isNotEmpty) {
+    for (final candidate in candidates) {
+      if (candidate.videoId == videoId) {
+        selected = candidate;
+        break;
+      }
+    }
+  }
+
+  if (selected == null) {
+    final expectedTitle = _normalizeCatalogText(track.title);
+    final expectedArtists = <String>{
+      for (final artist in track.artists) _normalizeCatalogText(artist),
+      for (final artist in track.artist.split(','))
+        _normalizeCatalogText(artist),
+    }..removeWhere((artist) => artist.isEmpty);
+    final exactMatches = candidates
+        .where((candidate) {
+          if (_normalizeCatalogText(candidate.title) != expectedTitle) {
+            return false;
+          }
+          return candidate.artists.any(
+            (artist) => expectedArtists.contains(_normalizeCatalogText(artist)),
+          );
+        })
+        .toList(growable: false);
+    if (exactMatches.length == 1) {
+      selected = exactMatches.single;
+    }
+  }
+
+  final resolvedAlbum = selected?.album?.trim();
+  return resolvedAlbum == null || resolvedAlbum.isEmpty ? null : resolvedAlbum;
+}
+
+Future<_AlbumNavigationTarget?> _resolveAlbumNavigationTarget({
+  required TrackInfo track,
+  required String? albumTitle,
+  required YouTubeMusicSearch service,
+}) async {
+  final directBrowseId = track.albumBrowseId?.trim();
+  final directTitle = albumTitle?.trim();
+  if (directBrowseId != null &&
+      directTitle != null &&
+      directTitle.isNotEmpty &&
+      _isValidAlbumBrowseId(directBrowseId)) {
+    return (
+      browseId: directBrowseId,
+      title: directTitle,
+      artist: track.artist.trim(),
+      thumbnailUrl: track.catalogThumbnailUrl ?? track.thumbnailUrl,
+      metadata: const <String>[],
+    );
+  }
+
+  var resolvedAlbumTitle = directTitle;
+  final videoId = const BStreamTrackLinkCodec().tryFromTrack(track)?.videoId;
+  if (videoId != null && service is YouTubeMusicRelated) {
+    final page = await (service as YouTubeMusicRelated).getNext(
+      videoId,
+      radio: false,
+      limit: 20,
+    );
+    InnerTubeSong? exactSong;
+    for (final song in page.songs) {
+      if (song.videoId == videoId) {
+        exactSong = song;
+        break;
+      }
+    }
+    if (exactSong != null) {
+      final browseId = exactSong.albumBrowseId?.trim();
+      final title = exactSong.album?.trim();
+      if (browseId != null &&
+          title != null &&
+          title.isNotEmpty &&
+          _isValidAlbumBrowseId(browseId)) {
+        return (
+          browseId: browseId,
+          title: title,
+          artist: exactSong.artist.trim().isNotEmpty
+              ? exactSong.artist.trim()
+              : track.artist.trim(),
+          thumbnailUrl:
+              exactSong.thumbnailUrl ??
+              track.catalogThumbnailUrl ??
+              track.thumbnailUrl,
+          metadata: const <String>[],
+        );
+      }
+      if (resolvedAlbumTitle == null || resolvedAlbumTitle.isEmpty) {
+        resolvedAlbumTitle = title;
+      }
+    }
+  }
+
+  resolvedAlbumTitle ??= await _resolveAlbumTitleForTrack(
+    track: track,
+    albumTitle: albumTitle,
+    service: service,
+  );
+  if (resolvedAlbumTitle == null) {
+    return null;
+  }
+  if (service is! YouTubeMusicCatalogSearch) {
+    return null;
+  }
+  final expectedTitle = _normalizeCatalogText(resolvedAlbumTitle);
+  if (expectedTitle.isEmpty) {
+    return null;
+  }
+  final expectedArtists = <String>{
+    for (final artist in track.artists) _normalizeCatalogText(artist),
+    for (final artist in track.artist.split(',')) _normalizeCatalogText(artist),
+  }..removeWhere((artist) => artist.isEmpty);
+  final primaryArtist = track.artists
+      .map((artist) => artist.trim())
+      .firstWhere(
+        (artist) => artist.isNotEmpty,
+        orElse: () => track.artist.split(',').first.trim(),
+      );
+  final query = primaryArtist.isEmpty
+      ? resolvedAlbumTitle
+      : '$resolvedAlbumTitle $primaryArtist';
+  final results = await (service as YouTubeMusicCatalogSearch).searchAlbums(
+    query,
+    limit: 10,
+  );
+  final exactTitleMatches = results
+      .where((album) {
+        return _isValidAlbumBrowseId(album.browseId) &&
+            _normalizeCatalogText(album.title) == expectedTitle;
+      })
+      .toList(growable: false);
+  if (exactTitleMatches.isEmpty) {
+    return null;
+  }
+
+  InnerTubeAlbum? selected;
+  for (final album in exactTitleMatches) {
+    if (album.artists.any(
+      (artist) => expectedArtists.contains(_normalizeCatalogText(artist)),
+    )) {
+      selected = album;
+      break;
+    }
+  }
+  selected ??= exactTitleMatches.length == 1 ? exactTitleMatches.single : null;
+  if (selected == null) {
+    return null;
+  }
+
+  final resolvedArtist = selected.artist.trim().isNotEmpty
+      ? selected.artist.trim()
+      : track.artist.trim();
+  final metadata = <String>[
+    ?selected.type?.trim(),
+    ?selected.year?.trim(),
+  ].where((value) => value.isNotEmpty).toList(growable: false);
+  return (
+    browseId: selected.browseId.trim(),
+    title: selected.title.trim(),
+    artist: resolvedArtist,
+    thumbnailUrl: selected.thumbnailUrl ?? track.thumbnailUrl,
+    metadata: List<String>.unmodifiable(metadata),
+  );
+}
+
+bool _isValidAlbumBrowseId(String value) =>
+    RegExp(r'^MPRE[A-Za-z0-9_-]{1,200}$').hasMatch(value.trim());
+
+String _normalizeCatalogText(String value) =>
+    value.trim().toLowerCase().replaceAll(RegExp(r'[\s\-–—_:·]+'), ' ').trim();
 
 Future<void> _shareTrack({
   required BuildContext context,
@@ -1752,9 +2325,15 @@ class _VolumeButtonState extends ConsumerState<_VolumeButton> {
             CompositedTransformFollower(
               link: _layerLink,
               showWhenUnlinked: false,
-              targetAnchor: Alignment.topRight,
-              followerAnchor: Alignment.bottomRight,
-              offset: const Offset(0, -8),
+              targetAnchor: widget.label == null
+                  ? Alignment.topRight
+                  : Alignment.centerRight,
+              followerAnchor: widget.label == null
+                  ? Alignment.bottomRight
+                  : Alignment.centerRight,
+              offset: widget.label == null
+                  ? const Offset(-4, -10)
+                  : const Offset(-4, 0),
               child: _VolumePopover(onClose: _hidePopover),
             ),
           ],
@@ -1805,109 +2384,108 @@ class _VolumePopover extends ConsumerWidget {
     final menuInactiveSlider = AppColors.menuInactiveSliderFor(context);
     final accent = AppColors.downloadAccentFor(context);
 
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        key: const ValueKey('volume-popover'),
-        width: math.min(282.0, MediaQuery.sizeOf(context).width - 24),
-        padding: const EdgeInsets.fromLTRB(12, 8, 6, 10),
-        decoration: BoxDecoration(
-          color: menuBackground,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: menuBorder),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0xB3000000),
-              blurRadius: 20,
-              offset: Offset(0, 8),
-            ),
-          ],
+    final popover = Container(
+      key: const ValueKey('volume-popover'),
+      width: math.min(244.0, MediaQuery.sizeOf(context).width - 32),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        gradient: AppColors.glassSurfaceGradientFor(
+          context,
+          baseColor: menuBackground,
+          intensity: 0.82,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: menuBorder),
+      ),
+      child: Semantics(
+        key: const ValueKey('volume-popover-semantics'),
+        container: true,
+        onDismiss: onClose,
+        child: SizedBox(
+          height: 48,
+          child: Row(
+            children: [
+              Icon(_volumeIcon(volume), color: menuIcon, size: 19),
+              const SizedBox(width: 6),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 2.5,
+                    activeTrackColor: accent,
+                    inactiveTrackColor: menuInactiveSlider,
+                    thumbColor: accent,
+                    overlayColor: accent.withValues(alpha: 0.14),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 7,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 13,
+                    ),
+                  ),
+                  child: Slider(
+                    value: volume,
+                    semanticFormatterCallback: (value) =>
+                        '${strings.volume} ${(value * 100).round()}%',
+                    onChanged: (value) => unawaited(
+                      ref
+                          .read(playerControllerProvider.notifier)
+                          .setVolume(value),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              SizedBox(
+                width: 38,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
                   child: Text(
-                    strings.volume,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    key: const ValueKey('volume-popover-percentage'),
+                    '${(volume * 100).round()}%',
+                    maxLines: 1,
+                    style: TextStyle(
                       color: menuForeground,
-                      fontSize: 15,
+                      fontSize: 12,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
-                Semantics(
-                  label: strings.close,
-                  button: true,
-                  child: SizedBox.square(
-                    dimension: 48,
-                    child: IconButton(
-                      color: menuIcon,
-                      icon: const Icon(Icons.close_rounded),
-                      iconSize: 18,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 48,
-                        height: 48,
-                      ),
-                      onPressed: onClose,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 2),
-            SizedBox(
-              height: 30,
-              child: Row(
-                children: [
-                  Icon(_volumeIcon(volume), color: menuIcon, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 3,
-                        activeTrackColor: accent,
-                        inactiveTrackColor: menuInactiveSlider,
-                        thumbColor: accent,
-                        overlayColor: accent.withValues(alpha: 0.14),
-                        thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 8,
-                        ),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 14,
-                        ),
-                      ),
-                      child: Slider(
-                        value: volume,
-                        onChanged: (value) => unawaited(
-                          ref
-                              .read(playerControllerProvider.notifier)
-                              .setVolume(value),
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 42,
-                    child: Text(
-                      '${(volume * 100).round()}%',
-                      textAlign: TextAlign.end,
-                      style: TextStyle(
-                        color: menuForeground,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
+    );
+    final roundedPopover = ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child:
+          AppColors.surfaceBackgroundModeFor(context) ==
+              SurfaceBackgroundMode.transparent
+          ? BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: popover,
+            )
+          : popover,
+    );
+
+    return DecoratedBox(
+      key: const ValueKey('volume-popover-shadow'),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: Theme.of(context).brightness == Brightness.dark
+                  ? 0.38
+                  : 0.2,
+            ),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Material(color: Colors.transparent, child: roundedPopover),
     );
   }
 }
@@ -2018,6 +2596,8 @@ class _PlayerMenu extends ConsumerWidget {
     required this.isFavorite,
     required this.savedTrackId,
     required this.onOpenSearch,
+    required this.onOpenArtist,
+    required this.onOpenAlbum,
     required this.strings,
   });
 
@@ -2025,12 +2605,14 @@ class _PlayerMenu extends ConsumerWidget {
   final bool isFavorite;
   final String? savedTrackId;
   final VoidCallback? onOpenSearch;
+  final VoidCallback? onOpenArtist;
+  final VoidCallback? onOpenAlbum;
   final AppStrings strings;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final menuIconColor = AppColors.menuIconFor(context);
-    return PopupMenuButton<String>(
+    return GlassPopupMenuButton<String>(
       enabled: snapshot.trackId != null,
       tooltip: strings.moreOptions,
       padding: EdgeInsets.zero,
@@ -2053,9 +2635,49 @@ class _PlayerMenu extends ConsumerWidget {
                 strings: strings,
               ),
             );
+          case 'artist':
+            onOpenArtist?.call();
+          case 'album':
+            onOpenAlbum?.call();
         }
       },
       itemBuilder: (context) => [
+        if (onOpenArtist != null)
+          PopupMenuItem(
+            key: const ValueKey('player-menu-go-to-artist'),
+            value: 'artist',
+            child: Row(
+              children: [
+                Icon(Icons.person_search_rounded, color: menuIconColor),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    strings.goToArtist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (onOpenAlbum != null)
+          PopupMenuItem(
+            key: const ValueKey('player-menu-go-to-album'),
+            value: 'album',
+            child: Row(
+              children: [
+                Icon(Icons.album_rounded, color: menuIconColor),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    strings.goToAlbum,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
         if (snapshot.isRemote && snapshot.sourceUrl != null)
           PopupMenuItem(
             value: 'download',
@@ -2157,7 +2779,7 @@ class _PlayerMenu extends ConsumerWidget {
       return;
     }
 
-    final playlistId = await showDialog<String>(
+    final playlistId = await showAppDialog<String>(
       context: context,
       builder: (context) {
         return PlaylistPickerDialog(
@@ -2318,7 +2940,7 @@ Future<void> _toggleFavoriteForSnapshot({
     );
 }
 
-String? _savedTrackIdForSnapshot(
+LocalTrack? _savedTrackForSnapshot(
   List<LocalTrack> tracks, {
   required String? trackId,
   required String? sourceUrl,
@@ -2327,7 +2949,7 @@ String? _savedTrackIdForSnapshot(
   if (normalizedId != null && normalizedId.isNotEmpty) {
     for (final track in tracks) {
       if (track.id == normalizedId) {
-        return track.id;
+        return track;
       }
     }
   }
@@ -2338,7 +2960,7 @@ String? _savedTrackIdForSnapshot(
   }
   for (final track in tracks) {
     if (track.sourceUrl?.trim() == normalizedSource) {
-      return track.id;
+      return track;
     }
   }
   return null;

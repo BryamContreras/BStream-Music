@@ -176,6 +176,15 @@ abstract interface class AudioStreamResolver {
   Future<void> dispose();
 }
 
+/// Optional capability for a resolver that can stop expensive staged work
+/// after its caller has selected a different track.
+abstract interface class ContinuationAwareAudioStreamResolver {
+  Future<AudioStreamResolution> resolveWhileCurrent(
+    TrackInfo track, {
+    AudioResolverContinuationCallback? shouldContinue,
+  });
+}
+
 /// Optional capability for resolver chains that can skip the primary and can
 /// report the exact moment a fallback starts.
 abstract interface class FallbackAwareAudioStreamResolver {

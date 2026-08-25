@@ -46,17 +46,49 @@ enum LyricsTextAlignment {
   }
 }
 
+enum LocalMusicFilter {
+  hideWhatsAppAudio,
+  hideTelegramAudio,
+  hideAudioRecordings,
+  hideTracksUnder30Seconds;
+
+  String get code => name;
+
+  static Set<LocalMusicFilter> fromCodes(List<String>? codes) {
+    if (codes == null) {
+      return defaultLocalMusicFilters;
+    }
+    final storedCodes = codes.toSet();
+    return Set<LocalMusicFilter>.unmodifiable(
+      LocalMusicFilter.values.where(
+        (filter) => storedCodes.contains(filter.code),
+      ),
+    );
+  }
+}
+
+const defaultLocalMusicFilters = <LocalMusicFilter>{
+  LocalMusicFilter.hideWhatsAppAudio,
+  LocalMusicFilter.hideTelegramAudio,
+  LocalMusicFilter.hideAudioRecordings,
+  LocalMusicFilter.hideTracksUnder30Seconds,
+};
+
 class SettingsState {
   const SettingsState({
     required this.downloadDirectory,
     required this.language,
     this.themeMode = AppThemeMode.system,
     this.accent = AppAccent.white,
+    this.surfaceBackgroundMode = SurfaceBackgroundMode.accent,
+    this.miniPlayerMode = defaultMiniPlayerMode,
+    this.miniPlayerBackgroundMode = defaultMiniPlayerBackgroundMode,
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
     this.lyricsAnimationStyle = LyricsAnimationStyle.smooth,
     this.lyricsRomanizationEnabled = false,
     this.lyricsRomanizationLanguages = defaultLyricsRomanizationLanguages,
     this.recommendationHistoryEnabled = true,
+    this.localMusicFilters = defaultLocalMusicFilters,
     this.crossfadeEnabled = false,
     this.crossfadeDuration = defaultCrossfadeDuration,
     this.ytDlpPath,
@@ -67,11 +99,15 @@ class SettingsState {
   final AppLanguage language;
   final AppThemeMode themeMode;
   final AppAccent accent;
+  final SurfaceBackgroundMode surfaceBackgroundMode;
+  final MiniPlayerMode miniPlayerMode;
+  final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final LyricsTextAlignment lyricsTextAlignment;
   final LyricsAnimationStyle lyricsAnimationStyle;
   final bool lyricsRomanizationEnabled;
   final Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages;
   final bool recommendationHistoryEnabled;
+  final Set<LocalMusicFilter> localMusicFilters;
   final bool crossfadeEnabled;
   final Duration crossfadeDuration;
   final String? ytDlpPath;
@@ -82,11 +118,15 @@ class SettingsState {
     AppLanguage? language,
     AppThemeMode? themeMode,
     AppAccent? accent,
+    SurfaceBackgroundMode? surfaceBackgroundMode,
+    MiniPlayerMode? miniPlayerMode,
+    MiniPlayerBackgroundMode? miniPlayerBackgroundMode,
     LyricsTextAlignment? lyricsTextAlignment,
     LyricsAnimationStyle? lyricsAnimationStyle,
     bool? lyricsRomanizationEnabled,
     Set<LyricsRomanizationLanguage>? lyricsRomanizationLanguages,
     bool? recommendationHistoryEnabled,
+    Set<LocalMusicFilter>? localMusicFilters,
     bool? crossfadeEnabled,
     Duration? crossfadeDuration,
     String? ytDlpPath,
@@ -97,6 +137,11 @@ class SettingsState {
       language: language ?? this.language,
       themeMode: themeMode ?? this.themeMode,
       accent: accent ?? this.accent,
+      surfaceBackgroundMode:
+          surfaceBackgroundMode ?? this.surfaceBackgroundMode,
+      miniPlayerMode: miniPlayerMode ?? this.miniPlayerMode,
+      miniPlayerBackgroundMode:
+          miniPlayerBackgroundMode ?? this.miniPlayerBackgroundMode,
       lyricsTextAlignment: lyricsTextAlignment ?? this.lyricsTextAlignment,
       lyricsAnimationStyle: lyricsAnimationStyle ?? this.lyricsAnimationStyle,
       lyricsRomanizationEnabled:
@@ -105,6 +150,7 @@ class SettingsState {
           lyricsRomanizationLanguages ?? this.lyricsRomanizationLanguages,
       recommendationHistoryEnabled:
           recommendationHistoryEnabled ?? this.recommendationHistoryEnabled,
+      localMusicFilters: localMusicFilters ?? this.localMusicFilters,
       crossfadeEnabled: crossfadeEnabled ?? this.crossfadeEnabled,
       crossfadeDuration: crossfadeDuration ?? this.crossfadeDuration,
       ytDlpPath: ytDlpPath ?? this.ytDlpPath,
@@ -120,6 +166,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _languageKey = 'settings.language';
   static const _themeModeKey = 'settings.themeMode';
   static const _accentKey = 'settings.accent';
+  static const _surfaceBackgroundModeKey = 'settings.surfaceBackgroundMode';
+  static const _miniPlayerModeKey = 'settings.miniPlayerMode';
+  static const _miniPlayerBackgroundModeKey =
+      'settings.miniPlayerBackgroundMode';
   static const _lyricsTextAlignmentKey = 'settings.lyricsAlignment';
   static const _lyricsAnimationStyleKey = 'settings.lyricsAnimation';
   static const _lyricsRomanizationEnabledKey =
@@ -128,6 +178,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       'settings.lyricsRomanizationLanguages';
   static const _recommendationHistoryEnabledKey =
       'settings.recommendationHistoryEnabled';
+  static const _localMusicFiltersKey = 'settings.localMusicFilters';
   static const _crossfadeEnabledKey = 'settings.crossfadeEnabled';
   static const _crossfadeSecondsKey = 'settings.crossfadeSeconds';
   static const _mediaRootDirectoryName = 'BStream-Music';
@@ -135,6 +186,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
   Future<void> _lyricsRomanizationWriteTail = Future<void>.value();
   Future<void> _recommendationHistoryWriteTail = Future<void>.value();
+  Future<void> _localMusicFiltersWriteTail = Future<void>.value();
   Future<void> _crossfadeWriteTail = Future<void>.value();
 
   @override
@@ -148,6 +200,15 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     if (storedAccentCode == 'amber') {
       await prefs.setString(_accentKey, accent.code);
     }
+    final surfaceBackgroundMode = SurfaceBackgroundMode.fromCode(
+      prefs.getString(_surfaceBackgroundModeKey),
+    );
+    final miniPlayerMode = MiniPlayerMode.fromCode(
+      prefs.getString(_miniPlayerModeKey),
+    );
+    final miniPlayerBackgroundMode = MiniPlayerBackgroundMode.fromCode(
+      prefs.getString(_miniPlayerBackgroundModeKey),
+    );
     final lyricsTextAlignment = LyricsTextAlignment.fromCode(
       prefs.getString(_lyricsTextAlignmentKey),
     );
@@ -170,6 +231,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     );
     final recommendationHistoryEnabled =
         prefs.getBool(_recommendationHistoryEnabledKey) ?? true;
+    final localMusicFilters = LocalMusicFilter.fromCodes(
+      prefs.getStringList(_localMusicFiltersKey),
+    );
     final crossfadeSeconds = prefs.getInt(_crossfadeSecondsKey);
     final crossfadeDuration = crossfadeDurationFromStoredSeconds(
       crossfadeSeconds,
@@ -286,11 +350,15 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         language: language,
         themeMode: themeMode,
         accent: accent,
+        surfaceBackgroundMode: surfaceBackgroundMode,
+        miniPlayerMode: miniPlayerMode,
+        miniPlayerBackgroundMode: miniPlayerBackgroundMode,
         lyricsTextAlignment: lyricsTextAlignment,
         lyricsAnimationStyle: lyricsAnimationStyle,
         lyricsRomanizationEnabled: lyricsRomanizationEnabled,
         lyricsRomanizationLanguages: lyricsRomanizationLanguages,
         recommendationHistoryEnabled: recommendationHistoryEnabled,
+        localMusicFilters: localMusicFilters,
         crossfadeEnabled: crossfadeEnabled,
         crossfadeDuration: crossfadeDuration,
         ytDlpPath: await downloader.getYtDlpPath(),
@@ -303,11 +371,15 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       language: language,
       themeMode: themeMode,
       accent: accent,
+      surfaceBackgroundMode: surfaceBackgroundMode,
+      miniPlayerMode: miniPlayerMode,
+      miniPlayerBackgroundMode: miniPlayerBackgroundMode,
       lyricsTextAlignment: lyricsTextAlignment,
       lyricsAnimationStyle: lyricsAnimationStyle,
       lyricsRomanizationEnabled: lyricsRomanizationEnabled,
       lyricsRomanizationLanguages: lyricsRomanizationLanguages,
       recommendationHistoryEnabled: recommendationHistoryEnabled,
+      localMusicFilters: localMusicFilters,
       crossfadeEnabled: crossfadeEnabled,
       crossfadeDuration: crossfadeDuration,
     );
@@ -523,6 +595,29 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     state = AsyncData(current.copyWith(accent: accent));
   }
 
+  Future<void> setSurfaceBackgroundMode(SurfaceBackgroundMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_surfaceBackgroundModeKey, mode.code);
+    final current = await future;
+    state = AsyncData(current.copyWith(surfaceBackgroundMode: mode));
+  }
+
+  Future<void> setMiniPlayerMode(MiniPlayerMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_miniPlayerModeKey, mode.code);
+    final current = await future;
+    state = AsyncData(current.copyWith(miniPlayerMode: mode));
+  }
+
+  Future<void> setMiniPlayerBackgroundMode(
+    MiniPlayerBackgroundMode mode,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_miniPlayerBackgroundModeKey, mode.code);
+    final current = await future;
+    state = AsyncData(current.copyWith(miniPlayerBackgroundMode: mode));
+  }
+
   Future<void> setLyricsTextAlignment(
     LyricsTextAlignment lyricsTextAlignment,
   ) async {
@@ -657,6 +752,36 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       // A later qualifying listen creates a completely fresh engine.
       ..invalidate(personalizedHomeFeedSourceProvider)
       ..invalidate(homeRecommendationsProvider);
+  }
+
+  Future<void> setLocalMusicFilters(Set<LocalMusicFilter> filters) async {
+    final selected = Set<LocalMusicFilter>.unmodifiable(filters);
+    final current = state.asData?.value ?? await future;
+    if (current.localMusicFilters.length == selected.length &&
+        current.localMusicFilters.containsAll(selected)) {
+      return;
+    }
+    state = AsyncData(current.copyWith(localMusicFilters: selected));
+    final write = _localMusicFiltersWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_localMusicFiltersKey, [
+        for (final filter in LocalMusicFilter.values)
+          if (selected.contains(filter)) filter.code,
+      ]);
+    });
+    _localMusicFiltersWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> toggleLocalMusicFilter(LocalMusicFilter filter) async {
+    final current = state.asData?.value ?? await future;
+    final selected = current.localMusicFilters.toSet();
+    if (!selected.add(filter)) {
+      selected.remove(filter);
+    }
+    await setLocalMusicFilters(selected);
   }
 
   Future<void> setCrossfadeEnabled(bool enabled) async {

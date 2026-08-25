@@ -37,6 +37,7 @@ void main() {
       artists: const ['Lady Gaga', 'Bruno Mars'],
       artistBrowseIds: const ['UC-LadyGaga', null],
       album: 'MAYHEM',
+      albumBrowseId: 'MPREmayhem001',
       duration: const Duration(minutes: 4, seconds: 12),
       thumbnailUrl: 'https://i.ytimg.com/vi/DlFXDl_ROAM/hq720.jpg',
       catalogThumbnailUrl: 'https://music.example/catalog-artwork.jpg',
@@ -51,6 +52,8 @@ void main() {
     expect(track.artistBrowseIds, const ['UC-LadyGaga', null]);
     expect(encoded['artist_browse_ids'], const ['UC-LadyGaga', null]);
     expect(track.album, 'MAYHEM');
+    expect(track.albumBrowseId, 'MPREmayhem001');
+    expect(encoded['album_browse_id'], 'MPREmayhem001');
     expect(track.duration, const Duration(minutes: 4, seconds: 12));
     expect(
       track.catalogThumbnailUrl,

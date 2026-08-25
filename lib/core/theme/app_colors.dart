@@ -30,11 +30,160 @@ abstract final class AppColors {
         downloadGradient;
   }
 
+  static SurfaceBackgroundMode surfaceBackgroundModeFor(BuildContext context) {
+    return Theme.of(context).extension<AppSurfaceTheme>()?.backgroundMode ??
+        SurfaceBackgroundMode.accent;
+  }
+
+  /// Shared background for fixed chrome. Accent mode remains deliberately
+  /// substantial, while transparent mode keeps enough contrast for labels and
+  /// lets the blurred content underneath remain recognizable.
+  static Color surfaceChromeFor(
+    BuildContext context, {
+    double accentModeAlpha = 1,
+    double transparentDarkAlpha = 0.34,
+    double transparentLightAlpha = 0.42,
+    double accentTintAlpha = 0.06,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
+    final transparent =
+        surfaceBackgroundModeFor(context) == SurfaceBackgroundMode.transparent;
+    final surfaceAlpha = transparent
+        ? theme.brightness == Brightness.dark
+              ? transparentDarkAlpha
+              : transparentLightAlpha
+        : accentModeAlpha;
+    return Color.alphaBlend(
+      accent.withValues(alpha: accentTintAlpha),
+      colors.surface.withValues(alpha: surfaceAlpha),
+    );
+  }
+
+  /// Accent wash painted above translucent surfaces. The colors intentionally
+  /// remain semi-transparent so the surface keeps the depth supplied by its
+  /// [BackdropFilter] instead of becoming another opaque accent card.
+  static LinearGradient glassAccentGradientFor(
+    BuildContext context, {
+    double intensity = 1,
+    AlignmentGeometry begin = Alignment.centerLeft,
+    AlignmentGeometry end = Alignment.centerRight,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accentTheme = theme.extension<AppAccentTheme>();
+    final seed = accentTheme?.seed ?? colors.primary;
+    final dark = accentTheme?.dark ?? colors.primary;
+    final transparent =
+        surfaceBackgroundModeFor(context) == SurfaceBackgroundMode.transparent;
+    final isDark = theme.brightness == Brightness.dark;
+    final edgeAlpha =
+        (transparent
+            ? isDark
+                  ? 0.018
+                  : 0.012
+            : isDark
+            ? 0.012
+            : 0.008) *
+        intensity;
+    final centerAlpha =
+        (transparent
+            ? isDark
+                  ? 0.075
+                  : 0.052
+            : isDark
+            ? 0.045
+            : 0.032) *
+        intensity;
+
+    return LinearGradient(
+      begin: begin,
+      end: end,
+      colors: <Color>[
+        dark.withValues(alpha: edgeAlpha.clamp(0, 1)),
+        seed.withValues(alpha: centerAlpha.clamp(0, 1)),
+        dark.withValues(alpha: edgeAlpha.clamp(0, 1)),
+      ],
+      stops: const <double>[0, 0.5, 1],
+    );
+  }
+
+  /// Complete glass fill for widgets whose decoration cannot layer a base
+  /// color and an accent wash independently.
+  static LinearGradient glassSurfaceGradientFor(
+    BuildContext context, {
+    required Color baseColor,
+    double intensity = 1,
+    AlignmentGeometry begin = Alignment.centerLeft,
+    AlignmentGeometry end = Alignment.centerRight,
+  }) {
+    final wash = glassAccentGradientFor(
+      context,
+      intensity: intensity,
+      begin: begin,
+      end: end,
+    );
+    return LinearGradient(
+      begin: begin,
+      end: end,
+      colors: wash.colors
+          .map((color) => Color.alphaBlend(color, baseColor))
+          .toList(growable: false),
+      stops: wash.stops,
+    );
+  }
+
   static Color menuBackgroundFor(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return colors.brightness == Brightness.dark
-        ? menuBackground
-        : colors.surfaceContainerHighest.withValues(alpha: 0.97);
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accentTheme = theme.extension<AppAccentTheme>();
+    return _menuBackgroundForColors(
+      seed: accentTheme?.seed ?? colors.primary,
+      dark: accentTheme?.dark ?? colors.primary,
+      colors: colors,
+      backgroundMode: surfaceBackgroundModeFor(context),
+    );
+  }
+
+  /// Popup-menu surface used while building the application theme. Keeping
+  /// this calculation shared with [menuBackgroundFor] makes overlay routes
+  /// react to the persisted surface preference just like in-tree widgets do.
+  static Color menuBackgroundForTheme(
+    AppAccent accent,
+    ColorScheme colors, {
+    required SurfaceBackgroundMode backgroundMode,
+  }) {
+    return _menuBackgroundForColors(
+      seed: accent.seedColor,
+      dark: accent.darkColor,
+      colors: colors,
+      backgroundMode: backgroundMode,
+    );
+  }
+
+  static Color _menuBackgroundForColors({
+    required Color seed,
+    required Color dark,
+    required ColorScheme colors,
+    required SurfaceBackgroundMode backgroundMode,
+  }) {
+    final isDark = colors.brightness == Brightness.dark;
+    final tint = isDark ? seed : dark;
+    final base = switch (backgroundMode) {
+      SurfaceBackgroundMode.accent =>
+        isDark
+            ? menuBackground
+            : colors.surfaceContainerHighest.withValues(alpha: 0.97),
+      SurfaceBackgroundMode.transparent => colors.surface.withValues(
+        alpha: isDark ? 0.56 : 0.68,
+      ),
+    };
+    final tintStrength = switch (backgroundMode) {
+      SurfaceBackgroundMode.accent => isDark ? 0.075 : 0.06,
+      SurfaceBackgroundMode.transparent => isDark ? 0.09 : 0.07,
+    };
+    return Color.alphaBlend(tint.withValues(alpha: tintStrength), base);
   }
 
   static Color neutralSurfaceFor(BuildContext context) {
@@ -76,10 +225,57 @@ abstract final class AppColors {
   }
 
   static Color menuBorderFor(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return colors.brightness == Brightness.dark
-        ? menuBorder
-        : colors.outlineVariant.withValues(alpha: 0.9);
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accentTheme = theme.extension<AppAccentTheme>();
+    return _menuBorderForColors(
+      seed: accentTheme?.seed ?? colors.primary,
+      dark: accentTheme?.dark ?? colors.primary,
+      colors: colors,
+      backgroundMode: surfaceBackgroundModeFor(context),
+    );
+  }
+
+  static Color menuBorderForTheme(
+    AppAccent accent,
+    ColorScheme colors, {
+    required SurfaceBackgroundMode backgroundMode,
+  }) {
+    return _menuBorderForColors(
+      seed: accent.seedColor,
+      dark: accent.darkColor,
+      colors: colors,
+      backgroundMode: backgroundMode,
+    );
+  }
+
+  static Color _menuBorderForColors({
+    required Color seed,
+    required Color dark,
+    required ColorScheme colors,
+    required SurfaceBackgroundMode backgroundMode,
+  }) {
+    final isDark = colors.brightness == Brightness.dark;
+    final tint = isDark ? seed : dark;
+    final base = isDark ? Colors.white : colors.outlineVariant;
+    final tintStrength = backgroundMode == SurfaceBackgroundMode.transparent
+        ? isDark
+              ? 0.3
+              : 0.22
+        : isDark
+        ? 0.22
+        : 0.16;
+    final alpha = backgroundMode == SurfaceBackgroundMode.transparent
+        ? isDark
+              ? 0.34
+              : 0.52
+        : isDark
+        ? 0.22
+        : 0.72;
+    return Color.alphaBlend(
+      tint.withValues(alpha: tintStrength),
+      base,
+    ).withValues(alpha: alpha);
   }
 
   static Color menuIconFor(BuildContext context) {
@@ -128,23 +324,63 @@ abstract final class AppColors {
   /// Shared surface for dialogs and other modal panels. It follows the same
   /// restrained accent wash as cards without inheriting Material 3's much
   /// brighter surface-container colors.
-  static Color dialogSurfaceForTheme(AppAccent accent, ColorScheme colors) {
-    final tintStrength = colors.brightness == Brightness.dark ? 0.08 : 0.06;
+  static Color dialogSurfaceForTheme(
+    AppAccent accent,
+    ColorScheme colors, {
+    SurfaceBackgroundMode backgroundMode = SurfaceBackgroundMode.accent,
+  }) {
+    final isDark = colors.brightness == Brightness.dark;
+    final tint = isDark ? accent.seedColor : accent.darkColor;
+    final surfaceAlpha = backgroundMode == SurfaceBackgroundMode.transparent
+        ? isDark
+              ? 0.7
+              : 0.78
+        : 0.97;
+    final tintStrength = backgroundMode == SurfaceBackgroundMode.transparent
+        ? isDark
+              ? 0.09
+              : 0.07
+        : isDark
+        ? 0.08
+        : 0.06;
     return Color.alphaBlend(
-      accent.seedColor.withValues(alpha: tintStrength),
-      colors.surface,
-    ).withValues(alpha: 0.97);
+      tint.withValues(alpha: tintStrength),
+      colors.surface.withValues(alpha: surfaceAlpha),
+    );
   }
 
-  static Color dialogBorderForTheme(AppAccent accent, ColorScheme colors) {
-    final tintStrength = colors.brightness == Brightness.dark ? 0.24 : 0.18;
+  static Color dialogBorderForTheme(
+    AppAccent accent,
+    ColorScheme colors, {
+    SurfaceBackgroundMode backgroundMode = SurfaceBackgroundMode.accent,
+  }) {
+    final transparent = backgroundMode == SurfaceBackgroundMode.transparent;
+    final tintStrength = colors.brightness == Brightness.dark
+        ? transparent
+              ? 0.32
+              : 0.24
+        : transparent
+        ? 0.24
+        : 0.18;
     return Color.alphaBlend(
       (colors.brightness == Brightness.dark
               ? accent.seedColor
               : accent.darkColor)
           .withValues(alpha: tintStrength),
       colors.outlineVariant,
-    ).withValues(alpha: 0.9);
+    ).withValues(alpha: transparent ? 0.74 : 0.9);
+  }
+
+  static Color dialogBarrierForTheme(
+    ColorScheme colors, {
+    required SurfaceBackgroundMode backgroundMode,
+  }) {
+    if (backgroundMode == SurfaceBackgroundMode.accent) {
+      return Colors.black54;
+    }
+    return Colors.black.withValues(
+      alpha: colors.brightness == Brightness.dark ? 0.32 : 0.22,
+    );
   }
 
   static Color homeCardSurfaceFor(BuildContext context) {
@@ -176,13 +412,70 @@ abstract final class AppColors {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
-    final tintedSurface = Color.alphaBlend(
-      accent.withValues(alpha: 0.06),
+    final accentDark =
+        theme.extension<AppAccentTheme>()?.dark ?? colors.primary;
+    final headerAccent = theme.brightness == Brightness.dark
+        ? accent
+        : accentDark;
+    if (surfaceBackgroundModeFor(context) ==
+        SurfaceBackgroundMode.transparent) {
+      final base = colors.surface.withValues(
+        alpha: theme.brightness == Brightness.dark
+            ? scrolledUnder
+                  ? 0.52
+                  : 0.38
+            : scrolledUnder
+            ? 0.6
+            : 0.46,
+      );
+      final tintStrength = theme.brightness == Brightness.dark
+          ? scrolledUnder
+                ? 0.11
+                : 0.085
+          : scrolledUnder
+          ? 0.085
+          : 0.065;
+      return Color.alphaBlend(
+        headerAccent.withValues(alpha: tintStrength),
+        base,
+      );
+    }
+    final tintStrength = theme.brightness == Brightness.dark
+        ? scrolledUnder
+              ? 0.13
+              : 0.1
+        : scrolledUnder
+        ? 0.105
+        : 0.08;
+    return Color.alphaBlend(
+      headerAccent.withValues(alpha: tintStrength),
       colors.surface,
     );
-    return scrolledUnder
-        ? tintedSurface.withValues(alpha: 0.84)
-        : tintedSurface;
+  }
+
+  static Color tabHeaderBorderFor(
+    BuildContext context, {
+    required bool scrolledUnder,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accentTheme = theme.extension<AppAccentTheme>();
+    final accent = theme.brightness == Brightness.dark
+        ? accentTheme?.seed ?? colors.primary
+        : accentTheme?.dark ?? colors.primary;
+    final transparent =
+        surfaceBackgroundModeFor(context) == SurfaceBackgroundMode.transparent;
+    final tintStrength = transparent
+        ? scrolledUnder
+              ? 0.32
+              : 0.24
+        : scrolledUnder
+        ? 0.24
+        : 0.16;
+    return Color.alphaBlend(
+      accent.withValues(alpha: tintStrength),
+      colors.outlineVariant,
+    ).withValues(alpha: scrolledUnder ? 0.5 : 0.3);
   }
 
   static Color playbackPrimaryBackgroundFor(BuildContext context) {

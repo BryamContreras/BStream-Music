@@ -1,14 +1,16 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
+import '../widgets/artwork_gradient_header_background.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/source_image.dart';
+import '../widgets/surface_detail_app_bar.dart';
 import '../widgets/track_result_tile.dart';
 
 typedef AddRemoteTracksToPlaylist =
@@ -56,13 +58,32 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
     };
     final resolvedArtworkSource =
         artworkSource ?? (tracks.isEmpty ? null : tracks.first.thumbnailUrl);
-    final miniPlayerHeight = miniPlayerHeightFor(context);
+    final miniPlayerAppearance = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => (
+          mode: settings.value?.miniPlayerMode ?? defaultMiniPlayerMode,
+          backgroundMode:
+              settings.value?.miniPlayerBackgroundMode ??
+              defaultMiniPlayerBackgroundMode,
+        ),
+      ),
+    );
+    final miniPlayerMode = miniPlayerAppearance.mode;
+    final underlayMiniPlayer =
+        miniPlayerMode == MiniPlayerMode.capsule ||
+        miniPlayerAppearance.backgroundMode ==
+            MiniPlayerBackgroundMode.transparent;
+    final miniPlayerHeight = miniPlayerHeightFor(context, mode: miniPlayerMode);
 
     return Scaffold(
       key: const ValueKey('remote-collection-detail'),
+      extendBody: underlayMiniPlayer,
+      extendBodyBehindAppBar: true,
       backgroundColor: Theme.of(context).colorScheme.surface,
-      appBar: AppBar(
-        key: const ValueKey('remote-collection-app-bar'),
+      appBar: SurfaceDetailAppBar(
+        appBarKey: const ValueKey('remote-collection-app-bar'),
+        surfaceKey: const ValueKey('remote-collection-app-bar-surface'),
+        blurKey: const ValueKey('remote-collection-app-bar-blur'),
         leading: IconButton(
           key: const ValueKey('remote-collection-back'),
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,
@@ -72,7 +93,14 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
       body: CustomScrollView(
+        scrollCacheExtent: const ScrollCacheExtent.pixels(800),
         slivers: [
+          SliverToBoxAdapter(
+            child: SizedBox(
+              key: const ValueKey('remote-collection-app-bar-spacer'),
+              height: surfaceDetailAppBarBodyInset(context),
+            ),
+          ),
           SliverToBoxAdapter(
             child: _CollectionHeader(
               title: title,
@@ -160,12 +188,18 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
       // while the keyboard is visible.
       bottomNavigationBar: ColoredBox(
         key: const ValueKey('remote-collection-mini-player'),
-        color: Theme.of(context).colorScheme.surface,
+        color: underlayMiniPlayer
+            ? Colors.transparent
+            : Theme.of(context).colorScheme.surface,
         child: SafeArea(
           top: false,
           child: SizedBox(
             height: miniPlayerHeight,
-            child: MiniPlayer(onOpenPlayer: () => _openPlayer(context)),
+            child: MiniPlayer(
+              mode: miniPlayerMode,
+              backgroundMode: miniPlayerAppearance.backgroundMode,
+              onOpenPlayer: () => _openPlayer(context),
+            ),
           ),
         ),
       ),
@@ -340,9 +374,10 @@ class _CollectionHeader extends StatelessWidget {
           child: Stack(
             children: [
               Positioned.fill(
-                child: _CollectionHeaderBackground(
+                child: ArtworkGradientHeaderBackground(
                   artworkSource: artworkSource,
                   cacheWidth: artworkCacheWidth,
+                  keyPrefix: 'remote-collection',
                 ),
               ),
               Center(
@@ -378,95 +413,6 @@ class _CollectionHeader extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _CollectionHeaderBackground extends StatelessWidget {
-  const _CollectionHeaderBackground({
-    required this.artworkSource,
-    required this.cacheWidth,
-  });
-
-  final String? artworkSource;
-  final int cacheWidth;
-
-  @override
-  Widget build(BuildContext context) {
-    final source = artworkSource?.trim();
-    final colors = Theme.of(context).colorScheme;
-    final isDark = colors.brightness == Brightness.dark;
-    final fallback = _CollectionHeaderBackgroundFallback(
-      key: const ValueKey('remote-collection-background-fallback'),
-    );
-
-    return ClipRect(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          fallback,
-          if (source != null && source.isNotEmpty)
-            ExcludeSemantics(
-              child: ImageFiltered(
-                key: const ValueKey('remote-collection-background-blur'),
-                imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                child: Transform.scale(
-                  scale: 1.16,
-                  child: SourceImage(
-                    key: const ValueKey('remote-collection-background-image'),
-                    source: source,
-                    fit: BoxFit.cover,
-                    // Match the foreground provider key so Flutter's image
-                    // cache can share one bounded decode between both paints.
-                    cacheWidth: cacheWidth,
-                    // The gradient immediately underneath remains visible
-                    // when loading fails, without another decorated copy.
-                    fallback: const SizedBox.expand(),
-                  ),
-                ),
-              ),
-            ),
-          DecoratedBox(
-            key: const ValueKey('remote-collection-background-overlay'),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  colors.surface.withValues(alpha: isDark ? 0.58 : 0.64),
-                  colors.surface.withValues(alpha: isDark ? 0.76 : 0.82),
-                  colors.surface.withValues(alpha: 0.96),
-                ],
-                stops: const [0, 0.54, 1],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CollectionHeaderBackgroundFallback extends StatelessWidget {
-  const _CollectionHeaderBackgroundFallback({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color.alphaBlend(
-              colors.primary.withValues(alpha: 0.10),
-              colors.surface,
-            ),
-            colors.surface,
-          ],
-        ),
-      ),
     );
   }
 }

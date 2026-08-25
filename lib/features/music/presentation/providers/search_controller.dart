@@ -39,6 +39,8 @@ class SearchState {
       selectedPage?.tracks ?? const <TrackInfo>[];
   List<SearchAlbum> get selectedAlbums =>
       selectedPage?.albums ?? const <SearchAlbum>[];
+  List<SearchArtist> get selectedArtists =>
+      selectedPage?.artists ?? const <SearchArtist>[];
   List<SearchCategory> get availableCategories => fallbackOnly
       ? const <SearchCategory>[SearchCategory.videos]
       : SearchCategory.values;

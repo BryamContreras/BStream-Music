@@ -238,6 +238,51 @@ class RemotePlaylistMutationApplied {
   const RemotePlaylistMutationApplied();
 }
 
+class RemoteArtistSubscriptionState {
+  const RemoteArtistSubscriptionState({
+    required this.channelId,
+    required this.isSubscribed,
+  });
+
+  final String channelId;
+  final bool isSubscribed;
+}
+
+/// One artist followed by the authenticated YouTube Music account.
+///
+/// [browseId] is the stable navigation identity exposed by the Music client
+/// (usually an `UC...` channel or `MPLA...` artist id). [channelId] is kept
+/// separately because subscription mutations accept only `UC...` ids.
+class RemoteSubscribedArtist {
+  const RemoteSubscribedArtist({
+    required this.browseId,
+    required this.name,
+    this.channelId,
+    this.thumbnailUrl,
+  });
+
+  final String browseId;
+  final String name;
+  final String? channelId;
+  final String? thumbnailUrl;
+
+  String get identity => channelId ?? browseId;
+}
+
+class RemoteSubscribedArtistCollection {
+  RemoteSubscribedArtistCollection({
+    required List<RemoteSubscribedArtist> artists,
+    required this.termination,
+    required this.pagesFetched,
+  }) : artists = List<RemoteSubscribedArtist>.unmodifiable(artists);
+
+  final List<RemoteSubscribedArtist> artists;
+  final RemotePaginationTermination termination;
+  final int pagesFetched;
+
+  bool get isComplete => termination == RemotePaginationTermination.exhausted;
+}
+
 List<String?> _normalizeArtistBrowseIds(
   List<String> artists,
   List<String?>? artistBrowseIds,

@@ -1,9 +1,12 @@
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/features/music/domain/entities/search_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
+import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
 import 'package:flutter/material.dart' hide SearchController;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -551,6 +554,131 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('InnerTube no respondió'), findsOneWidget);
+  });
+
+  testWidgets(
+    'Artists uses circular portraits and opens the selected profile',
+    (tester) async {
+      const artist = SearchArtist(
+        browseId: 'UC-search-artist',
+        name: 'Artista circular',
+        thumbnailUrl: 'https://lh3.googleusercontent.com/artist=w512-h512',
+      );
+      final controller = _RecordingSearchController(
+        SearchState(
+          query: 'artista',
+          pages: <SearchCategory, SearchPage>{
+            SearchCategory.songs: SearchPage(
+              category: SearchCategory.songs,
+              backend: SearchBackend.innerTube,
+            ),
+            SearchCategory.artists: SearchPage(
+              category: SearchCategory.artists,
+              backend: SearchBackend.innerTube,
+              artists: const <SearchArtist>[artist],
+            ),
+          },
+        ),
+      );
+
+      await tester.pumpWidget(
+        _searchApp(
+          controller: controller,
+          platform: TargetPlatform.android,
+          extraOverrides: [
+            playerControllerProvider.overrideWith(
+              () => _RecordingPlayerController(),
+            ),
+            artistProfileProvider.overrideWith((ref, request) async {
+              return InnerTubeArtistProfile(
+                artist: InnerTubeArtist(
+                  browseId: request.artistBrowseId,
+                  name: request.artistName,
+                  thumbnailUrl: request.artistThumbnailUrl,
+                ),
+                popularSongs: const <InnerTubeSong>[],
+                albums: const <InnerTubeAlbum>[],
+                singles: const <InnerTubeAlbum>[],
+              );
+            }),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('search-category-songs')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('search-category-videos')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('search-category-albums')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('search-category-artists')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('search-category-artists')));
+      await tester.pumpAndSettle();
+
+      expect(controller.selectedCategories, [SearchCategory.artists]);
+      final portrait = find.byKey(
+        const ValueKey('search-artist-artwork-UC-search-artist'),
+      );
+      expect(portrait, findsOneWidget);
+      expect(tester.widget<ClipOval>(portrait), isA<ClipOval>());
+      expect(
+        tester
+            .widget<SourceImage>(
+              find.descendant(of: portrait, matching: find.byType(SourceImage)),
+            )
+            .source,
+        artist.thumbnailUrl,
+      );
+      expect(find.text(artist.name), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('search-artist-open-UC-search-artist')),
+      );
+      await tester.pumpAndSettle();
+
+      final profile = tester.widget<ArtistProfilePage>(
+        find.byType(ArtistProfilePage),
+      );
+      expect(profile.artistBrowseId, artist.browseId);
+      expect(profile.artistName, artist.name);
+      expect(profile.artistThumbnailUrl, artist.thumbnailUrl);
+    },
+  );
+
+  testWidgets('Artists shows its own empty state', (tester) async {
+    final controller = _RecordingSearchController(
+      SearchState(
+        query: 'sin coincidencias',
+        selectedCategory: SearchCategory.artists,
+        pages: <SearchCategory, SearchPage>{
+          SearchCategory.artists: SearchPage(
+            category: SearchCategory.artists,
+            backend: SearchBackend.innerTube,
+          ),
+        },
+      ),
+    );
+
+    await tester.pumpWidget(_searchApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Artistas'), findsNWidgets(2));
+    expect(
+      find.text('No encontramos artistas para esta búsqueda.'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.person_rounded), findsWidgets);
   });
 
   testWidgets(

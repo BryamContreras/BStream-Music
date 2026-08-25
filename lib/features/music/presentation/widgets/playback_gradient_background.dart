@@ -7,6 +7,7 @@ import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../providers/music_providers.dart';
 import 'source_image.dart';
+import 'track_change_transition.dart';
 
 /// Neutral background used by the browsing tabs. Artwork belongs to the player
 /// surface and should not tint navigation screens behind their content cards.
@@ -144,10 +145,20 @@ class _AnimatedPlaybackArtworkState extends State<_AnimatedPlaybackArtwork> {
   @override
   Widget build(BuildContext context) {
     final source = widget.source;
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 520);
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 520),
+      key: const ValueKey('player-background-track-transition'),
+      duration: duration,
+      reverseDuration: duration,
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
+      layoutBuilder: (currentChild, previousChildren) => Stack(
+        fit: StackFit.expand,
+        children: <Widget>[...previousChildren, ?currentChild],
+      ),
+      transitionBuilder: noDimmingFadeTransitionBuilder,
       child: SizedBox.expand(
         // The id changes only when the source changes, but remains unique if
         // the same source is selected again before the previous animation

@@ -2,6 +2,8 @@ import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/entities/lyrics_romanization_language.dart';
 import 'lyrics_animation_style.dart';
+import 'mini_player_background_mode.dart';
+import 'mini_player_mode.dart';
 
 enum AppLanguage { spanish, english }
 
@@ -34,10 +36,56 @@ class AppStrings {
   String choose(String es, String en) => isEnglish ? en : es;
 
   String get home => choose('Inicio', 'Home');
+  String homeGreeting({required int hour, String? firstName}) {
+    assert(hour >= 0 && hour < 24);
+    final normalized = firstName?.trim();
+    final greeting = hour < 12
+        ? choose('Buenos días', 'Good morning')
+        : choose('Buenas tardes', 'Good afternoon');
+    if (normalized == null || normalized.isEmpty) {
+      return greeting;
+    }
+    return '$greeting, $normalized';
+  }
+
   String get refreshHomeRecommendations =>
       choose('Refrescar recomendaciones', 'Refresh recommendations');
   String get refreshingHomeRecommendations =>
       choose('Refrescando recomendaciones', 'Refreshing recommendations');
+  String get popularArtists => choose('Artistas populares', 'Popular artists');
+  String get recommendedArtists =>
+      choose('Artistas recomendados', 'Recommended artists');
+  String get goToArtist => choose('Ir al artista', 'Go to artist');
+  String get goToAlbum => choose('Ir al álbum', 'Go to album');
+  String get albumNavigationUnavailable => choose(
+    'No se pudo encontrar el álbum de esta canción.',
+    'The album for this song could not be found.',
+  );
+  String get artistProfile => choose('Perfil del artista', 'Artist profile');
+  String get popularSongs => choose('Canciones más populares', 'Popular songs');
+  String get albums => choose('Álbumes', 'Albums');
+  String get singles => choose('Sencillos', 'Singles');
+  String get artistMix => 'Mix';
+  String get subscribe => choose('Suscribirse', 'Subscribe');
+  String get unsubscribe => choose('Cancelar suscripción', 'Unsubscribe');
+  String get artistProfileLoadError => choose(
+    'No se pudo cargar el perfil del artista.',
+    'The artist profile could not be loaded.',
+  );
+  String get artistMixLoadError => choose(
+    'No se pudo iniciar el mix del artista.',
+    'The artist mix could not be started.',
+  );
+  String get artistSubscriptionFailed => choose(
+    'No se pudo actualizar la suscripción.',
+    'The subscription could not be updated.',
+  );
+  String get artistSubscriptionUnavailable => choose(
+    'Este artista no tiene una suscripción disponible.',
+    'A subscription is not available for this artist.',
+  );
+  String get signInToSubscribe =>
+      choose('Inicia sesión para suscribirte', 'Sign in to subscribe');
   String get youtubeMusicAccount =>
       choose('Cuenta de YouTube Music', 'YouTube Music account');
   String get youtubeMusic => choose('YouTube Music', 'YouTube Music');
@@ -171,6 +219,29 @@ class AppStrings {
   String get clearSearch => choose('Limpiar búsqueda', 'Clear search');
   String get searchTitle => choose('Búsqueda', 'Search');
   String get player => choose('Reproductor', 'Player');
+  String get localTab => 'Local';
+  String get localMusic => choose('Música local', 'Local music');
+  String get allLocalSongs => choose('Todas las canciones', 'All songs');
+  String get localMusicFolders => choose('Carpetas', 'Folders');
+  String get localMusicEmptyTitle =>
+      choose('No encontramos música local', 'No local music found');
+  String get localMusicEmptyBody => choose(
+    'Agrega archivos de audio al dispositivo o revisa los filtros de almacenamiento.',
+    'Add audio files to the device or review the storage filters.',
+  );
+  String get localMusicPermissionTitle =>
+      choose('Permite el acceso a tu música', 'Allow access to your music');
+  String get localMusicPermissionBody => choose(
+    'BStream necesita permiso para mostrar y reproducir los archivos de audio del dispositivo.',
+    'BStream needs permission to show and play audio files on this device.',
+  );
+  String get allowMusicAccess => choose('Permitir acceso', 'Allow access');
+  String get localMusicLoadError => choose(
+    'No se pudo leer la música del dispositivo.',
+    'Device music could not be read.',
+  );
+  String get playAll => choose('Reproducir todo', 'Play all');
+  String get refresh => choose('Actualizar', 'Refresh');
   String get library => choose('Biblioteca', 'Library');
   String get settings => choose('Ajustes', 'Settings');
   String get searchHint =>
@@ -185,6 +256,7 @@ class AppStrings {
   String get searchSongs => choose('Canciones', 'Songs');
   String get searchVideos => choose('Videos', 'Videos');
   String get searchAlbums => choose('Álbumes', 'Albums');
+  String get searchArtists => choose('Artistas', 'Artists');
   String get searchSongsEmpty => choose(
     'No encontramos canciones para esta búsqueda.',
     'No songs matched this search.',
@@ -196,6 +268,10 @@ class AppStrings {
   String get searchAlbumsEmpty => choose(
     'No encontramos álbumes para esta búsqueda.',
     'No albums matched this search.',
+  );
+  String get searchArtistsEmpty => choose(
+    'No encontramos artistas para esta búsqueda.',
+    'No artists matched this search.',
   );
   String get searchInnerTubeFallback => choose(
     'InnerTube no respondió. Se usó yt-dlp y sólo se muestran videos.',
@@ -643,6 +719,23 @@ class AppStrings {
   String get themeLight => choose('Claro', 'Light');
   String get themeDark => choose('Oscuro', 'Dark');
   String get accentColor => choose('Color de acento', 'Accent color');
+  String get surfaceEffects =>
+      choose('Efectos de superficie', 'Surface effects');
+  String get surfaceBackground =>
+      choose('Fondo de las superficies', 'Surface background');
+  String get surfaceBackgroundAccent => choose('Acento', 'Accent');
+  String get surfaceBackgroundTransparent =>
+      choose('Transparente', 'Transparent');
+  String get miniPlayer => choose('Mini reproductor', 'Mini player');
+  String get miniPlayerStyle => choose('Estilo', 'Style');
+  String get miniPlayerClassic => choose('Clásico', 'Classic');
+  String get miniPlayerCapsule => choose('Cápsula', 'Capsule');
+  String get miniPlayerBackground =>
+      choose('Fondo del Mini reproductor', 'Mini player background');
+  String get miniPlayerBackgroundAccent => choose('Acento', 'Accent');
+  String get miniPlayerBackgroundArtwork => choose('Portada', 'Artwork');
+  String get miniPlayerBackgroundTransparent =>
+      choose('Transparente', 'Transparent');
   String accentLabel(AppAccent accent) => switch (accent) {
     AppAccent.white => choose('Blanco', 'White'),
     AppAccent.green => choose('Verde', 'Green'),
@@ -701,11 +794,51 @@ class AppStrings {
   );
   String get sleepTimer => choose('Temporizador', 'Sleep timer');
   String get storage => choose('Almacenamiento', 'Storage');
-  String get downloadsAndBackup =>
-      choose('Descargas y respaldo', 'Downloads and backup');
+  String get localMusicFilters =>
+      choose('Filtros de música local', 'Local music filters');
+  String localMusicFiltersSummary(int activeCount) => choose(
+    activeCount == 0
+        ? 'Sin filtros activos'
+        : activeCount == 1
+        ? '1 filtro activo'
+        : '$activeCount filtros activos',
+    activeCount == 0
+        ? 'No active filters'
+        : activeCount == 1
+        ? '1 active filter'
+        : '$activeCount active filters',
+  );
+  String get hideWhatsAppAudio =>
+      choose('Ocultar audios de WhatsApp', 'Hide WhatsApp audio');
+  String get hideWhatsAppAudioSummary => choose(
+    'No muestra notas de voz ni audios guardados en carpetas de WhatsApp.',
+    'Hide voice notes and audio stored in WhatsApp folders.',
+  );
+  String get hideTelegramAudio =>
+      choose('Ocultar audios de Telegram', 'Hide Telegram audio');
+  String get hideTelegramAudioSummary => choose(
+    'No muestra notas de voz ni audios guardados en carpetas de Telegram.',
+    'Hide voice notes and audio stored in Telegram folders.',
+  );
+  String get hideAudioRecordings =>
+      choose('Ocultar grabaciones de audio', 'Hide audio recordings');
+  String get hideAudioRecordingsSummary => choose(
+    'No muestra archivos guardados por grabadoras de voz y llamadas.',
+    'Hide files saved by voice and call recorder apps.',
+  );
+  String get hideTracksUnder30Seconds => choose(
+    'Ocultar canciones de menos de 30 segundos',
+    'Hide songs shorter than 30 seconds',
+  );
+  String get hideTracksUnder30SecondsSummary => choose(
+    'Evita tonos, grabaciones cortas y otros audios breves.',
+    'Avoid ringtones, short recordings, and other brief audio.',
+  );
+  String get backupAndRestore =>
+      choose('Respaldo y Restauración', 'Backup and restore');
   String get storageSummary => choose(
-    'Administra las descargas y el respaldo de tu biblioteca.',
-    'Manage downloads and your library backup.',
+    'Exporta o restaura tu biblioteca y configuración.',
+    'Export or restore your library and settings.',
   );
   String get integrations => choose('Integraciones', 'Integrations');
   String get automaticShutdown =>
@@ -720,6 +853,7 @@ class AppStrings {
       choose('Duración del crossfade', 'Crossfade duration');
   String secondsShort(int seconds) => '$seconds s';
   String get customDuration => choose('Personalizar', 'Custom');
+  String get apply => choose('Aplicar', 'Apply');
   String get timerDuration =>
       choose('Duración del temporizador', 'Timer duration');
   String get startTimer => choose('Iniciar', 'Start');
@@ -784,6 +918,21 @@ class AppStrings {
     AppThemeMode.light => themeLight,
     AppThemeMode.dark => themeDark,
   };
+  String miniPlayerModeLabel(MiniPlayerMode mode) => switch (mode) {
+    MiniPlayerMode.standard => miniPlayerClassic,
+    MiniPlayerMode.capsule => miniPlayerCapsule,
+  };
+  String surfaceBackgroundModeLabel(SurfaceBackgroundMode mode) =>
+      switch (mode) {
+        SurfaceBackgroundMode.accent => surfaceBackgroundAccent,
+        SurfaceBackgroundMode.transparent => surfaceBackgroundTransparent,
+      };
+  String miniPlayerBackgroundModeLabel(MiniPlayerBackgroundMode mode) =>
+      switch (mode) {
+        MiniPlayerBackgroundMode.accent => miniPlayerBackgroundAccent,
+        MiniPlayerBackgroundMode.artwork => miniPlayerBackgroundArtwork,
+        MiniPlayerBackgroundMode.transparent => miniPlayerBackgroundTransparent,
+      };
   String get selectDownloadFolder =>
       choose('Selecciona carpeta de descargas', 'Select downloads folder');
   String get queued => choose('En cola', 'Queued');

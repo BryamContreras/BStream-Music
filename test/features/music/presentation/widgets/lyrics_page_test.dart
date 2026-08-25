@@ -111,6 +111,55 @@ void main() {
     expect(LyricsAnimationStyle.fromCode('none'), LyricsAnimationStyle.smooth);
   });
 
+  testWidgets('lyrics transitions keep active scaling subtle', (tester) async {
+    const accent = Color(0xFF00BCD4);
+
+    Future<void> pumpTransition({
+      required LyricsAnimationStyle style,
+      required bool active,
+    }) {
+      return tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LyricsAnimationTransition(
+              key: const ValueKey('tested-lyrics-transition'),
+              style: style,
+              active: active,
+              accent: accent,
+              child: const Text('Line'),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await pumpTransition(style: LyricsAnimationStyle.smooth, active: false);
+    expect(_lyricsTransitionScale(tester), closeTo(0.98, 0.001));
+    await pumpTransition(style: LyricsAnimationStyle.smooth, active: true);
+    await tester.pumpAndSettle();
+    expect(_lyricsTransitionScale(tester), closeTo(1, 0.001));
+
+    await pumpTransition(style: LyricsAnimationStyle.highlight, active: false);
+    expect(_lyricsTransitionScale(tester), closeTo(0.98, 0.001));
+    await pumpTransition(style: LyricsAnimationStyle.highlight, active: true);
+    await tester.pumpAndSettle();
+    expect(_lyricsTransitionScale(tester), closeTo(1.01, 0.001));
+
+    final decoration =
+        tester
+                .widget<DecoratedBox>(
+                  find.descendant(
+                    of: find.byKey(const ValueKey('tested-lyrics-transition')),
+                    matching: find.byType(DecoratedBox),
+                  ),
+                )
+                .decoration
+            as BoxDecoration;
+    expect(decoration.color, accent.withValues(alpha: 0.10));
+    expect(decoration.boxShadow, hasLength(1));
+    expect(decoration.boxShadow?.single.color, accent.withValues(alpha: 0.16));
+  });
+
   testWidgets('synced lyrics follow the current playback position', (
     tester,
   ) async {
@@ -135,6 +184,33 @@ void main() {
 
     expect(_activeLine('Third line'), findsOneWidget);
     expect(_activeLine('First line'), findsNothing);
+  });
+
+  testWidgets('synced lyrics credit LRCLIB before and after the timeline', (
+    tester,
+  ) async {
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+
+    final topSource = find.byKey(const ValueKey('lyrics-source-top'));
+    final bottomSource = find.byKey(const ValueKey('lyrics-source-bottom'));
+    expect(find.text('Lyrics provided by LRCLIB'), findsNWidgets(2));
+    expect(topSource, findsOneWidget);
+    expect(bottomSource, findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-seek-hint')), findsOneWidget);
+    expect(find.text('Tap a line to seek to that moment.'), findsOneWidget);
+    expect(
+      tester.getTopLeft(topSource).dy,
+      lessThan(tester.getTopLeft(find.text('First line')).dy),
+    );
+    expect(
+      tester.getTopLeft(bottomSource).dy,
+      greaterThan(tester.getBottomLeft(find.text('Third line')).dy),
+    );
   });
 
   testWidgets(
@@ -298,7 +374,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('lyrics keep the mini player visible below the content', (
+  testWidgets('lyrics keep the default capsule visible below the content', (
     tester,
   ) async {
     tester.view
@@ -319,10 +395,10 @@ void main() {
     expect(find.byKey(const ValueKey('mini-player-frame')), findsOneWidget);
     expect(find.byKey(const ValueKey('mini-player-progress')), findsOneWidget);
     expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
-    expect(
-      tester.getRect(find.byKey(const ValueKey('mini-player-frame'))).bottom,
-      closeTo(800, 0.1),
-    );
+    final miniPlayerBottom = tester
+        .getRect(find.byKey(const ValueKey('mini-player-frame')))
+        .bottom;
+    expect(miniPlayerBottom, closeTo(800 - 12, 0.1));
   });
 
   testWidgets('slide animation interpolates when the active line changes', (
@@ -697,8 +773,13 @@ void main() {
 
     expect(padding.left, 12);
     expect(padding.right, 12);
-    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 30);
+    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 28);
     expect(_lyricLineFontSize(tester, 'lyric-line-1'), 27);
+    expect(
+      _lyricLineFontSize(tester, 'active-lyric-line') -
+          _lyricLineFontSize(tester, 'lyric-line-1'),
+      1,
+    );
   });
 
   testWidgets('Android lyrics keep offset controls above system navigation', (
@@ -756,14 +837,19 @@ void main() {
 
     expect(padding.left, 24);
     expect(padding.right, 24);
-    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 36);
+    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 34);
     expect(_lyricLineFontSize(tester, 'lyric-line-1'), 33);
 
     tester.view.physicalSize = const Size(1280, 800);
     await tester.pumpAndSettle();
 
-    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 39);
+    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 37);
     expect(_lyricLineFontSize(tester, 'lyric-line-1'), 36);
+    expect(
+      _lyricLineFontSize(tester, 'active-lyric-line') -
+          _lyricLineFontSize(tester, 'lyric-line-1'),
+      1,
+    );
     expect(_activeLine('First line'), findsOneWidget);
     final activeRect = tester.getRect(
       find.byKey(const ValueKey('active-lyric-line')),
@@ -888,10 +974,12 @@ void main() {
       activeLineStyle.color,
       Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white),
     );
-    expect(
-      activeLineStyle.shadows?.first.color,
-      accent.withValues(alpha: 0.04),
-    );
+    expect(activeLineStyle.shadows, hasLength(3));
+    expect(activeLineStyle.shadows?[0].color, accent.withValues(alpha: 0.30));
+    expect(activeLineStyle.shadows?[0].blurRadius, 10);
+    expect(activeLineStyle.shadows?[1].color, accent.withValues(alpha: 0.14));
+    expect(activeLineStyle.shadows?[1].blurRadius, 24);
+    expect(_lyricLineStyle(tester, 'lyric-line-1').shadows, isNull);
     final offsetText = tester.widget<Text>(
       find.byKey(const ValueKey('lyrics-offset-value')),
     );
@@ -1069,14 +1157,33 @@ void main() {
       find.text('These lyrics do not include synchronized timing.'),
       findsOneWidget,
     );
-    expect(find.text('Lyrics provided by LRCLIB'), findsOneWidget);
+    final topSource = find.byKey(const ValueKey('lyrics-source-top'));
+    final bottomSource = find.byKey(const ValueKey('lyrics-source-bottom'));
+    expect(find.text('Lyrics provided by LRCLIB'), findsNWidgets(2));
+    expect(topSource, findsOneWidget);
+    expect(bottomSource, findsOneWidget);
     expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsNothing);
     final plainText = find.byKey(const ValueKey('plain-lyrics-original'));
     expect(tester.widget<Text>(plainText).style?.fontSize, 25);
+    expect(tester.widget<Text>(plainText).style?.shadows, hasLength(2));
+    expect(
+      tester.widget<Text>(plainText).style?.shadows?.first.color,
+      AppColors.downloadAccentFor(
+        tester.element(plainText),
+      ).withValues(alpha: 0.16),
+    );
     expect(tester.widget<Text>(plainText).textAlign, TextAlign.start);
     expect(
       tester.widget<Text>(plainText).data,
       'Plain first line\n   Plain second line',
+    );
+    expect(
+      tester.getTopLeft(topSource).dy,
+      lessThan(tester.getTopLeft(plainText).dy),
+    );
+    expect(
+      tester.getTopLeft(bottomSource).dy,
+      greaterThan(tester.getBottomLeft(plainText).dy),
     );
 
     await container
@@ -1482,19 +1589,34 @@ void main() {
 }
 
 double _lyricLineFontSize(WidgetTester tester, String key) {
-  final style = tester.widget<AnimatedDefaultTextStyle>(
-    find
-        .ancestor(
-          of: find.byKey(ValueKey(key)),
-          matching: find.byType(AnimatedDefaultTextStyle),
-        )
-        .first,
-  );
-  return style.style.fontSize!;
+  return _lyricLineStyle(tester, key).fontSize!;
+}
+
+TextStyle _lyricLineStyle(WidgetTester tester, String key) {
+  return tester
+      .widget<AnimatedDefaultTextStyle>(
+        find
+            .ancestor(
+              of: find.byKey(ValueKey(key)),
+              matching: find.byType(AnimatedDefaultTextStyle),
+            )
+            .first,
+      )
+      .style;
 }
 
 double _activeSlidePixelOffset(WidgetTester tester) {
   return _lineSlidePixelOffset(tester, 'active-lyric-line');
+}
+
+double _lyricsTransitionScale(WidgetTester tester) {
+  final transform = tester.widget<Transform>(
+    find.descendant(
+      of: find.byKey(const ValueKey('tested-lyrics-transition')),
+      matching: find.byType(Transform),
+    ),
+  );
+  return transform.transform.entry(0, 0);
 }
 
 double _lineSlidePixelOffset(WidgetTester tester, String key) {

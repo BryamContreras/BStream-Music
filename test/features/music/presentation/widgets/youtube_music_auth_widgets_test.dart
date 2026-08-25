@@ -73,50 +73,52 @@ void main() {
     expect(find.text('Not now'), findsOneWidget);
   });
 
-  testWidgets(
-    'account button is a 48dp action and exposes no empty avatar URL',
-    (tester) async {
-      var pressed = false;
-      final store = _WidgetSessionStore();
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            youtubeMusicSessionStoreProvider.overrideWithValue(store),
-            youtubeMusicAccountClientProvider.overrideWithValue(
-              const UnconfiguredYouTubeMusicAccountClient(),
-            ),
-          ],
-          child: MaterialApp(
-            home: Scaffold(
-              appBar: AppBar(
-                actions: <Widget>[
-                  YouTubeMusicAccountButton(
-                    strings: const AppStrings(AppLanguage.english),
-                    onPressed: (context, ref, state) async {
-                      pressed = true;
-                    },
-                  ),
-                ],
-              ),
+  testWidgets('account button keeps a 48dp action with a compact avatar', (
+    tester,
+  ) async {
+    var pressed = false;
+    final store = _WidgetSessionStore();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          youtubeMusicSessionStoreProvider.overrideWithValue(store),
+          youtubeMusicAccountClientProvider.overrideWithValue(
+            const UnconfiguredYouTubeMusicAccountClient(),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            appBar: AppBar(
+              actions: <Widget>[
+                YouTubeMusicAccountButton(
+                  strings: const AppStrings(AppLanguage.english),
+                  onPressed: (context, ref, state) async {
+                    pressed = true;
+                  },
+                ),
+              ],
             ),
           ),
         ),
-      );
-      await tester.pump();
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
 
-      final button = find.byKey(const Key('home-youtube-music-account'));
-      expect(button, findsOneWidget);
-      expect(tester.getSize(button).width, greaterThanOrEqualTo(48));
-      expect(find.byType(Image), findsNothing);
-      expect(find.byIcon(Icons.person_outline), findsOneWidget);
-      expect(find.byTooltip('Sign in to YouTube Music'), findsOneWidget);
+    final button = find.byKey(const Key('home-youtube-music-account'));
+    expect(button, findsOneWidget);
+    expect(tester.getSize(button).width, greaterThanOrEqualTo(48));
+    final avatar = find.byType(YouTubeMusicAccountAvatar);
+    expect(tester.widget<YouTubeMusicAccountAvatar>(avatar).size, 32);
+    expect(tester.getSize(avatar), const Size.square(32));
+    expect(find.byType(Image), findsNothing);
+    expect(find.byIcon(Icons.person_outline), findsOneWidget);
+    expect(find.byTooltip('Sign in to YouTube Music'), findsOneWidget);
 
-      await tester.tap(button);
-      await tester.pump();
-      expect(pressed, isTrue);
-    },
-  );
+    await tester.tap(button);
+    await tester.pump();
+    expect(pressed, isTrue);
+  });
 
   testWidgets('untrusted avatar hosts render the local fallback only', (
     tester,

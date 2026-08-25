@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_dialog.dart';
 import '../providers/app_strings.dart';
 
 class YouTubeMusicPlaylistSyncConsentDialog extends StatelessWidget {
@@ -17,7 +18,7 @@ class YouTubeMusicPlaylistSyncConsentDialog extends StatelessWidget {
     required AppStrings strings,
     int? localPlaylistCount,
   }) async {
-    final accepted = await showDialog<bool>(
+    final accepted = await showAppDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => YouTubeMusicPlaylistSyncConsentDialog(
@@ -32,7 +33,7 @@ class YouTubeMusicPlaylistSyncConsentDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
-      child: AlertDialog(
+      child: AppAlertDialog(
         key: const Key('youtube-music-playlist-sync-consent'),
         icon: const Icon(Icons.cloud_sync_outlined),
         title: Text(strings.playlistSyncConsentTitle),

@@ -41,6 +41,14 @@ abstract interface class YouTubeMusicCatalogSearch {
   Future<List<InnerTubeAlbum>> searchAlbums(String query, {int limit = 20});
 }
 
+/// Artist-only YouTube Music catalog search.
+///
+/// Kept separate from [YouTubeMusicCatalogSearch] so existing catalog adapters
+/// that only support videos and albums remain source-compatible.
+abstract interface class YouTubeMusicArtistSearch {
+  Future<List<InnerTubeArtist>> searchArtists(String query, {int limit = 20});
+}
+
 abstract interface class YouTubeMusicTrackLookup {
   /// Returns the metadata for [videoId], or `null` when YouTube reports that
   /// the video is not currently playable music.
@@ -102,25 +110,49 @@ abstract interface class YouTubeMusicArtistLookup {
   });
 }
 
+abstract interface class YouTubeMusicArtistProfileLookup {
+  Future<InnerTubeArtistProfile> getArtistProfile(
+    String artistBrowseId, {
+    String? fallbackName,
+    String? fallbackThumbnailUrl,
+    int songLimit = 20,
+    int releaseLimit = 20,
+  });
+}
+
+abstract interface class YouTubeMusicPlaylistQueueLookup {
+  Future<InnerTubeNextPage> getPlaylistNext(
+    String playlistId, {
+    String? videoId,
+    int limit = innerTubeDetailResultLimit,
+  });
+}
+
 class InnerTubeSearchService
     implements
         YouTubeMusicSearch,
         YouTubeMusicCatalogSearch,
+        YouTubeMusicArtistSearch,
         YouTubeMusicTrackLookup,
         YouTubeMusicHome,
         YouTubeMusicCollectionLookup,
         YouTubeMusicAlbumLookup,
         YouTubeMusicRelated,
-        YouTubeMusicArtistLookup {
+        YouTubeMusicArtistLookup,
+        YouTubeMusicArtistProfileLookup,
+        YouTubeMusicPlaylistQueueLookup {
   factory InnerTubeSearchService({
     InnerTubeTransport? transport,
     InnerTubeVisitorDataStore? visitorDataStore,
     InnerTubeSearchParser parser = const InnerTubeSearchParser(),
     InnerTubeAlbumParser albumParser = const InnerTubeAlbumParser(),
+    InnerTubeArtistSearchParser artistSearchParser =
+        const InnerTubeArtistSearchParser(),
     InnerTubeHomeParser homeParser = const InnerTubeHomeParser(),
     InnerTubePlayerParser playerParser = const InnerTubePlayerParser(),
     InnerTubeNextParser nextParser = const InnerTubeNextParser(),
     InnerTubeRelatedParser relatedParser = const InnerTubeRelatedParser(),
+    InnerTubeArtistParser artistParser = const InnerTubeArtistParser(),
     InnerTubeBootstrapParser bootstrapParser = const InnerTubeBootstrapParser(),
     Uri? endpoint,
     Uri? browseEndpoint,
@@ -161,10 +193,12 @@ class InnerTubeSearchService
       visitorDataStore: visitorDataStore,
       parser: parser,
       albumParser: albumParser,
+      artistSearchParser: artistSearchParser,
       homeParser: homeParser,
       playerParser: playerParser,
       nextParser: nextParser,
       relatedParser: relatedParser,
+      artistParser: artistParser,
       bootstrapParser: bootstrapParser,
       endpoint:
           endpoint ?? Uri.parse('https://music.youtube.com/youtubei/v1/search'),
@@ -193,10 +227,12 @@ class InnerTubeSearchService
     required InnerTubeVisitorDataStore? visitorDataStore,
     required InnerTubeSearchParser parser,
     required InnerTubeAlbumParser albumParser,
+    required InnerTubeArtistSearchParser artistSearchParser,
     required InnerTubeHomeParser homeParser,
     required InnerTubePlayerParser playerParser,
     required InnerTubeNextParser nextParser,
     required InnerTubeRelatedParser relatedParser,
+    required InnerTubeArtistParser artistParser,
     required InnerTubeBootstrapParser bootstrapParser,
     required Uri endpoint,
     required Uri browseEndpoint,
@@ -215,10 +251,12 @@ class InnerTubeSearchService
          visitorDataStore,
          parser,
          albumParser,
+         artistSearchParser,
          homeParser,
          playerParser,
          nextParser,
          relatedParser,
+         artistParser,
          bootstrapParser,
          endpoint,
          browseEndpoint,
@@ -239,10 +277,12 @@ class InnerTubeSearchService
     this._visitorDataStore,
     this._parser,
     this._albumParser,
+    this._artistSearchParser,
     this._homeParser,
     this._playerParser,
     this._nextParser,
     this._relatedParser,
+    this._artistParser,
     this._bootstrapParser,
     this._endpoint,
     this._browseEndpoint,
@@ -266,6 +306,7 @@ class InnerTubeSearchService
   static const String songsFilter = 'EgWKAQIIAWoMEA4QChADEAQQCRAF';
   static const String videosFilter = 'EgWKAQIQAWoMEA4QChADEAQQCRAF';
   static const String albumsFilter = 'EgWKAQIYAWoMEA4QChADEAQQCRAF';
+  static const String artistsFilter = 'EgWKAQIgAWoMEA4QChADEAQQCRAF';
   static const String defaultUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -275,10 +316,12 @@ class InnerTubeSearchService
   final InnerTubeVisitorDataStore? _visitorDataStore;
   final InnerTubeSearchParser _parser;
   final InnerTubeAlbumParser _albumParser;
+  final InnerTubeArtistSearchParser _artistSearchParser;
   final InnerTubeHomeParser _homeParser;
   final InnerTubePlayerParser _playerParser;
   final InnerTubeNextParser _nextParser;
   final InnerTubeRelatedParser _relatedParser;
+  final InnerTubeArtistParser _artistParser;
   final InnerTubeBootstrapParser _bootstrapParser;
   final Uri _endpoint;
   final Uri _browseEndpoint;
@@ -345,6 +388,25 @@ class InnerTubeSearchService
     return _albumParser.parse(decoded, limit: limit);
   }
 
+  @override
+  Future<List<InnerTubeArtist>> searchArtists(
+    String query, {
+    int limit = maxResults,
+  }) async {
+    _ensureActive();
+    _validateResultLimit(limit);
+    final normalizedQuery = query.trim();
+    if (normalizedQuery.isEmpty) {
+      return const [];
+    }
+
+    final decoded = await _searchCatalog(
+      normalizedQuery,
+      filter: artistsFilter,
+    );
+    return _artistSearchParser.parse(decoded, limit: limit);
+  }
+
   Future<Object?> _searchCatalog(String query, {required String filter}) async {
     var configuration = await _configuration();
     var response = await _requestSearch(query, filter, configuration);
@@ -401,6 +463,7 @@ class InnerTubeSearchService
     final sections = <InnerTubeHomeSection>[];
     final seenVideoIds = <String>{};
     final seenBrowseIds = <String>{};
+    final seenArtistBrowseIds = <String>{};
     sections.addAll(
       _homeParser._parse(
         decoded,
@@ -408,6 +471,7 @@ class InnerTubeSearchService
         maxItemsPerSection: maxItemsPerSection,
         seenVideoIds: seenVideoIds,
         seenBrowseIds: seenBrowseIds,
+        seenArtistBrowseIds: seenArtistBrowseIds,
       ),
     );
 
@@ -440,6 +504,7 @@ class InnerTubeSearchService
             maxItemsPerSection: maxItemsPerSection,
             seenVideoIds: seenVideoIds,
             seenBrowseIds: seenBrowseIds,
+            seenArtistBrowseIds: seenArtistBrowseIds,
           ),
         );
         continuation = _homeContinuationToken(decoded);
@@ -719,6 +784,32 @@ class InnerTubeSearchService
   }
 
   @override
+  Future<InnerTubeNextPage> getPlaylistNext(
+    String playlistId, {
+    String? videoId,
+    int limit = maxDetailResults,
+  }) {
+    _ensureActive();
+    final normalizedPlaylistId = playlistId.trim();
+    if (!RegExp(r'^[A-Za-z0-9_-]{10,200}$').hasMatch(normalizedPlaylistId)) {
+      throw ArgumentError.value(
+        playlistId,
+        'playlistId',
+        'Must be a valid YouTube Music playlist id.',
+      );
+    }
+    final normalizedVideoId = videoId == null
+        ? null
+        : _validateVideoId(videoId);
+    _validateDetailResultLimit(limit);
+    return _loadNextPage(
+      videoId: normalizedVideoId,
+      playlistId: normalizedPlaylistId,
+      limit: limit,
+    );
+  }
+
+  @override
   Future<InnerTubeNextPage> getNextContinuation(
     String continuation, {
     int limit = maxDetailResults,
@@ -827,6 +918,48 @@ class InnerTubeSearchService
       );
     }
     return _albumParser.parse(_decodeDetailResponse(response), limit: limit);
+  }
+
+  @override
+  Future<InnerTubeArtistProfile> getArtistProfile(
+    String artistBrowseId, {
+    String? fallbackName,
+    String? fallbackThumbnailUrl,
+    int songLimit = maxResults,
+    int releaseLimit = maxResults,
+  }) async {
+    _ensureActive();
+    final normalizedBrowseId = artistBrowseId.trim();
+    if (!_artistBrowseIdPattern.hasMatch(normalizedBrowseId)) {
+      throw ArgumentError.value(
+        artistBrowseId,
+        'artistBrowseId',
+        'Must be a valid YouTube Music artist browse ID.',
+      );
+    }
+    _validateResultLimit(songLimit);
+    _validateResultLimit(releaseLimit);
+
+    var configuration = await _configuration();
+    var response = await _requestBrowse(
+      configuration,
+      browseId: normalizedBrowseId,
+    );
+    if (_needsFreshConfiguration(response.statusCode)) {
+      configuration = await _freshConfiguration();
+      response = await _requestBrowse(
+        configuration,
+        browseId: normalizedBrowseId,
+      );
+    }
+    return _artistParser.parse(
+      _decodeDetailResponse(response),
+      artistBrowseId: normalizedBrowseId,
+      fallbackName: fallbackName,
+      fallbackThumbnailUrl: fallbackThumbnailUrl,
+      songLimit: songLimit,
+      releaseLimit: releaseLimit,
+    );
   }
 
   String _validateVideoId(String videoId) {
@@ -959,13 +1092,11 @@ class InnerTubeSearchService
     String? playlistId,
     String? continuation,
   }) async {
-    if ((videoId == null) == (continuation == null)) {
+    final hasInitialEndpoint = videoId != null || playlistId != null;
+    if (hasInitialEndpoint == (continuation != null)) {
       throw ArgumentError(
-        'Exactly one of videoId or continuation must be provided.',
+        'Provide either an initial video/playlist endpoint or a continuation.',
       );
-    }
-    if (videoId == null && playlistId != null) {
-      throw ArgumentError('A radio playlist requires a video ID.');
     }
     final uri = _nextEndpoint.replace(
       queryParameters: <String, String>{
@@ -987,7 +1118,7 @@ class InnerTubeSearchService
       'videoId': ?videoId,
       'playlistId': ?playlistId,
       'continuation': ?continuation,
-      if (videoId != null) 'isAudioOnly': true,
+      if (hasInitialEndpoint) 'isAudioOnly': true,
       if (videoId != null) 'params': 'wAEB',
     };
 
@@ -1421,6 +1552,7 @@ class InnerTubeSearchParser {
     final artists = <String>[];
     final artistBrowseIds = <String?>[];
     String? album;
+    String? albumBrowseId;
     Duration? duration;
     for (final run in metadataRuns) {
       final text = _text(run['text']);
@@ -1442,6 +1574,7 @@ class InnerTubeSearchParser {
         }
       } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
         album = text;
+        albumBrowseId = _validatedAlbumBrowseId(run);
       }
       duration ??= _parseDuration(text);
     }
@@ -1469,6 +1602,7 @@ class InnerTubeSearchParser {
       artists: artists,
       artistBrowseIds: artistBrowseIds,
       album: album,
+      albumBrowseId: albumBrowseId,
       duration: duration,
       thumbnailUrl: _thumbnailUrl(renderer),
     );
@@ -1489,6 +1623,7 @@ class InnerTubeSearchParser {
     final artists = <String>[];
     final artistBrowseIds = <String?>[];
     String? album;
+    String? albumBrowseId;
     Duration? duration;
     for (final run in metadataRuns) {
       final text = _text(run['text']);
@@ -1510,6 +1645,7 @@ class InnerTubeSearchParser {
         }
       } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
         album = text;
+        albumBrowseId = _validatedAlbumBrowseId(run);
       }
       duration ??= _parseDuration(text);
     }
@@ -1535,6 +1671,7 @@ class InnerTubeSearchParser {
       artists: artists,
       artistBrowseIds: artistBrowseIds,
       album: album,
+      albumBrowseId: albumBrowseId,
       duration: duration,
       thumbnailUrl: _thumbnailUrl(renderer),
     );
@@ -1670,6 +1807,14 @@ class InnerTubeSearchParser {
       return null;
     }
     return browseId;
+  }
+
+  String? _validatedAlbumBrowseId(Map<dynamic, dynamic> run) {
+    final browseId = _browseId(run);
+    return browseId != null &&
+            InnerTubeSearchService._albumBrowseIdPattern.hasMatch(browseId)
+        ? browseId
+        : null;
   }
 
   String? _thumbnailUrl(Map<dynamic, dynamic> renderer) {
@@ -1812,6 +1957,133 @@ class InnerTubeSearchParser {
       return value.toInt();
     }
     return int.tryParse(value?.toString() ?? '');
+  }
+}
+
+/// Parses artist-only search responses without treating song credits as
+/// standalone artist results.
+class InnerTubeArtistSearchParser {
+  const InnerTubeArtistSearchParser({
+    this._searchParser = const InnerTubeSearchParser(),
+  });
+
+  final InnerTubeSearchParser _searchParser;
+
+  List<InnerTubeArtist> parse(Object? payload, {int limit = 20}) {
+    if (limit < 1 || limit > InnerTubeSearchService.maxResults) {
+      throw RangeError.range(
+        limit,
+        1,
+        InnerTubeSearchService.maxResults,
+        'limit',
+      );
+    }
+    if (payload is! Map) {
+      throw const InnerTubeFormatException(
+        'YouTube Music artist search response must be a JSON object.',
+      );
+    }
+
+    final artists = <InnerTubeArtist>[];
+    final seenBrowseIds = <String>{};
+    for (final candidate in _artistItemRenderers(payload)) {
+      final artist = candidate.isTwoRow
+          ? _parseTwoRowArtist(candidate.renderer)
+          : _parseResponsiveArtist(candidate.renderer);
+      if (artist == null || !seenBrowseIds.add(artist.browseId)) {
+        continue;
+      }
+      artists.add(artist);
+      if (artists.length == limit) break;
+    }
+    return List<InnerTubeArtist>.unmodifiable(artists);
+  }
+
+  InnerTubeArtist? _parseResponsiveArtist(Map<dynamic, dynamic> renderer) {
+    final columns = _searchParser
+        ._maps(renderer['flexColumns'])
+        .toList(growable: false);
+    final titleRuns = columns.isEmpty
+        ? const <Map<dynamic, dynamic>>[]
+        : _searchParser._columnRuns(columns.first).toList(growable: false);
+    return _parseArtist(renderer, titleRuns);
+  }
+
+  InnerTubeArtist? _parseTwoRowArtist(Map<dynamic, dynamic> renderer) {
+    return _parseArtist(
+      renderer,
+      _searchParser._runs(renderer['title']).toList(growable: false),
+    );
+  }
+
+  InnerTubeArtist? _parseArtist(
+    Map<dynamic, dynamic> renderer,
+    List<Map<dynamic, dynamic>> titleRuns,
+  ) {
+    final name = _searchParser._artistText(_searchParser._firstText(titleRuns));
+    if (name == null) return null;
+
+    final browseId =
+        _directArtistBrowseId(renderer['navigationEndpoint']) ??
+        _artistBrowseIdFromRuns(titleRuns);
+    if (browseId == null) return null;
+
+    return InnerTubeArtist(
+      browseId: browseId,
+      name: name,
+      thumbnailUrl: _searchParser._thumbnailUrl(renderer),
+    );
+  }
+
+  String? _artistBrowseIdFromRuns(Iterable<Map<dynamic, dynamic>> runs) {
+    for (final run in runs) {
+      final browseId = _directArtistBrowseId(run['navigationEndpoint']);
+      if (browseId != null) return browseId;
+    }
+    return null;
+  }
+
+  String? _directArtistBrowseId(Object? endpoint) {
+    if (endpoint is! Map) return null;
+    final browse = endpoint['browseEndpoint'];
+    if (browse is! Map) return null;
+    final browseId = _searchParser._text(browse['browseId']);
+    if (browseId == null ||
+        !InnerTubeSearchService._artistBrowseIdPattern.hasMatch(browseId)) {
+      return null;
+    }
+
+    final configs = browse['browseEndpointContextSupportedConfigs'];
+    final musicConfig = configs is Map
+        ? configs['browseEndpointContextMusicConfig']
+        : null;
+    final pageType = musicConfig is Map
+        ? _searchParser._text(musicConfig['pageType'])
+        : null;
+    if (pageType != null && pageType != 'MUSIC_PAGE_TYPE_ARTIST') {
+      return null;
+    }
+    return browseId;
+  }
+
+  Iterable<_InnerTubeSongRenderer> _artistItemRenderers(Object? node) sync* {
+    if (node is Map) {
+      final responsive = node['musicResponsiveListItemRenderer'];
+      if (responsive is Map) {
+        yield _InnerTubeSongRenderer(responsive, isTwoRow: false);
+      }
+      final twoRow = node['musicTwoRowItemRenderer'];
+      if (twoRow is Map) {
+        yield _InnerTubeSongRenderer(twoRow, isTwoRow: true);
+      }
+      for (final value in node.values) {
+        yield* _artistItemRenderers(value);
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        yield* _artistItemRenderers(value);
+      }
+    }
   }
 }
 
@@ -2370,6 +2642,601 @@ class _InnerTubeSongRenderer {
   final bool isTwoRow;
 }
 
+class InnerTubeArtistParser {
+  const InnerTubeArtistParser({
+    this._songParser = const InnerTubeSearchParser(),
+    this._albumParser = const InnerTubeAlbumParser(),
+  });
+
+  final InnerTubeSearchParser _songParser;
+  final InnerTubeAlbumParser _albumParser;
+
+  InnerTubeArtistProfile parse(
+    Object? payload, {
+    required String artistBrowseId,
+    String? fallbackName,
+    String? fallbackThumbnailUrl,
+    int songLimit = 20,
+    int releaseLimit = 20,
+  }) {
+    if (payload is! Map) {
+      throw const InnerTubeFormatException(
+        'YouTube Music artist response must be a JSON object.',
+      );
+    }
+    if (songLimit < 1 || songLimit > InnerTubeSearchService.maxResults) {
+      throw RangeError.range(
+        songLimit,
+        1,
+        InnerTubeSearchService.maxResults,
+        'songLimit',
+      );
+    }
+    if (releaseLimit < 1 || releaseLimit > InnerTubeSearchService.maxResults) {
+      throw RangeError.range(
+        releaseLimit,
+        1,
+        InnerTubeSearchService.maxResults,
+        'releaseLimit',
+      );
+    }
+
+    final header = _findArtistHeader(payload);
+    final resolvedName = _firstNonEmpty(<String?>[
+      header == null ? null : _textFromRenderer(header['title']),
+      fallbackName,
+      artistBrowseId,
+    ])!;
+    final thumbnailUrl = _firstNonEmpty(<String?>[
+      header == null ? null : _largestThumbnailUrl(header),
+      fallbackThumbnailUrl,
+    ]);
+    final popularShelf = _findPopularSongsShelf(payload);
+    final popularSongs = popularShelf == null
+        ? const <InnerTubeSong>[]
+        : _songParser.parseDetailSongs(popularShelf, limit: songLimit);
+
+    final albums = <InnerTubeAlbum>[];
+    final singles = <InnerTubeAlbum>[];
+    final seenBrowseIds = <String>{};
+    final relatedArtists = <InnerTubeArtist>[];
+    final seenRelatedArtistBrowseIds = <String>{artistBrowseId.trim()};
+    for (final shelf in _carouselShelves(payload)) {
+      if (relatedArtists.length < 12) {
+        for (final artist in _artistsFromCarousel(shelf)) {
+          final browseId = artist.browseId.trim();
+          if (browseId.isEmpty || !seenRelatedArtistBrowseIds.add(browseId)) {
+            continue;
+          }
+          relatedArtists.add(
+            browseId == artist.browseId
+                ? artist
+                : InnerTubeArtist(
+                    browseId: browseId,
+                    name: artist.name,
+                    thumbnailUrl: artist.thumbnailUrl,
+                  ),
+          );
+          if (relatedArtists.length == 12) break;
+        }
+      }
+      final title = _carouselShelfTitle(shelf).toLowerCase();
+      final releases = _albumParser.parse(shelf, limit: releaseLimit);
+      for (final release in releases) {
+        if (!seenBrowseIds.add(release.browseId)) continue;
+        if (_isSinglesSection(title) || _isSingleType(release.type)) {
+          if (singles.length < releaseLimit) singles.add(release);
+        } else if (albums.length < releaseLimit) {
+          albums.add(release);
+        }
+      }
+    }
+
+    // Some artist layouts omit carousel titles. Preserve those releases by
+    // classifying their metadata after the explicitly titled shelves.
+    for (final release in _albumParser.parse(payload, limit: releaseLimit)) {
+      if (!seenBrowseIds.add(release.browseId)) continue;
+      if (_isSingleType(release.type)) {
+        if (singles.length < releaseLimit) singles.add(release);
+      } else if (albums.length < releaseLimit) {
+        albums.add(release);
+      }
+    }
+
+    final subscription = _findSubscription(payload);
+    final startRadio = _findStartRadio(payload);
+    final playPlaylistId = header == null
+        ? null
+        : _findHeaderPlayPlaylistId(header);
+    final channelId = _firstNonEmpty(<String?>[
+      subscription?.channelId,
+      artistBrowseId.startsWith('UC') ? artistBrowseId : null,
+    ]);
+    return InnerTubeArtistProfile(
+      artist: InnerTubeArtist(
+        browseId: artistBrowseId,
+        name: resolvedName,
+        thumbnailUrl: thumbnailUrl,
+      ),
+      description: _findDescription(payload),
+      subscriberCount: _findSubscriberCount(header ?? payload),
+      monthlyListenerCount: _findMonthlyListenerCount(header ?? payload),
+      channelId: channelId,
+      playPlaylistId: playPlaylistId,
+      radioPlaylistId: startRadio?.playlistId ?? _findRadioPlaylistId(payload),
+      radioSeedVideoId: startRadio?.videoId ?? _findRadioVideoId(payload),
+      isSubscribed: subscription?.isSubscribed,
+      popularSongs: popularSongs,
+      albums: albums,
+      singles: singles,
+      relatedArtists: relatedArtists,
+    );
+  }
+
+  Map<dynamic, dynamic>? _findArtistHeader(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'musicImmersiveHeaderRenderer',
+        'musicVisualHeaderRenderer',
+        'musicResponsiveHeaderRenderer',
+      ]) {
+        final renderer = node[key];
+        if (renderer is Map) return renderer;
+      }
+      for (final value in node.values) {
+        final result = _findArtistHeader(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findArtistHeader(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  Map<dynamic, dynamic>? _findPopularSongsShelf(Object? node) {
+    Map<dynamic, dynamic>? fallback;
+
+    void visit(Object? value) {
+      if (value is Map) {
+        final renderer = value['musicShelfRenderer'];
+        if (renderer is Map && _containsResponsiveSong(renderer['contents'])) {
+          fallback ??= renderer;
+          final title = _textFromRenderer(renderer['title']).toLowerCase();
+          if (_isPopularSongsTitle(title)) {
+            fallback = <dynamic, dynamic>{...renderer, '_preferred': true};
+            return;
+          }
+        }
+        if (fallback?['_preferred'] == true) return;
+        for (final nested in value.values) {
+          visit(nested);
+          if (fallback?['_preferred'] == true) return;
+        }
+      } else if (value is List) {
+        for (final nested in value) {
+          visit(nested);
+          if (fallback?['_preferred'] == true) return;
+        }
+      }
+    }
+
+    visit(node);
+    if (fallback?['_preferred'] == true) {
+      return Map<dynamic, dynamic>.of(fallback!)..remove('_preferred');
+    }
+    return fallback;
+  }
+
+  Iterable<Map<dynamic, dynamic>> _carouselShelves(Object? node) sync* {
+    if (node is Map) {
+      final renderer = node['musicCarouselShelfRenderer'];
+      if (renderer is Map) yield renderer;
+      for (final value in node.values) {
+        yield* _carouselShelves(value);
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        yield* _carouselShelves(value);
+      }
+    }
+  }
+
+  Iterable<InnerTubeArtist> _artistsFromCarousel(
+    Map<dynamic, dynamic> shelf,
+  ) sync* {
+    final contents = shelf['contents'];
+    if (contents is! List) return;
+    for (final item in contents) {
+      if (item is! Map) continue;
+      final renderer = item['musicTwoRowItemRenderer'];
+      if (renderer is! Map) continue;
+      final artist = _parseArtistCard(renderer);
+      if (artist != null) yield artist;
+    }
+  }
+
+  InnerTubeArtist? _parseArtistCard(Map<dynamic, dynamic> renderer) {
+    final titleRuns = _songParser
+        ._runs(renderer['title'])
+        .toList(growable: false);
+    final name = _songParser._firstText(titleRuns);
+    if (name == null) return null;
+    final browseId =
+        _directArtistBrowseId(renderer['navigationEndpoint']) ??
+        _artistBrowseIdFromRuns(titleRuns);
+    if (browseId == null) return null;
+    return InnerTubeArtist(
+      browseId: browseId,
+      name: name,
+      thumbnailUrl: _songParser._thumbnailUrl(renderer),
+    );
+  }
+
+  String? _artistBrowseIdFromRuns(Iterable<Map<dynamic, dynamic>> runs) {
+    for (final run in runs) {
+      final browseId = _directArtistBrowseId(run['navigationEndpoint']);
+      if (browseId != null) return browseId;
+    }
+    return null;
+  }
+
+  String? _directArtistBrowseId(Object? endpoint) {
+    if (endpoint is! Map) return null;
+    final browse = endpoint['browseEndpoint'];
+    if (browse is! Map) return null;
+    final browseId = _songParser._text(browse['browseId']);
+    if (browseId == null) return null;
+    final configs = browse['browseEndpointContextSupportedConfigs'];
+    final musicConfig = configs is Map
+        ? configs['browseEndpointContextMusicConfig']
+        : null;
+    final pageType = musicConfig is Map
+        ? _songParser._text(musicConfig['pageType'])
+        : null;
+    return pageType == 'MUSIC_PAGE_TYPE_ARTIST' ? browseId : null;
+  }
+
+  String _carouselShelfTitle(Map<dynamic, dynamic> shelf) {
+    final header = shelf['header'];
+    if (header is! Map) return '';
+    final basic = header['musicCarouselShelfBasicHeaderRenderer'];
+    if (basic is Map) {
+      final title = _textFromRenderer(basic['title']);
+      if (title.isNotEmpty) return title;
+    }
+    final responsive = header['musicCarouselShelfHeaderRenderer'];
+    if (responsive is Map) {
+      final title = _textFromRenderer(responsive['title']);
+      if (title.isNotEmpty) return title;
+    }
+    return _textFromRenderer(header['title']);
+  }
+
+  bool _containsResponsiveSong(Object? contents) {
+    return contents is List &&
+        contents.any(
+          (item) =>
+              item is Map && item['musicResponsiveListItemRenderer'] is Map,
+        );
+  }
+
+  bool _isPopularSongsTitle(String title) {
+    return title.contains('popular') ||
+        title.contains('canciones') ||
+        title == 'songs';
+  }
+
+  bool _isSinglesSection(String title) {
+    return title.contains('single') ||
+        title.contains('sencillo') ||
+        title.contains('ep');
+  }
+
+  bool _isSingleType(String? type) {
+    final normalized = type?.trim().toLowerCase() ?? '';
+    return normalized == 'single' ||
+        normalized == 'sencillo' ||
+        normalized == 'ep';
+  }
+
+  String? _findDescription(Object? node) {
+    if (node is Map) {
+      final renderer = node['musicDescriptionShelfRenderer'];
+      if (renderer is Map) {
+        final description = _textFromRenderer(renderer['description']);
+        if (description.isNotEmpty) return description;
+      }
+      for (final value in node.values) {
+        final description = _findDescription(value);
+        if (description != null) return description;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final description = _findDescription(value);
+        if (description != null) return description;
+      }
+    }
+    return null;
+  }
+
+  String? _findSubscriberCount(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'longSubscriberCountText',
+        'subscriberCountText',
+        'subscriptionCountText',
+      ]) {
+        final text = _textFromRenderer(node[key]);
+        if (text.isNotEmpty) return text;
+      }
+      for (final value in node.values) {
+        final result = _findSubscriberCount(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findSubscriberCount(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  String? _findMonthlyListenerCount(Object? node) {
+    if (node is Map) {
+      final text = _textFromRenderer(node['monthlyListenerCount']);
+      if (text.isNotEmpty) return text;
+      for (final value in node.values) {
+        final result = _findMonthlyListenerCount(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findMonthlyListenerCount(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  _InnerTubeArtistSubscription? _findSubscription(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'subscribeButtonRenderer',
+        'musicSubscribeButtonRenderer',
+      ]) {
+        final renderer = node[key];
+        if (renderer is Map) {
+          final channelId = _firstNonEmpty(<String?>[
+            _songParser._text(renderer['channelId']),
+            _findChannelId(renderer),
+          ]);
+          final subscribed = renderer['subscribed'];
+          if (channelId != null || subscribed is bool) {
+            return _InnerTubeArtistSubscription(
+              channelId: channelId,
+              isSubscribed: subscribed is bool ? subscribed : null,
+            );
+          }
+        }
+      }
+      for (final value in node.values) {
+        final result = _findSubscription(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findSubscription(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  String? _findChannelId(Object? node) {
+    if (node is Map) {
+      final browse = node['browseEndpoint'];
+      if (browse is Map) {
+        final browseId = _songParser._text(browse['browseId']);
+        if (browseId != null && browseId.startsWith('UC')) return browseId;
+      }
+      for (final value in node.values) {
+        final result = _findChannelId(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findChannelId(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  String? _findRadioPlaylistId(Object? node) {
+    if (node is Map) {
+      final label = _textFromRenderer(
+        node['text'] ?? node['buttonText'] ?? node['accessibility'],
+      ).toLowerCase();
+      if (label.contains('radio')) {
+        final playlistId = _findPlaylistId(node);
+        if (playlistId != null) return playlistId;
+      }
+      for (final value in node.values) {
+        final result = _findRadioPlaylistId(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findRadioPlaylistId(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  String? _findHeaderPlayPlaylistId(Map<dynamic, dynamic> header) {
+    for (final actionKey in const <String>['playButton', 'shufflePlayButton']) {
+      final action = header[actionKey];
+      if (action is! Map) continue;
+      for (final rendererKey in const <String>[
+        'buttonRenderer',
+        'musicPlayButtonRenderer',
+      ]) {
+        final renderer = action[rendererKey];
+        if (renderer is! Map) continue;
+        final playlistId = _findPlaylistId(renderer);
+        if (playlistId != null) return playlistId;
+      }
+    }
+    return null;
+  }
+
+  _InnerTubeArtistRadio? _findStartRadio(Object? node) {
+    if (node is Map) {
+      final startRadioButton = node['startRadioButton'];
+      if (startRadioButton is Map) {
+        final playlistId = _findPlaylistId(startRadioButton);
+        final videoId = _songParser._findWatchVideoId(startRadioButton);
+        if (playlistId != null && videoId != null) {
+          return _InnerTubeArtistRadio(
+            playlistId: playlistId,
+            videoId: videoId,
+          );
+        }
+      }
+      for (final value in node.values) {
+        final result = _findStartRadio(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findStartRadio(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  String? _findRadioVideoId(Object? node) {
+    if (node is Map) {
+      final label = _textFromRenderer(
+        node['text'] ?? node['buttonText'] ?? node['accessibility'],
+      ).toLowerCase();
+      if (label.contains('radio')) {
+        final videoId = _songParser._findWatchVideoId(node);
+        if (videoId != null) return videoId;
+      }
+      for (final value in node.values) {
+        final result = _findRadioVideoId(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findRadioVideoId(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  String? _findPlaylistId(Object? node) {
+    if (node is Map) {
+      for (final key in const <String>[
+        'watchEndpoint',
+        'watchPlaylistEndpoint',
+      ]) {
+        final endpoint = node[key];
+        if (endpoint is Map) {
+          final playlistId = _songParser._text(endpoint['playlistId']);
+          if (playlistId != null) return playlistId;
+        }
+      }
+      for (final value in node.values) {
+        final result = _findPlaylistId(value);
+        if (result != null) return result;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final result = _findPlaylistId(value);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  String? _largestThumbnailUrl(Object? node) {
+    String? selected;
+    var selectedArea = -1;
+
+    void visit(Object? value) {
+      if (value is Map) {
+        final thumbnails = value['thumbnails'];
+        if (thumbnails is List) {
+          for (final candidate in thumbnails) {
+            if (candidate is! Map) continue;
+            var url = _songParser._text(candidate['url']);
+            if (url == null) continue;
+            if (url.startsWith('//')) url = 'https:$url';
+            final width = _songParser._integer(candidate['width']) ?? 0;
+            final height = _songParser._integer(candidate['height']) ?? 0;
+            final area = width * height;
+            if (area >= selectedArea) {
+              selected = url;
+              selectedArea = area;
+            }
+          }
+        }
+        for (final nested in value.values) {
+          visit(nested);
+        }
+      } else if (value is List) {
+        for (final nested in value) {
+          visit(nested);
+        }
+      }
+    }
+
+    visit(node);
+    return selected;
+  }
+
+  String _textFromRenderer(Object? renderer) {
+    return _songParser._text(renderer)?.trim() ?? '';
+  }
+
+  String? _firstNonEmpty(Iterable<String?> values) {
+    for (final value in values) {
+      final normalized = value?.trim();
+      if (normalized != null && normalized.isNotEmpty) return normalized;
+    }
+    return null;
+  }
+}
+
+class _InnerTubeArtistSubscription {
+  const _InnerTubeArtistSubscription({
+    required this.channelId,
+    required this.isSubscribed,
+  });
+
+  final String? channelId;
+  final bool? isSubscribed;
+}
+
+class _InnerTubeArtistRadio {
+  const _InnerTubeArtistRadio({
+    required this.playlistId,
+    required this.videoId,
+  });
+
+  final String playlistId;
+  final String videoId;
+}
+
 class InnerTubeHomeParser {
   const InnerTubeHomeParser({this._songParser = const InnerTubeSearchParser()});
 
@@ -2386,6 +3253,7 @@ class InnerTubeHomeParser {
       maxItemsPerSection: maxItemsPerSection,
       seenVideoIds: <String>{},
       seenBrowseIds: <String>{},
+      seenArtistBrowseIds: <String>{},
     );
   }
 
@@ -2395,6 +3263,7 @@ class InnerTubeHomeParser {
     required int maxItemsPerSection,
     required Set<String> seenVideoIds,
     required Set<String> seenBrowseIds,
+    required Set<String> seenArtistBrowseIds,
   }) {
     if (maxSections < 1 ||
         maxSections > InnerTubeSearchService.maxHomeSections) {
@@ -2442,9 +3311,16 @@ class InnerTubeHomeParser {
             items.add(InnerTubeHomeSongItem(song));
           }
         } else if (twoRow is Map) {
-          final collection = _parseCollection(twoRow);
-          if (collection != null && seenBrowseIds.add(collection.browseId)) {
-            items.add(collection);
+          final artist = _parseArtist(twoRow);
+          if (artist != null) {
+            if (seenArtistBrowseIds.add(artist.browseId)) {
+              items.add(InnerTubeHomeArtistItem(artist));
+            }
+          } else {
+            final collection = _parseCollection(twoRow);
+            if (collection != null && seenBrowseIds.add(collection.browseId)) {
+              items.add(collection);
+            }
           }
         }
         if (items.length == maxItemsPerSection) {
@@ -2507,6 +3383,59 @@ class InnerTubeHomeParser {
       }
     }
     return null;
+  }
+
+  InnerTubeArtist? _parseArtist(Map<dynamic, dynamic> renderer) {
+    final titleRuns = _songParser
+        ._runs(renderer['title'])
+        .toList(growable: false);
+    final name = _songParser._firstText(titleRuns);
+    if (name == null) {
+      return null;
+    }
+    final browseId =
+        _directArtistBrowseId(renderer['navigationEndpoint']) ??
+        _artistBrowseIdFromRuns(titleRuns);
+    if (browseId == null) {
+      return null;
+    }
+    return InnerTubeArtist(
+      browseId: browseId,
+      name: name,
+      thumbnailUrl: _songParser._thumbnailUrl(renderer),
+    );
+  }
+
+  String? _artistBrowseIdFromRuns(Iterable<Map<dynamic, dynamic>> runs) {
+    for (final run in runs) {
+      final browseId = _directArtistBrowseId(run['navigationEndpoint']);
+      if (browseId != null) {
+        return browseId;
+      }
+    }
+    return null;
+  }
+
+  String? _directArtistBrowseId(Object? endpoint) {
+    if (endpoint is! Map) {
+      return null;
+    }
+    final browse = endpoint['browseEndpoint'];
+    if (browse is! Map) {
+      return null;
+    }
+    final browseId = _songParser._text(browse['browseId']);
+    if (browseId == null) {
+      return null;
+    }
+    final configs = browse['browseEndpointContextSupportedConfigs'];
+    final musicConfig = configs is Map
+        ? configs['browseEndpointContextMusicConfig']
+        : null;
+    final pageType = musicConfig is Map
+        ? _songParser._text(musicConfig['pageType'])
+        : null;
+    return pageType == 'MUSIC_PAGE_TYPE_ARTIST' ? browseId : null;
   }
 
   InnerTubeHomeCollection? _parseCollection(Map<dynamic, dynamic> renderer) {
@@ -2773,6 +3702,7 @@ class InnerTubeNextParser {
     final artists = <String>[];
     final artistBrowseIds = <String?>[];
     String? album;
+    String? albumBrowseId;
     Duration? duration = _songParser._parseDuration(
       _songParser._text(renderer['lengthText']) ?? '',
     );
@@ -2796,6 +3726,7 @@ class InnerTubeNextParser {
         }
       } else if (pageType == 'MUSIC_PAGE_TYPE_ALBUM' && album == null) {
         album = text;
+        albumBrowseId = _songParser._validatedAlbumBrowseId(run);
       }
       duration ??= _songParser._parseDuration(text);
     }
@@ -2820,6 +3751,7 @@ class InnerTubeNextParser {
       artists: artists,
       artistBrowseIds: artistBrowseIds,
       album: album,
+      albumBrowseId: albumBrowseId,
       duration: duration,
       thumbnailUrl: _songParser._thumbnailUrl(renderer),
     );

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_dialog.dart';
 import '../../../../services/youtube_music/playlist_sync/playlist_sync_models.dart';
 import '../../../../services/youtube_music/playlist_sync/playlist_sync_store.dart';
 import '../providers/app_strings.dart';
@@ -35,7 +36,7 @@ class _YouTubeMusicPlaylistConflictsDialogState
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return AppAlertDialog(
       key: const Key('youtube-music-playlist-conflicts-dialog'),
       title: Text(widget.strings.resolvePlaylistSyncConflicts),
       content: SizedBox(

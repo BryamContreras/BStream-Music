@@ -165,6 +165,85 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     return entry;
   }
 
+  /// Adds a remote collection as catalog-only playlist entries.
+  ///
+  /// Whole playlists can contain dozens or hundreds of songs, so downloads
+  /// are opt-in here. Entries are deduplicated against both the destination
+  /// playlist and the current batch, while provider/queue synchronization is
+  /// consolidated after the complete import.
+  Future<int> addRemoteTracksToPlaylist(
+    String playlistId,
+    Iterable<TrackInfo> tracks, {
+    bool download = false,
+  }) async {
+    final database = ref.read(databaseServiceProvider);
+    final catalog = await database.getCatalogPlaylist(playlistId);
+    if (catalog == null) {
+      return 0;
+    }
+
+    final entriesByVideoId = <String, PlaylistEntry>{};
+    for (final entry in catalog.entries.where((entry) => !entry.isDeleted)) {
+      final videoId = entry.videoId?.trim();
+      if (videoId != null && videoId.isNotEmpty) {
+        entriesByVideoId.putIfAbsent(videoId, () => entry);
+      }
+    }
+
+    var added = 0;
+    final queuedDownloadIds = <String>{};
+    for (final track in tracks) {
+      final videoId = _youtubeVideoId(track);
+      if (videoId == null) {
+        continue;
+      }
+      final existing = entriesByVideoId[videoId];
+      if (existing != null) {
+        if (download &&
+            existing.localTrackId == null &&
+            queuedDownloadIds.add(videoId)) {
+          unawaited(
+            ref.read(downloadControllerProvider.notifier).downloadAudio(track),
+          );
+        }
+        continue;
+      }
+
+      final artists = track.artists.isEmpty
+          ? <String>[track.artist]
+          : track.artists;
+      final entry = await database.appendCatalogEntry(
+        playlistId: playlistId,
+        entryId: _uuid.v4(),
+        track: CatalogTrack.youtube(
+          videoId: videoId,
+          title: track.title,
+          artists: artists,
+          artistBrowseIds: track.artistBrowseIds,
+          album: track.album,
+          duration: track.duration,
+          thumbnailUrl: track.catalogThumbnailUrl ?? track.thumbnailUrl,
+          sourceUrl: track.url,
+        ),
+        now: DateTime.now(),
+      );
+      entriesByVideoId[videoId] = entry;
+      added += 1;
+      if (download && queuedDownloadIds.add(videoId)) {
+        unawaited(
+          ref.read(downloadControllerProvider.notifier).downloadAudio(track),
+        );
+      }
+    }
+
+    if (added > 0) {
+      await _reloadCatalogState();
+      await _syncActivePlaybackQueueById(playlistId);
+      _requestYouTubeMusicSync();
+    }
+    return added;
+  }
+
   Future<void> removeCatalogEntry(String playlistId, String entryId) async {
     await ref
         .read(databaseServiceProvider)

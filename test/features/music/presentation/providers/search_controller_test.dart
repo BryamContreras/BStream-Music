@@ -37,6 +37,7 @@ void main() {
     expect(catalog.songQueries, ['easy on me']);
     expect(catalog.videoQueries, isEmpty);
     expect(catalog.albumQueries, isEmpty);
+    expect(catalog.artistQueries, isEmpty);
     expect(downloader.searchQueries, isEmpty);
     expect(downloader.getInfoCalls, 0);
     expect(downloader.getPlaybackInfoCalls, 0);
@@ -71,6 +72,9 @@ void main() {
           artists: const ['Artist'],
         ),
       ],
+      artistResults: const [
+        InnerTubeArtist(browseId: 'UCartist001', name: 'Artist'),
+      ],
     );
     final container = _container(catalog, _FakeDownloaderService());
     addTearDown(container.dispose);
@@ -81,12 +85,14 @@ void main() {
     await controller.selectCategory(SearchCategory.videos);
     await controller.selectCategory(SearchCategory.songs);
     await controller.selectCategory(SearchCategory.albums);
+    await controller.selectCategory(SearchCategory.artists);
     await controller.selectCategory(SearchCategory.videos);
 
     final search = container.read(searchControllerProvider).value!;
     expect(catalog.songQueries, ['Artist']);
     expect(catalog.videoQueries, ['Artist']);
     expect(catalog.albumQueries, ['Artist']);
+    expect(catalog.artistQueries, ['Artist']);
     expect(search.pages.keys.toSet(), SearchCategory.values.toSet());
     expect(search.selectedCategory, SearchCategory.videos);
     expect(search.selectedTracks.single.title, 'Video');
@@ -317,11 +323,13 @@ class _FakeCatalog
     implements
         YouTubeMusicSearch,
         YouTubeMusicCatalogSearch,
+        YouTubeMusicArtistSearch,
         YouTubeMusicAlbumLookup {
   _FakeCatalog({
     this.songResults = const [],
     this.videoResults = const [],
     this.albumResults = const [],
+    this.artistResults = const [],
     this.albumSongs = const [],
     this.songLoader,
     this.videoLoader,
@@ -331,6 +339,7 @@ class _FakeCatalog
   final List<InnerTubeSong> songResults;
   final List<InnerTubeSong> videoResults;
   final List<InnerTubeAlbum> albumResults;
+  final List<InnerTubeArtist> artistResults;
   final List<InnerTubeSong> albumSongs;
   final Future<List<InnerTubeSong>> Function(String query)? songLoader;
   final Future<List<InnerTubeSong>> Function(String query)? videoLoader;
@@ -338,6 +347,7 @@ class _FakeCatalog
   final List<String> songQueries = [];
   final List<String> videoQueries = [];
   final List<String> albumQueries = [];
+  final List<String> artistQueries = [];
   final List<String> albumBrowseIds = [];
   int? lastAlbumLimit;
 
@@ -372,6 +382,15 @@ class _FakeCatalog
       throw failure;
     }
     return albumResults;
+  }
+
+  @override
+  Future<List<InnerTubeArtist>> searchArtists(
+    String query, {
+    int limit = 20,
+  }) async {
+    artistQueries.add(query);
+    return artistResults;
   }
 
   @override

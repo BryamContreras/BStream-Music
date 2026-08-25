@@ -157,7 +157,8 @@ class YoutubePlaybackStreamValidator {
 /// The resolver only handles YouTube URLs and IDs. Non-YouTube inputs are
 /// rejected by throwing a [AudioStreamResolverException] so the caller can
 /// fall back to another resolver.
-class YoutubeExplodeAudioResolver implements AudioStreamResolver {
+class YoutubeExplodeAudioResolver
+    implements AudioStreamResolver, ContinuationAwareAudioStreamResolver {
   YoutubeExplodeAudioResolver({
     YoutubeExplode? client,
     YoutubeExplodeRuntime? runtime,
@@ -231,7 +232,15 @@ class YoutubeExplodeAudioResolver implements AudioStreamResolver {
   }
 
   @override
-  Future<AudioStreamResolution> resolve(TrackInfo track) async {
+  Future<AudioStreamResolution> resolve(TrackInfo track) {
+    return resolveWhileCurrent(track);
+  }
+
+  @override
+  Future<AudioStreamResolution> resolveWhileCurrent(
+    TrackInfo track, {
+    AudioResolverContinuationCallback? shouldContinue,
+  }) async {
     final videoId = _parseYouTubeVideoId(track);
     if (videoId == null) {
       throw const AudioStreamResolverException(
@@ -239,56 +248,83 @@ class YoutubeExplodeAudioResolver implements AudioStreamResolver {
       );
     }
 
-    final client = await _ensureFastClient();
     final runtime = _runtime;
     final stopwatch = Stopwatch()..start();
+    var withinResolutionBudget = true;
+    bool isCurrent() =>
+        withinResolutionBudget && (shouldContinue?.call() ?? true);
     try {
-      final stream =
-          await resolvePreferredYoutubeAudioStream(
-            videoId: videoId,
-            loadManifest: (videoId, ytClient, requireWatchPage) {
-              return client.videos.streams.getManifest(
-                videoId,
-                ytClients: [ytClient],
-                requireWatchPage: requireWatchPage,
-              );
-            },
-            loadManifestForAttempt: runtime == null
-                ? null
-                : (videoId, attempt) async {
-                    final attemptClient = await runtime.clientFor(attempt);
-                    return attemptClient.videos.streams.getManifest(
-                      videoId,
-                      ytClients: [attempt.client],
-                      requireWatchPage: attempt.requireWatchPage,
-                    );
-                  },
-            validateSelectedStream: _validatePlaybackStream,
-            // A DASH base URL does not contain the fragment paths. The package can
-            // assemble those for downloads, but native players only receive this
-            // URL, so let yt-dlp handle manifests with no direct audio stream.
-            requireDirectUrl: true,
-            jsSolverAvailable: runtime?.supportsSolver ?? false,
-            onAttempt: (attempt, elapsed, error) {
-              developer.log(
-                'manifest attempt=${attempt.name}, '
-                'solver=${attempt.requiresJsSolver}, '
-                'elapsedMs=${elapsed.inMilliseconds}, '
-                'status=${error == null ? 'selected' : 'failed'}',
-                name: 'BStreamYoutubeExplode',
-                error: error,
-              );
-            },
-          ).timeout(
-            resolveTimeout,
-            onTimeout: () => throw AudioStreamResolverException(
-              'youtube_explode_dart no resolvio el audio a tiempo.',
-              cause: TimeoutException(
-                'YouTube manifest resolution timed out.',
-                resolveTimeout,
+      Future<AudioOnlyStreamInfo> resolveManifest() async {
+        _ensureCurrent(isCurrent);
+        final client = await _ensureFastClient();
+        _ensureCurrent(isCurrent);
+        return resolvePreferredYoutubeAudioStream(
+          videoId: videoId,
+          loadManifest: (videoId, ytClient, requireWatchPage) {
+            return client.videos.streams.getManifest(
+              videoId,
+              ytClients: [ytClient],
+              requireWatchPage: requireWatchPage,
+            );
+          },
+          loadManifestForAttempt: runtime == null
+              ? null
+              : (videoId, attempt) async {
+                  final attemptClient = await runtime.clientFor(attempt);
+                  return attemptClient.videos.streams.getManifest(
+                    videoId,
+                    ytClients: [attempt.client],
+                    requireWatchPage: attempt.requireWatchPage,
+                  );
+                },
+          validateSelectedStream: _validatePlaybackStream,
+          // A DASH base URL does not contain the fragment paths. The package can
+          // assemble those for downloads, but native players only receive this
+          // URL, so let yt-dlp handle manifests with no direct audio stream.
+          requireDirectUrl: true,
+          jsSolverAvailable: runtime?.supportsSolver ?? false,
+          shouldContinue: isCurrent,
+          onAttempt: (attempt, elapsed, error) {
+            developer.log(
+              'manifest attempt=${attempt.name}, '
+              'solver=${attempt.requiresJsSolver}, '
+              'elapsedMs=${elapsed.inMilliseconds}, '
+              'status=${error == null ? 'selected' : 'failed'}',
+              name: 'BStreamYoutubeExplode',
+              error: error,
+            );
+          },
+        );
+      }
+
+      final stream = runtime == null
+          ? await resolveManifest().timeout(
+              resolveTimeout,
+              onTimeout: () {
+                withinResolutionBudget = false;
+                throw AudioStreamResolverException(
+                  'youtube_explode_dart no resolvio el audio a tiempo.',
+                  cause: TimeoutException(
+                    'YouTube manifest resolution timed out.',
+                    resolveTimeout,
+                  ),
+                );
+              },
+            )
+          : await runtime.runManifestRequest(
+              priority: YoutubeExplodeManifestPriority.playback,
+              operation: resolveManifest,
+              shouldContinue: isCurrent,
+              executionTimeout: resolveTimeout,
+              executionTimeoutError: (timeout) => AudioStreamResolverException(
+                'youtube_explode_dart no resolvio el audio a tiempo.',
+                cause: TimeoutException(
+                  'YouTube manifest resolution timed out.',
+                  timeout,
+                ),
               ),
-            ),
-          );
+              onExecutionTimeout: () => withinResolutionBudget = false,
+            );
       final url = stream.url.toString();
       if (!url.startsWith('http')) {
         throw const AudioStreamResolverException(
@@ -324,6 +360,14 @@ class YoutubeExplodeAudioResolver implements AudioStreamResolver {
       throw AudioStreamResolverException(
         'youtube_explode_dart failed to resolve the stream.',
         cause: error,
+      );
+    }
+  }
+
+  void _ensureCurrent(AudioResolverContinuationCallback? shouldContinue) {
+    if (shouldContinue != null && !shouldContinue()) {
+      throw const AudioStreamResolverException(
+        'Audio stream resolution was superseded.',
       );
     }
   }

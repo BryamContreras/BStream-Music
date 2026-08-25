@@ -34,6 +34,118 @@ class LocalTrackDownloadHelper {
   final Queue<Completer<void>> _downloadPermitWaiters = Queue();
   int _activeDownloads = 0;
   Future<void> _downloadTail = Future<void>.value();
+  Future<int>? _storedArtworkRepair;
+
+  /// Replaces legacy, low-resolution library artwork without touching audio.
+  ///
+  /// Repairs run sequentially so a large local library cannot create the same
+  /// burst of network work as a batch media download. After two consecutive
+  /// transfer failures the pass stops early, which keeps offline startup fast.
+  Future<int> repairStoredArtwork(Iterable<LocalTrack> tracks) {
+    final active = _storedArtworkRepair;
+    if (active != null) {
+      return active;
+    }
+
+    late final Future<int> repair;
+    repair = _repairStoredArtwork(tracks.toList(growable: false)).whenComplete(
+      () {
+        if (identical(_storedArtworkRepair, repair)) {
+          _storedArtworkRepair = null;
+        }
+      },
+    );
+    _storedArtworkRepair = repair;
+    return repair;
+  }
+
+  Future<int> _repairStoredArtwork(List<LocalTrack> tracks) async {
+    if (tracks.isEmpty) {
+      return 0;
+    }
+
+    final thumbnailsDirectory = await _thumbnailsDirectory();
+    var repaired = 0;
+    var consecutiveFailures = 0;
+    for (final localTrack in tracks) {
+      if (localTrack.isExternal) {
+        continue;
+      }
+
+      final track = _trackInfoFromLocalTrack(localTrack);
+      final candidates = _thumbnailCandidates(track).toList(growable: false);
+      if (candidates.isEmpty) {
+        continue;
+      }
+
+      final desiredSource = candidates.first.toString();
+      final currentPath = localTrack.thumbnailPath?.trim();
+      final hasStoredArtwork =
+          currentPath != null &&
+          currentPath.isNotEmpty &&
+          await _isUsableFile(currentPath);
+      if (hasStoredArtwork &&
+          localTrack.thumbnailUrl?.trim() == desiredSource) {
+        consecutiveFailures = 0;
+        continue;
+      }
+
+      final identityDigest = sha256
+          .convert(utf8.encode(_trackIdentity(track)))
+          .toString();
+      final savedThumbnail = await _saveThumbnail(
+        track,
+        thumbnailsDirectory,
+        identityDigest,
+      );
+      if (savedThumbnail == null) {
+        consecutiveFailures++;
+        if (consecutiveFailures >= 2) {
+          break;
+        }
+        continue;
+      }
+
+      final updated = localTrack.copyWith(
+        thumbnailUrl: savedThumbnail.sourceUrl,
+        thumbnailPath: savedThumbnail.path,
+      );
+      try {
+        await _ref.read(libraryRepositoryProvider).saveLocalTrack(updated);
+        await _commitSavedThumbnail(savedThumbnail);
+        repaired++;
+        consecutiveFailures = 0;
+      } catch (_) {
+        await _rollbackSavedThumbnail(savedThumbnail);
+        consecutiveFailures++;
+        if (consecutiveFailures >= 2) {
+          break;
+        }
+      }
+    }
+
+    if (repaired > 0) {
+      _ref.invalidate(libraryTracksProvider);
+    }
+    return repaired;
+  }
+
+  TrackInfo _trackInfoFromLocalTrack(LocalTrack track) {
+    final sourceId = track.sourceId?.trim();
+    return TrackInfo(
+      id: sourceId == null || sourceId.isEmpty ? track.id : sourceId,
+      title: track.title,
+      artist: track.artist,
+      url: track.sourceUrl ?? '',
+      thumbnailUrl: track.thumbnailUrl,
+      catalogThumbnailUrl: track.catalogThumbnailUrl,
+      duration: track.duration,
+      album: track.album,
+      artists: track.artists,
+      artistBrowseIds: track.artistBrowseIds,
+      metadataSource: track.metadataSource,
+    );
+  }
 
   Future<LocalTrackDownloadResult> resolveForLibrary(
     TrackInfo track, {
@@ -954,28 +1066,23 @@ class LocalTrackDownloadHelper {
   Iterable<Uri> _thumbnailCandidates(TrackInfo track) sync* {
     final seen = <String>{};
     final direct = track.thumbnailUrl?.trim();
+    final catalog = track.catalogThumbnailUrl?.trim();
     final videoArtwork = youtubeThumbnailSourceForVideoId(
       _youtubeVideoId(track),
     );
+    // catalogThumbnailUrl is explicitly the square music-catalog cover. Some
+    // legacy rows predate metadataSource persistence, so its presence is more
+    // authoritative than the enum when choosing artwork.
     final candidates = <String>[
-      ...youtubeThumbnailCandidates(videoArtwork),
-      ...youtubeThumbnailCandidates(direct),
+      ...artworkSourceCandidates(catalog),
+      ...artworkSourceCandidates(direct),
+      ...artworkSourceCandidates(videoArtwork),
     ];
     for (final source in candidates) {
       final uri = Uri.tryParse(source);
       if (uri != null && uri.hasScheme && seen.add(uri.toString())) {
         yield uri;
       }
-    }
-
-    final catalogSource = track.catalogThumbnailUrl?.trim();
-    final catalogUri = catalogSource == null
-        ? null
-        : Uri.tryParse(catalogSource);
-    if (catalogUri != null &&
-        catalogUri.hasScheme &&
-        seen.add(catalogUri.toString())) {
-      yield catalogUri;
     }
   }
 

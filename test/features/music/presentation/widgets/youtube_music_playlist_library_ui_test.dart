@@ -103,6 +103,83 @@ void main() {
     },
   );
 
+  testWidgets('library collage uses nine catalog covers in two rows of four', (
+    tester,
+  ) async {
+    final fixture = _multiArtworkCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+
+    await tester.pumpWidget(
+      _libraryHarness(fixture: fixture, controller: controller),
+    );
+    await _pumpLibrary(tester);
+
+    final cover = find.byKey(
+      ValueKey('library-playlist-artwork-${fixture.playlist.id}'),
+    );
+    final artwork = find.descendant(
+      of: cover,
+      matching: find.byType(SourceImage),
+    );
+    final images = tester
+        .widgetList<SourceImage>(artwork)
+        .where(
+          (image) =>
+              image.source?.startsWith('https://img.test/local-album-cover-') ??
+              false,
+        )
+        .toList(growable: false);
+    final sources = images.map((image) => image.source).toList(growable: false);
+
+    expect(sources, hasLength(9));
+    expect(
+      sources.every(
+        (source) =>
+            source?.startsWith('https://img.test/local-album-cover-') ?? false,
+      ),
+      isTrue,
+    );
+    expect(
+      sources.any((source) => source?.contains('ytimg.com') ?? false),
+      isFalse,
+    );
+    expect(
+      images.every(
+        (image) =>
+            image.fallbackSource?.endsWith('.jpg') == true &&
+            image.fallbackSource!.contains('video-thumbnail-'),
+      ),
+      isTrue,
+    );
+    for (var row = 0; row < 2; row++) {
+      final secondaryRow = find.descendant(
+        of: cover,
+        matching: find.byKey(ValueKey('playlist-cover-secondary-row-$row')),
+      );
+      expect(secondaryRow, findsOneWidget);
+      expect(
+        tester
+            .widgetList<SourceImage>(
+              find.descendant(
+                of: secondaryRow,
+                matching: find.byType(SourceImage),
+              ),
+            )
+            .where(
+              (image) =>
+                  image.source?.startsWith(
+                    'https://img.test/local-album-cover-',
+                  ) ??
+                  false,
+            ),
+        hasLength(4),
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'remote playlist song menu offers download and add-to-playlist actions',
     (tester) async {
@@ -220,7 +297,10 @@ Future<void> _openDeleteDialog(WidgetTester tester, String playlistId) async {
   await tester.tap(deleteMenuItem);
   await tester.pump(const Duration(milliseconds: 300));
 
-  expect(find.byType(AlertDialog), findsOneWidget);
+  expect(
+    find.byWidgetPredicate((widget) => widget is AlertDialog),
+    findsOneWidget,
+  );
   expect(
     find.textContaining('Esta playlist está sincronizada'),
     findsOneWidget,
@@ -239,7 +319,7 @@ Widget _libraryHarness({
 }) {
   return ProviderScope(
     overrides: [
-      libraryTracksProvider.overrideWith((ref) async => const <LocalTrack>[]),
+      libraryTracksProvider.overrideWith((ref) async => fixture.libraryTracks),
       playlistsControllerProvider.overrideWith(() => controller),
       catalogPlaylistsProvider.overrideWith(
         (ref) async => <CatalogPlaylist>[fixture.catalog],
@@ -303,11 +383,13 @@ class _RemoteCatalogFixture {
     required this.now,
     required this.playlist,
     required this.catalog,
+    this.libraryTracks = const <LocalTrack>[],
   });
 
   final DateTime now;
   final Playlist playlist;
   final CatalogPlaylist catalog;
+  final List<LocalTrack> libraryTracks;
 }
 
 const _remoteThumbnail = 'https://i.ytimg.com/vi/duplicate-video/hqdefault.jpg';
@@ -363,5 +445,53 @@ _RemoteCatalogFixture _remoteCatalogFixture() {
         ),
       ],
     ),
+  );
+}
+
+_RemoteCatalogFixture _multiArtworkCatalogFixture() {
+  final now = DateTime.utc(2026, 8, 23);
+  final localTracks = List<LocalTrack>.generate(9, (index) {
+    final videoId = 'video${index.toString().padLeft(6, '0')}';
+    return LocalTrack(
+      id: 'local-$index',
+      title: 'Canción $index',
+      artist: 'Artista $index',
+      filePath: '/music/song-$index.m4a',
+      sourceId: videoId,
+      addedAt: now,
+      thumbnailPath: '/music/video-thumbnail-$index.jpg',
+      thumbnailUrl: 'https://i.ytimg.com/vi/$videoId/hqdefault.jpg',
+      catalogThumbnailUrl: 'https://img.test/local-album-cover-$index.jpg',
+    );
+  });
+  final playlist = Playlist(
+    id: 'multi-artwork-playlist',
+    name: 'Muchas portadas',
+    trackIds: localTracks.map((track) => track.id).toList(growable: false),
+    createdAt: now,
+    updatedAt: now,
+  );
+  final entries = List<PlaylistEntry>.generate(9, (index) {
+    final videoId = localTracks[index].sourceId!;
+    return PlaylistEntry(
+      id: 'entry-$index',
+      playlistId: playlist.id,
+      track: CatalogTrack.youtube(
+        videoId: videoId,
+        title: localTracks[index].title,
+        thumbnailUrl: 'https://img.test/album-cover-$index.jpg',
+      ),
+      localTrackId: localTracks[index].id,
+      remoteVideoId: videoId,
+      position: index,
+      createdAt: now,
+      updatedAt: now,
+    );
+  });
+  return _RemoteCatalogFixture(
+    now: now,
+    playlist: playlist,
+    catalog: CatalogPlaylist(playlist: playlist, entries: entries),
+    libraryTracks: localTracks,
   );
 }

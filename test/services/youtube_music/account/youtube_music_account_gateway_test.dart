@@ -44,6 +44,43 @@ void main() {
       expect(request.body['callCircumstance'], 'SWITCHING_USERS_FULL');
     });
 
+    test('reads only the fixed authenticated Music Home browse id', () async {
+      final firstPayload = <String, Object?>{'page': 'first'};
+      final nextPayload = <String, Object?>{'page': 'next'};
+      final transport = _FakeAccountTransport(<Object>[
+        _ok(firstPayload),
+        _ok(nextPayload),
+      ]);
+      final gateway = _gateway(transport);
+
+      expect(await gateway.readMusicHomePage(), same(firstPayload));
+      expect(
+        await gateway.readMusicHomePage(continuation: ' next-home '),
+        same(nextPayload),
+      );
+
+      expect(transport.requests, hasLength(2));
+      expect(transport.requests.first.endpoint, 'browse');
+      expect(transport.requests.first.body['context'], _clientContext);
+      expect(transport.requests.first.body['browseId'], 'FEmusic_home');
+      expect(transport.requests.first.body, isNot(contains('continuation')));
+      expect(transport.requests.last.body['context'], _clientContext);
+      expect(transport.requests.last.body['continuation'], 'next-home');
+      expect(transport.requests.last.body, isNot(contains('browseId')));
+    });
+
+    test('rejects unsafe Music Home continuations before transport', () async {
+      final transport = _FakeAccountTransport(<Object>[]);
+
+      expect(
+        () => _gateway(
+          transport,
+        ).readMusicHomePage(continuation: 'bad\ncontinuation'),
+        throwsArgumentError,
+      );
+      expect(transport.requests, isEmpty);
+    });
+
     test('reads saved playlists and stops on repeated continuation', () async {
       final transport = _FakeAccountTransport(<Object>[
         _ok(
@@ -400,6 +437,77 @@ void main() {
         (transport.requests.last.body['target'] as Map)['videoId'],
         'video-unlike',
       );
+    });
+
+    test(
+      'artist subscription read uses a UC browse id when renderer omits channel',
+      () async {
+        final transport = _FakeAccountTransport(<Object>[
+          _ok(<String, Object?>{
+            'header': <String, Object?>{
+              'musicImmersiveHeaderRenderer': <String, Object?>{
+                'subscriptionButton': <String, Object?>{
+                  'musicSubscribeButtonRenderer': <String, Object?>{
+                    'subscribed': true,
+                  },
+                },
+              },
+            },
+          }),
+        ]);
+        final gateway = _gateway(transport);
+
+        final state = await gateway.getArtistSubscriptionState('UCartist123');
+
+        expect(state?.channelId, 'UCartist123');
+        expect(state?.isSubscribed, isTrue);
+        expect(transport.requests.single.endpoint, 'browse');
+        expect(transport.requests.single.body['browseId'], 'UCartist123');
+      },
+    );
+
+    test('MPLA browse id is not reused as a subscription channel id', () async {
+      final transport = _FakeAccountTransport(<Object>[
+        _ok(<String, Object?>{
+          'musicSubscribeButtonRenderer': <String, Object?>{
+            'subscribed': false,
+          },
+        }),
+      ]);
+      final gateway = _gateway(transport);
+
+      final state = await gateway.getArtistSubscriptionState('MPLAartist123');
+
+      expect(state, isNull);
+    });
+
+    test('artist subscription mutations use channelIds exactly once', () async {
+      final transport = _FakeAccountTransport(<Object>[
+        _ok(const <String, Object?>{}),
+        _ok(const <String, Object?>{}),
+      ]);
+      final gateway = _gateway(transport);
+
+      final subscribed = await gateway.subscribeArtist('UCartist123');
+      final unsubscribed = await gateway.unsubscribeArtist('UCartist123');
+
+      expect(
+        subscribed,
+        isA<YouTubeMusicMutationSuccess<RemotePlaylistMutationApplied>>(),
+      );
+      expect(
+        unsubscribed,
+        isA<YouTubeMusicMutationSuccess<RemotePlaylistMutationApplied>>(),
+      );
+      expect(transport.requests.map((request) => request.endpoint), <String>[
+        'subscription/subscribe',
+        'subscription/unsubscribe',
+      ]);
+      expect(
+        transport.requests.map((request) => request.body['channelIds']),
+        everyElement(<String>['UCartist123']),
+      );
+      expect(transport.requests, hasLength(2));
     });
 
     test('encodes add, remove, move, metadata and delete operations', () async {

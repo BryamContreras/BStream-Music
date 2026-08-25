@@ -12,7 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('RemoteMusicDataSource search', () {
     test(
-      'loads song, video, and album tabs lazily through InnerTube',
+      'loads song, video, album, and artist tabs lazily through InnerTube',
       () async {
         final catalog = _FakeYouTubeMusicSearch(
           results: [
@@ -20,6 +20,8 @@ void main() {
               videoId: 'songs000001',
               title: 'Song result',
               artists: const ['Song artist'],
+              album: 'Song album',
+              albumBrowseId: 'MPREsongalbum001',
             ),
           ],
           videoResults: [
@@ -40,6 +42,13 @@ void main() {
               playlistId: 'OLAKalbum001',
             ),
           ],
+          artistResults: const [
+            InnerTubeArtist(
+              browseId: 'UCartist001',
+              name: 'Adele',
+              thumbnailUrl: 'https://img.test/adele.jpg',
+            ),
+          ],
         );
         final downloader = _FakeDownloaderService(searchResults: const []);
         final dataSource = RemoteMusicDataSource(
@@ -55,9 +64,11 @@ void main() {
         expect(catalog.queries, ['Adele']);
         expect(catalog.videoQueries, isEmpty);
         expect(catalog.albumQueries, isEmpty);
+        expect(catalog.artistQueries, isEmpty);
         expect(songs.category, SearchCategory.songs);
         expect(songs.backend, SearchBackend.innerTube);
         expect(songs.tracks.single.id, 'songs000001');
+        expect(songs.tracks.single.albumBrowseId, 'MPREsongalbum001');
 
         final videos = await dataSource.searchCategory(
           'Adele',
@@ -66,6 +77,7 @@ void main() {
 
         expect(catalog.videoQueries, ['Adele']);
         expect(catalog.albumQueries, isEmpty);
+        expect(catalog.artistQueries, isEmpty);
         expect(videos.category, SearchCategory.videos);
         expect(videos.backend, SearchBackend.innerTube);
         expect(videos.tracks.single.id, 'videos00001');
@@ -89,6 +101,26 @@ void main() {
             type: 'Album',
             thumbnailUrl: 'https://img.test/album.jpg',
             playlistId: 'OLAKalbum001',
+          ),
+        );
+        expect(catalog.artistQueries, isEmpty);
+
+        final artists = await dataSource.searchCategory(
+          'Adele',
+          SearchCategory.artists,
+        );
+
+        expect(catalog.artistQueries, ['Adele']);
+        expect(artists.category, SearchCategory.artists);
+        expect(artists.backend, SearchBackend.innerTube);
+        expect(artists.tracks, isEmpty);
+        expect(artists.albums, isEmpty);
+        expect(
+          artists.artists.single,
+          const SearchArtist(
+            browseId: 'UCartist001',
+            name: 'Adele',
+            thumbnailUrl: 'https://img.test/adele.jpg',
           ),
         );
         expect(downloader.searchQueries, isEmpty);
@@ -135,6 +167,7 @@ void main() {
           error: category == SearchCategory.songs ? failure : null,
           videoError: category == SearchCategory.videos ? failure : null,
           albumError: category == SearchCategory.albums ? failure : null,
+          artistError: category == SearchCategory.artists ? failure : null,
         );
         final downloader = _FakeDownloaderService(
           searchResults: const [fallback],
@@ -151,6 +184,7 @@ void main() {
         expect(page.backend, SearchBackend.ytDlp);
         expect(page.tracks, const [fallback]);
         expect(page.albums, isEmpty);
+        expect(page.artists, isEmpty);
         expect(page.primaryError, same(failure));
       }
     });
@@ -522,29 +556,35 @@ class _FakeYouTubeMusicSearch
     implements
         YouTubeMusicSearch,
         YouTubeMusicCatalogSearch,
+        YouTubeMusicArtistSearch,
         YouTubeMusicAlbumLookup {
   _FakeYouTubeMusicSearch({
     this.results = const [],
     this.videoResults = const [],
     this.albumResults = const [],
+    this.artistResults = const [],
     this.albumSongs = const [],
     this.error,
     this.videoError,
     this.albumError,
+    this.artistError,
     this.albumLookupError,
   });
 
   final List<InnerTubeSong> results;
   final List<InnerTubeSong> videoResults;
   final List<InnerTubeAlbum> albumResults;
+  final List<InnerTubeArtist> artistResults;
   final List<InnerTubeSong> albumSongs;
   final Object? error;
   final Object? videoError;
   final Object? albumError;
+  final Object? artistError;
   final Object? albumLookupError;
   final List<String> queries = [];
   final List<String> videoQueries = [];
   final List<String> albumQueries = [];
+  final List<String> artistQueries = [];
   final List<String> albumBrowseIds = [];
 
   @override
@@ -584,6 +624,19 @@ class _FakeYouTubeMusicSearch
       throw failure;
     }
     return albumResults;
+  }
+
+  @override
+  Future<List<InnerTubeArtist>> searchArtists(
+    String query, {
+    int limit = 20,
+  }) async {
+    artistQueries.add(query);
+    final failure = artistError;
+    if (failure != null) {
+      throw failure;
+    }
+    return artistResults;
   }
 
   @override

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_dialog.dart';
 import '../../../../services/youtube_music/auth/youtube_music_auth_models.dart';
 import 'youtube_music_account_avatar.dart';
 
@@ -13,7 +14,7 @@ class YouTubeMusicChannelPickerDialog extends StatelessWidget {
   static Future<YouTubeMusicAccountChannel?> show(
     BuildContext context,
     List<YouTubeMusicAccountChannel> channels,
-  ) => showDialog<YouTubeMusicAccountChannel>(
+  ) => showAppDialog<YouTubeMusicAccountChannel>(
     context: context,
     barrierDismissible: false,
     builder: (context) => YouTubeMusicChannelPickerDialog(channels: channels),
@@ -21,7 +22,7 @@ class YouTubeMusicChannelPickerDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return AppAlertDialog(
       key: const Key('youtube-music-channel-picker'),
       title: const Text('Elige un canal'),
       content: SizedBox(

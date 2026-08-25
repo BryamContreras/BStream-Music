@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/theme/app_dialog.dart';
 import '../pages/youtube_music_login_page.dart';
 import '../providers/app_strings.dart';
 import '../providers/music_providers.dart'
@@ -76,10 +77,10 @@ class _YouTubeMusicAccountButtonState
         icon: Stack(
           alignment: Alignment.center,
           children: <Widget>[
-            YouTubeMusicAccountAvatar(profile: state.profile, size: 40),
+            YouTubeMusicAccountAvatar(profile: state.profile, size: 32),
             if (isRestoring || playlistSync.isSyncing)
               const SizedBox.square(
-                dimension: 46,
+                dimension: 38,
                 child: CircularProgressIndicator(strokeWidth: 2.2),
               ),
           ],
@@ -94,7 +95,7 @@ class _YouTubeMusicAccountButtonState
   ) async {
     final profile = state.profile;
     if (state.isAuthenticated && profile != null) {
-      await showDialog<void>(
+      await showAppDialog<void>(
         context: context,
         builder: (dialogContext) => YouTubeMusicAccountDialog(
           profile: profile,
@@ -244,7 +245,7 @@ class _YouTubeMusicAccountButtonState
         );
       return;
     }
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => YouTubeMusicPlaylistConflictsDialog(

@@ -1,18 +1,20 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
-import '../../../../core/utils/image_source.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/player/player_service.dart';
+import '../../../../services/youtube_music/account/youtube_music_account.dart';
 import '../../domain/entities/catalog_playlist.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
@@ -20,8 +22,13 @@ import '../../domain/entities/playlist_entry.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/local_audio_availability.dart';
 import '../providers/music_providers.dart';
+import '../providers/subscribed_artists_controller.dart';
+import '../pages/artist_profile_page.dart';
 import 'favorite_star_badge.dart';
+import 'glass_popup_menu_button.dart';
+import 'library_subscribed_artists_shelf.dart';
 import 'now_playing_equalizer.dart';
+import 'playlist_artwork.dart';
 import 'playlist_picker_dialog.dart';
 import 'playlist_track_subtitle.dart';
 import 'scrolled_under_tab_frame.dart';
@@ -78,11 +85,13 @@ class LibraryPanel extends ConsumerStatefulWidget {
   const LibraryPanel({
     required this.onOpenPlayer,
     this.navigationController,
+    this.bottomContentPadding = 0,
     super.key,
   });
 
   final VoidCallback onOpenPlayer;
   final LibraryNavigationController? navigationController;
+  final double bottomContentPadding;
 
   @override
   ConsumerState<LibraryPanel> createState() => _LibraryPanelState();
@@ -178,6 +187,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     final tracks = ref.watch(libraryTracksProvider);
     final playlists = ref.watch(playlistsControllerProvider);
     final catalogPlaylists = ref.watch(catalogPlaylistsProvider);
+    final subscribedArtists = ref.watch(subscribedArtistsProvider);
     final liveQueue = _supportsTikTokLive
         ? ref.watch(tiktokLiveControllerProvider)
         : null;
@@ -216,18 +226,22 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
         key: currentRouteKey,
         child: switch (_route.type) {
           _LibraryRouteType.root => _LibraryRootView(
+            bottomContentPadding: widget.bottomContentPadding,
             tracks: tracks,
             playlists: playlists,
             catalogPlaylists: catalogPlaylists,
+            subscribedArtists: subscribedArtists,
             strings: strings,
             onOpenDownloads: _openDownloads,
             liveQueue: liveQueue,
             onOpenLive: _openLive,
             onOpenPlaylist: _openPlaylist,
             onCreatePlaylist: () => _showCreateDialog(context),
+            onOpenArtist: _openSubscribedArtist,
           ),
           _LibraryRouteType.downloads => tracks.when(
             data: (items) => _TrackListView(
+              bottomContentPadding: widget.bottomContentPadding,
               title: strings.downloadedSongs,
               subtitle: strings.songCountWithDuration(
                 items.length,
@@ -266,6 +280,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                   )
                 : liveQueue.when(
                     data: (state) => _LiveQueueView(
+                      bottomContentPadding: widget.bottomContentPadding,
                       state: state,
                       strings: strings,
                       onBack: _goRoot,
@@ -325,6 +340,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                                 .whereType<LocalTrack>()
                                 .toList(growable: false);
                             return _TrackListView(
+                              bottomContentPadding: widget.bottomContentPadding,
                               title: playlist.isFavorites
                                   ? strings.favorites
                                   : playlist.name,
@@ -363,6 +379,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                             );
                           }
                           return _CatalogTrackListView(
+                            bottomContentPadding: widget.bottomContentPadding,
                             title: playlist.isFavorites
                                 ? strings.favorites
                                 : playlist.name,
@@ -555,7 +572,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
       return;
     }
 
-    final playlistId = await showDialog<String>(
+    final playlistId = await showAppDialog<String>(
       context: this.context,
       builder: (_) => PlaylistPickerDialog(
         title: ref.read(appStringsProvider).choosePlaylist,
@@ -626,9 +643,9 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     }
 
     final strings = ref.read(appStringsProvider);
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         title: Text(
           playlist.isFavorites
               ? strings.removeFromFavorites
@@ -711,9 +728,9 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     }
 
     final strings = ref.read(appStringsProvider);
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         title: Text(strings.deleteSelectedSongs),
         content: Text(strings.confirmDeleteSongs(selectedTracks.length)),
         actions: [
@@ -775,7 +792,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
 
   Future<void> _showCreateDialog(BuildContext context) async {
     final strings = ref.read(appStringsProvider);
-    final rawName = await showDialog<String>(
+    final rawName = await showAppDialog<String>(
       context: context,
       builder: (_) => CreatePlaylistDialog(strings: strings),
     );
@@ -785,30 +802,49 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     }
     await ref.read(playlistsControllerProvider.notifier).create(name);
   }
+
+  void _openSubscribedArtist(RemoteSubscribedArtist artist) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ArtistProfilePage(
+          artistBrowseId: artist.browseId,
+          artistName: artist.name,
+          artistThumbnailUrl: artist.thumbnailUrl,
+          onOpenPlayer: widget.onOpenPlayer,
+        ),
+      ),
+    );
+  }
 }
 
 class _LibraryRootView extends StatelessWidget {
   const _LibraryRootView({
+    required this.bottomContentPadding,
     required this.tracks,
     required this.playlists,
     required this.catalogPlaylists,
+    required this.subscribedArtists,
     required this.liveQueue,
     required this.strings,
     required this.onOpenDownloads,
     required this.onOpenLive,
     required this.onOpenPlaylist,
     required this.onCreatePlaylist,
+    required this.onOpenArtist,
   });
 
+  final double bottomContentPadding;
   final AsyncValue<List<LocalTrack>> tracks;
   final AsyncValue<List<Playlist>> playlists;
   final AsyncValue<List<CatalogPlaylist>> catalogPlaylists;
+  final AsyncValue<List<RemoteSubscribedArtist>> subscribedArtists;
   final AsyncValue<TikTokLiveState>? liveQueue;
   final AppStrings strings;
   final VoidCallback onOpenDownloads;
   final VoidCallback onOpenLive;
   final ValueChanged<String> onOpenPlaylist;
   final VoidCallback onCreatePlaylist;
+  final ValueChanged<RemoteSubscribedArtist> onOpenArtist;
 
   @override
   Widget build(BuildContext context) {
@@ -817,6 +853,8 @@ class _LibraryRootView extends StatelessWidget {
       for (final catalog in catalogPlaylists.value ?? const <CatalogPlaylist>[])
         catalog.playlist.id: catalog,
     };
+    final followedArtists =
+        subscribedArtists.value ?? const <RemoteSubscribedArtist>[];
 
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('library-tab-header-surface'),
@@ -827,17 +865,12 @@ class _LibraryRootView extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: appTabTitleStyle(context),
       ),
-      body: CustomScrollView(
-        key: const ValueKey('library-root-scroll'),
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _SectionTitle(strings.library),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 10)),
-          SliverToBoxAdapter(
+      scrollKey: const ValueKey('library-root-scroll'),
+      scrollCacheExtent: const ScrollCacheExtent.pixels(800),
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(top: appTabFirstSectionTopGap),
             child: tracks.when(
               data: (items) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -856,84 +889,91 @@ class _LibraryRootView extends StatelessWidget {
               error: (error, _) => _ErrorRow(error: error),
             ),
           ),
-          if (liveQueue != null) ...[
-            const SliverToBoxAdapter(child: SizedBox(height: 8)),
-            SliverToBoxAdapter(
-              child: liveQueue!.when(
-                data: (state) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: _LibraryEntry(
-                    key: const ValueKey('library-live-entry'),
-                    icon: Icons.sensors_rounded,
-                    title: strings.liveQueue,
-                    subtitle: strings.liveQueueSummary(
-                      state.liveQueue.length,
-                      state.readyPlayCommands,
-                      state.pendingPlayCommands,
-                    ),
-                    onTap: onOpenLive,
+        ),
+        if (liveQueue != null) ...[
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+          SliverToBoxAdapter(
+            child: liveQueue!.when(
+              data: (state) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: _LibraryEntry(
+                  key: const ValueKey('library-live-entry'),
+                  icon: Icons.sensors_rounded,
+                  title: strings.liveQueue,
+                  subtitle: strings.liveQueueSummary(
+                    state.liveQueue.length,
+                    state.readyPlayCommands,
+                    state.pendingPlayCommands,
                   ),
+                  onTap: onOpenLive,
                 ),
-                loading: () => const _LoadingRow(),
-                error: (error, _) => _ErrorRow(error: error),
               ),
+              loading: () => const _LoadingRow(),
+              error: (error, _) => _ErrorRow(error: error),
             ),
-          ],
+          ),
+        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 28)),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(child: _SectionTitle(strings.playlist)),
+                _NeutralLibraryIconButton(
+                  key: const ValueKey('library-create-playlist-button'),
+                  tooltip: strings.newPlaylist,
+                  icon: Icons.add_rounded,
+                  onPressed: onCreatePlaylist,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 10)),
+        playlists.when(
+          data: (items) => _PlaylistList(
+            playlists: items,
+            libraryTracks: localTracks,
+            catalogPlaylists: catalogsById,
+            strings: strings,
+            onOpenPlaylist: onOpenPlaylist,
+          ),
+          loading: () => const SliverToBoxAdapter(child: _LoadingRow()),
+          error: (error, _) =>
+              SliverToBoxAdapter(child: _ErrorRow(error: error)),
+        ),
+        if (followedArtists.isNotEmpty) ...[
           const SliverToBoxAdapter(child: SizedBox(height: 28)),
           SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Expanded(child: _SectionTitle(strings.playlist)),
-                  _NeutralLibraryIconButton(
-                    tooltip: strings.newPlaylist,
-                    icon: Icons.add_rounded,
-                    onPressed: onCreatePlaylist,
-                  ),
-                ],
-              ),
+            child: LibrarySubscribedArtistsShelf(
+              title: strings.choose('Artistas', 'Artists'),
+              artists: followedArtists,
+              onOpenArtist: onOpenArtist,
             ),
           ),
-          const SliverToBoxAdapter(child: SizedBox(height: 10)),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: _CreatePlaylistRow(
-                key: const ValueKey('create-playlist'),
-                label: strings.createPlaylist,
-                onPressed: onCreatePlaylist,
-              ),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 10)),
-          playlists.when(
-            data: (items) => _PlaylistList(
-              playlists: items,
-              libraryTracks: localTracks,
-              catalogPlaylists: catalogsById,
-              strings: strings,
-              onOpenPlaylist: onOpenPlaylist,
-            ),
-            loading: () => const SliverToBoxAdapter(child: _LoadingRow()),
-            error: (error, _) =>
-                SliverToBoxAdapter(child: _ErrorRow(error: error)),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
-      ),
+        SliverToBoxAdapter(
+          child: SizedBox(
+            key: const ValueKey('library-scroll-bottom-reserve'),
+            height: bottomContentPadding + 24,
+          ),
+        ),
+      ],
     );
   }
 }
 
 class _LiveQueueView extends ConsumerWidget {
   const _LiveQueueView({
+    required this.bottomContentPadding,
     required this.state,
     required this.strings,
     required this.onBack,
     required this.onOpenPlayer,
   });
 
+  final double bottomContentPadding;
   final TikTokLiveState state;
   final AppStrings strings;
   final VoidCallback onBack;
@@ -983,7 +1023,7 @@ class _LiveQueueView extends ConsumerWidget {
                     ),
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 12),
+                    padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
                     itemCount: items.length,
                     itemBuilder: (context, index) {
                       return Padding(
@@ -1240,35 +1280,16 @@ class _CatalogDisplayItem {
 
   String? get album => localTrack?.album ?? entry.track.album;
   Duration? get duration => localTrack?.duration ?? entry.track.duration;
-  String? get artworkSource {
-    final localPath = localTrack?.thumbnailPath?.trim();
-    if (localPath != null && localPath.isNotEmpty) {
-      return localPath;
-    }
-    final localUrl = localTrack?.thumbnailUrl?.trim();
-    if (localUrl != null && localUrl.isNotEmpty) {
-      return localUrl;
-    }
-    final catalogUrl = entry.track.thumbnailUrl?.trim();
-    return catalogUrl == null || catalogUrl.isEmpty ? null : catalogUrl;
-  }
+  PlaylistArtworkSource? get trackArtworkSource =>
+      preferredCatalogTrackArtworkSource(entry.track, localTrack: localTrack);
+  String? get artworkSource => trackArtworkSource?.source;
+  String? get artworkFallbackSource => trackArtworkSource?.fallbackSource;
 
-  String? get artworkFallbackSource {
-    final primary = artworkSource;
-    final candidates = <String?>[
-      localTrack?.thumbnailUrl,
-      entry.track.thumbnailUrl,
-    ];
-    for (final candidate in candidates) {
-      final normalized = candidate?.trim();
-      if (normalized != null &&
-          normalized.isNotEmpty &&
-          normalized != primary) {
-        return normalized;
-      }
-    }
-    return null;
-  }
+  PlaylistArtworkSource? get playlistArtworkSource =>
+      preferredCatalogPlaylistArtworkSource(
+        entry.track,
+        localTrack: localTrack,
+      );
 
   bool matchesSnapshot(PlayerSnapshot? snapshot) {
     final trackId = snapshot?.trackId;
@@ -1301,14 +1322,14 @@ List<_CatalogDisplayItem> _catalogDisplayItems(
   );
 }
 
-List<String> _catalogPlaylistThumbnailSources(List<_CatalogDisplayItem> items) {
-  return items
-      .map((item) => item.artworkSource)
-      .whereType<String>()
-      .where((source) => source.trim().isNotEmpty)
-      .toSet()
-      .take(4)
-      .toList(growable: false);
+List<PlaylistArtworkSource> _catalogPlaylistThumbnailSources(
+  String playlistId,
+  List<_CatalogDisplayItem> items,
+) {
+  return rotatingPlaylistArtworkSources(
+    playlistId: playlistId,
+    candidates: items.map((item) => item.playlistArtworkSource),
+  );
 }
 
 Widget _trackMenuItem(BuildContext context, IconData icon, String label) {
@@ -1344,7 +1365,7 @@ Future<String?> _pickDestinationPlaylist(
   final tracks = await ref.read(libraryTracksProvider.future);
   final catalogs = await ref.read(catalogPlaylistsProvider.future);
   if (!context.mounted) return null;
-  return showDialog<String>(
+  return showAppDialog<String>(
     context: context,
     builder: (_) => PlaylistPickerDialog(
       title: strings.choosePlaylist,
@@ -1388,6 +1409,7 @@ TrackInfo? _remoteTrackInfoForLocal(LocalTrack track) {
 
 class _CatalogTrackListView extends ConsumerWidget {
   const _CatalogTrackListView({
+    required this.bottomContentPadding,
     required this.title,
     required this.subtitle,
     required this.items,
@@ -1398,6 +1420,7 @@ class _CatalogTrackListView extends ConsumerWidget {
     required this.playlist,
   });
 
+  final double bottomContentPadding;
   final String title;
   final String subtitle;
   final List<_CatalogDisplayItem> items;
@@ -1450,7 +1473,7 @@ class _CatalogTrackListView extends ConsumerWidget {
                     ),
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 12),
+                    padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
                     itemCount: items.length,
                     itemBuilder: (context, index) => Padding(
                       padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
@@ -1614,7 +1637,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                 SizedBox(
                   width: 36,
                   height: 44,
-                  child: PopupMenuButton<_TrackMenuAction>(
+                  child: GlassPopupMenuButton<_TrackMenuAction>(
                     key: ValueKey(
                       'library-catalog-menu-${widget.item.entry.id}',
                     ),
@@ -1799,6 +1822,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
 
 class _TrackListView extends ConsumerWidget {
   const _TrackListView({
+    required this.bottomContentPadding,
     required this.title,
     required this.subtitle,
     required this.tracks,
@@ -1819,6 +1843,7 @@ class _TrackListView extends ConsumerWidget {
     this.playlistId,
   });
 
+  final double bottomContentPadding;
   final String title;
   final String subtitle;
   final List<LocalTrack> tracks;
@@ -1896,7 +1921,7 @@ class _TrackListView extends ConsumerWidget {
                     ),
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 12),
+                    padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
                     itemCount: tracks.length,
                     itemBuilder: (context, index) {
                       return Padding(
@@ -2066,6 +2091,7 @@ class _DetailHeader extends StatelessWidget {
 
 class _NeutralLibraryIconButton extends StatelessWidget {
   const _NeutralLibraryIconButton({
+    super.key,
     required this.tooltip,
     required this.icon,
     required this.onPressed,
@@ -2124,7 +2150,7 @@ class _PlaylistMenu extends ConsumerWidget {
     return SizedBox(
       width: buttonWidth,
       height: buttonSize,
-      child: PopupMenuButton<_PlaylistMenuAction>(
+      child: GlassPopupMenuButton<_PlaylistMenuAction>(
         tooltip: strings.moreOptions,
         padding: EdgeInsets.zero,
         iconSize: iconSize,
@@ -2192,7 +2218,7 @@ class _PlaylistMenu extends ConsumerWidget {
 
   Future<void> _renamePlaylist(BuildContext context, WidgetRef ref) async {
     final strings = ref.read(appStringsProvider);
-    final rawName = await showDialog<String>(
+    final rawName = await showAppDialog<String>(
       context: context,
       builder: (_) => _NameDialog(
         title: strings.renamePlaylist,
@@ -2223,12 +2249,12 @@ class _PlaylistMenu extends ConsumerWidget {
     final controller = ref.read(playlistsControllerProvider.notifier);
     final options = await controller.playlistDeleteOptions(playlist.id);
     if (!context.mounted) return;
-    final scope = await showDialog<PlaylistDeleteScope>(
+    final scope = await showAppDialog<PlaylistDeleteScope>(
       context: context,
       builder: (dialogContext) {
         final linked = options.isYouTubeMusicLinked;
         final canDeleteRemote = options.canDeleteFromYouTubeMusic;
-        return AlertDialog(
+        return AppAlertDialog(
           title: Text(strings.deletePlaylist),
           content: Text(
             linked
@@ -2334,7 +2360,7 @@ class _NameDialogState extends State<_NameDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return AppAlertDialog(
       title: Text(widget.title),
       content: TextField(
         controller: _controller,
@@ -2462,7 +2488,7 @@ class _PlaylistList extends StatelessWidget {
             : sumKnownDurations(catalogItems.map((item) => item.duration));
         final thumbnailSources = catalog == null
             ? _playlistThumbnailSources(playlist, tracksById)
-            : _catalogPlaylistThumbnailSources(catalogItems);
+            : _catalogPlaylistThumbnailSources(playlist.id, catalogItems);
         return Padding(
           padding: const EdgeInsets.fromLTRB(6, 0, 6, appCardGap),
           child: _PlaylistRow(
@@ -2490,7 +2516,7 @@ class _PlaylistRow extends StatelessWidget {
   });
 
   final Playlist playlist;
-  final List<String> thumbnailSources;
+  final List<PlaylistArtworkSource> thumbnailSources;
   final String subtitle;
   final AppStrings strings;
   final VoidCallback onTap;
@@ -2525,96 +2551,18 @@ class _PlaylistRow extends StatelessWidget {
   }
 }
 
-List<String> _playlistThumbnailSources(
+List<PlaylistArtworkSource> _playlistThumbnailSources(
   Playlist playlist,
   Map<String, LocalTrack> tracksById,
 ) {
   final sources = playlist.trackIds
       .map((id) => tracksById[id])
       .whereType<LocalTrack>()
-      .map((track) => _trackThumbnailSource(track))
-      .whereType<String>()
-      .toSet()
-      .toList(growable: false);
-
-  if (sources.length <= 1) {
-    return sources;
-  }
-
-  final start = playlist.id.hashCode.abs() % sources.length;
-  return [
-    ...sources.skip(start),
-    ...sources.take(start),
-  ].take(4).toList(growable: false);
-}
-
-String? _trackThumbnailSource(LocalTrack track) {
-  final source = track.thumbnailPath ?? track.thumbnailUrl;
-  final normalized = source?.trim();
-  if (normalized == null || normalized.isEmpty) {
-    return null;
-  }
-
-  if (isNetworkImageSource(normalized)) {
-    return normalized;
-  }
-
-  final file = imageFileFromSource(normalized);
-  if (file == null) {
-    return null;
-  }
-  return file.path;
-}
-
-class _CreatePlaylistRow extends StatelessWidget {
-  const _CreatePlaylistRow({
-    super.key,
-    required this.label,
-    required this.onPressed,
-  });
-
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCardShell(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          minHeight: _libraryArtworkRowMinHeight,
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(appCardRadius),
-          onTap: onPressed,
-          child: Padding(
-            padding: _libraryOverviewContentPadding,
-            child: Row(
-              children: [
-                Container(
-                  width: _libraryOverviewArtworkSize,
-                  height: _libraryOverviewArtworkSize,
-                  decoration: BoxDecoration(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(appListCardIconRadius),
-                  ),
-                  child: const Icon(Icons.add_rounded, size: 34),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: MarqueeText(
-                    label,
-                    style: appListCardTitleStyle(context),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+      .map(preferredLocalPlaylistArtworkSource);
+  return rotatingPlaylistArtworkSources(
+    playlistId: playlist.id,
+    candidates: sources,
+  );
 }
 
 class _LibraryEntry extends StatelessWidget {
@@ -2661,7 +2609,7 @@ class _LibraryEntry extends StatelessWidget {
 class _PlaylistCover extends StatelessWidget {
   const _PlaylistCover({required this.sources, super.key});
 
-  final List<String> sources;
+  final List<PlaylistArtworkSource> sources;
 
   @override
   Widget build(BuildContext context) {
@@ -2669,7 +2617,8 @@ class _PlaylistCover extends StatelessWidget {
       return const _FolderIcon(icon: Icons.queue_music_rounded);
     }
 
-    final underlay = sources.skip(1).take(3).toList(growable: false);
+    final underlay = sources.skip(1).take(8).toList(growable: false);
+    final rows = _secondaryArtworkRows(underlay);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(appArtworkRadius),
@@ -2680,16 +2629,17 @@ class _PlaylistCover extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             SourceImage(
-              source: sources.first,
-              cacheWidth: 256,
+              source: sources.first.source,
+              fallbackSource: sources.first.fallbackSource,
+              cacheWidth: 192,
               fallback: const _PlaylistCoverFallback(),
             ),
-            if (underlay.isNotEmpty)
+            if (rows.isNotEmpty)
               Positioned(
                 left: 0,
                 right: 0,
                 bottom: 0,
-                height: 22,
+                height: rows.length == 1 ? 20 : 34,
                 child: DecoratedBox(
                   decoration: const BoxDecoration(
                     color: Color(0xAA000000),
@@ -2697,20 +2647,32 @@ class _PlaylistCover extends StatelessWidget {
                       top: BorderSide(color: Color(0xAA050805), width: 1),
                     ),
                   ),
-                  child: Row(
+                  child: Column(
                     children: [
-                      for (final source in underlay)
+                      for (var rowIndex = 0; rowIndex < rows.length; rowIndex++)
                         Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.all(1),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(1.5),
-                              child: SourceImage(
-                                source: source,
-                                cacheWidth: 256,
-                                fallback: const _PlaylistCoverFallback(),
-                              ),
+                          child: Row(
+                            key: ValueKey(
+                              'playlist-cover-secondary-row-$rowIndex',
                             ),
+                            children: [
+                              for (final artwork in rows[rowIndex])
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(0.75),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(1.5),
+                                      child: SourceImage(
+                                        source: artwork.source,
+                                        fallbackSource: artwork.fallbackSource,
+                                        cacheWidth: 64,
+                                        fallback:
+                                            const _PlaylistCoverFallback(),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                     ],
@@ -2722,6 +2684,23 @@ class _PlaylistCover extends StatelessWidget {
       ),
     );
   }
+}
+
+List<List<PlaylistArtworkSource>> _secondaryArtworkRows(
+  List<PlaylistArtworkSource> sources,
+) {
+  if (sources.isEmpty) {
+    return const <List<PlaylistArtworkSource>>[];
+  }
+  if (sources.length <= 4) {
+    return <List<PlaylistArtworkSource>>[sources];
+  }
+
+  final firstRowLength = (sources.length + 1) ~/ 2;
+  return <List<PlaylistArtworkSource>>[
+    sources.take(firstRowLength).toList(growable: false),
+    sources.skip(firstRowLength).toList(growable: false),
+  ];
 }
 
 class _PlaylistCoverFallback extends StatelessWidget {
@@ -2872,6 +2851,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
             playback.status == PlayerStatus.paused);
     final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
     final colors = Theme.of(context).colorScheme;
+    final artwork = preferredLocalTrackArtworkSource(track);
     final menuButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final menuButtonWidth = AppPlatform.isAndroid ? 36.0 : 40.0;
     final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
@@ -2930,7 +2910,8 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                 children: [
                   _LocalArtwork(
                     key: ValueKey('library-track-artwork-${track.id}'),
-                    source: track.thumbnailPath ?? track.thumbnailUrl,
+                    source: artwork?.source,
+                    fallbackSource: artwork?.fallbackSource,
                   ),
                   if (isFavorite)
                     const Positioned(
@@ -3000,7 +2981,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                         SizedBox(
                           width: menuButtonWidth,
                           height: menuButtonSize,
-                          child: PopupMenuButton<_TrackMenuAction>(
+                          child: GlassPopupMenuButton<_TrackMenuAction>(
                             key: ValueKey('library-track-menu-${track.id}'),
                             tooltip: strings.moreOptions,
                             padding: EdgeInsets.zero,
@@ -3250,7 +3231,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
 
   Future<void> _renameTrack(BuildContext context, WidgetRef ref) async {
     final strings = ref.read(appStringsProvider);
-    final rawName = await showDialog<String>(
+    final rawName = await showAppDialog<String>(
       context: context,
       builder: (_) => _NameDialog(
         title: strings.renameSong,
@@ -3302,10 +3283,10 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
   }
 
   Future<void> _deleteTrack(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
       builder: (context) {
-        return AlertDialog(
+        return AppAlertDialog(
           title: Text(ref.read(appStringsProvider).deleteSong),
           content: Text(track.title),
           actions: [

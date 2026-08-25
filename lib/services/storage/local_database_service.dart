@@ -372,6 +372,14 @@ class LocalDatabaseService {
   }
 
   Future<void> saveLocalTrack(LocalTrack track) async {
+    if (track.isExternal) {
+      throw ArgumentError.value(
+        track.id,
+        'track',
+        'External device audio is transient and cannot be persisted in the '
+            'BStream library.',
+      );
+    }
     final db = await database;
     await _upsertWithoutDelete(
       db,

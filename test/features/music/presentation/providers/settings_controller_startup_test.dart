@@ -50,6 +50,150 @@ void main() {
     }
   });
 
+  test('startup restores the persisted capsule mini player mode', () async {
+    SharedPreferences.setMockInitialValues({
+      'settings.surfaceBackgroundMode': 'transparent',
+      'settings.miniPlayerMode': 'capsule',
+      'settings.miniPlayerBackgroundMode': 'transparent',
+    });
+    final container = ProviderContainer(
+      overrides: [
+        ytDlpDownloaderServiceProvider.overrideWithValue(
+          const _NoopDownloaderService(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+
+    expect(settings.surfaceBackgroundMode, SurfaceBackgroundMode.transparent);
+    expect(settings.miniPlayerMode, MiniPlayerMode.capsule);
+    expect(
+      settings.miniPlayerBackgroundMode,
+      MiniPlayerBackgroundMode.transparent,
+    );
+  });
+
+  test('fresh startup uses the requested accent capsule defaults', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        ytDlpDownloaderServiceProvider.overrideWithValue(
+          const _NoopDownloaderService(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+    final preferences = await SharedPreferences.getInstance();
+
+    expect(settings.surfaceBackgroundMode, SurfaceBackgroundMode.accent);
+    expect(settings.miniPlayerMode, MiniPlayerMode.capsule);
+    expect(settings.miniPlayerBackgroundMode, MiniPlayerBackgroundMode.accent);
+    expect(preferences.containsKey('settings.surfaceBackgroundMode'), isFalse);
+    expect(preferences.containsKey('settings.miniPlayerMode'), isFalse);
+    expect(
+      preferences.containsKey('settings.miniPlayerBackgroundMode'),
+      isFalse,
+    );
+    expect(settings.localMusicFilters, defaultLocalMusicFilters);
+    expect(settings.localMusicFilters, {
+      LocalMusicFilter.hideWhatsAppAudio,
+      LocalMusicFilter.hideTelegramAudio,
+      LocalMusicFilter.hideAudioRecordings,
+      LocalMusicFilter.hideTracksUnder30Seconds,
+    });
+    expect(preferences.containsKey('settings.localMusicFilters'), isFalse);
+  });
+
+  test('startup restores the selected local music filters', () async {
+    SharedPreferences.setMockInitialValues({
+      'settings.localMusicFilters': [
+        LocalMusicFilter.hideWhatsAppAudio.code,
+        LocalMusicFilter.hideTelegramAudio.code,
+        'futureFilter',
+      ],
+    });
+    final container = ProviderContainer(
+      overrides: [
+        ytDlpDownloaderServiceProvider.overrideWithValue(
+          const _NoopDownloaderService(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+
+    expect(settings.localMusicFilters, {
+      LocalMusicFilter.hideWhatsAppAudio,
+      LocalMusicFilter.hideTelegramAudio,
+    });
+  });
+
+  test('an explicitly empty local music filter list stays empty', () async {
+    SharedPreferences.setMockInitialValues({});
+    final firstContainer = ProviderContainer(
+      overrides: [
+        ytDlpDownloaderServiceProvider.overrideWithValue(
+          const _NoopDownloaderService(),
+        ),
+      ],
+    );
+    await firstContainer.read(settingsControllerProvider.future);
+    await firstContainer
+        .read(settingsControllerProvider.notifier)
+        .setLocalMusicFilters(const <LocalMusicFilter>{});
+    final preferences = await SharedPreferences.getInstance();
+
+    expect(preferences.getStringList('settings.localMusicFilters'), isEmpty);
+    firstContainer.dispose();
+
+    final restoredContainer = ProviderContainer(
+      overrides: [
+        ytDlpDownloaderServiceProvider.overrideWithValue(
+          const _NoopDownloaderService(),
+        ),
+      ],
+    );
+    addTearDown(restoredContainer.dispose);
+
+    final restored = await restoredContainer.read(
+      settingsControllerProvider.future,
+    );
+    expect(restored.localMusicFilters, isEmpty);
+  });
+
+  test(
+    'startup preserves an explicitly persisted classic artwork style',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'settings.surfaceBackgroundMode': 'transparent',
+        'settings.miniPlayerMode': 'default',
+        'settings.miniPlayerBackgroundMode': 'artwork',
+      });
+      final container = ProviderContainer(
+        overrides: [
+          ytDlpDownloaderServiceProvider.overrideWithValue(
+            const _NoopDownloaderService(),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final settings = await container.read(settingsControllerProvider.future);
+
+      expect(settings.surfaceBackgroundMode, SurfaceBackgroundMode.transparent);
+      expect(settings.miniPlayerMode, MiniPlayerMode.standard);
+      expect(
+        settings.miniPlayerBackgroundMode,
+        MiniPlayerBackgroundMode.artwork,
+      );
+    },
+  );
+
   test(
     'startup quarantines a semantically invalid migration journal',
     () async {

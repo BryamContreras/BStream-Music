@@ -5,15 +5,194 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.util.LruCache
+import android.util.Size
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.LinkedHashSet
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 internal class ExternalAudioIntentHandler(private val context: Context) {
     private val resolver: ContentResolver = context.contentResolver
+    private val artworkCacheLock = Any()
+    private val artworkCache = object : LruCache<String, ByteArray>(ARTWORK_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: ByteArray): Int = value.size
+    }
+    private val missingArtworkKeys = LinkedHashSet<String>()
+
+    /**
+     * Returns the audio catalog exposed by MediaStore across every mounted
+     * external volume. The query deliberately includes non-music audio: the
+     * user-facing WhatsApp and short-audio filters live in Dart and can be
+     * changed without querying MediaStore again.
+     */
+    fun queryLibrary(): List<Map<String, Any?>> {
+        // A manual catalog refresh is also the point at which externally
+        // edited metadata should become visible during this app session.
+        synchronized(artworkCacheLock) {
+            artworkCache.evictAll()
+            missingArtworkKeys.clear()
+        }
+        val rows = linkedMapOf<String, AudioRow>()
+        for (collection in libraryCollections()) {
+            val result = queryCollection(
+                collection = collection,
+                selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    "${MediaStore.MediaColumns.IS_PENDING} = 0"
+                } else {
+                    null
+                },
+                selectionArgs = null,
+                expectedParent = null,
+            )
+            for (row in result.rows) {
+                rows.putIfAbsent(row.uri.toString(), row)
+            }
+        }
+        return rows.values.sortedWith(audioRowComparator).map(::toPayload)
+    }
+
+    /**
+     * Reads embedded artwork for one visible audio item.
+     *
+     * Catalog queries never call this method. The result is scaled before it
+     * crosses Flutter's MethodChannel and both hits and misses use bounded LRU
+     * caches, avoiding repeated metadata reads while scrolling.
+     */
+    fun loadArtwork(audioUri: String, requestedWidth: Int): ByteArray? {
+        val uri = runCatching { Uri.parse(audioUri) }.getOrNull() ?: return null
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT &&
+            uri.scheme != ContentResolver.SCHEME_FILE
+        ) {
+            return null
+        }
+        val targetWidth = artworkWidthBucket(requestedWidth)
+        val key = "$targetWidth:$uri"
+        val missingKey = uri.toString()
+        synchronized(artworkCacheLock) {
+            artworkCache.get(key)?.let { return it }
+            if (missingArtworkKeys.contains(missingKey)) {
+                return null
+            }
+        }
+
+        val encoded = resolveArtwork(uri, targetWidth)
+        synchronized(artworkCacheLock) {
+            if (encoded == null || encoded.isEmpty()) {
+                rememberMissingArtwork(missingKey)
+                return null
+            }
+            missingArtworkKeys.remove(missingKey)
+            artworkCache.put(key, encoded)
+        }
+        return encoded
+    }
+
+    private fun resolveArtwork(uri: Uri, targetWidth: Int): ByteArray? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val thumbnail = runCatching {
+                resolver.loadThumbnail(uri, Size(targetWidth, targetWidth), null)
+            }.getOrNull()
+            if (thumbnail != null) {
+                return encodeBoundedArtwork(thumbnail, targetWidth)
+            }
+        }
+
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val embedded = retriever.embeddedPicture ?: return null
+            decodeEmbeddedArtwork(embedded, targetWidth)
+                ?.let { encodeBoundedArtwork(it, targetWidth) }
+        } catch (_: Throwable) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    private fun decodeEmbeddedArtwork(bytes: ByteArray, targetWidth: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null
+        }
+        var sampleSize = 1
+        val largestDimension = max(bounds.outWidth, bounds.outHeight)
+        while (largestDimension / (sampleSize * 2) >= targetWidth) {
+            sampleSize *= 2
+        }
+        return BitmapFactory.decodeByteArray(
+            bytes,
+            0,
+            bytes.size,
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            },
+        )
+    }
+
+    private fun encodeBoundedArtwork(bitmap: Bitmap, targetWidth: Int): ByteArray? {
+        var outputBitmap = bitmap
+        return try {
+            val largestDimension = max(bitmap.width, bitmap.height)
+            if (largestDimension > targetWidth) {
+                val scale = targetWidth.toDouble() / largestDimension
+                outputBitmap = Bitmap.createScaledBitmap(
+                    bitmap,
+                    (bitmap.width * scale).roundToInt().coerceAtLeast(1),
+                    (bitmap.height * scale).roundToInt().coerceAtLeast(1),
+                    true,
+                )
+            }
+            ByteArrayOutputStream().use { output ->
+                val format = if (outputBitmap.hasAlpha()) {
+                    Bitmap.CompressFormat.PNG
+                } else {
+                    Bitmap.CompressFormat.JPEG
+                }
+                if (!outputBitmap.compress(format, ARTWORK_JPEG_QUALITY, output)) {
+                    return null
+                }
+                output.toByteArray()
+            }
+        } finally {
+            if (outputBitmap !== bitmap) {
+                outputBitmap.recycle()
+            }
+            bitmap.recycle()
+        }
+    }
+
+    private fun artworkWidthBucket(requestedWidth: Int): Int = when {
+        requestedWidth <= 128 -> 128
+        requestedWidth <= 256 -> 256
+        requestedWidth <= 512 -> 512
+        else -> MAX_ARTWORK_WIDTH
+    }
+
+    private fun rememberMissingArtwork(key: String) {
+        missingArtworkKeys.remove(key)
+        missingArtworkKeys.add(key)
+        while (missingArtworkKeys.size > MAX_MISSING_ARTWORK_KEYS) {
+            val iterator = missingArtworkKeys.iterator()
+            if (!iterator.hasNext()) {
+                break
+            }
+            iterator.next()
+            iterator.remove()
+        }
+    }
 
     fun accepts(intent: Intent?): Boolean {
         if (intent?.action != Intent.ACTION_VIEW || intent.data == null) {
@@ -174,8 +353,8 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
 
     private fun queryCollection(
         collection: Uri,
-        selection: String,
-        selectionArgs: Array<String>,
+        selection: String?,
+        selectionArgs: Array<String>?,
         expectedParent: String?,
     ): FolderResult {
         val projection = buildList {
@@ -183,6 +362,7 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
             add(MediaStore.MediaColumns.DISPLAY_NAME)
             add(MediaStore.Audio.AudioColumns.TITLE)
             add(MediaStore.Audio.AudioColumns.ARTIST)
+            add(MediaStore.Audio.AudioColumns.ALBUM)
             add(MediaStore.Audio.AudioColumns.DURATION)
             add(MediaStore.MediaColumns.MIME_TYPE)
             add(MediaStore.MediaColumns.DATA)
@@ -245,6 +425,8 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
             displayName = cursor.stringOrNull(MediaStore.MediaColumns.DISPLAY_NAME),
             title = cursor.stringOrNull(MediaStore.Audio.AudioColumns.TITLE),
             artist = cursor.stringOrNull(MediaStore.Audio.AudioColumns.ARTIST)
+                ?.takeUnless { it.equals("<unknown>", ignoreCase = true) },
+            album = cursor.stringOrNull(MediaStore.Audio.AudioColumns.ALBUM)
                 ?.takeUnless { it.equals("<unknown>", ignoreCase = true) },
             durationMs = cursor.longOrNull(MediaStore.Audio.AudioColumns.DURATION)
                 ?.takeIf { it > 0L },
@@ -320,6 +502,7 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
             displayName = primary.displayName ?: metadata.displayName,
             title = primary.title ?: metadata.title,
             artist = primary.artist ?: metadata.artist,
+            album = primary.album ?: metadata.album,
             durationMs = primary.durationMs ?: metadata.durationMs,
             mimeType = primary.mimeType ?: metadata.mimeType,
             relativePath = metadata.relativePath ?: primary.relativePath,
@@ -361,15 +544,57 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
             ?.takeIf { it.isNotEmpty() }
             ?: displayName?.substringBeforeLast('.', displayName)
             ?: "Audio"
+        val folder = folderIdentity(row)
         return mapOf(
             "id" to "external:${row.uri}",
             "uri" to row.uri.toString(),
             "displayName" to displayName,
             "title" to title,
             "artist" to row.artist,
+            "album" to row.album,
             "durationMs" to row.durationMs,
             "mimeType" to row.mimeType,
+            "relativePath" to row.relativePath,
+            "absolutePath" to row.absolutePath,
+            "folderId" to folder.first,
+            "folderName" to folder.second,
         )
+    }
+
+    private fun libraryCollections(): List<Uri> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return listOf(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+        }
+        val volumes = runCatching { MediaStore.getExternalVolumeNames(context) }
+            .getOrDefault(emptySet())
+        if (volumes.isEmpty()) {
+            return listOf(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+        }
+        return volumes.mapNotNull { volume ->
+            runCatching { MediaStore.Audio.Media.getContentUri(volume) }.getOrNull()
+        }.ifEmpty { listOf(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI) }
+    }
+
+    private fun folderIdentity(row: AudioRow): Pair<String, String> {
+        val normalizedRelative = row.relativePath
+            ?.replace('\\', '/')
+            ?.trim('/')
+            ?.takeIf { it.isNotBlank() }
+        val absoluteParent = row.absolutePath
+            ?.let(::File)
+            ?.parentFile
+            ?.path
+            ?.replace('\\', '/')
+            ?.trimEnd('/')
+            ?.takeIf { it.isNotBlank() }
+        val folderPath = normalizedRelative ?: absoluteParent
+        val volume = row.volumeName?.takeIf { it.isNotBlank() } ?: "external"
+        val idPath = folderPath?.lowercase(Locale.ROOT) ?: "root"
+        val name = folderPath
+            ?.substringAfterLast('/')
+            ?.takeIf { it.isNotBlank() }
+            ?: "Audio"
+        return "$volume:$idPath" to name
     }
 
     private fun Cursor.stringOrNull(columnName: String): String? {
@@ -392,6 +617,7 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
         val displayName: String? = null,
         val title: String? = null,
         val artist: String? = null,
+        val album: String? = null,
         val durationMs: Long? = null,
         val mimeType: String? = null,
         val relativePath: String? = null,
@@ -409,6 +635,10 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
         private const val EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY =
             "com.android.externalstorage.documents"
         private const val PROVIDER_PATH_COLUMN = "_path"
+        private const val MAX_ARTWORK_WIDTH = 1280
+        private const val ARTWORK_CACHE_BYTES = 24 * 1024 * 1024
+        private const val MAX_MISSING_ARTWORK_KEYS = 512
+        private const val ARTWORK_JPEG_QUALITY = 90
         private val APPLICATION_AUDIO_MIME_TYPES = setOf(
             "application/ogg",
             "application/x-ogg",

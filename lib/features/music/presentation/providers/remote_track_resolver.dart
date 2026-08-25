@@ -65,6 +65,9 @@ TrackInfo _mergeTrackInfo(TrackInfo base, TrackInfo resolved) {
     album: preserveMusicMetadata
         ? _preferredOptionalText(base.album, resolved.album)
         : _preferredOptionalText(resolved.album, base.album),
+    albumBrowseId: preserveMusicMetadata
+        ? _preferredOptionalText(base.albumBrowseId, resolved.albumBrowseId)
+        : _preferredOptionalText(resolved.albumBrowseId, base.albumBrowseId),
     viewCount: resolved.viewCount ?? base.viewCount,
     httpHeaders: hasResolvedTransport
         ? resolved.httpHeaders
@@ -180,9 +183,11 @@ class RemoteTrackResolver {
       return cached.future.then((resolved) => _mergeTrackInfo(track, resolved));
     }
 
+    final generation = Object();
     final future = _resolveAndCache(
       track,
       key,
+      generation: generation,
       forceRefresh: forceRefresh,
       allowStaleStreamFallback: allowStaleStreamFallback,
       mode: mode,
@@ -190,7 +195,7 @@ class RemoteTrackResolver {
       shouldContinue: shouldContinue,
     );
 
-    _entries[key] = _TrackResolutionEntry(future);
+    _entries[key] = _TrackResolutionEntry(future, generation: generation);
     _trimMemoryEntries(preserveKey: key);
     return future;
   }
@@ -200,15 +205,31 @@ class RemoteTrackResolver {
   }
 
   String _cacheKey(TrackInfo track) {
-    if (track.url.trim().isNotEmpty) {
-      return track.url;
+    final normalizedUrl = track.url.trim();
+    if (normalizedUrl.isNotEmpty) {
+      try {
+        return 'youtube:${VideoId.fromString(normalizedUrl).value}';
+      } catch (_) {
+        // A non-YouTube URL is authoritative; do not reinterpret an unrelated
+        // eleven-character extractor id as a YouTube video.
+        return normalizedUrl;
+      }
     }
-    return track.id;
+    final normalizedId = track.id.trim();
+    if (normalizedId.isEmpty) {
+      return '';
+    }
+    try {
+      return 'youtube:${VideoId.fromString(normalizedId).value}';
+    } catch (_) {
+      return normalizedId;
+    }
   }
 
   Future<TrackInfo> _resolveAndCache(
     TrackInfo track,
     String key, {
+    required Object generation,
     required bool forceRefresh,
     required bool allowStaleStreamFallback,
     required AudioResolutionMode mode,
@@ -232,13 +253,16 @@ class RemoteTrackResolver {
         );
       }
       final merged = _mergeTrackInfo(track, _trackFromResolution(resolved));
-      if (_hasPlayableStream(merged)) {
+      if (_hasPlayableStream(merged) && _isCurrentGeneration(key, generation)) {
         unawaited(_persistResolvedEntry(key, merged));
       }
       return merged;
     } catch (_) {
-      _entries.remove(key);
-      if (forceRefresh) {
+      final currentGeneration = _isCurrentGeneration(key, generation);
+      if (currentGeneration) {
+        _entries.remove(key);
+      }
+      if (forceRefresh && currentGeneration) {
         unawaited(_removePersistentEntry(key));
       }
       if (allowStaleStreamFallback && _hasPlayableStream(track)) {
@@ -246,6 +270,10 @@ class RemoteTrackResolver {
       }
       rethrow;
     }
+  }
+
+  bool _isCurrentGeneration(String key, Object generation) {
+    return identical(_entries[key]?.generation, generation);
   }
 
   TrackInfo _trackFromResolution(AudioStreamResolution resolution) {
@@ -469,6 +497,7 @@ class RemoteTrackResolver {
       streamCodec: track.streamCodec,
       extractor: track.extractor,
       album: track.album,
+      albumBrowseId: track.albumBrowseId,
       viewCount: track.viewCount,
       httpHeaders: track.httpHeaders,
       artists: track.artists,
@@ -479,10 +508,12 @@ class RemoteTrackResolver {
 }
 
 class _TrackResolutionEntry {
-  _TrackResolutionEntry(this.future, {DateTime? createdAt})
-    : createdAt = createdAt ?? DateTime.now();
+  _TrackResolutionEntry(this.future, {Object? generation, DateTime? createdAt})
+    : generation = generation ?? Object(),
+      createdAt = createdAt ?? DateTime.now();
 
   final Future<TrackInfo> future;
+  final Object generation;
   final DateTime createdAt;
 
   bool get isExpired =>

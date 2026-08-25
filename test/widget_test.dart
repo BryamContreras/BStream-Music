@@ -5,6 +5,7 @@ import 'dart:io' as io;
 import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/theme/app_ui.dart';
 import 'package:bstream_music/core/widgets/marquee_text.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
@@ -19,6 +20,8 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
+import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
@@ -37,6 +40,7 @@ import 'package:bstream_music/services/recommendations/recommendations.dart';
 import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
+import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_models.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide SearchController;
@@ -77,8 +81,37 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Inicio'), findsWidgets);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('home-tab-title'))).data,
+      'Buenos días',
+    );
     expect(find.byIcon(Icons.search_rounded), findsWidgets);
     expect(find.text('Reproductor'), findsNothing);
+  });
+
+  testWidgets('home greets an authenticated account by first name', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _testApp(
+        homeGreetingTime: DateTime(2026, 8, 24, 15),
+        youtubeMusicAuthState: const YouTubeMusicAuthState(
+          phase: YouTubeMusicAuthPhase.authenticated,
+          generation: 1,
+          profile: YouTubeMusicAccountProfile(
+            channelId: 'UC-greeting-test',
+            displayName: '  Ana   Maria Lopez  ',
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('home-tab-title'))).data,
+      'Buenas tardes, Ana',
+    );
+    expect(find.text('Inicio'), findsWidgets);
   });
 
   testWidgets('browsing tabs keep playback artwork out of their background', (
@@ -146,6 +179,14 @@ void main() {
       tester.view.physicalSize = const Size(1280, 720);
       await tester.pumpWidget(
         _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              miniPlayerMode: MiniPlayerMode.standard,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.accent,
+            ),
+          ),
           playerService: _FakePlayerService(
             snapshot: const PlayerSnapshot(
               status: PlayerStatus.playing,
@@ -334,7 +375,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('bottom-navigation-item-2')),
+        find.byKey(const ValueKey('bottom-navigation-item-3')),
         findsOneWidget,
       );
       expect(find.byType(MiniPlayer), findsOneWidget);
@@ -414,11 +455,11 @@ void main() {
         findsNothing,
       );
       expect(
-        find.byKey(const ValueKey('side-navigation-item-2')),
+        find.byKey(const ValueKey('side-navigation-item-3')),
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('bottom-navigation-item-2')),
+        find.byKey(const ValueKey('bottom-navigation-item-3')),
         findsNothing,
       );
       expect(tester.getBottomLeft(miniPlayerClip).dy, closeTo(720, 0.1));
@@ -475,6 +516,14 @@ void main() {
 
     await tester.pumpWidget(
       _testApp(
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/BStream-Music',
+            language: AppLanguage.spanish,
+            miniPlayerMode: MiniPlayerMode.standard,
+            miniPlayerBackgroundMode: MiniPlayerBackgroundMode.artwork,
+          ),
+        ),
         playerService: _FakePlayerService(
           snapshot: const PlayerSnapshot(
             status: PlayerStatus.playing,
@@ -532,6 +581,14 @@ void main() {
 
     await tester.pumpWidget(
       _testApp(
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/BStream-Music',
+            language: AppLanguage.spanish,
+            miniPlayerMode: MiniPlayerMode.standard,
+            miniPlayerBackgroundMode: MiniPlayerBackgroundMode.artwork,
+          ),
+        ),
         playerService: _FakePlayerService(
           snapshot: const PlayerSnapshot(
             status: PlayerStatus.playing,
@@ -574,7 +631,13 @@ void main() {
     );
     expect(
       glassDecoration.color,
-      Theme.of(context).colorScheme.surface.withValues(alpha: 0.86),
+      AppColors.surfaceChromeFor(
+        context,
+        accentModeAlpha: 0.86,
+        transparentDarkAlpha: 0.42,
+        transparentLightAlpha: 0.5,
+        accentTintAlpha: 0.06,
+      ),
     );
     expect(
       tester.getBottomLeft(miniPlayer).dy,
@@ -598,6 +661,149 @@ void main() {
   });
 
   testWidgets(
+    'capsule glass keeps browsing content visible behind the player and gap',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              miniPlayerMode: MiniPlayerMode.capsule,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.transparent,
+            ),
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Glass real',
+              artist: 'BStream Music',
+              trackId: 'glass-layout-track',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      final capsuleSurface = find.byKey(const ValueKey('mini-player-surface'));
+      final navigation = find.byKey(const ValueKey('bottom-navigation-glass'));
+      final scrollRect = tester.getRect(homeScroll);
+      final capsuleRect = tester.getRect(capsuleSurface);
+      final navigationRect = tester.getRect(navigation);
+
+      expect(scrollRect.bottom, closeTo(navigationRect.top, 0.1));
+      expect(scrollRect.bottom, greaterThan(capsuleRect.bottom));
+      expect(capsuleRect.top, lessThan(scrollRect.bottom));
+      expect(
+        scrollRect.bottom - capsuleRect.bottom,
+        closeTo(10, 0.1),
+        reason: 'The capsule gap must reveal the scrolling tab beneath it.',
+      );
+      final reserve = tester.widget<SizedBox>(
+        find.byKey(const ValueKey('home-scroll-bottom-reserve')),
+      );
+      expect(reserve.height, greaterThanOrEqualTo(76));
+      expect(
+        find.byKey(const ValueKey('mini-player-glass-blur')),
+        findsOneWidget,
+      );
+
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'transparent surface effects reveal content behind headers and menu',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.transparent,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      final navigation = find.byKey(const ValueKey('bottom-navigation-glass'));
+      final navigationSurface = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('bottom-navigation-surface')),
+      );
+      final navigationColor =
+          (navigationSurface.decoration as BoxDecoration).color!;
+      final header = find.byKey(const ValueKey('home-tab-header-surface'));
+      final headerMaterial = tester.widget<Material>(header);
+      final surfaceTheme = Theme.of(
+        tester.element(header),
+      ).extension<AppSurfaceTheme>();
+      final storedSurfaceMode = ProviderScope.containerOf(
+        tester.element(header),
+      ).read(settingsControllerProvider).value?.surfaceBackgroundMode;
+
+      expect(storedSurfaceMode, SurfaceBackgroundMode.transparent);
+      expect(surfaceTheme?.backgroundMode, SurfaceBackgroundMode.transparent);
+      expect(
+        tester.getRect(homeScroll).bottom,
+        tester.getRect(navigation).bottom,
+      );
+      expect(navigationColor.a, greaterThan(0.5));
+      expect(navigationColor.a, lessThan(0.6));
+      expect(headerMaterial.color?.a, greaterThan(0.45));
+      expect(headerMaterial.color?.a, lessThan(0.55));
+      expect(
+        find.ancestor(of: header, matching: find.byType(BackdropFilter)),
+        findsOneWidget,
+      );
+      final reserve = tester.widget<SizedBox>(
+        find.byKey(const ValueKey('home-scroll-bottom-reserve')),
+      );
+      expect(reserve.height, greaterThanOrEqualTo(170));
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
     'android keyboard keeps mini player attached to bottom navigation',
     (tester) async {
       final navigationInset = keyboardNavigationInsets.currentValue!;
@@ -617,6 +823,14 @@ void main() {
 
       await tester.pumpWidget(
         _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              miniPlayerMode: MiniPlayerMode.standard,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.artwork,
+            ),
+          ),
           playerService: _FakePlayerService(
             snapshot: const PlayerSnapshot(
               status: PlayerStatus.playing,
@@ -1215,7 +1429,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('home cards use larger mobile dimensions', (tester) async {
+  testWidgets('home recent cards use larger mobile dimensions', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     tester.view.physicalSize = const Size(360, 900);
     tester.view.devicePixelRatio = 1;
@@ -1235,17 +1449,10 @@ void main() {
       148,
     );
     expect(
-      tester.getSize(find.byKey(const ValueKey('home-playlist-card'))).width,
-      160,
-    );
-    expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
       200,
     );
-    expect(
-      tester.getSize(find.byKey(const ValueKey('home-playlist-shelf'))).height,
-      212,
-    );
+    expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     final recentCard = find.byKey(const ValueKey('home-recent-card'));
     final recentMaterial = find
         .descendant(of: recentCard, matching: find.byType(Material))
@@ -1258,11 +1465,9 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('home hides the complete playlist section when it is empty', (
-    tester,
-  ) async {
+  testWidgets('home does not show the local playlist section', (tester) async {
     _configureMobileHomeViewport(tester);
-    final repository = _homeCardsRepository()..playlists.clear();
+    final repository = _homeCardsRepository();
 
     await tester.pumpWidget(_testApp(libraryRepository: repository));
     await tester.pump(const Duration(seconds: 1));
@@ -1279,7 +1484,7 @@ void main() {
   });
 
   testWidgets(
-    'home playlist cards include streamed and unavailable catalog entries',
+    'home keeps synchronized catalog playlists out of the start screen',
     (tester) async {
       _configureMobileHomeViewport(tester);
       final now = DateTime.utc(2026, 8, 22);
@@ -1337,16 +1542,9 @@ void main() {
       );
       await tester.pump(const Duration(seconds: 1));
 
-      expect(find.text('Viaje sincronizado'), findsOneWidget);
-      expect(find.text('2 canciones · 3:07 min'), findsOneWidget);
-      final playlistImage = find.descendant(
-        of: find.byKey(const ValueKey('home-playlist-artwork-synced-playlist')),
-        matching: find.byType(SourceImage),
-      );
-      expect(
-        tester.widget<SourceImage>(playlistImage).source,
-        'https://i.ytimg.com/vi/video-remote/hqdefault.jpg',
-      );
+      expect(find.text('Mis playlists'), findsNothing);
+      expect(find.text('Viaje sincronizado'), findsNothing);
+      expect(find.byKey(const ValueKey('home-playlist-card')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -1366,45 +1564,42 @@ void main() {
     expect(find.text('Aún no has escuchado canciones.'), findsNothing);
     expect(find.byKey(const ValueKey('home-recent-shelf')), findsNothing);
     expect(find.byKey(const ValueKey('home-recent-card')), findsNothing);
-    expect(find.text('Mis playlists'), findsOneWidget);
-    expect(find.byKey(const ValueKey('home-playlist-card')), findsOneWidget);
+    expect(find.text('Mis playlists'), findsNothing);
+    expect(find.byKey(const ValueKey('home-playlist-card')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('home cards use larger desktop dimensions', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    tester.view.physicalSize = const Size(1280, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(() {
+  testWidgets(
+    'home recent cards use larger desktop dimensions',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      final repository = _homeCardsRepository();
+
+      await tester.pumpWidget(_testApp(libraryRepository: repository));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+
+      expect(
+        tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
+        176,
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
+        228,
+      );
+      expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
+      expect(tester.takeException(), isNull);
       debugDefaultTargetPlatformOverride = null;
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-    });
-    final repository = _homeCardsRepository();
-
-    await tester.pumpWidget(_testApp(libraryRepository: repository));
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
-
-    expect(
-      tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
-      176,
-    );
-    expect(
-      tester.getSize(find.byKey(const ValueKey('home-playlist-card'))).width,
-      188,
-    );
-    expect(
-      tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-      228,
-    );
-    expect(
-      tester.getSize(find.byKey(const ValueKey('home-playlist-shelf'))).height,
-      240,
-    );
-    expect(tester.takeException(), isNull);
-    debugDefaultTargetPlatformOverride = null;
-  }, skip: !io.Platform.isWindows);
+    },
+    skip: !io.Platform.isWindows,
+  );
 
   testWidgets('home shelves fit text scale 3 on a 320x568 phone', (
     tester,
@@ -1461,8 +1656,15 @@ void main() {
       of: find.byKey(const ValueKey('bottom-navigation-content')),
       matching: find.byType(InkWell),
     );
-    expect(navigationItems, findsNWidgets(4));
-    for (var index = 0; index < 4; index++) {
+    expect(navigationItems, findsNWidgets(5));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('bottom-navigation-content')),
+        matching: find.byIcon(Icons.folder_rounded),
+      ),
+      findsOneWidget,
+    );
+    for (var index = 0; index < 5; index++) {
       final size = tester.getSize(navigationItems.at(index));
       expect(size.width, greaterThanOrEqualTo(48));
       expect(size.height, greaterThanOrEqualTo(48));
@@ -1510,11 +1712,178 @@ void main() {
     );
 
     await tester.drag(homeScroll, const Offset(0, -900));
-    await tester.pump(const Duration(milliseconds: 400));
+    // Advance the Android stretching overscroll one frame at a time. A single
+    // long pump only ticks the spring once and leaves the pinned sliver
+    // temporarily transformed in widget tests.
+    for (var frame = 0; frame < 30; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
 
     expect(tester.getTopLeft(homeHeading).dy, closeTo(homeHeadingTop, 0.01));
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('home shows circular artists and hides Tus mixes', (
+    tester,
+  ) async {
+    _configureMobileHomeViewport(tester);
+    const artistArtwork = 'https://example.invalid/artist-one.jpg';
+    final sections = [
+      HomeRecommendationSection.items(
+        title: 'Artistas populares',
+        items: const [
+          HomeRecommendationArtistItem(
+            HomeRecommendationArtist(
+              name: 'Artista Uno',
+              browseId: 'UCartist-one',
+              thumbnailUrl: artistArtwork,
+            ),
+          ),
+          HomeRecommendationArtistItem(
+            HomeRecommendationArtist(
+              name: 'Artista Dos',
+              browseId: 'UCartist-two',
+              thumbnailUrl: 'https://example.invalid/artist-two.jpg',
+            ),
+          ),
+          HomeRecommendationArtistItem(
+            HomeRecommendationArtist(
+              name: 'Artista Tres',
+              browseId: 'UCartist-three',
+              thumbnailUrl: 'https://example.invalid/artist-three.jpg',
+            ),
+          ),
+        ],
+      ),
+      HomeRecommendationSection.items(
+        title: 'Tus mixes',
+        personalizedKind: PersonalizedSectionKind.mixes,
+        items: const [
+          HomeRecommendationCollectionItem(
+            HomeRecommendationCollection(
+              title: 'Mix oculto',
+              browseId: 'VLRDhidden-mix',
+              playlistId: 'RDhidden-mix',
+              kind: HomeRecommendationCollectionKind.mix,
+            ),
+          ),
+        ],
+      ),
+      HomeRecommendationSection.items(
+        title: 'Mixes para entrenar',
+        items: const [
+          HomeRecommendationCollectionItem(
+            HomeRecommendationCollection(
+              title: 'Energía diaria',
+              browseId: 'VLRDtraining-mix',
+              playlistId: 'RDtraining-mix',
+              kind: HomeRecommendationCollectionKind.mix,
+            ),
+          ),
+        ],
+      ),
+    ];
+
+    await tester.pumpWidget(_testApp(homeRecommendations: sections));
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('Artistas populares'), findsOneWidget);
+    expect(find.text('Artista Uno'), findsOneWidget);
+    expect(find.text('Tus mixes'), findsNothing);
+    expect(find.text('Mix oculto'), findsNothing);
+    expect(find.text('Mixes para entrenar'), findsOneWidget);
+    expect(find.text('Energía diaria'), findsOneWidget);
+    expect(
+      tester
+          .getTopLeft(
+            find.byKey(
+              const ValueKey(
+                'home-recommendations-section-Mixes para entrenar',
+              ),
+            ),
+          )
+          .dy,
+      greaterThan(
+        tester
+            .getTopLeft(
+              find.byKey(
+                const ValueKey(
+                  'home-recommendations-section-Artistas populares',
+                ),
+              ),
+            )
+            .dy,
+      ),
+    );
+    expect(
+      find.byKey(const ValueKey('home-artist-artwork-UCartist-one')),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget(
+        find.byKey(const ValueKey('home-artist-artwork-UCartist-one')),
+      ),
+      isA<ClipOval>(),
+    );
+    final artwork = find.descendant(
+      of: find.byKey(const ValueKey('home-artist-UCartist-one')),
+      matching: find.byType(SourceImage),
+    );
+    expect(artwork, findsOneWidget);
+    expect(tester.widget<SourceImage>(artwork).source, artistArtwork);
+
+    final artistOpen = find.byKey(
+      const ValueKey('home-artist-open-UCartist-one'),
+    );
+    expect(tester.widget<InkWell>(artistOpen).onTap, isNotNull);
+    tester.widget<InkWell>(artistOpen).onTap!();
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    expect(find.byType(ArtistProfilePage), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('home progressively fills a missing artist portrait', (
+    tester,
+  ) async {
+    _configureMobileHomeViewport(tester);
+    final service = _ArtistPortraitSearch();
+    final sections = [
+      HomeRecommendationSection.items(
+        title: 'Artistas recomendados',
+        items: const [
+          HomeRecommendationArtistItem(
+            HomeRecommendationArtist(
+              name: 'Artista sin retrato inicial',
+              browseId: 'UCartist-missing-photo',
+            ),
+          ),
+        ],
+      ),
+    ];
+
+    await tester.pumpWidget(
+      _testApp(homeRecommendations: sections, youtubeMusicSearch: service),
+    );
+    final artwork = find.descendant(
+      of: find.byKey(const ValueKey('home-artist-UCartist-missing-photo')),
+      matching: find.byType(SourceImage),
+    );
+    await _pumpUntil(
+      tester,
+      () =>
+          artwork.evaluate().isNotEmpty &&
+          tester.widget<SourceImage>(artwork).source ==
+              _ArtistPortraitSearch.portraitUrl,
+      reason: 'the progressively loaded artist portrait',
+    );
+    expect(artwork, findsOneWidget);
+    expect(
+      tester.widget<SourceImage>(artwork).source,
+      _ArtistPortraitSearch.portraitUrl,
+    );
+    expect(service.profileCalls, 1);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -1584,7 +1953,7 @@ void main() {
         expect(find.byKey(ValueKey('home-recommendation-$id')), findsOneWidget);
       }
       expect(find.text('Cancion reciente'), findsOneWidget);
-      expect(find.text('Playlist de Inicio'), findsOneWidget);
+      expect(find.text('Mis playlists'), findsNothing);
 
       final homeScroll = find.byType(CustomScrollView);
       await tester.drag(homeScroll, const Offset(0, -600));
@@ -1997,113 +2366,114 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('home opens a mix detail and Play starts the complete queue', (
-    tester,
-  ) async {
-    _configureMobileHomeViewport(tester);
-    final player = _RecordingHomePlayerController();
-    var collectionCalls = 0;
-    const browseId = 'VLRDrelaxing-mix';
-    final mixTracks = const [
-      TrackInfo(
-        id: 'mix-track-1',
-        title: 'Mix uno',
-        artist: 'Artista uno',
-        url: 'https://www.youtube.com/watch?v=mixtrack001',
-        thumbnailUrl: '',
-      ),
-      TrackInfo(
-        id: 'mix-track-2',
-        title: 'Mix dos',
-        artist: 'Artista dos',
-        url: 'https://www.youtube.com/watch?v=mixtrack002',
-        thumbnailUrl: '',
-      ),
-    ];
-    final sections = [
-      HomeRecommendationSection.items(
-        title: 'Melodias relajantes',
-        items: const [
-          HomeRecommendationCollectionItem(
-            HomeRecommendationCollection(
-              title: 'Mix para relajarse',
-              subtitle: 'YouTube Music',
-              thumbnailUrl: '',
-              browseId: browseId,
-              playlistId: 'RDrelaxing-mix',
-              kind: HomeRecommendationCollectionKind.mix,
+  testWidgets(
+    'home opens a playlist detail and Play starts the complete queue',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final player = _RecordingHomePlayerController();
+      var collectionCalls = 0;
+      const browseId = 'VLPLrelaxing-playlist';
+      final playlistTracks = const [
+        TrackInfo(
+          id: 'playlist-track-1',
+          title: 'Playlist uno',
+          artist: 'Artista uno',
+          url: 'https://www.youtube.com/watch?v=playlist01',
+          thumbnailUrl: '',
+        ),
+        TrackInfo(
+          id: 'playlist-track-2',
+          title: 'Playlist dos',
+          artist: 'Artista dos',
+          url: 'https://www.youtube.com/watch?v=playlist02',
+          thumbnailUrl: '',
+        ),
+      ];
+      final sections = [
+        HomeRecommendationSection.items(
+          title: 'Melodias relajantes',
+          items: const [
+            HomeRecommendationCollectionItem(
+              HomeRecommendationCollection(
+                title: 'Playlist para relajarse',
+                subtitle: 'YouTube Music',
+                thumbnailUrl: '',
+                browseId: browseId,
+                playlistId: 'PLrelaxing-playlist',
+                kind: HomeRecommendationCollectionKind.playlist,
+              ),
             ),
-          ),
-        ],
-      ),
-    ];
+          ],
+        ),
+      ];
 
-    await tester.pumpWidget(
-      _testApp(
-        libraryRepository: _homeCardsRepository(),
-        playerController: player,
-        homeRecommendations: sections,
-        homeCollectionLoader: (requestedBrowseId) async {
-          collectionCalls++;
-          expect(requestedBrowseId, browseId);
-          return mixTracks;
-        },
-      ),
-    );
-    await tester.pump(const Duration(seconds: 1));
+      await tester.pumpWidget(
+        _testApp(
+          libraryRepository: _homeCardsRepository(),
+          playerController: player,
+          homeRecommendations: sections,
+          homeCollectionLoader: (requestedBrowseId) async {
+            collectionCalls++;
+            expect(requestedBrowseId, browseId);
+            return playlistTracks;
+          },
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
 
-    expect(collectionCalls, 0);
-    expect(player.remotePlayCalls, 0);
+      expect(collectionCalls, 0);
+      expect(player.remotePlayCalls, 0);
 
-    final mixCard = find.byKey(
-      const ValueKey('home-collection-open-$browseId'),
-    );
-    await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
-    await _pumpUntil(
-      tester,
-      () => mixCard.evaluate().isNotEmpty,
-      reason: 'the mix card to enter the viewport',
-    );
-    expect(mixCard, findsOneWidget);
-    expect(find.text('Mix para relajarse'), findsOneWidget);
+      final playlistCard = find.byKey(
+        const ValueKey('home-collection-open-$browseId'),
+      );
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
+      await _pumpUntil(
+        tester,
+        () => playlistCard.evaluate().isNotEmpty,
+        reason: 'the playlist card to enter the viewport',
+      );
+      expect(playlistCard, findsOneWidget);
+      expect(find.text('Playlist para relajarse'), findsOneWidget);
 
-    await tester.tap(mixCard);
-    await _pumpUntil(
-      tester,
-      () =>
-          collectionCalls == 1 &&
-          find
-              .byKey(const ValueKey('remote-collection-detail'))
-              .evaluate()
-              .isNotEmpty &&
-          find.text('Mix para relajarse').evaluate().length == 2,
-      reason: 'the loaded mix detail to be rendered',
-    );
+      await tester.tap(playlistCard);
+      await _pumpUntil(
+        tester,
+        () =>
+            collectionCalls == 1 &&
+            find
+                .byKey(const ValueKey('remote-collection-detail'))
+                .evaluate()
+                .isNotEmpty &&
+            find.text('Playlist para relajarse').evaluate().length == 2,
+        reason: 'the loaded playlist detail to be rendered',
+      );
 
-    expect(collectionCalls, 1);
-    expect(player.remotePlayCalls, 0);
-    expect(
-      find.byKey(const ValueKey('remote-collection-detail')),
-      findsOneWidget,
-    );
-    expect(find.text('Mix para relajarse'), findsNWidgets(2));
-    expect(find.text('YouTube Music'), findsOneWidget);
-    expect(find.text('Mix uno'), findsOneWidget);
-    expect(find.text('Mix dos'), findsOneWidget);
+      expect(collectionCalls, 1);
+      expect(player.remotePlayCalls, 0);
+      expect(
+        find.byKey(const ValueKey('remote-collection-detail')),
+        findsOneWidget,
+      );
+      expect(find.text('Playlist para relajarse'), findsNWidgets(2));
+      expect(find.text('YouTube Music'), findsOneWidget);
+      expect(find.text('Playlist uno'), findsOneWidget);
+      expect(find.text('Playlist dos'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('remote-collection-play')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.byKey(const ValueKey('remote-collection-play')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
 
-    expect(player.remotePlayCalls, 1);
-    expect(player.lastRemoteTrack?.id, 'mix-track-1');
-    expect(player.lastRemoteQueue?.map((track) => track.id), const [
-      'mix-track-1',
-      'mix-track-2',
-    ]);
-    expect(player.lastRemoteQueueSourceId, 'home-collection:$browseId');
-    expect(tester.takeException(), isNull);
-  });
+      expect(player.remotePlayCalls, 1);
+      expect(player.lastRemoteTrack?.id, 'playlist-track-1');
+      expect(player.lastRemoteQueue?.map((track) => track.id), const [
+        'playlist-track-1',
+        'playlist-track-2',
+      ]);
+      expect(player.lastRemoteQueueSourceId, 'home-collection:$browseId');
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'home refresh keeps recommendations visible while loading and replaces them',
@@ -2190,7 +2560,7 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('home-recent-card')), findsOneWidget);
-      expect(find.byKey(const ValueKey('home-playlist-card')), findsOneWidget);
+      expect(find.byKey(const ValueKey('home-playlist-card')), findsNothing);
 
       pending.complete(refreshedSections);
       await tester.pump();
@@ -2263,7 +2633,7 @@ void main() {
       );
       expect(find.text('offline'), findsNothing);
       expect(find.byKey(const ValueKey('home-recent-card')), findsOneWidget);
-      expect(find.byKey(const ValueKey('home-playlist-card')), findsOneWidget);
+      expect(find.byKey(const ValueKey('home-playlist-card')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -2383,6 +2753,101 @@ void main() {
     expect(settingsColor, homeColor);
   });
 
+  testWidgets('tab titles and first root content share page insets', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      _testApp(
+        libraryRepository: _homeCardsRepository(),
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/bstream',
+            language: AppLanguage.spanish,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+
+    void expectSharedInsets({
+      required Finder header,
+      required Finder title,
+      required Finder firstSection,
+    }) {
+      expect(
+        tester.getTopLeft(firstSection).dx,
+        closeTo(tester.getTopLeft(title).dx, 0.01),
+      );
+      expect(
+        tester.getTopLeft(firstSection).dy - tester.getBottomLeft(header).dy,
+        closeTo(appTabFirstSectionTopGap, 0.01),
+      );
+    }
+
+    expectSharedInsets(
+      header: find.byKey(const ValueKey('home-tab-header-surface')),
+      title: find.byKey(const ValueKey('home-tab-title')),
+      firstSection: find.byKey(
+        const ValueKey('home-section-title-Escuchado recientemente'),
+      ),
+    );
+
+    await tester.tap(find.text('Biblioteca').last);
+    await tester.pump(const Duration(milliseconds: 300));
+    final libraryHeader = find.byKey(
+      const ValueKey('library-tab-header-surface'),
+    );
+    final downloadsEntry = find.byKey(
+      const ValueKey('library-downloads-entry'),
+    );
+    expect(
+      find.byKey(const ValueKey('library-first-section-title')),
+      findsNothing,
+    );
+    expect(
+      tester.getTopLeft(downloadsEntry).dy -
+          tester.getBottomLeft(libraryHeader).dy,
+      closeTo(appTabFirstSectionTopGap, 0.01),
+    );
+
+    await tester.tap(find.text('Ajustes').last);
+    await tester.pump(const Duration(milliseconds: 300));
+    expectSharedInsets(
+      header: find.byKey(const ValueKey('settings-tab-header-surface')),
+      title: find.byKey(const ValueKey('settings-tab-title')),
+      firstSection: find.byKey(const ValueKey('settings-first-section-title')),
+    );
+    final settingsCardLeft = tester
+        .getTopLeft(find.byKey(const ValueKey('settings-card-language')))
+        .dx;
+    final settingsSectionLeft = tester
+        .getTopLeft(find.byKey(const ValueKey('settings-first-section-title')))
+        .dx;
+    expect(settingsSectionLeft - settingsCardLeft, closeTo(10, 0.01));
+    final settingsRootPadding =
+        tester
+                .widget<SliverPadding>(
+                  find
+                      .descendant(
+                        of: find.byKey(const ValueKey('settings-root')),
+                        matching: find.byType(SliverPadding),
+                      )
+                      .first,
+                )
+                .padding
+            as EdgeInsets;
+    expect(settingsRootPadding.left, 6);
+    expect(settingsRootPadding.right, 6);
+    expect(settingsRootPadding.top, appTabFirstSectionTopGap);
+  });
+
   testWidgets('settings heading stays fixed at text scale 3', (tester) async {
     tester.view
       ..physicalSize = const Size(320, 568)
@@ -2446,79 +2911,119 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('light popup text and icons follow the selected accent', (
-    tester,
-  ) async {
-    final settingsController = _FakeSettingsController(
-      const SettingsState(
-        downloadDirectory: '/tmp/bstream',
-        language: AppLanguage.spanish,
-        themeMode: AppThemeMode.light,
-        accent: AppAccent.blue,
-      ),
-    );
-    await tester.pumpWidget(_testApp(settingsController: settingsController));
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+  for (final popupCase in const [
+    (
+      label: 'light accent',
+      themeMode: AppThemeMode.light,
+      brightness: Brightness.light,
+      surfaceMode: SurfaceBackgroundMode.accent,
+      borderAlpha: 0.72,
+    ),
+    (
+      label: 'dark accent',
+      themeMode: AppThemeMode.dark,
+      brightness: Brightness.dark,
+      surfaceMode: SurfaceBackgroundMode.accent,
+      borderAlpha: 0.22,
+    ),
+    (
+      label: 'light transparent',
+      themeMode: AppThemeMode.light,
+      brightness: Brightness.light,
+      surfaceMode: SurfaceBackgroundMode.transparent,
+      borderAlpha: 0.52,
+    ),
+    (
+      label: 'dark transparent',
+      themeMode: AppThemeMode.dark,
+      brightness: Brightness.dark,
+      surfaceMode: SurfaceBackgroundMode.transparent,
+      borderAlpha: 0.34,
+    ),
+  ]) {
+    testWidgets('${popupCase.label} popup follows the surface palette', (
+      tester,
+    ) async {
+      final settingsController = _FakeSettingsController(
+        SettingsState(
+          downloadDirectory: '/tmp/bstream',
+          language: AppLanguage.spanish,
+          themeMode: popupCase.themeMode,
+          accent: AppAccent.blue,
+          surfaceBackgroundMode: popupCase.surfaceMode,
+        ),
+      );
+      await tester.pumpWidget(_testApp(settingsController: settingsController));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 300));
 
-    final context = tester.element(find.byType(Scaffold).first);
-    expect(
-      ProviderScope.containerOf(
+      final context = tester.element(find.byType(Scaffold).first);
+      final settings = ProviderScope.containerOf(
         context,
-      ).read(settingsControllerProvider).value?.themeMode,
-      AppThemeMode.light,
-    );
-    final popupTheme = Theme.of(context).popupMenuTheme;
-    final colors = Theme.of(context).colorScheme;
-    expect(colors.brightness, Brightness.light);
-    expect(popupTheme.color, AppColors.menuBackgroundFor(context));
-    expect(popupTheme.textStyle?.color, AppColors.menuForegroundFor(context));
-    expect(popupTheme.iconColor, AppColors.menuIconFor(context));
-    expect(
-      popupTheme.color,
-      colors.surfaceContainerHighest.withValues(alpha: 0.97),
-    );
-    expect(popupTheme.surfaceTintColor, Colors.transparent);
-    final shape = popupTheme.shape! as RoundedRectangleBorder;
-    expect(shape.side.color, AppColors.menuBorderFor(context));
-    expect(shape.side.color, colors.outlineVariant.withValues(alpha: 0.9));
-  });
+      ).read(settingsControllerProvider).value;
+      final theme = Theme.of(context);
+      final popupTheme = theme.popupMenuTheme;
+      final shape = popupTheme.shape! as RoundedRectangleBorder;
+      final dialogTheme = theme.dialogTheme;
+      final dialogShape = dialogTheme.shape! as RoundedRectangleBorder;
 
-  testWidgets('dark popup surface stays neutral while content uses accent', (
-    tester,
-  ) async {
-    final settingsController = _FakeSettingsController(
-      const SettingsState(
-        downloadDirectory: '/tmp/bstream',
-        language: AppLanguage.spanish,
-        themeMode: AppThemeMode.dark,
-        accent: AppAccent.blue,
-      ),
-    );
-    await tester.pumpWidget(_testApp(settingsController: settingsController));
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-
-    final context = tester.element(find.byType(Scaffold).first);
-    expect(
-      ProviderScope.containerOf(
-        context,
-      ).read(settingsControllerProvider).value?.themeMode,
-      AppThemeMode.dark,
-    );
-    final popupTheme = Theme.of(context).popupMenuTheme;
-    final colors = Theme.of(context).colorScheme;
-    expect(colors.brightness, Brightness.dark);
-    expect(popupTheme.color, AppColors.menuBackground);
-    expect(popupTheme.textStyle?.color, AppColors.menuForegroundFor(context));
-    expect(popupTheme.textStyle?.color, isNot(AppColors.menuForeground));
-    expect(popupTheme.iconColor, AppColors.menuIconFor(context));
-    expect(popupTheme.iconColor, isNot(AppColors.menuForeground));
-    final shape = popupTheme.shape! as RoundedRectangleBorder;
-    expect(shape.side.color, AppColors.menuBorder);
-  });
+      expect(settings?.themeMode, popupCase.themeMode);
+      expect(settings?.surfaceBackgroundMode, popupCase.surfaceMode);
+      expect(theme.brightness, popupCase.brightness);
+      expect(
+        popupTheme.color,
+        AppColors.menuBackgroundForTheme(
+          AppAccent.blue,
+          theme.colorScheme,
+          backgroundMode: popupCase.surfaceMode,
+        ),
+      );
+      expect(popupTheme.color, AppColors.menuBackgroundFor(context));
+      expect(popupTheme.textStyle?.color, AppColors.menuForegroundFor(context));
+      expect(popupTheme.iconColor, AppColors.menuIconFor(context));
+      expect(popupTheme.surfaceTintColor, Colors.transparent);
+      expect(
+        shape.side.color,
+        AppColors.menuBorderForTheme(
+          AppAccent.blue,
+          theme.colorScheme,
+          backgroundMode: popupCase.surfaceMode,
+        ),
+      );
+      expect(shape.side.color, AppColors.menuBorderFor(context));
+      expect(shape.side.color.a, closeTo(popupCase.borderAlpha, 0.001));
+      expect(
+        popupTheme.color!.a,
+        popupCase.surfaceMode == SurfaceBackgroundMode.transparent
+            ? lessThan(0.75)
+            : greaterThan(0.9),
+      );
+      expect(
+        dialogTheme.backgroundColor,
+        AppColors.dialogSurfaceForTheme(
+          AppAccent.blue,
+          theme.colorScheme,
+          backgroundMode: popupCase.surfaceMode,
+        ),
+      );
+      expect(
+        dialogShape.side.color,
+        AppColors.dialogBorderForTheme(
+          AppAccent.blue,
+          theme.colorScheme,
+          backgroundMode: popupCase.surfaceMode,
+        ),
+      );
+      expect(
+        dialogTheme.barrierColor,
+        AppColors.dialogBarrierForTheme(
+          theme.colorScheme,
+          backgroundMode: popupCase.surfaceMode,
+        ),
+      );
+      expect(dialogTheme.surfaceTintColor, Colors.transparent);
+    });
+  }
 
   testWidgets('desktop Downloads and Backup share the Storage settings page', (
     tester,
@@ -3837,7 +4342,10 @@ void main() {
       find.byKey(const ValueKey('library-selection-remove-from-playlist')),
     );
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(
+      find.byWidgetPredicate((widget) => widget is AlertDialog),
+      findsOneWidget,
+    );
     expect(repository.localTracks, [first, second, third]);
     await tester.tap(find.widgetWithText(FilledButton, 'Quitar de playlist'));
     await tester.pumpAndSettle();
@@ -3950,7 +4458,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('library-selection-delete')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(
+      find.byWidgetPredicate((widget) => widget is AlertDialog),
+      findsOneWidget,
+    );
     expect(repository.localTracks, [first, second, survivor]);
     expect(sharedAudio.existsSync(), isTrue);
     expect(uniqueAudio.existsSync(), isTrue);
@@ -4006,7 +4517,9 @@ void main() {
       const SettingsState(
         downloadDirectory: '/tmp/bstream',
         language: AppLanguage.spanish,
+        themeMode: AppThemeMode.light,
         accent: AppAccent.blue,
+        surfaceBackgroundMode: SurfaceBackgroundMode.accent,
       ),
     );
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -4223,23 +4736,63 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     final popover = find.byKey(const ValueKey('volume-popover'));
     expect(popover, findsOneWidget);
+    expect(
+      find.ancestor(of: popover, matching: find.byType(BackdropFilter)),
+      findsNothing,
+    );
     final popoverContext = tester.element(popover);
     final popoverDecoration =
         tester.widget<Container>(popover).decoration! as BoxDecoration;
+    final expectedPopoverGradient = AppColors.glassSurfaceGradientFor(
+      popoverContext,
+      baseColor: AppColors.menuBackgroundFor(popoverContext),
+      intensity: 0.82,
+    );
+    expect(popoverDecoration.color, isNull);
     expect(
-      popoverDecoration.color,
-      AppColors.menuBackgroundFor(popoverContext),
+      (popoverDecoration.gradient! as LinearGradient).colors,
+      expectedPopoverGradient.colors,
     );
     expect(
       (popoverDecoration.border! as Border).top.color,
       AppColors.menuBorderFor(popoverContext),
     );
-    final popoverTitle = tester.widget<Text>(
-      find.descendant(of: popover, matching: find.text('Volumen')),
-    );
+    expect(popoverDecoration.boxShadow, isNull);
+    final shadowDecoration =
+        tester
+                .widget<DecoratedBox>(
+                  find.byKey(const ValueKey('volume-popover-shadow')),
+                )
+                .decoration
+            as BoxDecoration;
+    expect(shadowDecoration.boxShadow, hasLength(1));
+    expect(shadowDecoration.boxShadow!.single.color.a, lessThan(0.4));
+    final popoverRect = tester.getRect(popover);
+    final volumeRect = tester.getRect(volumeControl);
+    expect(popoverRect.width, lessThanOrEqualTo(244));
+    expect(popoverRect.height, lessThanOrEqualTo(60));
+    expect(popoverRect.right, closeTo(volumeRect.right - 4, 0.01));
+    expect(popoverRect.center.dy, closeTo(volumeRect.center.dy, 0.01));
     expect(
-      popoverTitle.style?.color,
-      AppColors.menuForegroundFor(popoverContext),
+      popoverRect.overlaps(
+        tester.getRect(find.byKey(const ValueKey('player-primary-control'))),
+      ),
+      isFalse,
+      reason:
+          'The compact volume surface must not cover the primary transport '
+          'control. popover=$popoverRect, primary=${tester.getRect(find.byKey(const ValueKey('player-primary-control')))}',
+    );
+    final sliderSize = tester.getSize(
+      find.descendant(of: popover, matching: find.byType(Slider)),
+    );
+    expect(sliderSize.width, greaterThan(100));
+    expect(sliderSize.height, greaterThanOrEqualTo(48));
+    expect(
+      find.ancestor(
+        of: find.byKey(const ValueKey('volume-popover-percentage')),
+        matching: find.byType(FittedBox),
+      ),
+      findsOneWidget,
     );
 
     final sliderTheme = tester.widget<SliderTheme>(
@@ -4255,6 +4808,87 @@ void main() {
       sliderTheme.data.inactiveTrackColor,
       AppColors.menuInactiveSliderFor(popoverContext),
     );
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('transparent volume popover uses a blurred surface', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view.physicalSize = const Size(320, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+        themeMode: AppThemeMode.light,
+        accent: AppAccent.blue,
+        surfaceBackgroundMode: SurfaceBackgroundMode.transparent,
+      ),
+    );
+
+    await tester.pumpWidget(
+      _testApp(
+        settingsController: settingsController,
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Cancion con volumen transparente',
+            artist: 'BStream Music',
+            trackId: 'transparent-volume-track',
+            duration: Duration(minutes: 3),
+            volume: 0.64,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tapAt(
+      tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.byTooltip('Volumen'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final popover = find.byKey(const ValueKey('volume-popover'));
+    expect(popover, findsOneWidget);
+    expect(
+      find.ancestor(of: popover, matching: find.byType(BackdropFilter)),
+      findsOneWidget,
+    );
+    final popoverContext = tester.element(popover);
+    final decoration =
+        tester.widget<Container>(popover).decoration! as BoxDecoration;
+    expect(
+      AppColors.surfaceBackgroundModeFor(popoverContext),
+      SurfaceBackgroundMode.transparent,
+    );
+    final expectedGradient = AppColors.glassSurfaceGradientFor(
+      popoverContext,
+      baseColor: AppColors.menuBackgroundFor(popoverContext),
+      intensity: 0.82,
+    );
+    final gradient = decoration.gradient! as LinearGradient;
+    expect(decoration.color, isNull);
+    expect(gradient.colors, expectedGradient.colors);
+    expect(gradient.colors.every((color) => color.a < 0.75), isTrue);
+    expect(
+      (decoration.border! as Border).top.color,
+      AppColors.menuBorderFor(popoverContext),
+    );
+    expect(
+      tester
+          .getSize(find.descendant(of: popover, matching: find.byType(Slider)))
+          .width,
+      greaterThan(100),
+    );
+    expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -4796,7 +5430,7 @@ void main() {
       await tester.pump();
       expect(playerService.togglePlayPauseCalls, 1);
 
-      await tester.tap(find.byKey(const ValueKey('side-navigation-item-2')));
+      await tester.tap(find.byKey(const ValueKey('side-navigation-item-3')));
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.byType(PlayerPanel), findsOneWidget);
       expect(tester.widget<Focus>(shortcut).focusNode?.hasFocus, isTrue);
@@ -4824,7 +5458,7 @@ void main() {
       expect(editableText.controller.text, 'consulta');
       expect(editableText.focusNode.hasFocus, isTrue);
 
-      await tester.tap(find.byKey(const ValueKey('side-navigation-item-2')));
+      await tester.tap(find.byKey(const ValueKey('side-navigation-item-3')));
       await tester.pump(const Duration(milliseconds: 500));
       expect(editableText.focusNode.hasFocus, isFalse);
       expect(tester.widget<Focus>(shortcut).focusNode?.hasFocus, isTrue);
@@ -4837,7 +5471,9 @@ void main() {
     },
   );
 
-  testWidgets('library entry cards have matching heights', (tester) async {
+  testWidgets('library keeps only the header action for creating playlists', (
+    tester,
+  ) async {
     final libraryRepository = _FakeLibraryRepository();
     libraryRepository.playlists.add(
       Playlist(
@@ -4858,20 +5494,22 @@ void main() {
     final downloadsEntry = find.byKey(
       const ValueKey('library-downloads-entry'),
     );
-    final createPlaylistRow = find.byKey(const ValueKey('create-playlist'));
+    final createPlaylistButton = find.byKey(
+      const ValueKey('library-create-playlist-button'),
+    );
     final playlistEntry = find.byKey(
       const ValueKey('library-playlist-test-playlist-height'),
     );
 
     expect(downloadsEntry, findsOneWidget);
-    expect(createPlaylistRow, findsOneWidget);
+    expect(createPlaylistButton, findsOneWidget);
+    expect(find.byKey(const ValueKey('create-playlist')), findsNothing);
+    expect(find.text('Crear playlist'), findsNothing);
     expect(playlistEntry, findsOneWidget);
 
     final downloadsHeight = tester.getSize(downloadsEntry).height;
-    final createHeight = tester.getSize(createPlaylistRow).height;
     final playlistHeight = tester.getSize(playlistEntry).height;
 
-    expect(downloadsHeight, createHeight);
     expect(downloadsHeight, playlistHeight);
     expect(downloadsHeight, greaterThanOrEqualTo(56));
     expect(downloadsHeight, lessThanOrEqualTo(72));
@@ -4884,7 +5522,9 @@ void main() {
 
     await tester.tap(find.text('Biblioteca').last);
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.text('Crear playlist'));
+    await tester.tap(
+      find.byKey(const ValueKey('library-create-playlist-button')),
+    );
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('Nueva playlist'), findsOneWidget);
 
@@ -4903,7 +5543,9 @@ void main() {
 
     await tester.tap(find.text('Biblioteca').last);
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.text('Crear playlist'));
+    await tester.tap(
+      find.byKey(const ValueKey('library-create-playlist-button')),
+    );
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('Nueva playlist'), findsOneWidget);
 
@@ -4946,9 +5588,9 @@ void _expectLocalOnlyHome(WidgetTester tester) {
     findsNothing,
   );
   expect(find.text('Cancion reciente'), findsOneWidget);
-  expect(find.text('Playlist de Inicio'), findsOneWidget);
+  expect(find.text('Mis playlists'), findsNothing);
   expect(find.byKey(const ValueKey('home-recent-card')), findsOneWidget);
-  expect(find.byKey(const ValueKey('home-playlist-card')), findsOneWidget);
+  expect(find.byKey(const ValueKey('home-playlist-card')), findsNothing);
 }
 
 LocalTrack _librarySelectionTrack(
@@ -5126,6 +5768,8 @@ Widget _testApp({
   PersonalizedHomeFeedSource? personalizedHomeFeedSource,
   IncomingTrackLinkService? incomingTrackLinkService,
   YouTubeMusicSearch? youtubeMusicSearch,
+  YouTubeMusicAuthState? youtubeMusicAuthState,
+  DateTime? homeGreetingTime,
   List<CatalogPlaylist>? catalogPlaylists,
   Widget? testHome,
 }) {
@@ -5137,6 +5781,9 @@ Widget _testApp({
       : null;
   return ProviderScope(
     overrides: [
+      homeGreetingClockProvider.overrideWithValue(
+        () => homeGreetingTime ?? DateTime(2026, 8, 24, 9),
+      ),
       if (settingsController != null)
         settingsControllerProvider.overrideWith(() => settingsController),
       downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
@@ -5146,9 +5793,18 @@ Widget _testApp({
       ),
       if (playerController != null)
         playerControllerProvider.overrideWith(() => playerController),
+      if (youtubeMusicAuthState != null)
+        youtubeMusicAuthControllerProvider.overrideWith(
+          () => _StaticYouTubeMusicAuthController(youtubeMusicAuthState),
+        ),
+      if (youtubeMusicAuthState != null)
+        youtubeMusicPlaylistSyncControllerProvider.overrideWith(
+          _IdleYouTubeMusicPlaylistSyncController.new,
+        ),
       personalizedHomeFeedSourceProvider.overrideWithValue(
         personalizedHomeFeedSource,
       ),
+      homeArtistRecommendationSourceProvider.overrideWithValue(null),
       youtubeMusicHomeRecommendationsProvider.overrideWith((ref) {
         final loader = homeRecommendationsLoader;
         if (loader != null) {
@@ -5218,6 +5874,57 @@ Widget _testApp({
             home: testHome,
           ),
   );
+}
+
+class _ArtistPortraitSearch
+    implements YouTubeMusicSearch, YouTubeMusicArtistProfileLookup {
+  static const portraitUrl =
+      'https://example.invalid/resolved-artist-portrait.jpg';
+
+  int profileCalls = 0;
+
+  @override
+  Future<InnerTubeArtistProfile> getArtistProfile(
+    String artistBrowseId, {
+    String? fallbackName,
+    String? fallbackThumbnailUrl,
+    int songLimit = 20,
+    int releaseLimit = 20,
+  }) async {
+    profileCalls++;
+    return InnerTubeArtistProfile(
+      artist: InnerTubeArtist(
+        browseId: artistBrowseId,
+        name: fallbackName ?? 'Artista',
+        thumbnailUrl: portraitUrl,
+      ),
+      popularSongs: const [],
+      albums: const [],
+      singles: const [],
+    );
+  }
+
+  @override
+  Future<List<InnerTubeSong>> searchSongs(
+    String query, {
+    int limit = 20,
+  }) async => const [];
+}
+
+class _StaticYouTubeMusicAuthController extends YouTubeMusicAuthController {
+  _StaticYouTubeMusicAuthController(this.fixedState);
+
+  final YouTubeMusicAuthState fixedState;
+
+  @override
+  YouTubeMusicAuthState build() => fixedState;
+}
+
+class _IdleYouTubeMusicPlaylistSyncController
+    extends YouTubeMusicPlaylistSyncController {
+  @override
+  YouTubeMusicPlaylistSyncState build() =>
+      const YouTubeMusicPlaylistSyncState();
 }
 
 class _FakeSettingsController extends SettingsController {

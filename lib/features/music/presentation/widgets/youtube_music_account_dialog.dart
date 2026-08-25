@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/app_dialog.dart';
 import '../../../../services/youtube_music/auth/youtube_music_auth_models.dart';
 import '../providers/app_strings.dart';
 import 'youtube_music_account_avatar.dart';
@@ -26,7 +27,7 @@ class YouTubeMusicAccountDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = strings ?? const AppStrings(AppLanguage.spanish);
     final secondary = profile.email ?? profile.handle;
-    return AlertDialog(
+    return AppAlertDialog(
       key: const Key('youtube-music-account-dialog'),
       title: Text(text.youtubeMusicAccount),
       content: ConstrainedBox(
@@ -109,9 +110,9 @@ class YouTubeMusicAccountDialog extends StatelessWidget {
 
   Future<void> _confirmLogout(BuildContext context) async {
     final text = strings ?? const AppStrings(AppLanguage.spanish);
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         key: const Key('youtube-music-logout-confirmation'),
         title: Text(text.choose('¿Cerrar sesión?', 'Sign out?')),
         content: Text(

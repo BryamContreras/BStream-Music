@@ -17,6 +17,7 @@ class TrackInfoModel extends TrackInfo {
     super.streamCodec,
     super.extractor,
     super.album,
+    super.albumBrowseId,
     super.viewCount,
     super.httpHeaders,
     super.artists,
@@ -68,6 +69,7 @@ class TrackInfoModel extends TrackInfo {
           _stringValue(json['extractor_key']) ??
           _stringValue(json['ie_key']),
       album: _stringValue(json['album']),
+      albumBrowseId: _stringValue(json['album_browse_id']),
       viewCount: _intValue(json['view_count']),
       httpHeaders: _httpHeaders(json),
       artists: artistNames.isNotEmpty
@@ -103,6 +105,7 @@ class TrackInfoModel extends TrackInfo {
       'stream_codec': streamCodec,
       'extractor': extractor,
       'album': album,
+      'album_browse_id': albumBrowseId,
       'view_count': viewCount,
       'http_headers': httpHeaders,
       'artists': artists,

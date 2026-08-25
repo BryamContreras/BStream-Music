@@ -63,6 +63,7 @@ class DefaultYoutubeExplodeDownloadClient
     YoutubeSelectedAudioValidator? validateDownloadStream,
     Iterable<YoutubeManifestAttempt>? manifestAttempts,
     this.downloadProbeTimeout = const Duration(seconds: 4),
+    this.resolveTimeout = const Duration(seconds: 30),
   }) : _injectedClient = client,
        _runtime = runtime,
        _injectedDownloadValidator = validateDownloadStream,
@@ -82,6 +83,13 @@ class DefaultYoutubeExplodeDownloadClient
         'Must be positive.',
       );
     }
+    if (resolveTimeout <= Duration.zero) {
+      throw ArgumentError.value(
+        resolveTimeout,
+        'resolveTimeout',
+        'Must be positive.',
+      );
+    }
   }
 
   final YoutubeExplode? _injectedClient;
@@ -89,6 +97,7 @@ class DefaultYoutubeExplodeDownloadClient
   final YoutubeSelectedAudioValidator? _injectedDownloadValidator;
   final List<YoutubeManifestAttempt>? _manifestAttempts;
   final Duration downloadProbeTimeout;
+  final Duration resolveTimeout;
   YoutubeExplode? _ownedClient;
   Future<YoutubeExplode>? _clientFuture;
   YoutubeSelectedAudioValidator? _ownedDownloadValidator;
@@ -152,42 +161,71 @@ class DefaultYoutubeExplodeDownloadClient
       final remainingAttempts = attempts.sublist(nextAttemptIndex);
       var selectedClient = client;
       YoutubeManifestAttempt? selectedAttempt;
-      final stream = await resolvePreferredYoutubeAudioStream(
-        videoId: videoId,
-        loadManifest: (videoId, ytClient, requireWatchPage) {
-          return client.videos.streams.getManifest(
-            videoId,
-            ytClients: [ytClient],
-            requireWatchPage: requireWatchPage,
-          );
-        },
-        loadManifestForAttempt: runtime == null
-            ? null
-            : (videoId, attempt) async {
-                selectedClient = await runtime.clientFor(attempt);
-                return selectedClient.videos.streams.getManifest(
-                  videoId,
-                  ytClients: [attempt.client],
-                  requireWatchPage: attempt.requireWatchPage,
+      var withinResolutionBudget = true;
+      Future<AudioOnlyStreamInfo> resolveManifest() {
+        return resolvePreferredYoutubeAudioStream(
+          videoId: videoId,
+          loadManifest: (videoId, ytClient, requireWatchPage) {
+            return client.videos.streams.getManifest(
+              videoId,
+              ytClients: [ytClient],
+              requireWatchPage: requireWatchPage,
+            );
+          },
+          loadManifestForAttempt: runtime == null
+              ? null
+              : (videoId, attempt) async {
+                  selectedClient = await runtime.clientFor(attempt);
+                  return selectedClient.videos.streams.getManifest(
+                    videoId,
+                    ytClients: [attempt.client],
+                    requireWatchPage: attempt.requireWatchPage,
+                  );
+                },
+          validateSelectedStream: (candidate) {
+            // Fragmented DASH streams are assembled by StreamClient and their
+            // base URL is not independently readable. Direct streams prove
+            // that the selected URL returns bytes before a large transfer.
+            if (candidate.fragments.isNotEmpty) {
+              return Future<void>.value();
+            }
+            return _validateDownloadStream(candidate);
+          },
+          jsSolverAvailable: runtime?.supportsSolver ?? false,
+          attempts: remainingAttempts,
+          shouldContinue: () => withinResolutionBudget,
+          onAttempt: (attempt, _, error) {
+            if (error == null) {
+              selectedAttempt = attempt;
+            }
+          },
+        );
+      }
+
+      final stream = runtime == null
+          ? await resolveManifest().timeout(
+              resolveTimeout,
+              onTimeout: () {
+                withinResolutionBudget = false;
+                throw DownloaderException(
+                  'youtube_explode_dart no resolvio el audio en '
+                  '${resolveTimeout.inSeconds} segundos.',
+                  code: 'youtube_explode_resolve_timeout',
                 );
               },
-        validateSelectedStream: (candidate) {
-          // Fragmented DASH streams are assembled by StreamClient and their
-          // base URL is not independently readable. Direct streams prove that
-          // the exact selected URL returns bytes before a large transfer.
-          if (candidate.fragments.isNotEmpty) {
-            return Future<void>.value();
-          }
-          return _validateDownloadStream(candidate);
-        },
-        jsSolverAvailable: runtime?.supportsSolver ?? false,
-        attempts: remainingAttempts,
-        onAttempt: (attempt, _, error) {
-          if (error == null) {
-            selectedAttempt = attempt;
-          }
-        },
-      );
+            )
+          : await runtime.runManifestRequest(
+              priority: YoutubeExplodeManifestPriority.download,
+              operation: resolveManifest,
+              shouldContinue: () => withinResolutionBudget,
+              executionTimeout: resolveTimeout,
+              executionTimeoutError: (_) => DownloaderException(
+                'youtube_explode_dart no resolvio el audio en '
+                '${resolveTimeout.inSeconds} segundos.',
+                code: 'youtube_explode_resolve_timeout',
+              ),
+              onExecutionTimeout: () => withinResolutionBudget = false,
+            );
 
       final attempt = selectedAttempt;
       if (attempt == null) {

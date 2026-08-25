@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
@@ -205,6 +206,7 @@ void main() {
         miniPlayer.height,
         miniPlayerHeightFor(
           tester.element(find.byKey(const ValueKey('mini-player-container'))),
+          mode: defaultMiniPlayerMode,
         ),
       );
     }
@@ -335,7 +337,7 @@ void main() {
     expect(player.playCalls, 0);
   });
 
-  testWidgets('uses the Material 3 scrolled-under app bar while scrolling', (
+  testWidgets('keeps the accented detail surface pinned while scrolling', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -367,31 +369,59 @@ void main() {
     final appBarFinder = find.byKey(
       const ValueKey('remote-collection-app-bar'),
     );
-    Material appBarMaterial() => tester.widget<Material>(
-      find.descendant(of: appBarFinder, matching: find.byType(Material)).first,
-    );
-    final colors = Theme.of(tester.element(appBarFinder)).colorScheme;
     final titleFinder = find.descendant(
       of: appBarFinder,
       matching: find.text('Album de contrato'),
     );
 
-    final initialMaterial = appBarMaterial();
     final initialTitleRect = tester.getRect(titleFinder);
-    expect(initialMaterial.color, colors.surface);
-    expect(initialMaterial.elevation, 0);
+    final initialHeaderRect = tester.getRect(
+      find.byKey(const ValueKey('remote-collection-header')),
+    );
+    final appBarRect = tester.getRect(appBarFinder);
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('remote-collection-app-bar-spacer')),
+          )
+          .height,
+      appBarRect.height,
+    );
+    expect(initialHeaderRect.top, greaterThanOrEqualTo(appBarRect.bottom));
+    final surface = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('remote-collection-app-bar-surface')),
+    );
+    final decoration = surface.decoration as BoxDecoration;
+    expect(decoration.color!.a, 1);
+    expect(decoration.gradient, isA<LinearGradient>());
+    expect(decoration.border, isNull);
+    expect(
+      find.byKey(const ValueKey('remote-collection-app-bar-blur')),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<Scaffold>(
+            find.byKey(const ValueKey('remote-collection-detail')),
+          )
+          .extendBodyBehindAppBar,
+      isTrue,
+    );
 
-    await tester.drag(find.byType(CustomScrollView), const Offset(0, -700));
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
     await tester.pumpAndSettle();
 
     expect(
       tester.state<ScrollableState>(find.byType(Scrollable)).position.pixels,
       greaterThan(0),
     );
-    final scrolledMaterial = appBarMaterial();
-    expect(scrolledMaterial.color, colors.surfaceContainer);
-    expect(scrolledMaterial.elevation, 3);
     expect(tester.getRect(titleFinder), initialTitleRect);
+    expect(
+      tester
+          .getRect(find.byKey(const ValueKey('remote-collection-header')))
+          .top,
+      lessThan(appBarRect.bottom),
+    );
     expect(find.text('Album de contrato'), findsWidgets);
     expect(
       find.byKey(const ValueKey('remote-collection-back')),
@@ -401,10 +431,44 @@ void main() {
     tester.state<ScrollableState>(find.byType(Scrollable)).position.jumpTo(0);
     await tester.pumpAndSettle();
 
-    final restoredMaterial = appBarMaterial();
-    expect(restoredMaterial.color, colors.surface);
-    expect(restoredMaterial.elevation, 0);
     expect(tester.getRect(titleFinder), initialTitleRect);
+  });
+
+  testWidgets('transparent detail surface blurs only its app bar bounds', (
+    tester,
+  ) async {
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => _tracks,
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: tracksProvider,
+        surfaceBackgroundMode: SurfaceBackgroundMode.transparent,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final blurFinder = find.byKey(
+      const ValueKey('remote-collection-app-bar-blur'),
+    );
+    final surfaceFinder = find.byKey(
+      const ValueKey('remote-collection-app-bar-surface'),
+    );
+    expect(blurFinder, findsOneWidget);
+    expect(
+      find.ancestor(of: blurFinder, matching: find.byType(ClipRect)),
+      findsOneWidget,
+    );
+    final decoration =
+        tester.widget<DecoratedBox>(surfaceFinder).decoration as BoxDecoration;
+    expect(decoration.color!.a, lessThan(1));
+    expect(decoration.gradient, isA<LinearGradient>());
+    expect(decoration.border, isNull);
+    expect(tester.getRect(blurFinder), tester.getRect(surfaceFinder));
+    expect(tester.getRect(blurFinder).height, closeTo(kToolbarHeight, 0.01));
   });
 
   testWidgets(
@@ -573,6 +637,7 @@ Widget _detailApp({
   List<String> metadata = const ['Album', '2026'],
   String? artworkSource,
   bool disableAnimations = false,
+  SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
 }) {
   return ProviderScope(
     overrides: [
@@ -582,6 +647,9 @@ Widget _detailApp({
       ),
     ],
     child: MaterialApp(
+      theme: ThemeData(
+        extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
+      ),
       builder: (context, child) {
         if (!disableAnimations) return child!;
         return MediaQuery(

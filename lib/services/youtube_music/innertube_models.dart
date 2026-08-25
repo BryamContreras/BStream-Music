@@ -5,6 +5,7 @@ class InnerTubeSong {
     required List<String> artists,
     List<String?>? artistBrowseIds,
     this.album,
+    this.albumBrowseId,
     this.duration,
     this.thumbnailUrl,
   }) : artists = List.unmodifiable(artists),
@@ -21,6 +22,7 @@ class InnerTubeSong {
   /// therefore remain source-compatible.
   final List<String?> artistBrowseIds;
   final String? album;
+  final String? albumBrowseId;
   final Duration? duration;
   final String? thumbnailUrl;
 
@@ -38,6 +40,7 @@ class InnerTubeSong {
             _listsEqual(artists, other.artists) &&
             _listsEqual(artistBrowseIds, other.artistBrowseIds) &&
             album == other.album &&
+            albumBrowseId == other.albumBrowseId &&
             duration == other.duration &&
             thumbnailUrl == other.thumbnailUrl;
   }
@@ -49,6 +52,7 @@ class InnerTubeSong {
     Object.hashAll(artists),
     Object.hashAll(artistBrowseIds),
     album,
+    albumBrowseId,
     duration,
     thumbnailUrl,
   );
@@ -143,6 +147,59 @@ class InnerTubeArtist {
   int get hashCode => Object.hash(browseId, name, thumbnailUrl);
 }
 
+/// Structured content exposed by a YouTube Music artist browse page.
+class InnerTubeArtistProfile {
+  InnerTubeArtistProfile({
+    required this.artist,
+    required List<InnerTubeSong> popularSongs,
+    required List<InnerTubeAlbum> albums,
+    required List<InnerTubeAlbum> singles,
+    List<InnerTubeArtist> relatedArtists = const <InnerTubeArtist>[],
+    this.description,
+    this.subscriberCount,
+    this.monthlyListenerCount,
+    this.channelId,
+    this.playPlaylistId,
+    this.radioPlaylistId,
+    this.radioSeedVideoId,
+    this.isSubscribed,
+  }) : popularSongs = List<InnerTubeSong>.unmodifiable(popularSongs),
+       albums = List<InnerTubeAlbum>.unmodifiable(albums),
+       singles = List<InnerTubeAlbum>.unmodifiable(singles),
+       relatedArtists = List<InnerTubeArtist>.unmodifiable(relatedArtists);
+
+  final InnerTubeArtist artist;
+  final String? description;
+
+  /// Localized subscriber count exposed by YouTube Music's artist header.
+  ///
+  /// When available, the parser prefers the long form that includes its own
+  /// label (for example, `41.5 M de suscriptores`) over an ambiguous compact
+  /// number such as `41.5 M`.
+  final String? subscriberCount;
+
+  /// Localized monthly audience exposed by YouTube Music for this artist.
+  ///
+  /// This is absent for artists whose browse response does not publish the
+  /// metric. It is distinct from subscribers and is not a lifetime view count.
+  final String? monthlyListenerCount;
+
+  /// Concrete YouTube channel identifier used by subscription mutations.
+  final String? channelId;
+
+  /// Playlist advertised by the artist header's primary Play action.
+  final String? playPlaylistId;
+
+  /// Radio/automix playlist advertised by the artist page, when present.
+  final String? radioPlaylistId;
+  final String? radioSeedVideoId;
+  final bool? isSubscribed;
+  final List<InnerTubeSong> popularSongs;
+  final List<InnerTubeAlbum> albums;
+  final List<InnerTubeAlbum> singles;
+  final List<InnerTubeArtist> relatedArtists;
+}
+
 class InnerTubeNextPage {
   InnerTubeNextPage({
     required List<InnerTubeSong> songs,
@@ -220,6 +277,21 @@ final class InnerTubeHomeSongItem extends InnerTubeHomeItem {
   int get hashCode => song.hashCode;
 }
 
+final class InnerTubeHomeArtistItem extends InnerTubeHomeItem {
+  const InnerTubeHomeArtistItem(this.artist);
+
+  final InnerTubeArtist artist;
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is InnerTubeHomeArtistItem && artist == other.artist;
+  }
+
+  @override
+  int get hashCode => artist.hashCode;
+}
+
 enum InnerTubeHomeCollectionKind { mix, playlist }
 
 final class InnerTubeHomeCollection extends InnerTubeHomeItem {
@@ -285,6 +357,10 @@ class InnerTubeHomeSection {
 
   List<InnerTubeSong> get songs => List.unmodifiable(
     items.whereType<InnerTubeHomeSongItem>().map((item) => item.song),
+  );
+
+  List<InnerTubeArtist> get artists => List.unmodifiable(
+    items.whereType<InnerTubeHomeArtistItem>().map((item) => item.artist),
   );
 
   List<InnerTubeHomeCollection> get collections =>

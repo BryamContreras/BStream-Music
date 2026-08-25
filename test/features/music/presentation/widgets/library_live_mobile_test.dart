@@ -4,6 +4,7 @@ import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,62 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'downloaded rows prefer sharp catalog art with offline fallback',
+    (tester) async {
+      final track = LocalTrack(
+        id: 'sharp-library-artwork',
+        title: 'Bonsai',
+        artist: 'BStream Artist',
+        filePath: r'C:\Music\bonsai.m4a',
+        thumbnailPath: r'C:\Music\soft-bonsai.jpg',
+        thumbnailUrl: 'https://i.ytimg.com/vi/bonsai00001/hqdefault.jpg',
+        catalogThumbnailUrl:
+            'https://lh3.googleusercontent.com/bonsai=w120-h120-l90-rj',
+        addedAt: DateTime.utc(2026),
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            libraryTracksProvider.overrideWith((ref) async => [track]),
+            playlistsControllerProvider.overrideWith(
+              _EmptyPlaylistsController.new,
+            ),
+            catalogPlaylistsProvider.overrideWith(
+              (ref) async => const <CatalogPlaylist>[],
+            ),
+            tiktokLiveControllerProvider.overrideWith(
+              _IdleTikTokLiveController.new,
+            ),
+            playerControllerProvider.overrideWith(_IdlePlayerController.new),
+          ],
+          child: MaterialApp(
+            home: Scaffold(body: LibraryPanel(onOpenPlayer: () {})),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('library-downloads-entry')));
+      await tester.pumpAndSettle();
+
+      final artworkSurface = find.byKey(
+        const ValueKey('library-track-artwork-sharp-library-artwork'),
+      );
+      final image = tester.widget<ProportionalArtwork>(
+        find.descendant(
+          of: artworkSurface,
+          matching: find.byType(ProportionalArtwork),
+        ),
+      );
+      expect(
+        image.source,
+        'https://lh3.googleusercontent.com/bonsai=w1280-h1280-l90-rj',
+      );
+      expect(image.fallbackSource, track.thumbnailPath);
+    },
+  );
+
   for (final layout in <String, Size>{
     'narrow Android': const Size(320, 568),
     'wide desktop': const Size(1100, 700),

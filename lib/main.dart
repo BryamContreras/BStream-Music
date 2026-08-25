@@ -57,11 +57,58 @@ AppStartupCoordinator launchBStreamMusicApp({
   // The UI is intentionally mounted before optional Android integrations are
   // attempted. Transient failures retry in the background with a bounded
   // backoff, without trapping the user on a blank launch screen.
-  (runApplication ?? runApp)(const ProviderScope(child: BStreamMusicApp()));
+  (runApplication ?? runApp)(
+    const ProviderScope(
+      child: _LocalArtworkMaintenance(child: BStreamMusicApp()),
+    ),
+  );
   (scheduleStartup ?? _scheduleStartupAfterFirstFrame)(() {
     unawaited(startup.initialize());
   });
   return startup;
+}
+
+/// Runs non-blocking library maintenance only for the production app shell.
+/// Widget tests that mount [BStreamMusicApp] directly remain deterministic.
+class _LocalArtworkMaintenance extends ConsumerStatefulWidget {
+  const _LocalArtworkMaintenance({required this.child});
+
+  final Widget child;
+
+  @override
+  ConsumerState<_LocalArtworkMaintenance> createState() =>
+      _LocalArtworkMaintenanceState();
+}
+
+class _LocalArtworkMaintenanceState
+    extends ConsumerState<_LocalArtworkMaintenance> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_repairStoredArtwork());
+      }
+    });
+  }
+
+  Future<void> _repairStoredArtwork() async {
+    try {
+      // Android may first rewrite managed-media paths during reconciliation.
+      // Repair only after those paths are stable.
+      await ref.read(localLibraryReconciliationProvider.future);
+      final tracks = await ref.read(libraryRepositoryProvider).getLocalTracks();
+      await ref
+          .read(localTrackDownloadHelperProvider)
+          .repairStoredArtwork(tracks);
+    } catch (error, stackTrace) {
+      debugPrint('Stored artwork repair failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class BStreamMusicApp extends ConsumerWidget {
@@ -73,10 +120,22 @@ class BStreamMusicApp extends ConsumerWidget {
     // Keep the per-track lyrics offset synchronized even while its route is
     // closed, without rebuilding the app when the offset itself changes.
     ref.watch(lyricsOffsetControllerProvider.select((_) => null));
-    final settings = ref.watch(settingsControllerProvider).value;
-    final language = settings?.language ?? AppLanguage.spanish;
-    final accent = settings?.accent ?? AppAccent.white;
-    final themeMode = settings?.themeMode.materialMode ?? ThemeMode.system;
+    final appearance = ref.watch(
+      settingsControllerProvider.select((settings) {
+        final value = settings.value;
+        return (
+          language: value?.language ?? AppLanguage.spanish,
+          accent: value?.accent ?? AppAccent.white,
+          surfaceBackgroundMode:
+              value?.surfaceBackgroundMode ?? SurfaceBackgroundMode.accent,
+          themeMode: value?.themeMode.materialMode ?? ThemeMode.system,
+        );
+      }),
+    );
+    final language = appearance.language;
+    final accent = appearance.accent;
+    final surfaceBackgroundMode = appearance.surfaceBackgroundMode;
+    final themeMode = appearance.themeMode;
     final isDesktop = AppPlatform.isDesktop;
     final iconButtonSize = isDesktop ? 52.0 : 48.0;
     final textButtonHeight = isDesktop ? 52.0 : 48.0;
@@ -94,12 +153,14 @@ class BStreamMusicApp extends ConsumerWidget {
       themeMode: themeMode,
       theme: _buildLightTheme(
         accent: accent,
+        surfaceBackgroundMode: surfaceBackgroundMode,
         isDesktop: isDesktop,
         iconButtonSize: iconButtonSize,
         textButtonHeight: textButtonHeight,
       ),
       darkTheme: _buildDarkTheme(
         accent: accent,
+        surfaceBackgroundMode: surfaceBackgroundMode,
         isDesktop: isDesktop,
         iconButtonSize: iconButtonSize,
         textButtonHeight: textButtonHeight,
@@ -113,6 +174,7 @@ class BStreamMusicApp extends ConsumerWidget {
 
 ThemeData _buildDarkTheme({
   required AppAccent accent,
+  required SurfaceBackgroundMode surfaceBackgroundMode,
   required bool isDesktop,
   required double iconButtonSize,
   required double textButtonHeight,
@@ -144,7 +206,10 @@ ThemeData _buildDarkTheme({
     fontFamilyFallback: AppPlatform.isLinux ? const [] : null,
     brightness: Brightness.dark,
     colorScheme: scheme,
-    extensions: [AppAccentTheme.fromAccent(accent)],
+    extensions: [
+      AppAccentTheme.fromAccent(accent),
+      AppSurfaceTheme(backgroundMode: surfaceBackgroundMode),
+    ],
     scaffoldBackgroundColor: const Color(0xFF030504),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: const Color(0xFF050705),
@@ -172,17 +237,35 @@ ThemeData _buildDarkTheme({
     ),
     segmentedButtonTheme: _segmentedButtonTheme(accent, scheme),
     dialogTheme: DialogThemeData(
-      backgroundColor: AppColors.dialogSurfaceForTheme(accent, scheme),
+      backgroundColor: AppColors.dialogSurfaceForTheme(
+        accent,
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       surfaceTintColor: Colors.transparent,
+      barrierColor: AppColors.dialogBarrierForTheme(
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       shadowColor: const Color(0xB8000000),
       elevation: 18,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: AppColors.dialogBorderForTheme(accent, scheme)),
+        side: BorderSide(
+          color: AppColors.dialogBorderForTheme(
+            accent,
+            scheme,
+            backgroundMode: surfaceBackgroundMode,
+          ),
+        ),
       ),
     ),
     popupMenuTheme: PopupMenuThemeData(
-      color: AppColors.menuBackground,
+      color: AppColors.menuBackgroundForTheme(
+        accent,
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       surfaceTintColor: Colors.transparent,
       shadowColor: const Color(0xB3000000),
       elevation: 14,
@@ -190,7 +273,13 @@ ThemeData _buildDarkTheme({
       iconColor: menuIcon,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
-        side: const BorderSide(color: AppColors.menuBorder),
+        side: BorderSide(
+          color: AppColors.menuBorderForTheme(
+            accent,
+            scheme,
+            backgroundMode: surfaceBackgroundMode,
+          ),
+        ),
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(
@@ -209,6 +298,7 @@ ThemeData _buildDarkTheme({
 
 ThemeData _buildLightTheme({
   required AppAccent accent,
+  required SurfaceBackgroundMode surfaceBackgroundMode,
   required bool isDesktop,
   required double iconButtonSize,
   required double textButtonHeight,
@@ -238,7 +328,10 @@ ThemeData _buildLightTheme({
     fontFamilyFallback: AppPlatform.isLinux ? const [] : null,
     brightness: Brightness.light,
     colorScheme: scheme,
-    extensions: [AppAccentTheme.fromAccent(accent)],
+    extensions: [
+      AppAccentTheme.fromAccent(accent),
+      AppSurfaceTheme(backgroundMode: surfaceBackgroundMode),
+    ],
     scaffoldBackgroundColor: const Color(0xFFF5F8F6),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: Colors.white,
@@ -266,17 +359,35 @@ ThemeData _buildLightTheme({
     ),
     segmentedButtonTheme: _segmentedButtonTheme(accent, scheme),
     dialogTheme: DialogThemeData(
-      backgroundColor: AppColors.dialogSurfaceForTheme(accent, scheme),
+      backgroundColor: AppColors.dialogSurfaceForTheme(
+        accent,
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       surfaceTintColor: Colors.transparent,
+      barrierColor: AppColors.dialogBarrierForTheme(
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       shadowColor: const Color(0x40000000),
       elevation: 8,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: AppColors.dialogBorderForTheme(accent, scheme)),
+        side: BorderSide(
+          color: AppColors.dialogBorderForTheme(
+            accent,
+            scheme,
+            backgroundMode: surfaceBackgroundMode,
+          ),
+        ),
       ),
     ),
     popupMenuTheme: PopupMenuThemeData(
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.97),
+      color: AppColors.menuBackgroundForTheme(
+        accent,
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       surfaceTintColor: Colors.transparent,
       shadowColor: const Color(0x40000000),
       elevation: 8,
@@ -284,7 +395,13 @@ ThemeData _buildLightTheme({
       iconColor: menuIcon,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
-        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.9)),
+        side: BorderSide(
+          color: AppColors.menuBorderForTheme(
+            accent,
+            scheme,
+            backgroundMode: surfaceBackgroundMode,
+          ),
+        ),
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(

@@ -2,18 +2,207 @@ import 'dart:ui' as ui;
 
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/marquee_text.dart';
+import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
+import 'package:bstream_music/features/music/presentation/widgets/track_change_transition.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('playback visual identity has a stable source fallback', () {
+    final first = playbackVisualIdentity(
+      sourceUrl: ' https://music.example/track-a ',
+      title: 'Titulo inicial',
+      artist: 'Artista inicial',
+    );
+    final enriched = playbackVisualIdentity(
+      sourceUrl: 'https://music.example/track-a',
+      title: 'Titulo corregido',
+      artist: 'Artista corregido',
+      thumbnailUrl: 'https://images.example/cover.jpg',
+    );
+    final identified = playbackVisualIdentity(
+      trackId: 'track-a',
+      sourceUrl: 'https://music.example/track-a',
+    );
+
+    expect(first, enriched);
+    expect(identified, 'track:track-a');
+    expect(identified, isNot(first));
+  });
+
+  testWidgets('mini-player uses sharp catalog art for a downloaded track', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const snapshot = PlayerSnapshot(
+      status: PlayerStatus.playing,
+      title: 'Tu falta de querer',
+      artist: 'Mon Laferte',
+      trackId: 'downloaded-mini-track',
+      sourceUrl: 'https://www.youtube.com/watch?v=download001',
+      thumbnailUrl: '/music/soft-saved-cover.jpg',
+    );
+    final localTrack = LocalTrack(
+      id: snapshot.trackId!,
+      title: snapshot.title!,
+      artist: snapshot.artist!,
+      filePath: '/music/song.m4a',
+      thumbnailPath: snapshot.thumbnailUrl,
+      catalogThumbnailUrl:
+          'https://lh3.googleusercontent.com/mini-cover=w120-h120-l90-rj',
+      sourceUrl: snapshot.sourceUrl,
+      addedAt: DateTime.utc(2026),
+    );
+
+    await tester.pumpWidget(
+      _miniPlayerHarness(
+        playerController: _TestPlayerController(snapshot: snapshot),
+        localTracks: [localTrack],
+      ),
+    );
+    await tester.pump();
+
+    final artwork = find.byKey(const ValueKey('mini-player-artwork'));
+    final image = tester.widget<ProportionalArtwork>(
+      find.descendant(of: artwork, matching: find.byType(ProportionalArtwork)),
+    );
+    expect(
+      image.source,
+      'https://lh3.googleusercontent.com/mini-cover=w1280-h1280-l90-rj',
+    );
+    expect(image.fallbackSource, localTrack.thumbnailPath);
+  });
+
+  testWidgets(
+    'mini-player cross-fades artwork and metadata when track changes',
+    (tester) async {
+      _configureView(tester, const Size(360, 800));
+      const first = PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: 'Primera cancion',
+        artist: 'Primer artista',
+        trackId: 'mini-transition-first',
+      );
+      const second = PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: 'Segunda cancion',
+        artist: 'Segundo artista',
+        trackId: 'mini-transition-second',
+      );
+      final controller = _TestPlayerController(snapshot: first);
+
+      await tester.pumpWidget(_miniPlayerHarness(playerController: controller));
+      await tester.pump();
+      await tester.pump();
+
+      final transition = find.byKey(
+        const ValueKey('mini-player-track-transition'),
+      );
+      final switcher = tester.widget<AnimatedSwitcher>(transition);
+      expect(switcher.duration, const Duration(milliseconds: 420));
+      expect(find.text(first.title!), findsOneWidget);
+
+      controller.emit(second);
+      await tester.pump();
+
+      expect(find.text(first.title!), findsOneWidget);
+      expect(find.text(second.title!), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('mini-player-artwork')),
+        findsNWidgets(2),
+      );
+
+      await tester.pump(const Duration(milliseconds: 430));
+      expect(find.text(first.title!), findsNothing);
+      expect(find.text(second.title!), findsOneWidget);
+      expect(find.byKey(const ValueKey('mini-player-artwork')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('mini-player track transition honors reduced motion', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const first = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Primera reducida',
+      trackId: 'mini-reduced-first',
+    );
+    const second = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Segunda reducida',
+      trackId: 'mini-reduced-second',
+    );
+    final controller = _TestPlayerController(snapshot: first);
+
+    await tester.pumpWidget(
+      _miniPlayerHarness(playerController: controller, disableAnimations: true),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final switcher = tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('mini-player-track-transition')),
+    );
+    expect(switcher.duration, Duration.zero);
+    expect(switcher.reverseDuration, Duration.zero);
+
+    controller.emit(second);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text(first.title!), findsNothing);
+    expect(find.text(second.title!), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mini-player gently scrolls a title only when it overflows', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(320, 640));
+    const snapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title:
+          'Este es un título de canción deliberadamente largo para el mini reproductor',
+      artist: 'Artista',
+      trackId: 'mini-long-title',
+    );
+
+    await tester.pumpWidget(
+      _miniPlayerHarness(
+        playerController: _TestPlayerController(snapshot: snapshot),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final title = find.byKey(const ValueKey('mini-player-track-title-marquee'));
+    expect(title, findsOneWidget);
+    expect(
+      tester.widget<MarqueeText>(title).travel,
+      const Duration(milliseconds: 6200),
+    );
+    expect(
+      find.descendant(
+        of: title,
+        matching: find.byKey(const ValueKey('marquee-text-animation')),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('mini-player blur decodes a bounded background image', (
     tester,
   ) async {
+    _configureView(tester, const Size(1290, 2400), devicePixelRatio: 3);
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -49,7 +238,225 @@ void main() {
     expect(backgroundImage, findsOneWidget);
     final image = tester.widget<Image>(backgroundImage);
     final provider = image.image as ResizeImage;
-    expect(provider.width, 320);
+    expect(provider.width, 1280);
+    expect(image.filterQuality, FilterQuality.high);
+    final container = tester.widget<Container>(
+      find.byKey(const ValueKey('mini-player-container')),
+    );
+    expect(container.clipBehavior, Clip.antiAliasWithSaveLayer);
+    final artworkClip = tester.widget<ClipRRect>(
+      find.byKey(const ValueKey('mini-player-artwork-rounded-rect')),
+    );
+    expect(artworkClip.clipBehavior, Clip.antiAliasWithSaveLayer);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('mini-player-progress'))).height,
+      2,
+    );
+  });
+
+  testWidgets('accent background avoids decoding a second artwork image', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 200));
+    await tester.pumpWidget(
+      _miniPlayerHarness(backgroundMode: MiniPlayerBackgroundMode.accent),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('mini-player-accent-background')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-artwork-background')),
+      findsNothing,
+    );
+    expect(find.byType(ImageFiltered), findsNothing);
+    expect(
+      find.byType(SourceImage),
+      findsOneWidget,
+      reason: 'Only the visible cover should be decoded.',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('transparent background uses glass blur and a subtle tint', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 200));
+    await tester.pumpWidget(
+      _miniPlayerHarness(
+        mode: MiniPlayerMode.capsule,
+        backgroundMode: MiniPlayerBackgroundMode.transparent,
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('mini-player-glass-blur')),
+      findsOneWidget,
+    );
+    final glass = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('mini-player-glass-background')),
+    );
+    final colors = (glass.decoration as BoxDecoration).gradient!.colors;
+    expect(colors.every((color) => color.a > 0.4 && color.a < 0.55), isTrue);
+    expect(colors[1].a, greaterThan(colors.first.a));
+    expect(colors[1].a, greaterThan(colors.last.a));
+    final container = tester.widget<Container>(
+      find.byKey(const ValueKey('mini-player-container')),
+    );
+    expect(container.clipBehavior, Clip.antiAlias);
+    expect(
+      find.byKey(const ValueKey('mini-player-artwork-background')),
+      findsNothing,
+    );
+    expect(find.byType(ImageFiltered), findsNothing);
+    expect(
+      find.byType(SourceImage),
+      findsOneWidget,
+      reason: 'Glass must not decode a hidden background cover.',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('capsule mini-player floats with a complete rounded outline', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 200));
+    await tester.pumpWidget(_miniPlayerHarness(mode: MiniPlayerMode.capsule));
+    await tester.pump();
+
+    final containerFinder = find.byKey(const ValueKey('mini-player-container'));
+    final container = tester.widget<Container>(containerFinder);
+    final decoration = container.decoration! as BoxDecoration;
+    final foregroundDecoration =
+        container.foregroundDecoration! as BoxDecoration;
+    final surface = find.byKey(const ValueKey('mini-player-surface'));
+
+    expect(container.margin, const EdgeInsets.fromLTRB(8, 5, 8, 10));
+    expect(container.clipBehavior, Clip.antiAliasWithSaveLayer);
+    expect(decoration.borderRadius, BorderRadius.circular(28));
+    expect(decoration.boxShadow, isNotEmpty);
+    expect(foregroundDecoration.borderRadius, BorderRadius.circular(28));
+    final outline = foregroundDecoration.border! as Border;
+    expect(outline.top.width, 0.5);
+    expect(outline.top.strokeAlign, BorderSide.strokeAlignInside);
+    expect(
+      find.byKey(const ValueKey('mini-player-artwork-circle')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-artwork-rounded-rect')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-accent-top-border')),
+      findsNothing,
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('mini-player-progress'))).height,
+      2,
+    );
+    final progressRect = tester.getRect(
+      find.byKey(const ValueKey('mini-player-progress')),
+    );
+    final surfaceRect = tester.getRect(surface);
+    expect(progressRect.left - surfaceRect.left, closeTo(18, 0.1));
+    expect(surfaceRect.right - progressRect.right, closeTo(18, 0.1));
+    final artworkClip = tester.widget<ClipOval>(
+      find.byKey(const ValueKey('mini-player-artwork-circle')),
+    );
+    expect(artworkClip.clipBehavior, Clip.antiAliasWithSaveLayer);
+    final artwork = tester.widget<ProportionalArtwork>(
+      find.descendant(
+        of: find.byKey(const ValueKey('mini-player-artwork')),
+        matching: find.byType(ProportionalArtwork),
+      ),
+    );
+    expect(artwork.filterQuality, FilterQuality.high);
+    expect(tester.getSize(surface).height, 61);
+    expect(
+      miniPlayerHeightFor(
+        tester.element(surface),
+        mode: MiniPlayerMode.standard,
+      ),
+      61,
+    );
+    expect(
+      miniPlayerHeightFor(
+        tester.element(surface),
+        mode: MiniPlayerMode.capsule,
+      ),
+      76,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop capsule keeps its controls inside the floating card', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(960, 260));
+    await tester.pumpWidget(
+      _miniPlayerHarness(
+        platform: TargetPlatform.windows,
+        mode: MiniPlayerMode.capsule,
+        constrainedHeight: 114,
+      ),
+    );
+    await tester.pump();
+
+    final container = tester.widget<Container>(
+      find.byKey(const ValueKey('mini-player-container')),
+    );
+    final decoration = container.decoration! as BoxDecoration;
+    final surface = find.byKey(const ValueKey('mini-player-surface'));
+
+    expect(container.margin, const EdgeInsets.fromLTRB(14, 8, 14, 12));
+    expect(decoration.borderRadius, BorderRadius.circular(40));
+    expect(tester.getSize(surface).height, 94);
+    expect(
+      miniPlayerHeightFor(
+        tester.element(surface),
+        mode: MiniPlayerMode.capsule,
+      ),
+      114,
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-artwork-circle')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-volume-control')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-progress-control')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('capsule keeps its softer radius at large text scale', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(320, 260), textScaleFactor: 3);
+    await tester.pumpWidget(
+      _miniPlayerHarness(mode: MiniPlayerMode.capsule, constrainedHeight: 146),
+    );
+    await tester.pump();
+
+    final container = tester.widget<Container>(
+      find.byKey(const ValueKey('mini-player-container')),
+    );
+    final decoration = container.decoration! as BoxDecoration;
+
+    expect(decoration.borderRadius, BorderRadius.circular(28));
+    expect(
+      find.byKey(const ValueKey('mini-player-artwork-circle')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   for (final size in const [Size(320, 640), Size(360, 800)]) {
@@ -87,13 +494,21 @@ void main() {
         expect(progressRect.left, closeTo(frameRect.left, 0.1));
         expect(progressRect.right, closeTo(frameRect.right, 0.1));
         expect(progressRect.bottom, closeTo(frameRect.bottom, 0.1));
-        expect(progressRect.height, 3);
+        expect(progressRect.height, 2);
         expect(progressRect.top, greaterThanOrEqualTo(playRect.bottom));
         expect(progressRect.top, greaterThanOrEqualTo(metadataRect.bottom));
         expect(frameRect.intersect(progressRect), progressRect);
         expect(tester.getSize(play), const Size.square(48));
         expect(previous, findsNothing);
         expect(next, findsNothing);
+        expect(
+          find.byKey(const ValueKey('mini-player-artwork-circle')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-artwork-rounded-rect')),
+          findsOneWidget,
+        );
         expect(playRect.right, lessThanOrEqualTo(frameRect.right));
         expect(metadataRect.right, lessThanOrEqualTo(playRect.left));
         expect(
@@ -123,16 +538,16 @@ void main() {
         expect(accentPaint.painter, isNotNull);
         final dynamic accentPainter = accentPaint.painter;
         expect(accentPainter.cornerRadius, 10);
-        expect(accentPainter.strokeWidth, 1);
+        expect(accentPainter.strokeWidth, 0.5);
         expect(
           accentPainter.color,
           AppColors.downloadAccentFor(
             tester.element(accentBorder),
-          ).withValues(alpha: 0.45),
+          ).withValues(alpha: 0.22),
         );
         final container = tester.widget<Container>(containerFinder);
         final decoration = container.decoration! as BoxDecoration;
-        expect(container.clipBehavior, Clip.antiAlias);
+        expect(container.clipBehavior, Clip.antiAliasWithSaveLayer);
         expect(
           decoration.borderRadius,
           const BorderRadius.vertical(top: Radius.circular(10)),
@@ -445,6 +860,7 @@ void main() {
             platform: TargetPlatform.windows,
             brightness: variant.brightness,
             accent: AppAccent.blue,
+            backgroundMode: MiniPlayerBackgroundMode.accent,
           ),
         );
         await tester.pump();
@@ -499,6 +915,7 @@ void main() {
         _miniPlayerHarness(
           platform: TargetPlatform.windows,
           brightness: Brightness.dark,
+          backgroundMode: MiniPlayerBackgroundMode.accent,
           playerController: _TestPlayerController(withTrack: false),
         ),
       );
@@ -579,12 +996,18 @@ Widget _miniPlayerHarness({
   TargetPlatform platform = TargetPlatform.android,
   Brightness brightness = Brightness.light,
   AppAccent accent = AppAccent.blue,
+  MiniPlayerMode mode = MiniPlayerMode.standard,
+  MiniPlayerBackgroundMode backgroundMode = MiniPlayerBackgroundMode.artwork,
+  double? constrainedHeight,
   _TestPlayerController? playerController,
+  List<LocalTrack> localTracks = const <LocalTrack>[],
+  bool disableAnimations = false,
 }) {
   final controller = playerController ?? _TestPlayerController();
   return ProviderScope(
     overrides: [
       playerControllerProvider.overrideWith(() => controller),
+      libraryTracksProvider.overrideWith((ref) async => localTracks),
       favoriteTrackIdsProvider.overrideWithValue(const <String>{}),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
@@ -596,8 +1019,20 @@ Widget _miniPlayerHarness({
         brightness: brightness,
         extensions: [AppAccentTheme(accent: accent)],
       ),
-      home: const Scaffold(
-        body: Align(alignment: Alignment.topCenter, child: MiniPlayer()),
+      builder: disableAnimations
+          ? (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            )
+          : null,
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            height: constrainedHeight,
+            child: MiniPlayer(mode: mode, backgroundMode: backgroundMode),
+          ),
+        ),
       ),
     ),
   );
@@ -607,10 +1042,11 @@ void _configureView(
   WidgetTester tester,
   Size size, {
   double textScaleFactor = 1,
+  double devicePixelRatio = 1,
 }) {
   tester.view
     ..physicalSize = size
-    ..devicePixelRatio = 1;
+    ..devicePixelRatio = devicePixelRatio;
   tester.platformDispatcher.textScaleFactorTestValue = textScaleFactor;
   addTearDown(() {
     tester.view
@@ -625,11 +1061,13 @@ class _TestPlayerController extends PlayerController {
     this.initialStatus = PlayerStatus.paused,
     this.withTrack = true,
     this.errorMessage,
+    this.snapshot,
   });
 
   final PlayerStatus initialStatus;
   final bool withTrack;
   final String? errorMessage;
+  final PlayerSnapshot? snapshot;
   Duration? lastSeek;
   double? lastVolume;
   int seekCalls = 0;
@@ -638,17 +1076,23 @@ class _TestPlayerController extends PlayerController {
   int nextCalls = 0;
 
   @override
-  Future<PlayerSnapshot> build() async => PlayerSnapshot(
-    status: initialStatus,
-    title: 'Canción de prueba',
-    artist: 'BStream Music',
-    trackId: withTrack ? 'mini-player-test-track' : null,
-    thumbnailUrl: withTrack
-        ? 'https://example.invalid/mini-player-artwork.jpg'
-        : null,
-    duration: Duration(minutes: 3),
-    errorMessage: errorMessage,
-  );
+  Future<PlayerSnapshot> build() async =>
+      snapshot ??
+      PlayerSnapshot(
+        status: initialStatus,
+        title: 'Canción de prueba',
+        artist: 'BStream Music',
+        trackId: withTrack ? 'mini-player-test-track' : null,
+        thumbnailUrl: withTrack
+            ? 'https://example.invalid/mini-player-artwork.jpg'
+            : null,
+        duration: const Duration(minutes: 3),
+        errorMessage: errorMessage,
+      );
+
+  void emit(PlayerSnapshot nextSnapshot) {
+    state = AsyncData(nextSnapshot);
+  }
 
   @override
   Future<void> seek(Duration position) async {

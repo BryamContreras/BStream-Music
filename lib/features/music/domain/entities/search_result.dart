@@ -1,6 +1,6 @@
 import 'track_info.dart';
 
-enum SearchCategory { songs, videos, albums }
+enum SearchCategory { songs, videos, albums, artists }
 
 enum SearchBackend { innerTube, ytDlp }
 
@@ -50,28 +50,57 @@ class SearchAlbum {
   );
 }
 
+class SearchArtist {
+  const SearchArtist({
+    required this.browseId,
+    required this.name,
+    this.thumbnailUrl,
+  });
+
+  final String browseId;
+  final String name;
+  final String? thumbnailUrl;
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is SearchArtist &&
+            browseId == other.browseId &&
+            name == other.name &&
+            thumbnailUrl == other.thumbnailUrl;
+  }
+
+  @override
+  int get hashCode => Object.hash(browseId, name, thumbnailUrl);
+}
+
 class SearchPage {
   SearchPage({
     required this.category,
     required this.backend,
     List<TrackInfo> tracks = const [],
     List<SearchAlbum> albums = const [],
+    List<SearchArtist> artists = const [],
     this.primaryError,
-  }) : assert(
-         category == SearchCategory.albums ? tracks.isEmpty : albums.isEmpty,
-         'Albums and playable tracks must not share a search page.',
-       ),
+  }) : assert(switch (category) {
+         SearchCategory.songs ||
+         SearchCategory.videos => albums.isEmpty && artists.isEmpty,
+         SearchCategory.albums => tracks.isEmpty && artists.isEmpty,
+         SearchCategory.artists => tracks.isEmpty && albums.isEmpty,
+       }, 'A search page can contain results only for its category.'),
        assert(
          backend != SearchBackend.ytDlp || category == SearchCategory.videos,
          'yt-dlp search results are always YouTube videos.',
        ),
        tracks = List.unmodifiable(tracks),
-       albums = List.unmodifiable(albums);
+       albums = List.unmodifiable(albums),
+       artists = List.unmodifiable(artists);
 
   final SearchCategory category;
   final SearchBackend backend;
   final List<TrackInfo> tracks;
   final List<SearchAlbum> albums;
+  final List<SearchArtist> artists;
 
   /// The InnerTube failure that caused this page to use yt-dlp.
   ///
@@ -80,7 +109,7 @@ class SearchPage {
   final Object? primaryError;
 
   bool get isFallback => backend == SearchBackend.ytDlp;
-  bool get isEmpty => tracks.isEmpty && albums.isEmpty;
+  bool get isEmpty => tracks.isEmpty && albums.isEmpty && artists.isEmpty;
 }
 
 bool _listsEqual<T>(List<T> left, List<T> right) {

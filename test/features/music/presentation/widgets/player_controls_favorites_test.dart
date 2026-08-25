@@ -5,8 +5,10 @@ import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/sharing/track_share_service.dart';
+import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +30,42 @@ void main() {
     duration: Duration(minutes: 3),
     volume: 0.72,
   );
+
+  testWidgets('downloaded playback replaces a soft file with catalog artwork', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+    final sharpLocalTrack = LocalTrack(
+      id: trackId,
+      title: 'Cancion de prueba',
+      artist: 'BStream Music',
+      filePath: '/tmp/player-controls-track.m4a',
+      thumbnailPath: '/tmp/soft-player-cover.jpg',
+      catalogThumbnailUrl:
+          'https://lh3.googleusercontent.com/player-cover=w120-h120-l90-rj',
+      addedAt: DateTime(2026),
+    );
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: sharpLocalTrack,
+        playlists: _TestPlaylistsController(),
+      ),
+    );
+    await tester.pump();
+
+    final artwork = find.byKey(const ValueKey('player-large-artwork'));
+    final image = tester.widget<ProportionalArtwork>(
+      find.descendant(of: artwork, matching: find.byType(ProportionalArtwork)),
+    );
+    expect(
+      image.source,
+      'https://lh3.googleusercontent.com/player-cover=w1280-h1280-l90-rj',
+    );
+    expect(image.fallbackSource, sharpLocalTrack.thumbnailPath);
+  });
 
   for (final size in const [Size(320, 720), Size(360, 800)]) {
     testWidgets(
@@ -560,6 +598,188 @@ void main() {
     },
   );
 
+  testWidgets('short desktop frames compact the shadow with the artwork', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(1280, 900));
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.windows,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    BoxShadow artworkShadow() {
+      final surface = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('player-artwork-surface')),
+      );
+      return (surface.decoration as BoxDecoration).boxShadow!.single;
+    }
+
+    final artwork = find.byKey(const ValueKey('player-large-artwork'));
+    final roomyArtworkWidth = tester.getSize(artwork).width;
+    final roomyShadow = artworkShadow();
+    expect(roomyShadow.blurRadius, 42);
+    expect(roomyShadow.spreadRadius, 6);
+    expect(roomyShadow.offset.dy, 18);
+
+    tester.view.physicalSize = const Size(960, 600);
+    await tester.pump();
+
+    final compactArtworkWidth = tester.getSize(artwork).width;
+    final compactShadow = artworkShadow();
+    expect(compactArtworkWidth, lessThan(roomyArtworkWidth));
+    expect(compactShadow.blurRadius, lessThan(roomyShadow.blurRadius));
+    expect(compactShadow.spreadRadius, lessThan(roomyShadow.spreadRadius));
+    expect(compactShadow.offset.dy, lessThan(roomyShadow.offset.dy));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'full player transitions metadata and artwork without a luminance dip',
+    (tester) async {
+      _configureView(tester, const Size(960, 600));
+      const first = PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: 'Primera transicion',
+        artist: 'Primer artista',
+        trackId: 'player-transition-first',
+        duration: Duration(minutes: 3),
+      );
+      const second = PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: 'Segunda transicion',
+        artist: 'Segundo artista',
+        trackId: 'player-transition-second',
+        duration: Duration(minutes: 4),
+      );
+      final controller = _TestPlayerController(first);
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.windows,
+          snapshot: first,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          playerController: controller,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      final artworkTransition = tester.widget<AnimatedSwitcher>(
+        find.byKey(const ValueKey('player-artwork-track-transition')),
+      );
+      final metadataTransition = tester.widget<AnimatedSwitcher>(
+        find.byKey(const ValueKey('player-metadata-track-transition')),
+      );
+      expect(artworkTransition.duration, const Duration(milliseconds: 420));
+      expect(metadataTransition.duration, const Duration(milliseconds: 420));
+
+      controller.emit(second);
+      await tester.pump();
+
+      final transitioningTitles = tester
+          .widgetList<MarqueeText>(
+            find.byKey(const ValueKey('player-track-title')),
+          )
+          .map((widget) => widget.text);
+      expect(transitioningTitles, containsAll([first.title, second.title]));
+      expect(
+        find.byKey(const ValueKey('player-artwork-surface')),
+        findsNWidgets(2),
+        reason: 'The track id must animate even when both covers are absent.',
+      );
+
+      await tester.pump(const Duration(milliseconds: 210));
+      final artworkOpacities = tester
+          .widgetList<Opacity>(
+            find.descendant(
+              of: find.byKey(const ValueKey('player-artwork-track-transition')),
+              matching: find.byType(Opacity),
+            ),
+          )
+          .map((widget) => widget.opacity)
+          .toList(growable: false);
+      expect(artworkOpacities, contains(1));
+      expect(
+        artworkOpacities.any((opacity) => opacity > 0 && opacity < 1),
+        isTrue,
+      );
+
+      await tester.pump(const Duration(milliseconds: 220));
+      final settledTitle = tester.widget<MarqueeText>(
+        find.byKey(const ValueKey('player-track-title')),
+      );
+      expect(settledTitle.text, second.title);
+      expect(
+        find.byKey(const ValueKey('player-artwork-surface')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('full player track transitions honor reduced motion', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(960, 600));
+    const first = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Primera sin movimiento',
+      trackId: 'player-reduced-first',
+    );
+    const second = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Segunda sin movimiento',
+      trackId: 'player-reduced-second',
+    );
+    final controller = _TestPlayerController(first);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.windows,
+        snapshot: first,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playerController: controller,
+        disableAnimations: true,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    for (final key in const [
+      'player-artwork-track-transition',
+      'player-metadata-track-transition',
+    ]) {
+      final switcher = tester.widget<AnimatedSwitcher>(
+        find.byKey(ValueKey(key)),
+      );
+      expect(switcher.duration, Duration.zero);
+      expect(switcher.reverseDuration, Duration.zero);
+    }
+
+    controller.emit(second);
+    await tester.pump();
+    await tester.pump();
+
+    final title = tester.widget<MarqueeText>(
+      find.byKey(const ValueKey('player-track-title')),
+    );
+    expect(title.text, second.title);
+    expect(
+      find.byKey(const ValueKey('player-artwork-surface')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('player errors keep normal artwork and use scroll as fallback', (
     tester,
   ) async {
@@ -869,11 +1089,12 @@ void main() {
     },
   );
 
-  testWidgets('external playback keeps the title share control disabled', (
+  testWidgets('external playback exposes transport but no library actions', (
     tester,
   ) async {
     _configureView(tester, const Size(360, 800));
     final shareService = _TestTrackShareService();
+    final artistService = _TestArtistService();
 
     await tester.pumpWidget(
       _playerHarness(
@@ -885,15 +1106,37 @@ void main() {
         localTrack: localTrack,
         playlists: _TestPlaylistsController(),
         shareService: shareService,
+        youtubeMusicSearch: artistService,
       ),
     );
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump();
 
-    final share = find.byKey(const ValueKey('player-share-control'));
-    expect(tester.widget<IconButton>(share).onPressed, isNull);
-    await tester.tap(share);
-    await tester.pump();
+    expect(find.byKey(const ValueKey('player-share-control')), findsNothing);
+    expect(find.byKey(const ValueKey('player-favorite-control')), findsNothing);
+    expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+    expect(
+      find.byKey(const ValueKey('player-menu-go-to-artist')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('player-menu-go-to-album')), findsNothing);
+
+    final headerArtist = tester.widget<InkWell>(
+      find.byKey(const ValueKey('player-header-artist-action')),
+    );
+    final trackArtist = tester.widget<InkWell>(
+      find.byKey(const ValueKey('player-track-artist-action')),
+    );
+    expect(headerArtist.onTap, isNull);
+    expect(trackArtist.onTap, isNull);
+    expect(artistService.profileCalls, 0);
+
+    expect(find.byKey(const ValueKey('player-lyrics-control')), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-volume-control')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('player-primary-control')),
+      findsOneWidget,
+    );
     expect(shareService.shareCalls, 0);
     expect(tester.takeException(), isNull);
   });
@@ -944,6 +1187,333 @@ void main() {
     await tester.pump();
 
     expect(find.text('No se pudo compartir la canción.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final entryPoint in <String>['artist-name', 'menu']) {
+    testWidgets('$entryPoint opens the first artist profile', (tester) async {
+      _configureView(tester, const Size(360, 800));
+      const remoteSnapshot = PlayerSnapshot(
+        status: PlayerStatus.paused,
+        title: 'Colaboración',
+        artist: 'Artista Primero, Artista Segundo',
+        trackId: 'popular0001',
+        sourceUrl: 'https://www.youtube.com/watch?v=popular0001',
+        duration: Duration(minutes: 3),
+        isRemote: true,
+      );
+      const canonicalTrack = TrackInfo(
+        id: 'popular0001',
+        title: 'Colaboración',
+        artist: 'Artista Primero, Artista Segundo',
+        artists: <String>['Artista Primero', 'Artista Segundo'],
+        artistBrowseIds: <String?>['UCartistFirst', 'UCartistSecond'],
+        url: 'https://www.youtube.com/watch?v=popular0001',
+      );
+      final artistService = _TestArtistService();
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: remoteSnapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          canonicalRemoteTrack: canonicalTrack,
+          youtubeMusicSearch: artistService,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      if (entryPoint == 'artist-name') {
+        final artistAction = tester.widget<InkWell>(
+          find.byKey(const ValueKey('player-track-artist-action')),
+        );
+        artistAction.onTap!();
+        artistAction.onTap!();
+      } else {
+        await tester.tap(find.byIcon(Icons.more_vert_rounded));
+        await tester.pumpAndSettle();
+        expect(find.text('Ir al artista'), findsOneWidget);
+        await tester.tap(find.text('Ir al artista'));
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('artist-profile-page')), findsOneWidget);
+      expect(find.text('Artista Primero'), findsOneWidget);
+      expect(artistService.lastBrowseId, 'UCartistFirst');
+      expect(artistService.profileCalls, 1);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('player menu opens the resolved YouTube Music album', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const remoteSnapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Canción del álbum',
+      artist: 'Artista del álbum',
+      album: 'Álbum correcto',
+      trackId: 'albumtrk001',
+      sourceUrl: 'https://www.youtube.com/watch?v=albumtrk001',
+      duration: Duration(minutes: 3),
+      isRemote: true,
+    );
+    const canonicalTrack = TrackInfo(
+      id: 'albumtrk001',
+      title: 'Canción del álbum',
+      artist: 'Artista del álbum',
+      artists: <String>['Artista del álbum'],
+      artistBrowseIds: <String?>['UCalbumArtist'],
+      album: 'Álbum correcto',
+      url: 'https://www.youtube.com/watch?v=albumtrk001',
+      metadataSource: TrackMetadataSource.youtubeMusic,
+    );
+    final albumService = _TestAlbumService();
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: remoteSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        canonicalRemoteTrack: canonicalTrack,
+        youtubeMusicSearch: albumService,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    expect(albumService.searchCalls, 0);
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('player-menu-go-to-album')),
+      findsOneWidget,
+    );
+    expect(find.text('Ir al álbum'), findsOneWidget);
+    await tester.tap(find.text('Ir al álbum'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('remote-collection-detail')),
+      findsOneWidget,
+    );
+    expect(find.text('Álbum correcto'), findsWidgets);
+    expect(albumService.lastAlbumBrowseId, 'MPREalbumCorrect');
+    expect(albumService.searchCalls, 1);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ir al álbum'));
+    await tester.pumpAndSettle();
+    expect(albumService.searchCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('player resolves a missing album name from the song catalog', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const remoteSnapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Cancion sin album',
+      artist: 'Artista del album',
+      trackId: 'songalbum01',
+      sourceUrl: 'https://www.youtube.com/watch?v=songalbum01',
+      duration: Duration(minutes: 3),
+      isRemote: true,
+    );
+    const canonicalTrack = TrackInfo(
+      id: 'songalbum01',
+      title: 'Cancion sin album',
+      artist: 'Artista del album',
+      artists: <String>['Artista del album'],
+      artistBrowseIds: <String?>['UCalbumArtist'],
+      url: 'https://www.youtube.com/watch?v=songalbum01',
+      metadataSource: TrackMetadataSource.youtubeMusic,
+    );
+    final albumService = _TestRelatedAlbumService(
+      nextSongs: <InnerTubeSong>[
+        InnerTubeSong(
+          videoId: 'different01',
+          title: 'Otro resultado',
+          artists: const <String>['Otro artista'],
+          album: 'Álbum incorrecto',
+          albumBrowseId: 'MPREalbumWrong',
+        ),
+        InnerTubeSong(
+          videoId: 'songalbum01',
+          title: 'Cancion sin album',
+          artists: const <String>['Artista del album'],
+          album: 'Álbum correcto',
+          albumBrowseId: 'MPREalbumCorrect',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: remoteSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        canonicalRemoteTrack: canonicalTrack,
+        youtubeMusicSearch: albumService,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    expect(albumService.nextCalls, 0);
+    expect(albumService.searchCalls, 0);
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('player-menu-go-to-album')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('player-menu-go-to-album')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.byKey(const ValueKey('remote-collection-detail')),
+      findsOneWidget,
+    );
+    expect(albumService.nextCalls, 1);
+    expect(albumService.searchCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('invalid album lookup reports unavailable without navigating', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const remoteSnapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Canción del álbum',
+      artist: 'Artista del álbum',
+      album: 'Álbum correcto',
+      trackId: 'albumtrk001',
+      sourceUrl: 'https://www.youtube.com/watch?v=albumtrk001',
+      duration: Duration(minutes: 3),
+      isRemote: true,
+    );
+    const canonicalTrack = TrackInfo(
+      id: 'albumtrk001',
+      title: 'Canción del álbum',
+      artist: 'Artista del álbum',
+      artists: <String>['Artista del álbum'],
+      album: 'Álbum correcto',
+      url: 'https://www.youtube.com/watch?v=albumtrk001',
+      metadataSource: TrackMetadataSource.youtubeMusic,
+    );
+    final albumService = _TestAlbumService(albumBrowseId: 'VLnot-an-album');
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: remoteSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        canonicalRemoteTrack: canonicalTrack,
+        youtubeMusicSearch: albumService,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump();
+
+    expect(albumService.searchCalls, 0);
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('player-menu-go-to-album')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('player-menu-go-to-album')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.byKey(const ValueKey('remote-collection-detail')),
+      findsNothing,
+    );
+    expect(
+      find.text('No se pudo encontrar el álbum de esta canción.'),
+      findsOneWidget,
+    );
+    expect(albumService.searchCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('album lookup failure does not block the normal player menu', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const remoteSnapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Canción del álbum',
+      artist: 'Artista del álbum',
+      album: 'Álbum correcto',
+      trackId: 'albumtrk001',
+      sourceUrl: 'https://www.youtube.com/watch?v=albumtrk001',
+      duration: Duration(minutes: 3),
+      isRemote: true,
+    );
+    const canonicalTrack = TrackInfo(
+      id: 'albumtrk001',
+      title: 'Canción del álbum',
+      artist: 'Artista del álbum',
+      artists: <String>['Artista del álbum'],
+      album: 'Álbum correcto',
+      url: 'https://www.youtube.com/watch?v=albumtrk001',
+      metadataSource: TrackMetadataSource.youtubeMusic,
+    );
+    final albumService = _TestAlbumService(throwOnSearch: true);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: remoteSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        canonicalRemoteTrack: canonicalTrack,
+        youtubeMusicSearch: albumService,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Añadir a playlist'), findsOneWidget);
+    expect(find.text('Añadir a favoritos'), findsOneWidget);
+    expect(find.text('Ir al álbum'), findsOneWidget);
+    expect(albumService.searchCalls, 0);
+    await tester.tap(find.byKey(const ValueKey('player-menu-go-to-album')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.text('No se pudo encontrar el álbum de esta canción.'),
+      findsOneWidget,
+    );
+    expect(albumService.searchCalls, 1);
+
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('player-menu-go-to-album')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(albumService.searchCalls, 2);
     expect(tester.takeException(), isNull);
   });
 
@@ -1099,6 +1669,8 @@ Widget _playerHarness({
   TrackShareService? shareService,
   TrackInfo? canonicalRemoteTrack,
   _TestPlayerController? playerController,
+  YouTubeMusicSearch? youtubeMusicSearch,
+  bool disableAnimations = false,
 }) {
   const accent = AppAccent.blue;
   final scheme = ColorScheme.fromSeed(
@@ -1125,6 +1697,8 @@ Widget _playerHarness({
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),
+      if (youtubeMusicSearch != null)
+        youtubeMusicSearchProvider.overrideWithValue(youtubeMusicSearch),
     ],
     child: MaterialApp(
       theme: ThemeData(
@@ -1132,9 +1706,159 @@ Widget _playerHarness({
         colorScheme: scheme,
         extensions: const [AppAccentTheme(accent: accent)],
       ),
+      builder: disableAnimations
+          ? (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            )
+          : null,
       home: const Scaffold(body: PlayerPanel(drawBackground: false)),
     ),
   );
+}
+
+class _TestArtistService
+    implements YouTubeMusicSearch, YouTubeMusicArtistProfileLookup {
+  String? lastBrowseId;
+  int profileCalls = 0;
+
+  @override
+  Future<List<InnerTubeSong>> searchSongs(
+    String query, {
+    int limit = 20,
+  }) async => const <InnerTubeSong>[];
+
+  @override
+  Future<InnerTubeArtistProfile> getArtistProfile(
+    String artistBrowseId, {
+    String? fallbackName,
+    String? fallbackThumbnailUrl,
+    int songLimit = 20,
+    int releaseLimit = 20,
+  }) async {
+    profileCalls += 1;
+    lastBrowseId = artistBrowseId;
+    return InnerTubeArtistProfile(
+      artist: InnerTubeArtist(
+        browseId: artistBrowseId,
+        name: fallbackName ?? 'Artista',
+        thumbnailUrl: fallbackThumbnailUrl,
+      ),
+      popularSongs: const <InnerTubeSong>[],
+      albums: const <InnerTubeAlbum>[],
+      singles: const <InnerTubeAlbum>[],
+    );
+  }
+}
+
+class _TestAlbumService
+    implements
+        YouTubeMusicSearch,
+        YouTubeMusicCatalogSearch,
+        YouTubeMusicAlbumLookup {
+  _TestAlbumService({
+    this.albumBrowseId = 'MPREalbumCorrect',
+    this.throwOnSearch = false,
+  });
+
+  final String albumBrowseId;
+  final bool throwOnSearch;
+  int searchCalls = 0;
+  int songSearchCalls = 0;
+  String? lastAlbumBrowseId;
+
+  @override
+  Future<List<InnerTubeSong>> searchSongs(
+    String query, {
+    int limit = 20,
+  }) async {
+    songSearchCalls += 1;
+    return const <InnerTubeSong>[];
+  }
+
+  @override
+  Future<List<InnerTubeSong>> searchVideos(
+    String query, {
+    int limit = 20,
+  }) async => const <InnerTubeSong>[];
+
+  @override
+  Future<List<InnerTubeAlbum>> searchAlbums(
+    String query, {
+    int limit = 20,
+  }) async {
+    searchCalls += 1;
+    if (throwOnSearch) {
+      throw StateError('album search failed');
+    }
+    return <InnerTubeAlbum>[
+      InnerTubeAlbum(
+        browseId: albumBrowseId,
+        title: 'Álbum correcto',
+        artists: const <String>['Artista del álbum'],
+        year: '2026',
+        type: 'Álbum',
+        thumbnailUrl: 'https://example.invalid/album.jpg',
+      ),
+    ];
+  }
+
+  @override
+  Future<List<InnerTubeSong>> getAlbumSongs(
+    String browseId, {
+    int limit = innerTubeDetailResultLimit,
+  }) async {
+    lastAlbumBrowseId = browseId;
+    return <InnerTubeSong>[
+      InnerTubeSong(
+        videoId: 'albumtrk001',
+        title: 'Canción del álbum',
+        artists: const <String>['Artista del álbum'],
+        album: 'Álbum correcto',
+      ),
+    ];
+  }
+}
+
+class _TestRelatedAlbumService extends _TestAlbumService
+    implements YouTubeMusicRelated {
+  _TestRelatedAlbumService({required this.nextSongs});
+
+  final List<InnerTubeSong> nextSongs;
+  int nextCalls = 0;
+
+  @override
+  Future<InnerTubeNextPage> getNext(
+    String videoId, {
+    bool radio = false,
+    int limit = innerTubeDetailResultLimit,
+  }) async {
+    nextCalls += 1;
+    return InnerTubeNextPage(songs: nextSongs.take(limit).toList());
+  }
+
+  @override
+  Future<InnerTubeNextPage> getNextContinuation(
+    String continuation, {
+    int limit = innerTubeDetailResultLimit,
+  }) async => InnerTubeNextPage(songs: const <InnerTubeSong>[]);
+
+  @override
+  Future<InnerTubeRelatedPage> getRelated(
+    String browseId, {
+    int limit = 20,
+  }) async => InnerTubeRelatedPage(
+    songs: const <InnerTubeSong>[],
+    albums: const <InnerTubeAlbum>[],
+    artists: const <InnerTubeArtist>[],
+    collections: const <InnerTubeHomeCollection>[],
+  );
+
+  @override
+  Future<InnerTubeRelatedPage> getRelatedContinuation(
+    String continuation, {
+    int limit = 20,
+  }) => getRelated(continuation, limit: limit);
 }
 
 class _TestTrackShareService implements TrackShareService {

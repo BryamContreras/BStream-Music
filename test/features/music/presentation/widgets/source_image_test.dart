@@ -1,8 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:bstream_music/core/utils/cached_artwork_image_provider.dart';
+import 'package:bstream_music/core/utils/image_source.dart';
+import 'package:bstream_music/features/music/presentation/widgets/device_audio_artwork_image_provider.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -105,6 +109,82 @@ void main() {
       final image = tester.widget<Image>(find.byType(Image));
       final provider = image.image as ResizeImage;
       expect(provider.width, 256);
+      expect(provider.imageProvider, isA<CachedArtworkImageProvider>());
     },
   );
+
+  testWidgets('SourceImage requests a card-sized Google rendition', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SourceImage(
+          source: 'https://yt3.googleusercontent.com/artist=w120-h120-l90-rj',
+          cacheWidth: 320,
+          fallback: Text('fallback'),
+        ),
+      ),
+    );
+
+    final image = tester.widget<Image>(find.byType(Image));
+    final resized = image.image as ResizeImage;
+    final cached = resized.imageProvider as CachedArtworkImageProvider;
+    expect(
+      cached.url,
+      'https://yt3.googleusercontent.com/artist=w384-h384-l90-rj',
+    );
+  });
+
+  testWidgets('SourceImage loads embedded device artwork only when rendered', (
+    tester,
+  ) async {
+    const channel = MethodChannel('bstream_music/local_audio');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return base64Decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+          );
+        });
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    final source = deviceAudioArtworkSourceForUri(
+      'content://media/external/audio/media/embedded-42',
+    );
+    expect(calls, isEmpty);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SourceImage(
+          source: source,
+          cacheWidth: 192,
+          fallback: const Text('fallback'),
+        ),
+      ),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump();
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'loadArtwork');
+    expect(calls.single.arguments, <String, Object>{
+      'audioUri': 'content://media/external/audio/media/embedded-42',
+      'targetWidth': 192,
+    });
+    final image = tester.widget<Image>(find.byType(Image));
+    expect(image.image, isA<DeviceAudioArtworkImageProvider>());
+    expect(find.text('fallback'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
