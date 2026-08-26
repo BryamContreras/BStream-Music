@@ -105,6 +105,133 @@ void main() {
     },
   );
 
+  test(
+    'a playlist created remotely accepts a later local addition without conflict',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'bstream-account-create-then-append-',
+      );
+      final database = _TestDatabase(p.join(sandbox.path, 'library.db'));
+      addTearDown(() async {
+        await database.close();
+        await sandbox.delete(recursive: true);
+      });
+      final now = DateTime.utc(2026, 8, 22, 12);
+      final repository = CatalogPlaylistRepositoryImpl(database);
+      await repository.createCatalogPlaylist(
+        id: 'local-new',
+        name: 'New playlist',
+        now: now,
+      );
+
+      var conflictId = 0;
+      final store = SqlitePlaylistSyncStore(
+        database,
+        conflictIdFactory: () => 'conflict-${conflictId++}',
+      );
+      final gateway = _AccountGateway()..includeRegularRemote = false;
+      var generatedItem = 0;
+      var mutation = 0;
+      final engine = PlaylistSyncEngine(
+        store: store,
+        gateway: gateway,
+        merger: PlaylistThreeWayMerger(
+          itemIdFactory: () => 'remote-entry-${generatedItem++}',
+        ),
+        mutationTokenFactory: () => 'mutation-${mutation++}',
+        clock: () => now,
+      );
+      final coordinator = PlaylistAccountSyncCoordinator(
+        playlists: repository,
+        store: store,
+        engine: engine,
+        catalogGateway: gateway,
+        localPlaylistIdFactory: () => 'unused-import',
+        clock: () => now,
+      );
+      const key = PlaylistSyncKey(
+        accountKey: 'account',
+        playlistId: 'local-new',
+      );
+
+      final created = await coordinator.syncAll('account');
+
+      expect(created.linkedLocalCount, 1);
+      expect(created.importedRemoteCount, 0);
+      expect(
+        created.results[key]?.disposition,
+        PlaylistSyncDisposition.synchronized,
+      );
+      expect(gateway.createCount, 1);
+      expect(gateway.applyCount, 0);
+      final createdWork = await store.loadWork(key);
+      expect(createdWork, isNotNull);
+      expect(createdWork!.binding.remotePlaylistId, 'created-one');
+      expect(createdWork.binding.localRevisionAtBase, 1);
+      expect(createdWork.base?.items, isEmpty);
+      expect(createdWork.intent, isNull);
+
+      await repository.appendCatalogEntry(
+        playlistId: key.playlistId,
+        entryId: 'local-entry',
+        track: CatalogTrack.youtube(
+          videoId: 'Local000001',
+          title: 'Added after remote creation',
+        ),
+        now: now.add(const Duration(seconds: 1)),
+      );
+      final pendingWork = await store.loadWork(key);
+      expect(pendingWork!.localRevision, 2);
+      expect(pendingWork.intent?.status, PlaylistSyncIntentStatus.pending);
+      expect(pendingWork.intent?.reason, 'local_append');
+
+      final updated = await coordinator.syncAll('account');
+
+      expect(updated.linkedLocalCount, 0);
+      expect(updated.importedRemoteCount, 0);
+      expect(
+        updated.results[key]?.disposition,
+        PlaylistSyncDisposition.synchronized,
+      );
+      expect(gateway.createCount, 1);
+      expect(gateway.applyCount, 1);
+      expect(gateway.deleteCount, 0);
+      expect(
+        gateway.snapshots['created-one']!.items.map((item) => item.videoId),
+        const <String>['Local000001'],
+      );
+
+      final synchronized = await repository.getCatalogPlaylist(key.playlistId);
+      final synchronizedWork = await store.loadWork(key);
+      expect(synchronized, isNotNull);
+      expect(synchronized!.entries, hasLength(1));
+      expect(synchronized.entries.single.id, 'local-entry');
+      expect(synchronized.entries.single.videoId, 'Local000001');
+      expect(synchronizedWork, isNotNull);
+      expect(synchronizedWork!.intent, isNull);
+      expect(synchronizedWork.base?.items.single.videoId, 'Local000001');
+      expect(synchronizedWork.local.items.single.videoId, 'Local000001');
+      expect(
+        synchronizedWork.binding.localRevisionAtBase,
+        synchronized.playlist.localRevision,
+      );
+      expect(
+        await store.listUnresolvedConflicts(accountKey: 'account'),
+        isEmpty,
+      );
+
+      final repeated = await coordinator.syncAll('account');
+
+      expect(
+        repeated.results[key]?.disposition,
+        PlaylistSyncDisposition.noChanges,
+      );
+      expect(gateway.createCount, 1);
+      expect(gateway.applyCount, 1);
+      expect(gateway.deleteCount, 0);
+    },
+  );
+
   test('binds YouTube Music Liked Music to local Favorites', () async {
     final sandbox = await Directory.systemTemp.createTemp(
       'bstream-account-sync-favorites-',

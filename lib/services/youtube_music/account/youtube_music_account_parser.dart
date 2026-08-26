@@ -179,9 +179,21 @@ class YouTubeMusicAccountParser {
     Object? root, {
     required String playlistId,
   }) {
+    // Current YouTube Music responses can wrap the visible detail header in
+    // musicEditablePlaylistDetailHeaderRenderer while keeping the edit
+    // endpoint on the wrapper (or on a sibling menu). Looking only inside the
+    // renderer that provides the title turns an owned playlist into a false
+    // read-only snapshot and blocks the next synchronization.
+    final isEditable =
+        _firstRenderer(root, 'musicEditablePlaylistDetailHeaderRenderer') !=
+            null ||
+        _containsAnyKey(root, const <String>{
+          'editPlaylistEndpoint',
+          'playlistEditEndpoint',
+        });
     for (final rendererName in const <String>[
-      'musicDetailHeaderRenderer',
       'musicEditablePlaylistDetailHeaderRenderer',
+      'musicDetailHeaderRenderer',
       'musicResponsiveHeaderRenderer',
     ]) {
       final renderer = _firstRenderer(root, rendererName);
@@ -200,12 +212,7 @@ class YouTubeMusicAccountParser {
         thumbnailUrl: _thumbnailUrl(renderer),
         itemCount: _itemCount(metadata),
         visibility: _visibility(metadata),
-        isEditable:
-            rendererName.contains('Editable') ||
-            _containsAnyKey(renderer, const <String>{
-              'editPlaylistEndpoint',
-              'playlistEditEndpoint',
-            }),
+        isEditable: isEditable,
       );
     }
     return null;

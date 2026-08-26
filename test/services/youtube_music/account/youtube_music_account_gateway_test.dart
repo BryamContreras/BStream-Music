@@ -211,6 +211,59 @@ void main() {
     );
 
     test(
+      'keeps an owned playlist editable when its edit marker wraps the header',
+      () async {
+        final page = _playlistPageFixture(
+          setVideoId: 'set-owned',
+          includeHeader: false,
+        );
+        page['header'] = <String, Object?>{
+          'musicEditablePlaylistDetailHeaderRenderer': <String, Object?>{
+            'header': <String, Object?>{
+              'musicResponsiveHeaderRenderer': <String, Object?>{
+                'title': _runs('Playlist propia'),
+                'subtitle': _runs('1 canción'),
+              },
+            },
+            'editHeader': <String, Object?>{
+              'musicPlaylistEditHeaderRenderer': <String, Object?>{
+                'privacy': 'PRIVATE',
+              },
+            },
+          },
+        };
+        final transport = _FakeAccountTransport(<Object>[_ok(page)]);
+
+        final snapshot = await _gateway(transport).getPlaylist('PL-owned');
+
+        expect(snapshot.summary?.title, 'Playlist propia');
+        expect(snapshot.summary?.isEditable, isTrue);
+      },
+    );
+
+    test(
+      'keeps a playlist read-only when no edit capability is present',
+      () async {
+        final page = _playlistPageFixture(
+          setVideoId: 'set-read-only',
+          includeHeader: false,
+        );
+        page['header'] = <String, Object?>{
+          'musicResponsiveHeaderRenderer': <String, Object?>{
+            'title': _runs('Playlist ajena'),
+            'subtitle': _runs('1 canción'),
+          },
+        };
+        final transport = _FakeAccountTransport(<Object>[_ok(page)]);
+
+        final snapshot = await _gateway(transport).getPlaylist('PL-read-only');
+
+        expect(snapshot.summary?.title, 'Playlist ajena');
+        expect(snapshot.summary?.isEditable, isFalse);
+      },
+    );
+
+    test(
       'ignores saved-playlist cards and continuations outside the grid',
       () async {
         final transport = _FakeAccountTransport(<Object>[
