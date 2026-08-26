@@ -94,7 +94,7 @@ class SearchView extends ConsumerWidget {
             curve: Curves.easeOutCubic,
             padding: EdgeInsets.fromLTRB(
               0,
-              showHeading ? appTabFirstSectionTopGap : 20,
+              showHeading ? appTabFirstSectionTopGap : 10,
               0,
               14,
             ),
@@ -424,24 +424,80 @@ class _SearchCategoryTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final textDirection = Directionality.of(context);
+    final labelStyle =
+        (Theme.of(context).textTheme.labelLarge ?? const TextStyle()).copyWith(
+          fontWeight: FontWeight.w800,
+        );
+    final tabWidths = <double>[
+      for (final category in categories)
+        _naturalTabWidth(
+          label: _categoryLabel(strings, category),
+          style: labelStyle,
+          textScaler: textScaler,
+          textDirection: textDirection,
+        ),
+    ];
 
-    return Row(
-      children: [
-        for (var index = 0; index < categories.length; index++) ...[
-          if (index > 0) const SizedBox(width: 6),
-          Expanded(
-            child: _SearchCategoryTab(
-              category: categories[index],
-              icon: _categoryIcon(categories[index]),
-              label: _categoryLabel(strings, categories[index]),
-              selected: categories[index] == selectedCategory,
-              selectedColor: colors.primaryContainer,
-              onSelected: onSelected,
-            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 6.0;
+        final spacingWidth = categories.length > 1
+            ? spacing * (categories.length - 1)
+            : 0.0;
+        final naturalWidth = tabWidths.fold<double>(
+          spacingWidth,
+          (total, width) => total + width,
+        );
+        final extraWidthPerTab =
+            categories.isNotEmpty && constraints.maxWidth > naturalWidth
+            ? (constraints.maxWidth - naturalWidth) / categories.length
+            : 0.0;
+
+        return SingleChildScrollView(
+          key: const ValueKey('search-category-horizontal-scroll'),
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var index = 0; index < categories.length; index++) ...[
+                if (index > 0) const SizedBox(width: spacing),
+                SizedBox(
+                  width: tabWidths[index] + extraWidthPerTab,
+                  child: _SearchCategoryTab(
+                    category: categories[index],
+                    icon: _categoryIcon(categories[index]),
+                    label: _categoryLabel(strings, categories[index]),
+                    selected: categories[index] == selectedCategory,
+                    selectedColor: colors.primaryContainer,
+                    onSelected: onSelected,
+                  ),
+                ),
+              ],
+            ],
           ),
-        ],
-      ],
+        );
+      },
     );
+  }
+
+  double _naturalTabWidth({
+    required String label,
+    required TextStyle style,
+    required TextScaler textScaler,
+    required TextDirection textDirection,
+  }) {
+    final painter = TextPainter(
+      text: TextSpan(text: label, style: style),
+      maxLines: 1,
+      textDirection: textDirection,
+      textScaler: textScaler,
+    )..layout();
+
+    // Icon (18), separation (4) and the horizontal breathing room (24).
+    final width = painter.width + 46;
+    return width < 92 ? 92 : width;
   }
 }
 
@@ -515,7 +571,7 @@ class _SearchCategoryTab extends StatelessWidget {
                 onTap: selected ? null : () => onSelected(category),
                 child: Center(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [

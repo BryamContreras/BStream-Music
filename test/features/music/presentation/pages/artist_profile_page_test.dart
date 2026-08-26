@@ -4,6 +4,7 @@ import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/youtube_music/account/youtube_music_account.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
@@ -137,6 +138,68 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('last artist song scrolls above the floating mini player', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final service = _ArtistProfileService()
+      ..profilePopularSongs = <InnerTubeSong>[
+        for (var index = 1; index <= 12; index++)
+          InnerTubeSong(
+            videoId: 'longPopular$index',
+            title: 'Popular $index',
+            artists: const <String>['Artista de prueba'],
+            artistBrowseIds: const <String?>['UCartist123'],
+          ),
+      ];
+
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(
+          size: Size(360, 640),
+          devicePixelRatio: 1,
+          padding: EdgeInsets.only(bottom: 24),
+          viewPadding: EdgeInsets.only(bottom: 24),
+        ),
+        child: _artistProfileApp(
+          service: service,
+          player: _RecordingPlayerController(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final scroll = find.byKey(const ValueKey('artist-profile-scroll'));
+    await tester.drag(scroll, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+
+    final lastTrack = find.byKey(
+      const ValueKey('artist-popular-longPopular12'),
+    );
+    final miniPlayer = find.byKey(const ValueKey('mini-player-container'));
+    expect(lastTrack, findsOneWidget);
+    expect(
+      tester.getRect(lastTrack).bottom,
+      lessThanOrEqualTo(tester.getRect(miniPlayer).top - 8),
+    );
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('artist-profile-bottom-spacer')))
+          .height,
+      miniPlayerHeightFor(
+            tester.element(miniPlayer),
+            mode: defaultMiniPlayerMode,
+          ) +
+          24 +
+          24,
+    );
+  });
 
   test(
     'artist profile provider reuses a browse response for five minutes',

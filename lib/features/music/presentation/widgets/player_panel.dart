@@ -46,6 +46,9 @@ class PlayerPanel extends ConsumerStatefulWidget {
 class _PlayerPanelState extends ConsumerState<PlayerPanel> {
   static const _mobileArtworkMaxReduction = 20.0;
   static const _mobileArtworkComfortHeight = 680.0;
+  static const _mobileArtworkExtentCeiling = 400.0;
+  static const _mobileArtworkShadowCompressionRange = 100.0;
+  static const _mobileArtworkShadowActivationRange = 0.2;
   static const _mobileFrameComfortHeight = 820.0;
   static const _mobileFrameCompressionRange = 100.0;
 
@@ -263,10 +266,6 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   ? ((620.0 - constraints.maxHeight) / 140.0)
                                         .clamp(0.0, 1.0)
                                   : 0.0;
-                              final artworkCompactness = math.max(
-                                verticalCompactness,
-                                mobileFrameCompactness,
-                              );
                               final regularArtworkExtent = _artworkExtent(
                                 constraints,
                                 stackedDesktop: stackedDesktop,
@@ -282,6 +281,32 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                       hasError: presentation.hasError,
                                     )
                                   : regularArtworkExtent;
+                              // A short, narrow phone can make the cover
+                              // width-bound before the frame-height factor is
+                              // large enough to shrink its halo. Once the
+                              // mobile layout has entered its compact range,
+                              // include that measured cover reduction so the
+                              // shadow follows the artwork proportionally.
+                              // Roomy mobile frames retain the original
+                              // shadow values exactly.
+                              final mobileArtworkShadowActivation = mobile
+                                  ? (mobileFrameCompactness /
+                                            _mobileArtworkShadowActivationRange)
+                                        .clamp(0.0, 1.0)
+                                  : 0.0;
+                              final mobileArtworkShadowCompactness =
+                                  ((_mobileArtworkExtentCeiling -
+                                              artworkExtent) /
+                                          _mobileArtworkShadowCompressionRange)
+                                      .clamp(0.0, 1.0) *
+                                  mobileArtworkShadowActivation;
+                              final artworkShadowCompactness = math.max(
+                                verticalCompactness,
+                                math.max(
+                                  mobileFrameCompactness,
+                                  mobileArtworkShadowCompactness,
+                                ),
+                              );
                               final artwork = Center(
                                 child: _LargeArtwork(
                                   url: artworkSource,
@@ -289,7 +314,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   identity: visualIdentity,
                                   maxExtent: artworkExtent,
                                   isFavorite: isFavorite,
-                                  shadowCompactness: artworkCompactness,
+                                  shadowCompactness: artworkShadowCompactness,
                                 ),
                               );
                               final gap = mobile
@@ -585,7 +610,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                     ? lerpDouble(0.50, 0.47, mobileFrameCompactness)!
                     : 0.56),
           )
-          .clamp(mobile ? 180.0 : 210.0, 400.0)
+          .clamp(mobile ? 180.0 : 210.0, _mobileArtworkExtentCeiling)
           .toDouble();
     }
 

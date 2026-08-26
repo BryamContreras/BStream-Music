@@ -201,15 +201,26 @@ void main() {
     expect(find.text('Lyrics provided by LRCLIB'), findsNWidgets(2));
     expect(topSource, findsOneWidget);
     expect(bottomSource, findsOneWidget);
-    expect(find.byKey(const ValueKey('lyrics-seek-hint')), findsOneWidget);
-    expect(find.text('Tap a line to seek to that moment.'), findsOneWidget);
+    final topHint = find.byKey(const ValueKey('lyrics-seek-hint-top'));
+    final bottomHint = find.byKey(const ValueKey('lyrics-seek-hint-bottom'));
+    expect(topHint, findsOneWidget);
+    expect(bottomHint, findsOneWidget);
+    expect(find.text('Tap a line to seek to that moment.'), findsNWidgets(2));
     expect(
       tester.getTopLeft(topSource).dy,
+      lessThan(tester.getTopLeft(topHint).dy),
+    );
+    expect(
+      tester.getTopLeft(topHint).dy,
       lessThan(tester.getTopLeft(find.text('First line')).dy),
     );
     expect(
       tester.getTopLeft(bottomSource).dy,
       greaterThan(tester.getBottomLeft(find.text('Third line')).dy),
+    );
+    expect(
+      tester.getTopLeft(bottomSource).dy,
+      lessThan(tester.getTopLeft(bottomHint).dy),
     );
   });
 

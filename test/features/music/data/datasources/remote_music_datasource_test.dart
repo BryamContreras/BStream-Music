@@ -230,6 +230,37 @@ void main() {
       },
     );
 
+    test(
+      'eleven-letter words are searched through InnerTube instead of yt-dlp',
+      () async {
+        final catalog = _FakeYouTubeMusicSearch(
+          results: [
+            InnerTubeSong(
+              videoId: 'songresult1',
+              title: 'Traicionera',
+              artists: const ['Sebastián Yatra'],
+            ),
+          ],
+        );
+        final downloader = _FakeDownloaderService(searchResults: const []);
+        final dataSource = RemoteMusicDataSource(
+          downloader,
+          youtubeMusicSearch: catalog,
+        );
+
+        final page = await dataSource.searchCategory(
+          'traicionera',
+          SearchCategory.songs,
+        );
+
+        expect(page.backend, SearchBackend.innerTube);
+        expect(page.category, SearchCategory.songs);
+        expect(page.tracks.single.title, 'Traicionera');
+        expect(catalog.queries, ['traicionera']);
+        expect(downloader.searchQueries, isEmpty);
+      },
+    );
+
     test('resolves an album browse ID to playable tracks', () async {
       final catalog = _FakeYouTubeMusicSearch(
         albumSongs: [

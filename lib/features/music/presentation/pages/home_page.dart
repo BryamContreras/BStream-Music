@@ -28,7 +28,6 @@ import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 import '../../domain/usecases/get_track_info.dart';
 import '../providers/music_providers.dart';
-import '../providers/youtube_music_auth_controller.dart';
 import '../widgets/bstream_logo.dart';
 import '../widgets/favorite_star_badge.dart';
 import '../widgets/library_panel.dart';
@@ -1699,17 +1698,6 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
   }
 }
 
-String? _authenticatedFirstName(YouTubeMusicAuthState state) {
-  if (!state.isAuthenticated) {
-    return null;
-  }
-  final displayName = state.profile?.displayName.trim() ?? '';
-  if (displayName.isEmpty) {
-    return null;
-  }
-  return displayName.split(RegExp(r'\s+')).first;
-}
-
 class _HomeView extends ConsumerWidget {
   const _HomeView({
     required this.bottomContentPadding,
@@ -1724,8 +1712,6 @@ class _HomeView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final authState = ref.watch(youtubeMusicAuthControllerProvider);
-    final firstName = _authenticatedFirstName(authState);
     final greetingTime = ref.watch(homeGreetingClockProvider)();
     final history = ref.watch(historyProvider);
     final hasHistory = history.value?.isNotEmpty ?? false;
@@ -1748,10 +1734,7 @@ class _HomeView extends ConsumerWidget {
           Expanded(
             child: Text(
               key: const ValueKey('home-tab-title'),
-              strings.homeGreeting(
-                hour: greetingTime.hour,
-                firstName: firstName,
-              ),
+              strings.homeGreeting(hour: greetingTime.hour),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: appTabTitleStyle(context),

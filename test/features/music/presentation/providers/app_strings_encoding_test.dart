@@ -167,23 +167,17 @@ void main() {
     expect(english.miniPlayerBackgroundTransparent, 'Transparent');
   });
 
-  test('Home greeting labels cover both day periods and named accounts', () {
+  test('Home greeting labels omit account names', () {
     const spanish = AppStrings(AppLanguage.spanish);
     const english = AppStrings(AppLanguage.english);
 
     expect(spanish.homeGreeting(hour: 0), 'Buenos días');
     expect(spanish.homeGreeting(hour: 11), 'Buenos días');
-    expect(
-      spanish.homeGreeting(hour: 12, firstName: 'Ana'),
-      'Buenas tardes, Ana',
-    );
+    expect(spanish.homeGreeting(hour: 12), 'Buenas tardes');
     expect(spanish.homeGreeting(hour: 23), 'Buenas tardes');
     expect(spanish.recommendedArtists, 'Artistas recomendados');
     expect(english.homeGreeting(hour: 11), 'Good morning');
-    expect(
-      english.homeGreeting(hour: 12, firstName: 'Ana'),
-      'Good afternoon, Ana',
-    );
+    expect(english.homeGreeting(hour: 12), 'Good afternoon');
     expect(english.recommendedArtists, 'Recommended artists');
   });
 

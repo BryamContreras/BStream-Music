@@ -209,7 +209,75 @@ void main() {
           mode: defaultMiniPlayerMode,
         ),
       );
+      final spacer = tester.getSize(
+        find.byKey(const ValueKey('remote-collection-bottom-spacer')),
+      );
+      expect(
+        spacer.height,
+        miniPlayerHeightFor(
+              tester.element(
+                find.byKey(const ValueKey('mini-player-container')),
+              ),
+              mode: defaultMiniPlayerMode,
+            ) +
+            bottomInset +
+            24,
+      );
     }
+  });
+
+  testWidgets('last collection track scrolls above the floating mini player', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final tracks = <TrackInfo>[
+      for (var index = 1; index <= 12; index++)
+        TrackInfo(
+          id: 'long-song-$index',
+          title: 'Cancion $index',
+          artist: 'Artista principal',
+          url: 'https://www.youtube.com/watch?v=long-song-$index',
+        ),
+    ];
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => tracks,
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(
+          size: Size(360, 640),
+          devicePixelRatio: 1,
+          padding: EdgeInsets.only(bottom: 24),
+          viewPadding: EdgeInsets.only(bottom: 24),
+        ),
+        child: _detailApp(
+          player: _RecordingPlayerController(),
+          tracksProvider: tracksProvider,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final scroll = find.byType(CustomScrollView);
+    await tester.drag(scroll, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+
+    final lastTrack = find.byKey(
+      const ValueKey('remote-collection-track-long-song-12'),
+    );
+    final miniPlayer = find.byKey(const ValueKey('mini-player-container'));
+    expect(lastTrack, findsOneWidget);
+    expect(
+      tester.getRect(lastTrack).bottom,
+      lessThanOrEqualTo(tester.getRect(miniPlayer).top - 20),
+    );
   });
 
   testWidgets('collection header exposes Add to playlist for link imports', (

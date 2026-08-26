@@ -27,10 +27,10 @@ double miniPlayerHeightFor(
 }) {
   final compactAndroid = Theme.of(context).platform == TargetPlatform.android;
   final baseHeight = compactAndroid
-      ? 61.0
+      ? 65.0
       : AppPlatform.isDesktop
-      ? 94.0
-      : 74.0;
+      ? 98.0
+      : 78.0;
   final textScale = MediaQuery.textScalerOf(context).scale(1.0);
   final contentHeight = baseHeight + math.max(0.0, (textScale - 1.0) * 35.0);
   return contentHeight + _miniPlayerMarginFor(context, mode).vertical;
@@ -42,12 +42,12 @@ EdgeInsets _miniPlayerMarginFor(BuildContext context, MiniPlayerMode mode) {
   }
   final compactAndroid = Theme.of(context).platform == TargetPlatform.android;
   if (compactAndroid) {
-    return const EdgeInsets.fromLTRB(8, 5, 8, 10);
+    return const EdgeInsets.fromLTRB(8, 5, 8, 8);
   }
   if (AppPlatform.isDesktop) {
-    return const EdgeInsets.fromLTRB(14, 8, 14, 12);
+    return const EdgeInsets.fromLTRB(14, 8, 14, 10);
   }
-  return const EdgeInsets.fromLTRB(12, 6, 12, 10);
+  return const EdgeInsets.fromLTRB(12, 6, 12, 8);
 }
 
 class MiniPlayer extends ConsumerWidget {
@@ -119,21 +119,21 @@ class MiniPlayer extends ConsumerWidget {
         ? 12.0
         : 20.0;
     final artworkSize = compactAndroid
-        ? 40.0
+        ? 44.0
         : windowsLayout
-        ? 60.0
-        : 48.0;
+        ? 64.0
+        : 52.0;
     final isPlaying = presentation.status == PlayerStatus.playing;
-    final playControlSize = compactAndroid ? 48.0 : 52.0;
+    final playControlSize = compactAndroid ? 50.0 : 54.0;
     final playIconSize = compactAndroid
         ? isPlaying
-              ? 36.0
-              : 44.0
+              ? 37.0
+              : 45.0
         : windowsLayout
         ? isPlaying
-              ? 40.0
-              : 44.0
-        : 34.0;
+              ? 41.0
+              : 45.0
+        : 35.0;
     final minimumHeight = miniPlayerHeightFor(context);
     final isDark = theme.brightness == Brightness.dark;
     final capsule = mode == MiniPlayerMode.capsule;
@@ -423,11 +423,11 @@ class MiniPlayer extends ConsumerWidget {
                   ),
                 ),
               ),
-            if (!windowsLayout)
+            if (!windowsLayout && !capsule)
               Positioned(
-                left: capsule ? 18 : 0,
-                right: capsule ? 18 : 0,
-                bottom: capsule ? 1 : 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
                 child: _MiniProgress(
                   key: const ValueKey('mini-player-progress'),
                   height: 2,
@@ -471,24 +471,25 @@ class MiniPlayer extends ConsumerWidget {
                                               ],
                                             ),
                                             const SizedBox(height: 0),
-                                            Align(
-                                              alignment: Alignment.center,
-                                              child: ConstrainedBox(
-                                                constraints:
-                                                    const BoxConstraints(
-                                                      maxWidth: 480,
-                                                    ),
-                                                child: const SizedBox(
-                                                  width: double.infinity,
-                                                  child: _MiniProgress(
-                                                    interactive: true,
-                                                    key: ValueKey(
-                                                      'mini-player-progress',
+                                            if (!capsule)
+                                              Align(
+                                                alignment: Alignment.center,
+                                                child: ConstrainedBox(
+                                                  constraints:
+                                                      const BoxConstraints(
+                                                        maxWidth: 480,
+                                                      ),
+                                                  child: const SizedBox(
+                                                    width: double.infinity,
+                                                    child: _MiniProgress(
+                                                      interactive: true,
+                                                      key: ValueKey(
+                                                        'mini-player-progress',
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
                                               ),
-                                            ),
                                           ],
                                         ),
                                       ),
@@ -1265,7 +1266,7 @@ class _MiniFallbackBackground extends StatelessWidget {
   }
 }
 
-class _MiniArtwork extends StatelessWidget {
+class _MiniArtwork extends ConsumerWidget {
   const _MiniArtwork({
     required this.url,
     required this.fallbackUrl,
@@ -1281,7 +1282,24 @@ class _MiniArtwork extends StatelessWidget {
   final bool circular;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final progress = circular
+        ? ref.watch(
+            playerControllerProvider.select((player) {
+              final snapshot = player.value;
+              final duration = snapshot?.duration;
+              if (duration == null || duration.inMilliseconds <= 0) {
+                return 0.0;
+              }
+              return (snapshot!.position.inMilliseconds /
+                      duration.inMilliseconds)
+                  .clamp(0.0, 1.0)
+                  .toDouble();
+            }),
+          )
+        : 0.0;
+    final ringInset = circular ? 2.5 : 0.0;
+
     return SizedBox(
       key: const ValueKey('mini-player-artwork'),
       width: size,
@@ -1290,10 +1308,13 @@ class _MiniArtwork extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           if (circular)
-            ClipOval(
-              key: const ValueKey('mini-player-artwork-circle'),
-              clipBehavior: Clip.antiAliasWithSaveLayer,
-              child: _MiniArtworkImage(url: url, fallbackUrl: fallbackUrl),
+            Padding(
+              padding: EdgeInsets.all(ringInset),
+              child: ClipOval(
+                key: const ValueKey('mini-player-artwork-circle'),
+                clipBehavior: Clip.antiAliasWithSaveLayer,
+                child: _MiniArtworkImage(url: url, fallbackUrl: fallbackUrl),
+              ),
             )
           else
             ClipRRect(
@@ -1302,10 +1323,33 @@ class _MiniArtwork extends StatelessWidget {
               clipBehavior: Clip.antiAliasWithSaveLayer,
               child: _MiniArtworkImage(url: url, fallbackUrl: fallbackUrl),
             ),
+          if (circular)
+            Positioned.fill(
+              child: ExcludeSemantics(
+                child: TweenAnimationBuilder<double>(
+                  key: const ValueKey('mini-player-artwork-progress-animation'),
+                  tween: Tween<double>(end: progress),
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, animatedProgress, _) {
+                    return CircularProgressIndicator(
+                      key: const ValueKey('mini-player-artwork-progress-ring'),
+                      value: animatedProgress,
+                      strokeWidth: 2,
+                      strokeCap: StrokeCap.round,
+                      color: AppColors.downloadAccentFor(context),
+                      backgroundColor: AppColors.menuInactiveSliderFor(
+                        context,
+                      ).withValues(alpha: 0.55),
+                    );
+                  },
+                ),
+              ),
+            ),
           if (isFavorite)
             const Positioned(
-              top: 1,
-              right: 1,
+              top: 3,
+              right: 3,
               child: FavoriteStarBadge(iconSize: 11),
             ),
         ],

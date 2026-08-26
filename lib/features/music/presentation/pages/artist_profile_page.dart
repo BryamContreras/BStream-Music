@@ -126,6 +126,9 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
         miniPlayerAppearance.backgroundMode ==
             MiniPlayerBackgroundMode.transparent;
     final miniPlayerHeight = miniPlayerHeightFor(context, mode: miniPlayerMode);
+    final bottomContentPadding = underlayMiniPlayer
+        ? miniPlayerHeight + MediaQuery.viewPaddingOf(context).bottom
+        : 0.0;
     final profile =
         profileState.value ??
         InnerTubeArtistProfile(
@@ -166,6 +169,7 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
         profileLoaded: profileState.hasValue,
         profileLoading: profileState.isLoading,
         profileFailed: profileState.hasError && !profileState.hasValue,
+        bottomContentPadding: bottomContentPadding,
       ),
       bottomNavigationBar: ColoredBox(
         color: underlayMiniPlayer
@@ -192,6 +196,7 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
     required bool profileLoaded,
     required bool profileLoading,
     required bool profileFailed,
+    required double bottomContentPadding,
   }) {
     final strings = ref.watch(appStringsProvider);
     final tracks = profile.popularSongs
@@ -360,7 +365,12 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
               onOpen: _openRelease,
             ),
           ),
-        const SliverToBoxAdapter(child: SizedBox(height: 30)),
+        SliverToBoxAdapter(
+          child: SizedBox(
+            key: const ValueKey('artist-profile-bottom-spacer'),
+            height: bottomContentPadding + 24,
+          ),
+        ),
       ],
     );
   }

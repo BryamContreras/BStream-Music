@@ -107,7 +107,25 @@ void main() {
     }
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.byKey(const ValueKey('search-category-albums')));
+    final categoryScroller = find.ancestor(
+      of: find.byKey(const ValueKey('search-category-songs')),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is SingleChildScrollView &&
+            widget.scrollDirection == Axis.horizontal,
+      ),
+    );
+    final categoryScrollable = find.descendant(
+      of: categoryScroller,
+      matching: find.byType(Scrollable),
+    );
+    final albumsTab = find.byKey(const ValueKey('search-category-albums'));
+    await tester
+        .state<ScrollableState>(categoryScrollable)
+        .position
+        .ensureVisible(tester.renderObject(albumsTab), alignment: 0.5);
+    await tester.pump();
+    await tester.tap(albumsTab);
     await tester.pump();
 
     expect(controller.selectedCategories, [SearchCategory.albums]);
@@ -127,6 +145,116 @@ void main() {
     }
     expect(find.text('otra búsqueda'), findsNothing);
   });
+
+  testWidgets(
+    'narrow screens keep full category labels in a horizontal scroller',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final pages = <SearchCategory, SearchPage>{
+        for (final category in SearchCategory.values)
+          category: SearchPage(
+            category: category,
+            backend: SearchBackend.innerTube,
+          ),
+      };
+      final controller = _RecordingSearchController(
+        SearchState(query: 'radiohead', pages: pages),
+      );
+
+      await tester.pumpWidget(
+        _searchApp(controller: controller, platform: TargetPlatform.android),
+      );
+      await tester.pumpAndSettle();
+
+      final categoryScroller = find.ancestor(
+        of: find.byKey(const ValueKey('search-category-songs')),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is SingleChildScrollView &&
+              widget.scrollDirection == Axis.horizontal,
+        ),
+      );
+      expect(categoryScroller, findsOneWidget);
+
+      for (final entry in const <SearchCategory, String>{
+        SearchCategory.songs: 'Canciones',
+        SearchCategory.videos: 'Videos',
+        SearchCategory.albums: 'Álbumes',
+        SearchCategory.artists: 'Artistas',
+      }.entries) {
+        final label = entry.value;
+        final labelFinder = find.descendant(
+          of: find.byKey(ValueKey('search-category-${entry.key.name}')),
+          matching: find.text(label),
+        );
+        expect(labelFinder, findsOneWidget);
+
+        final context = tester.element(labelFinder);
+        final painter = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: DefaultTextStyle.of(context).style,
+          ),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        expect(
+          tester.getSize(labelFinder).width,
+          greaterThanOrEqualTo(painter.width - 0.01),
+          reason: '$label must have enough width to render without ellipsis',
+        );
+      }
+
+      for (var index = 1; index < SearchCategory.values.length; index++) {
+        final previous = tester.getRect(
+          find.byKey(
+            ValueKey(
+              'search-category-${SearchCategory.values[index - 1].name}',
+            ),
+          ),
+        );
+        final current = tester.getRect(
+          find.byKey(
+            ValueKey('search-category-${SearchCategory.values[index].name}'),
+          ),
+        );
+        expect(
+          current.left - previous.right,
+          closeTo(6, 0.01),
+          reason:
+              'category cards should retain their horizontal breathing room',
+        );
+      }
+
+      final songsLeftBefore = tester
+          .getRect(find.byKey(const ValueKey('search-category-songs')))
+          .left;
+      final scrollable = find.descendant(
+        of: categoryScroller,
+        matching: find.byType(Scrollable),
+      );
+      final scrollPosition = tester.state<ScrollableState>(scrollable).position;
+      expect(scrollPosition.maxScrollExtent, greaterThan(0));
+      scrollPosition.jumpTo(scrollPosition.maxScrollExtent);
+      await tester.pump();
+      final songsLeftAfter = tester
+          .getRect(find.byKey(const ValueKey('search-category-songs')))
+          .left;
+      expect(songsLeftAfter, lessThan(songsLeftBefore));
+
+      await tester.tap(find.byKey(const ValueKey('search-category-artists')));
+      await tester.pump();
+      expect(controller.selectedCategories, [SearchCategory.artists]);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('mobile heading transitions out and back with the search state', (
     tester,
@@ -234,7 +362,20 @@ void main() {
                   .padding
               as EdgeInsets)
           .top,
-      20,
+      10,
+    );
+    final headerBottom = tester
+        .getRect(find.byKey(const ValueKey('search-tab-header-surface')))
+        .bottom;
+    final categoriesTop = tester
+        .getRect(
+          find.byKey(const ValueKey('search-category-horizontal-scroll')),
+        )
+        .top;
+    expect(
+      categoriesTop - headerBottom,
+      closeTo(20, 0.01),
+      reason: 'filters should sit closer to the active search bar',
     );
 
     await tester.tap(find.byKey(const ValueKey('search-clear-button')));

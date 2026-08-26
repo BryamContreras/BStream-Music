@@ -89,6 +89,9 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
         miniPlayerAppearance.backgroundMode ==
             MiniPlayerBackgroundMode.transparent;
     final miniPlayerHeight = miniPlayerHeightFor(context, mode: miniPlayerMode);
+    final bottomContentPadding = underlayMiniPlayer
+        ? miniPlayerHeight + MediaQuery.viewPaddingOf(context).bottom
+        : 0.0;
 
     return Scaffold(
       key: const ValueKey('remote-collection-detail'),
@@ -156,7 +159,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
               ),
             ),
             AsyncData(:final value) => SliverPadding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 32),
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
               sliver: SliverList.separated(
                 itemCount: value.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 6),
@@ -210,6 +213,12 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
               ),
             ),
           },
+          SliverToBoxAdapter(
+            child: SizedBox(
+              key: const ValueKey('remote-collection-bottom-spacer'),
+              height: bottomContentPadding + 24,
+            ),
+          ),
         ],
       ),
       // This route has its own Scaffold, outside HomePage's shell. Reserve

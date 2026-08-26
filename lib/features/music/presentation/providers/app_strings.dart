@@ -36,16 +36,11 @@ class AppStrings {
   String choose(String es, String en) => isEnglish ? en : es;
 
   String get home => choose('Inicio', 'Home');
-  String homeGreeting({required int hour, String? firstName}) {
+  String homeGreeting({required int hour}) {
     assert(hour >= 0 && hour < 24);
-    final normalized = firstName?.trim();
-    final greeting = hour < 12
+    return hour < 12
         ? choose('Buenos días', 'Good morning')
         : choose('Buenas tardes', 'Good afternoon');
-    if (normalized == null || normalized.isEmpty) {
-      return greeting;
-    }
-    return '$greeting, $normalized';
   }
 
   String get refreshHomeRecommendations =>

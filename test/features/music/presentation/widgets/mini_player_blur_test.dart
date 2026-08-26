@@ -249,6 +249,10 @@ void main() {
     );
     expect(artworkClip.clipBehavior, Clip.antiAliasWithSaveLayer);
     expect(
+      tester.getSize(find.byKey(const ValueKey('mini-player-artwork'))),
+      const Size.square(44),
+    );
+    expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-progress'))).height,
       2,
     );
@@ -324,8 +328,25 @@ void main() {
     tester,
   ) async {
     _configureView(tester, const Size(360, 200));
-    await tester.pumpWidget(_miniPlayerHarness(mode: MiniPlayerMode.capsule));
+    await tester.pumpWidget(
+      _miniPlayerHarness(
+        mode: MiniPlayerMode.capsule,
+        playerController: _TestPlayerController(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Progreso circular',
+            artist: 'BStream Music',
+            trackId: 'capsule-progress-track',
+            thumbnailUrl:
+                'https://example.invalid/capsule-progress-artwork.jpg',
+            position: Duration(seconds: 45),
+            duration: Duration(minutes: 3),
+          ),
+        ),
+      ),
+    );
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
 
     final containerFinder = find.byKey(const ValueKey('mini-player-container'));
     final container = tester.widget<Container>(containerFinder);
@@ -334,7 +355,7 @@ void main() {
         container.foregroundDecoration! as BoxDecoration;
     final surface = find.byKey(const ValueKey('mini-player-surface'));
 
-    expect(container.margin, const EdgeInsets.fromLTRB(8, 5, 8, 10));
+    expect(container.margin, const EdgeInsets.fromLTRB(8, 5, 8, 8));
     expect(container.clipBehavior, Clip.antiAliasWithSaveLayer);
     expect(decoration.borderRadius, BorderRadius.circular(28));
     expect(decoration.boxShadow, isNotEmpty);
@@ -354,16 +375,21 @@ void main() {
       find.byKey(const ValueKey('mini-player-accent-top-border')),
       findsNothing,
     );
+    expect(find.byKey(const ValueKey('mini-player-progress')), findsNothing);
+    final progressRingFinder = find.byKey(
+      const ValueKey('mini-player-artwork-progress-ring'),
+    );
+    final progressRing = tester.widget<CircularProgressIndicator>(
+      progressRingFinder,
+    );
+    expect(progressRing.value, closeTo(0.25, 0.001));
+    expect(progressRing.strokeWidth, 2);
+    expect(progressRing.strokeCap, StrokeCap.round);
+    expect(progressRing.backgroundColor, isNotNull);
     expect(
-      tester.getSize(find.byKey(const ValueKey('mini-player-progress'))).height,
-      2,
+      tester.getRect(progressRingFinder),
+      tester.getRect(find.byKey(const ValueKey('mini-player-artwork'))),
     );
-    final progressRect = tester.getRect(
-      find.byKey(const ValueKey('mini-player-progress')),
-    );
-    final surfaceRect = tester.getRect(surface);
-    expect(progressRect.left - surfaceRect.left, closeTo(18, 0.1));
-    expect(surfaceRect.right - progressRect.right, closeTo(18, 0.1));
     final artworkClip = tester.widget<ClipOval>(
       find.byKey(const ValueKey('mini-player-artwork-circle')),
     );
@@ -375,20 +401,24 @@ void main() {
       ),
     );
     expect(artwork.filterQuality, FilterQuality.high);
-    expect(tester.getSize(surface).height, 61);
+    expect(tester.getSize(surface).height, 65);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('mini-player-artwork'))),
+      const Size.square(44),
+    );
     expect(
       miniPlayerHeightFor(
         tester.element(surface),
         mode: MiniPlayerMode.standard,
       ),
-      61,
+      65,
     );
     expect(
       miniPlayerHeightFor(
         tester.element(surface),
         mode: MiniPlayerMode.capsule,
       ),
-      76,
+      78,
     );
     expect(tester.takeException(), isNull);
   });
@@ -401,7 +431,7 @@ void main() {
       _miniPlayerHarness(
         platform: TargetPlatform.windows,
         mode: MiniPlayerMode.capsule,
-        constrainedHeight: 114,
+        constrainedHeight: 116,
       ),
     );
     await tester.pump();
@@ -412,15 +442,19 @@ void main() {
     final decoration = container.decoration! as BoxDecoration;
     final surface = find.byKey(const ValueKey('mini-player-surface'));
 
-    expect(container.margin, const EdgeInsets.fromLTRB(14, 8, 14, 12));
+    expect(container.margin, const EdgeInsets.fromLTRB(14, 8, 14, 10));
     expect(decoration.borderRadius, BorderRadius.circular(40));
-    expect(tester.getSize(surface).height, 94);
+    expect(tester.getSize(surface).height, 98);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('mini-player-artwork'))),
+      const Size.square(64),
+    );
     expect(
       miniPlayerHeightFor(
         tester.element(surface),
         mode: MiniPlayerMode.capsule,
       ),
-      114,
+      116,
     );
     expect(
       find.byKey(const ValueKey('mini-player-artwork-circle')),
@@ -432,6 +466,10 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('mini-player-progress-control')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('mini-player-artwork-progress-ring')),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -442,7 +480,7 @@ void main() {
   ) async {
     _configureView(tester, const Size(320, 260), textScaleFactor: 3);
     await tester.pumpWidget(
-      _miniPlayerHarness(mode: MiniPlayerMode.capsule, constrainedHeight: 146),
+      _miniPlayerHarness(mode: MiniPlayerMode.capsule, constrainedHeight: 150),
     );
     await tester.pump();
 
@@ -498,7 +536,7 @@ void main() {
         expect(progressRect.top, greaterThanOrEqualTo(playRect.bottom));
         expect(progressRect.top, greaterThanOrEqualTo(metadataRect.bottom));
         expect(frameRect.intersect(progressRect), progressRect);
-        expect(tester.getSize(play), const Size.square(48));
+        expect(tester.getSize(play), const Size.square(50));
         expect(previous, findsNothing);
         expect(next, findsNothing);
         expect(
@@ -516,7 +554,7 @@ void main() {
           findsNothing,
         );
         final playButton = tester.widget<IconButton>(play);
-        expect(playButton.iconSize, 44);
+        expect(playButton.iconSize, 45);
         expect(
           playButton.style?.foregroundColor?.resolve(<WidgetState>{}),
           AppColors.playbackControlForegroundFor(tester.element(play)),
@@ -640,10 +678,10 @@ void main() {
     expect(progressRect.bottom, lessThan(frameRect.bottom));
     expect(progressRect.height, 32);
     expect(progressRect.top, greaterThanOrEqualTo(playRect.bottom));
-    expect(progressRect.top - previousRect.bottom, closeTo(2, 0.1));
+    expect(progressRect.top - previousRect.bottom, closeTo(3, 0.1));
     expect(
       (previousRect.top + progressRect.bottom) / 2,
-      closeTo(surfaceRect.center.dy + 4, 0.1),
+      closeTo(surfaceRect.center.dy + 4.5, 0.1),
     );
     expect(frameRect.contains(progressRect.topLeft), isTrue);
     expect(frameRect.contains(progressRect.bottomRight), isTrue);
@@ -687,7 +725,7 @@ void main() {
     );
     expect(find.text('0:00'), findsOneWidget);
     expect(find.text('3:00'), findsOneWidget);
-    expect(tester.getSize(artwork), const Size.square(60));
+    expect(tester.getSize(artwork), const Size.square(64));
     expect(
       tester.widget<Text>(find.text('Canción de prueba')).style?.fontSize,
       16,
@@ -716,7 +754,7 @@ void main() {
     );
     expect(shuffleButton.iconSize, 26);
     expect(previousButton.iconSize, 30);
-    expect(playButton.iconSize, 44);
+    expect(playButton.iconSize, 45);
     final playIconTranslation = tester.widget<Transform>(
       find.descendant(
         of: find.byKey(const ValueKey('mini-player-primary-control')),
@@ -742,9 +780,9 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-primary-control'))),
-      const Size.square(52),
+      const Size.square(54),
     );
-    expect(miniPlayerHeightFor(tester.element(surface)), 94);
+    expect(miniPlayerHeightFor(tester.element(surface)), 98);
     expect(tester.getSize(previous), const Size.square(48));
     expect(tester.getSize(lyrics), const Size.square(48));
     expect(tester.getSize(volume), const Size(152, 44));
@@ -821,8 +859,8 @@ void main() {
       find.descendant(of: primaryControl, matching: find.byType(Transform)),
     );
 
-    expect(tester.getSize(primaryControl), const Size.square(52));
-    expect(button.iconSize, 40);
+    expect(tester.getSize(primaryControl), const Size.square(54));
+    expect(button.iconSize, 41);
     expect(
       find.descendant(
         of: primaryControl,

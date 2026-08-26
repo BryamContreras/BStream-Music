@@ -598,6 +598,44 @@ void main() {
     },
   );
 
+  testWidgets(
+    'width-compacted artwork also compacts its shadow on a short phone',
+    (tester) async {
+      _configureView(tester, const Size(360, 800), bottomPadding: 24);
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      final artworkWidth = tester
+          .getSize(find.byKey(const ValueKey('player-large-artwork')))
+          .width;
+      final surface = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('player-artwork-surface')),
+      );
+      final shadow = (surface.decoration as BoxDecoration).boxShadow!.single;
+
+      expect(artworkWidth, lessThan(400));
+      expect(shadow.blurRadius / artworkWidth, lessThanOrEqualTo(0.102));
+      expect(shadow.spreadRadius / artworkWidth, lessThanOrEqualTo(0.009));
+      expect(shadow.offset.dy / artworkWidth, lessThanOrEqualTo(0.041));
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('player-volume-control')))
+            .bottom,
+        lessThanOrEqualTo(800 - 24.0 + 0.1),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('short desktop frames compact the shadow with the artwork', (
     tester,
   ) async {

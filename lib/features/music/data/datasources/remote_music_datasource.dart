@@ -204,7 +204,12 @@ class RemoteMusicDataSource {
 
   bool _isDirectYouTubeReference(String query) {
     final normalized = query.trim();
-    if (RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(normalized)) {
+    // A bare video id is always 11 characters, but ordinary search terms can
+    // have that exact shape too (for example, "traicionera"). Requiring an
+    // id-like digit or separator keeps pasted ids fast without routing plain
+    // words away from the YouTube Music catalog.
+    if (RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(normalized) &&
+        RegExp(r'[0-9_-]').hasMatch(normalized)) {
       return true;
     }
     final uri = Uri.tryParse(normalized);

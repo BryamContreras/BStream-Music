@@ -91,7 +91,7 @@ void main() {
     expect(find.text('Reproductor'), findsNothing);
   });
 
-  testWidgets('home greets an authenticated account by first name', (
+  testWidgets('home greeting does not include the authenticated account name', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -111,7 +111,7 @@ void main() {
 
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('home-tab-title'))).data,
-      'Buenas tardes, Ana',
+      'Buenas tardes',
     );
     expect(find.text('Inicio'), findsWidgets);
   });
@@ -230,9 +230,9 @@ void main() {
 
         expect(surfaceRect.left, closeTo(0, 0.1));
         expect(surfaceRect.width, closeTo(viewport.width, 0.1));
-        expect(surfaceRect.height, 94);
+        expect(surfaceRect.height, 98);
         expect(playCenter.dx, closeTo(surfaceRect.center.dx, 0.1));
-        expect(tester.getSize(play), const Size.square(52));
+        expect(tester.getSize(play), const Size.square(54));
         expect(
           find.byKey(const ValueKey('mini-player-primary-gradient')),
           findsNothing,
@@ -241,7 +241,7 @@ void main() {
         final previousButton = tester.widget<IconButton>(
           find.descendant(of: previous, matching: find.byType(IconButton)),
         );
-        expect(playButton.iconSize, 40);
+        expect(playButton.iconSize, 41);
         expect(
           playButton.style?.foregroundColor?.resolve(<WidgetState>{}),
           previousButton.color,
@@ -288,15 +288,15 @@ void main() {
         expect(tester.getSize(lyrics), const Size.square(48));
         expect(tester.getSize(volume), const Size(152, 44));
         expect(previousCenter.dx - shuffleCenter.dx, closeTo(48, 0.1));
-        expect(playCenter.dx - previousCenter.dx, closeTo(50, 0.1));
-        expect(nextCenter.dx - playCenter.dx, closeTo(50, 0.1));
+        expect(playCenter.dx - previousCenter.dx, closeTo(51, 0.1));
+        expect(nextCenter.dx - playCenter.dx, closeTo(51, 0.1));
         expect(repeatCenter.dx - nextCenter.dx, closeTo(48, 0.1));
         expect(previousCenter.dy, closeTo(playCenter.dy, 0.1));
         expect(nextCenter.dy, closeTo(playCenter.dy, 0.1));
-        expect(progressRect.top - previousRect.bottom, closeTo(2, 0.1));
+        expect(progressRect.top - previousRect.bottom, closeTo(3, 0.1));
         expect(
           (previousRect.top + progressRect.bottom) / 2,
-          closeTo(surfaceRect.center.dy + 4, 0.1),
+          closeTo(surfaceRect.center.dy + 4.5, 0.1),
         );
         expect(
           find.byKey(const ValueKey('mini-player-current-time')),
@@ -541,11 +541,11 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-surface'))).height,
-      61,
+      65,
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-primary-control'))),
-      const Size.square(48),
+      const Size.square(50),
     );
     expect(
       find.byKey(const ValueKey('mini-player-primary-gradient')),
@@ -554,7 +554,7 @@ void main() {
     final playButton = tester.widget<IconButton>(
       find.byKey(const ValueKey('mini-player-primary-control')),
     );
-    expect(playButton.iconSize, 36);
+    expect(playButton.iconSize, 37);
     expect(
       playButton.style?.foregroundColor?.resolve(<WidgetState>{}),
       AppColors.playbackControlForegroundFor(
@@ -716,13 +716,13 @@ void main() {
       expect(capsuleRect.top, lessThan(scrollRect.bottom));
       expect(
         scrollRect.bottom - capsuleRect.bottom,
-        closeTo(10, 0.1),
+        closeTo(8, 0.1),
         reason: 'The capsule gap must reveal the scrolling tab beneath it.',
       );
       final reserve = tester.widget<SizedBox>(
         find.byKey(const ValueKey('home-scroll-bottom-reserve')),
       );
-      expect(reserve.height, greaterThanOrEqualTo(76));
+      expect(reserve.height, greaterThanOrEqualTo(80));
       expect(
         find.byKey(const ValueKey('mini-player-glass-blur')),
         findsOneWidget,
@@ -1985,7 +1985,7 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-primary-control'))),
-      const Size.square(48),
+      const Size.square(50),
     );
     expect(
       tester

@@ -1025,9 +1025,10 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _LyricsSourceAttribution(
+            _SyncedLyricsGuidance(
               source: widget.sourceFooter,
               placement: 'top',
+              seekHint: strings.tapLyricsToSeek,
             ),
             const SizedBox(height: 12),
             for (var index = 0; index < widget.lines.length; index++)
@@ -1057,20 +1058,10 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
                 ),
               ),
             const SizedBox(height: 20),
-            _LyricsSourceAttribution(
+            _SyncedLyricsGuidance(
               source: widget.sourceFooter,
               placement: 'bottom',
-            ),
-            const SizedBox(height: 10),
-            Text(
-              key: const ValueKey('lyrics-seek-hint'),
-              strings.tapLyricsToSeek,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.52),
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
+              seekHint: strings.tapLyricsToSeek,
             ),
           ],
         ),
@@ -1521,6 +1512,39 @@ class _LyricsSourceAttribution extends StatelessWidget {
         fontSize: 11,
         fontWeight: FontWeight.w700,
       ),
+    );
+  }
+}
+
+class _SyncedLyricsGuidance extends StatelessWidget {
+  const _SyncedLyricsGuidance({
+    required this.source,
+    required this.placement,
+    required this.seekHint,
+  });
+
+  final String source;
+  final String placement;
+  final String seekHint;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _LyricsSourceAttribution(source: source, placement: placement),
+        const SizedBox(height: 6),
+        Text(
+          key: ValueKey('lyrics-seek-hint-$placement'),
+          seekHint,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.52),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }
