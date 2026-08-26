@@ -83,6 +83,23 @@ final class YouTubeMusicAccountPlaylistGateway
         ),
       );
     }
+    // YouTube occasionally omits its system Liked Music card from the saved
+    // playlists shelf (notably for new/empty libraries and during staged UI
+    // experiments). VLLM is nevertheless the stable browse endpoint for that
+    // account collection. Always expose the canonical LM summary so BStream's
+    // reserved Favorites playlist can be bound and synchronized instead of
+    // silently remaining local-only.
+    mapped.putIfAbsent(
+      'LM',
+      () => const RemotePlaylistSummary(
+        remotePlaylistId: 'LM',
+        remoteBrowseId: 'VLLM',
+        title: 'Liked Music',
+        isEditable: true,
+        privacy: 'PRIVATE',
+        isLikedMusic: true,
+      ),
+    );
     return mapped.values.toList(growable: false);
   }
 

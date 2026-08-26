@@ -266,6 +266,104 @@ void main() {
     });
 
     test(
+      'Favorites keep local identity when YouTube reuses a setVideoId',
+      () async {
+        final videoA = _video('A');
+        final videoB = _video('B');
+        final localTrackA = CatalogTrack.youtube(
+          videoId: videoA,
+          title: 'Local metadata A',
+          artists: const <String>['Local artist A'],
+          album: 'Local album A',
+        );
+        final localA = PlaylistSyncItem(
+          localItemId: 'local-a',
+          localTrackId: 'download-a',
+          videoId: videoA,
+          setVideoId: 'set-old',
+          track: localTrackA,
+        );
+        final remoteB = PlaylistSyncItem(
+          videoId: videoB,
+          setVideoId: 'set-old',
+          track: CatalogTrack.youtube(
+            videoId: videoB,
+            title: 'Remote metadata B',
+            artists: const <String>['Remote artist B'],
+            album: 'Remote album B',
+          ),
+        );
+        final remoteA = PlaylistSyncItem(
+          videoId: videoA,
+          setVideoId: 'set-new',
+          track: CatalogTrack.youtube(videoId: videoA, title: ''),
+        );
+        const key = PlaylistSyncKey(
+          accountKey: 'account',
+          playlistId: 'bstream:favorites',
+        );
+        final local = PlaylistSyncSnapshot(
+          remotePlaylistId: 'LM',
+          title: 'Favoritos',
+          items: <PlaylistSyncItem>[localA],
+        );
+        final store = _MemoryStore(
+          PlaylistSyncWork(
+            binding: PlaylistSyncBinding(
+              key: key,
+              remotePlaylistId: 'LM',
+              mode: PlaylistSyncMode.automatic,
+              localRevisionAtBase: 1,
+              createdAt: now,
+              updatedAt: now,
+            ),
+            base: local,
+            local: local,
+            localRevision: 1,
+            localDeleted: false,
+          ),
+        );
+        final gateway = _FakeLikedGateway()
+          ..fetches.add(
+            PlaylistSyncSnapshot(
+              remotePlaylistId: 'LM',
+              title: 'Liked Music',
+              items: <PlaylistSyncItem>[remoteB, remoteA],
+            ),
+          );
+
+        final result = await _engine(store, gateway, now).sync(key);
+
+        expect(result.disposition, PlaylistSyncDisposition.synchronized);
+        expect(gateway.likedMutationCount, 0);
+        expect(gateway.mutationCount, 0);
+        expect(store.commits, 1);
+        expect(store.conflicts, 0);
+        expect(store.work.intent, isNull);
+
+        final synchronizedA = store.work.local.items.singleWhere(
+          (item) => item.videoId == videoA,
+        );
+        expect(synchronizedA.localItemId, 'local-a');
+        expect(synchronizedA.localTrackId, 'download-a');
+        expect(synchronizedA.setVideoId, 'set-new');
+        expect(synchronizedA.track.title, 'Local metadata A');
+        expect(synchronizedA.track.artists, const <String>['Local artist A']);
+        expect(synchronizedA.track.album, 'Local album A');
+
+        final synchronizedB = store.work.local.items.singleWhere(
+          (item) => item.videoId == videoB,
+        );
+        expect(synchronizedB.localItemId, isNot('local-a'));
+        expect(synchronizedB.localTrackId, isNull);
+        expect(synchronizedB.setVideoId, 'set-old');
+        expect(synchronizedB.track.title, 'Remote metadata B');
+        expect(synchronizedB.track.artists, const <String>['Remote artist B']);
+        expect(synchronizedB.track.album, 'Remote album B');
+      },
+    );
+
+    test(
       'an ambiguous favorite like is confirmed despite server reordering',
       () async {
         final a = _item('A', localId: 'a', setId: 'set-a');

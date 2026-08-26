@@ -23,6 +23,7 @@ class PlaylistThreeWayMerger {
     required PlaylistSyncSnapshot remote,
     bool ignoreTitleConflicts = false,
     bool ignoreOrderConflicts = false,
+    bool matchItemsByVideoIdOnly = false,
   }) {
     if (base == null) {
       return PlaylistMergeResult.merged(_initialUnion(local, remote));
@@ -51,12 +52,14 @@ class PlaylistThreeWayMerger {
       side: local,
       prefix: 'local',
       preferLocalIds: true,
+      matchItemsByVideoIdOnly: matchItemsByVideoIdOnly,
     );
     final remoteSide = _tokenizeSide(
       base: base,
       side: remote,
       prefix: 'remote',
       preferLocalIds: false,
+      matchItemsByVideoIdOnly: matchItemsByVideoIdOnly,
     );
     final keptBaseTokens = baseTokens
         .where(
@@ -196,6 +199,7 @@ class PlaylistThreeWayMerger {
     required PlaylistSyncSnapshot side,
     required String prefix,
     required bool preferLocalIds,
+    required bool matchItemsByVideoIdOnly,
   }) {
     final matchedBase = <int>{};
     final tokens = <String>[];
@@ -208,6 +212,7 @@ class PlaylistThreeWayMerger {
         matchedBase,
         item,
         preferLocalIds: preferLocalIds,
+        matchItemsByVideoIdOnly: matchItemsByVideoIdOnly,
       );
       final token = baseIndex == null
           ? '$prefix:$sideIndex'
@@ -232,7 +237,18 @@ class PlaylistThreeWayMerger {
     Set<int> matched,
     PlaylistSyncItem item, {
     required bool preferLocalIds,
+    required bool matchItemsByVideoIdOnly,
   }) {
+    // Liked Music is a set of videos, not an ordinary playlist. YouTube may
+    // recycle/reassign setVideoId values whenever that server-ordered list is
+    // rebuilt. In that mode a playable row must therefore be matched only by
+    // its durable videoId; otherwise an existing downloaded item can be
+    // rebound to a completely different favorite. Rows without a videoId
+    // still use their occurrence identifiers because no stronger identity is
+    // available for unavailable/region-blocked entries.
+    if (matchItemsByVideoIdOnly && item.videoId != null) {
+      return _firstUnmatchedVideo(base, matched, item.videoId);
+    }
     if (preferLocalIds && item.localItemId != null) {
       for (var index = 0; index < base.length; index++) {
         if (!matched.contains(index) &&

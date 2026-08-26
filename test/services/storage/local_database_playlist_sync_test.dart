@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
+import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:bstream_music/services/youtube_music/playlist_sync/playlist_sync_models.dart';
 import 'package:bstream_music/services/youtube_music/playlist_sync/playlist_sync_store.dart';
@@ -188,6 +189,133 @@ void main() {
         ),
         0,
       );
+    },
+  );
+
+  test(
+    'Favorites commit remaps a mismatched download to its source video',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'bstream-favorites-download-identity-',
+      );
+      final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+      addTearDown(() async {
+        await service.close();
+        await sandbox.delete(recursive: true);
+      });
+      final now = DateTime.utc(2026, 8, 26, 15);
+      const videoA = 'AbCdEfGhIj1';
+      const videoB = 'BcDeFgHiJk2';
+      final audioPath = p.join(sandbox.path, 'a.m4a');
+      final trackA = CatalogTrack.youtube(videoId: videoA, title: 'Song A');
+      final trackB = CatalogTrack.youtube(videoId: videoB, title: 'Song B');
+      await service.createCatalogPlaylist(
+        id: Playlist.favoritesId,
+        name: 'Favoritos',
+        now: now,
+      );
+      await service.appendCatalogEntry(
+        playlistId: Playlist.favoritesId,
+        entryId: 'favorite-a',
+        track: trackA,
+        now: now,
+      );
+      await service.saveLocalTrack(
+        LocalTrack(
+          id: 'download-a',
+          title: 'Song A',
+          artist: 'Artist A',
+          filePath: audioPath,
+          sourceId: videoA,
+          addedAt: now,
+        ),
+      );
+      await service.linkCatalogDownload(
+        videoId: videoA,
+        localTrackId: 'download-a',
+        now: now.add(const Duration(seconds: 1)),
+      );
+
+      final store = SqlitePlaylistSyncStore(
+        service,
+        conflictIdFactory: () => 'unused-conflict',
+      );
+      const key = PlaylistSyncKey(
+        accountKey: 'account',
+        playlistId: Playlist.favoritesId,
+      );
+      final before = (await service.getCatalogPlaylist(
+        Playlist.favoritesId,
+      ))!.playlist;
+      await store.upsertBinding(
+        PlaylistSyncBinding(
+          key: key,
+          remotePlaylistId: 'LM',
+          mode: PlaylistSyncMode.automatic,
+          localRevisionAtBase: before.localRevision,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      final merged = PlaylistSyncSnapshot(
+        remotePlaylistId: 'LM',
+        title: 'Favoritos',
+        items: <PlaylistSyncItem>[
+          PlaylistSyncItem(
+            localItemId: 'favorite-a',
+            localTrackId: 'download-a',
+            videoId: videoB,
+            setVideoId: 'set-b',
+            track: trackB,
+          ),
+          PlaylistSyncItem(
+            localItemId: 'favorite-a-imported',
+            videoId: videoA,
+            setVideoId: 'set-a',
+            track: trackA,
+          ),
+        ],
+      );
+
+      await store.commitSynchronized(
+        key: key,
+        mergedLocal: merged,
+        verifiedRemote: merged,
+        expectedLocalRevision: before.localRevision,
+        now: now.add(const Duration(seconds: 2)),
+      );
+
+      final favorites = (await service.getCatalogPlaylist(
+        Playlist.favoritesId,
+      ))!;
+      expect(favorites.entries.map((entry) => entry.videoId), <String?>[
+        videoB,
+        videoA,
+      ]);
+      expect(favorites.entries.map((entry) => entry.localTrackId), <String?>[
+        null,
+        'download-a',
+      ]);
+      final db = await service.database;
+      final localRow = (await db.query(
+        'local_tracks',
+        where: 'id = ?',
+        whereArgs: const <Object?>['download-a'],
+        limit: 1,
+      )).single;
+      expect(localRow['source_id'], videoA);
+      expect(localRow['catalog_key'], trackA.key);
+      expect(localRow['file_path'], audioPath);
+      final playlistRow = (await db.query(
+        'playlists',
+        columns: const <String>['track_ids'],
+        where: 'id = ?',
+        whereArgs: const <Object?>[Playlist.favoritesId],
+        limit: 1,
+      )).single;
+      expect(jsonDecode(playlistRow['track_ids']! as String), <String>[
+        'download-a',
+      ]);
     },
   );
 

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../../../features/music/domain/entities/catalog_track.dart';
+import '../../../features/music/domain/entities/playlist.dart';
 import '../../../features/music/domain/entities/playlist_entry.dart';
 import '../../storage/local_database_service.dart';
 import 'playlist_sync_models.dart';
@@ -321,24 +322,69 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
         whereArgs: <Object?>[key.playlistId],
         orderBy: 'position ASC, item_id ASC',
       );
+      final isFavorites = key.playlistId == Playlist.favoritesId;
+      final localVideoIdByTrackId = <String, String>{};
+      final localTrackIdByVideoId = <String, String>{};
+      if (isFavorites) {
+        final referencedLocalTrackIds = mergedLocal.items
+            .map((item) => _text(item.localTrackId))
+            .whereType<String>()
+            .toSet()
+            .toList(growable: false);
+        final localTrackRows = referencedLocalTrackIds.isEmpty
+            ? const <Map<String, Object?>>[]
+            : await transaction.query(
+                'local_tracks',
+                columns: const <String>['id', 'source_id'],
+                where:
+                    'id IN (${List.filled(referencedLocalTrackIds.length, '?').join(', ')})',
+                whereArgs: referencedLocalTrackIds,
+              );
+        for (final row in localTrackRows) {
+          final localTrackId = _text(row['id']);
+          final videoId = _text(row['source_id']);
+          if (localTrackId == null || videoId == null) {
+            continue;
+          }
+          localVideoIdByTrackId[localTrackId] = videoId;
+        }
+        for (final localTrackId in referencedLocalTrackIds) {
+          final videoId = localVideoIdByTrackId[localTrackId];
+          if (videoId != null) {
+            localTrackIdByVideoId.putIfAbsent(videoId, () => localTrackId);
+          }
+        }
+      }
+      final effectiveLocalTrackIds = <String?>[];
       final desiredIds = <String>{};
       var contentChanged =
           playlistRows.single['name']?.toString() != mergedLocal.title ||
           existingRows.length != mergedLocal.items.length;
       for (var position = 0; position < mergedLocal.items.length; position++) {
         final item = mergedLocal.items[position];
+        final proposedLocalTrackId = _text(item.localTrackId);
+        final videoId = _text(item.videoId);
+        final effectiveLocalTrackId = !isFavorites || videoId == null
+            ? proposedLocalTrackId
+            : localVideoIdByTrackId[proposedLocalTrackId] == videoId
+            ? proposedLocalTrackId
+            : localTrackIdByVideoId[videoId];
+        effectiveLocalTrackIds.add(effectiveLocalTrackId);
         final itemId = item.localItemId;
         if (itemId == null || itemId.isEmpty) {
           throw StateError('A merged playlist item has no local UUID.');
         }
         desiredIds.add(itemId);
         await _upsertTrack(transaction, item.track, now);
-        if (item.localTrackId != null) {
+        if (effectiveLocalTrackId != null &&
+            (!isFavorites ||
+                (videoId != null &&
+                    localVideoIdByTrackId[effectiveLocalTrackId] == videoId))) {
           await transaction.update(
             'local_tracks',
             <String, Object?>{'catalog_key': item.track.key},
             where: 'id = ?',
-            whereArgs: <Object?>[item.localTrackId],
+            whereArgs: <Object?>[effectiveLocalTrackId],
           );
         }
         final existing = position < existingRows.length
@@ -349,8 +395,8 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
             existing == null ||
             existing['item_id']?.toString() != itemId ||
             existing['catalog_key']?.toString() != item.track.key ||
-            _text(existing['local_track_id']) != item.localTrackId ||
-            _text(existing['remote_video_id']) != item.videoId;
+            _text(existing['local_track_id']) != effectiveLocalTrackId ||
+            _text(existing['remote_video_id']) != videoId;
         await transaction.rawInsert(
           '''
             INSERT INTO playlist_items (
@@ -373,8 +419,8 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
             itemId,
             key.playlistId,
             item.track.key,
-            item.localTrackId,
-            item.videoId,
+            effectiveLocalTrackId,
+            videoId,
             item.setVideoId,
             position,
             now.toIso8601String(),
@@ -404,10 +450,7 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
         <String, Object?>{
           'name': mergedLocal.title,
           'track_ids': jsonEncode(
-            mergedLocal.items
-                .map((item) => item.localTrackId)
-                .whereType<String>()
-                .toList(growable: false),
+            effectiveLocalTrackIds.whereType<String>().toList(),
           ),
           if (contentChanged) 'updated_at': now.toIso8601String(),
           'local_revision': nextRevision,

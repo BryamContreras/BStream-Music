@@ -41,11 +41,13 @@ void main() {
         remotePlaylistId: 'VLPL-road',
       );
 
-      expect(summaries, hasLength(1));
-      expect(summaries.single.remotePlaylistId, 'PL-road');
-      expect(summaries.single.remoteBrowseId, 'VLPL-road');
-      expect(summaries.single.privacy, 'PRIVATE');
-      expect(summaries.single.isEditable, isTrue);
+      expect(summaries, hasLength(2));
+      final road = summaries.singleWhere(
+        (summary) => summary.remotePlaylistId == 'PL-road',
+      );
+      expect(road.remoteBrowseId, 'VLPL-road');
+      expect(road.privacy, 'PRIVATE');
+      expect(road.isEditable, isTrue);
       expect(snapshot, isNotNull);
       expect(snapshot!.items, hasLength(2));
       expect(snapshot.items.map((item) => item.videoId), const <String?>[
@@ -102,6 +104,27 @@ void main() {
       );
       expect(summaries.first.isLikedMusic, isTrue);
     });
+
+    test(
+      'discovers canonical Liked Music when the saved shelf omits it',
+      () async {
+        final accountGateway = _FakeAccountGateway()
+          ..savedPlaylists = account.RemotePlaylistCollection(
+            playlists: const <account.RemotePlaylistSummary>[],
+            termination: account.RemotePaginationTermination.exhausted,
+            pagesFetched: 1,
+          );
+
+        final summaries = await _adapter(
+          accountGateway,
+        ).listRemotePlaylists(accountKey: _accountKey);
+
+        expect(summaries, hasLength(1));
+        expect(summaries.single.remotePlaylistId, 'LM');
+        expect(summaries.single.remoteBrowseId, 'VLLM');
+        expect(summaries.single.isLikedMusic, isTrue);
+      },
+    );
 
     test(
       'refuses incomplete account pages instead of syncing partial data',

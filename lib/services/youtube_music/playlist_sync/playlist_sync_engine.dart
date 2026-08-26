@@ -340,6 +340,7 @@ class PlaylistSyncEngine {
       // would make each subsequent local like require manual resolution.
       ignoreTitleConflicts: _isFavoritesKey(key),
       ignoreOrderConflicts: _isFavoritesKey(key),
+      matchItemsByVideoIdOnly: _isFavoritesKey(key),
     );
     if (merge.hasConflicts) {
       for (final conflict in merge.conflicts) {
