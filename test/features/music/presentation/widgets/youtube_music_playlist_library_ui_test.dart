@@ -8,6 +8,7 @@ import 'package:bstream_music/features/music/presentation/widgets/library_panel.
 import 'package:bstream_music/features/music/presentation/widgets/playlist_picker_dialog.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/sharing/youtube_music_playlist_share_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -209,6 +210,79 @@ void main() {
   );
 
   testWidgets(
+    'synchronized playlist menu shares its real name and remote identity',
+    (tester) async {
+      final fixture = _remoteCatalogFixture();
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      final shareService = _RecordingPlaylistShareService();
+      await tester.pumpWidget(
+        _libraryHarness(
+          fixture: fixture,
+          controller: controller,
+          shareableBindings: <String, String>{
+            fixture.playlist.id: 'PLremote123',
+          },
+          playlistShareService: shareService,
+        ),
+      );
+      await _pumpLibrary(tester);
+
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+      final header = find.byKey(const ValueKey('library-detail-header'));
+      await tester.tap(
+        find.descendant(
+          of: header,
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Compartir playlist'), findsOneWidget);
+      await tester.tap(
+        find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(shareService.remotePlaylistId, 'PLremote123');
+      expect(shareService.playlistName, 'Viaje importado');
+      expect(shareService.message, contains('Viaje importado'));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('local playlist menu does not expose sharing', (tester) async {
+    final fixture = _remoteCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    await tester.pumpWidget(
+      _libraryHarness(fixture: fixture, controller: controller),
+    );
+    await _pumpLibrary(tester);
+
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+    final header = find.byKey(const ValueKey('library-detail-header'));
+    await tester.tap(
+      find.descendant(
+        of: header,
+        matching: find.byIcon(Icons.more_vert_rounded),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Compartir playlist'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
     'linked playlist local-only action never requests YouTube deletion',
     (tester) async {
       final fixture = _remoteCatalogFixture();
@@ -316,6 +390,8 @@ Future<void> _pumpLibrary(WidgetTester tester) async {
 Widget _libraryHarness({
   required _RemoteCatalogFixture fixture,
   required _RecordingPlaylistsController controller,
+  Map<String, String> shareableBindings = const <String, String>{},
+  YouTubeMusicPlaylistShareService? playlistShareService,
 }) {
   return ProviderScope(
     overrides: [
@@ -329,6 +405,13 @@ Widget _libraryHarness({
             playlistId == fixture.playlist.id ? fixture.catalog : null,
       ),
       playerControllerProvider.overrideWith(_IdlePlayerController.new),
+      youtubeMusicShareablePlaylistBindingsProvider.overrideWith(
+        (ref) async => shareableBindings,
+      ),
+      if (playlistShareService != null)
+        youtubeMusicPlaylistShareServiceProvider.overrideWithValue(
+          playlistShareService,
+        ),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),
@@ -376,6 +459,33 @@ class _IdlePlayerController extends PlayerController {
   @override
   Future<PlayerSnapshot> build() async =>
       const PlayerSnapshot(status: PlayerStatus.idle);
+}
+
+class _RecordingPlaylistShareService
+    implements YouTubeMusicPlaylistShareService {
+  String? remotePlaylistId;
+  String? playlistName;
+  String? message;
+
+  @override
+  bool canShare({
+    required String remotePlaylistId,
+    required String playlistName,
+  }) => remotePlaylistId.trim().isNotEmpty && playlistName.trim().isNotEmpty;
+
+  @override
+  Future<void> sharePlaylist({
+    required String remotePlaylistId,
+    required String playlistName,
+    required String message,
+    required String title,
+    String? subject,
+    Rect? sharePositionOrigin,
+  }) async {
+    this.remotePlaylistId = remotePlaylistId;
+    this.playlistName = playlistName;
+    this.message = message;
+  }
 }
 
 class _RemoteCatalogFixture {

@@ -109,8 +109,9 @@ void main() {
     expect(button, findsOneWidget);
     expect(tester.getSize(button).width, greaterThanOrEqualTo(48));
     final avatar = find.byType(YouTubeMusicAccountAvatar);
-    expect(tester.widget<YouTubeMusicAccountAvatar>(avatar).size, 32);
-    expect(tester.getSize(avatar), const Size.square(32));
+    expect(tester.widget<YouTubeMusicAccountAvatar>(avatar).size, 30);
+    expect(tester.getSize(avatar), const Size.square(30));
+    expect(tester.getSize(button), const Size.square(48));
     expect(find.byType(Image), findsNothing);
     expect(find.byIcon(Icons.person_outline), findsOneWidget);
     expect(find.byTooltip('Sign in to YouTube Music'), findsOneWidget);

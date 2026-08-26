@@ -1,4 +1,5 @@
 import 'package:bstream_music/core/theme/app_colors.dart';
+import 'package:bstream_music/core/theme/app_ui.dart';
 import 'package:bstream_music/features/music/domain/entities/search_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
@@ -164,6 +165,16 @@ void main() {
           .duration,
       const Duration(milliseconds: 220),
     );
+    expect(
+      (tester
+                  .widget<AnimatedPadding>(
+                    find.byKey(const ValueKey('search-input-section-padding')),
+                  )
+                  .padding
+              as EdgeInsets)
+          .top,
+      appTabFirstSectionTopGap,
+    );
 
     await tester.enterText(find.byType(TextField), 'radiohead');
     await tester.testTextInput.receiveAction(TextInputAction.search);
@@ -197,7 +208,33 @@ void main() {
     expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
     expect(
       find.byKey(const ValueKey('search-tab-header-surface')),
-      findsNothing,
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('search-tab-search-input')),
+      findsOneWidget,
+    );
+    expect(find.byType(TextField), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      'radiohead',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('search-tab-header-surface')),
+        matching: find.byKey(const ValueKey('search-tab-search-input')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      (tester
+                  .widget<AnimatedPadding>(
+                    find.byKey(const ValueKey('search-input-section-padding')),
+                  )
+                  .padding
+              as EdgeInsets)
+          .top,
+      20,
     );
 
     await tester.tap(find.byKey(const ValueKey('search-clear-button')));
@@ -227,6 +264,17 @@ void main() {
     expect(tester.takeException(), isNull);
 
     await tester.pumpAndSettle();
+
+    expect(
+      (tester
+                  .widget<AnimatedPadding>(
+                    find.byKey(const ValueKey('search-input-section-padding')),
+                  )
+                  .padding
+              as EdgeInsets)
+          .top,
+      appTabFirstSectionTopGap,
+    );
 
     await tester.pumpWidget(
       _searchApp(controller: controller, platform: TargetPlatform.windows),
@@ -280,8 +328,16 @@ void main() {
     expect(find.byKey(const ValueKey('search-tab-title')), findsNothing);
     expect(
       find.byKey(const ValueKey('search-tab-header-surface')),
-      findsNothing,
+      findsOneWidget,
     );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('search-tab-header-surface')),
+        matching: find.byKey(const ValueKey('search-tab-search-input')),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byType(TextField), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

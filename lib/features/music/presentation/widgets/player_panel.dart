@@ -2621,7 +2621,7 @@ class _PlayerMenu extends ConsumerWidget {
       onSelected: (value) {
         switch (value) {
           case 'download':
-            _downloadCurrent(context, ref);
+            unawaited(_downloadCurrent(context, ref));
           case 'playlist':
             unawaited(_showPlaylistPicker(context, ref));
           case 'favorite':
@@ -2680,6 +2680,7 @@ class _PlayerMenu extends ConsumerWidget {
           ),
         if (snapshot.isRemote && snapshot.sourceUrl != null)
           PopupMenuItem(
+            key: const ValueKey('player-menu-download'),
             value: 'download',
             child: Row(
               children: [
@@ -2740,16 +2741,31 @@ class _PlayerMenu extends ConsumerWidget {
     );
   }
 
-  void _downloadCurrent(BuildContext context, WidgetRef ref) {
+  Future<void> _downloadCurrent(BuildContext context, WidgetRef ref) async {
     final sourceUrl = snapshot.sourceUrl;
     if (sourceUrl == null || sourceUrl.trim().isEmpty) {
       return;
     }
 
-    ref
-        .read(downloadControllerProvider.notifier)
-        .downloadAudio(_trackInfoFromSnapshot(sourceUrl, ref));
-    onOpenSearch?.call();
+    try {
+      await ref
+          .read(downloadControllerProvider.notifier)
+          .downloadAudio(_trackInfoFromSnapshot(sourceUrl, ref));
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(strings.downloadQueueFailed)));
+      return;
+    }
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(strings.downloadQueued)));
   }
 
   Future<void> _showPlaylistPicker(BuildContext context, WidgetRef ref) async {

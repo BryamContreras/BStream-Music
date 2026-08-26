@@ -736,6 +736,67 @@ class YouTubeMusicPlaylistSyncRuntime {
   final PlaylistSyncStore? store;
 }
 
+/// Remote playlist identities that are safe to expose to sharing UI for the
+/// currently authenticated YouTube Music account.
+///
+/// Keeping this projection next to the synchronization boundary prevents UI
+/// code from inspecting credentials or accidentally sharing a binding left by
+/// a different account. Watching both authentication and synchronization state
+/// also refreshes the projection after login, logout, and every completed sync.
+final youtubeMusicShareablePlaylistBindingsProvider =
+    FutureProvider<Map<String, String>>((ref) async {
+      final auth = ref.watch(youtubeMusicAuthControllerProvider);
+      // A sync state change can create, replace, or retire remote bindings.
+      ref.watch(youtubeMusicPlaylistSyncControllerProvider);
+
+      final accountKey = auth.profile?.accountKey.trim();
+      if (!auth.isAuthenticated || accountKey == null || accountKey.isEmpty) {
+        return const <String, String>{};
+      }
+
+      final runtime = ref.watch(youtubeMusicPlaylistSyncRuntimeProvider);
+      final runtimeAccountKey = runtime?.accountKey.trim();
+      final store = runtime?.store;
+      if (runtimeAccountKey != accountKey || store == null) {
+        return const <String, String>{};
+      }
+
+      final generation = auth.generation;
+      final bindings = await store.listBindings(accountKey: accountKey);
+
+      // Fail closed when the account changes while the database read is in
+      // flight. Riverpod will start a fresh computation for the new session.
+      final currentAuth = ref.read(youtubeMusicAuthControllerProvider);
+      final currentRuntime = ref.read(youtubeMusicPlaylistSyncRuntimeProvider);
+      if (!currentAuth.isAuthenticated ||
+          currentAuth.generation != generation ||
+          currentAuth.profile?.accountKey.trim() != accountKey ||
+          currentRuntime?.accountKey.trim() != accountKey) {
+        return const <String, String>{};
+      }
+
+      final shareable = <String, String>{};
+      for (final binding in bindings) {
+        if (binding.key.accountKey.trim() != accountKey ||
+            binding.remoteDeleteRequestedAt != null) {
+          continue;
+        }
+        final localPlaylistId = binding.key.playlistId.trim();
+        var remotePlaylistId = binding.remotePlaylistId?.trim();
+        if (localPlaylistId.isEmpty ||
+            remotePlaylistId == null ||
+            remotePlaylistId.isEmpty) {
+          continue;
+        }
+        if (remotePlaylistId.startsWith('VL')) {
+          remotePlaylistId = remotePlaylistId.substring(2);
+        }
+        if (remotePlaylistId.isEmpty) continue;
+        shareable[localPlaylistId] = remotePlaylistId;
+      }
+      return Map<String, String>.unmodifiable(shareable);
+    });
+
 PlaylistSyncTrigger _strongerTrigger(
   PlaylistSyncTrigger? current,
   PlaylistSyncTrigger incoming,

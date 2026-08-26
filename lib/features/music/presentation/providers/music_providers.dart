@@ -45,6 +45,7 @@ import '../../../../services/recommendations/recommendations.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/sharing/incoming_track_link_service.dart';
 import '../../../../services/sharing/track_share_service.dart';
+import '../../../../services/sharing/youtube_music_playlist_share_service.dart';
 import '../../../../services/sharing/youtube_music_link.dart';
 import '../../../../services/storage/backup_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
@@ -199,6 +200,11 @@ final playerServiceProvider = Provider<PlayerService>((ref) {
 final trackShareServiceProvider = Provider<TrackShareService>((ref) {
   return const SharePlusTrackShareService();
 });
+
+final youtubeMusicPlaylistShareServiceProvider =
+    Provider<YouTubeMusicPlaylistShareService>((ref) {
+      return const SharePlusYouTubeMusicPlaylistShareService();
+    });
 
 final incomingTrackLinkServiceProvider = Provider<IncomingTrackLinkService>((
   ref,
@@ -2211,6 +2217,66 @@ void _retainRemoteDetailTracks(Ref ref) {
   final cacheTimer = Timer(duration, cacheLink.close);
   ref.onDispose(cacheTimer.cancel);
 }
+
+/// Presentation-ready metadata and tracks for a public YouTube Music
+/// collection. Nullable header fields let the detail page retain its localized
+/// fallback labels for private or changing playlist layouts.
+class RemoteCollectionData {
+  RemoteCollectionData({
+    required List<TrackInfo> tracks,
+    this.title,
+    this.subtitle,
+    this.artworkSource,
+  }) : tracks = List<TrackInfo>.unmodifiable(tracks);
+
+  final String? title;
+  final String? subtitle;
+  final String? artworkSource;
+  final List<TrackInfo> tracks;
+}
+
+String? _nonEmptyCollectionText(String? value) {
+  final normalized = value?.trim();
+  return normalized == null || normalized.isEmpty ? null : normalized;
+}
+
+final homeCollectionDetailProvider = FutureProvider.autoDispose
+    .family<RemoteCollectionData, String>((ref, browseId) async {
+      _retainRemoteDetailTracks(ref);
+      final normalizedBrowseId = browseId.trim();
+      if (normalizedBrowseId.isEmpty) {
+        throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');
+      }
+      final search = ref.watch(youtubeMusicSearchProvider);
+      if (search is YouTubeMusicCollectionDetailLookup) {
+        final detail = await (search as YouTubeMusicCollectionDetailLookup)
+            .getCollectionDetail(
+              normalizedBrowseId,
+              limit: innerTubeDetailResultLimit,
+            );
+        final tracks = detail.songs
+            .map(trackInfoFromInnerTubeSong)
+            .toList(growable: false);
+        return RemoteCollectionData(
+          title: _nonEmptyCollectionText(detail.title),
+          subtitle: _nonEmptyCollectionText(detail.subtitle),
+          artworkSource:
+              _nonEmptyCollectionText(detail.thumbnailUrl) ??
+              (tracks.isEmpty ? null : tracks.first.thumbnailUrl),
+          tracks: tracks,
+        );
+      }
+
+      // Compatibility path for test doubles and alternate catalog adapters
+      // that only implement the original songs-only contract.
+      final tracks = await ref.watch(
+        homeCollectionTracksProvider(normalizedBrowseId).future,
+      );
+      return RemoteCollectionData(
+        artworkSource: tracks.isEmpty ? null : tracks.first.thumbnailUrl,
+        tracks: tracks,
+      );
+    });
 
 final homeCollectionTracksProvider = FutureProvider.autoDispose
     .family<List<TrackInfo>, String>((ref, browseId) async {

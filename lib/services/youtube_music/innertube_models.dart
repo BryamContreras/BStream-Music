@@ -70,6 +70,49 @@ class InnerTubeSong {
   }
 }
 
+/// Metadata and ordered songs resolved from a public YouTube Music playlist.
+///
+/// Header fields are nullable because some private, unavailable, or changing
+/// playlist layouts can still expose playable rows without a usable header.
+/// Keeping the songs in that case preserves the compatibility contract of
+/// `getCollectionSongs`, while normal public playlists retain their real
+/// title, owner/subtitle, and highest-resolution header artwork.
+final class InnerTubeCollectionDetail {
+  InnerTubeCollectionDetail({
+    required this.browseId,
+    required List<InnerTubeSong> songs,
+    this.title,
+    this.subtitle,
+    this.thumbnailUrl,
+  }) : songs = List<InnerTubeSong>.unmodifiable(songs);
+
+  final String browseId;
+  final String? title;
+  final String? subtitle;
+  final String? thumbnailUrl;
+  final List<InnerTubeSong> songs;
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is InnerTubeCollectionDetail &&
+            browseId == other.browseId &&
+            title == other.title &&
+            subtitle == other.subtitle &&
+            thumbnailUrl == other.thumbnailUrl &&
+            InnerTubeSong._listsEqual(songs, other.songs);
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    browseId,
+    title,
+    subtitle,
+    thumbnailUrl,
+    Object.hashAll(songs),
+  );
+}
+
 class InnerTubeAlbum {
   InnerTubeAlbum({
     required this.browseId,

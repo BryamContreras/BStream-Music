@@ -1288,6 +1288,70 @@ void main() {
     );
 
     test(
+      'loads public playlist metadata and songs from one browse chain',
+      () async {
+        final initialPayload = _collectionDetailPayload([
+          _songRenderer(
+            videoId: 'public00001',
+            title: 'Public song one',
+            artists: const ['First artist'],
+          ),
+        ], continuation: 'public-playlist-page-2');
+        initialPayload['header'] = _publicPlaylistHeader(
+          title: 'Playlist publica real',
+          owner: 'BStream Listener',
+          thumbnails: const [
+            ('https://img.test/playlist-160.jpg', 160),
+            ('//img.test/playlist-1280.jpg', 1280),
+            ('https://img.test/playlist-640.jpg', 640),
+          ],
+        );
+        transport.responses.addAll([
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(initialPayload),
+          ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(
+              _detailContinuationPayload([
+                _songRenderer(
+                  videoId: 'public00002',
+                  title: 'Public song two',
+                  artists: const ['Second artist'],
+                ),
+              ]),
+            ),
+          ),
+        ]);
+        final service = createService();
+
+        final detail = await service.getCollectionDetail(
+          ' VLPLpublic123 ',
+          limit: 2,
+        );
+
+        expect(detail.browseId, 'VLPLpublic123');
+        expect(detail.title, 'Playlist publica real');
+        expect(detail.subtitle, 'BStream Listener');
+        expect(detail.thumbnailUrl, 'https://img.test/playlist-1280.jpg');
+        expect(detail.songs.map((song) => song.videoId), [
+          'public00001',
+          'public00002',
+        ]);
+        expect(transport.getRequests, hasLength(1));
+        expect(transport.requests, hasLength(2));
+        expect(transport.requests.first.body['browseId'], 'VLPLpublic123');
+        expect(transport.requests.first.body, isNot(contains('continuation')));
+        expect(
+          transport.requests.last.body['continuation'],
+          'public-playlist-page-2',
+        );
+        expect(transport.requests.last.body, isNot(contains('browseId')));
+      },
+    );
+
+    test(
       'detail lookups parse more than the 20 search results in one payload',
       () async {
         final collectionTracks = List.generate(
@@ -2853,6 +2917,50 @@ Map<String, Object> _collectionDetailPayload(
                     ],
                 },
               },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
+Map<String, Object> _publicPlaylistHeader({
+  required String title,
+  required String owner,
+  required List<(String, int)> thumbnails,
+}) {
+  return {
+    'musicDetailHeaderRenderer': {
+      'title': {
+        'runs': [
+          {'text': title},
+        ],
+      },
+      'subtitle': {
+        'runs': [
+          {'text': 'Playlist'},
+          {'text': ' \u2022 '},
+          {
+            'text': owner,
+            'navigationEndpoint': {
+              'browseEndpoint': {'browseId': 'UCplaylist-owner'},
+            },
+          },
+          {'text': ' \u2022 '},
+          {'text': '2 canciones'},
+        ],
+      },
+      'thumbnail': {
+        'musicThumbnailRenderer': {
+          'thumbnail': {
+            'thumbnails': [
+              for (final thumbnail in thumbnails)
+                {
+                  'url': thumbnail.$1,
+                  'width': thumbnail.$2,
+                  'height': thumbnail.$2,
+                },
             ],
           },
         },

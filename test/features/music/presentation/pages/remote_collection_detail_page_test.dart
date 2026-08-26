@@ -342,9 +342,11 @@ void main() {
   ) async {
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(top: 24);
     addTearDown(() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
+      tester.view.resetPadding();
     });
     final tracksProvider = FutureProvider<List<TrackInfo>>(
       (ref) async => List.generate(
@@ -379,6 +381,19 @@ void main() {
       find.byKey(const ValueKey('remote-collection-header')),
     );
     final appBarRect = tester.getRect(appBarFinder);
+    final statusBarSurface = find.byKey(
+      const ValueKey('remote-collection-status-bar-surface'),
+    );
+    final toolbarSurface = find.byKey(
+      const ValueKey('remote-collection-app-bar-surface'),
+    );
+    final statusBarRect = tester.getRect(statusBarSurface);
+    final toolbarRect = tester.getRect(toolbarSurface);
+    expect(statusBarRect.height, 24);
+    expect(statusBarRect.top, appBarRect.top);
+    expect(statusBarRect.bottom, toolbarRect.top);
+    expect(toolbarRect.height, kToolbarHeight);
+    expect(toolbarRect.bottom, appBarRect.bottom);
     expect(
       tester
           .getSize(
@@ -398,6 +413,13 @@ void main() {
     expect(
       find.byKey(const ValueKey('remote-collection-app-bar-blur')),
       findsNothing,
+    );
+    final appBar = tester.widget<AppBar>(appBarFinder);
+    expect(appBar.forceMaterialTransparency, isFalse);
+    expect(appBar.backgroundColor?.a, 1);
+    expect(
+      appBar.systemOverlayStyle?.statusBarColor,
+      Theme.of(tester.element(appBarFinder)).colorScheme.surface,
     );
     expect(
       tester
@@ -437,6 +459,14 @@ void main() {
   testWidgets('transparent detail surface blurs only its app bar bounds', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(top: 24);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPadding();
+    });
     final tracksProvider = FutureProvider<List<TrackInfo>>(
       (ref) async => _tracks,
       retry: (_, _) => null,
@@ -457,6 +487,9 @@ void main() {
     final surfaceFinder = find.byKey(
       const ValueKey('remote-collection-app-bar-surface'),
     );
+    final statusBarSurfaceFinder = find.byKey(
+      const ValueKey('remote-collection-status-bar-surface'),
+    );
     expect(blurFinder, findsOneWidget);
     expect(
       find.ancestor(of: blurFinder, matching: find.byType(ClipRect)),
@@ -469,6 +502,20 @@ void main() {
     expect(decoration.border, isNull);
     expect(tester.getRect(blurFinder), tester.getRect(surfaceFinder));
     expect(tester.getRect(blurFinder).height, closeTo(kToolbarHeight, 0.01));
+    expect(tester.getRect(statusBarSurfaceFinder).height, 24);
+    expect(
+      tester.getRect(statusBarSurfaceFinder).bottom,
+      tester.getRect(surfaceFinder).top,
+    );
+    final appBar = tester.widget<AppBar>(
+      find.byKey(const ValueKey('remote-collection-app-bar')),
+    );
+    expect(appBar.forceMaterialTransparency, isTrue);
+    expect(appBar.backgroundColor, Colors.transparent);
+    expect(
+      appBar.systemOverlayStyle?.statusBarColor,
+      Theme.of(tester.element(surfaceFinder)).colorScheme.surface,
+    );
   });
 
   testWidgets(

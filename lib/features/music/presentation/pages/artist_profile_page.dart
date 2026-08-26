@@ -148,6 +148,9 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
         appBarKey: const ValueKey('artist-profile-app-bar'),
         surfaceKey: const ValueKey('artist-profile-app-bar-surface'),
         blurKey: const ValueKey('artist-profile-app-bar-blur'),
+        statusBarSurfaceKey: const ValueKey(
+          'artist-profile-status-bar-surface',
+        ),
         title: Text(
           strings.artistProfile,
           maxLines: 1,

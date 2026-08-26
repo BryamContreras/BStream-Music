@@ -17,6 +17,7 @@ import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/platform/app_platform.dart';
+import '../../../../platform_channels/android_app_activation_channel.dart';
 import '../../../../platform_channels/android_external_audio_channel.dart';
 import '../../../../services/recommendations/recommendation_feed_models.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
@@ -25,6 +26,7 @@ import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/remote_music_datasource.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
+import '../../domain/usecases/get_track_info.dart';
 import '../providers/music_providers.dart';
 import '../providers/youtube_music_auth_controller.dart';
 import '../widgets/bstream_logo.dart';
@@ -66,6 +68,22 @@ final homeGreetingClockProvider = Provider<HomeGreetingClock>(
   (ref) => DateTime.now,
 );
 
+final androidExternalAudioRequestsProvider =
+    Provider<Stream<ExternalAudioRequest>?>((ref) {
+      if (!AppPlatform.isAndroid) {
+        return null;
+      }
+      return androidExternalAudioChannel.requests;
+    });
+
+final androidAppActivationsProvider =
+    Provider<Stream<AndroidAppActivationEvent>?>((ref) {
+      if (!AppPlatform.isAndroid) {
+        return null;
+      }
+      return androidAppActivationChannel.activations;
+    });
+
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({
     super.key,
@@ -96,6 +114,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   int _rootBackCount = 0;
   DateTime? _lastRootBackAt;
   StreamSubscription<ExternalAudioRequest>? _externalAudioSubscription;
+  StreamSubscription<AndroidAppActivationEvent>? _appActivationSubscription;
   ProviderSubscription<AsyncValue<BStreamTrackLink>>?
   _incomingTrackLinkSubscription;
   ProviderSubscription<AsyncValue<YouTubeMusicLink>>?
@@ -105,6 +124,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   Future<void> _incomingYouTubeMusicLinkWork = Future<void>.value();
   final Set<String> _startedExternalAudioRequests = <String>{};
   final Set<String> _reportedIncompleteExternalFolders = <String>{};
+  int _latestAppEntryGeneration = 0;
   LocalHistoryEntry? _playerHistoryEntry;
   bool _playerHistoryRegistrationScheduled = false;
   bool _ignorePlayerHistoryRemoval = false;
@@ -128,16 +148,24 @@ class _HomePageState extends ConsumerState<HomePage> {
         unawaited(_reconcileLocalLibrary());
       }
     });
-    if (AppPlatform.isAndroid) {
-      _externalAudioSubscription = const AndroidExternalAudioChannel().requests
-          .listen(
-            _queueExternalAudioRequest,
-            onError: (Object error, StackTrace stackTrace) {
-              debugPrint('External audio channel failed: $error');
-              debugPrintStack(stackTrace: stackTrace);
-            },
-          );
-    }
+    _externalAudioSubscription = ref
+        .read(androidExternalAudioRequestsProvider)
+        ?.listen(
+          _queueExternalAudioRequest,
+          onError: (Object error, StackTrace stackTrace) {
+            debugPrint('External audio channel failed: $error');
+            debugPrintStack(stackTrace: stackTrace);
+          },
+        );
+    _appActivationSubscription = ref
+        .read(androidAppActivationsProvider)
+        ?.listen(
+          _handleAndroidAppActivation,
+          onError: (Object error, StackTrace stackTrace) {
+            debugPrint('Android app activation channel failed: $error');
+            debugPrintStack(stackTrace: stackTrace);
+          },
+        );
     _incomingTrackLinkSubscription = ref
         .listenManual<AsyncValue<BStreamTrackLink>>(
           incomingTrackLinkProvider,
@@ -165,43 +193,113 @@ class _HomePageState extends ConsumerState<HomePage> {
     if (!mounted) {
       return;
     }
-    _openPlayer();
+    _openPlayerFromExternalEntry();
 
     final watchUrl = link.youtubeUri.toString();
-    TrackInfo? track;
-    try {
-      final search = ref.read(youtubeMusicSearchProvider);
-      if (search is YouTubeMusicTrackLookup) {
-        final song = await (search as YouTubeMusicTrackLookup)
-            .getSong(link.videoId)
-            .timeout(const Duration(seconds: 3));
-        if (song != null) {
-          track = trackInfoFromInnerTubeSong(song);
-        }
-      }
-    } catch (error) {
-      // Metadata is best effort and must never delay playback indefinitely.
-      // The normal player path below still performs Explode -> yt-dlp audio
-      // fallback with the canonical YouTube URL.
-      debugPrint('Shared track InnerTube lookup failed: $error');
-    }
-
     final strings = ref.read(appStringsProvider);
-    track ??= TrackInfo(
+    final fallbackTrack = TrackInfo(
       id: link.videoId,
       title: strings.sharedSong,
       artist: 'YouTube',
       url: watchUrl,
       thumbnailUrl: youtubeThumbnailSourceForVideoId(link.videoId),
     );
+    final search = ref.read(youtubeMusicSearchProvider);
+    final getTrackInfo = ref.read(getTrackInfoProvider);
 
     if (!mounted) {
       return;
     }
     await ref.read(playerControllerProvider.future);
-    await ref
+    if (!mounted) {
+      return;
+    }
+    final controller = ref.read(playerControllerProvider.notifier);
+    final playback = controller.playRemote(
+      fallbackTrack,
+      queueSourceId: 'shared-link:${link.videoId}',
+    );
+    unawaited(
+      _enrichIncomingTrackMetadata(
+        link: link,
+        watchUrl: watchUrl,
+        search: search,
+        getTrackInfo: getTrackInfo,
+        playback: playback,
+      ),
+    );
+    await playback;
+  }
+
+  Future<void> _enrichIncomingTrackMetadata({
+    required BStreamTrackLink link,
+    required String watchUrl,
+    required YouTubeMusicSearch search,
+    required GetTrackInfo getTrackInfo,
+    required Future<void> playback,
+  }) async {
+    TrackInfo? resolved;
+    if (search case final YouTubeMusicTrackLookup lookup) {
+      try {
+        final song = await lookup.getSong(link.videoId);
+        if (song != null) {
+          resolved = trackInfoFromInnerTubeSong(song);
+        }
+      } catch (error) {
+        debugPrint('Shared track InnerTube player lookup failed: $error');
+      }
+    }
+
+    if (resolved == null && search is YouTubeMusicRelated) {
+      try {
+        final page = await (search as YouTubeMusicRelated).getNext(
+          link.videoId,
+          limit: 8,
+        );
+        for (final song in page.songs) {
+          if (song.videoId == link.videoId) {
+            resolved = trackInfoFromInnerTubeSong(song);
+            break;
+          }
+        }
+      } catch (error) {
+        debugPrint('Shared track InnerTube watch-next lookup failed: $error');
+      }
+    }
+
+    // yt-dlp can supply the same canonical fields when InnerTube changes, but
+    // only run it after the audio load settles. This avoids competing heavy
+    // extractor work while YouTube Explode is resolving playback.
+    if (resolved == null) {
+      try {
+        await playback;
+      } catch (_) {
+        // Metadata remains useful even when playback itself failed.
+      }
+      if (!mounted) {
+        return;
+      }
+      final controller = ref.read(playerControllerProvider.notifier);
+      if (controller.currentRemoteTrackFor(watchUrl) == null) {
+        return;
+      }
+      try {
+        resolved = await getTrackInfo(
+          watchUrl,
+        ).timeout(const Duration(seconds: 20));
+      } catch (error) {
+        debugPrint('Shared track extractor metadata lookup failed: $error');
+      }
+    }
+
+    if (!mounted || resolved == null) {
+      return;
+    }
+    ref
         .read(playerControllerProvider.notifier)
-        .playRemote(track, queueSourceId: 'shared-link:${link.videoId}');
+        .enrichCurrentRemoteTrackMetadata(
+          resolved.copyWith(id: link.videoId, url: watchUrl),
+        );
   }
 
   void _queueIncomingYouTubeMusicLink(YouTubeMusicLink link) {
@@ -231,19 +329,26 @@ class _HomePageState extends ConsumerState<HomePage> {
     final tracksProvider = isAlbum
         ? homeAlbumTracksProvider(collectionId)
         : homeCollectionTracksProvider(collectionId);
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => RemoteCollectionDetailPage(
-          title: title,
-          subtitle: strings.youtubeMusic,
-          artworkSource: null,
-          metadata: const [],
-          queueSourceId: 'incoming-youtube:${link.kind.name}:$collectionId',
-          tracksProvider: tracksProvider,
-          emptyMessage: strings.homeCollectionEmpty,
-          errorMessage: strings.homeCollectionLoadError,
-          onOpenPlayer: _openPlayer,
-          onAddToPlaylist: _addRemoteTracksToPlaylist,
+    final navigator = Navigator.of(context);
+    navigator.popUntil((route) => route.isFirst);
+    unawaited(
+      navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => RemoteCollectionDetailPage(
+            title: title,
+            subtitle: strings.youtubeMusic,
+            artworkSource: null,
+            metadata: const [],
+            queueSourceId: 'incoming-youtube:${link.kind.name}:$collectionId',
+            tracksProvider: tracksProvider,
+            detailsProvider: isAlbum
+                ? null
+                : homeCollectionDetailProvider(collectionId),
+            emptyMessage: strings.homeCollectionEmpty,
+            errorMessage: strings.homeCollectionLoadError,
+            onOpenPlayer: _openPlayer,
+            onAddToPlaylist: _addRemoteTracksToPlaylist,
+          ),
         ),
       ),
     );
@@ -328,16 +433,41 @@ class _HomePageState extends ConsumerState<HomePage> {
         });
   }
 
+  void _handleAndroidAppActivation(AndroidAppActivationEvent event) {
+    if (!mounted) {
+      return;
+    }
+    if (event.entryGeneration < _latestAppEntryGeneration) {
+      return;
+    }
+    _latestAppEntryGeneration = event.entryGeneration;
+    switch (event.activation) {
+      case AndroidAppActivation.home:
+        _openHomeFromExternalEntry();
+        break;
+      case AndroidAppActivation.player:
+        _openPlayerFromExternalEntry();
+        break;
+    }
+  }
+
   Future<void> _handleExternalAudioRequest(ExternalAudioRequest request) async {
     if (!mounted) {
       return;
+    }
+    final isLatestAppEntry =
+        request.entryGeneration >= _latestAppEntryGeneration;
+    if (request.entryGeneration > _latestAppEntryGeneration) {
+      _latestAppEntryGeneration = request.entryGeneration;
     }
     final strings = ref.read(appStringsProvider);
     final tracks = request.toLocalTracks(unknownArtist: strings.unknownArtist);
     final player = ref.read(playerControllerProvider.notifier);
 
     if (_startedExternalAudioRequests.add(request.requestId)) {
-      _openPlayer();
+      if (request.openPlayer && isLatestAppEntry) {
+        _openPlayerFromExternalEntry();
+      }
       await ref.read(playerControllerProvider.future);
       await player.playLocal(
         tracks[request.selectedIndex],
@@ -419,6 +549,39 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _openPlayer() {
     _setSelectedIndex(_playerIndex);
+  }
+
+  void _openPlayerFromExternalEntry() {
+    Navigator.maybeOf(context)?.popUntil((route) => route.isFirst);
+    if (_isPlayerSelected) {
+      _viewHistory.clear();
+      _rootBackCount = 0;
+      _lastRootBackAt = null;
+      _schedulePlayerHistoryEntry();
+      return;
+    }
+    _releaseFocusForViewChange();
+    setState(() {
+      _viewHistory.clear();
+      _rootBackCount = 0;
+      _lastRootBackAt = null;
+      _selectedIndex = _playerIndex;
+    });
+    _schedulePlayerHistoryEntry();
+  }
+
+  void _openHomeFromExternalEntry() {
+    Navigator.maybeOf(context)?.popUntil((route) => route.isFirst);
+    if (_isPlayerSelected) {
+      _removePlayerHistoryEntry();
+    }
+    _releaseFocusForViewChange();
+    setState(() {
+      _viewHistory.clear();
+      _rootBackCount = 0;
+      _lastRootBackAt = null;
+      _selectedIndex = _homeIndex;
+    });
   }
 
   void _openSearch() {
@@ -530,6 +693,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   void dispose() {
     _removePlayerHistoryEntry();
     unawaited(_externalAudioSubscription?.cancel());
+    unawaited(_appActivationSubscription?.cancel());
     _incomingTrackLinkSubscription?.close();
     _incomingYouTubeMusicLinkSubscription?.close();
     _localMusicNavigationController.dispose();

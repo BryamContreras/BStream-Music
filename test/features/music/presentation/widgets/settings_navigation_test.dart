@@ -327,6 +327,9 @@ void main() {
         find.byKey(const ValueKey('settings-tab-header-surface')),
         findsOneWidget,
       );
+      final rootHeaderRect = tester.getRect(
+        find.byKey(const ValueKey('settings-tab-header-surface')),
+      );
       expect(
         find.byKey(const ValueKey('settings-card-appearance')),
         findsOneWidget,
@@ -390,12 +393,19 @@ void main() {
         findsNothing,
       );
       expect(
-        find.byWidgetPredicate((widget) {
-          final key = widget.key;
-          return key is ValueKey<String> &&
-              key.value.startsWith('settings-detail-header-surface-');
-        }),
-        findsNothing,
+        find.byKey(const ValueKey('settings-detail-header-surface-appearance')),
+        findsOneWidget,
+      );
+      final detailHeader = find.byKey(
+        const ValueKey('settings-detail-header-surface-appearance'),
+      );
+      expect(tester.getRect(detailHeader), rootHeaderRect);
+      expect(
+        tester.widget<Material>(detailHeader).color,
+        AppColors.tabHeaderSurfaceFor(
+          tester.element(detailHeader),
+          scrolledUnder: false,
+        ),
       );
       expect(find.byKey(const ValueKey('accent-palette-grid')), findsOneWidget);
       expect(

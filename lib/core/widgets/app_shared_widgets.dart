@@ -1,7 +1,90 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_ui.dart';
+
+/// Adds the lighter blur used behind text inputs when transparent surfaces are
+/// enabled. The field's themed fill supplies the shared menu tint.
+class AppSurfaceInput extends StatelessWidget {
+  const AppSurfaceInput({
+    required this.child,
+    this.borderRadius = 8,
+    this.blur = true,
+    super.key,
+  });
+
+  final Widget child;
+  final double borderRadius;
+  final bool blur;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!blur ||
+        AppColors.surfaceBackgroundModeFor(context) !=
+            SurfaceBackgroundMode.transparent) {
+      return child;
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(borderRadius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Accent-aware surface for internal page headings such as downloaded songs
+/// and playlist names.
+class AppInsetHeaderSurface extends StatelessWidget {
+  const AppInsetHeaderSurface({
+    required this.child,
+    this.padding = const EdgeInsets.symmetric(horizontal: 6),
+    this.borderRadius = appCardRadius,
+    super.key,
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final double borderRadius;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(borderRadius);
+    final transparent =
+        AppColors.surfaceBackgroundModeFor(context) ==
+        SurfaceBackgroundMode.transparent;
+    final surface = DecoratedBox(
+      decoration: BoxDecoration(
+        color: transparent
+            ? null
+            : AppColors.tabHeaderSurfaceFor(context, scrolledUnder: true),
+        gradient: transparent
+            ? AppColors.glassSurfaceGradientFor(
+                context,
+                baseColor: AppColors.menuBackgroundFor(context),
+                intensity: 1.2,
+              )
+            : AppColors.glassAccentGradientFor(context, intensity: 0.9),
+        borderRadius: radius,
+      ),
+      child: Padding(padding: padding, child: child),
+    );
+    if (!transparent) {
+      return surface;
+    }
+    return ClipRRect(
+      borderRadius: radius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: surface,
+      ),
+    );
+  }
+}
 
 /// A page-section heading that uses the shared [appSectionTitleStyle].
 class AppSectionTitle extends StatelessWidget {

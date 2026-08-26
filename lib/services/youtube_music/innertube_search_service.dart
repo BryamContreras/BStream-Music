@@ -69,6 +69,17 @@ abstract interface class YouTubeMusicCollectionLookup {
   });
 }
 
+/// Resolves a public playlist's header metadata and songs together.
+///
+/// Implementations should obtain both from the same initial browse response,
+/// rather than issuing a second request only for the title or artwork.
+abstract interface class YouTubeMusicCollectionDetailLookup {
+  Future<InnerTubeCollectionDetail> getCollectionDetail(
+    String browseId, {
+    int limit = innerTubeDetailResultLimit,
+  });
+}
+
 abstract interface class YouTubeMusicAlbumLookup {
   Future<List<InnerTubeSong>> getAlbumSongs(
     String browseId, {
@@ -136,6 +147,7 @@ class InnerTubeSearchService
         YouTubeMusicTrackLookup,
         YouTubeMusicHome,
         YouTubeMusicCollectionLookup,
+        YouTubeMusicCollectionDetailLookup,
         YouTubeMusicAlbumLookup,
         YouTubeMusicRelated,
         YouTubeMusicArtistLookup,
@@ -595,6 +607,12 @@ class InnerTubeSearchService
   Future<List<InnerTubeSong>> getCollectionSongs(
     String browseId, {
     int limit = maxDetailResults,
+  }) async => (await getCollectionDetail(browseId, limit: limit)).songs;
+
+  @override
+  Future<InnerTubeCollectionDetail> getCollectionDetail(
+    String browseId, {
+    int limit = maxDetailResults,
   }) async {
     _ensureActive();
     final normalizedBrowseId = browseId.trim();
@@ -606,10 +624,20 @@ class InnerTubeSearchService
       );
     }
     _validateDetailResultLimit(limit);
-    return _getDetailSongs(
+    final page = await _getDetailPage(
       browseId: normalizedBrowseId,
       limit: limit,
       isAlbum: false,
+    );
+    final header = _InnerTubeCollectionHeaderParser(
+      _parser,
+    ).parse(page.initialPayload);
+    return InnerTubeCollectionDetail(
+      browseId: normalizedBrowseId,
+      title: header.title,
+      subtitle: header.subtitle,
+      thumbnailUrl: header.thumbnailUrl,
+      songs: page.songs,
     );
   }
 
@@ -628,14 +656,15 @@ class InnerTubeSearchService
       );
     }
     _validateDetailResultLimit(limit);
-    return _getDetailSongs(
+    final page = await _getDetailPage(
       browseId: normalizedBrowseId,
       limit: limit,
       isAlbum: true,
     );
+    return page.songs;
   }
 
-  Future<List<InnerTubeSong>> _getDetailSongs({
+  Future<_InnerTubeDetailPage> _getDetailPage({
     required String browseId,
     required int limit,
     required bool isAlbum,
@@ -648,6 +677,7 @@ class InnerTubeSearchService
     }
 
     var decoded = _decodeDetailResponse(response);
+    final initialPayload = decoded;
     final songs = <InnerTubeSong>[];
     final seenVideoIds = <String>{};
     String? fallbackAlbumTitle;
@@ -708,7 +738,10 @@ class InnerTubeSearchService
         break;
       }
     }
-    return List.unmodifiable(songs);
+    return _InnerTubeDetailPage(
+      initialPayload: initialPayload,
+      songs: List.unmodifiable(songs),
+    );
   }
 
   Object? _decodeDetailResponse(InnerTubeHttpResponse response) {
@@ -1957,6 +1990,203 @@ class InnerTubeSearchParser {
       return value.toInt();
     }
     return int.tryParse(value?.toString() ?? '');
+  }
+}
+
+final class _InnerTubeDetailPage {
+  const _InnerTubeDetailPage({
+    required this.initialPayload,
+    required this.songs,
+  });
+
+  final Object? initialPayload;
+  final List<InnerTubeSong> songs;
+}
+
+final class _InnerTubeCollectionHeader {
+  const _InnerTubeCollectionHeader({
+    this.title,
+    this.subtitle,
+    this.thumbnailUrl,
+  });
+
+  final String? title;
+  final String? subtitle;
+  final String? thumbnailUrl;
+}
+
+/// Reads only the playlist header from a browse response.
+///
+/// Limiting the traversal to a recognized header renderer prevents a song or
+/// recommendation nested later in the payload from becoming the collection's
+/// title or artwork.
+final class _InnerTubeCollectionHeaderParser {
+  const _InnerTubeCollectionHeaderParser(this._songParser);
+
+  final InnerTubeSearchParser _songParser;
+
+  _InnerTubeCollectionHeader parse(Object? payload) {
+    final header = _findHeader(payload);
+    if (header == null) {
+      return const _InnerTubeCollectionHeader();
+    }
+    final title = _firstText(header, const <String>['title', 'headline']);
+    return _InnerTubeCollectionHeader(
+      title: title,
+      subtitle: _ownerOrSubtitle(header, title: title),
+      thumbnailUrl: _largestThumbnailUrl(header),
+    );
+  }
+
+  Map<dynamic, dynamic>? _findHeader(Object? node) {
+    if (node is Map) {
+      for (final rendererName in const <String>[
+        'musicDetailHeaderRenderer',
+        'musicEditablePlaylistDetailHeaderRenderer',
+        'musicResponsiveHeaderRenderer',
+        'musicImmersiveHeaderRenderer',
+      ]) {
+        final renderer = node[rendererName];
+        if (renderer is Map) {
+          return renderer;
+        }
+      }
+      for (final value in node.values) {
+        final header = _findHeader(value);
+        if (header != null) {
+          return header;
+        }
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final header = _findHeader(value);
+        if (header != null) {
+          return header;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _firstText(Map<dynamic, dynamic> renderer, List<String> keys) {
+    for (final key in keys) {
+      final text = _songParser._text(renderer[key]);
+      if (text != null) {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  String? _ownerOrSubtitle(
+    Map<dynamic, dynamic> header, {
+    required String? title,
+  }) {
+    final directOwner = _firstText(header, const <String>[
+      'owner',
+      'straplineTextOne',
+    ]);
+    if (_isUsefulSubtitle(directOwner, title: title)) {
+      return directOwner;
+    }
+
+    for (final key in const <String>[
+      'subtitle',
+      'straplineTextOne',
+      'secondSubtitle',
+    ]) {
+      final owner = _linkedOwner(header[key]);
+      if (_isUsefulSubtitle(owner, title: title)) {
+        return owner;
+      }
+    }
+
+    for (final key in const <String>[
+      'subtitle',
+      'secondSubtitle',
+      'straplineTextOne',
+    ]) {
+      final subtitle = _songParser._text(header[key]);
+      if (_isUsefulSubtitle(subtitle, title: title)) {
+        return subtitle;
+      }
+    }
+    return null;
+  }
+
+  String? _linkedOwner(Object? textRenderer) {
+    if (textRenderer is! Map || textRenderer['runs'] is! List) {
+      return null;
+    }
+    for (final run in textRenderer['runs'] as List) {
+      if (run is! Map) {
+        continue;
+      }
+      final navigation = run['navigationEndpoint'];
+      final browse = navigation is Map ? navigation['browseEndpoint'] : null;
+      final browseId = browse is Map
+          ? _songParser._text(browse['browseId'])
+          : null;
+      if (browseId == null || !browseId.startsWith('UC')) {
+        continue;
+      }
+      final owner = _songParser._text(run['text']);
+      if (owner != null) {
+        return owner;
+      }
+    }
+    return null;
+  }
+
+  bool _isUsefulSubtitle(String? value, {required String? title}) {
+    final normalized = value?.trim();
+    return normalized != null &&
+        normalized.isNotEmpty &&
+        normalized != '\u2022' &&
+        normalized != '\u00b7' &&
+        normalized.toLowerCase() != title?.trim().toLowerCase();
+  }
+
+  String? _largestThumbnailUrl(Object? node) {
+    String? selectedUrl;
+    var selectedArea = -1;
+
+    void visit(Object? value) {
+      if (value is Map) {
+        final thumbnails = value['thumbnails'];
+        if (thumbnails is List) {
+          for (final rawThumbnail in thumbnails) {
+            if (rawThumbnail is! Map) {
+              continue;
+            }
+            var url = _songParser._text(rawThumbnail['url']);
+            if (url == null) {
+              continue;
+            }
+            if (url.startsWith('//')) {
+              url = 'https:$url';
+            }
+            final width = _songParser._integer(rawThumbnail['width']) ?? 0;
+            final height = _songParser._integer(rawThumbnail['height']) ?? 0;
+            final area = width * height;
+            if (selectedUrl == null || area >= selectedArea) {
+              selectedUrl = url;
+              selectedArea = area;
+            }
+          }
+        }
+        for (final child in value.values) {
+          visit(child);
+        }
+      } else if (value is List) {
+        for (final child in value) {
+          visit(child);
+        }
+      }
+    }
+
+    visit(node);
+    return selectedUrl;
   }
 }
 

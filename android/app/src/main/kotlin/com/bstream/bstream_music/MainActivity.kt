@@ -29,6 +29,7 @@ import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.thread
 import kotlin.concurrent.read
@@ -74,8 +75,10 @@ class MainActivity : AudioServiceActivity() {
     // workers keep visible rows responsive without creating unbounded metadata
     // concurrency on slower storage.
     private val localArtworkExecutor = Executors.newFixedThreadPool(2)
-    private var externalAudioSink: EventChannel.EventSink? = null
+    private var externalAudioChannel: MethodChannel? = null
     private val pendingExternalAudioEvents = ArrayDeque<Map<String, Any?>>()
+    private var appActivationChannel: MethodChannel? = null
+    private var pendingAppActivation: Map<String, Any>? = null
     private var pendingExternalAudioPermissionRequest: ExternalAudioRequest? = null
     private var audioPermissionRequestInFlight = false
     private var pendingLocalAudioPermissionResult: MethodChannel.Result? = null
@@ -94,6 +97,7 @@ class MainActivity : AudioServiceActivity() {
                 View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         if (!handleExternalAudioIntent(intent)) {
+            handleAppActivationIntent(intent)
             requestNotificationPermissionIfNeeded()
         }
     }
@@ -167,29 +171,45 @@ class MainActivity : AudioServiceActivity() {
             },
         )
 
-        EventChannel(
+        appActivationChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            APP_ACTIVATION_CHANNEL,
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "consumePendingActivation" -> {
+                        val activation = pendingAppActivation
+                        pendingAppActivation = null
+                        result.success(activation)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+
+        externalAudioChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             EXTERNAL_AUDIO_CHANNEL,
-        ).setStreamHandler(
-            object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    externalAudioSink = events
-                    while (pendingExternalAudioEvents.isNotEmpty()) {
-                        events?.success(pendingExternalAudioEvents.removeFirst())
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "consumePendingExternalAudioEvents" -> {
+                        val pending = ArrayList(pendingExternalAudioEvents)
+                        pendingExternalAudioEvents.clear()
+                        result.success(pending)
                     }
+                    else -> result.notImplemented()
                 }
-
-                override fun onCancel(arguments: Any?) {
-                    externalAudioSink = null
-                }
-            },
-        )
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleExternalAudioIntent(intent)
+        if (!handleExternalAudioIntent(intent)) {
+            handleAppActivationIntent(intent)
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -1485,7 +1505,11 @@ class MainActivity : AudioServiceActivity() {
         }
         val safeIntent = Intent(intent!!)
         retainExternalAudioPermission(safeIntent)
-        val request = ExternalAudioRequest(UUID.randomUUID().toString(), safeIntent)
+        val request = ExternalAudioRequest(
+            UUID.randomUUID().toString(),
+            safeIntent,
+            appEntryGeneration.incrementAndGet(),
+        )
 
         if (hasAudioLibraryPermission()) {
             resolveExternalAudio(
@@ -1539,15 +1563,22 @@ class MainActivity : AudioServiceActivity() {
                     permissionPending = permissionPending,
                     permissionDenied = permissionDenied,
                 )
+                val eventPayload = payload.toMutableMap().apply {
+                    put("entryGeneration", request.entryGeneration)
+                    put(
+                        "openPlayer",
+                        request.entryGeneration == appEntryGeneration.get(),
+                    )
+                }
                 Log.i(
                     EXTERNAL_AUDIO_TAG,
                     "Resolved external audio: tracks=" +
-                        "${(payload["tracks"] as? List<*>)?.size ?: 0}, " +
-                        "selected=${payload["selectedIndex"]}, " +
-                        "folderComplete=${payload["folderQueueComplete"]}, " +
+                        "${(eventPayload["tracks"] as? List<*>)?.size ?: 0}, " +
+                        "selected=${eventPayload["selectedIndex"]}, " +
+                        "folderComplete=${eventPayload["folderQueueComplete"]}, " +
                         "permissionPending=$permissionPending",
                 )
-                mainHandler.post { emitExternalAudio(payload) }
+                mainHandler.post { emitExternalAudio(eventPayload) }
             } catch (error: Throwable) {
                 Log.e(TAG, "Could not resolve external audio", error)
             }
@@ -1555,15 +1586,26 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun emitExternalAudio(payload: Map<String, Any?>) {
-        val sink = externalAudioSink
-        if (sink != null) {
-            sink.success(payload)
-            return
-        }
         while (pendingExternalAudioEvents.size >= MAX_PENDING_EXTERNAL_AUDIO_EVENTS) {
             pendingExternalAudioEvents.removeFirst()
         }
         pendingExternalAudioEvents.addLast(payload)
+        val channel = externalAudioChannel ?: return
+        channel.invokeMethod(
+            "externalAudio",
+            payload,
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    if (result == true) {
+                        pendingExternalAudioEvents.removeFirstOccurrence(payload)
+                    }
+                }
+
+                override fun error(code: String, message: String?, details: Any?) = Unit
+
+                override fun notImplemented() = Unit
+            },
+        )
     }
 
     private fun requestExternalAudioPermissionIfNeeded() {
@@ -1602,6 +1644,44 @@ class MainActivity : AudioServiceActivity() {
         } else {
             Manifest.permission.READ_EXTERNAL_STORAGE
         }
+    }
+
+    private fun handleAppActivationIntent(intent: Intent?) {
+        val activation = when {
+            intent?.action == ACTION_OPEN_HOME -> APP_ACTIVATION_HOME
+            intent?.action == AUDIO_SERVICE_NOTIFICATION_CLICK_ACTION -> APP_ACTIVATION_PLAYER
+            intent?.action == Intent.ACTION_MAIN &&
+                intent.hasCategory(Intent.CATEGORY_LAUNCHER) -> APP_ACTIVATION_HOME
+            else -> null
+        } ?: return
+        emitAppActivation(
+            activation = activation,
+            entryGeneration = appEntryGeneration.incrementAndGet(),
+        )
+    }
+
+    private fun emitAppActivation(activation: String, entryGeneration: Long) {
+        val payload = mapOf(
+            "activation" to activation,
+            "entryGeneration" to entryGeneration,
+        )
+        pendingAppActivation = payload
+        val channel = appActivationChannel ?: return
+        channel.invokeMethod(
+            "activate",
+            payload,
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    if (result == true && pendingAppActivation == payload) {
+                        pendingAppActivation = null
+                    }
+                }
+
+                override fun error(code: String, message: String?, details: Any?) = Unit
+
+                override fun notImplemented() = Unit
+            },
+        )
     }
 
     private fun localAudioPermissionStatus(): String {
@@ -1854,7 +1934,13 @@ class MainActivity : AudioServiceActivity() {
         private const val FILE_EXPORT_CHANNEL = "bstream_music/file_export"
         private const val SCREEN_CHANNEL = "bstream_music/screen"
         private const val EXTERNAL_AUDIO_CHANNEL = "bstream_music/external_audio"
+        private const val APP_ACTIVATION_CHANNEL = "bstream_music/app_activation"
         private const val LOCAL_AUDIO_CHANNEL = "bstream_music/local_audio"
+        private const val AUDIO_SERVICE_NOTIFICATION_CLICK_ACTION =
+            "com.ryanheise.audioservice.NOTIFICATION_CLICK"
+        private const val APP_ACTIVATION_HOME = "home"
+        private const val APP_ACTIVATION_PLAYER = "player"
+        private val appEntryGeneration = AtomicLong(0)
         private const val NOTIFICATION_PERMISSION_REQUEST = 4010
         private const val FILE_EXPORT_REQUEST = 4011
         private const val EXTERNAL_AUDIO_PERMISSION_REQUEST = 4012
@@ -1980,6 +2066,7 @@ class MainActivity : AudioServiceActivity() {
     private data class ExternalAudioRequest(
         val id: String,
         val intent: Intent,
+        val entryGeneration: Long,
     )
 
     private data class RuntimeYtDlpVerification(

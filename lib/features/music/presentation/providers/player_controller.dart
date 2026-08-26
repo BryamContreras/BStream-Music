@@ -921,7 +921,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         }
       }
 
-      final playableTrack = await _resolveRemoteTrack(
+      var playableTrack = await _resolveRemoteTrack(
         track,
         shouldContinue: () => _isCurrentRemoteSelection(
           track,
@@ -940,6 +940,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       );
       if (!_isCurrentPlayRequest(requestId)) {
         return;
+      }
+      final currentMetadata = _currentRemoteTrack;
+      if (currentMetadata != null) {
+        playableTrack = _preserveCatalogMetadata(
+          currentMetadata,
+          playableTrack,
+        );
       }
       _replaceCurrentRemoteTrack(playableTrack);
 
@@ -1202,16 +1209,22 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   PlayerSnapshot _remoteLoadingSnapshot(TrackInfo track) {
+    final current = _currentRemoteTrack;
+    final presentationTrack = current == null
+        ? track
+        : _preserveCatalogMetadata(current, track);
     return PlayerSnapshot(
       status: PlayerStatus.loading,
-      title: track.title,
-      artist: track.artist,
-      album: track.album,
-      trackId: track.id.isEmpty ? track.url : track.id,
+      title: presentationTrack.title,
+      artist: presentationTrack.artist,
+      album: presentationTrack.album,
+      trackId: presentationTrack.id.isEmpty
+          ? presentationTrack.url
+          : presentationTrack.id,
       queueEntryId: _currentRemoteQueueEntryId,
-      sourceUrl: track.url,
-      thumbnailUrl: _stableRemoteThumbnail(track),
-      duration: track.duration,
+      sourceUrl: presentationTrack.url,
+      thumbnailUrl: _stableRemoteThumbnail(presentationTrack),
+      duration: presentationTrack.duration,
       volume:
           state.value?.volume ??
           ref.read(playerServiceProvider).currentSnapshot.volume,
@@ -2012,9 +2025,32 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       return;
     }
     final next = List<_QueueItem>.of(_queue);
-    next[_queueIndex] = next[_queueIndex].withRemoteTrack(track);
+    next[_queueIndex] = next[_queueIndex].withRemoteTrack(
+      _preserveCatalogMetadata(current, track),
+    );
     _queue = List.unmodifiable(next);
     _publishPlaybackQueue();
+  }
+
+  TrackInfo _preserveCatalogMetadata(TrackInfo current, TrackInfo replacement) {
+    if (!_sameLogicalRemoteTrack(current, replacement) ||
+        current.metadataSource != TrackMetadataSource.youtubeMusic ||
+        replacement.metadataSource == TrackMetadataSource.youtubeMusic) {
+      return replacement;
+    }
+    return replacement.copyWith(
+      title: current.title,
+      artist: current.artist,
+      thumbnailUrl: current.thumbnailUrl,
+      catalogThumbnailUrl: current.catalogThumbnailUrl,
+      duration: current.duration,
+      album: current.album,
+      albumBrowseId: current.albumBrowseId,
+      viewCount: current.viewCount,
+      artists: current.artists,
+      artistBrowseIds: current.artistBrowseIds,
+      metadataSource: current.metadataSource,
+    );
   }
 
   Future<TrackInfo> _resolveRemoteTrack(
@@ -3131,6 +3167,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (remote != null) {
       final cachedRemote = _isCachedRemoteSnapshot(snapshot, remote);
       snapshot = snapshot.copyWith(
+        title: remote.title.trim().isEmpty ? snapshot.title : remote.title,
+        artist: remote.artist.trim().isEmpty ? snapshot.artist : remote.artist,
         album: remote.album ?? snapshot.album,
         trackId: cachedRemote
             ? (remote.id.isEmpty ? remote.url : remote.id)
@@ -3140,6 +3178,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         // is loaded. Keep the artwork selected by the search result instead
         // of allowing extractor metadata to swap in another crop mid-load.
         thumbnailUrl: _stableRemoteThumbnail(remote, snapshot.thumbnailUrl),
+        duration: remote.duration ?? snapshot.duration,
         isRemote: true,
       );
     }
@@ -3216,6 +3255,55 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   TrackInfo? currentRemoteTrackFor(String sourceUrl) {
     final current = _playingRemoteTrack;
     return current != null && current.url == sourceUrl ? current : null;
+  }
+
+  /// Refreshes the metadata of the active remote item without reopening its
+  /// audio source or changing the current playback position.
+  ///
+  /// Shared links can begin playback while a slower catalog lookup is still
+  /// resolving. The late result is accepted only if the same logical item is
+  /// still active, so a previous link can never overwrite a newer song.
+  bool enrichCurrentRemoteTrackMetadata(TrackInfo metadata) {
+    final current = _playingRemoteTrack;
+    if (current == null || !_sameLogicalRemoteTrack(current, metadata)) {
+      return false;
+    }
+
+    final enriched = current.copyWith(
+      title: metadata.title.trim().isEmpty ? current.title : metadata.title,
+      artist: metadata.artist.trim().isEmpty ? current.artist : metadata.artist,
+      thumbnailUrl: metadata.thumbnailUrl ?? current.thumbnailUrl,
+      catalogThumbnailUrl:
+          metadata.catalogThumbnailUrl ?? current.catalogThumbnailUrl,
+      duration: metadata.duration ?? current.duration,
+      album: metadata.album ?? current.album,
+      albumBrowseId: metadata.albumBrowseId ?? current.albumBrowseId,
+      viewCount: metadata.viewCount ?? current.viewCount,
+      artists: metadata.artists.isEmpty ? current.artists : metadata.artists,
+      artistBrowseIds: metadata.artistBrowseIds.isEmpty
+          ? current.artistBrowseIds
+          : metadata.artistBrowseIds,
+      metadataSource: metadata.metadataSource,
+    );
+    _replaceCurrentRemoteTrack(enriched);
+
+    final pending = _pendingRemoteSnapshot;
+    if (pending != null && pending.queueEntryId == _currentRemoteQueueEntryId) {
+      _pendingRemoteSnapshot = pending.copyWith(
+        title: enriched.title,
+        artist: enriched.artist,
+        album: enriched.album,
+        thumbnailUrl: _stableRemoteThumbnail(enriched, pending.thumbnailUrl),
+        duration: enriched.duration ?? pending.duration,
+      );
+    }
+
+    if (!_disposed) {
+      final snapshot =
+          state.value ?? ref.read(playerServiceProvider).currentSnapshot;
+      state = AsyncData(_decorateSnapshot(snapshot));
+    }
+    return true;
   }
 
   void _syncPlaybackOptions() {

@@ -18,6 +18,7 @@ class SurfaceDetailAppBar extends StatelessWidget
     this.appBarKey,
     this.surfaceKey,
     this.blurKey,
+    this.statusBarSurfaceKey,
     super.key,
   });
 
@@ -26,6 +27,7 @@ class SurfaceDetailAppBar extends StatelessWidget
   final Key? appBarKey;
   final Key? surfaceKey;
   final Key? blurKey;
+  final Key? statusBarSurfaceKey;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -36,41 +38,58 @@ class SurfaceDetailAppBar extends StatelessWidget
     final transparent =
         AppColors.surfaceBackgroundModeFor(context) ==
         SurfaceBackgroundMode.transparent;
+    final headerSurfaceColor = AppColors.tabHeaderSurfaceFor(
+      context,
+      scrolledUnder: true,
+    );
     final surface = DecoratedBox(
       key: surfaceKey,
       decoration: BoxDecoration(
-        color: AppColors.tabHeaderSurfaceFor(context, scrolledUnder: true),
+        color: headerSurfaceColor,
         gradient: AppColors.glassAccentGradientFor(context, intensity: 0.9),
       ),
       // AppBar gives flexibleSpace loose constraints; an empty DecoratedBox
       // would otherwise collapse and leave no painted/blurred surface.
       child: const SizedBox.expand(),
     );
+    final toolbarSurface = transparent
+        ? ClipRect(
+            child: BackdropFilter(
+              key: blurKey,
+              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: surface,
+            ),
+          )
+        : surface;
+    final statusBarHeight = MediaQuery.paddingOf(context).top;
+    final systemBarColor = theme.colorScheme.surface;
 
     return AppBar(
       key: appBarKey,
       leading: leading,
       title: title,
-      backgroundColor: Colors.transparent,
+      backgroundColor: transparent ? Colors.transparent : headerSurfaceColor,
       foregroundColor: theme.colorScheme.onSurface,
       systemOverlayStyle:
           (theme.brightness == Brightness.dark
                   ? SystemUiOverlayStyle.light
                   : SystemUiOverlayStyle.dark)
-              .copyWith(statusBarColor: Colors.transparent),
+              .copyWith(statusBarColor: systemBarColor),
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
-      forceMaterialTransparency: true,
-      flexibleSpace: transparent
-          ? ClipRect(
-              child: BackdropFilter(
-                key: blurKey,
-                filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                child: surface,
-              ),
-            )
-          : surface,
+      forceMaterialTransparency: transparent,
+      flexibleSpace: Column(
+        children: [
+          SizedBox(
+            key: statusBarSurfaceKey,
+            width: double.infinity,
+            height: statusBarHeight,
+            child: ColoredBox(color: systemBarColor),
+          ),
+          Expanded(child: toolbarSurface),
+        ],
+      ),
     );
   }
 }

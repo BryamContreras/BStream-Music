@@ -31,6 +31,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
     required this.errorMessage,
     required this.onOpenPlayer,
     this.onAddToPlaylist,
+    this.detailsProvider,
     this.metadata = const [],
     this.fallbackIcon = Icons.queue_music_rounded,
     super.key,
@@ -45,19 +46,33 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
   final String errorMessage;
   final VoidCallback onOpenPlayer;
   final AddRemoteTracksToPlaylist? onAddToPlaylist;
+  final FutureProvider<RemoteCollectionData>? detailsProvider;
   final List<String> metadata;
   final IconData fallbackIcon;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final tracksState = ref.watch(tracksProvider);
+    final detailsState = detailsProvider == null
+        ? null
+        : ref.watch(detailsProvider!);
+    final detail = switch (detailsState) {
+      AsyncData(:final value) => value,
+      _ => null,
+    };
+    final AsyncValue<List<TrackInfo>> tracksState = detailsState == null
+        ? ref.watch(tracksProvider)
+        : detailsState.whenData((value) => value.tracks);
     final tracks = switch (tracksState) {
       AsyncData(:final value) => value,
       _ => const <TrackInfo>[],
     };
+    final resolvedTitle = detail?.title ?? title;
+    final resolvedSubtitle = detail?.subtitle ?? subtitle;
     final resolvedArtworkSource =
-        artworkSource ?? (tracks.isEmpty ? null : tracks.first.thumbnailUrl);
+        detail?.artworkSource ??
+        artworkSource ??
+        (tracks.isEmpty ? null : tracks.first.thumbnailUrl);
     final miniPlayerAppearance = ref.watch(
       settingsControllerProvider.select(
         (settings) => (
@@ -84,13 +99,20 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
         appBarKey: const ValueKey('remote-collection-app-bar'),
         surfaceKey: const ValueKey('remote-collection-app-bar-surface'),
         blurKey: const ValueKey('remote-collection-app-bar-blur'),
+        statusBarSurfaceKey: const ValueKey(
+          'remote-collection-status-bar-surface',
+        ),
         leading: IconButton(
           key: const ValueKey('remote-collection-back'),
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,
           onPressed: () => Navigator.of(context).maybePop(),
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+          resolvedTitle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
       body: CustomScrollView(
         scrollCacheExtent: const ScrollCacheExtent.pixels(800),
@@ -103,8 +125,8 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
           ),
           SliverToBoxAdapter(
             child: _CollectionHeader(
-              title: title,
-              subtitle: subtitle,
+              title: resolvedTitle,
+              subtitle: resolvedSubtitle,
               artworkSource: resolvedArtworkSource,
               metadata: metadata,
               fallbackIcon: fallbackIcon,
@@ -121,7 +143,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
                   : () => onAddToPlaylist!(
                       context,
                       tracks,
-                      initialPlaylistName: title,
+                      initialPlaylistName: resolvedTitle,
                     ),
             ),
           ),
@@ -167,7 +189,14 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
                 message: errorMessage,
                 action: FilledButton.tonalIcon(
                   key: const ValueKey('remote-collection-retry'),
-                  onPressed: () => ref.invalidate(tracksProvider),
+                  onPressed: () {
+                    final provider = detailsProvider;
+                    if (provider != null) {
+                      ref.invalidate(provider);
+                    } else {
+                      ref.invalidate(tracksProvider);
+                    }
+                  },
                   style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
                   icon: const Icon(Icons.refresh_rounded),
                   label: Text(strings.retry),

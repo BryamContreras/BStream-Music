@@ -1190,6 +1190,97 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('download from player stays open and confirms the queue', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const remoteSnapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Canción remota',
+      artist: 'Artista remoto',
+      trackId: 'remote-download-1',
+      sourceUrl: 'https://www.youtube.com/watch?v=remote-download-1',
+      duration: Duration(minutes: 3),
+      isRemote: true,
+    );
+    const canonicalTrack = TrackInfo(
+      id: 'remote-download-1',
+      title: 'Canción remota',
+      artist: 'Artista remoto',
+      url: 'https://www.youtube.com/watch?v=remote-download-1',
+    );
+    final downloads = _RecordingDownloadController();
+    var searchOpenCalls = 0;
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: remoteSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        canonicalRemoteTrack: canonicalTrack,
+        downloadController: downloads,
+        onOpenSearch: () => searchOpenCalls += 1,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('player-menu-download')));
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(downloads.downloadCalls, 1);
+    expect(downloads.downloadedTrack?.id, 'remote-download-1');
+    expect(searchOpenCalls, 0);
+    expect(find.byType(PlayerPanel), findsOneWidget);
+    expect(
+      find.text('Canción añadida a la cola de descargas.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('download enqueue failure is reported without leaving player', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 800));
+    const remoteSnapshot = PlayerSnapshot(
+      status: PlayerStatus.paused,
+      title: 'Canción remota',
+      artist: 'Artista remoto',
+      trackId: 'remote-download-error',
+      sourceUrl: 'https://www.youtube.com/watch?v=remote-download-error',
+      duration: Duration(minutes: 3),
+      isRemote: true,
+    );
+    final downloads = _RecordingDownloadController(fail: true);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: remoteSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        downloadController: downloads,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('player-menu-download')));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(downloads.downloadCalls, 1);
+    expect(find.byType(PlayerPanel), findsOneWidget);
+    expect(
+      find.text('No se pudo añadir la canción a la cola de descargas.'),
+      findsOneWidget,
+    );
+    expect(find.text('Canción añadida a la cola de descargas.'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final entryPoint in <String>['artist-name', 'menu']) {
     testWidgets('$entryPoint opens the first artist profile', (tester) async {
       _configureView(tester, const Size(360, 800));
@@ -1670,6 +1761,8 @@ Widget _playerHarness({
   TrackInfo? canonicalRemoteTrack,
   _TestPlayerController? playerController,
   YouTubeMusicSearch? youtubeMusicSearch,
+  DownloadController? downloadController,
+  VoidCallback? onOpenSearch,
   bool disableAnimations = false,
 }) {
   const accent = AppAccent.blue;
@@ -1699,6 +1792,8 @@ Widget _playerHarness({
       ),
       if (youtubeMusicSearch != null)
         youtubeMusicSearchProvider.overrideWithValue(youtubeMusicSearch),
+      if (downloadController != null)
+        downloadControllerProvider.overrideWith(() => downloadController),
     ],
     child: MaterialApp(
       theme: ThemeData(
@@ -1712,9 +1807,31 @@ Widget _playerHarness({
               child: child!,
             )
           : null,
-      home: const Scaffold(body: PlayerPanel(drawBackground: false)),
+      home: Scaffold(
+        body: PlayerPanel(drawBackground: false, onOpenSearch: onOpenSearch),
+      ),
     ),
   );
+}
+
+class _RecordingDownloadController extends DownloadController {
+  _RecordingDownloadController({this.fail = false});
+
+  final bool fail;
+  int downloadCalls = 0;
+  TrackInfo? downloadedTrack;
+
+  @override
+  Map<String, DownloadTaskState> build() => const {};
+
+  @override
+  Future<void> downloadAudio(TrackInfo track) async {
+    downloadCalls += 1;
+    downloadedTrack = track;
+    if (fail) {
+      throw StateError('enqueue failed');
+    }
+  }
 }
 
 class _TestArtistService

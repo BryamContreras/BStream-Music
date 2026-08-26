@@ -15,6 +15,14 @@ void main() {
   testWidgets('artist app bar respects accent and transparent surface modes', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(top: 24);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPadding();
+    });
     for (final mode in SurfaceBackgroundMode.values) {
       await tester.pumpWidget(
         _artistProfileApp(
@@ -41,6 +49,25 @@ void main() {
         decoration.color!.a,
         mode == SurfaceBackgroundMode.transparent ? lessThan(1) : 1,
       );
+      final appBarFinder = find.byKey(const ValueKey('artist-profile-app-bar'));
+      final appBarWidget = tester.widget<AppBar>(appBarFinder);
+      expect(
+        appBarWidget.forceMaterialTransparency,
+        mode == SurfaceBackgroundMode.transparent,
+      );
+      expect(
+        appBarWidget.backgroundColor?.a,
+        mode == SurfaceBackgroundMode.transparent ? 0 : 1,
+      );
+      final statusBarRect = tester.getRect(
+        find.byKey(const ValueKey('artist-profile-status-bar-surface')),
+      );
+      final toolbarSurfaceRect = tester.getRect(
+        find.byKey(const ValueKey('artist-profile-app-bar-surface')),
+      );
+      expect(statusBarRect.height, 24);
+      expect(statusBarRect.bottom, toolbarSurfaceRect.top);
+      expect(toolbarSurfaceRect.height, kToolbarHeight);
       expect(
         tester
             .widget<Scaffold>(find.byKey(const ValueKey('artist-profile-page')))
@@ -50,9 +77,7 @@ void main() {
       final spacer = tester.getSize(
         find.byKey(const ValueKey('artist-profile-app-bar-spacer')),
       );
-      final appBar = tester.getSize(
-        find.byKey(const ValueKey('artist-profile-app-bar')),
-      );
+      final appBar = tester.getSize(appBarFinder);
       expect(spacer.height, appBar.height);
     }
   });

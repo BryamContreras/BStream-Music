@@ -16,6 +16,8 @@ class ScrolledUnderTabFrame extends StatefulWidget {
     required this.header,
     required this.slivers,
     this.surfaceKey,
+    this.pinnedFooter,
+    this.pinnedFooterSurfaceKey,
     this.scrollKey,
     this.scrollCacheExtent,
     this.headerTransitionKey,
@@ -27,6 +29,8 @@ class ScrolledUnderTabFrame extends StatefulWidget {
   final Widget? header;
   final List<Widget> slivers;
   final Key? surfaceKey;
+  final Widget? pinnedFooter;
+  final Key? pinnedFooterSurfaceKey;
   final Key? scrollKey;
   final ScrollCacheExtent? scrollCacheExtent;
   final Key? headerTransitionKey;
@@ -111,6 +115,44 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
     );
   }
 
+  Widget _buildPinnedFooterSurface(
+    BuildContext context,
+    Widget footer, {
+    required Duration animationDuration,
+  }) {
+    final surface = Material(
+      key: widget.pinnedFooterSurfaceKey,
+      color: AppColors.tabHeaderSurfaceFor(
+        context,
+        scrolledUnder: _scrolledUnder,
+      ),
+      elevation: _scrolledUnder ? 1 : 0,
+      shadowColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      animationDuration: animationDuration,
+      child: DecoratedBox(
+        key: const ValueKey('tab-pinned-footer-accent-gradient'),
+        decoration: BoxDecoration(
+          gradient: AppColors.glassAccentGradientFor(
+            context,
+            intensity: _scrolledUnder ? 1 : 0.76,
+          ),
+        ),
+        child: footer,
+      ),
+    );
+    if (AppColors.surfaceBackgroundModeFor(context) !=
+        SurfaceBackgroundMode.transparent) {
+      return surface;
+    }
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: surface,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
@@ -130,11 +172,19 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
         key: ValueKey('scrolled-under-tab-hidden-header'),
       ),
     };
+    final pinnedFooter = switch (widget.pinnedFooter) {
+      final footer? => _buildPinnedFooterSurface(
+        context,
+        footer,
+        animationDuration: animationDuration,
+      ),
+      null => null,
+    };
 
     final hasHeaderTransition =
         widget.headerTransitionKey != null ||
         widget.headerTransitionDuration != Duration.zero;
-    final pinnedHeader = hasHeaderTransition
+    final transitioningHeader = hasHeaderTransition
         ? ConstrainedBox(
             // A transitioning pinned sliver needs a positive extent even when
             // hidden. Otherwise the viewport may lazily unmount it and defer
@@ -166,6 +216,15 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
         : widget.header == null
         ? null
         : header;
+    final pinnedHeader = switch ((transitioningHeader, pinnedFooter)) {
+      (final header?, final footer?) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [header, footer],
+      ),
+      (final header?, null) => header,
+      (null, final footer?) => footer,
+      (null, null) => null,
+    };
 
     return DecoratedBox(
       decoration: BoxDecoration(

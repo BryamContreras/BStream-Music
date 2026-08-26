@@ -77,7 +77,7 @@ class _YouTubeMusicAccountButtonState
         icon: Stack(
           alignment: Alignment.center,
           children: <Widget>[
-            YouTubeMusicAccountAvatar(profile: state.profile, size: 32),
+            YouTubeMusicAccountAvatar(profile: state.profile, size: 30),
             if (isRestoring || playlistSync.isSyncing)
               const SizedBox.square(
                 dimension: 38,

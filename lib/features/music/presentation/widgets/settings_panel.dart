@@ -179,16 +179,29 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onBack: _goRoot,
       );
       if (_route != _SettingsRoute.root) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              header,
-              const SizedBox(height: 16),
-              Expanded(child: body),
-            ],
-          ),
+        return ScrolledUnderTabFrame(
+          surfaceKey: ValueKey('settings-detail-header-surface-${_route.name}'),
+          scrollKey: ValueKey('settings-detail-scroll-${_route.name}'),
+          header: header,
+          slivers: [
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                12,
+                appTabFirstSectionTopGap,
+                12,
+                widget.bottomContentPadding + 28,
+              ),
+              sliver: SliverToBoxAdapter(
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 760),
+                    child: body,
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       }
       return ScrolledUnderTabFrame(
@@ -388,18 +401,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       _SettingsRoute.root => const SizedBox.shrink(),
     };
 
-    return ListView(
-      padding: EdgeInsets.only(bottom: widget.bottomContentPadding + 28),
-      children: [
-        Align(
-          alignment: Alignment.topLeft,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: content,
-          ),
-        ),
-      ],
-    );
+    return content;
   }
 
   List<Widget> _buildRootSlivers({
@@ -1695,9 +1697,9 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Bidirectional playlists that keep streaming-only songs and prefer downloaded audio automatically.',
             'Personalized Home recommendations, growing queues, and bounded stream recovery after connection loss.',
             'A cloud marks songs without local audio, and Back from an externally opened player safely returns Home.',
-            'Surface and mini-player customization.',
-            'Optional lyrics romanization.',
-            'Access to music stored on your device.',
+            'Customize app surfaces and the mini player with styles, accent colors, and transparency effects.',
+            'Convert lyrics written in other scripts to Latin characters so they are easier to follow.',
+            'Browse and play music stored on your device, with filters to hide unwanted audio files.',
           ]
         : const <String>[
             'Inicio de sesi\u00f3n seguro en YouTube Music y confirmaci\u00f3n '
@@ -1707,9 +1709,9 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Recomendaciones personalizadas, colas extensibles y '
                 'recuperaci\u00f3n controlada cuando se pierde la conexi\u00f3n.',
             'Una nube identifica canciones sin audio local y Volver desde un reproductor externo regresa de forma segura a Inicio.',
-            'Personalizaci\u00f3n de superficies y mini reproductor.',
-            'Romanizaci\u00f3n opcional de letras.',
-            'Acceso a la m\u00fasica local del dispositivo.',
+            'Personaliza las superficies de la app y el mini reproductor con estilos, colores de acento y transparencias.',
+            'Convierte letras de otros alfabetos a caracteres latinos para que sean m\u00e1s f\u00e1ciles de seguir.',
+            'Explora y reproduce la m\u00fasica guardada en tu dispositivo, con filtros para ocultar audios no deseados.',
           ];
     await showAppDialog<void>(
       context: context,

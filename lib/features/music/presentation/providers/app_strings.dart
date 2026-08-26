@@ -420,6 +420,16 @@ class AppStrings {
     'The song could not be shared.',
   );
   String get sharedSong => choose('Canción compartida', 'Shared song');
+  String get sharePlaylist => choose('Compartir playlist', 'Share playlist');
+  String get sharePlaylistTitle => sharePlaylist;
+  String sharePlaylistMessage(String name) => choose(
+    'Escucha mi playlist "$name" en YouTube Music.',
+    'Listen to my "$name" playlist on YouTube Music.',
+  );
+  String get playlistShareFailed => choose(
+    'No se pudo compartir la playlist.',
+    'The playlist could not be shared.',
+  );
   String get addToPlaylist => choose('Añadir a playlist', 'Add to playlist');
   String get favorites => choose('Favoritos', 'Favorites');
   String get addToFavorites => choose('Añadir a favoritos', 'Add to favorites');
@@ -448,8 +458,14 @@ class AppStrings {
       choose('Crea una playlist primero.', 'Create a playlist first.');
   String get songAddedToPlaylist =>
       choose('Canción agregada a la playlist.', 'Song added to playlist.');
-  String get downloadQueued =>
-      choose('Descarga agregada a la cola.', 'Download added to queue.');
+  String get downloadQueued => choose(
+    'Canción añadida a la cola de descargas.',
+    'Song added to the download queue.',
+  );
+  String get downloadQueueFailed => choose(
+    'No se pudo añadir la canción a la cola de descargas.',
+    'The song could not be added to the download queue.',
+  );
   String get back => choose('Volver', 'Back');
   String get error => choose('Error', 'Error');
   String get downloads => choose('Descargas', 'Downloads');

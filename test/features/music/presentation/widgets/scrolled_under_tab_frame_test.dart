@@ -121,6 +121,57 @@ void main() {
   });
 
   testWidgets(
+    'pinned footer stays compact and blurs content from the shared scroll',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        const _FrameHarness(
+          showPinnedFooter: true,
+          surfaceBackgroundMode: SurfaceBackgroundMode.transparent,
+        ),
+      );
+
+      final header = find.byKey(const ValueKey('test-tab-header-surface'));
+      final footer = find.byKey(const ValueKey('test-pinned-footer-surface'));
+      final initialHeaderRect = tester.getRect(header);
+      final initialFooterRect = tester.getRect(footer);
+
+      expect(initialHeaderRect.height, 64);
+      expect(initialFooterRect.height, 54);
+      expect(initialFooterRect.top, initialHeaderRect.bottom);
+      expect(
+        find.ancestor(of: footer, matching: find.byType(BackdropFilter)),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('test-item-0'))).dy,
+        closeTo(initialFooterRect.bottom, 0.01),
+      );
+
+      await tester.drag(
+        find.byKey(const ValueKey('test-tab-scroll')),
+        const Offset(0, -300),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(header), initialHeaderRect);
+      expect(tester.getRect(footer), initialFooterRect);
+      final overlappingItem = tester.getRect(
+        find.byKey(const ValueKey('test-item-6')),
+      );
+      expect(overlappingItem.top, lessThan(initialFooterRect.bottom));
+      expect(overlappingItem.bottom, greaterThan(initialHeaderRect.top));
+      expect(tester.widget<Material>(footer).elevation, 1);
+    },
+  );
+
+  testWidgets(
     'pinned header follows large text height without hiding content',
     (tester) async {
       tester.view.physicalSize = const Size(360, 640);
@@ -196,12 +247,14 @@ class _FrameHarness extends StatelessWidget {
     this.disableAnimations = false,
     this.surfaceBackgroundMode = SurfaceBackgroundMode.accent,
     this.textScaler = TextScaler.noScaling,
+    this.showPinnedFooter = false,
   });
 
   final bool showHeader;
   final bool disableAnimations;
   final SurfaceBackgroundMode surfaceBackgroundMode;
   final TextScaler textScaler;
+  final bool showPinnedFooter;
 
   @override
   Widget build(BuildContext context) {
@@ -221,6 +274,7 @@ class _FrameHarness extends StatelessWidget {
       home: Scaffold(
         body: ScrolledUnderTabFrame(
           surfaceKey: const ValueKey('test-tab-header-surface'),
+          pinnedFooterSurfaceKey: const ValueKey('test-pinned-footer-surface'),
           scrollKey: const ValueKey('test-tab-scroll'),
           header: showHeader
               ? const Row(
@@ -230,6 +284,9 @@ class _FrameHarness extends StatelessWidget {
                     ),
                   ],
                 )
+              : null,
+          pinnedFooter: showPinnedFooter
+              ? const SizedBox(height: 54, child: Center(child: Text('Filtro')))
               : null,
           slivers: [
             SliverFixedExtentList.builder(

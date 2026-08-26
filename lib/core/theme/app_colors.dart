@@ -321,6 +321,56 @@ abstract final class AppColors {
     return tintedBorder.withValues(alpha: 0.78);
   }
 
+  /// Shared fill for text inputs. In transparent mode the field remains more
+  /// opaque than the glass panel around it, keeping text and icons legible
+  /// while still carrying a restrained accent tint.
+  static Color inputSurfaceFor(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>();
+    return _inputSurfaceForColors(
+      seed: accent?.seed ?? colors.primary,
+      dark: accent?.dark ?? colors.primary,
+      colors: colors,
+      backgroundMode: surfaceBackgroundModeFor(context),
+    );
+  }
+
+  static Color inputSurfaceForTheme(
+    AppAccent accent,
+    ColorScheme colors, {
+    required SurfaceBackgroundMode backgroundMode,
+  }) {
+    return _inputSurfaceForColors(
+      seed: accent.seedColor,
+      dark: accent.darkColor,
+      colors: colors,
+      backgroundMode: backgroundMode,
+    );
+  }
+
+  static Color _inputSurfaceForColors({
+    required Color seed,
+    required Color dark,
+    required ColorScheme colors,
+    required SurfaceBackgroundMode backgroundMode,
+  }) {
+    if (backgroundMode == SurfaceBackgroundMode.transparent) {
+      final isDark = colors.brightness == Brightness.dark;
+      final tint = isDark ? seed : dark;
+      final base = colors.surface.withValues(alpha: isDark ? 0.74 : 0.82);
+      return Color.alphaBlend(
+        tint.withValues(alpha: isDark ? 0.10 : 0.08),
+        base,
+      );
+    }
+    final isDark = colors.brightness == Brightness.dark;
+    final tint = isDark ? seed : dark;
+    final base = colors.surfaceContainerHighest.withValues(alpha: 0.9);
+    final tintStrength = isDark ? 0.075 : 0.06;
+    return Color.alphaBlend(tint.withValues(alpha: tintStrength), base);
+  }
+
   /// Shared surface for dialogs and other modal panels. It follows the same
   /// restrained accent wash as cards without inheriting Material 3's much
   /// brighter surface-container colors.

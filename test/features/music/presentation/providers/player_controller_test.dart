@@ -2315,6 +2315,66 @@ void main() {
   );
 
   test(
+    'late catalog metadata enriches an active shared link without reopening it',
+    () async {
+      final player = _FakePlayerService();
+      final resolver = _ControlledAudioResolver();
+      final container = _container(player, audioResolver: resolver);
+      addTearDown(container.dispose);
+      const fallback = TrackInfo(
+        id: 'dQw4w9WgXcQ',
+        title: 'CanciÃ³n compartida',
+        artist: 'YouTube',
+        url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        thumbnailUrl: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+      );
+      const catalog = TrackInfo(
+        id: 'dQw4w9WgXcQ',
+        title: 'Never Gonna Give You Up',
+        artist: 'Rick Astley',
+        artists: ['Rick Astley'],
+        album: 'Whenever You Need Somebody',
+        duration: Duration(minutes: 3, seconds: 33),
+        url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        thumbnailUrl: 'https://img.test/rick-astley.jpg',
+        metadataSource: TrackMetadataSource.youtubeMusic,
+      );
+
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      final playback = controller.playRemote(fallback);
+      await _waitUntil(() => resolver.resolveCalls == 1);
+
+      expect(controller.enrichCurrentRemoteTrackMetadata(catalog), isTrue);
+      resolver.complete(
+        const AudioStreamResolution(
+          source: AudioStreamSource.youtubeExplode,
+          streamUrl: 'https://media.example/rick.m4a',
+          videoId: 'dQw4w9WgXcQ',
+        ),
+      );
+      await playback;
+
+      expect(player.playedRemote, hasLength(1));
+      expect(player.playedRemote.single.title, catalog.title);
+      expect(player.playedRemote.single.artist, catalog.artist);
+      expect(player.playedRemote.single.album, catalog.album);
+      expect(
+        player.playedRemote.single.metadataSource,
+        TrackMetadataSource.youtubeMusic,
+      );
+      expect(
+        container.read(playerControllerProvider).requireValue.title,
+        catalog.title,
+      );
+      expect(
+        container.read(playbackQueueProvider).entries.single.title,
+        catalog.title,
+      );
+    },
+  );
+
+  test(
     'keeps bot and cookie playback failures visible without refreshing',
     () async {
       final player = _FakePlayerService();
@@ -4547,6 +4607,27 @@ class _SequencedAudioResolver implements AudioStreamResolver {
       return outcome;
     }
     throw outcome;
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
+class _ControlledAudioResolver implements AudioStreamResolver {
+  final Completer<AudioStreamResolution> _resolution =
+      Completer<AudioStreamResolution>();
+  int resolveCalls = 0;
+
+  @override
+  Future<AudioStreamResolution> resolve(TrackInfo track) {
+    resolveCalls += 1;
+    return _resolution.future;
+  }
+
+  void complete(AudioStreamResolution resolution) {
+    if (!_resolution.isCompleted) {
+      _resolution.complete(resolution);
+    }
   }
 
   @override

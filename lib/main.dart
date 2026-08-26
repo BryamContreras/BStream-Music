@@ -284,7 +284,11 @@ ThemeData _buildDarkTheme({
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.64),
+      fillColor: AppColors.inputSurfaceForTheme(
+        accent,
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide.none,
@@ -406,7 +410,11 @@ ThemeData _buildLightTheme({
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.64),
+      fillColor: AppColors.inputSurfaceForTheme(
+        accent,
+        scheme,
+        backgroundMode: surfaceBackgroundMode,
+      ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide.none,

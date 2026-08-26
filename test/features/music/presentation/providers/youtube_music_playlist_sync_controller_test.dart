@@ -646,6 +646,168 @@ void main() {
 
     expect(await conflicts, isEmpty);
   });
+
+  testWidgets(
+    'shareable playlist bindings are account scoped, filtered, and normalized',
+    (tester) async {
+      final now = DateTime.utc(2026, 8, 25);
+      final syncStore = _BindingStore(<PlaylistSyncBinding>[
+        _binding(
+          localPlaylistId: 'local-prefixed',
+          remotePlaylistId: 'VLPL-prefixed',
+          now: now,
+        ),
+        _binding(
+          localPlaylistId: 'local-plain',
+          remotePlaylistId: 'PL-plain',
+          now: now,
+        ),
+        _binding(
+          accountKey: 'other-account',
+          localPlaylistId: 'local-other-account',
+          remotePlaylistId: 'PL-other-account',
+          now: now,
+        ),
+        _binding(
+          localPlaylistId: 'local-without-remote',
+          remotePlaylistId: null,
+          now: now,
+        ),
+        _binding(
+          localPlaylistId: 'local-empty-remote',
+          remotePlaylistId: '  ',
+          now: now,
+        ),
+        _binding(
+          localPlaylistId: 'local-deleting',
+          remotePlaylistId: 'PL-deleting',
+          remoteDeleteRequestedAt: now,
+          now: now,
+        ),
+        _binding(
+          localPlaylistId: '  ',
+          remotePlaylistId: 'PL-empty-local',
+          now: now,
+        ),
+      ]);
+      final coordinator = _RecordingSyncCoordinator(
+        (_, _) async => _successfulResult(),
+      );
+      final container = _container(
+        store: _MemorySessionStore(value: _credential()),
+        coordinator: coordinator,
+        syncStore: syncStore,
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(_accountButtonHost(container));
+      await _pumpUntil(
+        tester,
+        () =>
+            container.read(youtubeMusicPlaylistSyncControllerProvider).phase ==
+            YouTubeMusicPlaylistSyncPhase.synchronized,
+      );
+
+      final bindings = await container.read(
+        youtubeMusicShareablePlaylistBindingsProvider.future,
+      );
+
+      expect(bindings, const <String, String>{
+        'local-prefixed': 'PL-prefixed',
+        'local-plain': 'PL-plain',
+      });
+      expect(syncStore.requestedAccountKeys, everyElement('test-channel'));
+      expect(
+        () => bindings['another-local'] = 'PL-another',
+        throwsUnsupportedError,
+      );
+    },
+  );
+
+  testWidgets(
+    'shareable playlist bindings refresh after login, sync, and logout',
+    (tester) async {
+      final now = DateTime.utc(2026, 8, 25);
+      final syncStore = _BindingStore(<PlaylistSyncBinding>[
+        _binding(
+          localPlaylistId: 'local-playlist',
+          remotePlaylistId: 'VLPL-before-sync',
+          now: now,
+        ),
+      ]);
+      final coordinator = _RecordingSyncCoordinator((_, trigger) async {
+        if (trigger == PlaylistSyncTrigger.manual) {
+          syncStore.bindings = <PlaylistSyncBinding>[
+            _binding(
+              localPlaylistId: 'local-playlist',
+              remotePlaylistId: 'VLPL-after-sync',
+              now: now,
+            ),
+          ];
+        }
+        return _successfulResult();
+      });
+      final container = _container(
+        store: _MemorySessionStore(),
+        coordinator: coordinator,
+        syncStore: syncStore,
+        accountClient: _SuccessfulAccountClient(),
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(_accountButtonHost(container));
+      await _pumpUntil(
+        tester,
+        () =>
+            container.read(youtubeMusicAuthControllerProvider).phase ==
+            YouTubeMusicAuthPhase.anonymous,
+      );
+      expect(
+        await container.read(
+          youtubeMusicShareablePlaylistBindingsProvider.future,
+        ),
+        isEmpty,
+      );
+      expect(syncStore.listCalls, 0);
+
+      final auth = container.read(youtubeMusicAuthControllerProvider.notifier);
+      auth.beginLogin();
+      await auth.submitWebAuthentication(_webAuthData());
+      await _pumpUntil(
+        tester,
+        () =>
+            container.read(youtubeMusicPlaylistSyncControllerProvider).phase ==
+            YouTubeMusicPlaylistSyncPhase.synchronized,
+      );
+      expect(
+        await container.read(
+          youtubeMusicShareablePlaylistBindingsProvider.future,
+        ),
+        const <String, String>{'local-playlist': 'PL-before-sync'},
+      );
+
+      await container
+          .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+          .syncNow();
+      expect(
+        await container.read(
+          youtubeMusicShareablePlaylistBindingsProvider.future,
+        ),
+        const <String, String>{'local-playlist': 'PL-after-sync'},
+      );
+
+      final callsBeforeLogout = syncStore.listCalls;
+      await auth.logout();
+      await tester.pump();
+      expect(
+        await container.read(
+          youtubeMusicShareablePlaylistBindingsProvider.future,
+        ),
+        isEmpty,
+      );
+      expect(syncStore.listCalls, callsBeforeLogout);
+    },
+  );
 }
 
 ProviderContainer _container({
@@ -788,6 +950,27 @@ class _ConflictStore implements PlaylistSyncStore {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _BindingStore implements PlaylistSyncStore {
+  _BindingStore(List<PlaylistSyncBinding> bindings)
+    : bindings = List<PlaylistSyncBinding>.of(bindings);
+
+  List<PlaylistSyncBinding> bindings;
+  final List<String?> requestedAccountKeys = <String?>[];
+  var listCalls = 0;
+
+  @override
+  Future<List<PlaylistSyncBinding>> listBindings({String? accountKey}) async {
+    listCalls += 1;
+    requestedAccountKeys.add(accountKey);
+    // Deliberately return every binding so the provider's account fence is
+    // covered independently from a store implementation's optional filter.
+    return List<PlaylistSyncBinding>.unmodifiable(bindings);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 class _MemoryConsentStore implements PlaylistSyncConsentStore {
   _MemoryConsentStore({Iterable<String> grantedAccounts = const <String>[]})
     : grantedAccounts = <String>{...grantedAccounts};
@@ -898,6 +1081,22 @@ PlaylistSyncUnresolvedConflict _unresolvedConflict({
   kind: kind,
   detectedAt: DateTime.utc(2026, 8, 22),
   message: message,
+);
+
+PlaylistSyncBinding _binding({
+  String accountKey = 'test-channel',
+  required String localPlaylistId,
+  required String? remotePlaylistId,
+  required DateTime now,
+  DateTime? remoteDeleteRequestedAt,
+}) => PlaylistSyncBinding(
+  key: PlaylistSyncKey(accountKey: accountKey, playlistId: localPlaylistId),
+  remotePlaylistId: remotePlaylistId,
+  mode: PlaylistSyncMode.automatic,
+  localRevisionAtBase: 1,
+  remoteDeleteRequestedAt: remoteDeleteRequestedAt,
+  createdAt: now,
+  updatedAt: now,
 );
 
 YouTubeMusicAccountProfile _profile() => const YouTubeMusicAccountProfile(

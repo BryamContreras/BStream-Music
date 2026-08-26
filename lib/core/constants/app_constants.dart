@@ -10,6 +10,7 @@ class AppConstants {
   static const androidFileExportChannel = 'bstream_music/file_export';
   static const androidScreenChannel = 'bstream_music/screen';
   static const androidExternalAudioChannel = 'bstream_music/external_audio';
+  static const androidAppActivationChannel = 'bstream_music/app_activation';
   static const preferredNativeAudioFormat =
       'bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[acodec^=mp4a]/bestaudio[acodec^=aac]/bestaudio';
   static const defaultSearchLimit = 20;

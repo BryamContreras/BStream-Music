@@ -47,22 +47,43 @@ class SearchView extends ConsumerWidget {
 
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('search-tab-header-surface'),
-      headerTransitionKey: const ValueKey('search-tab-heading-transition'),
-      headerTransitionDuration: _headingTransitionDuration,
-      header: showHeading
-          ? Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                key: const ValueKey('search-tab-title'),
-                strings.searchTitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w900,
+      header: AnimatedSwitcher(
+        key: const ValueKey('search-tab-heading-transition'),
+        duration: headingTransitionDuration,
+        reverseDuration: headingTransitionDuration,
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        layoutBuilder: (currentChild, previousChildren) => Stack(
+          alignment: Alignment.centerLeft,
+          children: <Widget>[...previousChildren, ?currentChild],
+        ),
+        child: showHeading
+            ? Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  key: const ValueKey('search-tab-title'),
+                  strings.searchTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
+              )
+            : SearchInput(
+                key: const ValueKey('search-tab-search-input'),
+                initialText: searchState.query,
+                compact: true,
+                requestFocusOnClear: false,
+                hintText: strings.searchHint,
+                tooltip: strings.search,
+                clearTooltip: strings.clearSearch,
+                onSubmitted: (query) =>
+                    ref.read(searchControllerProvider.notifier).submit(query),
+                onCleared: () =>
+                    ref.read(searchControllerProvider.notifier).clear(),
               ),
-            )
-          : null,
+      ),
       scrollKey: const ValueKey('search-results-scroll'),
       scrollCacheExtent: const ScrollCacheExtent.pixels(800),
       slivers: [
@@ -71,24 +92,30 @@ class SearchView extends ConsumerWidget {
             key: const ValueKey('search-input-section-padding'),
             duration: headingTransitionDuration,
             curve: Curves.easeOutCubic,
-            padding: EdgeInsets.fromLTRB(0, showHeading ? 0 : 20, 0, 14),
+            padding: EdgeInsets.fromLTRB(
+              0,
+              showHeading ? appTabFirstSectionTopGap : 20,
+              0,
+              14,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Padding(
-                  key: const ValueKey('search-input-container'),
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: SearchInput(
-                    hintText: strings.searchHint,
-                    tooltip: strings.search,
-                    clearTooltip: strings.clearSearch,
-                    onSubmitted: (query) => ref
-                        .read(searchControllerProvider.notifier)
-                        .submit(query),
-                    onCleared: () =>
-                        ref.read(searchControllerProvider.notifier).clear(),
+                if (showHeading)
+                  Padding(
+                    key: const ValueKey('search-input-container'),
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: SearchInput(
+                      hintText: strings.searchHint,
+                      tooltip: strings.search,
+                      clearTooltip: strings.clearSearch,
+                      onSubmitted: (query) => ref
+                          .read(searchControllerProvider.notifier)
+                          .submit(query),
+                      onCleared: () =>
+                          ref.read(searchControllerProvider.notifier).clear(),
+                    ),
                   ),
-                ),
                 if (searchState.hasQuery) ...[
                   const SizedBox(height: 10),
                   Padding(

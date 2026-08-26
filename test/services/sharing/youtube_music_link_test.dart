@@ -42,6 +42,7 @@ void main() {
     expect(album?.kind, YouTubeMusicLinkKind.album);
     expect(album?.collectionId, 'MPREb_abc123');
     expect(mix?.kind, YouTubeMusicLinkKind.mix);
+    expect(mix?.collectionId, 'VLRDCLAK5uy_test');
     expect(radio?.kind, YouTubeMusicLinkKind.mix);
     expect(radio?.collectionId, 'VLRDAMVMdQw4w9WgXcQ');
   });

@@ -138,10 +138,10 @@ class YouTubeMusicLinkCodec {
               ? identity.substring(2)
               : identity
         : null;
-    final collectionId =
-        kind == YouTubeMusicLinkKind.playlist && !identity.startsWith('VL')
-        ? 'VL$identity'
-        : kind == YouTubeMusicLinkKind.mix && identity.startsWith('RDAMVM')
+    final isPlaylistLike =
+        kind == YouTubeMusicLinkKind.playlist ||
+        kind == YouTubeMusicLinkKind.mix;
+    final collectionId = isPlaylistLike && !identity.startsWith('VL')
         ? 'VL$identity'
         : identity;
     return YouTubeMusicLink._(

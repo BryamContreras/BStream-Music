@@ -46,7 +46,7 @@ enum _TrackMenuAction {
   removeFromPlaylist,
 }
 
-enum _PlaylistMenuAction { renamePlaylist, deletePlaylist }
+enum _PlaylistMenuAction { sharePlaylist, renamePlaylist, deletePlaylist }
 
 // Keep overview covers at the same visual size as artwork in downloaded-song
 // and playlist detail rows. The shared card icon token is intentionally
@@ -982,62 +982,66 @@ class _LiveQueueView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final items = state.liveQueue;
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: _DetailHeader(
-              key: const ValueKey('library-detail-header'),
-              title: strings.liveQueueTitle,
-              subtitle: strings.liveQueueSummary(
-                items.length,
-                state.readyPlayCommands,
-                state.pendingPlayCommands,
+    return ScrolledUnderTabFrame(
+      surfaceKey: const ValueKey('library-detail-header-surface'),
+      scrollKey: const ValueKey('library-live-queue-scroll'),
+      header: _DetailHeader(
+        key: const ValueKey('library-detail-header'),
+        title: strings.liveQueueTitle,
+        subtitle: strings.liveQueueSummary(
+          items.length,
+          state.readyPlayCommands,
+          state.pendingPlayCommands,
+        ),
+        onBack: onBack,
+        trailing: items.isEmpty
+            ? null
+            : IconButton.filledTonal(
+                tooltip: strings.clearLiveQueue,
+                icon: const Icon(Icons.playlist_remove_rounded),
+                onPressed: () async {
+                  await ref
+                      .read(tiktokLiveControllerProvider.notifier)
+                      .clearLiveQueue();
+                },
               ),
-              onBack: onBack,
-              trailing: items.isEmpty
-                  ? null
-                  : IconButton.filledTonal(
-                      tooltip: strings.clearLiveQueue,
-                      icon: const Icon(Icons.playlist_remove_rounded),
-                      onPressed: () async {
-                        await ref
-                            .read(tiktokLiveControllerProvider.notifier)
-                            .clearLiveQueue();
-                      },
-                    ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Expanded(
-            child: items.isEmpty
-                ? Center(
-                    child: Text(
-                      strings.liveQueueEmpty,
-                      style: TextStyle(
-                        color: AppColors.contentSubtitleFor(context),
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
-                    itemCount: items.length,
-                    itemBuilder: (context, index) {
-                      return Padding(
-                        padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                        child: _LiveQueueTile(
-                          item: items[index],
-                          onOpenPlayer: onOpenPlayer,
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
       ),
+      slivers: items.isEmpty
+          ? <Widget>[
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Text(
+                    strings.liveQueueEmpty,
+                    style: TextStyle(
+                      color: AppColors.contentSubtitleFor(context),
+                    ),
+                  ),
+                ),
+              ),
+            ]
+          : <Widget>[
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  0,
+                  14,
+                  0,
+                  bottomContentPadding + 12,
+                ),
+                sliver: SliverList.builder(
+                  itemCount: items.length,
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                      child: _LiveQueueTile(
+                        item: items[index],
+                        onOpenPlayer: onOpenPlayer,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
     );
   }
 }
@@ -1433,64 +1437,57 @@ class _CatalogTrackListView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: _DetailHeader(
-              key: const ValueKey('library-detail-header'),
-              title: title,
-              subtitle: subtitle,
-              onBack: onBack,
-              trailing: playlist.isFavorites
-                  ? null
-                  : _PlaylistMenu(playlist: playlist, onBack: onBack),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: TextField(
-              controller: filterController,
-              decoration: InputDecoration(
-                hintText: strings.filterSongs,
-                prefixIcon: const Icon(Icons.search_rounded),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: items.isEmpty
-                ? Center(
-                    child: Text(
-                      strings.noSongsToShow,
-                      style: TextStyle(
-                        color: AppColors.contentSubtitleFor(context),
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
-                    itemCount: items.length,
-                    itemBuilder: (context, index) => Padding(
-                      padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                      child: _CatalogTrackTile(
-                        key: ValueKey(
-                          'library-catalog-entry-${items[index].entry.id}',
-                        ),
-                        item: items[index],
-                        queueItems: queueItems,
-                        playlist: playlist,
-                        onOpenPlayer: onOpenPlayer,
-                      ),
+    return ScrolledUnderTabFrame(
+      surfaceKey: const ValueKey('library-detail-header-surface'),
+      pinnedFooterSurfaceKey: const ValueKey('library-filter-region-surface'),
+      scrollKey: const ValueKey('library-catalog-track-scroll'),
+      header: _DetailHeader(
+        key: const ValueKey('library-detail-header'),
+        title: title,
+        subtitle: subtitle,
+        onBack: onBack,
+        trailing: playlist.isFavorites
+            ? null
+            : _PlaylistMenu(playlist: playlist, onBack: onBack),
+      ),
+      pinnedFooter: _LibraryFilterSurface(
+        controller: filterController,
+        hintText: strings.filterSongs,
+      ),
+      slivers: items.isEmpty
+          ? <Widget>[
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Text(
+                    strings.noSongsToShow,
+                    style: TextStyle(
+                      color: AppColors.contentSubtitleFor(context),
                     ),
                   ),
-          ),
-        ],
-      ),
+                ),
+              ),
+            ]
+          : <Widget>[
+              SliverPadding(
+                padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
+                sliver: SliverList.builder(
+                  itemCount: items.length,
+                  itemBuilder: (context, index) => Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                    child: _CatalogTrackTile(
+                      key: ValueKey(
+                        'library-catalog-entry-${items[index].entry.id}',
+                      ),
+                      item: items[index],
+                      queueItems: queueItems,
+                      playlist: playlist,
+                      onOpenPlayer: onOpenPlayer,
+                    ),
+                  ),
+                ),
+              ),
+            ],
     );
   }
 }
@@ -1538,20 +1535,18 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
       colors.primary.withValues(alpha: 0.13),
       baseColor,
     );
+    final resolvedSurfaceColor = isCurrent
+        ? activeColor
+        : _hovered
+        ? Color.alphaBlend(colors.onSurface.withValues(alpha: 0.075), baseColor)
+        : baseColor;
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         decoration: BoxDecoration(
-          color: isCurrent
-              ? activeColor
-              : _hovered
-              ? Color.alphaBlend(
-                  colors.onSurface.withValues(alpha: 0.075),
-                  baseColor,
-                )
-              : baseColor,
+          color: resolvedSurfaceColor,
           borderRadius: borderRadius,
           border: Border.all(
             color: isCurrent || _hovered
@@ -1867,87 +1862,84 @@ class _TrackListView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final selectionActive = selectionEnabled && selectedTrackIds.isNotEmpty;
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: selectionActive
-                  ? _TrackSelectionToolbar(
-                      key: const ValueKey('library-selection-toolbar'),
-                      count: selectedTrackIds.length,
-                      removesFromPlaylist: mode == _TrackListMode.playlist,
-                      favorites: playlist?.isFavorites ?? false,
-                      busy: selectionBusy,
-                      onClose: onClearSelection,
-                      onAddToPlaylist: () => onAddSelected(context),
-                      onDelete: () => onDeleteSelected(context),
-                    )
-                  : _DetailHeader(
-                      key: const ValueKey('library-detail-header'),
-                      title: title,
-                      subtitle: subtitle,
-                      onBack: onBack,
-                      trailing: playlist == null || playlist!.isFavorites
-                          ? null
-                          : _PlaylistMenu(playlist: playlist!, onBack: onBack),
-                    ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: TextField(
-              controller: filterController,
-              decoration: InputDecoration(
-                hintText: strings.filterSongs,
-                prefixIcon: const Icon(Icons.search_rounded),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: tracks.isEmpty
-                ? Center(
-                    child: Text(
-                      strings.noSongsToShow,
-                      style: TextStyle(
-                        color: AppColors.contentSubtitleFor(context),
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
-                    itemCount: tracks.length,
-                    itemBuilder: (context, index) {
-                      return Padding(
-                        padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                        child: _LocalTrackTile(
-                          key: ValueKey('library-track-${tracks[index].id}'),
-                          track: tracks[index],
-                          mode: mode,
-                          playlistId: playlistId,
-                          queueTracks: queueTracks,
-                          onOpenPlayer: onOpenPlayer,
-                          selectionActive: selectionActive,
-                          selected: selectedTrackIds.contains(tracks[index].id),
-                          onLongPress: selectionEnabled
-                              ? () => onSelectTrack(tracks[index].id)
-                              : null,
-                          onSelectionTap: selectionActive
-                              ? () => onToggleTrack(tracks[index].id)
-                              : null,
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
+    return ScrolledUnderTabFrame(
+      surfaceKey: ValueKey(
+        selectionActive
+            ? 'library-selection-toolbar-padding'
+            : 'library-detail-header-surface',
       ),
+      pinnedFooterSurfaceKey: const ValueKey('library-filter-region-surface'),
+      scrollKey: const ValueKey('library-track-scroll'),
+      header: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: selectionActive
+            ? _TrackSelectionToolbar(
+                key: const ValueKey('library-selection-toolbar'),
+                count: selectedTrackIds.length,
+                removesFromPlaylist: mode == _TrackListMode.playlist,
+                favorites: playlist?.isFavorites ?? false,
+                busy: selectionBusy,
+                onClose: onClearSelection,
+                onAddToPlaylist: () => onAddSelected(context),
+                onDelete: () => onDeleteSelected(context),
+              )
+            : _DetailHeader(
+                key: const ValueKey('library-detail-header'),
+                title: title,
+                subtitle: subtitle,
+                onBack: onBack,
+                trailing: playlist == null || playlist!.isFavorites
+                    ? null
+                    : _PlaylistMenu(playlist: playlist!, onBack: onBack),
+              ),
+      ),
+      pinnedFooter: _LibraryFilterSurface(
+        controller: filterController,
+        hintText: strings.filterSongs,
+      ),
+      slivers: tracks.isEmpty
+          ? <Widget>[
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Text(
+                    strings.noSongsToShow,
+                    style: TextStyle(
+                      color: AppColors.contentSubtitleFor(context),
+                    ),
+                  ),
+                ),
+              ),
+            ]
+          : <Widget>[
+              SliverPadding(
+                padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
+                sliver: SliverList.builder(
+                  itemCount: tracks.length,
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                      child: _LocalTrackTile(
+                        key: ValueKey('library-track-${tracks[index].id}'),
+                        track: tracks[index],
+                        mode: mode,
+                        playlistId: playlistId,
+                        queueTracks: queueTracks,
+                        onOpenPlayer: onOpenPlayer,
+                        selectionActive: selectionActive,
+                        selected: selectedTrackIds.contains(tracks[index].id),
+                        onLongPress: selectionEnabled
+                            ? () => onSelectTrack(tracks[index].id)
+                            : null,
+                        onSelectionTap: selectionActive
+                            ? () => onToggleTrack(tracks[index].id)
+                            : null,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
     );
   }
 }
@@ -2035,6 +2027,44 @@ class _TrackSelectionToolbar extends ConsumerWidget {
 
 enum _TrackListMode { downloads, playlist }
 
+class _LibraryFilterSurface extends StatelessWidget {
+  const _LibraryFilterSurface({
+    required this.controller,
+    required this.hintText,
+  });
+
+  final TextEditingController controller;
+  final String hintText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 4, 6, 6),
+      child: SizedBox(
+        height: 50,
+        child: AppSurfaceInput(
+          key: const ValueKey('library-filter-surface'),
+          blur: false,
+          child: TextField(
+            controller: controller,
+            textAlignVertical: TextAlignVertical.center,
+            decoration: InputDecoration(
+              hintText: hintText,
+              prefixIcon: const Icon(Icons.search_rounded),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 48,
+                minHeight: 48,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _DetailHeader extends StatelessWidget {
   const _DetailHeader({
     required this.title,
@@ -2063,6 +2093,7 @@ class _DetailHeader extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
@@ -2072,13 +2103,17 @@ class _DetailHeader extends StatelessWidget {
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w900,
                   color: AppColors.contentHeadingFor(context),
+                  height: 1,
                 ),
               ),
               Text(
                 subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: AppColors.contentSubtitleFor(context)),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppColors.contentSubtitleFor(context),
+                  height: 1.1,
+                ),
               ),
             ],
           ),
@@ -2143,6 +2178,21 @@ class _PlaylistMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
+    final shareableBindings = ref.watch(
+      youtubeMusicShareablePlaylistBindingsProvider,
+    );
+    final remotePlaylistId = switch (shareableBindings) {
+      AsyncData(:final value) => value[playlist.id],
+      _ => null,
+    };
+    final canShare =
+        remotePlaylistId != null &&
+        ref
+            .watch(youtubeMusicPlaylistShareServiceProvider)
+            .canShare(
+              remotePlaylistId: remotePlaylistId,
+              playlistName: playlist.name,
+            );
     final buttonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final buttonWidth = AppPlatform.isAndroid ? 36.0 : 40.0;
     final iconSize = AppPlatform.isAndroid ? 32.0 : 24.0;
@@ -2163,6 +2213,24 @@ class _PlaylistMenu extends ConsumerWidget {
         ),
         onSelected: (action) => _handleAction(context, ref, action),
         itemBuilder: (context) => [
+          if (canShare)
+            PopupMenuItem(
+              key: ValueKey('playlist-share-${playlist.id}'),
+              value: _PlaylistMenuAction.sharePlaylist,
+              child: Row(
+                children: [
+                  Icon(Icons.share_rounded, color: menuIconColor),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      strings.sharePlaylist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           PopupMenuItem(
             value: _PlaylistMenuAction.renamePlaylist,
             child: Row(
@@ -2209,10 +2277,51 @@ class _PlaylistMenu extends ConsumerWidget {
     _PlaylistMenuAction action,
   ) async {
     switch (action) {
+      case _PlaylistMenuAction.sharePlaylist:
+        await _sharePlaylist(context, ref);
       case _PlaylistMenuAction.renamePlaylist:
         await _renamePlaylist(context, ref);
       case _PlaylistMenuAction.deletePlaylist:
         await _deletePlaylist(context, ref);
+    }
+  }
+
+  Future<void> _sharePlaylist(BuildContext context, WidgetRef ref) async {
+    final strings = ref.read(appStringsProvider);
+    Rect? sharePositionOrigin;
+    final renderObject = context.findRenderObject();
+    if (renderObject is RenderBox && renderObject.attached) {
+      sharePositionOrigin =
+          renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    }
+    try {
+      final bindings = await ref.read(
+        youtubeMusicShareablePlaylistBindingsProvider.future,
+      );
+      final remotePlaylistId = bindings[playlist.id];
+      final service = ref.read(youtubeMusicPlaylistShareServiceProvider);
+      if (remotePlaylistId == null ||
+          !service.canShare(
+            remotePlaylistId: remotePlaylistId,
+            playlistName: playlist.name,
+          )) {
+        throw StateError('The playlist is no longer synchronized.');
+      }
+
+      await service.sharePlaylist(
+        remotePlaylistId: remotePlaylistId,
+        playlistName: playlist.name,
+        message: strings.sharePlaylistMessage(playlist.name),
+        title: strings.sharePlaylistTitle,
+        subject: strings.sharePlaylistTitle,
+        sharePositionOrigin: sharePositionOrigin,
+      );
+    } catch (error) {
+      debugPrint('Could not share synchronized playlist: $error');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(strings.playlistShareFailed)));
     }
   }
 
@@ -2409,19 +2518,18 @@ class _PanelError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _DetailHeader(title: title, subtitle: 'Error', onBack: onBack),
-          const SizedBox(height: 20),
-          Text(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _DetailHeader(title: title, subtitle: 'Error', onBack: onBack),
+        Padding(
+          padding: const EdgeInsets.all(18),
+          child: Text(
             error.toString(),
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -2861,6 +2969,11 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
         .maybeWhen(data: (available) => available, orElse: () => true);
     final borderRadius = BorderRadius.circular(appCardRadius);
     final baseColor = AppColors.cardSurfaceFor(context);
+    final resolvedSurfaceColor = selected
+        ? Color.alphaBlend(colors.primary.withValues(alpha: 0.14), baseColor)
+        : isCurrent
+        ? Color.alphaBlend(colors.onSurface.withValues(alpha: 0.075), baseColor)
+        : baseColor;
     final borderColor = selected
         ? colors.primary
         : isCurrent
@@ -2879,17 +2992,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
           curve: Curves.easeOutCubic,
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            color: selected
-                ? Color.alphaBlend(
-                    colors.primary.withValues(alpha: 0.14),
-                    baseColor,
-                  )
-                : isCurrent
-                ? Color.alphaBlend(
-                    colors.onSurface.withValues(alpha: 0.075),
-                    baseColor,
-                  )
-                : baseColor,
+            color: resolvedSurfaceColor,
             borderRadius: borderRadius,
             border: Border.all(
               color: borderColor,

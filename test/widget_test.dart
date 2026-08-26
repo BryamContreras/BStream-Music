@@ -33,6 +33,8 @@ import 'package:bstream_music/features/music/presentation/widgets/settings_panel
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/features/music/presentation/widgets/track_result_tile.dart';
 import 'package:bstream_music/main.dart';
+import 'package:bstream_music/platform_channels/android_app_activation_channel.dart';
+import 'package:bstream_music/platform_channels/android_external_audio_channel.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
@@ -735,6 +737,25 @@ void main() {
     'transparent surface effects reveal content behind headers and menu',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final glassTrack = LocalTrack(
+        id: 'glass-surface-track',
+        title: 'Cancion de cristal',
+        artist: 'BStream Music',
+        filePath: r'C:\Music\glass-surface-track.mp3',
+        duration: const Duration(minutes: 3),
+        addedAt: DateTime(2026),
+      );
+      final libraryRepository = _FakeLibraryRepository()
+        ..localTracks.add(glassTrack)
+        ..playlists.add(
+          Playlist(
+            id: Playlist.favoritesId,
+            name: 'Favoritos',
+            trackIds: <String>[glassTrack.id],
+            createdAt: DateTime(2026),
+            updatedAt: DateTime(2026),
+          ),
+        );
       tester.view
         ..physicalSize = const Size(360, 800)
         ..devicePixelRatio = 1
@@ -756,6 +777,7 @@ void main() {
               surfaceBackgroundMode: SurfaceBackgroundMode.transparent,
             ),
           ),
+          libraryRepository: libraryRepository,
         ),
       );
       await tester.pump(const Duration(milliseconds: 500));
@@ -798,6 +820,193 @@ void main() {
         find.byKey(const ValueKey('home-scroll-bottom-reserve')),
       );
       expect(reserve.height, greaterThanOrEqualTo(170));
+
+      await tester.tap(find.byKey(const ValueKey('bottom-navigation-item-1')));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final searchInputSurface = find.byKey(
+        const ValueKey('search-input-surface'),
+      );
+      expect(searchInputSurface, findsOneWidget);
+      expect(
+        find.descendant(
+          of: searchInputSurface,
+          matching: find.byType(BackdropFilter),
+        ),
+        findsOneWidget,
+      );
+      final searchFieldContext = tester.element(find.byType(TextField));
+      final inputFill = Theme.of(
+        searchFieldContext,
+      ).inputDecorationTheme.fillColor;
+      expect(inputFill, AppColors.inputSurfaceFor(searchFieldContext));
+      expect(
+        inputFill!.a,
+        greaterThan(AppColors.menuBackgroundFor(searchFieldContext).a),
+      );
+      expect(inputFill.a, greaterThan(headerMaterial.color!.a));
+
+      await tester.tap(find.byKey(const ValueKey('bottom-navigation-item-3')));
+      await tester.pump(const Duration(milliseconds: 500));
+      final libraryTabHeaderRect = tester.getRect(
+        find.byKey(const ValueKey('library-tab-header-surface')),
+      );
+      await tester.tap(find.byKey(const ValueKey('library-downloads-entry')));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final detailHeaderSurface = find.byKey(
+        const ValueKey('library-detail-header-surface'),
+      );
+      final libraryFilterSurface = find.byKey(
+        const ValueKey('library-filter-surface'),
+      );
+      final libraryFilterRegion = find.byKey(
+        const ValueKey('library-filter-region-surface'),
+      );
+      expect(
+        find.byKey(const ValueKey('library-detail-header')),
+        findsOneWidget,
+      );
+      expect(detailHeaderSurface, findsOneWidget);
+      expect(libraryFilterSurface, findsOneWidget);
+      expect(libraryFilterRegion, findsOneWidget);
+      final detailHeaderRect = tester.getRect(detailHeaderSurface);
+      expect(detailHeaderRect.width, tester.view.physicalSize.width);
+      expect(detailHeaderRect.size, libraryTabHeaderRect.size);
+      expect(
+        tester.getRect(libraryFilterRegion).width,
+        tester.view.physicalSize.width,
+      );
+      expect(tester.getRect(libraryFilterRegion).height, lessThanOrEqualTo(60));
+      expect(
+        find.ancestor(
+          of: detailHeaderSurface,
+          matching: find.byType(BackdropFilter),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.ancestor(
+          of: libraryFilterRegion,
+          matching: find.byType(BackdropFilter),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: libraryFilterSurface,
+          matching: find.byType(BackdropFilter),
+        ),
+        findsNothing,
+      );
+      final libraryFilterRegionDecoration =
+          tester
+                  .widget<DecoratedBox>(
+                    find.byKey(
+                      const ValueKey('tab-pinned-footer-accent-gradient'),
+                    ),
+                  )
+                  .decoration
+              as BoxDecoration;
+      expect(libraryFilterRegionDecoration.borderRadius, isNull);
+      expect(libraryFilterRegionDecoration.gradient, isA<LinearGradient>());
+      final libraryFilterFieldContext = tester.element(
+        find.descendant(
+          of: libraryFilterSurface,
+          matching: find.byType(TextField),
+        ),
+      );
+      final libraryFilterFill = Theme.of(
+        libraryFilterFieldContext,
+      ).inputDecorationTheme.fillColor!;
+      expect(
+        libraryFilterFill.a,
+        greaterThan(AppColors.menuBackgroundFor(libraryFilterFieldContext).a),
+      );
+      final detailHeaderDecoration =
+          tester
+                  .widget<DecoratedBox>(
+                    find.descendant(
+                      of: detailHeaderSurface,
+                      matching: find.byKey(
+                        const ValueKey('tab-header-accent-gradient'),
+                      ),
+                    ),
+                  )
+                  .decoration
+              as BoxDecoration;
+      expect(detailHeaderDecoration.borderRadius, isNull);
+      final detailHeaderGradient = detailHeaderDecoration.gradient!;
+      final expectedHeaderGradient = AppColors.glassAccentGradientFor(
+        tester.element(detailHeaderSurface),
+        intensity: 0.76,
+      );
+      expect(
+        (detailHeaderGradient as LinearGradient).colors,
+        expectedHeaderGradient.colors,
+      );
+      final downloadedTile = find.byKey(
+        const ValueKey('library-track-glass-surface-track'),
+      );
+      expect(downloadedTile, findsOneWidget);
+      final downloadedDecoration =
+          tester
+                  .widget<AnimatedContainer>(
+                    find
+                        .descendant(
+                          of: downloadedTile,
+                          matching: find.byType(AnimatedContainer),
+                        )
+                        .first,
+                  )
+                  .decoration
+              as BoxDecoration;
+      final downloadedContext = tester.element(downloadedTile);
+      expect(
+        downloadedDecoration.color,
+        AppColors.cardSurfaceFor(downloadedContext),
+      );
+      expect(downloadedDecoration.gradient, isNull);
+      expect(
+        (downloadedDecoration.border! as Border).top.color,
+        AppColors.cardBorderFor(downloadedContext),
+      );
+
+      await tester.tap(find.byIcon(Icons.arrow_back_rounded).first);
+      await tester.pump(const Duration(milliseconds: 300));
+      final favoritesEntry = find.byKey(
+        const ValueKey('library-playlist-bstream:favorites'),
+      );
+      await tester.ensureVisible(favoritesEntry);
+      await tester.tap(favoritesEntry);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final favoriteTile = find.byKey(
+        const ValueKey('library-track-glass-surface-track'),
+      );
+      expect(favoriteTile, findsOneWidget);
+      final favoriteDecoration =
+          tester
+                  .widget<AnimatedContainer>(
+                    find
+                        .descendant(
+                          of: favoriteTile,
+                          matching: find.byType(AnimatedContainer),
+                        )
+                        .first,
+                  )
+                  .decoration
+              as BoxDecoration;
+      final favoriteContext = tester.element(favoriteTile);
+      expect(
+        favoriteDecoration.color,
+        AppColors.cardSurfaceFor(favoriteContext),
+      );
+      expect(favoriteDecoration.gradient, isNull);
+      expect(
+        (favoriteDecoration.border! as Border).top.color,
+        AppColors.cardBorderFor(favoriteContext),
+      );
       expect(tester.takeException(), isNull);
       debugDefaultTargetPlatformOverride = null;
     },
@@ -1173,6 +1382,138 @@ void main() {
         find.byKey(const ValueKey('shell-background-browsing')),
         findsOneWidget,
       );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'android external entries and repeated launcher activations return Home',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1;
+      final externalAudio = StreamController<ExternalAudioRequest>.broadcast(
+        sync: true,
+      );
+      final appActivations =
+          StreamController<AndroidAppActivationEvent>.broadcast(sync: true);
+      final player = _RecordingHomePlayerController();
+      addTearDown(() async {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+        await externalAudio.close();
+        await appActivations.close();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          playerController: player,
+          externalAudioRequests: externalAudio.stream,
+          androidAppActivations: appActivations.stream,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+
+      for (var index = 0; index < 3; index++) {
+        final externalGeneration = (index * 2) + 1;
+        externalAudio.add(
+          ExternalAudioRequest(
+            requestId: 'external-cycle-$index',
+            selectedIndex: 0,
+            tracks: [
+              ExternalAudioTrack(
+                id: 'external-track-$index',
+                uri: 'content://media/external/audio/$index',
+                title: 'Audio externo $index',
+                artist: 'Artista local',
+                duration: const Duration(minutes: 2),
+              ),
+            ],
+            folderQueueComplete: true,
+            permissionPending: false,
+            permissionDenied: false,
+            entryGeneration: externalGeneration,
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(
+          find.byKey(const ValueKey('shell-background-player')),
+          findsOneWidget,
+        );
+        expect(player.localPlayCalls, index + 1);
+
+        // This is the event sent by the dedicated launcher entry point. It
+        // must reset the same retained HomePage/FlutterEngine every time.
+        appActivations.add(
+          AndroidAppActivationEvent(
+            activation: AndroidAppActivation.home,
+            entryGeneration: externalGeneration + 1,
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(
+          find.byKey(const ValueKey('shell-background-browsing')),
+          findsOneWidget,
+        );
+        expect(find.text('Inicio'), findsWidgets);
+      }
+
+      externalAudio.add(
+        const ExternalAudioRequest(
+          requestId: 'external-resolved-after-launcher',
+          selectedIndex: 0,
+          tracks: [
+            ExternalAudioTrack(
+              id: 'external-track-after-launcher',
+              uri: 'content://media/external/audio/after-launcher',
+              title: 'Audio resuelto tarde',
+            ),
+          ],
+          folderQueueComplete: true,
+          permissionPending: false,
+          permissionDenied: false,
+          entryGeneration: 5,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byKey(const ValueKey('shell-background-browsing')),
+        findsOneWidget,
+      );
+      expect(player.localPlayCalls, 4);
+
+      // A media-notification activation remains distinct: it opens Player,
+      // while Back still consumes local history and returns safely to Home.
+      appActivations.add(
+        const AndroidAppActivationEvent(
+          activation: AndroidAppActivation.player,
+          entryGeneration: 7,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byKey(const ValueKey('shell-background-player')),
+        findsOneWidget,
+      );
+
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byKey(const ValueKey('shell-background-browsing')),
+        findsOneWidget,
+      );
+      expect(player.localPlayCalls, 4);
       expect(tester.takeException(), isNull);
       debugDefaultTargetPlatformOverride = null;
     },
@@ -2313,8 +2654,14 @@ void main() {
       expect(find.byKey(const ValueKey('player-tab-title')), findsOneWidget);
       expect(player.remotePlayCalls, 1);
       expect(player.lastRemoteTrack?.id, 'dQw4w9WgXcQ');
-      expect(player.lastRemoteTrack?.title, 'Cancion compartida');
-      expect(player.lastRemoteTrack?.artist, 'Artista compartido');
+      expect(player.lastRemoteTrack?.title, 'Never Gonna Give You Up');
+      expect(player.lastRemoteTrack?.artist, 'Rick Astley');
+      expect(player.lastRemoteTrack?.album, 'Whenever You Need Somebody');
+      expect(player.lastRemoteTrack?.duration, const Duration(minutes: 3));
+      expect(
+        player.lastRemoteTrack?.metadataSource,
+        TrackMetadataSource.youtubeMusic,
+      );
       expect(
         player.lastRemoteTrack?.url,
         'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
@@ -2331,6 +2678,193 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('public YouTube Music track link opens the player once', (
+    tester,
+  ) async {
+    _configureMobileHomeViewport(tester);
+    final incomingLinks = _FakeIncomingTrackLinkService();
+    final lookup = _FakeYouTubeMusicTrackLookup();
+    final player = _RecordingHomePlayerController();
+    addTearDown(incomingLinks.close);
+
+    await tester.pumpWidget(
+      _testApp(
+        playerController: player,
+        incomingTrackLinkService: incomingLinks,
+        youtubeMusicSearch: lookup,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    final uri = Uri.parse(
+      'https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=bstream-test',
+    );
+    incomingLinks.add(uri);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.byKey(const ValueKey('player-tab-title')), findsOneWidget);
+    expect(player.remotePlayCalls, 1);
+    expect(player.lastRemoteTrack?.id, 'dQw4w9WgXcQ');
+    expect(player.lastRemoteTrack?.title, 'Never Gonna Give You Up');
+    expect(player.lastRemoteTrack?.artist, 'Rick Astley');
+    expect(player.lastRemoteQueueSourceId, 'shared-link:dQw4w9WgXcQ');
+    expect(lookup.requestedVideoIds, ['dQw4w9WgXcQ']);
+
+    incomingLinks.add(uri);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(player.remotePlayCalls, 1);
+    expect(lookup.requestedVideoIds, ['dQw4w9WgXcQ']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'public YouTube Music playlist link opens its complete collection',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final incomingLinks = _FakeIncomingTrackLinkService();
+      final player = _RecordingHomePlayerController();
+      addTearDown(incomingLinks.close);
+      const playlistId = 'PL1234567890abcdef';
+      const browseId = 'VL$playlistId';
+      const playlistTracks = <TrackInfo>[
+        TrackInfo(
+          id: 'linked-song-1',
+          title: 'Cancion enlazada uno',
+          artist: 'Artista uno',
+          url: 'https://www.youtube.com/watch?v=LinkedSong1',
+        ),
+        TrackInfo(
+          id: 'linked-song-2',
+          title: 'Cancion enlazada dos',
+          artist: 'Artista dos',
+          url: 'https://www.youtube.com/watch?v=LinkedSong2',
+        ),
+      ];
+      final requestedBrowseIds = <String>[];
+
+      await tester.pumpWidget(
+        _testApp(
+          playerController: player,
+          incomingTrackLinkService: incomingLinks,
+          homeCollectionDetailLoader: (requestedBrowseId) async {
+            requestedBrowseIds.add(requestedBrowseId);
+            return RemoteCollectionData(
+              title: 'Favoritas para viajar',
+              subtitle: 'Cuenta de prueba',
+              artworkSource: 'https://img.test/playlist-real.jpg',
+              tracks: playlistTracks,
+            );
+          },
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      incomingLinks.add(
+        Uri.parse(
+          'https://music.youtube.com/playlist?list=$playlistId&si=test-share',
+        ),
+      );
+      await tester.pump();
+      await _pumpUntil(
+        tester,
+        () =>
+            requestedBrowseIds.isNotEmpty &&
+            find
+                .byKey(const ValueKey('remote-collection-detail'))
+                .evaluate()
+                .isNotEmpty &&
+            find.text('Cancion enlazada dos').evaluate().isNotEmpty,
+        reason: 'the linked playlist detail to load',
+      );
+
+      expect(requestedBrowseIds, [browseId]);
+      expect(find.text('Favoritas para viajar'), findsNWidgets(2));
+      expect(find.text('Cuenta de prueba'), findsOneWidget);
+      expect(find.text('Playlist'), findsNothing);
+      expect(find.text('Cancion enlazada uno'), findsOneWidget);
+      expect(find.text('Cancion enlazada dos'), findsOneWidget);
+      expect(player.remotePlayCalls, 0);
+
+      await tester.tap(find.byKey(const ValueKey('remote-collection-play')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(player.remotePlayCalls, 1);
+      expect(player.lastRemoteTrack?.id, 'linked-song-1');
+      expect(player.lastRemoteQueue?.map((track) => track.id), const [
+        'linked-song-1',
+        'linked-song-2',
+      ]);
+      expect(
+        player.lastRemoteQueueSourceId,
+        'incoming-youtube:playlist:$browseId',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('a public track link replaces an already open playlist detail', (
+    tester,
+  ) async {
+    _configureMobileHomeViewport(tester);
+    final incomingLinks = _FakeIncomingTrackLinkService();
+    final lookup = _FakeYouTubeMusicTrackLookup();
+    final player = _RecordingHomePlayerController();
+    addTearDown(incomingLinks.close);
+
+    await tester.pumpWidget(
+      _testApp(
+        playerController: player,
+        incomingTrackLinkService: incomingLinks,
+        youtubeMusicSearch: lookup,
+        homeCollectionLoader: (_) async => const <TrackInfo>[
+          TrackInfo(
+            id: 'linked-song-1',
+            title: 'Cancion de playlist abierta',
+            artist: 'Artista',
+            url: 'https://www.youtube.com/watch?v=LinkedSong1',
+          ),
+        ],
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+
+    incomingLinks.add(
+      Uri.parse('https://music.youtube.com/playlist?list=PL1234567890abcdef'),
+    );
+    await _pumpUntil(
+      tester,
+      () => find
+          .byKey(const ValueKey('remote-collection-detail'))
+          .evaluate()
+          .isNotEmpty,
+      reason: 'the linked playlist detail to open',
+    );
+
+    incomingLinks.add(
+      Uri.parse('https://music.youtube.com/watch?v=dQw4w9WgXcQ'),
+    );
+    await _pumpUntil(
+      tester,
+      () =>
+          player.remotePlayCalls == 1 &&
+          find.byKey(const ValueKey('player-tab-title')).evaluate().isNotEmpty,
+      reason: 'the newer linked track to replace the playlist detail',
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(
+      find.byKey(const ValueKey('remote-collection-detail')),
+      findsNothing,
+    );
+    expect(player.lastRemoteTrack?.id, 'dQw4w9WgXcQ');
+    expect(lookup.requestedVideoIds, ['dQw4w9WgXcQ']);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('shared app link does not wait indefinitely for metadata', (
     tester,
@@ -3370,12 +3904,21 @@ void main() {
     );
     expect(find.textContaining('Playlists bidireccionales'), findsOneWidget);
     expect(
-      find.text('Personalizaci\u00f3n de superficies y mini reproductor.'),
+      find.text(
+        'Personaliza las superficies de la app y el mini reproductor con estilos, colores de acento y transparencias.',
+      ),
       findsOneWidget,
     );
-    expect(find.text('Romanizaci\u00f3n opcional de letras.'), findsOneWidget);
     expect(
-      find.text('Acceso a la m\u00fasica local del dispositivo.'),
+      find.text(
+        'Convierte letras de otros alfabetos a caracteres latinos para que sean m\u00e1s f\u00e1ciles de seguir.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'Explora y reproduce la m\u00fasica guardada en tu dispositivo, con filtros para ocultar audios no deseados.',
+      ),
       findsOneWidget,
     );
     await tester.tap(
@@ -4217,6 +4760,12 @@ void main() {
         find.byKey(const ValueKey('library-selection-toolbar')),
         findsOneWidget,
       );
+      final selectionHeader = find.byKey(
+        const ValueKey('library-selection-toolbar-padding'),
+      );
+      final selectionHeaderRect = tester.getRect(selectionHeader);
+      expect(selectionHeaderRect.left, 0);
+      expect(selectionHeaderRect.right, tester.view.physicalSize.width);
       expect(
         tester
             .widget<Text>(find.byKey(const ValueKey('library-selection-count')))
@@ -5774,12 +6323,16 @@ Widget _testApp({
   FutureOr<List<HomeRecommendationSection>> Function()?
   homeRecommendationsLoader,
   Future<List<TrackInfo>> Function(String browseId)? homeCollectionLoader,
+  Future<RemoteCollectionData> Function(String browseId)?
+  homeCollectionDetailLoader,
   PersonalizedHomeFeedSource? personalizedHomeFeedSource,
   IncomingTrackLinkService? incomingTrackLinkService,
   YouTubeMusicSearch? youtubeMusicSearch,
   YouTubeMusicAuthState? youtubeMusicAuthState,
   DateTime? homeGreetingTime,
   List<CatalogPlaylist>? catalogPlaylists,
+  Stream<ExternalAudioRequest>? externalAudioRequests,
+  Stream<AndroidAppActivationEvent>? androidAppActivations,
   Widget? testHome,
 }) {
   final resolvedLibraryRepository =
@@ -5793,6 +6346,12 @@ Widget _testApp({
       homeGreetingClockProvider.overrideWithValue(
         () => homeGreetingTime ?? DateTime(2026, 8, 24, 9),
       ),
+      if (externalAudioRequests != null)
+        androidExternalAudioRequestsProvider.overrideWithValue(
+          externalAudioRequests,
+        ),
+      if (androidAppActivations != null)
+        androidAppActivationsProvider.overrideWithValue(androidAppActivations),
       if (settingsController != null)
         settingsControllerProvider.overrideWith(() => settingsController),
       downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
@@ -5829,6 +6388,15 @@ Widget _testApp({
         homeCollectionTracksProvider.overrideWith(
           (ref, browseId) => homeCollectionLoader(browseId),
         ),
+      if (homeCollectionDetailLoader != null)
+        homeCollectionDetailProvider.overrideWith(
+          (ref, browseId) => homeCollectionDetailLoader(browseId),
+        )
+      else if (homeCollectionLoader != null)
+        homeCollectionDetailProvider.overrideWith((ref, browseId) async {
+          final tracks = await homeCollectionLoader(browseId);
+          return RemoteCollectionData(tracks: tracks);
+        }),
       if (lyricsService != null)
         lyricsServiceProvider.overrideWithValue(lyricsService),
       if (artworkProgressColorService != null)
@@ -6322,6 +6890,30 @@ class _RecordingHomePlayerController extends PlayerController {
   }
 
   @override
+  bool enrichCurrentRemoteTrackMetadata(TrackInfo metadata) {
+    final current = lastRemoteTrack;
+    if (current == null ||
+        (current.id != metadata.id && current.url != metadata.url)) {
+      return false;
+    }
+    lastRemoteTrack = metadata;
+    state = AsyncData(
+      PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: metadata.title,
+        artist: metadata.artist,
+        album: metadata.album,
+        trackId: metadata.id,
+        sourceUrl: metadata.url,
+        thumbnailUrl: metadata.thumbnailUrl,
+        duration: metadata.duration,
+        isRemote: true,
+      ),
+    );
+    return true;
+  }
+
+  @override
   Future<void> playLocal(
     LocalTrack track, {
     List<LocalTrack>? queue,
@@ -6431,7 +7023,7 @@ class _StaticPersonalizedHomeFeedSource implements PersonalizedHomeFeedSource {
 }
 
 final class _FakeIncomingTrackLinkService implements IncomingTrackLinkService {
-  final StreamController<Uri> _controller = StreamController<Uri>();
+  final StreamController<Uri> _controller = StreamController<Uri>.broadcast();
 
   @override
   Stream<Uri> get links => _controller.stream;
@@ -6457,11 +7049,11 @@ final class _FakeYouTubeMusicTrackLookup
     requestedVideoIds.add(videoId);
     return InnerTubeSong(
       videoId: videoId,
-      title: 'Cancion compartida',
-      artists: const ['Artista compartido'],
-      album: 'Album compartido',
+      title: 'Never Gonna Give You Up',
+      artists: const ['Rick Astley'],
+      album: 'Whenever You Need Somebody',
       duration: const Duration(minutes: 3),
-      thumbnailUrl: '',
+      thumbnailUrl: 'https://img.test/rick-astley.jpg',
     );
   }
 

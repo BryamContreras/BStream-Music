@@ -1,20 +1,89 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../core/constants/app_constants.dart';
 import '../features/music/domain/entities/local_track.dart';
 
 class AndroidExternalAudioChannel {
-  const AndroidExternalAudioChannel({EventChannel? eventChannel})
-    : _eventChannel =
-          eventChannel ??
-          const EventChannel(AppConstants.androidExternalAudioChannel);
+  static const _maxPendingRequests = 8;
 
-  final EventChannel _eventChannel;
+  AndroidExternalAudioChannel({MethodChannel? methodChannel})
+    : _methodChannel =
+          methodChannel ??
+          const MethodChannel(AppConstants.androidExternalAudioChannel) {
+    _controller = StreamController<ExternalAudioRequest>.broadcast(
+      onListen: _flushPending,
+    );
+  }
 
-  Stream<ExternalAudioRequest> get requests => _eventChannel
-      .receiveBroadcastStream()
-      .map(ExternalAudioRequest.fromPlatformEvent);
+  final MethodChannel _methodChannel;
+  late final StreamController<ExternalAudioRequest> _controller;
+  final List<ExternalAudioRequest> _pending = <ExternalAudioRequest>[];
+  bool _initialized = false;
+
+  Stream<ExternalAudioRequest> get requests {
+    if (!_initialized) {
+      _initialized = true;
+      unawaited(_initialize());
+    }
+    return _controller.stream;
+  }
+
+  Future<void> _initialize() async {
+    _methodChannel.setMethodCallHandler((call) async {
+      if (call.method != 'externalAudio') {
+        throw MissingPluginException('Unknown external audio method.');
+      }
+      _emit(ExternalAudioRequest.fromPlatformEvent(call.arguments));
+      return true;
+    });
+
+    try {
+      final pending = await _methodChannel.invokeListMethod<Object?>(
+        'consumePendingExternalAudioEvents',
+      );
+      for (final event in pending ?? const <Object?>[]) {
+        _emit(ExternalAudioRequest.fromPlatformEvent(event));
+      }
+    } on MissingPluginException {
+      // This bridge exists only in the Android application.
+    } catch (error, stackTrace) {
+      debugPrint('Could not consume pending external audio: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+  }
+
+  void _emit(ExternalAudioRequest request) {
+    if (_controller.hasListener) {
+      _controller.add(request);
+      return;
+    }
+    while (_pending.length >= _maxPendingRequests) {
+      _pending.removeAt(0);
+    }
+    _pending.add(request);
+  }
+
+  void _flushPending() {
+    if (_pending.isEmpty) {
+      return;
+    }
+    for (final request in List<ExternalAudioRequest>.of(_pending)) {
+      _controller.add(request);
+    }
+    _pending.clear();
+  }
+
+  @visibleForTesting
+  Future<void> dispose() async {
+    _methodChannel.setMethodCallHandler(null);
+    await _controller.close();
+  }
 }
+
+final androidExternalAudioChannel = AndroidExternalAudioChannel();
 
 class ExternalAudioRequest {
   const ExternalAudioRequest({
@@ -24,6 +93,8 @@ class ExternalAudioRequest {
     required this.folderQueueComplete,
     required this.permissionPending,
     required this.permissionDenied,
+    this.openPlayer = true,
+    this.entryGeneration = 0,
   });
 
   final String requestId;
@@ -32,6 +103,8 @@ class ExternalAudioRequest {
   final bool folderQueueComplete;
   final bool permissionPending;
   final bool permissionDenied;
+  final bool openPlayer;
+  final int entryGeneration;
 
   String get queueSourceId => 'external-folder:$requestId';
 
@@ -66,6 +139,10 @@ class ExternalAudioRequest {
       folderQueueComplete: event['folderQueueComplete'] == true,
       permissionPending: event['permissionPending'] == true,
       permissionDenied: event['permissionDenied'] == true,
+      openPlayer: event['openPlayer'] != false,
+      entryGeneration: event['entryGeneration'] is num
+          ? (event['entryGeneration'] as num).toInt()
+          : 0,
     );
   }
 
