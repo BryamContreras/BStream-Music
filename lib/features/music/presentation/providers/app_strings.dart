@@ -242,8 +242,8 @@ class AppStrings {
   String get searchHint =>
       choose('Canción, artista o álbum', 'Song, artist, or album');
   String get searchEmptyTitle => choose(
-    'Busca canciones, artistas o enlaces',
-    'Search songs, artists, or links',
+    'Busca canciones, artistas o álbumes',
+    'Search songs, artists, or albums',
   );
   String get searchEmptySubtitle =>
       choose('Los resultados aparecerán aquí.', 'Results will appear here.');

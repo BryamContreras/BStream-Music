@@ -148,6 +148,7 @@ class SearchView extends ConsumerWidget {
         _SearchResultsSliver(
           results: results,
           strings: strings,
+          bottomContentPadding: bottomContentPadding,
           onOpenPlayer: onOpenPlayer,
           onAddToPlaylist: onAddToPlaylist,
         ),
@@ -166,12 +167,14 @@ class _SearchResultsSliver extends StatelessWidget {
   const _SearchResultsSliver({
     required this.results,
     required this.strings,
+    required this.bottomContentPadding,
     required this.onOpenPlayer,
     required this.onAddToPlaylist,
   });
 
   final AsyncValue<SearchState> results;
   final AppStrings strings;
+  final double bottomContentPadding;
   final VoidCallback onOpenPlayer;
   final AddRemoteTracksToPlaylist? onAddToPlaylist;
 
@@ -182,10 +185,14 @@ class _SearchResultsSliver extends StatelessWidget {
         if (!state.hasQuery) {
           return SliverFillRemaining(
             hasScrollBody: false,
-            child: _SearchEmptyState(
-              icon: Icons.search_rounded,
-              title: strings.searchEmptyTitle,
-              subtitle: strings.searchEmptySubtitle,
+            child: Padding(
+              key: const ValueKey('search-initial-empty-available-area'),
+              padding: EdgeInsets.only(bottom: bottomContentPadding),
+              child: _SearchEmptyState(
+                icon: Icons.search_rounded,
+                title: strings.searchEmptyTitle,
+                subtitle: strings.searchEmptySubtitle,
+              ),
             ),
           );
         }

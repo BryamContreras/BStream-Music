@@ -14,6 +14,46 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'centers the initial prompt above reserved player space and names albums',
+    (tester) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      const bottomContentPadding = 120.0;
+      final controller = _RecordingSearchController(SearchState());
+
+      await tester.pumpWidget(
+        _searchApp(
+          controller: controller,
+          bottomContentPadding: bottomContentPadding,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Busca canciones, artistas o álbumes'), findsOneWidget);
+      expect(find.textContaining('enlaces'), findsNothing);
+
+      final availableArea = find.byKey(
+        const ValueKey('search-initial-empty-available-area'),
+      );
+      final areaRect = tester.getRect(availableArea);
+      expect(areaRect.bottom, closeTo(800, 0.1));
+
+      final iconRect = tester.getRect(find.byIcon(Icons.search_rounded).last);
+      final subtitleRect = tester.getRect(
+        find.text('Los resultados aparecerán aquí.'),
+      );
+      final promptCenter = (iconRect.top + subtitleRect.bottom) / 2;
+      final usableAreaCenter =
+          (areaRect.top + areaRect.bottom - bottomContentPadding) / 2;
+      expect(promptCenter, closeTo(usableAreaCenter, 0.1));
+    },
+  );
+
   testWidgets('hides categories until a search is submitted', (tester) async {
     final controller = _RecordingSearchController(SearchState());
 
@@ -1058,6 +1098,7 @@ Widget _searchApp({
   List<Override> extraOverrides = const [],
   TargetPlatform? platform,
   bool disableAnimations = false,
+  double bottomContentPadding = 0,
 }) {
   return ProviderScope(
     overrides: [
@@ -1077,7 +1118,12 @@ Widget _searchApp({
               child: child!,
             )
           : null,
-      home: Scaffold(body: SearchView(onOpenPlayer: onOpenPlayer ?? () {})),
+      home: Scaffold(
+        body: SearchView(
+          onOpenPlayer: onOpenPlayer ?? () {},
+          bottomContentPadding: bottomContentPadding,
+        ),
+      ),
     ),
   );
 }
