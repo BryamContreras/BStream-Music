@@ -310,19 +310,6 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   mobileArtworkShadowCompactness,
                                 ),
                               );
-                              final artwork = Center(
-                                child: _LargeArtwork(
-                                  url: artworkSource,
-                                  fallbackUrl: artworkFallbackSource,
-                                  identity: visualIdentity,
-                                  maxExtent: artworkExtent,
-                                  isFavorite: isFavorite,
-                                  shadowCompactness: artworkShadowCompactness,
-                                ),
-                              );
-                              final gap = mobile
-                                  ? lerpDouble(22, 26, mobileFrameCompactness)!
-                                  : lerpDouble(26, 12, verticalCompactness)!;
                               final maxContentWidth = stackedDesktop
                                   ? showSideQueue
                                         ? constraints.maxWidth
@@ -334,6 +321,29 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                               .clamp(700.0, 1040.0)
                                               .toDouble()
                                   : 520.0;
+                              final artworkCanvasWidth = math.min(
+                                constraints.maxWidth,
+                                maxContentWidth,
+                              );
+                              final artworkHorizontalClearance = math.max(
+                                0.0,
+                                (artworkCanvasWidth - artworkExtent) / 2,
+                              );
+                              final artwork = Center(
+                                child: _LargeArtwork(
+                                  url: artworkSource,
+                                  fallbackUrl: artworkFallbackSource,
+                                  identity: visualIdentity,
+                                  maxExtent: artworkExtent,
+                                  isFavorite: isFavorite,
+                                  shadowCompactness: artworkShadowCompactness,
+                                  shadowHorizontalClearance:
+                                      artworkHorizontalClearance,
+                                ),
+                              );
+                              final gap = mobile
+                                  ? lerpDouble(22, 26, mobileFrameCompactness)!
+                                  : lerpDouble(26, 12, verticalCompactness)!;
                               final controls = _PlayerControls(
                                 snapshot: snapshot,
                                 hasTrack: hasTrack,
@@ -1087,6 +1097,7 @@ class _LargeArtwork extends StatefulWidget {
     required this.maxExtent,
     required this.isFavorite,
     required this.shadowCompactness,
+    required this.shadowHorizontalClearance,
   });
 
   final String? url;
@@ -1095,6 +1106,7 @@ class _LargeArtwork extends StatefulWidget {
   final double maxExtent;
   final bool isFavorite;
   final double shadowCompactness;
+  final double shadowHorizontalClearance;
 
   @override
   State<_LargeArtwork> createState() => _LargeArtworkState();
@@ -1162,6 +1174,7 @@ class _LargeArtworkState extends State<_LargeArtwork> {
                   url: source,
                   fallbackUrl: widget.fallbackUrl,
                   compactness: widget.shadowCompactness,
+                  horizontalClearance: widget.shadowHorizontalClearance,
                 ),
               ),
             ),
@@ -1191,11 +1204,13 @@ class _PlayerArtworkSurface extends StatelessWidget {
     required this.url,
     required this.fallbackUrl,
     required this.compactness,
+    required this.horizontalClearance,
   });
 
   final String? url;
   final String? fallbackUrl;
   final double compactness;
+  final double horizontalClearance;
 
   @override
   Widget build(BuildContext context) {
@@ -1204,10 +1219,29 @@ class _PlayerArtworkSurface extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final artworkExtent = constraints.biggest.shortestSide;
+        // Flutter's BoxShadow blur radius is converted to sigma before paint.
+        // Three sigmas cover the visible Gaussian tail closely enough that a
+        // compact scroll viewport cannot reveal a hard lateral cut. Ease into
+        // this safety profile quickly on short frames, while a roomy player
+        // (compactness == 0) keeps its original shadow exactly.
+        const blurRadiusToSigma = 0.57735;
+        const safeSigmaCount = 3.0;
+        final safeCompactBlur = math.max(
+          0.0,
+          (horizontalClearance - (safeSigmaCount * 0.5)) /
+              (safeSigmaCount * blurRadiusToSigma),
+        );
+        final compactBlurRadius = math.min(
+          artworkExtent * 0.035,
+          safeCompactBlur,
+        );
+        final shadowCompactness = Curves.easeOutCubic.transform(
+          compactness.clamp(0.0, 1.0),
+        );
         final shadowAlpha = lerpDouble(
           isDark ? 0.67 : 0.2,
-          isDark ? 0.46 : 0.14,
-          compactness,
+          isDark ? 0.3 : 0.1,
+          shadowCompactness,
         )!;
         final shadow = BoxShadow(
           color: Colors.black.withValues(alpha: shadowAlpha),
@@ -1216,11 +1250,11 @@ class _PlayerArtworkSurface extends StatelessWidget {
           // On short phones the smaller, lighter halo stays softly inside the
           // available breathing room instead of reaching the metadata or the
           // viewport edge after the cover itself has been compacted.
-          blurRadius: lerpDouble(42, artworkExtent * 0.082, compactness)!,
-          spreadRadius: lerpDouble(6, artworkExtent * 0.0025, compactness)!,
+          blurRadius: lerpDouble(42, compactBlurRadius, shadowCompactness)!,
+          spreadRadius: lerpDouble(6, 0, shadowCompactness)!,
           offset: Offset(
             0,
-            lerpDouble(18, artworkExtent * 0.026, compactness)!,
+            lerpDouble(18, artworkExtent * 0.018, shadowCompactness)!,
           ),
         );
         return DecoratedBox(

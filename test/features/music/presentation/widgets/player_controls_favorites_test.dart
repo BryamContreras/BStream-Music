@@ -586,13 +586,10 @@ void main() {
         tester.getRect(find.byKey(const ValueKey('player-tab-title'))).top,
         greaterThan(tester.getRect(header).top),
       );
-      expect(shortShadow.blurRadius / shortArtworkWidth, closeTo(0.082, 0.001));
-      expect(
-        shortShadow.spreadRadius / shortArtworkWidth,
-        closeTo(0.0025, 0.001),
-      );
-      expect(shortShadow.offset.dy / shortArtworkWidth, closeTo(0.026, 0.001));
-      expect(shortShadow.color.a, closeTo(0.46, 0.001));
+      expect(shortShadow.blurRadius / shortArtworkWidth, closeTo(0.035, 0.001));
+      expect(shortShadow.spreadRadius, closeTo(0, 0.001));
+      expect(shortShadow.offset.dy / shortArtworkWidth, closeTo(0.018, 0.001));
+      expect(shortShadow.color.a, closeTo(0.3, 0.001));
       expect(shortShadow.color.a, lessThan(longShadow.color.a));
       expect(
         tester.widget<SingleChildScrollView>(contentScroll).clipBehavior,
@@ -604,8 +601,7 @@ void main() {
       expect(compactScroll.position.maxScrollExtent, greaterThan(0));
       final scrollRect = tester.getRect(contentScroll);
       final artworkRect = tester.getRect(artwork);
-      final horizontalShadowExtent =
-          shortShadow.blurRadius + shortShadow.spreadRadius;
+      final horizontalShadowExtent = _visibleGaussianShadowExtent(shortShadow);
       expect(
         horizontalShadowExtent,
         lessThanOrEqualTo(artworkRect.left - scrollRect.left + 0.1),
@@ -633,6 +629,47 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('S22 display zoom keeps the compact shadow inside its viewport', (
+    tester,
+  ) async {
+    // The connected SM-S908U exposes a 1440x2808 app area at 600 dpi.
+    _configureView(tester, const Size(384, 748.8));
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    final artwork = find.byKey(const ValueKey('player-large-artwork'));
+    final contentScroll = find.byKey(const ValueKey('player-content-scroll'));
+    final surface = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('player-artwork-surface')),
+    );
+    final shadow = (surface.decoration as BoxDecoration).boxShadow!.single;
+    final scrollRect = tester.getRect(contentScroll);
+    final artworkRect = tester.getRect(artwork);
+    final visibleShadowExtent = _visibleGaussianShadowExtent(shadow);
+
+    expect(tester.getSize(artwork).width, inInclusiveRange(295, 306));
+    expect(shadow.color.a, lessThanOrEqualTo(0.31));
+    expect(shadow.spreadRadius, lessThan(0.1));
+    expect(
+      visibleShadowExtent,
+      lessThanOrEqualTo(artworkRect.left - scrollRect.left + 0.1),
+    );
+    expect(
+      visibleShadowExtent,
+      lessThanOrEqualTo(scrollRect.right - artworkRect.right + 0.1),
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'width-compacted artwork also compacts its shadow on a short phone',
@@ -1812,6 +1849,12 @@ void _expectTransparentPrimaryControl(
         : 1.5,
   );
   expect(iconTranslation.transform.getTranslation().y, 0);
+}
+
+double _visibleGaussianShadowExtent(BoxShadow shadow) {
+  const blurRadiusToSigma = 0.57735;
+  return shadow.spreadRadius +
+      (3 * ((shadow.blurRadius * blurRadiusToSigma) + 0.5));
 }
 
 void _configureView(
