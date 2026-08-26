@@ -474,7 +474,7 @@ void main() {
   }
 
   testWidgets(
-    'short Android viewports gently reduce artwork without resizing controls',
+    'short Android viewports preserve artwork and compact only spacing',
     (tester) async {
       _configureView(tester, const Size(360, 720), bottomPadding: 24);
 
@@ -517,10 +517,11 @@ void main() {
         ),
       );
       final artworkWidth = tester.getSize(artwork).width;
-      expect(errorArtworkWidth - artworkWidth, closeTo(20, 0.1));
+      expect(errorArtworkWidth, closeTo(artworkWidth, 0.1));
       expect(tester.getSize(volume).width, greaterThanOrEqualTo(112));
       expect(tester.getSize(volume).height, 48);
       expect(scroll.position.pixels, closeTo(0, 0.1));
+      expect(scroll.position.maxScrollExtent, closeTo(0, 0.1));
       expect(
         tester.getRect(volume).bottom,
         lessThanOrEqualTo(720 - 24.0 + 0.1),
@@ -555,8 +556,26 @@ void main() {
       final artwork = find.byKey(const ValueKey('player-large-artwork'));
       final header = find.byKey(const ValueKey('player-header'));
       final contentScroll = find.byKey(const ValueKey('player-content-scroll'));
+      final metadata = find.byKey(const ValueKey('player-stable-metadata'));
+      final timeline = find.byKey(const ValueKey('player-timeline'));
+      final playbackControls = find.byKey(
+        const ValueKey('player-playback-controls'),
+      );
       final longShadow = artworkShadow();
       expect(tester.getRect(header).top, closeTo(10, 0.1));
+      expect(
+        tester.getRect(find.byKey(const ValueKey('player-track-title'))).top -
+            tester.getRect(artwork).bottom,
+        closeTo(22, 0.1),
+      );
+      expect(
+        tester.getRect(timeline).top - tester.getRect(metadata).bottom,
+        closeTo(22, 0.1),
+      );
+      expect(
+        tester.getRect(playbackControls).top - tester.getRect(timeline).bottom,
+        closeTo(18, 0.1),
+      );
       expect(longShadow.blurRadius, 42);
       expect(longShadow.spreadRadius, 6);
       expect(longShadow.offset.dy, 18);
@@ -598,7 +617,7 @@ void main() {
       final compactScroll = tester.state<ScrollableState>(
         find.descendant(of: contentScroll, matching: find.byType(Scrollable)),
       );
-      expect(compactScroll.position.maxScrollExtent, greaterThan(0));
+      expect(compactScroll.position.maxScrollExtent, closeTo(0, 0.1));
       final scrollRect = tester.getRect(contentScroll);
       final artworkRect = tester.getRect(artwork);
       final horizontalShadowExtent = _visibleGaussianShadowExtent(shortShadow);
@@ -649,24 +668,46 @@ void main() {
 
     final artwork = find.byKey(const ValueKey('player-large-artwork'));
     final contentScroll = find.byKey(const ValueKey('player-content-scroll'));
+    final metadata = find.byKey(const ValueKey('player-stable-metadata'));
+    final timeline = find.byKey(const ValueKey('player-timeline'));
+    final playbackControls = find.byKey(
+      const ValueKey('player-playback-controls'),
+    );
     final surface = tester.widget<DecoratedBox>(
       find.byKey(const ValueKey('player-artwork-surface')),
     );
     final shadow = (surface.decoration as BoxDecoration).boxShadow!.single;
-    final scrollRect = tester.getRect(contentScroll);
     final artworkRect = tester.getRect(artwork);
     final visibleShadowExtent = _visibleGaussianShadowExtent(shadow);
+    final compactness = ((820 - 748.8) / 100).clamp(0.0, 1.0);
+    final scroll = tester.state<ScrollableState>(
+      find.descendant(of: contentScroll, matching: find.byType(Scrollable)),
+    );
 
-    expect(tester.getSize(artwork).width, inInclusiveRange(295, 306));
-    expect(shadow.color.a, lessThanOrEqualTo(0.31));
-    expect(shadow.spreadRadius, lessThan(0.1));
+    expect(tester.getSize(artwork).width, closeTo(317.52, 0.2));
+    expect(scroll.position.pixels, closeTo(0, 0.1));
+    expect(scroll.position.maxScrollExtent, closeTo(0, 0.1));
     expect(
-      visibleShadowExtent,
-      lessThanOrEqualTo(artworkRect.left - scrollRect.left + 0.1),
+      tester.getRect(find.byKey(const ValueKey('player-track-title'))).top -
+          artworkRect.bottom,
+      closeTo(22 - (6 * compactness), 0.2),
     );
     expect(
+      tester.getRect(timeline).top - tester.getRect(metadata).bottom,
+      closeTo(22 - (10 * compactness), 0.2),
+    );
+    expect(
+      tester.getRect(playbackControls).top - tester.getRect(timeline).bottom,
+      closeTo(18 - (10 * compactness), 0.2),
+    );
+    expect(shadow.color.a, lessThanOrEqualTo(0.31));
+    expect(shadow.spreadRadius, lessThan(0.1));
+    // With no vertical overflow RenderSingleChildViewport does not install a
+    // clip, so the compact halo may use the outer 20 dp content padding too.
+    expect(visibleShadowExtent, lessThanOrEqualTo(artworkRect.left + 0.1));
+    expect(
       visibleShadowExtent,
-      lessThanOrEqualTo(scrollRect.right - artworkRect.right + 0.1),
+      lessThanOrEqualTo(384 - artworkRect.right + 0.1),
     );
     expect(tester.takeException(), isNull);
   });
@@ -920,13 +961,13 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const ValueKey('player-error-message')), findsOneWidget);
-    expect(
+    final scroll = tester.state<ScrollableState>(
       find.descendant(
         of: find.byKey(const ValueKey('player-content-scroll')),
         matching: find.byType(Scrollable),
       ),
-      findsOneWidget,
     );
+    expect(scroll.position.maxScrollExtent, greaterThan(0));
     expect(tester.takeException(), isNull);
   });
 
@@ -1064,7 +1105,7 @@ void main() {
             0.0,
             1.0,
           );
-          final expectedArtworkTitleGap = 22 + (4 * compactness);
+          final expectedArtworkTitleGap = 22 - (6 * compactness);
           expect(
             shortTitle.artworkTitleGap,
             closeTo(expectedArtworkTitleGap, 0.1),

@@ -44,8 +44,6 @@ class PlayerPanel extends ConsumerStatefulWidget {
 }
 
 class _PlayerPanelState extends ConsumerState<PlayerPanel> {
-  static const _mobileArtworkMaxReduction = 20.0;
-  static const _mobileArtworkComfortHeight = 680.0;
   static const _mobileArtworkExtentCeiling = 400.0;
   static const _mobileArtworkShadowCompressionRange = 100.0;
   static const _mobileArtworkShadowActivationRange = 0.2;
@@ -277,13 +275,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 compactness: verticalCompactness,
                                 mobileFrameCompactness: mobileFrameCompactness,
                               );
-                              final artworkExtent = mobile
-                                  ? _mobileArtworkExtent(
-                                      constraints: constraints,
-                                      regularExtent: regularArtworkExtent,
-                                      hasError: presentation.hasError,
-                                    )
-                                  : regularArtworkExtent;
+                              // Short Android frames keep the regular artwork
+                              // size. Their vertical budget is recovered from
+                              // the surrounding gaps instead of shrinking the
+                              // cover, with scrolling retained only as a
+                              // fallback for exceptional content.
+                              final artworkExtent = regularArtworkExtent;
                               // A short, narrow phone can make the cover
                               // width-bound before the frame-height factor is
                               // large enough to shrink its halo. Once the
@@ -342,8 +339,11 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 ),
                               );
                               final gap = mobile
-                                  ? lerpDouble(22, 26, mobileFrameCompactness)!
+                                  ? lerpDouble(22, 16, mobileFrameCompactness)!
                                   : lerpDouble(26, 12, verticalCompactness)!;
+                              final controlSpacingCompactness = mobile
+                                  ? mobileFrameCompactness
+                                  : verticalCompactness;
                               final controls = _PlayerControls(
                                 snapshot: snapshot,
                                 hasTrack: hasTrack,
@@ -353,6 +353,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 errorText: presentation.errorText,
                                 compact: !wide || stackedDesktop,
                                 compactness: verticalCompactness,
+                                spacingCompactness: controlSpacingCompactness,
                                 maxWidth: stackedDesktop
                                     ? maxContentWidth
                                     : 520.0,
@@ -632,27 +633,6 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         .clamp(170.0, 220.0)
         .toDouble();
     return lerpDouble(regularExtent, compactExtent, compactness)!;
-  }
-
-  double _mobileArtworkExtent({
-    required BoxConstraints constraints,
-    required double regularExtent,
-    required bool hasError,
-  }) {
-    if (hasError || !constraints.maxHeight.isFinite) {
-      return regularExtent;
-    }
-
-    // Preserve the normal artwork size whenever the lower controls fit. Only
-    // reclaim the measured shortfall, capped at 20 dp, so small devices do not
-    // get an aggressive reflow. Error content intentionally keeps the normal
-    // artwork size and uses the scroll view as its fallback.
-    final shortfall = math.max(
-      0.0,
-      _mobileArtworkComfortHeight - constraints.maxHeight,
-    );
-    return regularExtent -
-        math.min(_mobileArtworkMaxReduction, shortfall).toDouble();
   }
 }
 
@@ -1344,6 +1324,7 @@ class _PlayerControls extends ConsumerWidget {
     required this.errorText,
     required this.compact,
     required this.compactness,
+    required this.spacingCompactness,
     required this.maxWidth,
     required this.onOpenLyrics,
     required this.onOpenArtist,
@@ -1358,6 +1339,7 @@ class _PlayerControls extends ConsumerWidget {
   final String? errorText;
   final bool compact;
   final double compactness;
+  final double spacingCompactness;
   final double maxWidth;
   final VoidCallback onOpenLyrics;
   final VoidCallback? onOpenArtist;
@@ -1377,7 +1359,7 @@ class _PlayerControls extends ConsumerWidget {
       fontWeight: FontWeight.w800,
       color: AppColors.contentSubtitleFor(context),
     );
-    final titleArtistGap = lerpDouble(6, 4, compactness)!;
+    final titleArtistGap = lerpDouble(6, 4, spacingCompactness)!;
     final visualIdentity = playbackVisualIdentity(
       trackId: snapshot.trackId,
       sourceUrl: snapshot.sourceUrl,
@@ -1480,15 +1462,24 @@ class _PlayerControls extends ConsumerWidget {
             alignment: Alignment.topLeft,
             child: stableMetadata,
           ),
-          SizedBox(height: lerpDouble(compact ? 22 : 36, 14, compactness)),
-          const _Timeline(),
-          SizedBox(height: lerpDouble(compact ? 18 : 28, 12, compactness)),
+          SizedBox(
+            height: mobile
+                ? lerpDouble(22, 12, spacingCompactness)
+                : lerpDouble(compact ? 22 : 36, 14, compactness),
+          ),
+          _Timeline(spacingCompactness: spacingCompactness),
+          SizedBox(
+            height: mobile
+                ? lerpDouble(18, 8, spacingCompactness)
+                : lerpDouble(compact ? 18 : 28, 12, compactness),
+          ),
           _PlaybackButtons(
             snapshot: snapshot,
             hasTrack: hasTrack,
             isPlaying: isPlaying,
             compact: compact,
             compactness: compactness,
+            spacingCompactness: spacingCompactness,
             onOpenLyrics: onOpenLyrics,
             strings: strings,
           ),
@@ -2045,6 +2036,7 @@ class _PlaybackButtons extends ConsumerWidget {
     required this.isPlaying,
     required this.compact,
     required this.compactness,
+    required this.spacingCompactness,
     required this.onOpenLyrics,
     required this.strings,
   });
@@ -2054,6 +2046,7 @@ class _PlaybackButtons extends ConsumerWidget {
   final bool isPlaying;
   final bool compact;
   final double compactness;
+  final double spacingCompactness;
   final VoidCallback onOpenLyrics;
   final AppStrings strings;
 
@@ -2065,6 +2058,7 @@ class _PlaybackButtons extends ConsumerWidget {
       context,
     );
     return LayoutBuilder(
+      key: const ValueKey('player-playback-controls'),
       builder: (context, constraints) {
         final width = constraints.maxWidth.isFinite
             ? constraints.maxWidth
@@ -2161,7 +2155,11 @@ class _PlaybackButtons extends ConsumerWidget {
           132.0,
         );
         const mobileLabelHeight = 48.0;
-        final mobileSecondaryGap = narrow ? 8.0 : 10.0;
+        final mobileSecondaryGap = lerpDouble(
+          narrow ? 8.0 : 10.0,
+          6.0,
+          spacingCompactness,
+        )!;
         final lyricsButton = mobile
             ? _LabeledControlButton(
                 key: const ValueKey('player-lyrics-control'),
@@ -3051,7 +3049,9 @@ LocalTrack? _savedTrackForSnapshot(
 }
 
 class _Timeline extends ConsumerWidget {
-  const _Timeline();
+  const _Timeline({required this.spacingCompactness});
+
+  final double spacingCompactness;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3090,6 +3090,7 @@ class _Timeline extends ConsumerWidget {
     }
 
     return LayoutBuilder(
+      key: const ValueKey('player-timeline'),
       builder: (context, constraints) {
         final stackLabels =
             labelWidth(positionLabel) + labelWidth(durationLabel) + 16 >
@@ -3119,7 +3120,7 @@ class _Timeline extends ConsumerWidget {
         return Column(
           children: [
             labels,
-            const SizedBox(height: 6),
+            SizedBox(height: lerpDouble(6, 4, spacingCompactness)),
             _WavySeekBar(
               position: position,
               duration: duration,
