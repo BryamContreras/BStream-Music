@@ -204,6 +204,9 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             : wide
             ? (showSideQueue ? 12.0 : 24.0)
             : 20.0 + systemBottomInset;
+        final horizontalContentPadding = wide
+            ? (showSideQueue ? 16.0 : 34.0)
+            : 20.0;
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -232,9 +235,9 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                   ],
                   Padding(
                     padding: EdgeInsets.fromLTRB(
-                      wide ? (showSideQueue ? 16 : 34) : 20,
+                      horizontalContentPadding,
                       lerpDouble(regularTopPadding, 8, heightCompactness)!,
-                      wide ? (showSideQueue ? 16 : 34) : 20,
+                      horizontalContentPadding,
                       lerpDouble(regularBottomPadding, 8, heightCompactness)!,
                     ),
                     child: Column(
@@ -348,32 +351,47 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 strings: strings,
                               );
 
-                              return SingleChildScrollView(
-                                key: const ValueKey('player-content-scroll'),
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(
-                                    minHeight: constraints.maxHeight,
-                                  ),
-                                  child: Align(
-                                    alignment: mobile
-                                        ? Alignment.bottomCenter
-                                        : Alignment.center,
-                                    child: ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        maxWidth: maxContentWidth,
-                                      ),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          artwork,
-                                          SizedBox(
-                                            key: const ValueKey(
-                                              'player-artwork-title-gap',
+                              return ClipRect(
+                                key: const ValueKey(
+                                  'player-content-shadow-clip',
+                                ),
+                                // Compact phones can need a few pixels of
+                                // vertical scrolling. The scroll viewport
+                                // normally clips both axes in that case,
+                                // creating a visible seam through the cover's
+                                // halo. Keep the vertical guard while letting
+                                // the shadow use the outer horizontal padding.
+                                clipper: _HorizontalShadowBleedClipper(
+                                  horizontalContentPadding,
+                                ),
+                                child: SingleChildScrollView(
+                                  key: const ValueKey('player-content-scroll'),
+                                  clipBehavior: Clip.none,
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      minHeight: constraints.maxHeight,
+                                    ),
+                                    child: Align(
+                                      alignment: mobile
+                                          ? Alignment.bottomCenter
+                                          : Alignment.center,
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          maxWidth: maxContentWidth,
+                                        ),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            artwork,
+                                            SizedBox(
+                                              key: const ValueKey(
+                                                'player-artwork-title-gap',
+                                              ),
+                                              height: gap,
                                             ),
-                                            height: gap,
-                                          ),
-                                          controls,
-                                        ],
+                                            controls,
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -640,6 +658,22 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     );
     return regularExtent -
         math.min(_mobileArtworkMaxReduction, shortfall).toDouble();
+  }
+}
+
+class _HorizontalShadowBleedClipper extends CustomClipper<Rect> {
+  const _HorizontalShadowBleedClipper(this.bleed);
+
+  final double bleed;
+
+  @override
+  Rect getClip(Size size) {
+    return Rect.fromLTRB(-bleed, 0, size.width + bleed, size.height);
+  }
+
+  @override
+  bool shouldReclip(_HorizontalShadowBleedClipper oldClipper) {
+    return bleed != oldClipper.bleed;
   }
 }
 
@@ -1201,17 +1235,23 @@ class _PlayerArtworkSurface extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final artworkExtent = constraints.biggest.shortestSide;
+        final shadowAlpha = lerpDouble(
+          isDark ? 0.67 : 0.2,
+          isDark ? 0.46 : 0.14,
+          compactness,
+        )!;
         final shadow = BoxShadow(
-          color: Colors.black.withValues(alpha: isDark ? 0.67 : 0.2),
+          color: Colors.black.withValues(alpha: shadowAlpha),
           // Keep the roomy-player shadow unchanged while scaling its visual
           // footprint with both the cover and the available frame height.
-          // On short phones this avoids the halo occupying the metadata area
-          // after the artwork itself has already been compacted.
-          blurRadius: lerpDouble(42, artworkExtent * 0.095, compactness)!,
-          spreadRadius: lerpDouble(6, artworkExtent * 0.006, compactness)!,
+          // On short phones the smaller, lighter halo stays softly inside the
+          // available breathing room instead of reaching the metadata or the
+          // viewport edge after the cover itself has been compacted.
+          blurRadius: lerpDouble(42, artworkExtent * 0.082, compactness)!,
+          spreadRadius: lerpDouble(6, artworkExtent * 0.0025, compactness)!,
           offset: Offset(
             0,
-            lerpDouble(18, artworkExtent * 0.036, compactness)!,
+            lerpDouble(18, artworkExtent * 0.026, compactness)!,
           ),
         );
         return DecoratedBox(

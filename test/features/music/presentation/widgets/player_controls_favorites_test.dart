@@ -554,11 +554,21 @@ void main() {
 
       final artwork = find.byKey(const ValueKey('player-large-artwork'));
       final header = find.byKey(const ValueKey('player-header'));
+      final shadowClip = find.byKey(
+        const ValueKey('player-content-shadow-clip'),
+      );
+      final contentScroll = find.byKey(const ValueKey('player-content-scroll'));
       final longShadow = artworkShadow();
       expect(tester.getRect(header).top, closeTo(10, 0.1));
       expect(longShadow.blurRadius, 42);
       expect(longShadow.spreadRadius, 6);
       expect(longShadow.offset.dy, 18);
+      expect(longShadow.color.a, closeTo(0.67, 0.001));
+      expect(
+        tester.widget<SingleChildScrollView>(contentScroll).clipBehavior,
+        Clip.none,
+      );
+      _expectHorizontalShadowBleed(tester, shadowClip);
 
       tester.view
         ..physicalSize = const Size(360, 720)
@@ -572,12 +582,23 @@ void main() {
         tester.getRect(find.byKey(const ValueKey('player-tab-title'))).top,
         greaterThan(tester.getRect(header).top),
       );
-      expect(shortShadow.blurRadius / shortArtworkWidth, closeTo(0.095, 0.001));
+      expect(shortShadow.blurRadius / shortArtworkWidth, closeTo(0.082, 0.001));
       expect(
         shortShadow.spreadRadius / shortArtworkWidth,
-        closeTo(0.006, 0.001),
+        closeTo(0.0025, 0.001),
       );
-      expect(shortShadow.offset.dy / shortArtworkWidth, closeTo(0.036, 0.001));
+      expect(shortShadow.offset.dy / shortArtworkWidth, closeTo(0.026, 0.001));
+      expect(shortShadow.color.a, closeTo(0.46, 0.001));
+      expect(shortShadow.color.a, lessThan(longShadow.color.a));
+      expect(
+        tester.widget<SingleChildScrollView>(contentScroll).clipBehavior,
+        Clip.none,
+      );
+      _expectHorizontalShadowBleed(tester, shadowClip);
+      final compactScroll = tester.state<ScrollableState>(
+        find.descendant(of: contentScroll, matching: find.byType(Scrollable)),
+      );
+      expect(compactScroll.position.maxScrollExtent, greaterThan(0));
       expect(
         shortShadow.blurRadius +
             shortShadow.spreadRadius +
@@ -623,9 +644,22 @@ void main() {
       final shadow = (surface.decoration as BoxDecoration).boxShadow!.single;
 
       expect(artworkWidth, lessThan(400));
-      expect(shadow.blurRadius / artworkWidth, lessThanOrEqualTo(0.102));
-      expect(shadow.spreadRadius / artworkWidth, lessThanOrEqualTo(0.009));
-      expect(shadow.offset.dy / artworkWidth, lessThanOrEqualTo(0.041));
+      expect(shadow.blurRadius / artworkWidth, lessThanOrEqualTo(0.095));
+      expect(shadow.spreadRadius / artworkWidth, lessThanOrEqualTo(0.007));
+      expect(shadow.offset.dy / artworkWidth, lessThanOrEqualTo(0.035));
+      expect(shadow.color.a, lessThan(0.67));
+      expect(
+        tester
+            .widget<SingleChildScrollView>(
+              find.byKey(const ValueKey('player-content-scroll')),
+            )
+            .clipBehavior,
+        Clip.none,
+      );
+      _expectHorizontalShadowBleed(
+        tester,
+        find.byKey(const ValueKey('player-content-shadow-clip')),
+      );
       expect(
         tester
             .getRect(find.byKey(const ValueKey('player-volume-control')))
@@ -1767,6 +1801,22 @@ void _expectTransparentPrimaryControl(
         : 1.5,
   );
   expect(iconTranslation.transform.getTranslation().y, 0);
+}
+
+void _expectHorizontalShadowBleed(WidgetTester tester, Finder shadowClip) {
+  final size = tester.getSize(shadowClip);
+  final clipper = tester.widget<ClipRect>(shadowClip).clipper;
+
+  expect(clipper, isNotNull);
+  final localClip = clipper!.getClip(size);
+  expect(localClip, Rect.fromLTRB(-20, 0, size.width + 20, size.height));
+
+  final origin = tester.getTopLeft(shadowClip);
+  expect(origin.dx + localClip.left, closeTo(0, 0.1));
+  expect(
+    origin.dx + localClip.right,
+    closeTo(tester.view.physicalSize.width, 0.1),
+  );
 }
 
 void _configureView(
