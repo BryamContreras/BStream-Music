@@ -852,6 +852,16 @@ class AppStrings {
     'Export or restore your library and settings.',
   );
   String get integrations => choose('Integraciones', 'Integrations');
+  String get supportedLinks =>
+      choose('Abrir enlaces compatibles', 'Open supported links');
+  String get supportedLinksSummary => choose(
+    'Elige BStream para abrir enlaces de YouTube y YouTube Music.',
+    'Choose BStream to open YouTube and YouTube Music links.',
+  );
+  String get supportedLinksOpenFailed => choose(
+    'No se pudo abrir la configuración de enlaces compatibles.',
+    'Could not open the supported links settings.',
+  );
   String get automaticShutdown =>
       choose('Apagado automático', 'Automatic shutdown');
   String get sleepTimerOff => choose('Desactivado', 'Off');

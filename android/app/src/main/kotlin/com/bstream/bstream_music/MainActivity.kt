@@ -5,11 +5,13 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
@@ -139,6 +141,16 @@ class MainActivity : AudioServiceActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setKeepScreenOn" -> setKeepScreenOn(call, result)
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SUPPORTED_LINKS_SETTINGS_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "openSupportedLinksSettings" -> openSupportedLinksSettings(result)
                 else -> result.notImplemented()
             }
         }
@@ -1608,6 +1620,30 @@ class MainActivity : AudioServiceActivity() {
         )
     }
 
+    private fun openSupportedLinksSettings(result: MethodChannel.Result) {
+        val packageUri = Uri.parse("package:$packageName")
+        val candidates = mutableListOf<Intent>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            candidates += Intent(
+                "android.settings.APP_OPEN_BY_DEFAULT_SETTINGS",
+                packageUri,
+            )
+        }
+        candidates += Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+        candidates += Intent(Settings.ACTION_SETTINGS)
+
+        for (candidate in candidates) {
+            try {
+                startActivity(candidate)
+                result.success(true)
+                return
+            } catch (error: Exception) {
+                Log.w(TAG, "No se pudo abrir ${candidate.action}", error)
+            }
+        }
+        result.success(false)
+    }
+
     private fun requestExternalAudioPermissionIfNeeded() {
         val pendingRequest = pendingExternalAudioPermissionRequest ?: return
         if (hasAudioLibraryPermission()) {
@@ -1933,6 +1969,8 @@ class MainActivity : AudioServiceActivity() {
         private const val PROGRESS_CHANNEL = "bstream_music/ytdl_progress"
         private const val FILE_EXPORT_CHANNEL = "bstream_music/file_export"
         private const val SCREEN_CHANNEL = "bstream_music/screen"
+        private const val SUPPORTED_LINKS_SETTINGS_CHANNEL =
+            "bstream_music/supported_links_settings"
         private const val EXTERNAL_AUDIO_CHANNEL = "bstream_music/external_audio"
         private const val APP_ACTIVATION_CHANNEL = "bstream_music/app_activation"
         private const val LOCAL_AUDIO_CHANNEL = "bstream_music/local_audio"

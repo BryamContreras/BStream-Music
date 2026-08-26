@@ -22,11 +22,16 @@ void main() {
     });
 
     final liveController = _FakeTikTokLiveController();
+    var supportedLinksOpenCalls = 0;
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           settingsControllerProvider.overrideWith(_FakeSettingsController.new),
           tiktokLiveControllerProvider.overrideWith(() => liveController),
+          settingsSupportedLinksLauncherProvider.overrideWithValue(() async {
+            supportedLinksOpenCalls += 1;
+            return true;
+          }),
           appStringsProvider.overrideWithValue(
             const AppStrings(AppLanguage.spanish),
           ),
@@ -40,6 +45,25 @@ void main() {
     await tester.pumpAndSettle();
 
     final liveCard = find.byKey(const ValueKey('settings-card-live'));
+    final supportedLinksCard = find.byKey(
+      const ValueKey('settings-card-supported-links'),
+    );
+    await tester.scrollUntilVisible(
+      supportedLinksCard,
+      240,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('settings-root')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.ensureVisible(supportedLinksCard);
+    await tester.pumpAndSettle();
+    expect(supportedLinksCard, findsOneWidget);
+    expect(find.text('Abrir enlaces compatibles'), findsOneWidget);
+    await tester.tap(supportedLinksCard);
+    await tester.pump();
+    expect(supportedLinksOpenCalls, 1);
+
     await tester.scrollUntilVisible(
       liveCard,
       240,

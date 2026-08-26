@@ -15,6 +15,7 @@ import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../platform_channels/android_file_export_channel.dart';
+import '../../../../platform_channels/android_supported_links_settings_channel.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
@@ -62,6 +63,14 @@ final settingsExternalLauncherProvider = Provider<SettingsExternalLauncher>(
   (ref) =>
       (url) => launchUrl(url, mode: LaunchMode.externalApplication),
 );
+
+typedef SettingsSupportedLinksLauncher = Future<bool> Function();
+
+final settingsSupportedLinksLauncherProvider =
+    Provider<SettingsSupportedLinksLauncher>((ref) {
+      const channel = AndroidSupportedLinksSettingsChannel();
+      return channel.open;
+    });
 
 enum _SettingsRoute { root, appearance, lyrics, storage, live, about }
 
@@ -411,6 +420,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     required AppStrings strings,
   }) {
     final liveState = tiktokLive?.value;
+    final showSupportedLinks =
+        AppPlatform.isAndroid ||
+        Theme.of(context).platform == TargetPlatform.android;
     final showDesktopTools =
         AppPlatform.isDesktop &&
         Theme.of(context).platform != TargetPlatform.android;
@@ -572,32 +584,44 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                 ),
               ],
             ),
-            if (tiktokLive != null)
+            if (showSupportedLinks || tiktokLive != null)
               _SettingsGroup(
                 title: strings.integrations,
                 children: [
-                  _SettingsEntryCard(
-                    key: const ValueKey('settings-card-live'),
-                    icon: Icons.live_tv_rounded,
-                    title: strings.liveConnection,
-                    subtitle:
-                        liveState?.message ?? strings.liveConnectionSummary,
-                    status: switch (liveState?.status) {
-                      TikTokLiveStatus.connected => true,
-                      TikTokLiveStatus.error ||
-                      TikTokLiveStatus.liveEnded => false,
-                      _ => null,
-                    },
-                    onTap: () => _openRoute(_SettingsRoute.live),
-                  ),
-                  const SizedBox(height: appCardGap),
-                  _LiveRequestStorageCard(
-                    state: liveState,
-                    strings: strings,
-                    onChanged: (value) => ref
-                        .read(tiktokLiveControllerProvider.notifier)
-                        .setSaveRequestsToLibrary(value),
-                  ),
+                  if (showSupportedLinks)
+                    _SettingsEntryCard(
+                      key: const ValueKey('settings-card-supported-links'),
+                      icon: Icons.link_rounded,
+                      title: strings.supportedLinks,
+                      subtitle: strings.supportedLinksSummary,
+                      onTap: _openSupportedLinksSettings,
+                    ),
+                  if (showSupportedLinks && tiktokLive != null)
+                    const SizedBox(height: appCardGap),
+                  if (tiktokLive != null) ...[
+                    _SettingsEntryCard(
+                      key: const ValueKey('settings-card-live'),
+                      icon: Icons.live_tv_rounded,
+                      title: strings.liveConnection,
+                      subtitle:
+                          liveState?.message ?? strings.liveConnectionSummary,
+                      status: switch (liveState?.status) {
+                        TikTokLiveStatus.connected => true,
+                        TikTokLiveStatus.error ||
+                        TikTokLiveStatus.liveEnded => false,
+                        _ => null,
+                      },
+                      onTap: () => _openRoute(_SettingsRoute.live),
+                    ),
+                    const SizedBox(height: appCardGap),
+                    _LiveRequestStorageCard(
+                      state: liveState,
+                      strings: strings,
+                      onChanged: (value) => ref
+                          .read(tiktokLiveControllerProvider.notifier)
+                          .setSaveRequestsToLibrary(value),
+                    ),
+                  ],
                 ],
               ),
             if (showDesktopTools)
@@ -771,6 +795,20 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       url: AppConstants.githubRepositoryUrl,
       failureMessage: ref.read(appStringsProvider).githubRepositoryOpenFailed,
     );
+  }
+
+  Future<void> _openSupportedLinksSettings() async {
+    try {
+      final opened = await ref.read(settingsSupportedLinksLauncherProvider)();
+      if (!mounted || opened) {
+        return;
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+    }
+    _showSnackBar(ref.read(appStringsProvider).supportedLinksOpenFailed);
   }
 
   Future<void> _openExternalPage({

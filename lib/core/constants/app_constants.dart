@@ -9,6 +9,8 @@ class AppConstants {
   static const androidYtdlProgressChannel = 'bstream_music/ytdl_progress';
   static const androidFileExportChannel = 'bstream_music/file_export';
   static const androidScreenChannel = 'bstream_music/screen';
+  static const androidSupportedLinksSettingsChannel =
+      'bstream_music/supported_links_settings';
   static const androidExternalAudioChannel = 'bstream_music/external_audio';
   static const androidAppActivationChannel = 'bstream_music/app_activation';
   static const preferredNativeAudioFormat =
