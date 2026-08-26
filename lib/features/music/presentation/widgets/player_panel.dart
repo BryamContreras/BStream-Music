@@ -351,47 +351,32 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                 strings: strings,
                               );
 
-                              return ClipRect(
-                                key: const ValueKey(
-                                  'player-content-shadow-clip',
-                                ),
-                                // Compact phones can need a few pixels of
-                                // vertical scrolling. The scroll viewport
-                                // normally clips both axes in that case,
-                                // creating a visible seam through the cover's
-                                // halo. Keep the vertical guard while letting
-                                // the shadow use the outer horizontal padding.
-                                clipper: _HorizontalShadowBleedClipper(
-                                  horizontalContentPadding,
-                                ),
-                                child: SingleChildScrollView(
-                                  key: const ValueKey('player-content-scroll'),
-                                  clipBehavior: Clip.none,
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      minHeight: constraints.maxHeight,
-                                    ),
-                                    child: Align(
-                                      alignment: mobile
-                                          ? Alignment.bottomCenter
-                                          : Alignment.center,
-                                      child: ConstrainedBox(
-                                        constraints: BoxConstraints(
-                                          maxWidth: maxContentWidth,
-                                        ),
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            artwork,
-                                            SizedBox(
-                                              key: const ValueKey(
-                                                'player-artwork-title-gap',
-                                              ),
-                                              height: gap,
+                              return SingleChildScrollView(
+                                key: const ValueKey('player-content-scroll'),
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    minHeight: constraints.maxHeight,
+                                  ),
+                                  child: Align(
+                                    alignment: mobile
+                                        ? Alignment.bottomCenter
+                                        : Alignment.center,
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxWidth: maxContentWidth,
+                                      ),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          artwork,
+                                          SizedBox(
+                                            key: const ValueKey(
+                                              'player-artwork-title-gap',
                                             ),
-                                            controls,
-                                          ],
-                                        ),
+                                            height: gap,
+                                          ),
+                                          controls,
+                                        ],
                                       ),
                                     ),
                                   ),
@@ -658,22 +643,6 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     );
     return regularExtent -
         math.min(_mobileArtworkMaxReduction, shortfall).toDouble();
-  }
-}
-
-class _HorizontalShadowBleedClipper extends CustomClipper<Rect> {
-  const _HorizontalShadowBleedClipper(this.bleed);
-
-  final double bleed;
-
-  @override
-  Rect getClip(Size size) {
-    return Rect.fromLTRB(-bleed, 0, size.width + bleed, size.height);
-  }
-
-  @override
-  bool shouldReclip(_HorizontalShadowBleedClipper oldClipper) {
-    return bleed != oldClipper.bleed;
   }
 }
 
