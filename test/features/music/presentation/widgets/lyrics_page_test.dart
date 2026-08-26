@@ -404,12 +404,31 @@ void main() {
     );
 
     expect(find.byKey(const ValueKey('mini-player-frame')), findsOneWidget);
-    expect(find.byKey(const ValueKey('mini-player-progress')), findsOneWidget);
+    expect(find.byKey(const ValueKey('mini-player-progress')), findsNothing);
+    final progressAnimationFinder = find.byKey(
+      const ValueKey('mini-player-artwork-progress-animation'),
+    );
+    final progressRingFinder = find.byKey(
+      const ValueKey('mini-player-artwork-progress-ring'),
+    );
+    expect(progressAnimationFinder, findsOneWidget);
+    expect(progressRingFinder, findsOneWidget);
+    final progressAnimation = tester.widget<TweenAnimationBuilder<double>>(
+      progressAnimationFinder,
+    );
+    final progressRing = tester.widget<CircularProgressIndicator>(
+      progressRingFinder,
+    );
+    const expectedProgress = 1800 / Duration.millisecondsPerMinute / 3;
+    expect(progressAnimation.tween.end, closeTo(expectedProgress, 0.0001));
+    expect(progressRing.value, closeTo(expectedProgress, 0.0001));
+    expect(progressRing.strokeWidth, 2);
+    expect(progressRing.strokeCap, StrokeCap.round);
     expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
     final miniPlayerBottom = tester
         .getRect(find.byKey(const ValueKey('mini-player-frame')))
         .bottom;
-    expect(miniPlayerBottom, closeTo(800 - 12, 0.1));
+    expect(miniPlayerBottom, closeTo(800 - 10, 0.1));
   });
 
   testWidgets('slide animation interpolates when the active line changes', (

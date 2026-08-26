@@ -5099,6 +5099,7 @@ void main() {
             artist: 'BStream Music',
             trackId: 'test-track',
             thumbnailUrl: 'test-artwork.invalid',
+            position: Duration(minutes: 1),
             duration: Duration(minutes: 4),
           ),
         ),
@@ -5144,11 +5145,32 @@ void main() {
       }),
       Colors.transparent,
     );
-    final miniProgressAnimation = tester.widget<TweenAnimationBuilder<Color?>>(
+    expect(find.byKey(const ValueKey('mini-player-progress')), findsNothing);
+    expect(
       find.byKey(const ValueKey('mini-progress-color-animation')),
+      findsNothing,
     );
-    final miniProgressColor = miniProgressAnimation.tween.end;
-    expect(miniProgressColor, miniProgressAccent);
+    final miniProgressAnimationFinder = find.byKey(
+      const ValueKey('mini-player-artwork-progress-animation'),
+    );
+    final miniProgressRingFinder = find.byKey(
+      const ValueKey('mini-player-artwork-progress-ring'),
+    );
+    final miniProgressAnimation = tester.widget<TweenAnimationBuilder<double>>(
+      miniProgressAnimationFinder,
+    );
+    final miniProgressRing = tester.widget<CircularProgressIndicator>(
+      miniProgressRingFinder,
+    );
+    expect(miniProgressAnimation.tween.end, closeTo(0.25, 0.0001));
+    expect(miniProgressRing.value, closeTo(0.25, 0.0001));
+    expect(miniProgressRing.color, miniProgressAccent);
+    expect(miniProgressRing.strokeWidth, 2);
+    expect(miniProgressRing.strokeCap, StrokeCap.round);
+    expect(
+      tester.getRect(miniProgressRingFinder),
+      tester.getRect(find.byKey(const ValueKey('mini-player-artwork'))),
+    );
 
     await tester.tapAt(
       tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
