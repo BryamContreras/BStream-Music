@@ -2235,6 +2235,23 @@ class RemoteCollectionData {
   final List<TrackInfo> tracks;
 }
 
+typedef YouTubeMusicAuthenticatedPlaylistLoader =
+    Future<ytm_account.RemotePlaylistSnapshot> Function(String playlistId);
+
+/// Authenticated playlist reader kept as a narrow, injectable boundary.
+///
+/// Public collection pages continue to use anonymous InnerTube first. This
+/// loader is only consulted by incoming playlist links when that public read
+/// cannot expose any tracks (for example, a private playlist created by the
+/// active BStream account).
+final youtubeMusicAuthenticatedPlaylistLoaderProvider =
+    Provider<YouTubeMusicAuthenticatedPlaylistLoader?>((ref) {
+      final gateway = ref.watch(
+        youtubeMusicAuthenticatedAccountGatewayProvider,
+      );
+      return gateway?.getPlaylist;
+    });
+
 String? _nonEmptyCollectionText(String? value) {
   final normalized = value?.trim();
   return normalized == null || normalized.isEmpty ? null : normalized;
@@ -2277,6 +2294,108 @@ final homeCollectionDetailProvider = FutureProvider.autoDispose
         tracks: tracks,
       );
     });
+
+/// Resolves a playlist opened from a public link without penalizing public
+/// playlists: anonymous InnerTube remains first and wins whenever it returns
+/// tracks. An authenticated account read is a bounded fallback for private
+/// synchronized playlists whose anonymous representation is empty.
+final incomingYouTubeMusicPlaylistDetailProvider = FutureProvider.autoDispose
+    .family<RemoteCollectionData, String>((ref, browseId) async {
+      _retainRemoteDetailTracks(ref);
+      final normalizedBrowseId = browseId.trim();
+      if (normalizedBrowseId.isEmpty) {
+        throw ArgumentError.value(browseId, 'browseId', 'Must not be empty.');
+      }
+
+      final anonymousFuture = ref.watch(
+        homeCollectionDetailProvider(normalizedBrowseId).future,
+      );
+      final authenticatedLoader = ref.watch(
+        youtubeMusicAuthenticatedPlaylistLoaderProvider,
+      );
+
+      RemoteCollectionData? anonymous;
+      Object? anonymousError;
+      StackTrace? anonymousStackTrace;
+      try {
+        anonymous = await anonymousFuture;
+        if (anonymous.tracks.isNotEmpty) {
+          return anonymous;
+        }
+      } catch (error, stackTrace) {
+        anonymousError = error;
+        anonymousStackTrace = stackTrace;
+      }
+
+      final playlistId = canonicalYouTubeMusicPlaylistId(normalizedBrowseId);
+      if (authenticatedLoader != null && playlistId != null) {
+        try {
+          final snapshot = await authenticatedLoader(playlistId);
+          // Detail pages can safely present a bounded partial snapshot. A
+          // very large private playlist is still more useful than the empty
+          // anonymous representation, while synchronization keeps requiring
+          // complete snapshots in its own stricter path.
+          return _remoteCollectionDataFromAuthenticatedPlaylist(snapshot);
+        } catch (error) {
+          debugPrint('Authenticated playlist link fallback failed: $error');
+        }
+      }
+
+      if (anonymous != null) {
+        return anonymous;
+      }
+      if (anonymousError != null && anonymousStackTrace != null) {
+        Error.throwWithStackTrace(anonymousError, anonymousStackTrace);
+      }
+      throw StateError('The playlist could not be resolved.');
+    });
+
+final incomingYouTubeMusicPlaylistTracksProvider = FutureProvider.autoDispose
+    .family<List<TrackInfo>, String>((ref, browseId) async {
+      final detail = await ref.watch(
+        incomingYouTubeMusicPlaylistDetailProvider(browseId).future,
+      );
+      return detail.tracks;
+    });
+
+RemoteCollectionData _remoteCollectionDataFromAuthenticatedPlaylist(
+  ytm_account.RemotePlaylistSnapshot snapshot,
+) {
+  final tracks = <TrackInfo>[];
+  for (final entry in snapshot.entries) {
+    final videoId = entry.videoId?.trim();
+    if (!entry.isAvailable || videoId == null || videoId.isEmpty) {
+      continue;
+    }
+    tracks.add(
+      TrackInfo(
+        id: videoId,
+        title: entry.title,
+        artist: entry.artist.isEmpty ? 'Desconocido' : entry.artist,
+        artists: entry.artists,
+        artistBrowseIds: entry.artistBrowseIds,
+        album: entry.album,
+        duration: entry.duration,
+        thumbnailUrl:
+            youtubeThumbnailSourceForVideoId(videoId) ?? entry.thumbnailUrl,
+        catalogThumbnailUrl: entry.thumbnailUrl,
+        url: Uri.https('www.youtube.com', '/watch', <String, String>{
+          'v': videoId,
+        }).toString(),
+        metadataSource: TrackMetadataSource.youtubeMusic,
+      ),
+    );
+  }
+  final summary = snapshot.summary;
+  return RemoteCollectionData(
+    title: _nonEmptyCollectionText(summary?.title),
+    subtitle: _nonEmptyCollectionText(summary?.owner),
+    artworkSource:
+        _nonEmptyCollectionText(summary?.thumbnailUrl) ??
+        (tracks.isEmpty ? null : tracks.first.thumbnailUrl),
+    tracks: tracks,
+  );
+}
 
 final homeCollectionTracksProvider = FutureProvider.autoDispose
     .family<List<TrackInfo>, String>((ref, browseId) async {

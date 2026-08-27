@@ -851,6 +851,96 @@ void main() {
   });
 
   test(
+    'incoming public playlist keeps the anonymous result without account read',
+    () async {
+      final source = _FakeHomeSearch(const [])
+        ..collectionSongs['VLPL_public'] = [
+          _song(videoId: 'Public00001', title: 'Public song'),
+        ];
+      var authenticatedCalls = 0;
+      final container = _containerFor(
+        source,
+        authenticatedPlaylistLoader: (playlistId) async {
+          authenticatedCalls += 1;
+          throw StateError('The authenticated fallback must not run.');
+        },
+      );
+
+      final detail = await container.read(
+        incomingYouTubeMusicPlaylistDetailProvider('VLPL_public').future,
+      );
+
+      expect(source.collectionCalls, 1);
+      expect(authenticatedCalls, 0);
+      expect(detail.tracks.single.id, 'Public00001');
+      expect(detail.tracks.single.title, 'Public song');
+    },
+  );
+
+  test(
+    'incoming private playlist falls back after an anonymous empty result',
+    () async {
+      final source = _FakeHomeSearch(const [])
+        ..collectionSongs['VLPL_private'] = const <InnerTubeSong>[];
+      final requestedPlaylistIds = <String>[];
+      final container = _containerFor(
+        source,
+        authenticatedPlaylistLoader: (playlistId) async {
+          requestedPlaylistIds.add(playlistId);
+          return ytm_account.RemotePlaylistSnapshot(
+            playlistId: playlistId,
+            summary: const ytm_account.RemotePlaylistSummary(
+              playlistId: 'PL_private',
+              title: 'Playlist privada',
+              owner: 'Cuenta BStream',
+              thumbnailUrl: 'https://img.test/private-playlist.jpg',
+            ),
+            entries: <ytm_account.RemotePlaylistEntry>[
+              ytm_account.RemotePlaylistEntry(
+                position: 0,
+                videoId: 'Private0001',
+                setVideoId: 'set-private-1',
+                title: 'Private song',
+                artists: const <String>['Private artist'],
+                artistBrowseIds: const <String?>['UCprivateartist'],
+                album: 'Private album',
+                duration: const Duration(minutes: 4, seconds: 2),
+                thumbnailUrl: 'https://img.test/private-song.jpg',
+              ),
+            ],
+            // A UI link may render a bounded snapshot; only synchronization
+            // requires every continuation page.
+            termination: ytm_account.RemotePaginationTermination.pageLimit,
+            pagesFetched: 1,
+          );
+        },
+      );
+
+      final detail = await container.read(
+        incomingYouTubeMusicPlaylistDetailProvider('VLPL_private').future,
+      );
+
+      expect(source.collectionCalls, 1);
+      expect(requestedPlaylistIds, const <String>['PL_private']);
+      expect(detail.title, 'Playlist privada');
+      expect(detail.subtitle, 'Cuenta BStream');
+      expect(detail.artworkSource, 'https://img.test/private-playlist.jpg');
+      expect(detail.tracks, hasLength(1));
+      expect(detail.tracks.single.id, 'Private0001');
+      expect(detail.tracks.single.title, 'Private song');
+      expect(detail.tracks.single.artist, 'Private artist');
+      expect(
+        detail.tracks.single.metadataSource,
+        TrackMetadataSource.youtubeMusic,
+      );
+      expect(
+        detail.tracks.single.url,
+        'https://www.youtube.com/watch?v=Private0001',
+      );
+    },
+  );
+
+  test(
     'releases collection tracks after the short detail cache expires',
     () async {
       final source = _FakeHomeSearch(const [])
@@ -1620,6 +1710,7 @@ ProviderContainer _containerFor(
   _FakeHomeSearch source, {
   Duration? artistEnrichmentBudget,
   YouTubeMusicHome? authenticatedHome,
+  YouTubeMusicAuthenticatedPlaylistLoader? authenticatedPlaylistLoader,
   Duration? remoteDetailCacheDuration,
 }) {
   final container = ProviderContainer(
@@ -1628,6 +1719,10 @@ ProviderContainer _containerFor(
       youtubeMusicAuthenticatedHomeProvider.overrideWithValue(
         authenticatedHome,
       ),
+      if (authenticatedPlaylistLoader != null)
+        youtubeMusicAuthenticatedPlaylistLoaderProvider.overrideWithValue(
+          authenticatedPlaylistLoader,
+        ),
       if (artistEnrichmentBudget != null)
         homeArtistEnrichmentBudgetProvider.overrideWithValue(
           artistEnrichmentBudget,

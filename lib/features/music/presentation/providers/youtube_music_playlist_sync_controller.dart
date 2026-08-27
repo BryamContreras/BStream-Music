@@ -95,6 +95,7 @@ final youtubeMusicPlaylistSyncRuntimeProvider =
         sessionGeneration: sessionGeneration,
         coordinator: coordinator,
         store: syncStore,
+        playlistVisibilityAccount: accountGateway,
       );
     });
 
@@ -145,6 +146,27 @@ final youtubeMusicPlaylistSyncControllerProvider =
       YouTubeMusicPlaylistSyncState
     >(YouTubeMusicPlaylistSyncController.new);
 
+typedef YouTubeMusicMakePlaylistUnlistedForSharing =
+    Future<void> Function({
+      required String localPlaylistId,
+      required String expectedRemotePlaylistId,
+    });
+
+/// Testable presentation boundary for the authenticated privacy change that
+/// must happen before a private playlist can be shared by link.
+final youtubeMusicMakePlaylistUnlistedForSharingProvider =
+    Provider<YouTubeMusicMakePlaylistUnlistedForSharing>((ref) {
+      return ({
+        required String localPlaylistId,
+        required String expectedRemotePlaylistId,
+      }) => ref
+          .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+          .makePlaylistUnlistedForSharing(
+            localPlaylistId: localPlaylistId,
+            expectedRemotePlaylistId: expectedRemotePlaylistId,
+          );
+    });
+
 class YouTubeMusicPlaylistSyncController
     extends Notifier<YouTubeMusicPlaylistSyncState> {
   Timer? _automaticTimer;
@@ -160,6 +182,7 @@ class YouTubeMusicPlaylistSyncController
   Future<PlaylistAccountSyncResult?>? _initialSync;
   String? _initialSyncAccountKey;
   String? _consentedAccountKey;
+  Future<void> _accountOperationTail = Future<void>.value();
   var _sessionEpoch = 0;
   var _retryAttempt = 0;
   var _disposed = false;
@@ -274,6 +297,170 @@ class YouTubeMusicPlaylistSyncController
       );
     }
     return _enqueue(PlaylistSyncTrigger.manual);
+  }
+
+  /// Converts the currently linked remote playlist to `UNLISTED` and verifies
+  /// that state with a fresh authenticated read before returning.
+  ///
+  /// The operation shares the same serial queue as playlist synchronization so
+  /// an older sync snapshot cannot overwrite the newly confirmed privacy.
+  Future<void> makePlaylistUnlistedForSharing({
+    required String localPlaylistId,
+    required String expectedRemotePlaylistId,
+  }) {
+    final normalizedLocalId = localPlaylistId.trim();
+    final normalizedExpectedRemoteId = _canonicalRemotePlaylistId(
+      expectedRemotePlaylistId,
+    );
+    if (normalizedLocalId.isEmpty || normalizedExpectedRemoteId == null) {
+      return Future<void>.error(
+        StateError('A synchronized playlist identity is required.'),
+      );
+    }
+    return _serializeAccountOperation(
+      () => _makePlaylistUnlistedForSharing(
+        localPlaylistId: normalizedLocalId,
+        expectedRemotePlaylistId: normalizedExpectedRemoteId,
+      ),
+    );
+  }
+
+  Future<void> _makePlaylistUnlistedForSharing({
+    required String localPlaylistId,
+    required String expectedRemotePlaylistId,
+  }) async {
+    final runtime = _readRuntime();
+    final store = runtime?.store;
+    final account = runtime?.playlistVisibilityAccount;
+    if (runtime == null || store == null || account == null) {
+      throw StateError('YouTube Music is not available for playlist sharing.');
+    }
+    final operationEpoch = _sessionEpoch;
+    if (!_isCurrent(runtime, operationEpoch)) {
+      throw StateError('The YouTube Music account changed.');
+    }
+
+    final bindings = await store.listBindings(accountKey: runtime.accountKey);
+    if (!_isCurrent(runtime, operationEpoch)) {
+      throw StateError('The YouTube Music account changed.');
+    }
+    PlaylistSyncBinding? binding;
+    for (final candidate in bindings) {
+      if (candidate.key.accountKey == runtime.accountKey &&
+          candidate.key.playlistId == localPlaylistId &&
+          candidate.remoteDeleteRequestedAt == null) {
+        binding = candidate;
+        break;
+      }
+    }
+    final rawRemotePlaylistId = binding?.remotePlaylistId?.trim();
+    final canonicalRemotePlaylistId = _canonicalRemotePlaylistId(
+      rawRemotePlaylistId,
+    );
+    if (binding == null ||
+        rawRemotePlaylistId == null ||
+        canonicalRemotePlaylistId == null ||
+        canonicalRemotePlaylistId != expectedRemotePlaylistId ||
+        localPlaylistId == Playlist.favoritesId ||
+        _isLikedMusicPlaylistId(canonicalRemotePlaylistId)) {
+      throw StateError('The synchronized playlist changed.');
+    }
+
+    final before = await _readPlaylistSummaryForSharing(
+      account,
+      canonicalRemotePlaylistId,
+    );
+    if (!_isCurrent(runtime, operationEpoch)) {
+      throw StateError('The YouTube Music account changed.');
+    }
+    final beforePrivacy = _remotePlaylistPrivacyName(before?.visibility);
+    if (beforePrivacy == 'PUBLIC' || beforePrivacy == 'UNLISTED') {
+      await _persistPlaylistPrivacyForSharing(
+        runtime: runtime,
+        operationEpoch: operationEpoch,
+        binding: binding,
+        rawRemotePlaylistId: rawRemotePlaylistId,
+        privacy: beforePrivacy!,
+      );
+      return;
+    }
+    if (beforePrivacy != 'PRIVATE' ||
+        !binding.isEditable ||
+        before?.isEditable != true) {
+      throw StateError('The remote playlist does not allow privacy changes.');
+    }
+
+    final mutation = await account.setPlaylistVisibility(
+      playlistId: canonicalRemotePlaylistId,
+      visibility: ytm_account.RemotePlaylistVisibility.unlisted,
+    );
+    if (!_isCurrent(runtime, operationEpoch)) {
+      throw StateError('The YouTube Music account changed.');
+    }
+    if (mutation
+        is ytm_account.YouTubeMusicMutationFailure<
+          ytm_account.RemotePlaylistMutationApplied
+        >) {
+      await _expireSessionForAccountStatus(mutation.statusCode);
+      throw StateError('YouTube Music rejected the privacy change.');
+    }
+
+    // A 2xx edit response and an ambiguous delivery both require read-back.
+    // Never repeat an ambiguous mutation: doing so could apply an edit after
+    // the user has changed accounts or the remote playlist has been rebound.
+    final verified = await _readPlaylistSummaryForSharing(
+      account,
+      canonicalRemotePlaylistId,
+    );
+    if (!_isCurrent(runtime, operationEpoch) ||
+        verified?.visibility != ytm_account.RemotePlaylistVisibility.unlisted) {
+      throw StateError('The playlist privacy could not be verified.');
+    }
+    await _persistPlaylistPrivacyForSharing(
+      runtime: runtime,
+      operationEpoch: operationEpoch,
+      binding: binding,
+      rawRemotePlaylistId: rawRemotePlaylistId,
+      privacy: 'UNLISTED',
+    );
+  }
+
+  Future<ytm_account.RemotePlaylistSummary?> _readPlaylistSummaryForSharing(
+    ytm_account.YouTubeMusicPlaylistVisibilityAccount account,
+    String remotePlaylistId,
+  ) async {
+    try {
+      return await account.getPlaylistSummary(remotePlaylistId);
+    } on ytm_account.YouTubeMusicAccountException catch (error) {
+      await _expireSessionForAccountStatus(error.statusCode);
+      rethrow;
+    }
+  }
+
+  Future<void> _persistPlaylistPrivacyForSharing({
+    required YouTubeMusicPlaylistSyncRuntime runtime,
+    required int operationEpoch,
+    required PlaylistSyncBinding binding,
+    required String rawRemotePlaylistId,
+    required String privacy,
+  }) async {
+    final updated = await runtime.store!.updateBindingPrivacy(
+      key: binding.key,
+      expectedRemotePlaylistId: rawRemotePlaylistId,
+      privacy: privacy,
+      now: DateTime.now(),
+      canCommit: () => _isCurrent(runtime, operationEpoch),
+    );
+    if (!updated || !_isCurrent(runtime, operationEpoch)) {
+      throw StateError('The synchronized playlist changed.');
+    }
+    ref.invalidate(youtubeMusicShareablePlaylistBindingDetailsProvider);
+    ref.invalidate(youtubeMusicShareablePlaylistBindingsProvider);
+  }
+
+  Future<void> _expireSessionForAccountStatus(int? statusCode) async {
+    if (statusCode != 401 && statusCode != 403) return;
+    await ref.read(youtubeMusicAuthControllerProvider.notifier).expireSession();
   }
 
   Future<PlaylistAccountSyncResult?> acceptConsentAndSync(String accountKey) {
@@ -541,7 +728,7 @@ class YouTubeMusicPlaylistSyncController
   }
 
   Future<PlaylistAccountSyncResult?> _start(PlaylistSyncTrigger trigger) {
-    final operation = _perform(trigger);
+    final operation = _serializeAccountOperation(() => _perform(trigger));
     _inFlight = operation;
     unawaited(
       operation.then<void>(
@@ -550,6 +737,18 @@ class YouTubeMusicPlaylistSyncController
       ),
     );
     return operation;
+  }
+
+  Future<T> _serializeAccountOperation<T>(Future<T> Function() operation) {
+    final result = Completer<T>();
+    _accountOperationTail = _accountOperationTail.then((_) async {
+      try {
+        result.complete(await operation());
+      } on Object catch (error, stackTrace) {
+        result.completeError(error, stackTrace);
+      }
+    });
+    return result.future;
   }
 
   void _finish(Future<PlaylistAccountSyncResult?> operation) {
@@ -728,12 +927,35 @@ class YouTubeMusicPlaylistSyncRuntime {
     required this.sessionGeneration,
     required this.coordinator,
     this.store,
+    this.playlistVisibilityAccount,
   });
 
   final String accountKey;
   final int sessionGeneration;
   final PlaylistAccountSyncCoordinator coordinator;
   final PlaylistSyncStore? store;
+  final ytm_account.YouTubeMusicPlaylistVisibilityAccount?
+  playlistVisibilityAccount;
+}
+
+class YouTubeMusicShareablePlaylistBinding {
+  const YouTubeMusicShareablePlaylistBinding({
+    required this.localPlaylistId,
+    required this.remotePlaylistId,
+    required this.rawRemotePlaylistId,
+    required this.isEditable,
+    this.privacy,
+  });
+
+  final String localPlaylistId;
+  final String remotePlaylistId;
+  final String rawRemotePlaylistId;
+  final bool isEditable;
+  final String? privacy;
+
+  bool get isDirectlyShareable => privacy == 'PUBLIC' || privacy == 'UNLISTED';
+
+  bool get canOfferSharing => isDirectlyShareable || isEditable;
 }
 
 /// Remote playlist identities that are safe to expose to sharing UI for the
@@ -743,22 +965,24 @@ class YouTubeMusicPlaylistSyncRuntime {
 /// code from inspecting credentials or accidentally sharing a binding left by
 /// a different account. Watching both authentication and synchronization state
 /// also refreshes the projection after login, logout, and every completed sync.
-final youtubeMusicShareablePlaylistBindingsProvider =
-    FutureProvider<Map<String, String>>((ref) async {
+final youtubeMusicShareablePlaylistBindingDetailsProvider =
+    FutureProvider<Map<String, YouTubeMusicShareablePlaylistBinding>>((
+      ref,
+    ) async {
       final auth = ref.watch(youtubeMusicAuthControllerProvider);
       // A sync state change can create, replace, or retire remote bindings.
       ref.watch(youtubeMusicPlaylistSyncControllerProvider);
 
       final accountKey = auth.profile?.accountKey.trim();
       if (!auth.isAuthenticated || accountKey == null || accountKey.isEmpty) {
-        return const <String, String>{};
+        return const <String, YouTubeMusicShareablePlaylistBinding>{};
       }
 
       final runtime = ref.watch(youtubeMusicPlaylistSyncRuntimeProvider);
       final runtimeAccountKey = runtime?.accountKey.trim();
       final store = runtime?.store;
       if (runtimeAccountKey != accountKey || store == null) {
-        return const <String, String>{};
+        return const <String, YouTubeMusicShareablePlaylistBinding>{};
       }
 
       final generation = auth.generation;
@@ -772,30 +996,79 @@ final youtubeMusicShareablePlaylistBindingsProvider =
           currentAuth.generation != generation ||
           currentAuth.profile?.accountKey.trim() != accountKey ||
           currentRuntime?.accountKey.trim() != accountKey) {
-        return const <String, String>{};
+        return const <String, YouTubeMusicShareablePlaylistBinding>{};
       }
 
-      final shareable = <String, String>{};
+      final shareable = <String, YouTubeMusicShareablePlaylistBinding>{};
       for (final binding in bindings) {
         if (binding.key.accountKey.trim() != accountKey ||
             binding.remoteDeleteRequestedAt != null) {
           continue;
         }
         final localPlaylistId = binding.key.playlistId.trim();
-        var remotePlaylistId = binding.remotePlaylistId?.trim();
+        final rawRemotePlaylistId = binding.remotePlaylistId?.trim();
+        final remotePlaylistId = _canonicalRemotePlaylistId(
+          rawRemotePlaylistId,
+        );
         if (localPlaylistId.isEmpty ||
+            localPlaylistId == Playlist.favoritesId ||
+            rawRemotePlaylistId == null ||
             remotePlaylistId == null ||
-            remotePlaylistId.isEmpty) {
+            _isLikedMusicPlaylistId(remotePlaylistId)) {
           continue;
         }
-        if (remotePlaylistId.startsWith('VL')) {
-          remotePlaylistId = remotePlaylistId.substring(2);
-        }
-        if (remotePlaylistId.isEmpty) continue;
-        shareable[localPlaylistId] = remotePlaylistId;
+        final detail = YouTubeMusicShareablePlaylistBinding(
+          localPlaylistId: localPlaylistId,
+          remotePlaylistId: remotePlaylistId,
+          rawRemotePlaylistId: rawRemotePlaylistId,
+          isEditable: binding.isEditable,
+          privacy: _normalizedStoredPlaylistPrivacy(binding.privacy),
+        );
+        if (!detail.canOfferSharing) continue;
+        shareable[localPlaylistId] = detail;
       }
-      return Map<String, String>.unmodifiable(shareable);
+      return Map<String, YouTubeMusicShareablePlaylistBinding>.unmodifiable(
+        shareable,
+      );
     });
+
+/// Backwards-compatible ID-only projection used outside the sharing dialog.
+final youtubeMusicShareablePlaylistBindingsProvider =
+    FutureProvider<Map<String, String>>((ref) async {
+      final details = await ref.watch(
+        youtubeMusicShareablePlaylistBindingDetailsProvider.future,
+      );
+      return Map<String, String>.unmodifiable(<String, String>{
+        for (final entry in details.entries)
+          entry.key: entry.value.remotePlaylistId,
+      });
+    });
+
+String? _canonicalRemotePlaylistId(String? value) {
+  var normalized = value?.trim();
+  if (normalized == null || normalized.isEmpty) return null;
+  if (normalized.startsWith('VL')) normalized = normalized.substring(2);
+  return normalized.isEmpty ? null : normalized;
+}
+
+bool _isLikedMusicPlaylistId(String value) => value == 'LM';
+
+String? _normalizedStoredPlaylistPrivacy(String? value) {
+  final normalized = value?.trim().toUpperCase();
+  return switch (normalized) {
+    'PRIVATE' || 'UNLISTED' || 'PUBLIC' => normalized,
+    _ => null,
+  };
+}
+
+String? _remotePlaylistPrivacyName(
+  ytm_account.RemotePlaylistVisibility? visibility,
+) => switch (visibility) {
+  ytm_account.RemotePlaylistVisibility.private => 'PRIVATE',
+  ytm_account.RemotePlaylistVisibility.unlisted => 'UNLISTED',
+  ytm_account.RemotePlaylistVisibility.public => 'PUBLIC',
+  ytm_account.RemotePlaylistVisibility.unknown || null => null,
+};
 
 PlaylistSyncTrigger _strongerTrigger(
   PlaylistSyncTrigger? current,

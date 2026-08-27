@@ -3,10 +3,13 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
 import '../../../features/music/domain/entities/catalog_track.dart';
 import '../../../features/music/domain/entities/playlist.dart';
 import '../../../features/music/domain/entities/playlist_entry.dart';
 import '../../storage/local_database_service.dart';
+import '../../storage/portable_sqlite_upsert.dart';
 import 'playlist_sync_models.dart';
 import 'playlist_sync_store.dart';
 
@@ -161,30 +164,57 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
   }) async {
     final db = await _database.database;
     await db.transaction((transaction) async {
-      await transaction.rawInsert('''
-        INSERT INTO ytm_playlist_bindings (
-          account_key, playlist_id, remote_playlist_id, remote_browse_id,
-          sync_mode, is_editable, privacy, base_title, base_snapshot_hash,
-          remote_revision, local_revision_at_base, last_synced_at,
-          last_remote_seen_at, remote_delete_requested_at, created_at,
-          updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(account_key, playlist_id) DO UPDATE SET
-          remote_playlist_id = excluded.remote_playlist_id,
-          remote_browse_id = excluded.remote_browse_id,
-          sync_mode = excluded.sync_mode,
-          is_editable = excluded.is_editable,
-          privacy = excluded.privacy,
-          base_title = excluded.base_title,
-          base_snapshot_hash = excluded.base_snapshot_hash,
-          remote_revision = excluded.remote_revision,
-          local_revision_at_base = excluded.local_revision_at_base,
-          last_synced_at = excluded.last_synced_at,
-          last_remote_seen_at = excluded.last_remote_seen_at,
-          remote_delete_requested_at = excluded.remote_delete_requested_at,
-          updated_at = excluded.updated_at
-      ''', _bindingValues(binding));
+      final values = _bindingValues(binding);
+      await portableSqliteUpsert(
+        transaction,
+        table: 'ytm_playlist_bindings',
+        keyValues: <String, Object?>{
+          'account_key': binding.key.accountKey,
+          'playlist_id': binding.key.playlistId,
+        },
+        insertValues: values,
+        updateValues: (_) => <String, Object?>{
+          for (final entry in values.entries)
+            if (entry.key != 'account_key' &&
+                entry.key != 'playlist_id' &&
+                entry.key != 'created_at')
+              entry.key: entry.value,
+        },
+      );
       _ensureCommitAllowed(canCommit);
+    });
+  }
+
+  @override
+  Future<bool> updateBindingPrivacy({
+    required PlaylistSyncKey key,
+    required String expectedRemotePlaylistId,
+    required String privacy,
+    required DateTime now,
+    bool Function()? canCommit,
+  }) async {
+    final db = await _database.database;
+    return db.transaction((transaction) async {
+      final updated = await transaction.update(
+        'ytm_playlist_bindings',
+        <String, Object?>{
+          'privacy': privacy,
+          'updated_at': now.toIso8601String(),
+        },
+        where: '''
+          account_key = ?
+          AND playlist_id = ?
+          AND remote_playlist_id = ?
+          AND remote_delete_requested_at IS NULL
+        ''',
+        whereArgs: <Object?>[
+          key.accountKey,
+          key.playlistId,
+          expectedRemotePlaylistId,
+        ],
+      );
+      _ensureCommitAllowed(canCommit);
+      return updated == 1;
     });
   }
 
@@ -397,35 +427,29 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
             existing['catalog_key']?.toString() != item.track.key ||
             _text(existing['local_track_id']) != effectiveLocalTrackId ||
             _text(existing['remote_video_id']) != videoId;
-        await transaction.rawInsert(
-          '''
-            INSERT INTO playlist_items (
-              item_id, playlist_id, catalog_key, local_track_id,
-              remote_video_id, remote_set_video_id, position, origin,
-              created_at, updated_at, deleted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'merged', ?, ?, NULL)
-            ON CONFLICT(item_id) DO UPDATE SET
-              playlist_id = excluded.playlist_id,
-              catalog_key = excluded.catalog_key,
-              local_track_id = excluded.local_track_id,
-              remote_video_id = excluded.remote_video_id,
-              remote_set_video_id = excluded.remote_set_video_id,
-              position = excluded.position,
-              origin = 'merged',
-              updated_at = excluded.updated_at,
-              deleted_at = NULL
-          ''',
-          <Object?>[
-            itemId,
-            key.playlistId,
-            item.track.key,
-            effectiveLocalTrackId,
-            videoId,
-            item.setVideoId,
-            position,
-            now.toIso8601String(),
-            now.toIso8601String(),
-          ],
+        final itemValues = <String, Object?>{
+          'item_id': itemId,
+          'playlist_id': key.playlistId,
+          'catalog_key': item.track.key,
+          'local_track_id': effectiveLocalTrackId,
+          'remote_video_id': videoId,
+          'remote_set_video_id': item.setVideoId,
+          'position': position,
+          'origin': 'merged',
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+          'deleted_at': null,
+        };
+        await portableSqliteUpsert(
+          transaction,
+          table: 'playlist_items',
+          keyValues: <String, Object?>{'item_id': itemId},
+          insertValues: itemValues,
+          updateValues: (_) => <String, Object?>{
+            for (final entry in itemValues.entries)
+              if (entry.key != 'item_id' && entry.key != 'created_at')
+                entry.key: entry.value,
+          },
         );
       }
       for (final row in existingRows) {
@@ -605,20 +629,22 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
     bool ambiguous = false,
   }) async {
     final db = await _database.database;
-    await _upsertIntent(
-      db,
-      key: key,
-      requestedLocalRevision: requestedLocalRevision,
-      reason: reason,
-      status: ambiguous
-          ? PlaylistSyncIntentStatus.ambiguous
-          : PlaylistSyncIntentStatus.pending,
-      now: now,
-      desired: desired,
-      mutationToken: mutationToken,
-      nextAttemptAt: nextAttemptAt,
-      error: error,
-      incrementAttempts: true,
+    await db.transaction(
+      (transaction) => _upsertIntent(
+        transaction,
+        key: key,
+        requestedLocalRevision: requestedLocalRevision,
+        reason: reason,
+        status: ambiguous
+            ? PlaylistSyncIntentStatus.ambiguous
+            : PlaylistSyncIntentStatus.pending,
+        now: now,
+        desired: desired,
+        mutationToken: mutationToken,
+        nextAttemptAt: nextAttemptAt,
+        error: error,
+        incrementAttempts: true,
+      ),
     );
   }
 
@@ -749,7 +775,7 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
   }
 
   Future<void> _upsertIntent(
-    dynamic db, {
+    Transaction db, {
     required PlaylistSyncKey key,
     required int requestedLocalRevision,
     required String reason,
@@ -760,87 +786,86 @@ class SqlitePlaylistSyncStore implements PlaylistSyncStore {
     DateTime? nextAttemptAt,
     String? error,
     bool incrementAttempts = false,
-  }) {
-    return db.rawInsert(
-      '''
-        INSERT INTO playlist_sync_intents (
-          account_key, playlist_id, requested_local_revision, reason, status,
-          desired_snapshot_json, desired_snapshot_hash, mutation_token,
-          attempt_count, next_attempt_at, last_error, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(account_key, playlist_id) DO UPDATE SET
-          requested_local_revision = MAX(
-            playlist_sync_intents.requested_local_revision,
-            excluded.requested_local_revision
-          ),
-          reason = excluded.reason,
-          status = excluded.status,
-          desired_snapshot_json = excluded.desired_snapshot_json,
-          desired_snapshot_hash = excluded.desired_snapshot_hash,
-          mutation_token = excluded.mutation_token,
-          attempt_count = CASE WHEN ? = 1
-            THEN playlist_sync_intents.attempt_count + 1
-            ELSE playlist_sync_intents.attempt_count
-          END,
-          next_attempt_at = excluded.next_attempt_at,
-          last_error = excluded.last_error,
-          updated_at = excluded.updated_at
-      ''',
-      <Object?>[
-        key.accountKey,
-        key.playlistId,
-        requestedLocalRevision,
-        reason,
-        status.name,
-        desired?.encode(),
-        desired?.semanticHash,
-        mutationToken,
-        incrementAttempts ? 1 : 0,
-        nextAttemptAt?.toIso8601String(),
-        error,
-        now.toIso8601String(),
-        now.toIso8601String(),
-        incrementAttempts ? 1 : 0,
-      ],
+  }) async {
+    final values = <String, Object?>{
+      'account_key': key.accountKey,
+      'playlist_id': key.playlistId,
+      'requested_local_revision': requestedLocalRevision,
+      'reason': reason,
+      'status': status.name,
+      'desired_snapshot_json': desired?.encode(),
+      'desired_snapshot_hash': desired?.semanticHash,
+      'mutation_token': mutationToken,
+      'attempt_count': incrementAttempts ? 1 : 0,
+      'next_attempt_at': nextAttemptAt?.toIso8601String(),
+      'last_error': error,
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    };
+    await portableSqliteUpsert(
+      db,
+      table: 'playlist_sync_intents',
+      keyValues: <String, Object?>{
+        'account_key': key.accountKey,
+        'playlist_id': key.playlistId,
+      },
+      insertValues: values,
+      updateValues: (current) => <String, Object?>{
+        'requested_local_revision':
+            _integer(current['requested_local_revision']) >
+                requestedLocalRevision
+            ? _integer(current['requested_local_revision'])
+            : requestedLocalRevision,
+        'reason': values['reason'],
+        'status': values['status'],
+        'desired_snapshot_json': values['desired_snapshot_json'],
+        'desired_snapshot_hash': values['desired_snapshot_hash'],
+        'mutation_token': values['mutation_token'],
+        'attempt_count': incrementAttempts
+            ? _integer(current['attempt_count']) + 1
+            : _integer(current['attempt_count']),
+        'next_attempt_at': values['next_attempt_at'],
+        'last_error': values['last_error'],
+        'updated_at': values['updated_at'],
+      },
     );
   }
 
-  Future<void> _upsertTrack(dynamic db, CatalogTrack track, DateTime now) {
-    return db.rawInsert(
-      '''
-        INSERT INTO catalog_tracks (
-          track_key, provider, provider_id, title, artists_json,
-          artist_browse_ids_json, album, duration_ms, thumbnail_url,
-          source_url, metadata_source, metadata_updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(track_key) DO UPDATE SET
-          title = excluded.title,
-          artists_json = excluded.artists_json,
-          artist_browse_ids_json = excluded.artist_browse_ids_json,
-          album = COALESCE(excluded.album, catalog_tracks.album),
-          duration_ms = COALESCE(excluded.duration_ms, catalog_tracks.duration_ms),
-          thumbnail_url = COALESCE(
-            excluded.thumbnail_url,
-            catalog_tracks.thumbnail_url
-          ),
-          source_url = COALESCE(excluded.source_url, catalog_tracks.source_url),
-          metadata_source = excluded.metadata_source,
-          metadata_updated_at = excluded.metadata_updated_at
-      ''',
-      <Object?>[
-        track.key,
-        track.provider.name,
-        track.providerId,
-        track.title,
-        jsonEncode(track.artists),
-        jsonEncode(track.artistBrowseIds),
-        track.album,
-        track.duration?.inMilliseconds,
-        track.thumbnailUrl,
-        track.sourceUrl,
-        'youtube_music_sync',
-        now.toIso8601String(),
-      ],
+  Future<void> _upsertTrack(
+    Transaction db,
+    CatalogTrack track,
+    DateTime now,
+  ) async {
+    final values = <String, Object?>{
+      'track_key': track.key,
+      'provider': track.provider.name,
+      'provider_id': track.providerId,
+      'title': track.title,
+      'artists_json': jsonEncode(track.artists),
+      'artist_browse_ids_json': jsonEncode(track.artistBrowseIds),
+      'album': track.album,
+      'duration_ms': track.duration?.inMilliseconds,
+      'thumbnail_url': track.thumbnailUrl,
+      'source_url': track.sourceUrl,
+      'metadata_source': 'youtube_music_sync',
+      'metadata_updated_at': now.toIso8601String(),
+    };
+    await portableSqliteUpsert(
+      db,
+      table: 'catalog_tracks',
+      keyValues: <String, Object?>{'track_key': track.key},
+      insertValues: values,
+      updateValues: (current) => <String, Object?>{
+        'title': values['title'],
+        'artists_json': values['artists_json'],
+        'artist_browse_ids_json': values['artist_browse_ids_json'],
+        'album': values['album'] ?? current['album'],
+        'duration_ms': values['duration_ms'] ?? current['duration_ms'],
+        'thumbnail_url': values['thumbnail_url'] ?? current['thumbnail_url'],
+        'source_url': values['source_url'] ?? current['source_url'],
+        'metadata_source': values['metadata_source'],
+        'metadata_updated_at': values['metadata_updated_at'],
+      },
     );
   }
 }
@@ -924,24 +949,26 @@ PlaylistSyncUnresolvedConflict _unresolvedConflictFromRow(
   );
 }
 
-List<Object?> _bindingValues(PlaylistSyncBinding binding) => <Object?>[
-  binding.key.accountKey,
-  binding.key.playlistId,
-  binding.remotePlaylistId,
-  binding.remoteBrowseId,
-  binding.mode.name,
-  binding.isEditable ? 1 : 0,
-  binding.privacy,
-  binding.baseTitle,
-  binding.baseSnapshotHash,
-  binding.remoteRevision,
-  binding.localRevisionAtBase,
-  binding.lastSyncedAt?.toIso8601String(),
-  binding.lastRemoteSeenAt?.toIso8601String(),
-  binding.remoteDeleteRequestedAt?.toIso8601String(),
-  binding.createdAt.toIso8601String(),
-  binding.updatedAt.toIso8601String(),
-];
+Map<String, Object?> _bindingValues(PlaylistSyncBinding binding) =>
+    <String, Object?>{
+      'account_key': binding.key.accountKey,
+      'playlist_id': binding.key.playlistId,
+      'remote_playlist_id': binding.remotePlaylistId,
+      'remote_browse_id': binding.remoteBrowseId,
+      'sync_mode': binding.mode.name,
+      'is_editable': binding.isEditable ? 1 : 0,
+      'privacy': binding.privacy,
+      'base_title': binding.baseTitle,
+      'base_snapshot_hash': binding.baseSnapshotHash,
+      'remote_revision': binding.remoteRevision,
+      'local_revision_at_base': binding.localRevisionAtBase,
+      'last_synced_at': binding.lastSyncedAt?.toIso8601String(),
+      'last_remote_seen_at': binding.lastRemoteSeenAt?.toIso8601String(),
+      'remote_delete_requested_at': binding.remoteDeleteRequestedAt
+          ?.toIso8601String(),
+      'created_at': binding.createdAt.toIso8601String(),
+      'updated_at': binding.updatedAt.toIso8601String(),
+    };
 
 String? _text(Object? value) {
   final normalized = value?.toString().trim();

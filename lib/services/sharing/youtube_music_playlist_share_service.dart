@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'track_share_service.dart';
+import 'youtube_music_link.dart';
 
 abstract interface class YouTubeMusicPlaylistShareService {
   bool canShare({
@@ -29,8 +30,6 @@ class SharePlusYouTubeMusicPlaylistShareService
     this.gateway = const SharePlusTrackShareGateway(),
   });
 
-  static final RegExp _playlistIdPattern = RegExp(r'^[A-Za-z0-9_-]{1,200}$');
-
   final TrackShareGateway gateway;
 
   @override
@@ -38,7 +37,7 @@ class SharePlusYouTubeMusicPlaylistShareService
     required String remotePlaylistId,
     required String playlistName,
   }) {
-    return _canonicalPlaylistId(remotePlaylistId) != null &&
+    return canonicalYouTubeMusicPlaylistId(remotePlaylistId) != null &&
         playlistName.trim().isNotEmpty;
   }
 
@@ -51,7 +50,7 @@ class SharePlusYouTubeMusicPlaylistShareService
     String? subject,
     Rect? sharePositionOrigin,
   }) {
-    final canonicalId = _canonicalPlaylistId(remotePlaylistId);
+    final canonicalId = canonicalYouTubeMusicPlaylistId(remotePlaylistId);
     final normalizedName = playlistName.trim();
     if (canonicalId == null || normalizedName.isEmpty) {
       throw const FormatException(
@@ -81,14 +80,6 @@ class SharePlusYouTubeMusicPlaylistShareService
       subject: subject,
       sharePositionOrigin: sharePositionOrigin,
     );
-  }
-
-  String? _canonicalPlaylistId(String value) {
-    var normalized = value.trim();
-    if (normalized.startsWith('VL')) {
-      normalized = normalized.substring(2);
-    }
-    return _playlistIdPattern.hasMatch(normalized) ? normalized : null;
   }
 
   String _includePlaylistName(

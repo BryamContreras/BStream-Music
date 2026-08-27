@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:bstream_music/services/sharing/track_share_service.dart';
+import 'package:bstream_music/services/sharing/youtube_music_link.dart';
 import 'package:bstream_music/services/sharing/youtube_music_playlist_share_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -83,6 +84,33 @@ void main() {
       );
       expect(RegExp('Viaje de verano').allMatches(gateway.text!).length, 1);
     });
+
+    test(
+      'shared VL identity round-trips through the incoming parser',
+      () async {
+        final gateway = _RecordingGateway();
+        final service = SharePlusYouTubeMusicPlaylistShareService(
+          gateway: gateway,
+        );
+
+        await service.sharePlaylist(
+          remotePlaylistId: 'VLPL1234567890abcdef',
+          playlistName: 'Viaje de verano',
+          message: '',
+          title: '',
+        );
+
+        final sharedUri = Uri.parse(gateway.text!.trim().split('\n').last);
+        final decoded = const YouTubeMusicLinkCodec().tryDecode(sharedUri);
+        expect(
+          sharedUri.toString(),
+          'https://music.youtube.com/playlist?list=PL1234567890abcdef',
+        );
+        expect(decoded?.kind, YouTubeMusicLinkKind.playlist);
+        expect(decoded?.playlistId, 'PL1234567890abcdef');
+        expect(decoded?.collectionId, 'VLPL1234567890abcdef');
+      },
+    );
 
     test('forwards subject and share sheet origin', () async {
       final gateway = _RecordingGateway();

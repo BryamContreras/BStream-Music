@@ -23,6 +23,7 @@ import '../../domain/entities/track_info.dart';
 import '../providers/local_audio_availability.dart';
 import '../providers/music_providers.dart';
 import '../providers/subscribed_artists_controller.dart';
+import '../providers/youtube_music_auth_controller.dart';
 import '../pages/artist_profile_page.dart';
 import 'favorite_star_badge.dart';
 import 'glass_popup_menu_button.dart';
@@ -2179,20 +2180,32 @@ class _PlaylistMenu extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final shareableBindings = ref.watch(
-      youtubeMusicShareablePlaylistBindingsProvider,
+      youtubeMusicShareablePlaylistBindingDetailsProvider,
     );
-    final remotePlaylistId = switch (shareableBindings) {
+    final shareableBinding = switch (shareableBindings) {
       AsyncData(:final value) => value[playlist.id],
       _ => null,
     };
-    final canShare =
-        remotePlaylistId != null &&
+    final isAuthenticated = ref
+        .watch(youtubeMusicAuthControllerProvider)
+        .isAuthenticated;
+    final canShareFromCachedBinding =
+        isAuthenticated &&
+        shareableBinding != null &&
         ref
             .watch(youtubeMusicPlaylistShareServiceProvider)
             .canShare(
-              remotePlaylistId: remotePlaylistId,
+              remotePlaylistId: shareableBinding.remotePlaylistId,
               playlistName: playlist.name,
             );
+    // Opening the overflow menu must never wait for SQLite or the network.
+    // While the local binding projection is loading, authenticated playlists
+    // can resolve their exact eligibility only after Share is selected.
+    final canResolveShareOnDemand =
+        shareableBindings.isLoading &&
+        isAuthenticated &&
+        playlist.id != Playlist.favoritesId;
+    final canShare = canShareFromCachedBinding || canResolveShareOnDemand;
     final buttonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
     final buttonWidth = AppPlatform.isAndroid ? 36.0 : 40.0;
     final iconSize = AppPlatform.isAndroid ? 32.0 : 24.0;
@@ -2294,22 +2307,85 @@ class _PlaylistMenu extends ConsumerWidget {
       sharePositionOrigin =
           renderObject.localToGlobal(Offset.zero) & renderObject.size;
     }
+    late final Map<String, YouTubeMusicShareablePlaylistBinding> bindings;
     try {
-      final bindings = await ref.read(
-        youtubeMusicShareablePlaylistBindingsProvider.future,
+      bindings = await ref.read(
+        youtubeMusicShareablePlaylistBindingDetailsProvider.future,
       );
-      final remotePlaylistId = bindings[playlist.id];
-      final service = ref.read(youtubeMusicPlaylistShareServiceProvider);
-      if (remotePlaylistId == null ||
-          !service.canShare(
-            remotePlaylistId: remotePlaylistId,
-            playlistName: playlist.name,
-          )) {
-        throw StateError('The playlist is no longer synchronized.');
-      }
+    } catch (error) {
+      debugPrint('Could not read synchronized playlist binding: $error');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(strings.playlistShareFailed)));
+      return;
+    }
+    final binding = bindings[playlist.id];
+    final service = ref.read(youtubeMusicPlaylistShareServiceProvider);
+    if (binding == null ||
+        !service.canShare(
+          remotePlaylistId: binding.remotePlaylistId,
+          playlistName: playlist.name,
+        )) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(strings.playlistShareFailed)));
+      return;
+    }
 
+    var visibilityChanged = false;
+    if (!binding.isDirectlyShareable) {
+      if (!context.mounted) return;
+      final confirmed = await showAppDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AppAlertDialog(
+          title: Text(strings.sharePlaylistTitle),
+          content: Text(strings.sharePrivatePlaylistExplanation),
+          actions: [
+            TextButton(
+              key: const Key('playlist-share-private-cancel'),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(strings.cancel),
+            ),
+            FilledButton.icon(
+              key: const Key('playlist-share-make-unlisted'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              icon: const Icon(Icons.link_rounded),
+              label: Text(strings.makeUnlistedAndShare),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+      final preparationError = await showAppDialog<Object>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _PlaylistSharePreparationDialog(
+          message: strings.preparingPlaylistShare,
+          operation: () =>
+              ref.read(youtubeMusicMakePlaylistUnlistedForSharingProvider)(
+                localPlaylistId: playlist.id,
+                expectedRemotePlaylistId: binding.remotePlaylistId,
+              ),
+        ),
+      );
+      if (preparationError != null) {
+        debugPrint(
+          'Could not make synchronized playlist unlisted: $preparationError',
+        );
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(strings.playlistVisibilityChangeFailed)),
+        );
+        return;
+      }
+      visibilityChanged = true;
+    }
+
+    try {
       await service.sharePlaylist(
-        remotePlaylistId: remotePlaylistId,
+        remotePlaylistId: binding.remotePlaylistId,
         playlistName: playlist.name,
         message: strings.sharePlaylistMessage(playlist.name),
         title: strings.sharePlaylistTitle,
@@ -2319,9 +2395,15 @@ class _PlaylistMenu extends ConsumerWidget {
     } catch (error) {
       debugPrint('Could not share synchronized playlist: $error');
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(strings.playlistShareFailed)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            visibilityChanged
+                ? strings.playlistShareFailedAfterVisibilityChange
+                : strings.playlistShareFailed,
+          ),
+        ),
+      );
     }
   }
 
@@ -2427,6 +2509,61 @@ class _PlaylistMenu extends ConsumerWidget {
                     .read(appStringsProvider)
                     .youtubeMusicPlaylistDeletionScheduled
               : ref.read(appStringsProvider).playlistDeleted,
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaylistSharePreparationDialog extends StatefulWidget {
+  const _PlaylistSharePreparationDialog({
+    required this.message,
+    required this.operation,
+  });
+
+  final String message;
+  final Future<void> Function() operation;
+
+  @override
+  State<_PlaylistSharePreparationDialog> createState() =>
+      _PlaylistSharePreparationDialogState();
+}
+
+class _PlaylistSharePreparationDialogState
+    extends State<_PlaylistSharePreparationDialog> {
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    Object? error;
+    try {
+      await widget.operation();
+    } catch (caughtError) {
+      error = caughtError;
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop<Object>(error);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      child: AppAlertDialog(
+        key: const Key('playlist-share-preparing'),
+        content: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox.square(
+              dimension: 24,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
+            const SizedBox(width: 16),
+            Flexible(child: Text(widget.message)),
+          ],
         ),
       ),
     );

@@ -70,6 +70,19 @@ abstract interface class PlaylistSyncStore {
     bool Function()? canCommit,
   });
 
+  /// Updates only the privacy projection of the exact remote binding.
+  ///
+  /// The remote ID is intentionally compared as supplied (without
+  /// normalization) so a stale or malformed caller cannot update a different
+  /// binding. Bindings already fenced for remote deletion are never changed.
+  Future<bool> updateBindingPrivacy({
+    required PlaylistSyncKey key,
+    required String expectedRemotePlaylistId,
+    required String privacy,
+    required DateTime now,
+    bool Function()? canCommit,
+  });
+
   /// Creates a local shell, its immutable remote binding and initial intent in
   /// one transaction. Repeating the call for the same account/remote ID is
   /// idempotent and returns the existing binding.

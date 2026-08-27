@@ -55,14 +55,40 @@
                  assetlinks.json Android must keep the normal chooser instead
                  of claiming the link as the system default.
             -->
+            <!-- YouTube Music collection and track routes parsed by the app. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="music.youtube.com" />
-                <data android:scheme="https" android:host="youtube.com" />
-                <data android:scheme="https" android:host="www.youtube.com" />
-                <data android:scheme="https" android:host="m.youtube.com" />
+                <data android:scheme="https" />
+                <data android:host="music.youtube.com" />
+                <data android:pathPrefix="/watch" />
+                <data android:pathPrefix="/playlist" />
+                <data android:pathPrefix="/browse" />
+                <data android:pathPrefix="/shorts" />
+                <data android:pathPrefix="/embed" />
+                <data android:pathPrefix="/live" />
+            </intent-filter>
+            <!-- Equivalent public YouTube routes use the same catalog ids. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="youtube.com" />
+                <data android:host="www.youtube.com" />
+                <data android:host="m.youtube.com" />
+                <data android:pathPrefix="/watch" />
+                <data android:pathPrefix="/playlist" />
+                <data android:pathPrefix="/shorts" />
+                <data android:pathPrefix="/embed" />
+                <data android:pathPrefix="/live" />
+            </intent-filter>
+            <!-- Short links carry the video id as their first path segment. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="youtu.be" />
             </intent-filter>
             <intent-filter>

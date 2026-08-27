@@ -7,6 +7,8 @@ import 'package:bstream_music/features/music/presentation/widgets/youtube_music_
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_account_client.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_models.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_session_store.dart';
+import 'package:bstream_music/services/youtube_music/account/youtube_music_account.dart'
+    as ytm_account;
 import 'package:bstream_music/services/youtube_music/playlist_sync/playlist_account_sync_coordinator.dart';
 import 'package:bstream_music/services/youtube_music/playlist_sync/playlist_sync_consent_store.dart';
 import 'package:bstream_music/services/youtube_music/playlist_sync/playlist_sync_models.dart';
@@ -725,6 +727,248 @@ void main() {
   );
 
   testWidgets(
+    'shareable binding details preserve private editable projection and exclude liked music',
+    (tester) async {
+      final now = DateTime.utc(2026, 8, 27);
+      final syncStore = _BindingStore(<PlaylistSyncBinding>[
+        _binding(
+          localPlaylistId: 'local-private',
+          remotePlaylistId: 'VLPL-private',
+          privacy: 'private',
+          isEditable: true,
+          now: now,
+        ),
+        _binding(
+          localPlaylistId: Playlist.favoritesId,
+          remotePlaylistId: 'LM',
+          privacy: 'PRIVATE',
+          isEditable: true,
+          now: now,
+        ),
+        _binding(
+          localPlaylistId: 'local-liked-alias',
+          remotePlaylistId: 'VLLM',
+          privacy: 'PRIVATE',
+          isEditable: true,
+          now: now,
+        ),
+      ]);
+      final container = _container(
+        store: _MemorySessionStore(value: _credential()),
+        coordinator: _RecordingSyncCoordinator(
+          (_, _) async => _successfulResult(),
+        ),
+        syncStore: syncStore,
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(_accountButtonHost(container));
+      await _pumpUntil(
+        tester,
+        () =>
+            container.read(youtubeMusicPlaylistSyncControllerProvider).phase ==
+            YouTubeMusicPlaylistSyncPhase.synchronized,
+      );
+
+      final details = await container.read(
+        youtubeMusicShareablePlaylistBindingDetailsProvider.future,
+      );
+
+      expect(details.keys, <String>['local-private']);
+      final detail = details['local-private']!;
+      expect(detail.remotePlaylistId, 'PL-private');
+      expect(detail.rawRemotePlaylistId, 'VLPL-private');
+      expect(detail.privacy, 'PRIVATE');
+      expect(detail.isEditable, isTrue);
+      expect(detail.isDirectlyShareable, isFalse);
+      expect(detail.canOfferSharing, isTrue);
+    },
+  );
+
+  testWidgets(
+    'makePlaylistUnlistedForSharing mutates once, verifies, and persists exact binding privacy',
+    (tester) async {
+      final now = DateTime.utc(2026, 8, 27);
+      final syncStore = _BindingStore(<PlaylistSyncBinding>[
+        _binding(
+          localPlaylistId: 'local-private',
+          remotePlaylistId: 'VLPL-private',
+          privacy: 'PRIVATE',
+          isEditable: true,
+          now: now,
+        ),
+      ]);
+      final account = _PlaylistVisibilityAccount(
+        summaries: <ytm_account.RemotePlaylistSummary?>[
+          _remotePlaylistSummary(
+            visibility: ytm_account.RemotePlaylistVisibility.private,
+          ),
+          _remotePlaylistSummary(
+            visibility: ytm_account.RemotePlaylistVisibility.unlisted,
+          ),
+        ],
+        mutation:
+            const ytm_account.YouTubeMusicMutationSuccess<
+              ytm_account.RemotePlaylistMutationApplied
+            >(ytm_account.RemotePlaylistMutationApplied()),
+      );
+      final container = _container(
+        store: _MemorySessionStore(value: _credential()),
+        coordinator: _RecordingSyncCoordinator(
+          (_, _) async => _successfulResult(),
+        ),
+        syncStore: syncStore,
+        playlistVisibilityAccount: account,
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(_accountButtonHost(container));
+      await _pumpUntil(
+        tester,
+        () =>
+            container.read(youtubeMusicPlaylistSyncControllerProvider).phase ==
+            YouTubeMusicPlaylistSyncPhase.synchronized,
+      );
+
+      await container
+          .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+          .makePlaylistUnlistedForSharing(
+            localPlaylistId: 'local-private',
+            expectedRemotePlaylistId: 'PL-private',
+          );
+
+      expect(account.summaryPlaylistIds, <String>['PL-private', 'PL-private']);
+      expect(account.visibilityPlaylistIds, <String>['PL-private']);
+      expect(account.visibilities, <ytm_account.RemotePlaylistVisibility>[
+        ytm_account.RemotePlaylistVisibility.unlisted,
+      ]);
+      expect(syncStore.privacyUpdates, hasLength(1));
+      final update = syncStore.privacyUpdates.single;
+      expect(update.key.playlistId, 'local-private');
+      expect(update.expectedRemotePlaylistId, 'VLPL-private');
+      expect(update.privacy, 'UNLISTED');
+      expect(syncStore.bindings.single.privacy, 'UNLISTED');
+    },
+  );
+
+  testWidgets(
+    'ambiguous privacy mutation succeeds after unlisted readback without retrying',
+    (tester) async {
+      final syncStore = _BindingStore(<PlaylistSyncBinding>[
+        _binding(
+          localPlaylistId: 'local-private',
+          remotePlaylistId: 'PL-private',
+          privacy: 'PRIVATE',
+          isEditable: true,
+          now: DateTime.utc(2026, 8, 27),
+        ),
+      ]);
+      final account = _PlaylistVisibilityAccount(
+        summaries: <ytm_account.RemotePlaylistSummary?>[
+          _remotePlaylistSummary(
+            visibility: ytm_account.RemotePlaylistVisibility.private,
+          ),
+          _remotePlaylistSummary(
+            visibility: ytm_account.RemotePlaylistVisibility.unlisted,
+          ),
+        ],
+        mutation:
+            const ytm_account.YouTubeMusicMutationAmbiguous<
+              ytm_account.RemotePlaylistMutationApplied
+            >(operation: 'setPlaylistVisibility', reason: 'timeout'),
+      );
+      final container = _container(
+        store: _MemorySessionStore(value: _credential()),
+        coordinator: _RecordingSyncCoordinator(
+          (_, _) async => _successfulResult(),
+        ),
+        syncStore: syncStore,
+        playlistVisibilityAccount: account,
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(_accountButtonHost(container));
+      await _pumpUntil(
+        tester,
+        () =>
+            container.read(youtubeMusicPlaylistSyncControllerProvider).phase ==
+            YouTubeMusicPlaylistSyncPhase.synchronized,
+      );
+      await container
+          .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+          .makePlaylistUnlistedForSharing(
+            localPlaylistId: 'local-private',
+            expectedRemotePlaylistId: 'PL-private',
+          );
+
+      expect(account.visibilityPlaylistIds, hasLength(1));
+      expect(account.summaryPlaylistIds, hasLength(2));
+      expect(syncStore.privacyUpdates, hasLength(1));
+      expect(syncStore.bindings.single.privacy, 'UNLISTED');
+    },
+  );
+
+  testWidgets(
+    'unverified private readback fails and does not persist privacy',
+    (tester) async {
+      final syncStore = _BindingStore(<PlaylistSyncBinding>[
+        _binding(
+          localPlaylistId: 'local-private',
+          remotePlaylistId: 'PL-private',
+          privacy: 'PRIVATE',
+          isEditable: true,
+          now: DateTime.utc(2026, 8, 27),
+        ),
+      ]);
+      final account = _PlaylistVisibilityAccount(
+        summaries: <ytm_account.RemotePlaylistSummary?>[
+          _remotePlaylistSummary(
+            visibility: ytm_account.RemotePlaylistVisibility.private,
+          ),
+          _remotePlaylistSummary(
+            visibility: ytm_account.RemotePlaylistVisibility.private,
+          ),
+        ],
+        mutation:
+            const ytm_account.YouTubeMusicMutationSuccess<
+              ytm_account.RemotePlaylistMutationApplied
+            >(ytm_account.RemotePlaylistMutationApplied()),
+      );
+      final container = _container(
+        store: _MemorySessionStore(value: _credential()),
+        coordinator: _RecordingSyncCoordinator(
+          (_, _) async => _successfulResult(),
+        ),
+        syncStore: syncStore,
+        playlistVisibilityAccount: account,
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(_accountButtonHost(container));
+      await _pumpUntil(
+        tester,
+        () =>
+            container.read(youtubeMusicPlaylistSyncControllerProvider).phase ==
+            YouTubeMusicPlaylistSyncPhase.synchronized,
+      );
+
+      await expectLater(
+        container
+            .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+            .makePlaylistUnlistedForSharing(
+              localPlaylistId: 'local-private',
+              expectedRemotePlaylistId: 'PL-private',
+            ),
+        throwsA(isA<StateError>()),
+      );
+      expect(account.visibilityPlaylistIds, hasLength(1));
+      expect(account.summaryPlaylistIds, hasLength(2));
+      expect(syncStore.privacyUpdates, isEmpty);
+      expect(syncStore.bindings.single.privacy, 'PRIVATE');
+    },
+  );
+
+  testWidgets(
     'shareable playlist bindings refresh after login, sync, and logout',
     (tester) async {
       final now = DateTime.utc(2026, 8, 25);
@@ -816,6 +1060,7 @@ ProviderContainer _container({
   YouTubeMusicAccountClient? accountClient,
   PlaylistSyncConsentStore? consentStore,
   PlaylistSyncStore? syncStore,
+  ytm_account.YouTubeMusicPlaylistVisibilityAccount? playlistVisibilityAccount,
   List<Duration> retryBackoff = const <Duration>[Duration(seconds: 1)],
 }) {
   final playlists = _RecordingPlaylistsController();
@@ -841,6 +1086,7 @@ ProviderContainer _container({
           sessionGeneration: 0,
           coordinator: coordinator,
           store: syncStore,
+          playlistVisibilityAccount: playlistVisibilityAccount,
         ),
       ),
     ],
@@ -956,6 +1202,7 @@ class _BindingStore implements PlaylistSyncStore {
 
   List<PlaylistSyncBinding> bindings;
   final List<String?> requestedAccountKeys = <String?>[];
+  final List<_PrivacyUpdate> privacyUpdates = <_PrivacyUpdate>[];
   var listCalls = 0;
 
   @override
@@ -968,7 +1215,93 @@ class _BindingStore implements PlaylistSyncStore {
   }
 
   @override
+  Future<bool> updateBindingPrivacy({
+    required PlaylistSyncKey key,
+    required String expectedRemotePlaylistId,
+    required String privacy,
+    required DateTime now,
+    bool Function()? canCommit,
+  }) async {
+    if (canCommit?.call() == false) return false;
+    final index = bindings.indexWhere(
+      (binding) =>
+          binding.key == key &&
+          binding.remotePlaylistId == expectedRemotePlaylistId &&
+          binding.remoteDeleteRequestedAt == null,
+    );
+    if (index < 0 || canCommit?.call() == false) return false;
+    privacyUpdates.add(
+      _PrivacyUpdate(
+        key: key,
+        expectedRemotePlaylistId: expectedRemotePlaylistId,
+        privacy: privacy,
+      ),
+    );
+    bindings[index] = bindings[index].copyWith(
+      privacy: privacy,
+      updatedAt: now,
+    );
+    return true;
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _PrivacyUpdate {
+  const _PrivacyUpdate({
+    required this.key,
+    required this.expectedRemotePlaylistId,
+    required this.privacy,
+  });
+
+  final PlaylistSyncKey key;
+  final String expectedRemotePlaylistId;
+  final String privacy;
+}
+
+class _PlaylistVisibilityAccount
+    implements ytm_account.YouTubeMusicPlaylistVisibilityAccount {
+  _PlaylistVisibilityAccount({
+    required List<ytm_account.RemotePlaylistSummary?> summaries,
+    required this.mutation,
+  }) : _summaries = List<ytm_account.RemotePlaylistSummary?>.of(summaries);
+
+  final List<ytm_account.RemotePlaylistSummary?> _summaries;
+  final ytm_account.YouTubeMusicMutationResult<
+    ytm_account.RemotePlaylistMutationApplied
+  >
+  mutation;
+  final List<String> summaryPlaylistIds = <String>[];
+  final List<String> visibilityPlaylistIds = <String>[];
+  final List<ytm_account.RemotePlaylistVisibility> visibilities =
+      <ytm_account.RemotePlaylistVisibility>[];
+
+  @override
+  Future<ytm_account.RemotePlaylistSummary?> getPlaylistSummary(
+    String playlistId,
+  ) async {
+    summaryPlaylistIds.add(playlistId);
+    if (_summaries.isEmpty) {
+      throw StateError('No playlist summary was configured.');
+    }
+    return _summaries.removeAt(0);
+  }
+
+  @override
+  Future<
+    ytm_account.YouTubeMusicMutationResult<
+      ytm_account.RemotePlaylistMutationApplied
+    >
+  >
+  setPlaylistVisibility({
+    required String playlistId,
+    required ytm_account.RemotePlaylistVisibility visibility,
+  }) async {
+    visibilityPlaylistIds.add(playlistId);
+    visibilities.add(visibility);
+    return mutation;
+  }
 }
 
 class _MemoryConsentStore implements PlaylistSyncConsentStore {
@@ -1088,15 +1421,29 @@ PlaylistSyncBinding _binding({
   required String localPlaylistId,
   required String? remotePlaylistId,
   required DateTime now,
+  bool isEditable = true,
+  String? privacy,
   DateTime? remoteDeleteRequestedAt,
 }) => PlaylistSyncBinding(
   key: PlaylistSyncKey(accountKey: accountKey, playlistId: localPlaylistId),
   remotePlaylistId: remotePlaylistId,
   mode: PlaylistSyncMode.automatic,
+  isEditable: isEditable,
+  privacy: privacy,
   localRevisionAtBase: 1,
   remoteDeleteRequestedAt: remoteDeleteRequestedAt,
   createdAt: now,
   updatedAt: now,
+);
+
+ytm_account.RemotePlaylistSummary _remotePlaylistSummary({
+  required ytm_account.RemotePlaylistVisibility visibility,
+  bool isEditable = true,
+}) => ytm_account.RemotePlaylistSummary(
+  playlistId: 'PL-private',
+  title: 'Private playlist',
+  visibility: visibility,
+  isEditable: isEditable,
 );
 
 YouTubeMusicAccountProfile _profile() => const YouTubeMusicAccountProfile(

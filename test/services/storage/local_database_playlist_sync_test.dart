@@ -60,6 +60,59 @@ void main() {
   });
 
   test(
+    'playlist updates preserve creation time and revision semantics',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'bstream-playlist-portable-upsert-',
+      );
+      final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+      addTearDown(() async {
+        await service.close();
+        await sandbox.delete(recursive: true);
+      });
+      final createdAt = DateTime.utc(2026, 8, 27, 10);
+      await service.savePlaylist(
+        Playlist(
+          id: 'playlist-upsert',
+          name: 'First',
+          trackIds: const <String>['one'],
+          createdAt: createdAt,
+          updatedAt: createdAt,
+        ),
+      );
+      await service.savePlaylist(
+        Playlist(
+          id: 'playlist-upsert',
+          name: 'Second',
+          trackIds: const <String>['two'],
+          createdAt: createdAt.add(const Duration(days: 1)),
+          updatedAt: createdAt.add(const Duration(minutes: 1)),
+        ),
+      );
+      var stored = (await service.getPlaylists()).single;
+      expect(stored.createdAt, createdAt);
+      expect(stored.name, 'Second');
+      expect(stored.trackIds, const <String>['two']);
+      expect(stored.localRevision, 1);
+
+      await service.savePlaylist(
+        Playlist(
+          id: 'playlist-upsert',
+          name: 'Imported revision',
+          trackIds: const <String>['three'],
+          createdAt: createdAt.add(const Duration(days: 2)),
+          updatedAt: createdAt.add(const Duration(minutes: 2)),
+          localRevision: 7,
+        ),
+      );
+      stored = (await service.getPlaylists()).single;
+      expect(stored.createdAt, createdAt);
+      expect(stored.localRevision, 7);
+      expect(stored.name, 'Imported revision');
+    },
+  );
+
+  test(
     'v7 migration preserves order, duplicates and missing memberships',
     () async {
       final sandbox = await Directory.systemTemp.createTemp('bstream-v7-sync-');
@@ -691,6 +744,285 @@ void main() {
       );
     },
   );
+
+  test('binding and deferred intent updates preserve creation state', () async {
+    final sandbox = await Directory.systemTemp.createTemp(
+      'bstream-portable-sync-upsert-',
+    );
+    final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+    addTearDown(() async {
+      await service.close();
+      await sandbox.delete(recursive: true);
+    });
+    final now = DateTime.utc(2026, 8, 27, 12);
+    await service.createCatalogPlaylist(id: 'p1', name: 'Road', now: now);
+    final store = SqlitePlaylistSyncStore(
+      service,
+      conflictIdFactory: () => 'unused-conflict',
+    );
+    const key = PlaylistSyncKey(accountKey: 'account', playlistId: 'p1');
+    await store.upsertBinding(
+      PlaylistSyncBinding(
+        key: key,
+        remotePlaylistId: 'remote-1',
+        mode: PlaylistSyncMode.automatic,
+        privacy: 'PUBLIC',
+        localRevisionAtBase: 0,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+    await store.upsertBinding(
+      PlaylistSyncBinding(
+        key: key,
+        remotePlaylistId: 'remote-1',
+        mode: PlaylistSyncMode.automatic,
+        privacy: 'PRIVATE',
+        localRevisionAtBase: 0,
+        createdAt: now.add(const Duration(days: 1)),
+        updatedAt: now.add(const Duration(seconds: 1)),
+      ),
+    );
+
+    final binding = (await store.listBindings(accountKey: 'account')).single;
+    expect(binding.createdAt, now);
+    expect(binding.updatedAt, now.add(const Duration(seconds: 1)));
+    expect(binding.privacy, 'PRIVATE');
+
+    await store.recordDeferred(
+      key: key,
+      requestedLocalRevision: 7,
+      reason: 'first_attempt',
+      now: now.add(const Duration(seconds: 2)),
+      nextAttemptAt: now.add(const Duration(minutes: 1)),
+      error: 'first error',
+    );
+    await store.recordDeferred(
+      key: key,
+      requestedLocalRevision: 3,
+      reason: 'second_attempt',
+      now: now.add(const Duration(seconds: 3)),
+      nextAttemptAt: now.add(const Duration(minutes: 2)),
+      error: 'second error',
+    );
+
+    final intent = (await store.loadWork(key))!.intent!;
+    expect(intent.requestedLocalRevision, 7);
+    expect(intent.reason, 'second_attempt');
+    expect(intent.attemptCount, 2);
+    expect(intent.createdAt, now.add(const Duration(seconds: 2)));
+    expect(intent.updatedAt, now.add(const Duration(seconds: 3)));
+    expect(intent.lastError, 'second error');
+  });
+
+  test('directed privacy update preserves every other binding field', () async {
+    final sandbox = await Directory.systemTemp.createTemp(
+      'bstream-binding-privacy-atomic-',
+    );
+    final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+    addTearDown(() async {
+      await service.close();
+      await sandbox.delete(recursive: true);
+    });
+    final createdAt = DateTime.utc(2026, 8, 27, 8);
+    final originalUpdatedAt = createdAt.add(const Duration(minutes: 1));
+    final privacyUpdatedAt = createdAt.add(const Duration(minutes: 2));
+    await service.createCatalogPlaylist(
+      id: 'privacy-playlist',
+      name: 'Private playlist',
+      now: createdAt,
+    );
+    final store = SqlitePlaylistSyncStore(
+      service,
+      conflictIdFactory: () => 'unused-conflict',
+    );
+    const key = PlaylistSyncKey(
+      accountKey: 'account-a',
+      playlistId: 'privacy-playlist',
+    );
+    await store.upsertBinding(
+      PlaylistSyncBinding(
+        key: key,
+        remotePlaylistId: 'remote-exact',
+        remoteBrowseId: 'VLremote-exact',
+        mode: PlaylistSyncMode.automatic,
+        isEditable: true,
+        privacy: 'PRIVATE',
+        baseTitle: 'Remote title',
+        baseSnapshotHash: 'snapshot-hash',
+        remoteRevision: 'remote-revision',
+        localRevisionAtBase: 7,
+        lastSyncedAt: createdAt.add(const Duration(seconds: 10)),
+        lastRemoteSeenAt: createdAt.add(const Duration(seconds: 20)),
+        createdAt: createdAt,
+        updatedAt: originalUpdatedAt,
+      ),
+    );
+    final db = await service.database;
+    final before = Map<String, Object?>.from(
+      (await db.query(
+        'ytm_playlist_bindings',
+        where: 'account_key = ? AND playlist_id = ?',
+        whereArgs: const <Object?>['account-a', 'privacy-playlist'],
+      )).single,
+    );
+
+    final changed = await store.updateBindingPrivacy(
+      key: key,
+      expectedRemotePlaylistId: 'remote-exact',
+      privacy: 'UNLISTED',
+      now: privacyUpdatedAt,
+    );
+
+    expect(changed, isTrue);
+    final after = Map<String, Object?>.from(
+      (await db.query(
+        'ytm_playlist_bindings',
+        where: 'account_key = ? AND playlist_id = ?',
+        whereArgs: const <Object?>['account-a', 'privacy-playlist'],
+      )).single,
+    );
+    expect(after.remove('privacy'), 'UNLISTED');
+    expect(after.remove('updated_at'), privacyUpdatedAt.toIso8601String());
+    before.remove('privacy');
+    before.remove('updated_at');
+    expect(after, before);
+  });
+
+  test(
+    'directed privacy update fences remote id, account and deleting bindings',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'bstream-binding-privacy-fences-',
+      );
+      final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+      addTearDown(() async {
+        await service.close();
+        await sandbox.delete(recursive: true);
+      });
+      final now = DateTime.utc(2026, 8, 27, 9);
+      await service.createCatalogPlaylist(
+        id: 'privacy-playlist',
+        name: 'Private playlist',
+        now: now,
+      );
+      final store = SqlitePlaylistSyncStore(
+        service,
+        conflictIdFactory: () => 'unused-conflict',
+      );
+      const key = PlaylistSyncKey(
+        accountKey: 'account-a',
+        playlistId: 'privacy-playlist',
+      );
+      final binding = PlaylistSyncBinding(
+        key: key,
+        remotePlaylistId: 'remote-exact',
+        mode: PlaylistSyncMode.automatic,
+        privacy: 'PRIVATE',
+        localRevisionAtBase: 0,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await store.upsertBinding(binding);
+
+      expect(
+        await store.updateBindingPrivacy(
+          key: key,
+          expectedRemotePlaylistId: ' remote-exact ',
+          privacy: 'UNLISTED',
+          now: now.add(const Duration(seconds: 1)),
+        ),
+        isFalse,
+      );
+      expect(
+        await store.updateBindingPrivacy(
+          key: const PlaylistSyncKey(
+            accountKey: 'account-b',
+            playlistId: 'privacy-playlist',
+          ),
+          expectedRemotePlaylistId: 'remote-exact',
+          privacy: 'UNLISTED',
+          now: now.add(const Duration(seconds: 2)),
+        ),
+        isFalse,
+      );
+      var stored = (await store.listBindings(accountKey: 'account-a')).single;
+      expect(stored.privacy, 'PRIVATE');
+      expect(stored.updatedAt, now);
+
+      final deletingAt = now.add(const Duration(seconds: 3));
+      await store.upsertBinding(
+        binding.copyWith(
+          remoteDeleteRequestedAt: deletingAt,
+          updatedAt: deletingAt,
+        ),
+      );
+      expect(
+        await store.updateBindingPrivacy(
+          key: key,
+          expectedRemotePlaylistId: 'remote-exact',
+          privacy: 'UNLISTED',
+          now: now.add(const Duration(seconds: 4)),
+        ),
+        isFalse,
+      );
+      stored = (await store.listBindings(accountKey: 'account-a')).single;
+      expect(stored.privacy, 'PRIVATE');
+      expect(stored.updatedAt, deletingAt);
+      expect(stored.remoteDeleteRequestedAt, deletingAt);
+    },
+  );
+
+  test('directed privacy update rolls back when commit fence closes', () async {
+    final sandbox = await Directory.systemTemp.createTemp(
+      'bstream-binding-privacy-rollback-',
+    );
+    final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+    addTearDown(() async {
+      await service.close();
+      await sandbox.delete(recursive: true);
+    });
+    final now = DateTime.utc(2026, 8, 27, 10);
+    await service.createCatalogPlaylist(
+      id: 'privacy-playlist',
+      name: 'Private playlist',
+      now: now,
+    );
+    final store = SqlitePlaylistSyncStore(
+      service,
+      conflictIdFactory: () => 'unused-conflict',
+    );
+    const key = PlaylistSyncKey(
+      accountKey: 'account-a',
+      playlistId: 'privacy-playlist',
+    );
+    await store.upsertBinding(
+      PlaylistSyncBinding(
+        key: key,
+        remotePlaylistId: 'remote-exact',
+        mode: PlaylistSyncMode.automatic,
+        privacy: 'PRIVATE',
+        localRevisionAtBase: 0,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+
+    await expectLater(
+      store.updateBindingPrivacy(
+        key: key,
+        expectedRemotePlaylistId: 'remote-exact',
+        privacy: 'UNLISTED',
+        now: now.add(const Duration(seconds: 1)),
+        canCommit: () => false,
+      ),
+      throwsA(isA<PlaylistSyncFenceChanged>()),
+    );
+
+    final stored = (await store.listBindings(accountKey: 'account-a')).single;
+    expect(stored.privacy, 'PRIVATE');
+    expect(stored.updatedAt, now);
+  });
 
   test('SQLite sync store commits base and rejects stale revisions', () async {
     final sandbox = await Directory.systemTemp.createTemp(

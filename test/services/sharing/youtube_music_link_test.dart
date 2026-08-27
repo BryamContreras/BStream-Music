@@ -28,6 +28,28 @@ void main() {
     expect(link?.collectionId, 'VLPL1234567890abcdef');
   });
 
+  test('normalizes public and VL playlist routes to the same identity', () {
+    final queryBrowse = codec.tryDecode(
+      Uri.parse('https://music.youtube.com/playlist?list=VLPL1234567890abcdef'),
+    );
+    final pathBrowse = codec.tryDecode(
+      Uri.parse('https://music.youtube.com/playlist/VLPL1234567890abcdef'),
+    );
+    final watchList = codec.tryDecode(
+      Uri.parse('https://music.youtube.com/watch?list=PL1234567890abcdef'),
+    );
+
+    for (final link in <YouTubeMusicLink?>[
+      queryBrowse,
+      pathBrowse,
+      watchList,
+    ]) {
+      expect(link?.kind, YouTubeMusicLinkKind.playlist);
+      expect(link?.playlistId, 'PL1234567890abcdef');
+      expect(link?.collectionId, 'VLPL1234567890abcdef');
+    }
+  });
+
   test('parses album and mix browse links', () {
     final album = codec.tryDecode(
       Uri.parse('https://music.youtube.com/browse/MPREb_abc123'),
@@ -38,6 +60,9 @@ void main() {
     final radio = codec.tryDecode(
       Uri.parse('https://music.youtube.com/playlist?list=RDAMVMdQw4w9WgXcQ'),
     );
+    final browseRadio = codec.tryDecode(
+      Uri.parse('https://music.youtube.com/browse/VLRDAMVMdQw4w9WgXcQ'),
+    );
 
     expect(album?.kind, YouTubeMusicLinkKind.album);
     expect(album?.collectionId, 'MPREb_abc123');
@@ -45,6 +70,25 @@ void main() {
     expect(mix?.collectionId, 'VLRDCLAK5uy_test');
     expect(radio?.kind, YouTubeMusicLinkKind.mix);
     expect(radio?.collectionId, 'VLRDAMVMdQw4w9WgXcQ');
+    expect(browseRadio?.kind, YouTubeMusicLinkKind.mix);
+    expect(browseRadio?.playlistId, 'RDAMVMdQw4w9WgXcQ');
+    expect(browseRadio?.collectionId, 'VLRDAMVMdQw4w9WgXcQ');
+  });
+
+  test('playlist identity helpers never duplicate the VL browse prefix', () {
+    expect(
+      canonicalYouTubeMusicPlaylistId('VLPL1234567890abcdef'),
+      'PL1234567890abcdef',
+    );
+    expect(
+      youtubeMusicPlaylistBrowseId('VLPL1234567890abcdef'),
+      'VLPL1234567890abcdef',
+    );
+    expect(
+      youtubeMusicPlaylistBrowseId('PL1234567890abcdef'),
+      'VLPL1234567890abcdef',
+    );
+    expect(canonicalYouTubeMusicPlaylistId('VL'), isNull);
   });
 
   test('rejects unsafe hosts, schemes, ports and malformed identities', () {

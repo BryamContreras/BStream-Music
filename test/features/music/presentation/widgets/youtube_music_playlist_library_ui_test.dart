@@ -1,14 +1,18 @@
+import 'dart:async';
+
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist_entry.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playlist_picker_dialog.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/sharing/youtube_music_playlist_share_service.dart';
+import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -221,9 +225,16 @@ void main() {
         _libraryHarness(
           fixture: fixture,
           controller: controller,
-          shareableBindings: <String, String>{
-            fixture.playlist.id: 'PLremote123',
+          shareableBindings: <String, YouTubeMusicShareablePlaylistBinding>{
+            fixture.playlist.id: YouTubeMusicShareablePlaylistBinding(
+              localPlaylistId: fixture.playlist.id,
+              remotePlaylistId: 'PLremote123',
+              rawRemotePlaylistId: 'PLremote123',
+              isEditable: true,
+              privacy: 'UNLISTED',
+            ),
           },
+          authenticated: true,
           playlistShareService: shareService,
         ),
       );
@@ -254,6 +265,236 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'authenticated synchronized playlist menu opens while bindings load',
+    (tester) async {
+      final fixture = _remoteCatalogFixture();
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      final pendingBindings =
+          Completer<Map<String, YouTubeMusicShareablePlaylistBinding>>();
+      final visibilityChange = _RecordingVisibilityChange();
+      await tester.pumpWidget(
+        _libraryHarness(
+          fixture: fixture,
+          controller: controller,
+          shareableBindingsFuture: pendingBindings.future,
+          authenticated: true,
+          makeUnlisted: visibilityChange.call,
+        ),
+      );
+      await _pumpLibrary(tester);
+
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+      final header = find.byKey(const ValueKey('library-detail-header'));
+      await tester.tap(
+        find.descendant(
+          of: header,
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(find.text('Compartir playlist'), findsOneWidget);
+      expect(find.text('Renombrar playlist'), findsOneWidget);
+      expect(find.text('Eliminar playlist'), findsOneWidget);
+      expect(visibilityChange.calls, 0);
+      expect(find.byKey(const Key('playlist-share-preparing')), findsNothing);
+      expect(tester.takeException(), isNull);
+      pendingBindings.complete(
+        const <String, YouTubeMusicShareablePlaylistBinding>{},
+      );
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'private synchronized playlist is changed to unlisted before sharing',
+    (tester) async {
+      final fixture = _remoteCatalogFixture();
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      final events = <String>[];
+      final shareService = _RecordingPlaylistShareService(events: events);
+      final visibilityChange = _RecordingVisibilityChange(events: events);
+      await tester.pumpWidget(
+        _libraryHarness(
+          fixture: fixture,
+          controller: controller,
+          shareableBindings: <String, YouTubeMusicShareablePlaylistBinding>{
+            fixture.playlist.id: YouTubeMusicShareablePlaylistBinding(
+              localPlaylistId: fixture.playlist.id,
+              remotePlaylistId: 'PLprivate123',
+              rawRemotePlaylistId: 'VLPLprivate123',
+              isEditable: true,
+              privacy: 'PRIVATE',
+            ),
+          },
+          authenticated: true,
+          playlistShareService: shareService,
+          makeUnlisted: visibilityChange.call,
+        ),
+      );
+      await _pumpLibrary(tester);
+
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+      final header = find.byKey(const ValueKey('library-detail-header'));
+      await tester.tap(
+        find.descendant(
+          of: header,
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('playlist-share-make-unlisted')), findsOne);
+      expect(shareService.remotePlaylistId, isNull);
+      await tester.tap(find.byKey(const Key('playlist-share-make-unlisted')));
+      await tester.pumpAndSettle();
+
+      expect(visibilityChange.localPlaylistId, fixture.playlist.id);
+      expect(visibilityChange.expectedRemotePlaylistId, 'PLprivate123');
+      expect(shareService.remotePlaylistId, 'PLprivate123');
+      expect(events, <String>['make-unlisted', 'share']);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'private playlist shows preparation progress until remote change completes',
+    (tester) async {
+      final fixture = _remoteCatalogFixture();
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      final preparation = Completer<void>();
+      final events = <String>[];
+      final shareService = _RecordingPlaylistShareService(events: events);
+      final visibilityChange = _RecordingVisibilityChange(
+        events: events,
+        pendingOperation: preparation.future,
+      );
+      await tester.pumpWidget(
+        _libraryHarness(
+          fixture: fixture,
+          controller: controller,
+          shareableBindings: <String, YouTubeMusicShareablePlaylistBinding>{
+            fixture.playlist.id: YouTubeMusicShareablePlaylistBinding(
+              localPlaylistId: fixture.playlist.id,
+              remotePlaylistId: 'PLprivate123',
+              rawRemotePlaylistId: 'VLPLprivate123',
+              isEditable: true,
+              privacy: 'PRIVATE',
+            ),
+          },
+          authenticated: true,
+          playlistShareService: shareService,
+          makeUnlisted: visibilityChange.call,
+        ),
+      );
+      await _pumpLibrary(tester);
+
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+      final header = find.byKey(const ValueKey('library-detail-header'));
+      await tester.tap(
+        find.descendant(
+          of: header,
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('playlist-share-make-unlisted')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(find.byKey(const Key('playlist-share-preparing')), findsOneWidget);
+      expect(visibilityChange.calls, 1);
+      expect(shareService.remotePlaylistId, isNull);
+      expect(events, <String>['make-unlisted']);
+
+      preparation.complete();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('playlist-share-preparing')), findsNothing);
+      expect(shareService.remotePlaylistId, 'PLprivate123');
+      expect(events, <String>['make-unlisted', 'share']);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('cancelling private playlist sharing makes no changes', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    final shareService = _RecordingPlaylistShareService();
+    final visibilityChange = _RecordingVisibilityChange();
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        shareableBindings: <String, YouTubeMusicShareablePlaylistBinding>{
+          fixture.playlist.id: YouTubeMusicShareablePlaylistBinding(
+            localPlaylistId: fixture.playlist.id,
+            remotePlaylistId: 'PLprivate123',
+            rawRemotePlaylistId: 'PLprivate123',
+            isEditable: true,
+            privacy: 'PRIVATE',
+          ),
+        },
+        authenticated: true,
+        playlistShareService: shareService,
+        makeUnlisted: visibilityChange.call,
+      ),
+    );
+    await _pumpLibrary(tester);
+
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+    final header = find.byKey(const ValueKey('library-detail-header'));
+    await tester.tap(
+      find.descendant(
+        of: header,
+        matching: find.byIcon(Icons.more_vert_rounded),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('playlist-share-private-cancel')));
+    await tester.pumpAndSettle();
+
+    expect(visibilityChange.calls, 0);
+    expect(shareService.remotePlaylistId, isNull);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('local playlist menu does not expose sharing', (tester) async {
     final fixture = _remoteCatalogFixture();
@@ -390,8 +631,13 @@ Future<void> _pumpLibrary(WidgetTester tester) async {
 Widget _libraryHarness({
   required _RemoteCatalogFixture fixture,
   required _RecordingPlaylistsController controller,
-  Map<String, String> shareableBindings = const <String, String>{},
+  Map<String, YouTubeMusicShareablePlaylistBinding> shareableBindings =
+      const <String, YouTubeMusicShareablePlaylistBinding>{},
+  Future<Map<String, YouTubeMusicShareablePlaylistBinding>>?
+  shareableBindingsFuture,
+  bool authenticated = false,
   YouTubeMusicPlaylistShareService? playlistShareService,
+  YouTubeMusicMakePlaylistUnlistedForSharing? makeUnlisted,
 }) {
   return ProviderScope(
     overrides: [
@@ -405,9 +651,17 @@ Widget _libraryHarness({
             playlistId == fixture.playlist.id ? fixture.catalog : null,
       ),
       playerControllerProvider.overrideWith(_IdlePlayerController.new),
-      youtubeMusicShareablePlaylistBindingsProvider.overrideWith(
-        (ref) async => shareableBindings,
+      youtubeMusicShareablePlaylistBindingDetailsProvider.overrideWith(
+        (ref) => shareableBindingsFuture ?? Future.value(shareableBindings),
       ),
+      if (authenticated)
+        youtubeMusicAuthControllerProvider.overrideWith(
+          _AuthenticatedYouTubeMusicAuthController.new,
+        ),
+      if (makeUnlisted != null)
+        youtubeMusicMakePlaylistUnlistedForSharingProvider.overrideWithValue(
+          makeUnlisted,
+        ),
       if (playlistShareService != null)
         youtubeMusicPlaylistShareServiceProvider.overrideWithValue(
           playlistShareService,
@@ -461,8 +715,24 @@ class _IdlePlayerController extends PlayerController {
       const PlayerSnapshot(status: PlayerStatus.idle);
 }
 
+class _AuthenticatedYouTubeMusicAuthController
+    extends YouTubeMusicAuthController {
+  @override
+  YouTubeMusicAuthState build() => const YouTubeMusicAuthState(
+    phase: YouTubeMusicAuthPhase.authenticated,
+    generation: 1,
+    profile: YouTubeMusicAccountProfile(
+      channelId: 'test-channel',
+      displayName: 'Test account',
+    ),
+  );
+}
+
 class _RecordingPlaylistShareService
     implements YouTubeMusicPlaylistShareService {
+  _RecordingPlaylistShareService({this.events});
+
+  final List<String>? events;
   String? remotePlaylistId;
   String? playlistName;
   String? message;
@@ -482,9 +752,31 @@ class _RecordingPlaylistShareService
     String? subject,
     Rect? sharePositionOrigin,
   }) async {
+    events?.add('share');
     this.remotePlaylistId = remotePlaylistId;
     this.playlistName = playlistName;
     this.message = message;
+  }
+}
+
+class _RecordingVisibilityChange {
+  _RecordingVisibilityChange({this.events, this.pendingOperation});
+
+  final List<String>? events;
+  final Future<void>? pendingOperation;
+  int calls = 0;
+  String? localPlaylistId;
+  String? expectedRemotePlaylistId;
+
+  Future<void> call({
+    required String localPlaylistId,
+    required String expectedRemotePlaylistId,
+  }) async {
+    calls += 1;
+    events?.add('make-unlisted');
+    this.localPlaylistId = localPlaylistId;
+    this.expectedRemotePlaylistId = expectedRemotePlaylistId;
+    await pendingOperation;
   }
 }
 

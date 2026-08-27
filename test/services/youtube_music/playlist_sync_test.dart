@@ -1271,6 +1271,32 @@ class _MemoryStore implements PlaylistSyncStore {
   }
 
   @override
+  Future<bool> updateBindingPrivacy({
+    required PlaylistSyncKey key,
+    required String expectedRemotePlaylistId,
+    required String privacy,
+    required DateTime now,
+    bool Function()? canCommit,
+  }) async {
+    _ensureMemoryCommitAllowed(canCommit);
+    final binding = work.binding;
+    if (binding.key != key ||
+        binding.remotePlaylistId != expectedRemotePlaylistId ||
+        binding.remoteDeleteRequestedAt != null) {
+      return false;
+    }
+    work = PlaylistSyncWork(
+      binding: binding.copyWith(privacy: privacy, updatedAt: now),
+      base: work.base,
+      local: work.local,
+      localRevision: work.localRevision,
+      localDeleted: work.localDeleted,
+      intent: work.intent,
+    );
+    return true;
+  }
+
+  @override
   Future<PlaylistSyncImportResult> importRemotePlaylistAtomically({
     required PlaylistSyncBinding binding,
     required String localPlaylistName,

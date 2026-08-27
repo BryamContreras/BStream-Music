@@ -421,6 +421,26 @@ class AppStrings {
     'Escucha mi playlist "$name" en YouTube Music.',
     'Listen to my "$name" playlist on YouTube Music.',
   );
+  String get sharePrivatePlaylistExplanation => choose(
+    'Esta playlist es privada. Para compartirla se cambiará a No listada. '
+        'Cualquier persona con el enlace podrá verla y volver a compartirla, '
+        'pero no aparecerá en búsquedas.',
+    'This playlist is private. To share it, its visibility will change to '
+        'Unlisted. Anyone with the link can view and reshare it, but it will '
+        'not appear in searches.',
+  );
+  String get makeUnlistedAndShare =>
+      choose('Cambiar y compartir', 'Change and share');
+  String get preparingPlaylistShare =>
+      choose('Preparando enlace...', 'Preparing link...');
+  String get playlistVisibilityChangeFailed => choose(
+    'No se pudo cambiar la playlist a No listada. No se compartió el enlace.',
+    'The playlist could not be changed to Unlisted. The link was not shared.',
+  );
+  String get playlistShareFailedAfterVisibilityChange => choose(
+    'La playlist quedó No listada, pero no se pudo abrir el menú para compartir.',
+    'The playlist is now Unlisted, but the share menu could not be opened.',
+  );
   String get playlistShareFailed => choose(
     'No se pudo compartir la playlist.',
     'The playlist could not be shared.',

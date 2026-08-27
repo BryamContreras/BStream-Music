@@ -34,6 +34,21 @@ abstract interface class YouTubeMusicSubscribedArtistsAccount {
   Future<RemoteSubscribedArtistCollection> getSubscribedArtists();
 }
 
+/// Narrow authenticated port for reading and changing playlist visibility.
+///
+/// [getPlaylistSummary] intentionally reads only the initial playlist page.
+/// It is suitable for verifying a visibility mutation without loading or
+/// paginating the playlist entries.
+abstract interface class YouTubeMusicPlaylistVisibilityAccount {
+  Future<RemotePlaylistSummary?> getPlaylistSummary(String playlistId);
+
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>>
+  setPlaylistVisibility({
+    required String playlistId,
+    required RemotePlaylistVisibility visibility,
+  });
+}
+
 /// Narrow authenticated read port for the YouTube Music Home feed.
 ///
 /// The initial browse id is intentionally fixed to `FEmusic_home`; callers
@@ -51,7 +66,8 @@ class YouTubeMusicAccountGateway
     implements
         YouTubeMusicArtistAccount,
         YouTubeMusicSubscribedArtistsAccount,
-        YouTubeMusicAccountHome {
+        YouTubeMusicAccountHome,
+        YouTubeMusicPlaylistVisibilityAccount {
   factory YouTubeMusicAccountGateway({
     required YouTubeMusicAccountTransport transport,
     required YouTubeMusicSessionHeadersProvider sessionHeaders,
@@ -308,6 +324,19 @@ class YouTubeMusicAccountGateway
     }
   }
 
+  @override
+  Future<RemotePlaylistSummary?> getPlaylistSummary(String playlistId) async {
+    final normalizedPlaylistId = _requiredPlaylistId(playlistId);
+    final response = await _read(
+      YouTubeMusicAccountEndpoints.browse,
+      _body(<String, Object?>{'browseId': 'VL$normalizedPlaylistId'}),
+    );
+    return _parser.parsePlaylistHeader(
+      response.body,
+      playlistId: normalizedPlaylistId,
+    );
+  }
+
   Future<YouTubeMusicMutationResult<RemotePlaylistCreated>> createPlaylist(
     String title, {
     RemotePlaylistVisibility visibility = RemotePlaylistVisibility.private,
@@ -502,6 +531,22 @@ class YouTubeMusicAccountGateway
         'action': 'ACTION_SET_PLAYLIST_DESCRIPTION',
         // Empty is valid and clears the existing description.
         'playlistDescription': description.trim(),
+      },
+    );
+  }
+
+  @override
+  Future<YouTubeMusicMutationResult<RemotePlaylistMutationApplied>>
+  setPlaylistVisibility({
+    required String playlistId,
+    required RemotePlaylistVisibility visibility,
+  }) {
+    return _editPlaylist(
+      operation: 'setPlaylistVisibility',
+      playlistId: playlistId,
+      action: <String, Object?>{
+        'action': 'ACTION_SET_PLAYLIST_PRIVACY',
+        'playlistPrivacy': _privacyStatus(visibility),
       },
     );
   }
@@ -840,7 +885,7 @@ String _privacyStatus(RemotePlaylistVisibility visibility) {
     RemotePlaylistVisibility.unknown => throw ArgumentError.value(
       visibility,
       'visibility',
-      'A concrete visibility is required when creating a playlist.',
+      'A concrete playlist visibility is required.',
     ),
   };
 }

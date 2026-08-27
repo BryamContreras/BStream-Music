@@ -191,6 +191,7 @@ class YouTubeMusicAccountParser {
           'editPlaylistEndpoint',
           'playlistEditEndpoint',
         });
+    final directVisibility = _playlistEditHeaderVisibility(root);
     for (final rendererName in const <String>[
       'musicEditablePlaylistDetailHeaderRenderer',
       'musicDetailHeaderRenderer',
@@ -211,7 +212,9 @@ class YouTubeMusicAccountParser {
         owner: _owner(renderer, metadata),
         thumbnailUrl: _thumbnailUrl(renderer),
         itemCount: _itemCount(metadata),
-        visibility: _visibility(metadata),
+        visibility: directVisibility == RemotePlaylistVisibility.unknown
+            ? _visibility(metadata)
+            : directVisibility,
         isEditable: isEditable,
       );
     }
@@ -960,6 +963,21 @@ RemotePlaylistVisibility _visibility(List<String> metadata) {
     return RemotePlaylistVisibility.public;
   }
   return RemotePlaylistVisibility.unknown;
+}
+
+RemotePlaylistVisibility _playlistEditHeaderVisibility(Object? root) {
+  final renderer = _firstRenderer(root, 'musicPlaylistEditHeaderRenderer');
+  return _visibilityValue(renderer?['privacy']);
+}
+
+RemotePlaylistVisibility _visibilityValue(Object? value) {
+  final normalized = _nonEmptyString(value)?.toUpperCase();
+  return switch (normalized) {
+    'PRIVATE' => RemotePlaylistVisibility.private,
+    'UNLISTED' => RemotePlaylistVisibility.unlisted,
+    'PUBLIC' => RemotePlaylistVisibility.public,
+    _ => RemotePlaylistVisibility.unknown,
+  };
 }
 
 String? _owner(Map<String, Object?> renderer, List<String> metadata) {

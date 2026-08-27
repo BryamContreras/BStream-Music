@@ -320,6 +320,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     if (collectionId == null || collectionId.isEmpty) return;
     final strings = ref.read(appStringsProvider);
     final isAlbum = link.kind == YouTubeMusicLinkKind.album;
+    final isPlaylist = link.kind == YouTubeMusicLinkKind.playlist;
     final title = switch (link.kind) {
       YouTubeMusicLinkKind.album => strings.album,
       YouTubeMusicLinkKind.mix => strings.mix,
@@ -327,6 +328,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     };
     final tracksProvider = isAlbum
         ? homeAlbumTracksProvider(collectionId)
+        : isPlaylist
+        ? incomingYouTubeMusicPlaylistTracksProvider(collectionId)
         : homeCollectionTracksProvider(collectionId);
     final navigator = Navigator.of(context);
     navigator.popUntil((route) => route.isFirst);
@@ -342,6 +345,8 @@ class _HomePageState extends ConsumerState<HomePage> {
             tracksProvider: tracksProvider,
             detailsProvider: isAlbum
                 ? null
+                : isPlaylist
+                ? incomingYouTubeMusicPlaylistDetailProvider(collectionId)
                 : homeCollectionDetailProvider(collectionId),
             emptyMessage: strings.homeCollectionEmpty,
             errorMessage: strings.homeCollectionLoadError,

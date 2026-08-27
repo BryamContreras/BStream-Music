@@ -238,8 +238,58 @@ void main() {
 
         expect(snapshot.summary?.title, 'Playlist propia');
         expect(snapshot.summary?.isEditable, isTrue);
+        expect(snapshot.summary?.visibility, RemotePlaylistVisibility.private);
       },
     );
+
+    test('reads only a playlist summary without paginating entries', () async {
+      final page = _playlistPageFixture(
+        setVideoId: 'set-summary',
+        continuation: 'must-not-be-read',
+        includeHeader: false,
+      );
+      page['header'] = _editablePlaylistHeaderFixture(
+        title: 'Resumen',
+        privacy: 'UNLISTED',
+      );
+      final transport = _FakeAccountTransport(<Object>[_ok(page)]);
+      final YouTubeMusicPlaylistVisibilityAccount account = _gateway(transport);
+
+      final summary = await account.getPlaylistSummary('VLPL-summary');
+
+      expect(summary?.playlistId, 'PL-summary');
+      expect(summary?.title, 'Resumen');
+      expect(summary?.visibility, RemotePlaylistVisibility.unlisted);
+      expect(summary?.isEditable, isTrue);
+      expect(transport.requests, hasLength(1));
+      expect(transport.requests.single.endpoint, 'browse');
+      expect(transport.requests.single.body['browseId'], 'VLPL-summary');
+      expect(transport.requests.single.body, isNot(contains('continuation')));
+    });
+
+    test('playlist edit-header privacy wins over text metadata', () {
+      const parser = YouTubeMusicAccountParser();
+      const cases = <String, RemotePlaylistVisibility>{
+        'PRIVATE': RemotePlaylistVisibility.private,
+        'UNLISTED': RemotePlaylistVisibility.unlisted,
+        'PUBLIC': RemotePlaylistVisibility.public,
+      };
+
+      for (final entry in cases.entries) {
+        final root = _editablePlaylistHeaderFixture(
+          title: entry.key,
+          privacy: entry.key,
+          subtitle: 'Pública',
+        );
+
+        final summary = parser.parsePlaylistHeader(
+          root,
+          playlistId: 'PL-${entry.key.toLowerCase()}',
+        );
+
+        expect(summary?.visibility, entry.value, reason: entry.key);
+      }
+    });
 
     test(
       'keeps a playlist read-only when no edit capability is present',
@@ -458,6 +508,45 @@ void main() {
       expect(request.body['title'], 'Viaje');
       expect(request.body['privacyStatus'], 'UNLISTED');
       expect(request.body['videoIds'], <String>['video-a', 'video-b']);
+    });
+
+    test('changes playlist privacy with the exact edit action', () async {
+      final transport = _FakeAccountTransport(<Object>[
+        _ok(const <String, Object?>{}),
+      ]);
+      final YouTubeMusicPlaylistVisibilityAccount account = _gateway(transport);
+
+      final result = await account.setPlaylistVisibility(
+        playlistId: 'VLPL-share',
+        visibility: RemotePlaylistVisibility.unlisted,
+      );
+
+      expect(
+        result,
+        isA<YouTubeMusicMutationSuccess<RemotePlaylistMutationApplied>>(),
+      );
+      final request = transport.requests.single;
+      expect(request.endpoint, 'browse/edit_playlist');
+      expect(request.kind, YouTubeMusicAccountRequestKind.mutation);
+      expect(request.body['playlistId'], 'PL-share');
+      expect(_action(request), <String, Object?>{
+        'action': 'ACTION_SET_PLAYLIST_PRIVACY',
+        'playlistPrivacy': 'UNLISTED',
+      });
+    });
+
+    test('rejects an unknown playlist privacy before transport', () async {
+      final transport = _FakeAccountTransport(<Object>[]);
+      final account = _gateway(transport);
+
+      expect(
+        () => account.setPlaylistVisibility(
+          playlistId: 'PL-share',
+          visibility: RemotePlaylistVisibility.unknown,
+        ),
+        throwsArgumentError,
+      );
+      expect(transport.requests, isEmpty);
     });
 
     test('liked music mutations use like and removelike endpoints', () async {
@@ -984,6 +1073,24 @@ Map<String, Object?> _playlistPageFixture({
     ],
   };
 }
+
+Map<String, Object?> _editablePlaylistHeaderFixture({
+  required String title,
+  required String privacy,
+  String subtitle = '1 canción',
+}) => <String, Object?>{
+  'musicEditablePlaylistDetailHeaderRenderer': <String, Object?>{
+    'header': <String, Object?>{
+      'musicResponsiveHeaderRenderer': <String, Object?>{
+        'title': _runs(title),
+        'subtitle': _runs(subtitle),
+      },
+    },
+    'editHeader': <String, Object?>{
+      'musicPlaylistEditHeaderRenderer': <String, Object?>{'privacy': privacy},
+    },
+  },
+};
 
 Map<String, Object?> _playlistEntryItem({
   required String setVideoId,

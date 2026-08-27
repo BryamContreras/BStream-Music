@@ -16,6 +16,7 @@ import '../../features/music/domain/entities/playlist_entry.dart';
 import '../../features/music/domain/repositories/catalog_playlist_repository.dart';
 import '../recommendations/recommendation_storage_models.dart';
 import '../sharing/bstream_track_link.dart';
+import 'portable_sqlite_upsert.dart';
 
 class PlaybackEventRetentionPolicy {
   const PlaybackEventRetentionPolicy({
@@ -381,11 +382,13 @@ class LocalDatabaseService {
       );
     }
     final db = await database;
-    await _upsertWithoutDelete(
-      db,
-      table: 'local_tracks',
-      primaryKey: 'id',
-      values: LocalTrackModel.fromEntity(track).toMap(),
+    await db.transaction(
+      (transaction) => _upsertWithoutDelete(
+        transaction,
+        table: 'local_tracks',
+        primaryKey: 'id',
+        values: LocalTrackModel.fromEntity(track).toMap(),
+      ),
     );
   }
 
@@ -632,90 +635,76 @@ class LocalDatabaseService {
     }
 
     final trackKey = recommendationTrackKey(videoId: videoId, trackId: trackId);
-    final values = <Object?>[
-      sessionId,
-      trackKey,
-      trackId,
-      videoId,
-      title,
-      jsonEncode(_normalizedStrings(event.artists)),
-      jsonEncode(_normalizedArtistBrowseIds(event.artistBrowseIds)),
-      _optionalText(event.album),
-      _optionalText(event.thumbnailUrl),
-      durationMs,
-      event.source.name,
-      event.startedAt.toUtc().toIso8601String(),
-      event.playedAt.toUtc().toIso8601String(),
-      event.listenedMs,
-      event.completed ? 1 : 0,
-      _nullableBoolToInt(event.isFavorite),
-      _nullableBoolToInt(event.isLiked),
-    ];
+    final values = <String, Object?>{
+      'session_id': sessionId,
+      'track_key': trackKey,
+      'track_id': trackId,
+      'video_id': videoId,
+      'title': title,
+      'artists_json': jsonEncode(_normalizedStrings(event.artists)),
+      'artist_browse_ids_json': jsonEncode(
+        _normalizedArtistBrowseIds(event.artistBrowseIds),
+      ),
+      'album': _optionalText(event.album),
+      'thumbnail_url': _optionalText(event.thumbnailUrl),
+      'duration_ms': durationMs,
+      'source': event.source.name,
+      'started_at': event.startedAt.toUtc().toIso8601String(),
+      'played_at': event.playedAt.toUtc().toIso8601String(),
+      'listened_ms': event.listenedMs,
+      'completed': event.completed ? 1 : 0,
+      'is_favorite': _nullableBoolToInt(event.isFavorite),
+      'is_liked': _nullableBoolToInt(event.isLiked),
+    };
 
     final db = await database;
     final inserted = await db.transaction((transaction) async {
-      final existing = await transaction.query(
-        'playback_events',
-        columns: const <String>['session_id'],
-        where: 'session_id = ?',
-        whereArgs: <Object?>[sessionId],
-        limit: 1,
+      final wasInserted = await portableSqliteUpsert(
+        transaction,
+        table: 'playback_events',
+        keyValues: <String, Object?>{'session_id': sessionId},
+        insertValues: values,
+        updateValues: (current) {
+          final startedAt = values['started_at']!.toString();
+          final currentStartedAt = current['started_at']!.toString();
+          final playedAt = values['played_at']!.toString();
+          final currentPlayedAt = current['played_at']!.toString();
+          return <String, Object?>{
+            'track_key': videoId ?? current['video_id']?.toString() ?? trackKey,
+            'track_id': trackId,
+            'video_id': videoId ?? current['video_id'],
+            'title': title,
+            'artists_json': values['artists_json'],
+            'artist_browse_ids_json': values['artist_browse_ids_json'],
+            'album': values['album'] ?? current['album'],
+            'thumbnail_url':
+                values['thumbnail_url'] ?? current['thumbnail_url'],
+            'duration_ms': values['duration_ms'] ?? current['duration_ms'],
+            'source': values['source'],
+            'started_at': currentStartedAt.compareTo(startedAt) <= 0
+                ? currentStartedAt
+                : startedAt,
+            'played_at': currentPlayedAt.compareTo(playedAt) >= 0
+                ? currentPlayedAt
+                : playedAt,
+            'listened_ms': _int(current['listened_ms']) > event.listenedMs
+                ? _int(current['listened_ms'])
+                : event.listenedMs,
+            'completed': _int(current['completed']) > (event.completed ? 1 : 0)
+                ? _int(current['completed'])
+                : (event.completed ? 1 : 0),
+            'is_favorite': values['is_favorite'] ?? current['is_favorite'],
+            'is_liked': values['is_liked'] ?? current['is_liked'],
+          };
+        },
       );
-      if (existing.isEmpty) {
+      if (wasInserted) {
         // Advance inside the same serialized database transaction as the new
         // event. A recommendation refresh that started from the previous
         // history revision can no longer overwrite the feed after this play.
         _recommendationGeneration += 1;
       }
-      await transaction.rawInsert('''
-      INSERT INTO playback_events (
-        session_id,
-        track_key,
-        track_id,
-        video_id,
-        title,
-        artists_json,
-        artist_browse_ids_json,
-        album,
-        thumbnail_url,
-        duration_ms,
-        source,
-        started_at,
-        played_at,
-        listened_ms,
-        completed,
-        is_favorite,
-        is_liked
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(session_id) DO UPDATE SET
-        track_key = COALESCE(
-          excluded.video_id,
-          playback_events.video_id,
-          excluded.track_key
-        ),
-        track_id = excluded.track_id,
-        video_id = COALESCE(excluded.video_id, playback_events.video_id),
-        title = excluded.title,
-        artists_json = excluded.artists_json,
-        artist_browse_ids_json = excluded.artist_browse_ids_json,
-        album = COALESCE(excluded.album, playback_events.album),
-        thumbnail_url = COALESCE(
-          excluded.thumbnail_url,
-          playback_events.thumbnail_url
-        ),
-        duration_ms = COALESCE(excluded.duration_ms, playback_events.duration_ms),
-        source = excluded.source,
-        started_at = MIN(playback_events.started_at, excluded.started_at),
-        played_at = MAX(playback_events.played_at, excluded.played_at),
-        listened_ms = MAX(playback_events.listened_ms, excluded.listened_ms),
-        completed = MAX(playback_events.completed, excluded.completed),
-        is_favorite = COALESCE(
-          excluded.is_favorite,
-          playback_events.is_favorite
-        ),
-        is_liked = COALESCE(excluded.is_liked, playback_events.is_liked)
-      ''', values);
-      return existing.isEmpty;
+      return wasInserted;
     });
     await _prunePlaybackEventsIfDue(inserted: inserted);
   }
@@ -1579,32 +1568,26 @@ class LocalDatabaseService {
   Future<void> savePlaylist(Playlist playlist) async {
     final db = await database;
     final values = PlaylistModel.fromEntity(playlist).toMap();
-    await db.rawInsert(
-      '''
-        INSERT INTO playlists (
-          id, name, track_ids, created_at, updated_at,
-          local_revision, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          name = excluded.name,
-          track_ids = excluded.track_ids,
-          updated_at = excluded.updated_at,
-          local_revision = CASE
-            WHEN excluded.local_revision > playlists.local_revision
-              THEN excluded.local_revision
-            ELSE playlists.local_revision + 1
-          END,
-          deleted_at = excluded.deleted_at
-      ''',
-      <Object?>[
-        values['id'],
-        values['name'],
-        values['track_ids'],
-        values['created_at'],
-        values['updated_at'],
-        values['local_revision'],
-        values['deleted_at'],
-      ],
+    await db.transaction(
+      (transaction) => portableSqliteUpsert(
+        transaction,
+        table: 'playlists',
+        keyValues: <String, Object?>{'id': values['id']},
+        insertValues: values,
+        updateValues: (current) {
+          final requestedRevision = _int(values['local_revision']);
+          final currentRevision = _int(current['local_revision']);
+          return <String, Object?>{
+            'name': values['name'],
+            'track_ids': values['track_ids'],
+            'updated_at': values['updated_at'],
+            'local_revision': requestedRevision > currentRevision
+                ? requestedRevision
+                : currentRevision + 1,
+            'deleted_at': values['deleted_at'],
+          };
+        },
+      ),
     );
   }
 
@@ -1798,7 +1781,7 @@ class LocalDatabaseService {
   }
 
   Future<void> _touchCatalogPlaylist(
-    DatabaseExecutor db, {
+    Transaction db, {
     required String playlistId,
     required int localRevision,
     required String reason,
@@ -1836,7 +1819,7 @@ class LocalDatabaseService {
   }
 
   Future<void> _coalescePlaylistSyncIntents(
-    DatabaseExecutor db, {
+    Transaction db, {
     required String playlistId,
     required int localRevision,
     required String reason,
@@ -1853,119 +1836,83 @@ class LocalDatabaseService {
     );
     final timestamp = now.toIso8601String();
     for (final binding in bindings) {
-      await db.rawInsert(
-        '''
-          INSERT INTO playlist_sync_intents (
-            account_key, playlist_id, requested_local_revision, reason,
-            status, attempt_count, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
-          ON CONFLICT(account_key, playlist_id) DO UPDATE SET
-            requested_local_revision = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.requested_local_revision
-              ELSE excluded.requested_local_revision
-            END,
-            reason = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.reason
-              ELSE excluded.reason
-            END,
-            status = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.status
-              ELSE 'pending'
-            END,
-            desired_snapshot_json = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.desired_snapshot_json
-              ELSE NULL
-            END,
-            desired_snapshot_hash = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.desired_snapshot_hash
-              ELSE NULL
-            END,
-            mutation_token = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.mutation_token
-              ELSE NULL
-            END,
-            attempt_count = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.attempt_count
-              ELSE 0
-            END,
-            next_attempt_at = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.next_attempt_at
-              ELSE NULL
-            END,
-            last_error = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.last_error
-              ELSE NULL
-            END,
-            updated_at = CASE
-              WHEN playlist_sync_intents.status IN ('ambiguous', 'conflict')
-                THEN playlist_sync_intents.updated_at
-              ELSE excluded.updated_at
-            END
-        ''',
-        <Object?>[
-          binding['account_key'],
-          playlistId,
-          localRevision,
-          reason,
-          timestamp,
-          timestamp,
-        ],
+      final bindingAccountKey = binding['account_key'];
+      final insertValues = <String, Object?>{
+        'account_key': bindingAccountKey,
+        'playlist_id': playlistId,
+        'requested_local_revision': localRevision,
+        'reason': reason,
+        'status': 'pending',
+        'attempt_count': 0,
+        'created_at': timestamp,
+        'updated_at': timestamp,
+      };
+      await portableSqliteUpsert(
+        db,
+        table: 'playlist_sync_intents',
+        keyValues: <String, Object?>{
+          'account_key': bindingAccountKey,
+          'playlist_id': playlistId,
+        },
+        insertValues: insertValues,
+        updateValues: (current) {
+          final status = current['status']?.toString();
+          final isFrozen = status == 'ambiguous' || status == 'conflict';
+          if (isFrozen) {
+            return const <String, Object?>{};
+          }
+          return <String, Object?>{
+            'requested_local_revision': localRevision,
+            'reason': reason,
+            'status': 'pending',
+            'desired_snapshot_json': null,
+            'desired_snapshot_hash': null,
+            'mutation_token': null,
+            'attempt_count': 0,
+            'next_attempt_at': null,
+            'last_error': null,
+            'updated_at': timestamp,
+          };
+        },
       );
     }
   }
 
   Future<void> _upsertCatalogTrack(
-    DatabaseExecutor db,
+    Transaction db,
     CatalogTrack track,
     DateTime now,
   ) async {
-    await db.rawInsert(
-      '''
-        INSERT INTO catalog_tracks (
-          track_key, provider, provider_id, title, artists_json,
-          artist_browse_ids_json, album, duration_ms, thumbnail_url,
-          source_url, metadata_source, metadata_updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(track_key) DO UPDATE SET
-          title = excluded.title,
-          artists_json = excluded.artists_json,
-          artist_browse_ids_json = excluded.artist_browse_ids_json,
-          album = COALESCE(excluded.album, catalog_tracks.album),
-          duration_ms = COALESCE(
-            excluded.duration_ms,
-            catalog_tracks.duration_ms
-          ),
-          thumbnail_url = COALESCE(
-            excluded.thumbnail_url,
-            catalog_tracks.thumbnail_url
-          ),
-          source_url = COALESCE(excluded.source_url, catalog_tracks.source_url),
-          metadata_source = excluded.metadata_source,
-          metadata_updated_at = excluded.metadata_updated_at
-      ''',
-      <Object?>[
-        track.key,
-        track.provider.name,
-        track.providerId,
-        track.title,
-        jsonEncode(track.artists),
-        jsonEncode(track.artistBrowseIds),
-        track.album,
-        track.duration?.inMilliseconds,
-        track.thumbnailUrl,
-        track.sourceUrl,
-        track.provider.name,
-        now.toIso8601String(),
-      ],
+    final values = <String, Object?>{
+      'track_key': track.key,
+      'provider': track.provider.name,
+      'provider_id': track.providerId,
+      'title': track.title,
+      'artists_json': jsonEncode(track.artists),
+      'artist_browse_ids_json': jsonEncode(track.artistBrowseIds),
+      'album': track.album,
+      'duration_ms': track.duration?.inMilliseconds,
+      'thumbnail_url': track.thumbnailUrl,
+      'source_url': track.sourceUrl,
+      'metadata_source': track.provider.name,
+      'metadata_updated_at': now.toIso8601String(),
+    };
+    await portableSqliteUpsert(
+      db,
+      table: 'catalog_tracks',
+      keyValues: <String, Object?>{'track_key': track.key},
+      insertValues: values,
+      updateValues: (current) => <String, Object?>{
+        'title': values['title'],
+        'artists_json': values['artists_json'],
+        'artist_browse_ids_json': values['artist_browse_ids_json'],
+        'album': values['album'] ?? current['album'],
+        'duration_ms': values['duration_ms'] ?? current['duration_ms'],
+        'thumbnail_url': values['thumbnail_url'] ?? current['thumbnail_url'],
+        'source_url': values['source_url'] ?? current['source_url'],
+        'metadata_source': values['metadata_source'],
+        'metadata_updated_at': values['metadata_updated_at'],
+      },
     );
   }
 
@@ -2708,8 +2655,11 @@ class LocalDatabaseService {
             track_key, provider, provider_id, title, artists_json,
             artist_browse_ids_json, album, duration_ms, thumbnail_url,
             source_url, metadata_source, metadata_updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(track_key) DO NOTHING
+          )
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE NOT EXISTS (
+            SELECT 1 FROM catalog_tracks WHERE track_key = ?
+          )
         ''',
         <Object?>[
           catalogKey,
@@ -2726,6 +2676,7 @@ class LocalDatabaseService {
           row['source_url'],
           row['metadata_source']?.toString() ?? 'local',
           row['added_at']?.toString() ?? DateTime.now().toIso8601String(),
+          catalogKey,
         ],
       );
       await db.update(
@@ -2761,23 +2712,30 @@ class LocalDatabaseService {
               INSERT INTO catalog_tracks (
                 track_key, provider, provider_id, title, artists_json,
                 artist_browse_ids_json, metadata_source, metadata_updated_at
-              ) VALUES (?, 'legacy', ?, ?, '[]', '[]', 'legacy', ?)
-              ON CONFLICT(track_key) DO NOTHING
+              )
+              SELECT ?, 'legacy', ?, ?, '[]', '[]', 'legacy', ?
+              WHERE NOT EXISTS (
+                SELECT 1 FROM catalog_tracks WHERE track_key = ?
+              )
             ''',
-            <Object?>[catalogKey, localId, localId, updatedAt],
+            <Object?>[catalogKey, localId, localId, updatedAt, catalogKey],
           );
         }
         final encodedPlaylistId = base64Url.encode(utf8.encode(playlistId));
+        final itemId = 'legacy:$encodedPlaylistId:$position';
         await db.rawInsert(
           '''
             INSERT INTO playlist_items (
               item_id, playlist_id, catalog_key, local_track_id,
               remote_video_id, position, origin, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'legacy', ?, ?)
-            ON CONFLICT(item_id) DO NOTHING
+            )
+            SELECT ?, ?, ?, ?, ?, ?, 'legacy', ?, ?
+            WHERE NOT EXISTS (
+              SELECT 1 FROM playlist_items WHERE item_id = ?
+            )
           ''',
           <Object?>[
-            'legacy:$encodedPlaylistId:$position',
+            itemId,
             playlistId,
             catalogKey,
             catalogKeyByLocalId.containsKey(localId) ? localId : null,
@@ -2787,6 +2745,7 @@ class LocalDatabaseService {
             position,
             createdAt,
             updatedAt,
+            itemId,
           ],
         );
       }
@@ -3261,21 +3220,20 @@ List<String> _decodeLegacyPlaylistTrackIds(Object? value) {
 }
 
 Future<void> _upsertWithoutDelete(
-  DatabaseExecutor db, {
+  Transaction db, {
   required String table,
   required String primaryKey,
   required Map<String, Object?> values,
 }) async {
-  final columns = values.keys.toList(growable: false);
-  final updates = columns
-      .where((column) => column != primaryKey)
-      .map((column) => '$column = excluded.$column')
-      .join(', ');
-  final placeholders = List.filled(columns.length, '?').join(', ');
-  await db.rawInsert(
-    'INSERT INTO $table (${columns.join(', ')}) VALUES ($placeholders) '
-    'ON CONFLICT($primaryKey) DO UPDATE SET $updates',
-    columns.map((column) => values[column]).toList(growable: false),
+  await portableSqliteUpsert(
+    db,
+    table: table,
+    keyValues: <String, Object?>{primaryKey: values[primaryKey]},
+    insertValues: values,
+    updateValues: (_) => <String, Object?>{
+      for (final entry in values.entries)
+        if (entry.key != primaryKey) entry.key: entry.value,
+    },
   );
 }
 

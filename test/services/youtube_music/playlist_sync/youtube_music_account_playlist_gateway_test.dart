@@ -675,6 +675,23 @@ final class _FakeAccountGateway implements account.YouTubeMusicAccountGateway {
   }
 
   @override
+  Future<account.RemotePlaylistSummary?> getPlaylistSummary(
+    String playlistId,
+  ) async => (await getPlaylist(playlistId)).summary;
+
+  @override
+  Future<
+    account.YouTubeMusicMutationResult<account.RemotePlaylistMutationApplied>
+  >
+  setPlaylistVisibility({
+    required String playlistId,
+    required account.RemotePlaylistVisibility visibility,
+  }) async =>
+      const account.YouTubeMusicMutationSuccess<
+        account.RemotePlaylistMutationApplied
+      >(account.RemotePlaylistMutationApplied());
+
+  @override
   Future<account.YouTubeMusicMutationResult<account.RemotePlaylistCreated>>
   createPlaylist(
     String title, {

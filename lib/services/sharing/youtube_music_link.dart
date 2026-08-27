@@ -5,6 +5,29 @@
 /// catalog identity, or signed playback URLs.
 enum YouTubeMusicLinkKind { track, playlist, album, mix }
 
+final RegExp _youtubeMusicCollectionIdentity = RegExp(
+  r'^[A-Za-z0-9_-]{1,200}$',
+);
+
+/// Converts either a playlist id (`PL…`) or its InnerTube browse form
+/// (`VLPL…`) to the canonical id used by public `list=` URLs.
+String? canonicalYouTubeMusicPlaylistId(String? value) {
+  var normalized = value?.trim() ?? '';
+  if (normalized.startsWith('VL')) {
+    normalized = normalized.substring(2);
+  }
+  return _youtubeMusicCollectionIdentity.hasMatch(normalized)
+      ? normalized
+      : null;
+}
+
+/// Converts either public or browse notation to the single `VL…` identity
+/// expected by InnerTube browse endpoints.
+String? youtubeMusicPlaylistBrowseId(String? value) {
+  final playlistId = canonicalYouTubeMusicPlaylistId(value);
+  return playlistId == null ? null : 'VL$playlistId';
+}
+
 final class YouTubeMusicLink {
   const YouTubeMusicLink._({
     required this.kind,
@@ -41,7 +64,6 @@ class YouTubeMusicLinkCodec {
   const YouTubeMusicLinkCodec();
 
   static final RegExp _videoId = RegExp(r'^[A-Za-z0-9_-]{11}$');
-  static final RegExp _identity = RegExp(r'^[A-Za-z0-9_-]{1,200}$');
   static const _hosts = <String>{
     'music.youtube.com',
     'youtube.com',
@@ -76,12 +98,18 @@ class YouTubeMusicLinkCodec {
             );
     }
 
-    if (path == '/watch' && queryVideo != null) {
-      return YouTubeMusicLink._(
-        kind: YouTubeMusicLinkKind.track,
-        uri: uri,
-        videoId: queryVideo,
-      );
+    if (path == '/watch') {
+      if (queryVideo != null) {
+        return YouTubeMusicLink._(
+          kind: YouTubeMusicLinkKind.track,
+          uri: uri,
+          videoId: queryVideo,
+        );
+      }
+      final playlist = _validIdentity(uri.queryParameters['list']);
+      if (playlist != null) {
+        return _playlistCollection(uri, playlist);
+      }
     }
 
     final pathSegments = uri.pathSegments;
@@ -99,22 +127,21 @@ class YouTubeMusicLinkCodec {
 
     final playlist = _validIdentity(uri.queryParameters['list']);
     if ((path == '/playlist' || path == '/playlist/') && playlist != null) {
-      return _collection(
-        uri,
-        playlist,
-        playlist.startsWith('RD')
-            ? YouTubeMusicLinkKind.mix
-            : YouTubeMusicLinkKind.playlist,
-      );
+      return _playlistCollection(uri, playlist);
     }
 
     final segments = pathSegments;
+    if (segments.length == 2 && segments.first == 'playlist') {
+      final playlist = _validIdentity(segments[1]);
+      return playlist == null ? null : _playlistCollection(uri, playlist);
+    }
     if (segments.length >= 2 && segments.first == 'browse') {
       final browseId = _validIdentity(segments[1]);
       if (browseId == null) return null;
+      final canonicalPlaylistId = canonicalYouTubeMusicPlaylistId(browseId);
       final kind = browseId.startsWith('MPRE')
           ? YouTubeMusicLinkKind.album
-          : browseId.startsWith('RD')
+          : canonicalPlaylistId?.startsWith('RD') == true
           ? YouTubeMusicLinkKind.mix
           : browseId.startsWith('VL')
           ? YouTubeMusicLinkKind.playlist
@@ -124,6 +151,19 @@ class YouTubeMusicLinkCodec {
     }
 
     return null;
+  }
+
+  YouTubeMusicLink? _playlistCollection(Uri uri, String identity) {
+    final playlistId = canonicalYouTubeMusicPlaylistId(identity);
+    if (playlistId == null) return null;
+    return YouTubeMusicLink._(
+      kind: playlistId.startsWith('RD')
+          ? YouTubeMusicLinkKind.mix
+          : YouTubeMusicLinkKind.playlist,
+      uri: uri,
+      collectionId: youtubeMusicPlaylistBrowseId(playlistId),
+      playlistId: playlistId,
+    );
   }
 
   YouTubeMusicLink? _collection(
@@ -157,7 +197,9 @@ class YouTubeMusicLinkCodec {
   }
 
   String? _validIdentity(String? value) {
-    return value != null && _identity.hasMatch(value) ? value : null;
+    return value != null && _youtubeMusicCollectionIdentity.hasMatch(value)
+        ? value
+        : null;
   }
 }
 
