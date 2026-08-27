@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_dialog.dart';
+import '../pages/desktop_youtube_music_login_page.dart';
 import '../pages/youtube_music_login_page.dart';
 import '../providers/app_strings.dart';
 import '../providers/music_providers.dart'
@@ -25,6 +27,25 @@ typedef YouTubeMusicAccountButtonAction =
       WidgetRef ref,
       YouTubeMusicAuthState state,
     );
+
+@visibleForTesting
+Widget buildYouTubeMusicLoginPageForPlatform({
+  required bool isWeb,
+  required TargetPlatform platform,
+  DesktopYouTubeMusicWebAuthPortFactory? desktopWebAuthPortFactory,
+}) {
+  final mechanism = resolveYouTubeMusicLoginMechanism(
+    isWeb: isWeb,
+    platform: platform,
+  );
+  return switch (mechanism) {
+    YouTubeMusicLoginMechanism.desktopBrowser => DesktopYouTubeMusicLoginPage(
+      webAuthPortFactory: desktopWebAuthPortFactory,
+    ),
+    YouTubeMusicLoginMechanism.embeddedWebView ||
+    YouTubeMusicLoginMechanism.unsupported => const YouTubeMusicLoginPage(),
+  };
+}
 
 /// Drop-in Home action. Without [onPressed], it owns disclosure, login,
 /// account details and logout; callers may override navigation while keeping
@@ -121,9 +142,13 @@ class _YouTubeMusicAccountButtonState
       strings: strings,
     );
     if (!accepted || !mounted) return;
+    final loginPage = buildYouTubeMusicLoginPageForPlatform(
+      isWeb: kIsWeb,
+      platform: defaultTargetPlatform,
+    );
     await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (context) => const YouTubeMusicLoginPage(),
+        builder: (context) => loginPage,
         settings: const RouteSettings(name: 'youtube-music-login'),
       ),
     );

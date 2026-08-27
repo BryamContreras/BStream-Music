@@ -205,6 +205,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     );
     final miniPlayerMode = MiniPlayerMode.fromCode(
       prefs.getString(_miniPlayerModeKey),
+      platform: defaultTargetPlatform,
     );
     final miniPlayerBackgroundMode = MiniPlayerBackgroundMode.fromCode(
       prefs.getString(_miniPlayerBackgroundModeKey),

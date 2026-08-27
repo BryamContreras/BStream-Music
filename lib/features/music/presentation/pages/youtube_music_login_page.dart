@@ -14,10 +14,30 @@ import '../../../../services/youtube_music/auth/youtube_music_web_auth_port.dart
 import '../providers/youtube_music_auth_controller.dart';
 import '../widgets/youtube_music_channel_picker_dialog.dart';
 
+enum YouTubeMusicLoginMechanism { embeddedWebView, desktopBrowser, unsupported }
+
+YouTubeMusicLoginMechanism resolveYouTubeMusicLoginMechanism({
+  required bool isWeb,
+  required TargetPlatform platform,
+}) {
+  if (isWeb) return YouTubeMusicLoginMechanism.unsupported;
+  return switch (platform) {
+    TargetPlatform.android ||
+    TargetPlatform.macOS => YouTubeMusicLoginMechanism.embeddedWebView,
+    TargetPlatform.windows ||
+    TargetPlatform.linux => YouTubeMusicLoginMechanism.desktopBrowser,
+    _ => YouTubeMusicLoginMechanism.unsupported,
+  };
+}
+
 bool get isYouTubeMusicWebLoginSupported =>
-    !kIsWeb &&
-    (defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.windows);
+    !kIsWeb && isEmbeddedYouTubeMusicWebLoginSupportedOn(defaultTargetPlatform);
+
+@visibleForTesting
+bool isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform platform) =>
+    platform == TargetPlatform.android ||
+    platform == TargetPlatform.windows ||
+    platform == TargetPlatform.macOS;
 
 Future<void> _noOpCleanup() async {}
 
@@ -33,25 +53,34 @@ class YouTubeMusicLoginPage extends ConsumerStatefulWidget {
     'https%3A%2F%2Fmusic.youtube.com%2F',
   );
 
-  static InAppWebViewSettings secureWebViewSettings() => InAppWebViewSettings(
-    javaScriptEnabled: true,
-    javaScriptCanOpenWindowsAutomatically: false,
-    useShouldOverrideUrlLoading: true,
-    incognito: true,
-    cacheEnabled: false,
-    allowFileAccess: false,
-    allowContentAccess: false,
-    allowFileAccessFromFileURLs: false,
-    allowUniversalAccessFromFileURLs: false,
-    domStorageEnabled: true,
-    databaseEnabled: false,
-    safeBrowsingEnabled: true,
-    mixedContentMode: MixedContentMode.MIXED_CONTENT_NEVER_ALLOW,
-    saveFormData: false,
-    supportMultipleWindows: false,
-    thirdPartyCookiesEnabled: true,
-    isInspectable: false,
-  );
+  static InAppWebViewSettings secureWebViewSettings({
+    TargetPlatform? platform,
+  }) {
+    final resolvedPlatform = platform ?? defaultTargetPlatform;
+    return InAppWebViewSettings(
+      javaScriptEnabled: true,
+      javaScriptCanOpenWindowsAutomatically: false,
+      useShouldOverrideUrlLoading: true,
+      // Windows already receives a brand-new WebView2 user-data directory for
+      // each login. InPrivate would create a second cookie profile while the
+      // stable plugin's CookieManager reads the first one, making the completed
+      // Google session invisible. Android keeps its existing private WebView.
+      incognito: resolvedPlatform != TargetPlatform.windows,
+      cacheEnabled: false,
+      allowFileAccess: false,
+      allowContentAccess: false,
+      allowFileAccessFromFileURLs: false,
+      allowUniversalAccessFromFileURLs: false,
+      domStorageEnabled: true,
+      databaseEnabled: false,
+      safeBrowsingEnabled: true,
+      mixedContentMode: MixedContentMode.MIXED_CONTENT_NEVER_ALLOW,
+      saveFormData: false,
+      supportMultipleWindows: false,
+      thirdPartyCookiesEnabled: true,
+      isInspectable: false,
+    );
+  }
 
   @override
   ConsumerState<YouTubeMusicLoginPage> createState() =>
@@ -237,7 +266,8 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
       return const _LoginStatusView(
         icon: Icons.desktop_windows_outlined,
         message:
-            'El inicio de sesión está disponible en Android y Windows. '
+            'El inicio de sesión integrado está disponible en Android, '
+            'Windows y macOS. '
             'Puedes seguir usando BStream sin una cuenta.',
       );
     }

@@ -1,4 +1,5 @@
 import 'package:bstream_music/features/music/presentation/pages/youtube_music_login_page.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -11,8 +12,10 @@ void main() {
     expect(uri.queryParameters['continue'], 'https://music.youtube.com/');
   });
 
-  test('WebView settings isolate and harden the account surface', () {
-    final settings = YouTubeMusicLoginPage.secureWebViewSettings();
+  test('Android WebView settings preserve the private hardened surface', () {
+    final settings = YouTubeMusicLoginPage.secureWebViewSettings(
+      platform: TargetPlatform.android,
+    );
     expect(settings.incognito, isTrue);
     expect(settings.cacheEnabled, isFalse);
     expect(settings.useShouldOverrideUrlLoading, isTrue);
@@ -32,5 +35,72 @@ void main() {
     expect(settings.saveFormData, isFalse);
     expect(settings.supportMultipleWindows, isFalse);
     expect(settings.isInspectable, isFalse);
+  });
+
+  test('Windows uses its isolated profile where CookieManager can read it', () {
+    final settings = YouTubeMusicLoginPage.secureWebViewSettings(
+      platform: TargetPlatform.windows,
+    );
+
+    expect(settings.incognito, isFalse);
+    expect(settings.cacheEnabled, isFalse);
+    expect(settings.isInspectable, isFalse);
+  });
+
+  test('embedded login support has an explicit platform matrix', () {
+    expect(
+      isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform.android),
+      isTrue,
+    );
+    expect(
+      isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform.windows),
+      isTrue,
+    );
+    expect(
+      isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform.macOS),
+      isTrue,
+    );
+    expect(
+      isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform.linux),
+      isFalse,
+    );
+  });
+
+  test('desktop login mechanism never replaces the Android flow', () {
+    expect(
+      resolveYouTubeMusicLoginMechanism(
+        isWeb: false,
+        platform: TargetPlatform.android,
+      ),
+      YouTubeMusicLoginMechanism.embeddedWebView,
+    );
+    expect(
+      resolveYouTubeMusicLoginMechanism(
+        isWeb: false,
+        platform: TargetPlatform.windows,
+      ),
+      YouTubeMusicLoginMechanism.desktopBrowser,
+    );
+    expect(
+      resolveYouTubeMusicLoginMechanism(
+        isWeb: false,
+        platform: TargetPlatform.linux,
+      ),
+      YouTubeMusicLoginMechanism.desktopBrowser,
+    );
+    expect(
+      resolveYouTubeMusicLoginMechanism(
+        isWeb: false,
+        platform: TargetPlatform.macOS,
+      ),
+      YouTubeMusicLoginMechanism.embeddedWebView,
+    );
+    expect(
+      resolveYouTubeMusicLoginMechanism(
+        isWeb: true,
+        platform: TargetPlatform.windows,
+      ),
+      YouTubeMusicLoginMechanism.unsupported,
+    );
   });
 }

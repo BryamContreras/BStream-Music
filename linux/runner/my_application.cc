@@ -19,6 +19,25 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+// GNOME integrates GTK header bars with its window controls. Other desktops,
+// notably KDE Plasma on Wayland, are more reliable when the compositor draws
+// the standard window decorations instead.
+static gboolean desktop_prefers_header_bar() {
+  const gchar* current_desktop = g_getenv("XDG_CURRENT_DESKTOP");
+  if (current_desktop == nullptr) {
+    return FALSE;
+  }
+
+  g_auto(GStrv) desktops = g_strsplit(current_desktop, ":", -1);
+  for (gchar** desktop = desktops; *desktop != nullptr; ++desktop) {
+    if (g_ascii_strcasecmp(*desktop, "GNOME") == 0) {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
@@ -32,21 +51,15 @@ static void my_application_activate(GApplication* application) {
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
-  // Use a header bar when running in GNOME as this is the common style used
-  // by applications and is the setup most users will be using (e.g. Ubuntu
-  // desktop).
-  // If running on X and not using GNOME then just use a traditional title bar
-  // in case the window manager does more exotic layout, e.g. tiling.
-  // If running on Wayland assume the header bar will work (may need changing
-  // if future cases occur).
-  gboolean use_header_bar = TRUE;
+  // Keep GTK's client-side header bar on GNOME. On other desktops, use the
+  // compositor-provided title bar so minimize, maximize, and close follow the
+  // desktop theme and remain visible.
+  gboolean use_header_bar = desktop_prefers_header_bar();
 #ifdef GDK_WINDOWING_X11
   GdkScreen* screen = gtk_window_get_screen(window);
   if (GDK_IS_X11_SCREEN(screen)) {
     const gchar* wm_name = gdk_x11_screen_get_window_manager_name(screen);
-    if (g_strcmp0(wm_name, "GNOME Shell") != 0) {
-      use_header_bar = FALSE;
-    }
+    use_header_bar = g_strcmp0(wm_name, "GNOME Shell") == 0;
   }
 #endif
   if (use_header_bar) {

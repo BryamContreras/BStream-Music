@@ -101,7 +101,9 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
     final lyricsRomanizationLanguages =
         settings?.lyricsRomanizationLanguages ??
         defaultLyricsRomanizationLanguages;
-    final miniPlayerMode = settings?.miniPlayerMode ?? defaultMiniPlayerMode;
+    final miniPlayerMode =
+        settings?.miniPlayerMode ??
+        defaultMiniPlayerModeForPlatform(Theme.of(context).platform);
     final miniPlayerBackgroundMode =
         settings?.miniPlayerBackgroundMode ?? defaultMiniPlayerBackgroundMode;
     final systemBottomInset = math.max(

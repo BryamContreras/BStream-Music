@@ -140,7 +140,7 @@ void main() {
     expect(crossfadeDurationFromStoredSeconds(7), const Duration(seconds: 7));
   });
 
-  test('mini player mode defaults safely and persists capsule', () async {
+  test('mini player mode decodes safely and persists capsule', () async {
     expect(SurfaceBackgroundMode.fromCode(null), SurfaceBackgroundMode.accent);
     expect(
       SurfaceBackgroundMode.fromCode('unknown'),
@@ -150,8 +150,14 @@ void main() {
       SurfaceBackgroundMode.fromCode('transparent'),
       SurfaceBackgroundMode.transparent,
     );
-    expect(MiniPlayerMode.fromCode(null), MiniPlayerMode.capsule);
-    expect(MiniPlayerMode.fromCode('unknown'), MiniPlayerMode.capsule);
+    expect(
+      MiniPlayerMode.fromCode(null, platform: TargetPlatform.android),
+      MiniPlayerMode.capsule,
+    );
+    expect(
+      MiniPlayerMode.fromCode('unknown', platform: TargetPlatform.android),
+      MiniPlayerMode.capsule,
+    );
     expect(MiniPlayerMode.fromCode('default'), MiniPlayerMode.standard);
     expect(MiniPlayerMode.fromCode('capsule'), MiniPlayerMode.capsule);
     expect(

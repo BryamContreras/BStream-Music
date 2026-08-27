@@ -110,10 +110,13 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
   Widget build(BuildContext context) {
     final strings = ref.watch(appStringsProvider);
     final profileState = ref.watch(artistProfileProvider(_request));
+    final defaultMode = defaultMiniPlayerModeForPlatform(
+      Theme.of(context).platform,
+    );
     final miniPlayerAppearance = ref.watch(
       settingsControllerProvider.select(
         (settings) => (
-          mode: settings.value?.miniPlayerMode ?? defaultMiniPlayerMode,
+          mode: settings.value?.miniPlayerMode ?? defaultMode,
           backgroundMode:
               settings.value?.miniPlayerBackgroundMode ??
               defaultMiniPlayerBackgroundMode,

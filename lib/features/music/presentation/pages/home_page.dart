@@ -804,10 +804,13 @@ class _HomePageState extends ConsumerState<HomePage> {
     final useSideNavigation = width >= 920 && !_usesAndroidNavigation;
     final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
     final systemBottomInset = _shellSystemBottomInset(context);
+    final defaultMode = defaultMiniPlayerModeForPlatform(
+      Theme.of(context).platform,
+    );
     final miniPlayerAppearance = ref.watch(
       settingsControllerProvider.select(
         (settings) => (
-          mode: settings.value?.miniPlayerMode ?? defaultMiniPlayerMode,
+          mode: settings.value?.miniPlayerMode ?? defaultMode,
           backgroundMode:
               settings.value?.miniPlayerBackgroundMode ??
               defaultMiniPlayerBackgroundMode,

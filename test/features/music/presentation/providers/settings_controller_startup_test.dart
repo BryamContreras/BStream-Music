@@ -10,6 +10,7 @@ import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/services/downloader/desktop_downloader_service.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -75,7 +76,9 @@ void main() {
     );
   });
 
-  test('fresh startup uses the requested accent capsule defaults', () async {
+  test('fresh Android startup uses the accent capsule defaults', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer(
       overrides: [
@@ -106,6 +109,26 @@ void main() {
       LocalMusicFilter.hideTracksUnder30Seconds,
     });
     expect(preferences.containsKey('settings.localMusicFilters'), isFalse);
+  });
+
+  test('fresh Linux startup uses the classic mini player default', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        ytDlpDownloaderServiceProvider.overrideWithValue(
+          const _NoopDownloaderService(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+    final preferences = await SharedPreferences.getInstance();
+
+    expect(settings.miniPlayerMode, MiniPlayerMode.standard);
+    expect(preferences.containsKey('settings.miniPlayerMode'), isFalse);
   });
 
   test('startup restores the selected local music filters', () async {

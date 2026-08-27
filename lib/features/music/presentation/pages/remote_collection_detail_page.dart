@@ -73,10 +73,13 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
         detail?.artworkSource ??
         artworkSource ??
         (tracks.isEmpty ? null : tracks.first.thumbnailUrl);
+    final defaultMode = defaultMiniPlayerModeForPlatform(
+      Theme.of(context).platform,
+    );
     final miniPlayerAppearance = ref.watch(
       settingsControllerProvider.select(
         (settings) => (
-          mode: settings.value?.miniPlayerMode ?? defaultMiniPlayerMode,
+          mode: settings.value?.miniPlayerMode ?? defaultMode,
           backgroundMode:
               settings.value?.miniPlayerBackgroundMode ??
               defaultMiniPlayerBackgroundMode,
