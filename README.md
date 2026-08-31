@@ -230,7 +230,9 @@ Recognized commands:
 revoke!
 ```
 
-`!play` searches for the first result, prepares it, and adds it to the queue. `!skip`/`!next` advance playback, while `!revoke`/`!stop` clear the LIVE queue.
+`!play` searches for the first result, prepares it, and adds it to the queue.
+`!skip`/`!next` advance playback. `!revoke`/`revoke!` remove the last request
+from the LIVE queue, while `!stop` pauses the current LIVE song.
 
 On Android, the connection can continue while the app is normally in the
 background as long as its Flutter process remains alive. Force-stopping the app

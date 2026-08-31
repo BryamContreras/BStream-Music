@@ -64,6 +64,39 @@ void main() {
 
     expect(strings.liveQueueEmpty, 'Los pedidos !play aparecerán aquí.');
     expect(strings.commandPermissions, 'Quién puede usar los comandos');
+    expect(strings.everyone, 'Todos');
+    expect(strings.moderators, 'Moderadores');
+    expect(strings.subscribers, 'Suscriptores');
+    expect(
+      strings.everyoneCommandPermissionsHint,
+      'Comandos disponibles para cualquier espectador.',
+    );
+    expect(
+      strings.moderatorCommandPermissionsHint,
+      'Permisos adicionales para moderadores.',
+    );
+    expect(
+      strings.subscriberCommandPermissionsHint,
+      'Permisos adicionales para suscriptores.',
+    );
+    expect(strings.commandAllowedForEveryone, 'Ya está disponible para todos.');
+    expect(strings.livePlayCommand, '!play <canción>');
+    expect(
+      strings.livePlayCommandDescription,
+      'Añade una canción a la cola LIVE.',
+    );
+    expect(strings.liveSkipCommand, '!skip / !next');
+    expect(
+      strings.liveSkipCommandDescription,
+      'Salta a la siguiente canción de la cola LIVE.',
+    );
+    expect(strings.liveRevokeCommand, '!revoke / revoke!');
+    expect(
+      strings.liveRevokeCommandDescription,
+      'Retira el último pedido de la cola LIVE.',
+    );
+    expect(strings.liveStopCommand, '!stop');
+    expect(strings.liveStopCommandDescription, 'Pausa la canción LIVE actual.');
     expect(strings.liveConnection, 'Conexión LIVE');
     expect(
       strings.liveConnectionSummary,

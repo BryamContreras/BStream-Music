@@ -538,6 +538,7 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
   String text, {
   required String user,
   bool isModerator = false,
+  bool isSubscriber = false,
 }) {
   final message = text.trim();
   if (message.isEmpty) {
@@ -550,6 +551,7 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
       user: user,
       text: message,
       isModerator: isModerator,
+      isSubscriber: isSubscriber,
     );
   }
   if (!message.startsWith('!')) {
@@ -572,11 +574,13 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
       user: user,
       text: message,
       isModerator: isModerator,
+      isSubscriber: isSubscriber,
     );
   }
   final normalizedAction = switch (action) {
     'skip' || 'next' => 'skip',
-    'revoke' || 'stop' => 'revoke',
+    'revoke' => 'revoke',
+    'stop' => 'stop',
     _ => null,
   };
   if (normalizedAction == null) {
@@ -587,6 +591,7 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
     user: user,
     text: message,
     isModerator: isModerator,
+    isSubscriber: isSubscriber,
   );
 }
 
@@ -651,6 +656,44 @@ bool isTikTokLiveModerator(
   return false;
 }
 
+/// Reads subscriber status from the identity attached to a chat message.
+///
+/// `UserIdentity.isSubscriberOfAnchor` is the most specific signal because it
+/// is explicitly relative to the active LIVE creator. Alternate field names
+/// keep the adapter compatible with transports that normalize protobuf maps.
+/// PirateTok's older `User.isSubscribe` field is retained as a final fallback.
+bool isTikTokLiveSubscriber(
+  Map<String, dynamic>? user, {
+  Map<String, dynamic>? eventData,
+}) {
+  final identityCandidates = <Map<String, dynamic>>[
+    ?_mapAt(user, 'userIdentity'),
+    ?_mapAt(user, 'user_identity'),
+    ?_mapAt(eventData, 'userIdentity'),
+    ?_mapAt(eventData, 'user_identity'),
+    ?user,
+    ?eventData,
+  ];
+  final anchorSubscriber = _firstKnownBool(identityCandidates, const [
+    'isSubscriberOfAnchor',
+    'is_subscriber_of_anchor',
+  ]);
+  if (anchorSubscriber != null) {
+    return anchorSubscriber;
+  }
+
+  final normalizedSubscriber = _firstKnownBool(identityCandidates, const [
+    'isSubscriber',
+    'is_subscriber',
+  ]);
+  if (normalizedSubscriber != null) {
+    return normalizedSubscriber;
+  }
+
+  return _firstKnownBool([?user], const ['isSubscribe', 'is_subscribe']) ??
+      false;
+}
+
 TikTokLiveChatCommand? _commandFromChatEvent(Map<String, dynamic>? data) {
   if (data == null) {
     return null;
@@ -676,6 +719,7 @@ TikTokLiveChatCommand? _commandFromChatEvent(Map<String, dynamic>? data) {
     content,
     user: username.isEmpty ? 'unknown' : username,
     isModerator: isTikTokLiveModerator(user, eventData: data),
+    isSubscriber: isTikTokLiveSubscriber(user, eventData: data),
   );
 }
 
@@ -712,6 +756,25 @@ bool _boolValue(Object? value) {
   }
   final normalized = value?.toString().trim().toLowerCase();
   return normalized == 'true' || normalized == '1';
+}
+
+bool? _firstKnownBool(
+  Iterable<Map<String, dynamic>> candidates,
+  Iterable<String> keys,
+) {
+  var found = false;
+  for (final candidate in candidates) {
+    for (final key in keys) {
+      if (!candidate.containsKey(key)) {
+        continue;
+      }
+      found = true;
+      if (_boolValue(candidate[key])) {
+        return true;
+      }
+    }
+  }
+  return found ? false : null;
 }
 
 Map<String, dynamic>? _mapAt(Map<String, dynamic>? map, String key) =>

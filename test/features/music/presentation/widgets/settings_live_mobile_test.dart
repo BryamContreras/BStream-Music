@@ -21,7 +21,12 @@ void main() {
         ..resetDevicePixelRatio();
     });
 
-    final liveController = _FakeTikTokLiveController();
+    final liveController = _FakeTikTokLiveController(
+      initialCommandPermissions: const TikTokCommandPermissions(
+        everyone: {TikTokLiveCommand.play},
+        moderators: {TikTokLiveCommand.revoke},
+      ),
+    );
     var supportedLinksOpenCalls = 0;
     await tester.pumpWidget(
       ProviderScope(
@@ -133,6 +138,112 @@ void main() {
     await tester.pump();
     expect(liveController.connectCalls, 1);
     expect(liveController.lastCreatorInput, '@bstream_test');
+
+    final audienceSections = [
+      for (final audience in TikTokCommandAudience.values)
+        find.byKey(ValueKey('tiktok-command-section-${audience.name}')),
+    ];
+    for (final section in audienceSections) {
+      expect(section, findsOneWidget);
+      expect(
+        find.descendant(of: section, matching: find.byType(CheckboxListTile)),
+        findsNWidgets(TikTokLiveCommand.values.length),
+      );
+      final sectionRect = tester.getRect(section);
+      expect(sectionRect.left, closeTo(fieldRect.left, 0.1));
+      expect(sectionRect.right, closeTo(fieldRect.right, 0.1));
+    }
+    expect(
+      tester.getTopLeft(audienceSections[1]).dy,
+      greaterThan(tester.getBottomLeft(audienceSections[0]).dy),
+    );
+    expect(
+      tester.getTopLeft(audienceSections[2]).dy,
+      greaterThan(tester.getBottomLeft(audienceSections[1]).dy),
+    );
+    expect(find.text('Todos'), findsOneWidget);
+    expect(find.text('Moderadores'), findsOneWidget);
+    expect(find.text('Suscriptores'), findsOneWidget);
+    expect(find.text('!stop'), findsNWidgets(3));
+    expect(find.text('Pausa la canción LIVE actual.'), findsNWidgets(3));
+
+    for (final audience in TikTokCommandAudience.values) {
+      for (final command in TikTokLiveCommand.values) {
+        expect(
+          find.byKey(
+            ValueKey('tiktok-command-${audience.name}-${command.name}'),
+          ),
+          findsOneWidget,
+        );
+      }
+    }
+
+    final inheritedModeratorPlay = tester.widget<CheckboxListTile>(
+      find.byKey(const ValueKey('tiktok-command-moderators-play')),
+    );
+    expect(inheritedModeratorPlay.value, isTrue);
+    expect(inheritedModeratorPlay.onChanged, isNull);
+
+    final moderatorRevoke = find.byKey(
+      const ValueKey('tiktok-command-moderators-revoke'),
+    );
+    expect(tester.widget<CheckboxListTile>(moderatorRevoke).value, isTrue);
+    final detailScrollable = find
+        .descendant(
+          of: find.byKey(const ValueKey('settings-detail-scroll-live')),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.scrollUntilVisible(
+      moderatorRevoke,
+      240,
+      scrollable: detailScrollable,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(moderatorRevoke);
+    await tester.pump();
+    expect(liveController.commandPermissionCalls.last, (
+      audience: TikTokCommandAudience.moderators,
+      command: TikTokLiveCommand.revoke,
+      enabled: false,
+    ));
+
+    final moderatorStop = find.byKey(
+      const ValueKey('tiktok-command-moderators-stop'),
+    );
+    expect(tester.widget<CheckboxListTile>(moderatorStop).value, isFalse);
+    await tester.scrollUntilVisible(
+      moderatorStop,
+      240,
+      scrollable: detailScrollable,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(moderatorStop);
+    await tester.pump();
+    expect(liveController.commandPermissionCalls.last, (
+      audience: TikTokCommandAudience.moderators,
+      command: TikTokLiveCommand.stop,
+      enabled: true,
+    ));
+
+    final subscriberSkip = find.byKey(
+      const ValueKey('tiktok-command-subscribers-skip'),
+    );
+    expect(tester.widget<CheckboxListTile>(subscriberSkip).value, isFalse);
+    await tester.scrollUntilVisible(
+      subscriberSkip,
+      240,
+      scrollable: detailScrollable,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(subscriberSkip);
+    await tester.pump();
+    expect(liveController.commandPermissionCalls.last, (
+      audience: TikTokCommandAudience.subscribers,
+      command: TikTokLiveCommand.skip,
+      enabled: true,
+    ));
+    expect(liveController.commandPermissionCalls, hasLength(3));
     expect(tester.takeException(), isNull);
 
     debugDefaultTargetPlatformOverride = null;
@@ -208,19 +319,32 @@ class _FakeSettingsController extends SettingsController {
 }
 
 class _FakeTikTokLiveController extends TikTokLiveController {
-  _FakeTikTokLiveController({this.initialStatus = TikTokLiveStatus.idle});
+  _FakeTikTokLiveController({
+    this.initialStatus = TikTokLiveStatus.idle,
+    this.initialCommandPermissions = defaultTikTokCommandPermissions,
+  });
 
   final TikTokLiveStatus initialStatus;
+  final TikTokCommandPermissions initialCommandPermissions;
   var connectCalls = 0;
   var disconnectCalls = 0;
   var saveRequestsToLibraryCalls = 0;
   String? lastCreatorInput;
   bool? lastSaveRequestsToLibrary;
+  final commandPermissionCalls =
+      <
+        ({
+          TikTokCommandAudience audience,
+          TikTokLiveCommand command,
+          bool enabled,
+        })
+      >[];
 
   @override
   Future<TikTokLiveState> build() async => TikTokLiveState(
     creatorInput: '',
     status: initialStatus,
+    commandPermissions: initialCommandPermissions,
     message: initialStatus == TikTokLiveStatus.connecting
         ? 'Conectando...'
         : 'Listo para conectar.',
@@ -235,6 +359,19 @@ class _FakeTikTokLiveController extends TikTokLiveController {
   @override
   Future<void> disconnect() async {
     disconnectCalls += 1;
+  }
+
+  @override
+  Future<void> setCommandPermission(
+    TikTokCommandAudience audience,
+    TikTokLiveCommand command,
+    bool enabled,
+  ) async {
+    commandPermissionCalls.add((
+      audience: audience,
+      command: command,
+      enabled: enabled,
+    ));
   }
 
   @override

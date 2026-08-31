@@ -31,6 +31,7 @@ void main() {
         '  !PlAy   La pareja del año  ',
         user: 'viewer.one',
         isModerator: true,
+        isSubscriber: true,
       );
 
       expect(command, isNotNull);
@@ -39,9 +40,22 @@ void main() {
       expect(command.user, 'viewer.one');
       expect(command.text, '!PlAy   La pareja del año');
       expect(command.isModerator, isTrue);
+      expect(command.isSubscriber, isTrue);
     });
 
-    test('maps aliases to the existing skip and revoke actions', () {
+    test('restores subscriber metadata from serialized commands', () {
+      final command = TikTokLiveChatCommand.fromJson(const {
+        'action': 'skip',
+        'user': 'subscriber.viewer',
+        'text': '!skip',
+        'is_subscriber': true,
+      });
+
+      expect(command.isSubscriber, isTrue);
+      expect(command.isModerator, isFalse);
+    });
+
+    test('maps aliases while keeping revoke and stop separate', () {
       for (final text in const ['!skip', '!next']) {
         expect(
           parseTikTokLiveCommand(text, user: 'viewer')?.action,
@@ -49,13 +63,14 @@ void main() {
           reason: text,
         );
       }
-      for (final text in const ['!revoke', '!stop', 'revoke!']) {
+      for (final text in const ['!revoke', 'revoke!']) {
         expect(
           parseTikTokLiveCommand(text, user: 'viewer')?.action,
           'revoke',
           reason: text,
         );
       }
+      expect(parseTikTokLiveCommand('!StOp', user: 'viewer')?.action, 'stop');
     });
 
     test('ignores ordinary chat, unknown commands and play without query', () {
@@ -131,6 +146,60 @@ void main() {
       expect(
         isTikTokLiveModerator(const {'isModeratorOfAnchor': false}),
         isFalse,
+      );
+    });
+  });
+
+  group('isTikTokLiveSubscriber', () {
+    test('supports identity metadata in camelCase and snake_case', () {
+      expect(
+        isTikTokLiveSubscriber(
+          const {},
+          eventData: const {
+            'userIdentity': {'isSubscriberOfAnchor': true},
+          },
+        ),
+        isTrue,
+      );
+      expect(
+        isTikTokLiveSubscriber(const {
+          'user_identity': {'is_subscriber_of_anchor': true},
+        }),
+        isTrue,
+      );
+    });
+
+    test('supports normalized subscriber fields and User.isSubscribe', () {
+      for (final user in <Map<String, dynamic>>[
+        {'isSubscriber': true},
+        {'is_subscriber': true},
+        {'isSubscribe': true},
+        {'is_subscribe': true},
+      ]) {
+        expect(isTikTokLiveSubscriber(user), isTrue, reason: '$user');
+      }
+    });
+
+    test('does not grant subscriber access for absent or false flags', () {
+      expect(isTikTokLiveSubscriber(null), isFalse);
+      expect(isTikTokLiveSubscriber(const {}), isFalse);
+      expect(isTikTokLiveSubscriber(const {'isSubscribe': false}), isFalse);
+      expect(
+        isTikTokLiveSubscriber(
+          const {},
+          eventData: const {
+            'userIdentity': {'isSubscriberOfAnchor': false},
+          },
+        ),
+        isFalse,
+      );
+      expect(
+        isTikTokLiveSubscriber(const {
+          'userIdentity': {'isSubscriberOfAnchor': false},
+          'isSubscribe': true,
+        }),
+        isFalse,
+        reason: 'anchor identity is authoritative over the legacy fallback',
       );
     });
   });
@@ -215,13 +284,14 @@ void main() {
       },
     );
 
-    test('emits parsed chat commands with moderator metadata', () async {
+    test('emits parsed chat commands with role metadata', () async {
       await adapter.connect('creator');
       clients.single.emit(
         'chat',
         data: const {
           'comment': '!play Hello',
           'user': {'uniqueId': 'moderator.viewer', 'isModeratorOfAnchor': true},
+          'userIdentity': {'isSubscriberOfAnchor': true},
         },
         roomId: 'room-1',
       );
@@ -232,6 +302,7 @@ void main() {
       expect(event.command?.query, 'Hello');
       expect(event.command?.user, 'moderator.viewer');
       expect(event.command?.isModerator, isTrue);
+      expect(event.command?.isSubscriber, isTrue);
       expect(event.roomId, 'room-1');
     });
 

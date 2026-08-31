@@ -242,6 +242,195 @@ void main() {
   });
 
   test(
+    '!stop pauses an active LIVE source without removing its requests',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (query) async => [_remoteTrack(query)],
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      harness.service.emit(_playEvent('Activa'));
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.singleOrNull?.isReady == true &&
+            harness.player.isLiveQueueActive,
+      );
+      final requestIds = [
+        for (final item in harness.liveState.liveQueue) item.id,
+      ];
+
+      harness.service.emit(_commandEvent('stop', '!stop'));
+      await _waitUntil(() => harness.player.pauseCalls == 1);
+
+      expect(harness.liveState.liveQueue.map((item) => item.id), requestIds);
+      expect(harness.player.pauseCalls, 1);
+      expect(harness.player.stopCalls, 0);
+      expect(harness.player.clearQueueSourceCalls, 0);
+    },
+  );
+
+  test('!stop does not pause playback outside the LIVE source', () async {
+    SharedPreferences.setMockInitialValues({});
+    final harness = _LiveHarness(search: (_) async => const []);
+    addTearDown(harness.dispose);
+    await harness.initialize();
+
+    expect(harness.player.isLiveQueueActive, isFalse);
+    harness.service.emit(_commandEvent('stop', '!stop'));
+    await _waitUntil(() => harness.liveState.lastCommand?.action == 'stop');
+    await _pumpEventQueue();
+
+    expect(harness.player.pauseCalls, 0);
+    expect(harness.liveState.liveQueue, isEmpty);
+  });
+
+  test(
+    '!revoke removes only the last ready request and syncs the remaining queue',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (query) async => [_remoteTrack(query)],
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      harness.service.emit(_playEvent('Primera lista'));
+      harness.service.emit(_playEvent('Ultima lista'));
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.every((item) => item.isReady) &&
+            harness.player.lastRemoteQueue?.length == 2,
+      );
+      final remainingId = harness.liveState.liveQueue.first.id;
+      final syncCallsBeforeRevoke = harness.player.remoteQueueSyncCalls;
+
+      harness.service.emit(_commandEvent('revoke', '!revoke'));
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 1 &&
+            harness.player.remoteQueueSyncCalls == syncCallsBeforeRevoke + 1,
+      );
+
+      expect(harness.liveState.liveQueue.single.id, remainingId);
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'Primera lista',
+      ]);
+      expect(harness.player.pauseCalls, 0);
+      expect(harness.player.stopCalls, 0);
+      expect(harness.player.clearQueueSourceCalls, 0);
+      expect(harness.player.isLiveQueueActive, isTrue);
+    },
+  );
+
+  test('!revoke hides the playing request without interrupting it', () async {
+    SharedPreferences.setMockInitialValues({});
+    final harness = _LiveHarness(
+      search: (query) async => [_remoteTrack(query)],
+    );
+    addTearDown(harness.dispose);
+    await harness.initialize();
+
+    harness.service.emit(_playEvent('Sonando'));
+    await _waitUntil(
+      () =>
+          harness.liveState.liveQueue.singleOrNull?.isReady == true &&
+          harness.player.isLiveQueueActive,
+    );
+
+    harness.service.emit(_commandEvent('revoke', '!revoke'));
+    await _waitUntil(() => harness.liveState.liveQueue.isEmpty);
+
+    expect(harness.player.remotePlayCalls, 1);
+    expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+      'Sonando',
+    ]);
+    expect(harness.player.pauseCalls, 0);
+    expect(harness.player.stopCalls, 0);
+    expect(harness.player.clearQueueSourceCalls, 0);
+
+    harness.service.emit(_playEvent('Siguiente'));
+    await _waitUntil(
+      () =>
+          harness.liveState.liveQueue.singleOrNull?.isReady == true &&
+          harness.player.lastRemoteQueue?.length == 2,
+    );
+    expect(harness.player.remotePlayCalls, 1);
+    expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+      'Sonando',
+      'Siguiente',
+    ]);
+
+    harness.player.simulateRemoteTrack(_remoteTrack('Siguiente'));
+    await _waitUntil(() => harness.player.lastRemoteQueue?.length == 1);
+    expect(harness.player.lastRemoteQueue?.single.id, 'Siguiente');
+  });
+
+  test(
+    '!revoke cancels the last pending request without blocking a later one',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final revokedSearch = Completer<List<TrackInfo>>();
+      final harness = _LiveHarness(
+        search: (query) {
+          if (query == 'Pendiente revocado') {
+            return revokedSearch.future;
+          }
+          return Future.value([_remoteTrack(query)]);
+        },
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      harness.service.emit(_playEvent('Primera conservada'));
+      await _waitUntil(
+        () => harness.liveState.liveQueue.singleOrNull?.isReady == true,
+      );
+      harness.service.emit(_playEvent('Pendiente revocado'));
+      await _waitUntil(
+        () =>
+            harness.repository.searchCalls == 2 &&
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.last.status ==
+                LiveQueueItemStatus.resolving,
+      );
+
+      harness.service.emit(_commandEvent('revoke', '!revoke'));
+      await _waitUntil(() => harness.liveState.liveQueue.length == 1);
+      harness.service.emit(_playEvent('Posterior aceptado'));
+      await _waitUntil(
+        () =>
+            harness.repository.searchCalls == 3 &&
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.last.isReady &&
+            harness.player.lastRemoteQueue?.length == 2,
+      );
+
+      expect(harness.liveState.liveQueue.map((item) => item.query), [
+        'Primera conservada',
+        'Posterior aceptado',
+      ]);
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'Primera conservada',
+        'Posterior aceptado',
+      ]);
+
+      revokedSearch.complete([_remoteTrack('demasiado-tarde')]);
+      await _pumpEventQueue();
+      expect(
+        harness.liveState.liveQueue.map((item) => item.query),
+        isNot(contains('Pendiente revocado')),
+      );
+      expect(
+        harness.liveState.readyRemoteTracks.map((track) => track.id),
+        isNot(contains('demasiado-tarde')),
+      );
+    },
+  );
+
+  test(
     'resolves concurrently but commits and publishes in acceptance order',
     () async {
       SharedPreferences.setMockInitialValues({});
@@ -703,6 +892,13 @@ TikTokLiveEvent _playEvent(String query) {
   );
 }
 
+TikTokLiveEvent _commandEvent(String action, String text) {
+  return TikTokLiveEvent(
+    type: 'command',
+    command: TikTokLiveChatCommand(action: action, user: 'viewer', text: text),
+  );
+}
+
 TrackInfo _remoteTrack(String id) {
   return TrackInfo(
     id: id,
@@ -878,6 +1074,13 @@ class _RecordingPlayerController extends PlayerController {
   bool? lastUseNativeQueue;
   String? lastLocalQueueSourceId;
   int remoteQueueSyncCalls = 0;
+  int pauseCalls = 0;
+  int stopCalls = 0;
+  int clearQueueSourceCalls = 0;
+  bool _liveQueueActive = false;
+
+  @override
+  bool get isLiveQueueActive => _liveQueueActive;
 
   @override
   Future<PlayerSnapshot> build() async {
@@ -894,6 +1097,9 @@ class _RecordingPlayerController extends PlayerController {
     lastRemoteTrack = track;
     lastRemoteQueue = queue == null ? null : List.unmodifiable(queue);
     lastQueueSourceId = queueSourceId;
+    if (queueSourceId == PlayerController.liveQueueSourceId) {
+      _liveQueueActive = true;
+    }
     if (silentlyFailRemoteTrackIds.contains(track.id)) {
       state = AsyncError(
         StateError('Fallo silencioso al abrir ${track.id}.'),
@@ -922,6 +1128,9 @@ class _RecordingPlayerController extends PlayerController {
     remoteQueueSyncCalls++;
     lastRemoteQueue = List.unmodifiable(tracks);
     lastQueueSourceId = sourceId;
+    if (sourceId == PlayerController.liveQueueSourceId) {
+      _liveQueueActive = true;
+    }
     return true;
   }
 
@@ -937,6 +1146,9 @@ class _RecordingPlayerController extends PlayerController {
     lastLocalQueue = queue == null ? null : List.unmodifiable(queue);
     lastUseNativeQueue = useNativeQueue;
     lastLocalQueueSourceId = queueSourceId;
+    if (queueSourceId == PlayerController.liveQueueSourceId) {
+      _liveQueueActive = true;
+    }
     state = AsyncData(
       PlayerSnapshot(
         status: PlayerStatus.playing,
@@ -945,6 +1157,48 @@ class _RecordingPlayerController extends PlayerController {
         trackId: track.id,
         sourceUrl: track.filePath,
         duration: track.duration,
+      ),
+    );
+  }
+
+  @override
+  Future<void> pause() async {
+    pauseCalls++;
+    final snapshot = state.value;
+    if (snapshot != null) {
+      state = AsyncData(snapshot.copyWith(status: PlayerStatus.paused));
+    }
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCalls++;
+    _liveQueueActive = false;
+    final snapshot = state.value;
+    if (snapshot != null) {
+      state = AsyncData(snapshot.copyWith(status: PlayerStatus.stopped));
+    }
+  }
+
+  @override
+  Future<bool> clearQueueSource(String sourceId) async {
+    clearQueueSourceCalls++;
+    if (sourceId == PlayerController.liveQueueSourceId) {
+      _liveQueueActive = false;
+    }
+    return true;
+  }
+
+  void simulateRemoteTrack(TrackInfo track) {
+    state = AsyncData(
+      PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: track.title,
+        artist: track.artist,
+        trackId: track.id,
+        sourceUrl: track.url,
+        duration: track.duration,
+        isRemote: true,
       ),
     );
   }

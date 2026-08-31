@@ -508,6 +508,43 @@ class AppStrings {
       choose('Quién puede usar los comandos', 'Who can use commands');
   String get everyone => choose('Todos', 'Everyone');
   String get moderators => choose('Moderadores', 'Moderators');
+  String get subscriber => choose('Suscriptor', 'Subscriber');
+  String get subscribers => choose('Suscriptores', 'Subscribers');
+  String get everyoneCommandPermissionsHint => choose(
+    'Comandos disponibles para cualquier espectador.',
+    'Commands available to any viewer.',
+  );
+  String get moderatorCommandPermissionsHint => choose(
+    'Permisos adicionales para moderadores.',
+    'Additional permissions for moderators.',
+  );
+  String get subscriberCommandPermissionsHint => choose(
+    'Permisos adicionales para suscriptores.',
+    'Additional permissions for subscribers.',
+  );
+  String get commandAllowedForEveryone => choose(
+    'Ya está disponible para todos.',
+    'Already available to everyone.',
+  );
+  String get livePlayCommand => choose('!play <canción>', '!play <song>');
+  String get livePlayCommandDescription => choose(
+    'Añade una canción a la cola LIVE.',
+    'Adds a song to the LIVE queue.',
+  );
+  String get liveSkipCommand => choose('!skip / !next', '!skip / !next');
+  String get liveSkipCommandDescription => choose(
+    'Salta a la siguiente canción de la cola LIVE.',
+    'Skips to the next song in the LIVE queue.',
+  );
+  String get liveRevokeCommand =>
+      choose('!revoke / revoke!', '!revoke / revoke!');
+  String get liveRevokeCommandDescription => choose(
+    'Retira el último pedido de la cola LIVE.',
+    'Removes the last request from the LIVE queue.',
+  );
+  String get liveStopCommand => choose('!stop', '!stop');
+  String get liveStopCommandDescription =>
+      choose('Pausa la canción LIVE actual.', 'Pauses the current LIVE song.');
   String get reusedDownload => choose('Ya descargada', 'Already downloaded');
   String get playlist => choose('Playlist', 'Playlist');
   String get newPlaylist => choose('Nueva playlist', 'New playlist');

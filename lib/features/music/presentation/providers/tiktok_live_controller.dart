@@ -7,7 +7,164 @@ final tiktokLiveControllerProvider =
 
 enum LiveQueueItemStatus { resolving, downloading, ready, failed }
 
-enum TikTokCommandAccess { everyone, moderators }
+enum TikTokLiveCommand {
+  play,
+  skip,
+  revoke,
+  stop;
+
+  static TikTokLiveCommand? fromAction(String action) {
+    final normalized = action.trim().toLowerCase();
+    for (final command in values) {
+      if (command.name == normalized) {
+        return command;
+      }
+    }
+    return null;
+  }
+}
+
+enum TikTokCommandAudience { everyone, moderators, subscribers }
+
+const Set<TikTokLiveCommand> allTikTokLiveCommands = {
+  TikTokLiveCommand.play,
+  TikTokLiveCommand.skip,
+  TikTokLiveCommand.revoke,
+  TikTokLiveCommand.stop,
+};
+
+const defaultTikTokCommandPermissions = TikTokCommandPermissions(
+  everyone: allTikTokLiveCommands,
+);
+
+class TikTokCommandPermissions {
+  const TikTokCommandPermissions({
+    this.everyone = const <TikTokLiveCommand>{},
+    this.moderators = const <TikTokLiveCommand>{},
+    this.subscribers = const <TikTokLiveCommand>{},
+  });
+
+  final Set<TikTokLiveCommand> everyone;
+  final Set<TikTokLiveCommand> moderators;
+  final Set<TikTokLiveCommand> subscribers;
+
+  Set<TikTokLiveCommand> forAudience(TikTokCommandAudience audience) {
+    return switch (audience) {
+      TikTokCommandAudience.everyone => everyone,
+      TikTokCommandAudience.moderators => moderators,
+      TikTokCommandAudience.subscribers => subscribers,
+    };
+  }
+
+  bool isExplicitlyEnabled(
+    TikTokCommandAudience audience,
+    TikTokLiveCommand command,
+  ) {
+    return forAudience(audience).contains(command);
+  }
+
+  bool allows(TikTokLiveChatCommand command) {
+    final liveCommand = TikTokLiveCommand.fromAction(command.action);
+    if (liveCommand == null) {
+      return false;
+    }
+    return everyone.contains(liveCommand) ||
+        (command.isModerator && moderators.contains(liveCommand)) ||
+        (command.isSubscriber && subscribers.contains(liveCommand));
+  }
+
+  TikTokCommandPermissions withCommand(
+    TikTokCommandAudience audience,
+    TikTokLiveCommand command,
+    bool enabled,
+  ) {
+    final updated = <TikTokLiveCommand>{...forAudience(audience)};
+    if (enabled) {
+      updated.add(command);
+    } else {
+      updated.remove(command);
+    }
+    final immutable = Set<TikTokLiveCommand>.unmodifiable(updated);
+    return switch (audience) {
+      TikTokCommandAudience.everyone => TikTokCommandPermissions(
+        everyone: immutable,
+        moderators: moderators,
+        subscribers: subscribers,
+      ),
+      TikTokCommandAudience.moderators => TikTokCommandPermissions(
+        everyone: everyone,
+        moderators: immutable,
+        subscribers: subscribers,
+      ),
+      TikTokCommandAudience.subscribers => TikTokCommandPermissions(
+        everyone: everyone,
+        moderators: moderators,
+        subscribers: immutable,
+      ),
+    };
+  }
+
+  Map<String, Object> toJson() {
+    List<String> encode(Set<TikTokLiveCommand> commands) => [
+      for (final command in TikTokLiveCommand.values)
+        if (commands.contains(command)) command.name,
+    ];
+
+    return {
+      'version': 3,
+      'everyone': encode(everyone),
+      'moderators': encode(moderators),
+      'subscribers': encode(subscribers),
+    };
+  }
+
+  static TikTokCommandPermissions? tryFromJson(Object? value) {
+    if (value is! Map<String, dynamic>) {
+      return null;
+    }
+    final version = value['version'];
+    if (version != 2 && version != 3) {
+      return null;
+    }
+
+    Set<TikTokLiveCommand>? decode(String key) {
+      final encoded = value[key];
+      if (encoded is! List) {
+        return null;
+      }
+      final commands = <TikTokLiveCommand>{
+        ...encoded
+            .map((entry) => TikTokLiveCommand.fromAction(entry.toString()))
+            .whereType<TikTokLiveCommand>(),
+      };
+      // Until v2, !stop was an alias of !revoke. Copy that permission only
+      // while migrating so v3 can persist both choices independently.
+      if (version == 2 && commands.contains(TikTokLiveCommand.revoke)) {
+        commands.add(TikTokLiveCommand.stop);
+      }
+      return Set<TikTokLiveCommand>.unmodifiable(commands);
+    }
+
+    final everyone = decode('everyone');
+    final moderators = decode('moderators');
+    final subscribers = decode('subscribers');
+    if (everyone == null || moderators == null || subscribers == null) {
+      return null;
+    }
+    return TikTokCommandPermissions(
+      everyone: everyone,
+      moderators: moderators,
+      subscribers: subscribers,
+    );
+  }
+}
+
+TikTokCommandPermissions _migrateCommandPermissions(String? legacyAccess) {
+  if (legacyAccess == 'moderators') {
+    return const TikTokCommandPermissions(moderators: allTikTokLiveCommands);
+  }
+  return defaultTikTokCommandPermissions;
+}
 
 class _LiveQueueOperationCancelled implements Exception {
   const _LiveQueueOperationCancelled();
@@ -51,10 +208,10 @@ class _LiveQueueResolution {
 }
 
 bool canUseTikTokCommand(
-  TikTokCommandAccess access,
+  TikTokCommandPermissions permissions,
   TikTokLiveChatCommand command,
 ) {
-  return access == TikTokCommandAccess.everyone || command.isModerator;
+  return permissions.allows(command);
 }
 
 class LiveQueueItem {
@@ -160,7 +317,7 @@ class TikTokLiveState {
     this.normalizedCreator,
     this.roomId,
     this.lastCommand,
-    this.commandAccess = TikTokCommandAccess.everyone,
+    this.commandPermissions = defaultTikTokCommandPermissions,
     this.saveRequestsToLibrary = false,
     this.commandsHandled = 0,
     this.liveQueue = const [],
@@ -172,7 +329,7 @@ class TikTokLiveState {
   final String? normalizedCreator;
   final String? roomId;
   final TikTokLiveChatCommand? lastCommand;
-  final TikTokCommandAccess commandAccess;
+  final TikTokCommandPermissions commandPermissions;
   final bool saveRequestsToLibrary;
   final int commandsHandled;
   final List<LiveQueueItem> liveQueue;
@@ -209,7 +366,7 @@ class TikTokLiveState {
     String? normalizedCreator,
     String? roomId,
     TikTokLiveChatCommand? lastCommand,
-    TikTokCommandAccess? commandAccess,
+    TikTokCommandPermissions? commandPermissions,
     bool? saveRequestsToLibrary,
     int? commandsHandled,
     List<LiveQueueItem>? liveQueue,
@@ -221,7 +378,7 @@ class TikTokLiveState {
       normalizedCreator: normalizedCreator ?? this.normalizedCreator,
       roomId: roomId ?? this.roomId,
       lastCommand: lastCommand ?? this.lastCommand,
-      commandAccess: commandAccess ?? this.commandAccess,
+      commandPermissions: commandPermissions ?? this.commandPermissions,
       saveRequestsToLibrary:
           saveRequestsToLibrary ?? this.saveRequestsToLibrary,
       commandsHandled: commandsHandled ?? this.commandsHandled,
@@ -253,16 +410,25 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
 
   static const _creatorInputKey = 'tiktokLive.creatorInput';
   static const _commandAccessKey = 'tiktokLive.commandAccess';
+  static const _commandPermissionsKey = 'tiktokLive.commandPermissions.v3';
+  static const _legacyCommandPermissionsKey =
+      'tiktokLive.commandPermissions.v2';
   static const _saveRequestsToLibraryKey = 'tiktokLive.saveRequestsToLibrary';
 
   final _pendingMusicQueue = Queue<_ScheduledLiveQueueItem>();
   final _completedMusicResolutions = <int, _LiveQueueResolution>{};
   final _committingMusicQueueGenerations = <int>{};
+  final _scheduledMusicItems = <String, _ScheduledLiveQueueItem>{};
+  final _cancelledMusicSequences = <int>{};
   int _activeMusicResolutions = 0;
   int _nextMusicSequence = 0;
   int _nextMusicSequenceToCommit = 0;
   bool _liveQueueActivated = false;
   int _liveQueueGeneration = 0;
+  Future<void> _immediateCommandTail = Future<void>.value();
+  Future<void> _liveQueueSyncTail = Future<void>.value();
+  LiveQueueItem? _revokedPlayingItem;
+  int _revokedPlayingReadyIndex = -1;
 
   @override
   Future<TikTokLiveState> build() async {
@@ -272,21 +438,46 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       _cancelMusicQueueOperations();
       unawaited(subscription.cancel());
     });
+    ref.listen<AsyncValue<PlayerSnapshot>>(playerControllerProvider, (_, next) {
+      _handlePlaybackSnapshotForRevokedItem(next.value);
+    });
 
     final prefs = await SharedPreferences.getInstance();
     final creatorInput = prefs.getString(_creatorInputKey) ?? '';
-    final storedCommandAccess = prefs.getString(_commandAccessKey);
-    final commandAccess = TikTokCommandAccess.values.firstWhere(
-      (value) => value.name == storedCommandAccess,
-      orElse: () => TikTokCommandAccess.everyone,
+    TikTokCommandPermissions? decodePermissions(String? encoded) {
+      if (encoded == null) {
+        return null;
+      }
+      try {
+        return TikTokCommandPermissions.tryFromJson(jsonDecode(encoded));
+      } on FormatException {
+        return null;
+      }
+    }
+
+    final storedPermissions = decodePermissions(
+      prefs.getString(_commandPermissionsKey),
     );
+    final restoredStoredPermissions = storedPermissions != null;
+    var commandPermissions =
+        storedPermissions ??
+        decodePermissions(prefs.getString(_legacyCommandPermissionsKey));
+    commandPermissions ??= _migrateCommandPermissions(
+      prefs.getString(_commandAccessKey),
+    );
+    if (!restoredStoredPermissions) {
+      await prefs.setString(
+        _commandPermissionsKey,
+        jsonEncode(commandPermissions.toJson()),
+      );
+    }
     final saveRequestsToLibrary =
         prefs.getBool(_saveRequestsToLibraryKey) ?? false;
     return TikTokLiveState(
       creatorInput: creatorInput,
       normalizedCreator: normalizeCreatorInput(creatorInput),
       status: TikTokLiveStatus.idle,
-      commandAccess: commandAccess,
+      commandPermissions: commandPermissions,
       saveRequestsToLibrary: saveRequestsToLibrary,
       message: creatorInput.trim().isEmpty
           ? 'Ingresa un usuario o link de TikTok LIVE.'
@@ -306,11 +497,29 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     );
   }
 
-  Future<void> setCommandAccess(TikTokCommandAccess access) async {
+  Future<void> setCommandPermission(
+    TikTokCommandAudience audience,
+    TikTokLiveCommand command,
+    bool enabled,
+  ) async {
+    final current = state.value ?? await future;
+    if (current.commandPermissions.isExplicitlyEnabled(audience, command) ==
+        enabled) {
+      return;
+    }
+    final commandPermissions = current.commandPermissions.withCommand(
+      audience,
+      command,
+      enabled,
+    );
+    state = AsyncData(current.copyWith(commandPermissions: commandPermissions));
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_commandAccessKey, access.name);
-    final current = await future;
-    state = AsyncData(current.copyWith(commandAccess: access));
+    final latestPermissions =
+        state.value?.commandPermissions ?? commandPermissions;
+    await prefs.setString(
+      _commandPermissionsKey,
+      jsonEncode(latestPermissions.toJson()),
+    );
   }
 
   Future<void> setSaveRequestsToLibrary(bool value) async {
@@ -318,7 +527,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     if (current.saveRequestsToLibrary == value) {
       return;
     }
-    if (current.liveQueue.isNotEmpty) {
+    if (current.liveQueue.isNotEmpty || _revokedPlayingItem != null) {
       state = AsyncData(
         current.copyWith(
           message: 'Limpia la cola LIVE antes de cambiar el modo.',
@@ -406,6 +615,39 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     }
   }
 
+  Future<void> revokeLastLiveQueueItem() async {
+    final current = await future;
+    if (current.liveQueue.isEmpty) {
+      _setMessage('No hay pedidos en la cola LIVE para retirar.');
+      return;
+    }
+
+    final removed = current.liveQueue.last;
+    final remaining = List<LiveQueueItem>.unmodifiable(
+      current.liveQueue.take(current.liveQueue.length - 1),
+    );
+    final player = ref.read(playerControllerProvider.notifier);
+    final playback = ref.read(playerControllerProvider).value;
+    final removesPlayingItem =
+        removed.isReady &&
+        player.isLiveQueueActive &&
+        _snapshotMatchesLiveQueueItem(playback, removed);
+
+    if (removesPlayingItem) {
+      _revokedPlayingItem = removed;
+      _revokedPlayingReadyIndex = removed.saveToLibrary
+          ? remaining.where((item) => item.localTrack != null).length
+          : remaining.where((item) => item.remoteTrack != null).length;
+    }
+    _cancelScheduledLiveQueueItem(removed.id);
+    state = AsyncData(current.copyWith(liveQueue: remaining));
+
+    if (removed.isReady && player.isLiveQueueActive) {
+      await _syncLiveQueuePlaybackInOrder(saveToLibrary: removed.saveToLibrary);
+    }
+    _setMessage('Último pedido retirado: ${removed.query}');
+  }
+
   Future<void> playLiveQueueItem(String itemId) async {
     final current = await future;
     final item = current.liveQueue
@@ -415,6 +657,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       return;
     }
 
+    _clearRevokedPlayingItem();
     _liveQueueActivated = true;
     final player = ref.read(playerControllerProvider.notifier);
     if (item.saveToLibrary) {
@@ -474,12 +717,11 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       return;
     }
 
-    if (!canUseTikTokCommand(current.commandAccess, command)) {
+    if (!canUseTikTokCommand(current.commandPermissions, command)) {
       state = AsyncData(
         current.copyWith(
           lastCommand: command,
-          message:
-              'Comando ignorado de ${command.user}: solo se permiten moderadores.',
+          message: 'Comando no permitido para ${command.user}: ${command.text}',
         ),
       );
       return;
@@ -514,25 +756,30 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     );
 
     if (liveItem != null) {
-      _pendingMusicQueue.add(
-        _ScheduledLiveQueueItem(
-          sequence: _nextMusicSequence++,
-          generation: _liveQueueGeneration,
-          item: liveItem,
-        ),
+      final scheduled = _ScheduledLiveQueueItem(
+        sequence: _nextMusicSequence++,
+        generation: _liveQueueGeneration,
+        item: liveItem,
       );
+      _scheduledMusicItems[liveItem.id] = scheduled;
+      _pendingMusicQueue.add(scheduled);
       _pumpMusicQueue();
       return;
     }
 
-    unawaited(_handleImmediateCommand(command));
+    final operation = _immediateCommandTail.then(
+      (_) => _handleImmediateCommand(command),
+    );
+    _immediateCommandTail = operation;
+    unawaited(operation);
   }
 
   String _commandMessage(TikTokLiveChatCommand command) {
     return switch (command.action) {
       'play' => '${command.user}: !play ${command.query ?? ''}',
       'skip' => '${command.user}: !skip',
-      'revoke' => '${command.user}: revoke!',
+      'revoke' => '${command.user}: ${command.text}',
+      'stop' => '${command.user}: !stop',
       _ => '${command.user}: ${command.text}',
     };
   }
@@ -545,7 +792,15 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
             await ref.read(playerControllerProvider.notifier).playNext();
           }
         case 'revoke':
-          await clearLiveQueue();
+          await revokeLastLiveQueueItem();
+        case 'stop':
+          final player = ref.read(playerControllerProvider.notifier);
+          if (!player.isLiveQueueActive) {
+            _setMessage('No hay una canción LIVE reproduciéndose.');
+            return;
+          }
+          await player.pause();
+          _setMessage('Reproducción LIVE pausada.');
       }
     } catch (error) {
       _setMessage('No se pudo ejecutar ${command.text}: $error');
@@ -559,6 +814,18 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       _activeMusicResolutions++;
       unawaited(_runMusicResolution(scheduled));
     }
+  }
+
+  void _cancelScheduledLiveQueueItem(String itemId) {
+    final scheduled = _scheduledMusicItems.remove(itemId);
+    if (scheduled == null || scheduled.generation != _liveQueueGeneration) {
+      return;
+    }
+    _pendingMusicQueue.remove(scheduled);
+    _completedMusicResolutions.remove(scheduled.sequence);
+    _cancelledMusicSequences.add(scheduled.sequence);
+    _scheduleMusicQueueCommit(scheduled.generation);
+    _pumpMusicQueue();
   }
 
   Future<void> _runMusicResolution(_ScheduledLiveQueueItem scheduled) async {
@@ -716,6 +983,10 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   Future<void> _commitCompletedMusicQueue(int generation) async {
     try {
       while (generation == _liveQueueGeneration) {
+        if (_cancelledMusicSequences.remove(_nextMusicSequenceToCommit)) {
+          _nextMusicSequenceToCommit++;
+          continue;
+        }
         final resolution = _completedMusicResolutions.remove(
           _nextMusicSequenceToCommit,
         );
@@ -725,6 +996,7 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         _nextMusicSequenceToCommit++;
 
         final item = resolution.scheduled.item;
+        _scheduledMusicItems.remove(item.id);
         if (!_isLiveQueueOperationCurrent(item.id, generation)) {
           continue;
         }
@@ -758,7 +1030,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
         );
 
         try {
-          await _syncLiveQueuePlayback(saveToLibrary: item.saveToLibrary);
+          await _syncLiveQueuePlaybackInOrder(
+            saveToLibrary: item.saveToLibrary,
+          );
           if (_isLiveQueueOperationCurrent(item.id, generation)) {
             _setMessage(
               item.saveToLibrary
@@ -790,6 +1064,17 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     }
   }
 
+  Future<void> _syncLiveQueuePlaybackInOrder({required bool saveToLibrary}) {
+    final operation = _liveQueueSyncTail.then(
+      (_) => _syncLiveQueuePlayback(saveToLibrary: saveToLibrary),
+    );
+    _liveQueueSyncTail = operation.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {},
+    );
+    return operation;
+  }
+
   Future<void> _syncLiveQueuePlayback({required bool saveToLibrary}) async {
     final current = state.value;
     if (current == null) {
@@ -801,8 +1086,13 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       return;
     }
 
-    final readyTracks = current.readyTracks;
+    final readyTracks = _localPlaybackTracks(current);
     if (readyTracks.isEmpty) {
+      final player = ref.read(playerControllerProvider.notifier);
+      if (player.isLiveQueueActive) {
+        _liveQueueActivated = false;
+        await player.clearQueueSource(PlayerController.liveQueueSourceId);
+      }
       return;
     }
 
@@ -838,8 +1128,13 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   }
 
   Future<void> _syncRemoteLiveQueuePlayback(TikTokLiveState current) async {
-    final readyTracks = current.readyRemoteTracks;
+    final readyTracks = _remotePlaybackTracks(current);
     if (readyTracks.isEmpty) {
+      final player = ref.read(playerControllerProvider.notifier);
+      if (player.isLiveQueueActive) {
+        _liveQueueActivated = false;
+        await player.clearQueueSource(PlayerController.liveQueueSourceId);
+      }
       return;
     }
 
@@ -875,6 +1170,72 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     _throwIfLivePlaybackFailed();
   }
 
+  List<LocalTrack> _localPlaybackTracks(TikTokLiveState current) {
+    final tracks = current.readyTracks.toList(growable: true);
+    final revoked = _revokedPlayingItem;
+    final revokedTrack = revoked?.saveToLibrary == true
+        ? revoked?.localTrack
+        : null;
+    if (revokedTrack != null) {
+      final index = _revokedPlayingReadyIndex.clamp(0, tracks.length).toInt();
+      tracks.insert(index, revokedTrack);
+    }
+    return List<LocalTrack>.unmodifiable(tracks);
+  }
+
+  List<TrackInfo> _remotePlaybackTracks(TikTokLiveState current) {
+    final tracks = current.readyRemoteTracks.toList(growable: true);
+    final revoked = _revokedPlayingItem;
+    final revokedTrack = revoked?.saveToLibrary == false
+        ? revoked?.remoteTrack
+        : null;
+    if (revokedTrack != null) {
+      final index = _revokedPlayingReadyIndex.clamp(0, tracks.length).toInt();
+      tracks.insert(index, revokedTrack);
+    }
+    return List<TrackInfo>.unmodifiable(tracks);
+  }
+
+  bool _snapshotMatchesLiveQueueItem(
+    PlayerSnapshot? snapshot,
+    LiveQueueItem item,
+  ) {
+    if (snapshot == null) {
+      return false;
+    }
+    if (item.saveToLibrary) {
+      final track = item.localTrack;
+      return track != null &&
+          (snapshot.trackId == track.id ||
+              (!snapshot.isRemote && snapshot.sourceUrl == track.filePath));
+    }
+    final track = item.remoteTrack;
+    return track != null && _snapshotMatchesRemoteTrack(snapshot, track);
+  }
+
+  void _handlePlaybackSnapshotForRevokedItem(PlayerSnapshot? snapshot) {
+    final revoked = _revokedPlayingItem;
+    if (revoked == null ||
+        snapshot == null ||
+        _snapshotMatchesLiveQueueItem(snapshot, revoked)) {
+      return;
+    }
+
+    final saveToLibrary = revoked.saveToLibrary;
+    _clearRevokedPlayingItem();
+    final current = state.value;
+    if (current == null ||
+        !ref.read(playerControllerProvider.notifier).isLiveQueueActive) {
+      return;
+    }
+    unawaited(_syncLiveQueuePlaybackInOrder(saveToLibrary: saveToLibrary));
+  }
+
+  void _clearRevokedPlayingItem() {
+    _revokedPlayingItem = null;
+    _revokedPlayingReadyIndex = -1;
+  }
+
   void _throwIfLivePlaybackFailed() {
     final playback = ref.read(playerControllerProvider);
     if (playback.hasError) {
@@ -906,6 +1267,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     _liveQueueGeneration++;
     _pendingMusicQueue.clear();
     _completedMusicResolutions.clear();
+    _scheduledMusicItems.clear();
+    _cancelledMusicSequences.clear();
+    _clearRevokedPlayingItem();
     // Existing non-cancellable Futures keep their worker slots until they
     // settle, but their sequence numbers must never block the new generation.
     _nextMusicSequenceToCommit = _nextMusicSequence;

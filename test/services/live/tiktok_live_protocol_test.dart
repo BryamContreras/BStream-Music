@@ -13,12 +13,14 @@ import 'package:piratetok_live/src/proto/codec.dart';
 import 'package:piratetok_live/src/proto/messages.dart';
 
 void main() {
-  test('chat decoder preserves moderator identity from protobuf field 18', () {
+  test('chat decoder preserves role identity from protobuf fields', () {
     final user = protoWrite((writer) {
       writer.writeStringField(3, 'Moderator');
       writer.writeStringField(38, 'mod.viewer');
+      writer.writeBoolField(1090, true);
     });
     final identity = protoWrite((writer) {
+      writer.writeBoolField(2, true);
       writer.writeBoolField(5, true);
     });
     final message = protoWrite((writer) {
@@ -35,6 +37,15 @@ void main() {
     expect(
       (decoded.data['user'] as Map<String, dynamic>)['uniqueId'],
       'mod.viewer',
+    );
+    expect(
+      (decoded.data['user'] as Map<String, dynamic>)['isSubscribe'],
+      isTrue,
+    );
+    expect(
+      (decoded.data['userIdentity']
+          as Map<String, dynamic>)['isSubscriberOfAnchor'],
+      isTrue,
     );
     expect(
       (decoded.data['userIdentity']

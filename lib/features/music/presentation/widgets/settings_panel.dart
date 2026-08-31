@@ -66,6 +66,13 @@ final settingsExternalLauncherProvider = Provider<SettingsExternalLauncher>(
 
 typedef SettingsSupportedLinksLauncher = Future<bool> Function();
 
+typedef _TikTokCommandPermissionChanged =
+    void Function(
+      TikTokCommandAudience audience,
+      TikTokLiveCommand command,
+      bool enabled,
+    );
+
 final settingsSupportedLinksLauncherProvider =
     Provider<SettingsSupportedLinksLauncher>((ref) {
       const channel = AndroidSupportedLinksSettingsChannel();
@@ -395,9 +402,10 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                   onDisconnect: () => ref
                       .read(tiktokLiveControllerProvider.notifier)
                       .disconnect(),
-                  onCommandAccessChanged: (access) => ref
-                      .read(tiktokLiveControllerProvider.notifier)
-                      .setCommandAccess(access),
+                  onCommandPermissionChanged: (audience, command, enabled) =>
+                      ref
+                          .read(tiktokLiveControllerProvider.notifier)
+                          .setCommandPermission(audience, command, enabled),
                 ),
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (error, _) => Text(error.toString()),
@@ -4036,7 +4044,7 @@ class _TikTokLiveSettings extends StatelessWidget {
     required this.strings,
     required this.onConnect,
     required this.onDisconnect,
-    required this.onCommandAccessChanged,
+    required this.onCommandPermissionChanged,
   });
 
   final TextEditingController controller;
@@ -4045,7 +4053,7 @@ class _TikTokLiveSettings extends StatelessWidget {
   final AppStrings strings;
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
-  final ValueChanged<TikTokCommandAccess> onCommandAccessChanged;
+  final _TikTokCommandPermissionChanged onCommandPermissionChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -4121,28 +4129,28 @@ class _TikTokLiveSettings extends StatelessWidget {
             strings.commandPermissions,
             style: appSecondaryLabelStyle(context),
           ),
-          const SizedBox(height: 7),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ChoiceChip(
-                avatar: const Icon(Icons.groups_rounded, size: 18),
-                label: Text(strings.everyone),
-                selected: state.commandAccess == TikTokCommandAccess.everyone,
-                onSelected: (_) =>
-                    onCommandAccessChanged(TikTokCommandAccess.everyone),
-              ),
-              ChoiceChip(
-                avatar: const Icon(Icons.shield_rounded, size: 18),
-                label: Text(strings.moderators),
-                selected: state.commandAccess == TikTokCommandAccess.moderators,
-                onSelected: (_) =>
-                    onCommandAccessChanged(TikTokCommandAccess.moderators),
-              ),
-            ],
+          const SizedBox(height: 8),
+          _TikTokCommandAudienceSection(
+            audience: TikTokCommandAudience.everyone,
+            permissions: state.commandPermissions,
+            strings: strings,
+            onChanged: onCommandPermissionChanged,
           ),
           const SizedBox(height: 10),
+          _TikTokCommandAudienceSection(
+            audience: TikTokCommandAudience.moderators,
+            permissions: state.commandPermissions,
+            strings: strings,
+            onChanged: onCommandPermissionChanged,
+          ),
+          const SizedBox(height: 10),
+          _TikTokCommandAudienceSection(
+            audience: TikTokCommandAudience.subscribers,
+            permissions: state.commandPermissions,
+            strings: strings,
+            onChanged: onCommandPermissionChanged,
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               Icon(_statusIcon(state.status), color: statusColor, size: 20),
@@ -4180,7 +4188,7 @@ class _TikTokLiveSettings extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '${strings.lastCommand}: ${state.lastCommand!.text}'
-              '${state.lastCommand!.isModerator ? ' - ${strings.moderator}' : ''}',
+              '${_commandRoleSuffix(state.lastCommand!, strings)}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodySmall,
@@ -4200,6 +4208,146 @@ class _TikTokLiveSettings extends StatelessWidget {
       _ => Icons.info_rounded,
     };
   }
+
+  String _commandRoleSuffix(TikTokLiveChatCommand command, AppStrings strings) {
+    final roles = <String>[
+      if (command.isModerator) strings.moderator,
+      if (command.isSubscriber) strings.subscriber,
+    ];
+    return roles.isEmpty ? '' : ' - ${roles.join(', ')}';
+  }
+}
+
+class _TikTokCommandAudienceSection extends StatelessWidget {
+  const _TikTokCommandAudienceSection({
+    required this.audience,
+    required this.permissions,
+    required this.strings,
+    required this.onChanged,
+  });
+
+  final TikTokCommandAudience audience;
+  final TikTokCommandPermissions permissions;
+  final AppStrings strings;
+  final _TikTokCommandPermissionChanged onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      key: ValueKey('tiktok-command-section-${audience.name}'),
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(_icon, size: 20, color: colorScheme.primary),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _title,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _hint,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 7),
+            for (final command in TikTokLiveCommand.values)
+              _commandTile(context, command),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _commandTile(BuildContext context, TikTokLiveCommand command) {
+    final inherited =
+        audience != TikTokCommandAudience.everyone &&
+        permissions.everyone.contains(command);
+    final selected =
+        inherited || permissions.isExplicitlyEnabled(audience, command);
+    final description = _commandDescription(command);
+    return CheckboxListTile(
+      key: ValueKey('tiktok-command-${audience.name}-${command.name}'),
+      value: selected,
+      onChanged: inherited
+          ? null
+          : (value) => onChanged(audience, command, value ?? false),
+      controlAffinity: ListTileControlAffinity.leading,
+      dense: true,
+      visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+      contentPadding: EdgeInsets.zero,
+      title: Text(
+        _commandLabel(command),
+        style: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      subtitle: Text(
+        inherited
+            ? '$description ${strings.commandAllowedForEveryone}'
+            : description,
+      ),
+    );
+  }
+
+  IconData get _icon => switch (audience) {
+    TikTokCommandAudience.everyone => Icons.groups_rounded,
+    TikTokCommandAudience.moderators => Icons.shield_rounded,
+    TikTokCommandAudience.subscribers => Icons.workspace_premium_rounded,
+  };
+
+  String get _title => switch (audience) {
+    TikTokCommandAudience.everyone => strings.everyone,
+    TikTokCommandAudience.moderators => strings.moderators,
+    TikTokCommandAudience.subscribers => strings.subscribers,
+  };
+
+  String get _hint => switch (audience) {
+    TikTokCommandAudience.everyone => strings.everyoneCommandPermissionsHint,
+    TikTokCommandAudience.moderators => strings.moderatorCommandPermissionsHint,
+    TikTokCommandAudience.subscribers =>
+      strings.subscriberCommandPermissionsHint,
+  };
+
+  String _commandLabel(TikTokLiveCommand command) => switch (command) {
+    TikTokLiveCommand.play => strings.livePlayCommand,
+    TikTokLiveCommand.skip => strings.liveSkipCommand,
+    TikTokLiveCommand.revoke => strings.liveRevokeCommand,
+    TikTokLiveCommand.stop => strings.liveStopCommand,
+  };
+
+  String _commandDescription(TikTokLiveCommand command) => switch (command) {
+    TikTokLiveCommand.play => strings.livePlayCommandDescription,
+    TikTokLiveCommand.skip => strings.liveSkipCommandDescription,
+    TikTokLiveCommand.revoke => strings.liveRevokeCommandDescription,
+    TikTokLiveCommand.stop => strings.liveStopCommandDescription,
+  };
 }
 
 class _PathField extends StatelessWidget {
