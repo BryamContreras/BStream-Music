@@ -14,6 +14,8 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import com.ryanheise.audioservice.AudioServiceActivity
 import com.yausername.youtubedl_android.YoutubeDL
@@ -87,6 +89,9 @@ class MainActivity : AudioServiceActivity() {
     private var localAudioPermissionRequestInFlight = false
     private var notificationPermissionRequestInFlight = false
     private var androidPoTokenProvider: AndroidPoTokenProvider? = null
+    private var statusBarHidden = false
+    private var previousSystemUiVisibility: Int? = null
+    private var previousSystemBarsBehavior: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -141,6 +146,7 @@ class MainActivity : AudioServiceActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setKeepScreenOn" -> setKeepScreenOn(call, result)
+                "setStatusBarHidden" -> setStatusBarHidden(call, result)
                 else -> result.notImplemented()
             }
         }
@@ -326,6 +332,55 @@ class MainActivity : AudioServiceActivity() {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         result.success(null)
+    }
+
+    private fun setStatusBarHidden(call: MethodCall, result: MethodChannel.Result) {
+        statusBarHidden = call.argument<Boolean>("hidden") ?: false
+        applyStatusBarVisibility()
+        result.success(null)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applyStatusBarVisibility() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val controller = window.insetsController ?: return
+            if (statusBarHidden) {
+                if (previousSystemBarsBehavior == null) {
+                    previousSystemBarsBehavior = controller.systemBarsBehavior
+                }
+                controller.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsets.Type.statusBars())
+            } else {
+                controller.show(WindowInsets.Type.statusBars())
+                previousSystemBarsBehavior?.let { controller.systemBarsBehavior = it }
+                previousSystemBarsBehavior = null
+            }
+            return
+        }
+
+        val decorView = window.decorView
+        if (statusBarHidden) {
+            if (previousSystemUiVisibility == null) {
+                previousSystemUiVisibility = decorView.systemUiVisibility
+            }
+            decorView.systemUiVisibility =
+                previousSystemUiVisibility!! or
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        } else {
+            previousSystemUiVisibility?.let { decorView.systemUiVisibility = it }
+            previousSystemUiVisibility = null
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && statusBarHidden) {
+            applyStatusBarVisibility()
+        }
     }
 
     @Deprecated("Deprecated in the Android framework, required by the document picker callback")

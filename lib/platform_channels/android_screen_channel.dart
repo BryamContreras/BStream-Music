@@ -21,4 +21,16 @@ class AndroidScreenChannel {
       // Failing to keep the display awake must not break the lyrics screen.
     }
   }
+
+  Future<void> setStatusBarHidden(bool hidden) async {
+    try {
+      await _methodChannel.invokeMethod<void>('setStatusBarHidden', {
+        'hidden': hidden,
+      });
+    } on MissingPluginException {
+      // The channel is Android-only; keep other platforms and old engines safe.
+    } on PlatformException {
+      // A cosmetic system-bar failure must not break the lyrics screen.
+    }
+  }
 }

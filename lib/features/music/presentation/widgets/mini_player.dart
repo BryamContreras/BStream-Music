@@ -522,7 +522,7 @@ class MiniPlayer extends ConsumerWidget {
                                             const SizedBox(width: 12),
                                           desktopLyrics,
                                           const SizedBox(width: 4),
-                                          desktopVolume,
+                                          Flexible(child: desktopVolume),
                                         ],
                                       ),
                                     ),

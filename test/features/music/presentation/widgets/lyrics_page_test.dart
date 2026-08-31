@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:bstream_music/core/theme/app_colors.dart';
+import 'package:bstream_music/core/widgets/marquee_text.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/lyrics.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -9,6 +10,8 @@ import 'package:bstream_music/features/music/presentation/providers/artwork_prog
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_animation_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_page.dart';
+import 'package:bstream_music/features/music/presentation/widgets/wavy_playback_seek_bar.dart';
+import 'package:bstream_music/platform_channels/lyrics_presentation_chrome.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/lyrics/lyrics_romanization_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
@@ -136,13 +139,13 @@ void main() {
     await pumpTransition(style: LyricsAnimationStyle.smooth, active: false);
     expect(_lyricsTransitionScale(tester), closeTo(0.98, 0.001));
     await pumpTransition(style: LyricsAnimationStyle.smooth, active: true);
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     expect(_lyricsTransitionScale(tester), closeTo(1, 0.001));
 
     await pumpTransition(style: LyricsAnimationStyle.highlight, active: false);
     expect(_lyricsTransitionScale(tester), closeTo(0.98, 0.001));
     await pumpTransition(style: LyricsAnimationStyle.highlight, active: true);
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     expect(_lyricsTransitionScale(tester), closeTo(1.01, 0.001));
 
     final decoration =
@@ -163,6 +166,14 @@ void main() {
   testWidgets('synced lyrics follow the current playback position', (
     tester,
   ) async {
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(
       tester,
@@ -180,7 +191,7 @@ void main() {
     player.emit(
       lookupSnapshot.copyWith(position: const Duration(milliseconds: 4250)),
     );
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     expect(_activeLine('Third line'), findsOneWidget);
     expect(_activeLine('First line'), findsNothing);
@@ -268,7 +279,7 @@ void main() {
       player.emit(
         lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
       );
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       expect(_activeLine('Second line'), findsOneWidget);
       expect(_activeLine('Romanized: Second line'), findsOneWidget);
       final retainedTile = tester.element(
@@ -283,14 +294,14 @@ void main() {
       await container
           .read(settingsControllerProvider.notifier)
           .setLyricsRomanizationEnabled(false);
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       expect(_activeLine('Second line'), findsOneWidget);
       expect(find.text('Romanized: Second line'), findsNothing);
 
       await container
           .read(settingsControllerProvider.notifier)
           .setLyricsRomanizationEnabled(true);
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       expect(_activeLine('Second line'), findsOneWidget);
       expect(_activeLine('Romanized: Second line'), findsOneWidget);
       expect(
@@ -332,7 +343,11 @@ void main() {
         ..resetPhysicalSize()
         ..resetDevicePixelRatio();
     });
-    final player = _FakePlayerService(lookupSnapshot);
+    const longHeaderTitle =
+        'A very long song title that must slide across the lyrics header';
+    final player = _FakePlayerService(
+      lookupSnapshot.copyWith(title: longHeaderTitle),
+    );
     await _pumpLyricsPage(
       tester,
       player: player,
@@ -355,6 +370,22 @@ void main() {
     final playbackButton = tester.widget<IconButton>(playback);
     expect(playbackButton.iconSize, 36);
     expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+    final headerTrackTitle = find.byKey(
+      const ValueKey('lyrics-header-track-title'),
+    );
+    expect(
+      tester.widget<MarqueeText>(headerTrackTitle).text,
+      '$longHeaderTitle - Test artist',
+    );
+    expect(
+      find.descendant(
+        of: headerTrackTitle,
+        matching: find.byKey(const ValueKey('marquee-text-animation')),
+      ),
+      findsOneWidget,
+    );
 
     final semantics = tester.ensureSemantics();
     final artworkSemantics = tester.getSemantics(artwork).getSemanticsData();
@@ -367,7 +398,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('desktop lyrics retain the bottom mini player and lean header', (
+  testWidgets('desktop lyrics open with the side player by default', (
     tester,
   ) async {
     await _pumpLyricsPage(
@@ -377,11 +408,721 @@ void main() {
       platform: TargetPlatform.windows,
     );
 
-    expect(find.byKey(const ValueKey('lyrics-back-button')), findsOneWidget);
-    expect(find.text('Lyrics'), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-header')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-back-button')), findsNothing);
     expect(find.byKey(const ValueKey('lyrics-header-artwork')), findsNothing);
     expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
-    expect(find.byKey(const ValueKey('mini-player-frame')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Windows opens the companion and keeps exit beside the offset capsule',
+    (tester) async {
+      tester.view
+        ..physicalSize = const Size(1280, 800)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      final player = _FakePlayerService(lookupSnapshot);
+      final chrome = _FakeLyricsPresentationChrome();
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(syncedDocument),
+        platform: TargetPlatform.windows,
+        presentationChrome: chrome,
+      );
+
+      final exit = find.byKey(const ValueKey('lyrics-exit-button'));
+      final toolbar = find.byKey(const ValueKey('lyrics-overlay-toolbar'));
+      final offsetControl = find.byKey(const ValueKey('lyrics-offset-control'));
+      final companion = find.byKey(const ValueKey('lyrics-playback-companion'));
+      final companionWidth = find.byKey(
+        const ValueKey('lyrics-companion-width'),
+      );
+      final companionGap = find.byKey(
+        const ValueKey('lyrics-desktop-companion-gap'),
+      );
+
+      expect(exit, findsOneWidget);
+      expect(tester.widget<IconButton>(exit).tooltip, 'Exit Lyrics');
+      expect(
+        find.descendant(of: exit, matching: find.byIcon(Icons.close_rounded)),
+        findsOneWidget,
+      );
+      expect(toolbar, findsOneWidget);
+      expect(offsetControl, findsOneWidget);
+      expect(find.descendant(of: toolbar, matching: exit), findsOneWidget);
+      expect(
+        find.descendant(of: toolbar, matching: offsetControl),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('lyrics-header')), findsNothing);
+      expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+      expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+      expect(companion, findsOneWidget);
+      expect(companionWidth, findsOneWidget);
+      expect(companionGap, findsOneWidget);
+      expect(chrome.calls, isEmpty);
+
+      final exitRect = tester.getRect(exit);
+      final offsetRect = tester.getRect(offsetControl);
+      expect(offsetRect.left - exitRect.right, inInclusiveRange(8, 10));
+      expect(exitRect.center.dy, closeTo(offsetRect.center.dy, 0.1));
+      expect(_iconButtonBackground(tester, exit), Colors.transparent);
+      final expandedCompanionWidth = tester.getSize(companionWidth).width;
+      expect(expandedCompanionWidth, closeTo(1280 * 0.34, 0.1));
+      expect(expandedCompanionWidth, greaterThan(1280 * 0.30));
+      expect(tester.getSize(companionGap).width, closeTo(0, 0.1));
+      expect(
+        tester
+                .getRect(find.byKey(const ValueKey('lyrics-content-region')))
+                .left -
+            tester.getRect(companionWidth).right,
+        closeTo(0, 0.1),
+      );
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('lyrics-content-region')))
+            .bottom,
+        closeTo(800, 0.1),
+      );
+      expect(
+        find.byKey(const ValueKey('lyrics-companion-artwork')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<MarqueeText>(
+              find.byKey(const ValueKey('lyrics-companion-title')),
+            )
+            .text,
+        'Test song',
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('lyrics-companion-artist')))
+            .data,
+        'Test artist',
+      );
+      expect(
+        find.byKey(const ValueKey('lyrics-companion-glass-blur')),
+        findsNothing,
+      );
+      final companionSurface = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('lyrics-companion-glass-surface')),
+      );
+      final companionDecoration = companionSurface.decoration as BoxDecoration;
+      expect(companionDecoration.color, Colors.transparent);
+      expect(companionDecoration.gradient, isNull);
+      expect(
+        (companionDecoration.border! as Border).top.color,
+        Colors.transparent,
+      );
+      final companionFrame = tester.widget<Container>(companion);
+      final companionFrameDecoration =
+          companionFrame.decoration! as BoxDecoration;
+      expect(companionFrameDecoration.color, Colors.transparent);
+      expect(
+        (companionFrameDecoration.border! as Border).top.color,
+        Colors.transparent,
+      );
+      expect(companionFrameDecoration.boxShadow, isNull);
+
+      final previousControl = find.byKey(
+        const ValueKey('lyrics-companion-previous-control'),
+      );
+      final primaryControl = find.byKey(
+        const ValueKey('lyrics-companion-primary-control'),
+      );
+      final nextControl = find.byKey(
+        const ValueKey('lyrics-companion-next-control'),
+      );
+      final controls = find.byKey(
+        const ValueKey('lyrics-companion-transport-controls'),
+      );
+      expect(previousControl, findsOneWidget);
+      expect(primaryControl, findsOneWidget);
+      expect(nextControl, findsOneWidget);
+      for (final control in [previousControl, primaryControl, nextControl]) {
+        expect(_iconButtonBackground(tester, control), Colors.transparent);
+        expect(
+          _iconButtonBackground(tester, control, disabled: true),
+          Colors.transparent,
+        );
+      }
+      expect(
+        find.descendant(
+          of: primaryControl,
+          matching: find.byIcon(Icons.pause_rounded),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.widget<IconButton>(previousControl).onPressed, isNotNull);
+      expect(tester.widget<IconButton>(nextControl).onPressed, isNotNull);
+
+      final timeline = find.byKey(const ValueKey('lyrics-companion-timeline'));
+      expect(
+        tester.widget<WavyPlaybackSeekBar>(timeline).position,
+        const Duration(milliseconds: 1800),
+      );
+      expect(
+        tester.widget<WavyPlaybackSeekBar>(timeline).duration,
+        const Duration(minutes: 3),
+      );
+      expect(tester.getSize(timeline).height, closeTo(48, 0.1));
+      expect(
+        tester.getRect(controls).top,
+        closeTo(tester.getRect(timeline).bottom - 6, 0.1),
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('lyrics-companion-position-label')),
+            )
+            .data,
+        '0:01',
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('lyrics-companion-duration-label')),
+            )
+            .data,
+        '3:00',
+      );
+      final colorAnimationFinder = find.byKey(
+        const ValueKey('lyrics-companion-progress-color-animation'),
+      );
+      final colorAnimation = tester.widget<TweenAnimationBuilder<Color?>>(
+        colorAnimationFinder,
+      );
+      expect(
+        colorAnimation.tween.end,
+        AppColors.downloadAccentFor(tester.element(colorAnimationFinder)),
+      );
+      expect(
+        find.descendant(of: companion, matching: find.byType(Slider)),
+        findsNothing,
+      );
+
+      final semantics = tester.ensureSemantics();
+      final timelineSemanticsFinder = find.bySemanticsLabel(
+        'Playback timeline',
+      );
+      expect(timelineSemanticsFinder, findsOneWidget);
+      final timelineSemantics = tester
+          .getSemantics(timelineSemanticsFinder)
+          .getSemanticsData();
+      expect(timelineSemantics.flagsCollection.isSlider, isTrue);
+      expect(timelineSemantics.label, 'Playback timeline');
+      expect(timelineSemantics.hasAction(SemanticsAction.increase), isTrue);
+      expect(timelineSemantics.hasAction(SemanticsAction.decrease), isTrue);
+      semantics.dispose();
+
+      await tester.tapAt(tester.getCenter(timeline));
+      await tester.pump();
+      expect(player.seekPositions, hasLength(1));
+      expect(
+        player.seekPositions.single.inMilliseconds,
+        closeTo(const Duration(seconds: 90).inMilliseconds, 1000),
+      );
+      await tester.tap(primaryControl);
+      await tester.pump();
+      expect(player.togglePlayPauseCalls, 1);
+
+      player.emit(lookupSnapshot.copyWith(status: PlayerStatus.paused));
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: primaryControl,
+          matching: find.byIcon(Icons.play_arrow_rounded),
+        ),
+        findsOneWidget,
+      );
+      final scrollRect = tester.getRect(
+        find.byKey(const ValueKey('synced-lyrics-scroll')),
+      );
+      final activeLineRect = tester.getRect(
+        find.byKey(const ValueKey('active-lyric-line')),
+      );
+      expect(
+        activeLineRect.center.dy,
+        inInclusiveRange(scrollRect.top, scrollRect.bottom),
+      );
+      expect(chrome.calls, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Windows side layout keeps track metadata attached to the artwork',
+    (tester) async {
+      tester.view
+        ..physicalSize = const Size(1920, 1000)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      await _pumpLyricsPage(
+        tester,
+        player: _FakePlayerService(lookupSnapshot),
+        lyrics: _FakeLyricsService(syncedDocument),
+        platform: TargetPlatform.windows,
+      );
+
+      final frame = find.byKey(const ValueKey('lyrics-side-layout-frame'));
+      final companionWidth = find.byKey(
+        const ValueKey('lyrics-companion-width'),
+      );
+      final companionGap = find.byKey(
+        const ValueKey('lyrics-desktop-companion-gap'),
+      );
+      final contentRegion = find.byKey(const ValueKey('lyrics-content-region'));
+      final artwork = find.byKey(const ValueKey('lyrics-companion-artwork'));
+      final title = find.byKey(const ValueKey('lyrics-companion-title'));
+      final artist = find.byKey(const ValueKey('lyrics-companion-artist'));
+
+      final frameRect = tester.getRect(frame);
+      expect(frameRect.width, closeTo(1800, 0.1));
+      expect(frameRect.left, closeTo(60, 0.1));
+      expect(frameRect.right, closeTo(1860, 0.1));
+      expect(tester.getSize(companionWidth).width, closeTo(580, 0.1));
+      expect(tester.getSize(companionGap).width, closeTo(80, 0.1));
+      expect(tester.getSize(contentRegion).width, closeTo(1140, 0.1));
+      expect(
+        tester.getRect(contentRegion).left -
+            tester.getRect(companionWidth).right,
+        closeTo(80, 0.1),
+      );
+
+      final artworkRect = tester.getRect(artwork);
+      final titleRect = tester.getRect(title);
+      final artistRect = tester.getRect(artist);
+      expect(titleRect.top - artworkRect.bottom, inInclusiveRange(0, 12));
+      expect(artistRect.top - titleRect.bottom, inInclusiveRange(0, 4));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Windows side mode never changes the native title bar', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(1280, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    final chrome = _FakeLyricsPresentationChrome();
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.windows,
+      presentationChrome: chrome,
+    );
+
+    expect(chrome.calls, isEmpty);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _settleLyricsAnimations(tester);
+
+    expect(chrome.calls, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows exit returns to the host and reopens in side mode', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(1280, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    final container = await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.windows,
+    );
+    final navigatorKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          navigatorKey: navigatorKey,
+          theme: ThemeData(platform: TargetPlatform.windows),
+          home: const Scaffold(
+            body: Center(
+              child: Text('Lyrics route host', key: ValueKey('lyrics-host')),
+            ),
+          ),
+        ),
+      ),
+    );
+    await _settleLyricsAnimations(tester);
+
+    void openLyrics() {
+      unawaited(
+        navigatorKey.currentState!.push<void>(
+          MaterialPageRoute<void>(builder: (_) => const LyricsPage()),
+        ),
+      );
+    }
+
+    openLyrics();
+    await _pumpAnimatedLyrics(tester);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('lyrics-header')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('lyrics-exit-button')));
+    await _settleLyricsAnimations(tester);
+    expect(find.byKey(const ValueKey('lyrics-host')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsNothing,
+    );
+
+    openLyrics();
+    await _pumpAnimatedLyrics(tester);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('lyrics-header')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('lyrics-exit-button')));
+    await _settleLyricsAnimations(tester);
+    expect(find.byKey(const ValueKey('lyrics-host')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android landscape automatically shows the minimal side player', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(800, 400)
+      ..devicePixelRatio = 1
+      ..padding = const FakeViewPadding(left: 34, right: 18);
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio()
+        ..resetPadding();
+    });
+
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+
+    expect(find.byKey(const ValueKey('lyrics-header')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    final companion = find.byKey(const ValueKey('lyrics-playback-companion'));
+    expect(companion, findsOneWidget);
+    final companionDecoration =
+        tester
+                .widget<DecoratedBox>(
+                  find.byKey(const ValueKey('lyrics-companion-glass-surface')),
+                )
+                .decoration
+            as BoxDecoration;
+    expect(companionDecoration.color, Colors.transparent);
+    expect(companionDecoration.gradient, isNull);
+    expect(
+      (companionDecoration.border! as Border).top.color,
+      Colors.transparent,
+    );
+    expect(
+      find.byKey(const ValueKey('lyrics-companion-artwork')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('lyrics-companion-title')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-companion-artist')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-companion-timeline')),
+      findsOneWidget,
+    );
+    final companionRect = tester.getRect(companion);
+    final lyricsRect = tester.getRect(
+      find.byKey(const ValueKey('lyrics-content-region')),
+    );
+    expect(companionRect.left, greaterThanOrEqualTo(34));
+    expect(companionRect.right, lessThanOrEqualTo(lyricsRect.left));
+    expect(companionRect.right, lessThanOrEqualTo(800 - 18));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('lyrics companion transport controls drive playback', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(800, 400)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    final controller = _LyricsTransportPlayerController(lookupSnapshot);
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      playerController: controller,
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+
+    final controls = find.byKey(
+      const ValueKey('lyrics-companion-transport-controls'),
+    );
+    final previous = find.byKey(
+      const ValueKey('lyrics-companion-previous-control'),
+    );
+    final primary = find.byKey(
+      const ValueKey('lyrics-companion-primary-control'),
+    );
+    final next = find.byKey(const ValueKey('lyrics-companion-next-control'));
+    final timeline = find.byKey(const ValueKey('lyrics-companion-timeline'));
+    final companion = find.byKey(const ValueKey('lyrics-playback-companion'));
+
+    expect(controls, findsOneWidget);
+    expect(previous, findsOneWidget);
+    expect(primary, findsOneWidget);
+    expect(next, findsOneWidget);
+    final timelineRect = tester.getRect(timeline);
+    final controlsRect = tester.getRect(controls);
+    expect(tester.widget<WavyPlaybackSeekBar>(timeline), isNotNull);
+    expect(timelineRect.height, closeTo(48, 0.1));
+    expect(controlsRect.top, closeTo(timelineRect.bottom - 6, 0.1));
+    expect(
+      tester.getRect(controls).bottom,
+      lessThanOrEqualTo(tester.getRect(companion).bottom),
+    );
+    expect(
+      tester.getCenter(previous).dx,
+      lessThan(tester.getCenter(primary).dx),
+    );
+    expect(tester.getCenter(primary).dx, lessThan(tester.getCenter(next).dx));
+    expect(tester.widget<IconButton>(previous).tooltip, 'Previous');
+    expect(tester.widget<IconButton>(primary).tooltip, 'Pause');
+    expect(tester.widget<IconButton>(next).tooltip, 'Next');
+    expect(tester.getSize(previous), const Size.square(44));
+    expect(tester.getSize(primary), const Size.square(48));
+    expect(tester.getSize(next), const Size.square(44));
+    expect(
+      tester.getRect(previous).right,
+      closeTo(tester.getRect(primary).left, 0.1),
+    );
+    expect(
+      tester.getRect(primary).right,
+      closeTo(tester.getRect(next).left, 0.1),
+    );
+    for (final control in [previous, primary, next]) {
+      expect(_iconButtonBackground(tester, control), Colors.transparent);
+      expect(
+        _iconButtonBackground(tester, control, disabled: true),
+        Colors.transparent,
+      );
+    }
+    expect(
+      find.descendant(of: primary, matching: find.byIcon(Icons.pause_rounded)),
+      findsOneWidget,
+    );
+
+    await tester.tap(previous);
+    await tester.tap(primary);
+    await tester.tap(next);
+    await tester.pump();
+
+    expect(controller.previousCalls, 1);
+    expect(controller.toggleCalls, 1);
+    expect(controller.nextCalls, 1);
+    expect(controller.nextAutomaticValues, [false]);
+
+    controller.emit(lookupSnapshot.copyWith(status: PlayerStatus.paused));
+    await tester.pump();
+
+    expect(tester.widget<IconButton>(primary).tooltip, 'Play');
+    expect(
+      find.descendant(
+        of: primary,
+        matching: find.byIcon(Icons.play_arrow_rounded),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(primary);
+    await tester.pump();
+    expect(controller.toggleCalls, 2);
+
+    controller.emit(lookupSnapshot.copyWith(status: PlayerStatus.failed));
+    await tester.pump();
+    expect(tester.widget<IconButton>(previous).onPressed, isNull);
+    expect(tester.widget<IconButton>(primary).onPressed, isNull);
+    expect(tester.widget<IconButton>(next).onPressed, isNull);
+
+    controller.emit(
+      const PlayerSnapshot(
+        status: PlayerStatus.paused,
+        trackId: 'identity-only-track',
+      ),
+    );
+    await tester.pump();
+    expect(tester.widget<IconButton>(previous).onPressed, isNotNull);
+    expect(tester.widget<IconButton>(primary).onPressed, isNotNull);
+    expect(tester.widget<IconButton>(next).onPressed, isNotNull);
+
+    tester.view.physicalSize = const Size(300, 200);
+    await _pumpAnimatedLyrics(tester);
+    expect(tester.getSize(previous), const Size.square(44));
+    expect(tester.getSize(primary), const Size.square(48));
+    expect(tester.getSize(next), const Size.square(44));
+    expect(tester.getSize(timeline).height, closeTo(48, 0.1));
+    expect(
+      tester.getRect(controls).top,
+      closeTo(tester.getRect(timeline).bottom - 6, 0.1),
+    );
+    expect(
+      tester.getRect(previous).right,
+      closeTo(tester.getRect(primary).left, 0.1),
+    );
+    expect(
+      tester.getRect(primary).right,
+      closeTo(tester.getRect(next).left, 0.1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android portrait adds no player chrome below lyrics', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+
+    expect(find.byKey(const ValueKey('lyrics-header')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('lyrics-companion-timeline')),
+      findsNothing,
+    );
+    expect(
+      tester
+          .getRect(find.byKey(const ValueKey('lyrics-content-region')))
+          .bottom,
+      closeTo(800, 0.1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android rotation automatically switches the player layout', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    final chrome = _FakeLyricsPresentationChrome();
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+      presentationChrome: chrome,
+    );
+
+    expect(find.byKey(const ValueKey('lyrics-header')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsNothing,
+    );
+    expect(chrome.calls, isEmpty);
+
+    tester.view.physicalSize = const Size(800, 360);
+    await _pumpAnimatedLyrics(tester);
+
+    expect(find.byKey(const ValueKey('lyrics-header')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsOneWidget,
+    );
+    expect(chrome.calls, [(platform: TargetPlatform.android, active: true)]);
+
+    tester.view.physicalSize = const Size(360, 800);
+    await _settleLyricsAnimations(tester);
+
+    expect(find.byKey(const ValueKey('lyrics-header')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lyrics-exit-button')), findsNothing);
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsNothing,
+    );
+    expect(chrome.calls, [
+      (platform: TargetPlatform.android, active: true),
+      (platform: TargetPlatform.android, active: false),
+    ]);
     expect(tester.takeException(), isNull);
   });
 
@@ -403,32 +1144,28 @@ void main() {
       platform: TargetPlatform.windows,
     );
 
-    expect(find.byKey(const ValueKey('mini-player-frame')), findsOneWidget);
-    expect(find.byKey(const ValueKey('mini-player-progress')), findsNothing);
-    final progressAnimationFinder = find.byKey(
-      const ValueKey('mini-player-artwork-progress-animation'),
+    final toolbar = find.byKey(const ValueKey('lyrics-overlay-toolbar'));
+    final exit = find.byKey(const ValueKey('lyrics-exit-button'));
+    final offset = find.byKey(const ValueKey('lyrics-offset-control'));
+    expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-playback-companion')),
+      findsOneWidget,
     );
-    final progressRingFinder = find.byKey(
-      const ValueKey('mini-player-artwork-progress-ring'),
+    expect(
+      find.byKey(const ValueKey('lyrics-companion-timeline')),
+      findsOneWidget,
     );
-    expect(progressAnimationFinder, findsOneWidget);
-    expect(progressRingFinder, findsOneWidget);
-    final progressAnimation = tester.widget<TweenAnimationBuilder<double>>(
-      progressAnimationFinder,
+    expect(toolbar, findsOneWidget);
+    expect(find.descendant(of: toolbar, matching: exit), findsOneWidget);
+    expect(find.descendant(of: toolbar, matching: offset), findsOneWidget);
+    expect(
+      tester.getRect(offset).left - tester.getRect(exit).right,
+      inInclusiveRange(8, 10),
     );
-    final progressRing = tester.widget<CircularProgressIndicator>(
-      progressRingFinder,
-    );
-    const expectedProgress = 1800 / Duration.millisecondsPerMinute / 3;
-    expect(progressAnimation.tween.end, closeTo(expectedProgress, 0.0001));
-    expect(progressRing.value, closeTo(expectedProgress, 0.0001));
-    expect(progressRing.strokeWidth, 2);
-    expect(progressRing.strokeCap, StrokeCap.round);
     expect(find.byKey(const ValueKey('lyrics-playback-control')), findsNothing);
-    final miniPlayerBottom = tester
-        .getRect(find.byKey(const ValueKey('mini-player-frame')))
-        .bottom;
-    expect(miniPlayerBottom, closeTo(800 - 10, 0.1));
+    expect(tester.getRect(toolbar).bottom, lessThanOrEqualTo(800 - 8 + 0.1));
   });
 
   testWidgets('slide animation interpolates when the active line changes', (
@@ -459,7 +1196,7 @@ void main() {
     expect(middle, lessThan(start));
     expect(_lineSlidePixelOffset(tester, 'lyric-line-0'), closeTo(0.0, 0.01));
 
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     expect(_activeSlidePixelOffset(tester), closeTo(0.0, 0.01));
     expect(_lineSlidePixelOffset(tester, 'lyric-line-0'), closeTo(0.0, 0.01));
   });
@@ -499,7 +1236,7 @@ void main() {
         .toList(growable: false);
     expect(builder, isNotEmpty);
 
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     final opacityWidgets = tester
         .widgetList<Opacity>(
           find.descendant(
@@ -526,7 +1263,7 @@ void main() {
       player.emit(
         lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
       );
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
 
       final transitions = tester
           .widgetList<LyricsAnimationTransition>(
@@ -567,7 +1304,7 @@ void main() {
     },
   );
 
-  testWidgets('lyrics background adds only a subtle theme accent tint', (
+  testWidgets('lyrics background does not add a theme accent wash', (
     tester,
   ) async {
     final player = _FakePlayerService(lookupSnapshot);
@@ -575,16 +1312,10 @@ void main() {
       tester,
       player: player,
       lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.windows,
     );
 
-    final tint = tester.widget<DecoratedBox>(
-      find.byKey(const ValueKey('lyrics-accent-tint')),
-    );
-    final decoration = tint.decoration;
-    expect(decoration, isA<BoxDecoration>());
-    final color = (decoration as BoxDecoration).color;
-    expect(color, isNotNull);
-    expect(color!.a, closeTo(0.075, 0.001));
+    expect(find.byKey(const ValueKey('lyrics-accent-tint')), findsNothing);
   });
 
   testWidgets('reduced motion skips lyrics animation builders', (tester) async {
@@ -599,7 +1330,7 @@ void main() {
     player.emit(
       lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
     );
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     final transitions = tester
         .widgetList<LyricsAnimationTransition>(
@@ -630,7 +1361,7 @@ void main() {
       player.emit(
         lookupSnapshot.copyWith(position: const Duration(milliseconds: 2500)),
       );
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
 
       final container = tester.element(
         find.byKey(const ValueKey('synced-lyrics-scroll')),
@@ -658,7 +1389,7 @@ void main() {
           .any((dy) => dy.abs() > 0.5);
       expect(hasSlide, isTrue);
 
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       final settled = tester
           .widgetList<Transform>(
             find
@@ -687,7 +1418,7 @@ void main() {
         lyricsAnimationStyle: LyricsAnimationStyle.slide,
       );
 
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
 
       final container = tester.element(
         find.byKey(const ValueKey('synced-lyrics-scroll')),
@@ -696,7 +1427,7 @@ void main() {
       await provider
           .read(settingsControllerProvider.notifier)
           .setLyricsAnimationStyle(LyricsAnimationStyle.highlight);
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
 
       player.emit(
         lookupSnapshot.copyWith(position: const Duration(milliseconds: 4250)),
@@ -777,7 +1508,7 @@ void main() {
           title: 'Next song',
         ),
       );
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       expect(
         tester.widget<Text>(find.text('First line')).textAlign,
         TextAlign.center,
@@ -871,7 +1602,7 @@ void main() {
     expect(_lyricLineFontSize(tester, 'lyric-line-1'), 33);
 
     tester.view.physicalSize = const Size(1280, 800);
-    await tester.pumpAndSettle();
+    await _pumpAnimatedLyrics(tester);
 
     expect(_lyricLineFontSize(tester, 'active-lyric-line'), 37);
     expect(_lyricLineFontSize(tester, 'lyric-line-1'), 36);
@@ -890,6 +1621,14 @@ void main() {
   testWidgets('header progress follows the current playback fraction', (
     tester,
   ) async {
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
     const expectedColor = Color(0xFF7B8DFF);
     final player = _FakePlayerService(
       lookupSnapshot.copyWith(
@@ -904,6 +1643,7 @@ void main() {
       artworkProgressColorService: _FakeArtworkProgressColorService(
         expectedColor,
       ),
+      platform: TargetPlatform.android,
     );
 
     final progress = find.byKey(const ValueKey('lyrics-header-progress'));
@@ -923,7 +1663,7 @@ void main() {
     player.emit(
       lookupSnapshot.copyWith(position: const Duration(seconds: 135)),
     );
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     expect(_renderedFraction(tester, progress, fill), closeTo(0.75, 0.01));
   });
@@ -931,7 +1671,7 @@ void main() {
   testWidgets('offset controls use the compact button-only layout', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(320, 720);
+    tester.view.physicalSize = const Size(640, 720);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
       tester.view.resetPhysicalSize();
@@ -942,6 +1682,7 @@ void main() {
       tester,
       player: player,
       lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.windows,
     );
 
     final controls = find.byKey(const ValueKey('lyrics-offset-control'));
@@ -1005,9 +1746,18 @@ void main() {
       Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white),
     );
     expect(activeLineStyle.shadows, hasLength(3));
-    expect(activeLineStyle.shadows?[0].color, accent.withValues(alpha: 0.30));
+    final haloColor = accent.computeLuminance() < 0.40
+        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.10), accent)
+        : accent;
+    expect(
+      activeLineStyle.shadows?[0].color,
+      haloColor.withValues(alpha: 0.30),
+    );
     expect(activeLineStyle.shadows?[0].blurRadius, 10);
-    expect(activeLineStyle.shadows?[1].color, accent.withValues(alpha: 0.14));
+    expect(
+      activeLineStyle.shadows?[1].color,
+      haloColor.withValues(alpha: 0.14),
+    );
     expect(activeLineStyle.shadows?[1].blurRadius, 24);
     expect(_lyricLineStyle(tester, 'lyric-line-1').shadows, isNull);
     final offsetText = tester.widget<Text>(
@@ -1020,6 +1770,47 @@ void main() {
         AppColors.menuForegroundFor(controlsContext),
       ).withValues(alpha: 0.72),
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile active lyrics keep a dense visible neon halo', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(lookupSnapshot),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+    );
+
+    final style = _lyricLineStyle(tester, 'active-lyric-line');
+    final lineContext = tester.element(
+      find.byKey(const ValueKey('active-lyric-line')),
+    );
+    final accent = AppColors.downloadAccentFor(lineContext);
+    final haloColor = accent.computeLuminance() < 0.40
+        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.10), accent)
+        : accent;
+    expect(style.shadows, hasLength(3));
+    expect(style.shadows?[0].color, haloColor.withValues(alpha: 0.40));
+    expect(style.shadows?[0].blurRadius, 8);
+    expect(style.shadows?[1].color, haloColor.withValues(alpha: 0.20));
+    expect(style.shadows?[1].blurRadius, 19);
+    if (accent.computeLuminance() < 0.40) {
+      expect(
+        haloColor.computeLuminance(),
+        greaterThan(accent.computeLuminance()),
+      );
+    }
+    expect(_lyricLineStyle(tester, 'lyric-line-1').shadows, isNull);
     expect(tester.takeException(), isNull);
   });
 
@@ -1036,13 +1827,13 @@ void main() {
     expect(_activeLine('First line'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('lyrics-offset-increase')));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     expect(find.textContaining('+0.50 s'), findsOneWidget);
     expect(_activeLine('Second line'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('lyrics-offset-reset')));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     expect(find.text('+0.00 s'), findsOneWidget);
     final reset = tester.widget<TextButton>(
@@ -1090,7 +1881,7 @@ void main() {
     );
 
     await tester.tap(find.byKey(const ValueKey('lyrics-offset-increase')));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     expect(find.text('+0.50 s'), findsOneWidget);
 
     await tester.pumpWidget(
@@ -1115,7 +1906,7 @@ void main() {
         child: const MaterialApp(home: LyricsPage()),
       ),
     );
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     expect(find.text('+0.50 s'), findsOneWidget);
 
     await tester.pumpWidget(
@@ -1143,7 +1934,7 @@ void main() {
         child: const MaterialApp(home: LyricsPage()),
       ),
     );
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     expect(find.text('+0.00 s'), findsOneWidget);
   });
 
@@ -1158,7 +1949,7 @@ void main() {
     );
 
     await tester.tap(find.byKey(const ValueKey('lyrics-offset-increase')));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     await tester.ensureVisible(find.text('Third line'));
     await tester.tap(find.text('Third line'));
     await tester.pump();
@@ -1219,7 +2010,7 @@ void main() {
     await container
         .read(settingsControllerProvider.notifier)
         .setLyricsTextAlignment(LyricsTextAlignment.centered);
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     expect(tester.widget<Text>(plainText).textAlign, TextAlign.center);
     expect(
@@ -1360,6 +2151,7 @@ void main() {
 
     const offlineMessage = 'No hay conexión a Internet.';
     final message = find.text(offlineMessage);
+    await _pumpLyricsUntilVisible(tester, message);
     expect(message, findsOneWidget);
     expect(
       find.ancestor(of: message, matching: find.byType(Center)),
@@ -1428,7 +2220,7 @@ void main() {
       final action = find.text('Letras similares');
       expect(action, findsOneWidget);
       await tester.tap(action);
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
 
       expect(find.byKey(const ValueKey('similar-lyrics-list')), findsOneWidget);
       expect(find.text('Libre Soy'), findsOneWidget);
@@ -1440,7 +2232,7 @@ void main() {
       await tester.tap(
         find.byKey(const ValueKey('similar-lyrics-candidate-manual-1')),
       );
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
 
       expect(
         find.byKey(const ValueKey('synced-lyrics-scroll')),
@@ -1463,16 +2255,16 @@ void main() {
           child: const MaterialApp(home: LyricsPage()),
         ),
       );
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       expect(find.text('Selected first line'), findsOneWidget);
 
       // A remote refresh can temporarily expose no snapshot value. That is
       // not a song change and must not discard the manual selection.
       player.emit(const PlayerSnapshot(status: PlayerStatus.loading));
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       expect(container.read(selectedLyricsControllerProvider), alternative);
       player.emit(lookupSnapshot);
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
       expect(find.text('Selected first line'), findsOneWidget);
 
       player.emit(
@@ -1484,7 +2276,7 @@ void main() {
           duration: Duration(minutes: 4),
         ),
       );
-      await tester.pumpAndSettle();
+      await _settleLyricsAnimations(tester);
 
       expect(container.read(selectedLyricsControllerProvider), isNull);
       expect(find.text('Letras similares'), findsOneWidget);
@@ -1503,7 +2295,7 @@ void main() {
     );
 
     await tester.tap(find.text('Letras similares'));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     expect(
       find.text('No encontramos letras similares seguras.'),
       findsOneWidget,
@@ -1522,7 +2314,7 @@ void main() {
       language: AppLanguage.spanish,
     );
     await tester.tap(find.text('Letras similares'));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     expect(find.text('No hay conexión a Internet.'), findsOneWidget);
     expect(find.byIcon(Icons.wifi_off_rounded), findsOneWidget);
@@ -1566,7 +2358,7 @@ void main() {
     );
 
     await tester.tap(find.text('Letras similares'));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
     final field = find.byKey(const ValueKey('manual-lyrics-search-field'));
     expect(field, findsOneWidget);
     expect(service.manualLookups, isEmpty);
@@ -1576,7 +2368,7 @@ void main() {
     expect(service.manualLookups, isEmpty);
 
     await tester.tap(find.byKey(const ValueKey('manual-lyrics-search-submit')));
-    await tester.pumpAndSettle();
+    await _settleLyricsAnimations(tester);
 
     expect(service.manualLookups, hasLength(1));
     expect(service.manualLookups.single.title, 'Canonical alternate title');
@@ -1682,6 +2474,47 @@ double _renderedFraction(WidgetTester tester, Finder progress, Finder fill) {
   return tester.getSize(fill).width / progressWidth;
 }
 
+Color? _iconButtonBackground(
+  WidgetTester tester,
+  Finder finder, {
+  bool disabled = false,
+}) {
+  final states = <WidgetState>{if (disabled) WidgetState.disabled};
+  return tester
+      .widget<IconButton>(finder)
+      .style
+      ?.backgroundColor
+      ?.resolve(states);
+}
+
+Future<void> _pumpAnimatedLyrics(WidgetTester tester) async {
+  await tester.pump();
+  // The wave deliberately never settles while playback is active. Advance a
+  // bounded number of frames instead; the longer simulated window also lets
+  // Riverpod finish its retry schedule in error-state tests.
+  for (var frame = 0; frame < 20; frame++) {
+    await tester.pump(const Duration(seconds: 1));
+  }
+}
+
+Future<void> _settleLyricsAnimations(WidgetTester tester) async {
+  if (find.byType(WavyPlaybackSeekBar).evaluate().isNotEmpty) {
+    await _pumpAnimatedLyrics(tester);
+  } else {
+    await tester.pumpAndSettle();
+  }
+}
+
+Future<void> _pumpLyricsUntilVisible(
+  WidgetTester tester,
+  Finder finder, {
+  int maxFrames = 80,
+}) async {
+  for (var frame = 0; frame < maxFrames && finder.evaluate().isEmpty; frame++) {
+    await tester.pump(const Duration(seconds: 1));
+  }
+}
+
 Future<ProviderContainer> _pumpLyricsPage(
   WidgetTester tester, {
   required _FakePlayerService player,
@@ -1694,6 +2527,9 @@ Future<ProviderContainer> _pumpLyricsPage(
   Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages =
       defaultLyricsRomanizationLanguages,
   LyricsRomanizationService? lyricsRomanizationService,
+  PlayerController? playerController,
+  LyricsPresentationChrome presentationChrome =
+      const LyricsPresentationChrome(),
   bool disableAnimations = false,
   TargetPlatform? platform,
   double textScale = 1,
@@ -1707,6 +2543,8 @@ Future<ProviderContainer> _pumpLyricsPage(
   final container = ProviderContainer(
     overrides: [
       playerServiceProvider.overrideWithValue(player),
+      if (playerController != null)
+        playerControllerProvider.overrideWith(() => playerController),
       favoriteTrackIdsProvider.overrideWithValue(const <String>{}),
       lyricsServiceProvider.overrideWithValue(lyrics),
       appStringsProvider.overrideWithValue(AppStrings(language)),
@@ -1743,11 +2581,15 @@ Future<ProviderContainer> _pumpLyricsPage(
           ),
           child: child!,
         ),
-        home: const LyricsPage(),
+        home: LyricsPage(presentationChrome: presentationChrome),
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (find.byType(WavyPlaybackSeekBar).evaluate().isNotEmpty) {
+    await _pumpAnimatedLyrics(tester);
+  } else {
+    await _settleLyricsAnimations(tester);
+  }
   return container;
 }
 
@@ -1998,5 +2840,51 @@ class _FakePlayerService implements PlayerService {
   @override
   Future<void> togglePlayPause() async {
     togglePlayPauseCalls++;
+  }
+}
+
+class _FakeLyricsPresentationChrome extends LyricsPresentationChrome {
+  final List<({TargetPlatform platform, bool active})> calls = [];
+
+  @override
+  Future<void> setSideModeActive({
+    required TargetPlatform platform,
+    required bool active,
+  }) async {
+    calls.add((platform: platform, active: active));
+  }
+}
+
+class _LyricsTransportPlayerController extends PlayerController {
+  _LyricsTransportPlayerController(this._snapshot);
+
+  PlayerSnapshot _snapshot;
+  int toggleCalls = 0;
+  int previousCalls = 0;
+  int nextCalls = 0;
+  final List<bool> nextAutomaticValues = [];
+
+  @override
+  Future<PlayerSnapshot> build() async => _snapshot;
+
+  void emit(PlayerSnapshot snapshot) {
+    _snapshot = snapshot;
+    state = AsyncData(snapshot);
+  }
+
+  @override
+  Future<void> togglePlayPause() async {
+    toggleCalls++;
+  }
+
+  @override
+  Future<void> playPrevious() async {
+    previousCalls++;
+  }
+
+  @override
+  Future<void> playNext({bool automatic = false}) async {
+    nextCalls++;
+    nextAutomaticValues.add(automatic);
   }
 }
