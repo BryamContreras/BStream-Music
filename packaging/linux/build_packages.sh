@@ -12,17 +12,27 @@ output_dir="$(mkdir -p "$3" && realpath "$3")"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 if [[ ! -x "$bundle/bstream_music" ]]; then
-  echo "Flutter Linux bundle not found at $bundle" >&2
+  echo "Flutter Linux launcher not found at $bundle" >&2
+  exit 1
+fi
+
+if [[ ! -x "$bundle/BStream Music" ]]; then
+  echo "Flutter Linux executable not found at $bundle" >&2
+  exit 1
+fi
+
+if [[ -e "$bundle/tools" || -e "$bundle/scripts" ]]; then
+  echo "Unexpected external-runtime directory in bundle: $bundle" >&2
   exit 1
 fi
 
 unexpected_media_tool="$(
   find "$bundle" -mindepth 1 \
-    \( -iname 'ffmpeg*' -o -iname 'ffprobe*' -o -iname 'yt-dlp*' -o -iname 'deno*' \) \
+    \( -iname 'ffmpeg*' -o -iname 'ffprobe*' \) \
     -print -quit
 )"
 if [[ -n "$unexpected_media_tool" ]]; then
-  echo "Unexpected external resolver or media tool in bundle: $unexpected_media_tool" >&2
+  echo "Unexpected external media tool in bundle: $unexpected_media_tool" >&2
   exit 1
 fi
 
@@ -54,7 +64,7 @@ Section: sound
 Priority: optional
 Architecture: amd64
 Maintainer: BryamContreras <BryamContreras@users.noreply.github.com>
-Depends: libgtk-3-0 | libgtk-3-0t64, libmpv2 | libmpv1, libsqlite3-0, libc6, libstdc++6
+Depends: libgtk-3-0 | libgtk-3-0t64, libmpv2 | libmpv1, libsqlite3-0, libsecret-1-0, libc6, libstdc++6
 Homepage: https://github.com/BryamContreras/BStream-Music
 Description: Reproductor y gestor musical multiplataforma
  BStream Music permite buscar, reproducir, descargar y organizar musica,

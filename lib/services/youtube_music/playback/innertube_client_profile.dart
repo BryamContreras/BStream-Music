@@ -413,7 +413,7 @@ abstract final class InnerTubeClientRegistry {
   );
 
   /// Mobile Web is the preferred WebPO fallback because ordinary WEB often
-  /// exposes only SABR formats. Values track yt-dlp's maintained MWEB client.
+  /// exposes only SABR formats. Values track the maintained MWEB client.
   static const InnerTubeClientProfile mweb = InnerTubeClientProfile(
     key: 'mweb',
     clientName: 'MWEB',

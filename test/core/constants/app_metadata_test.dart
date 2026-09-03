@@ -75,4 +75,44 @@ void main() {
       isNot(contains('youtube_explode_playback_test.dart')),
     );
   });
+
+  test('release packaging is hermetic and declares Linux secure storage', () {
+    final workflow = File(
+      '.github/workflows/desktop-builds.yml',
+    ).readAsStringSync();
+    final linuxPackages = File(
+      'packaging/linux/build_packages.sh',
+    ).readAsStringSync();
+    final rpmSpec = File(
+      'packaging/linux/bstream-music.spec',
+    ).readAsStringSync();
+    final attributes = File('.gitattributes').readAsStringSync();
+
+    expect(workflow, contains('Dir::Etc::sourcelist=/etc/apt/sources.list'));
+    expect(workflow, contains('bstream-apt-sourceparts'));
+    expect(workflow, contains('Dir::Etc::sourceparts=\$apt_sourceparts'));
+    expect(workflow, contains('Acquire::Retries=5'));
+    expect(workflow, contains('libsecret-1-dev'));
+    expect(workflow, contains('Verify Linux installer payloads'));
+    expect(workflow, contains('test -x "\$bundle/BStream Music"'));
+    expect(workflow, contains('dpkg-deb --extract'));
+    expect(workflow, contains('rpm2cpio'));
+    expect(linuxPackages, contains('libsecret-1-0'));
+    expect(rpmSpec, contains('Requires:       libsecret'));
+    expect(attributes, contains('packaging/linux/bstream-music text eol=lf'));
+
+    for (final legacyDirectory in <String>[
+      'third_party/youtube_explode_dart',
+      'lib/services/downloader/adapters/youtube_explode',
+      'windows/tools',
+      'linux/tools',
+      'macos/tools',
+    ]) {
+      expect(
+        Directory(legacyDirectory).existsSync(),
+        isFalse,
+        reason: '$legacyDirectory must not remain as an empty placeholder',
+      );
+    }
+  });
 }

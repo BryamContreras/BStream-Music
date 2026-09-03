@@ -1727,7 +1727,7 @@ class _AboutApplicationSettings extends StatelessWidget {
     final highlights = strings.isEnglish
         ? const <String>[
             'Native iOS 13+ support for playback, background audio, Now Playing, account sign-in, Media Library, and file export.',
-            'YouTube playback and downloads now run through the in-process Dart InnerTube pipeline, without yt-dlp, youtube_explode_dart, or external executables.',
+            'YouTube playback and downloads now use BStream\'s self-contained Dart InnerTube pipeline, without a vendored extractor or companion executable.',
             'Renewed Liquid Glass surfaces with adaptive color refraction, continuous edges, localized hover, and smoother transitions.',
             'Choose the BStream Music or Apple Music Style player, including animated artwork and responsive mobile layouts.',
             'TikTok LIVE now uses the same direct Dart transport on Android, iOS, Windows, Linux, and macOS.',
@@ -1735,7 +1735,7 @@ class _AboutApplicationSettings extends StatelessWidget {
           ]
         : const <String>[
             'Compatibilidad nativa con iOS 13 o posterior para reproducci\u00f3n, audio en segundo plano, Now Playing, inicio de sesi\u00f3n, biblioteca y exportaci\u00f3n.',
-            'La reproducci\u00f3n y las descargas de YouTube ahora usan el cliente InnerTube integrado en Dart, sin yt-dlp, youtube_explode_dart ni ejecutables externos.',
+            'La reproducci\u00f3n y las descargas de YouTube ahora usan el cliente InnerTube integrado en Dart, sin extractores vendorizados ni ejecutables auxiliares.',
             'Liquid Glass renovado con refracci\u00f3n adaptada al color, bordes continuos, hover localizado y transiciones m\u00e1s suaves.',
             'Elige entre los reproductores BStream Music y Apple Music Style, con portada animada y dise\u00f1os m\u00f3viles adaptables.',
             'TikTok LIVE ahora utiliza el mismo transporte directo en Dart en Android, iOS, Windows, Linux y macOS.',

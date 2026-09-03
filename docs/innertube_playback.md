@@ -1,7 +1,8 @@
 # InnerTube playback and downloads
 
-BStream resolves YouTube media without `youtube_explode_dart`, yt-dlp, Kotlin
-extractors, or an external executable. Catalog requests remain in
+BStream resolves YouTube media through a self-contained Dart pipeline, without
+a vendored extractor library, native extractor, or companion executable.
+Catalog requests remain in
 `innertube_search_service.dart`; playback is isolated under
 `lib/services/youtube_music/playback/` so client rotations and challenge
 changes do not affect search parsing.
@@ -35,8 +36,8 @@ or iOS profiles that require a platform attestation.
 
 The implementation follows behavior, not source code, from Zemer Cipher.
 Zemer is GPL-3.0 while BStream is BSD-2-Clause, so no Zemer implementation was
-copied or translated. EJS is the upstream Unlicense solver published by
-yt-dlp. The exact 0.8.0 release modules are bundled as Base64 assets and their
+copied or translated. EJS is an independent upstream Unlicense solver. The
+exact 0.8.0 release modules are bundled as Base64 assets and their
 decoded bytes are verified by SHA-256 before execution; a verified download
 of the same release is retained only as a recovery fallback.
 
@@ -189,8 +190,8 @@ BotGuard and EJS are orchestrated in Dart. Their JavaScript executes in a
 headless `flutter_inappwebview` runtime on Android, Windows, and macOS. Linux
 has no backend in the pinned stable plugin, so BStream cleanly limits Linux to
 the three JS-less tokenless profiles (`visionOS`, `androidSdkless`, and
-`visionOS01`) instead of invoking Deno, QuickJS, Kotlin, or yt-dlp. The runtime
-boundary remains injectable so Linux EJS/WebPO can be enabled after a stable
+`visionOS01`) instead of invoking a companion JavaScript or native extraction
+runtime. The runtime boundary remains injectable so Linux EJS/WebPO can be enabled after a stable
 WPE backend passes native build and smoke tests; it is not presented as current
 platform parity.
 Every runtime document receives a CSP before its first script that denies

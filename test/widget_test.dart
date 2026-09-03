@@ -5734,7 +5734,7 @@ void main() {
     );
     expect(
       find.text(
-        'La reproducci\u00f3n y las descargas de YouTube ahora usan el cliente InnerTube integrado en Dart, sin yt-dlp, youtube_explode_dart ni ejecutables externos.',
+        'La reproducci\u00f3n y las descargas de YouTube ahora usan el cliente InnerTube integrado en Dart, sin extractores vendorizados ni ejecutables auxiliares.',
       ),
       findsOneWidget,
     );

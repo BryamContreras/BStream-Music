@@ -495,19 +495,10 @@ jobs:
             }
           }
 
-          $obsolete = @(
-            (Join-Path $bundle "tools/yt-dlp.exe"),
-            (Join-Path $bundle "tools/deno.exe"),
-            (Join-Path $bundle "tools/tiktok-live-bridge"),
-            (Join-Path $bundle "tools/tiktok_live_bridge"),
-            (Join-Path $bundle "tools/tiktok_live_bridge.exe"),
-            (Join-Path $bundle "tools/tiktok-live-bridge.exe"),
-            (Join-Path $bundle "scripts/tiktok_live_bridge.py"),
-            (Join-Path $bundle "scripts/requirements-tiktok.txt")
-          )
-          foreach ($path in $obsolete) {
+          foreach ($relativePath in @("tools", "scripts")) {
+            $path = Join-Path $bundle $relativePath
             if (Test-Path -LiteralPath $path) {
-              throw "Obsolete external runtime remains in bundle: $path"
+              throw "Unexpected external-runtime directory remains in bundle: $path"
             }
           }
 
@@ -560,19 +551,10 @@ jobs:
             }
           }
 
-          $obsolete = @(
-            (Join-Path $installDir "tools/yt-dlp.exe"),
-            (Join-Path $installDir "tools/deno.exe"),
-            (Join-Path $installDir "tools/tiktok-live-bridge"),
-            (Join-Path $installDir "tools/tiktok_live_bridge"),
-            (Join-Path $installDir "tools/tiktok_live_bridge.exe"),
-            (Join-Path $installDir "tools/tiktok-live-bridge.exe"),
-            (Join-Path $installDir "scripts/tiktok_live_bridge.py"),
-            (Join-Path $installDir "scripts/requirements-tiktok.txt")
-          )
-          foreach ($path in $obsolete) {
+          foreach ($relativePath in @("tools", "scripts")) {
+            $path = Join-Path $installDir $relativePath
             if (Test-Path -LiteralPath $path) {
-              throw "Obsolete external runtime remains installed: $path"
+              throw "Unexpected external-runtime directory remains installed: $path"
             }
           }
 
@@ -607,9 +589,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Linux build and packaging dependencies
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
+          set -euo pipefail
+
+          # GitHub-hosted images include unrelated third-party APT feeds. Keep
+          # this build on the Ubuntu 22.04 base repositories so an outage or
+          # access-policy change in those feeds cannot block BStream packages.
+          apt_sourceparts="$RUNNER_TEMP/bstream-apt-sourceparts"
+          mkdir -p "$apt_sourceparts"
+          apt_options=(
+            -o "Dir::Etc::sourcelist=/etc/apt/sources.list"
+            -o "Dir::Etc::sourceparts=$apt_sourceparts"
+            -o "APT::Get::List-Cleanup=0"
+            -o "Acquire::Retries=5"
+          )
+
+          sudo apt-get "${apt_options[@]}" update
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get "${apt_options[@]}" install --yes \
             clang \
             cmake \
             ninja-build \
@@ -617,8 +615,11 @@ jobs:
             libgtk-3-dev \
             liblzma-dev \
             libsqlite3-dev \
+            libsecret-1-dev \
             libmpv-dev \
             desktop-file-utils \
+            cpio \
+            file \
             rpm \
             unzip
 
@@ -641,8 +642,9 @@ jobs:
           set -euo pipefail
           bundle="$PWD/build/linux/x64/release/bundle"
           test -x "$bundle/bstream_music"
-          test ! -e "$bundle/tools/yt-dlp"
-          test ! -e "$bundle/tools/deno"
+          test -x "$bundle/BStream Music"
+          test ! -e "$bundle/tools"
+          test ! -e "$bundle/scripts"
           desktop-file-validate packaging/linux/com.bstream.bstream_music.desktop
 
           missing=0
@@ -665,6 +667,40 @@ jobs:
             "$PWD/build/linux/x64/release/bundle" \
             "$APP_VERSION" \
             "$PWD/dist"
+
+      - name: Verify Linux installer payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$PWD/dist/BStream-Music-$APP_VERSION-linux-amd64.deb"
+          rpm="$PWD/dist/BStream-Music-$APP_VERSION-linux-x86_64.rpm"
+          stage="$(mktemp -d)"
+          trap 'rm -rf "$stage"' EXIT
+
+          test "$(dpkg-deb --field "$deb" Version)" = "$APP_VERSION"
+          deb_dependencies="$(dpkg-deb --field "$deb" Depends)"
+          grep -Eq '(^|, )libsecret-1-0([, ]|$)' <<<"$deb_dependencies"
+          dpkg-deb --extract "$deb" "$stage/deb"
+
+          test "$(rpm -qp --queryformat '%{VERSION}' "$rpm")" = "$APP_VERSION"
+          rpm_dependencies="$(rpm -qpR "$rpm")"
+          grep -Fxq libsecret <<<"$rpm_dependencies"
+          mkdir -p "$stage/rpm"
+          (
+            cd "$stage/rpm"
+            rpm2cpio "$rpm" | cpio --quiet -idmu
+          )
+
+          for root in "$stage/deb" "$stage/rpm"; do
+            test -x "$root/opt/bstream-music/bstream_music"
+            test -x "$root/opt/bstream-music/BStream Music"
+            test -f "$root/opt/bstream-music/THIRD_PARTY_NOTICES.md"
+            test -x "$root/usr/bin/bstream-music"
+            test -f \
+              "$root/usr/share/applications/com.bstream.bstream_music.desktop"
+            test ! -e "$root/opt/bstream-music/tools"
+            test ! -e "$root/opt/bstream-music/scripts"
+          done
 
       - name: Enforce Linux installer size budgets
         run: |
@@ -752,8 +788,8 @@ jobs:
             "$app" \
             "${{ matrix.host_arch }}" \
             "$APP_VERSION"
-          test ! -e "$app/Contents/Resources/tools/yt-dlp"
-          test ! -e "$app/Contents/Resources/tools/deno"
+          test ! -e "$app/Contents/Resources/tools"
+          test ! -e "$app/Contents/Resources/scripts"
 
       - name: Smoke test macOS launch
         shell: bash
@@ -810,8 +846,8 @@ jobs:
           grep -Fq \
             "BStream Music.app/Contents/MacOS/bstream_music" \
             "$payload_files"
-          if grep -Eiq '/tools/(yt-dlp|deno)$' "$payload_files"; then
-            echo "Obsolete resolver runtime found in macOS package payload." >&2
+          if grep -Eiq '/(tools|scripts)(/|$)' "$payload_files"; then
+            echo "Unexpected external-runtime directory found in macOS package payload." >&2
             exit 1
           fi
 

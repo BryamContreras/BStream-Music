@@ -14,6 +14,7 @@ AutoReqProv:    no
 Requires:       gtk3
 Requires:       mpv-libs
 Requires:       sqlite-libs
+Requires:       libsecret
 Requires:       glibc
 Requires:       libstdc++
 

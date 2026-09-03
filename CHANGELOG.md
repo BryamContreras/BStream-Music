@@ -73,10 +73,10 @@
   without the former foreground shader or an additional render layer.
 - Renamed the visible appearance labels to Liquid Glass Style and Flotante;
   their persisted `liquidGlass` and `capsule` values remain unchanged.
-- Removed every resolver/runtime dependency on `youtube_explode_dart`, yt-dlp,
-  Deno, QuickJS, and Android's youtubedl runtime. Catalog access, playback, and
-  downloads now use an in-process modular Dart InnerTube architecture on every
-  platform, with one shared resolver for playback and downloads.
+- Removed the former vendored extractor and companion resolver runtimes.
+  Catalog access, playback, and downloads now use an in-process modular Dart
+  InnerTube architecture on every platform, with one shared resolver for
+  playback and downloads.
 - Added maintained client profiles with correctness-first routing, deep ranged
   media validation, health cooldowns, latency tracking, and automatic fallback.
 - Added independent EJS `s`/`n` challenge solving and Web BotGuard PO-token
@@ -94,6 +94,9 @@
   `.mp4` only as the last resort, and use a resumable `dart:io` transfer with
   strong representation validators, bounded retries, safe partial files, and
   atomic promotion.
+- Linux release automation now isolates Ubuntu package sources from unrelated
+  runner feeds, declares libsecret for builds and installed packages, and
+  extracts both DEB and RPM outputs to validate their complete payloads.
 
 ## 1.2.5+125 — updated 2026-08-22
 

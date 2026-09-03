@@ -122,35 +122,13 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
-# Remove external resolver and TikTok LIVE artifacts left by older incremental
-# builds. Both integrations now run in Dart and ship no companion executables.
+# Remove external-runtime directories left by older incremental builds. The
+# current integrations run in Dart and ship no companion executables.
 install(CODE "
-  file(REMOVE
-    \"${CMAKE_INSTALL_PREFIX}/tools/yt-dlp.exe\"
-    \"${CMAKE_INSTALL_PREFIX}/tools/yt-dlp\"
-    \"${CMAKE_INSTALL_PREFIX}/tools/deno.exe\"
-    \"${CMAKE_INSTALL_PREFIX}/tools/deno\")
-  file(REMOVE
-    \"${CMAKE_INSTALL_PREFIX}/scripts/tiktok_live_bridge.py\"
-    \"${CMAKE_INSTALL_PREFIX}/scripts/requirements-tiktok.txt\")
-  file(GLOB BSTREAM_LEGACY_SCRIPT_ENTRIES
-    \"${CMAKE_INSTALL_PREFIX}/scripts/*\")
-  if(NOT BSTREAM_LEGACY_SCRIPT_ENTRIES)
-    file(REMOVE_RECURSE \"${CMAKE_INSTALL_PREFIX}/scripts\")
-  endif()
   file(REMOVE_RECURSE
-    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok-live-bridge\"
-    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok_live_bridge\")
-  file(REMOVE
-    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok_live_bridge.exe\"
-    \"${CMAKE_INSTALL_PREFIX}/tools/tiktok-live-bridge.exe\")
-  file(GLOB BSTREAM_LEGACY_TOOL_ENTRIES
-    \"${CMAKE_INSTALL_PREFIX}/tools/*\")
-  if(NOT BSTREAM_LEGACY_TOOL_ENTRIES)
-    file(REMOVE_RECURSE \"${CMAKE_INSTALL_PREFIX}/tools\")
-  endif()
+    \"${CMAKE_INSTALL_PREFIX}/tools\"
+    \"${CMAKE_INSTALL_PREFIX}/scripts\")
   "
-  CONFIGURATIONS Release Profile
   COMPONENT Runtime)
 
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../THIRD_PARTY_NOTICES.md"

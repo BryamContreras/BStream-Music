@@ -5,10 +5,9 @@ BStream Music is a cross-platform music player and library manager built with Fl
 Current version: **1.2.6+126**.
 
 > The repository does not store media content. YouTube search, playback, and
-> downloads use BStream's in-process Dart InnerTube pipeline. No supported
-> build depends on `youtube_explode_dart`, bundles or invokes `yt-dlp`, or
-> launches an external resolver runtime. Users are responsible for complying
-> with copyright laws and provider terms.
+> downloads use BStream's self-contained Dart InnerTube pipeline. Supported
+> builds neither bundle nor launch an external media resolver. Users are
+> responsible for complying with copyright laws and provider terms.
 
 <img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
 
@@ -21,8 +20,8 @@ Current version: **1.2.6+126**.
   compatible external signing or sideloading tool.
 - Use in-process Dart InnerTube services for catalog search, playback, and
   downloads on every platform. Playback and downloads share the same maintained
-  client ladder. The application no longer depends on `youtube_explode_dart`,
-  `yt-dlp`, `youtubedl-android`, Deno, QuickJS, or a native YouTube extractor.
+  client ladder and require no vendored extractor library, native extraction
+  runtime, or companion resolver executable.
 
 - Sign in to YouTube Music from an isolated account view without BStream
   intercepting or storing the Google password. Session data is encrypted on
@@ -267,7 +266,7 @@ actually delivers to the WebSocket client.
 | Android | `just_audio` + `audio_service` | Dart InnerTube | `minSdk 24`; optional headless WebView for EJS and Web BotGuard PO tokens; TikTok LIVE; open local audio from Android; release APKs support `armeabi-v7a`, `arm64-v8a`, and `x86_64` |
 | iOS | `just_audio` + `audio_service` | Dart InnerTube | iOS 13 or newer; embedded account login and optional headless WebView challenges; background audio and Now Playing; TikTok LIVE; native access to locally available, non-DRM songs in the Media Library; CI publishes an unsigned IPA for use with a compatible external signing tool |
 | Windows | `media_kit` | Dart InnerTube | Optional headless WebView for EJS and Web BotGuard PO tokens; SMTC controls, TikTok LIVE, and queue side panel |
-| Linux | `media_kit` | Dart InnerTube | Three tokenless/JS-less InnerTube identities (`visionOS`, `androidSdkless`, `visionOS01`); MPRIS controls; TikTok LIVE; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, and SQLite |
+| Linux | `media_kit` | Dart InnerTube | Three tokenless/JS-less InnerTube identities (`visionOS`, `androidSdkless`, `visionOS01`); MPRIS controls; TikTok LIVE; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, SQLite, and libsecret |
 | macOS | `media_kit` | Dart InnerTube | Optional headless WebView for EJS and Web BotGuard PO tokens; Now Playing controls, TikTok LIVE, separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
 
 Downloads and remote playback use the same native-audio selection policy on
@@ -293,9 +292,8 @@ when the app process closes.
 The interface is isolated from SQLite, the media engines, and provider
 protocol details. Communication flows through entities, use cases,
 repositories, providers, and interchangeable services. The remote catalog,
-playback, and download stack is implemented directly in Dart and has no
-`youtube_explode_dart`, `yt-dlp`, `youtubedl-android`, or external-runtime
-dependency.
+playback, and download stack is implemented directly in Dart without a
+vendored extractor library or companion resolver runtime.
 
 ```text
 lib/
@@ -347,7 +345,7 @@ remain inside the Dart service layer on every platform.
 - The pinned NuGet CLI on `PATH` for Windows plugin dependencies (the build
   bootstrap below installs it when needed).
 - A stable Rust toolchain with the MSVC x64 target for Windows SMTC builds.
-- Clang, CMake, Ninja, GTK 3, and libmpv for Linux.
+- Clang, CMake, Ninja, GTK 3, libmpv, SQLite, and libsecret for Linux.
 - A Mac with Xcode and CocoaPods to build and test iOS or macOS. Creating the
   unsigned iOS application and IPA needs no Apple certificate; direct device,
   TestFlight, and App Store installation still require an accepted signature
@@ -451,8 +449,9 @@ The native macOS window uses the same `960 × 600` minimum as Windows.
 ## Linux runtime dependencies
 
 Linux bundles contain no external YouTube resolver or JavaScript runtime. The
-target system must provide GTK 3, libmpv, and SQLite runtime libraries for the
-application and its `media_kit` player.
+target system must provide GTK 3, libmpv, SQLite, and libsecret runtime
+libraries for the application, secure storage, and its `media_kit` player. The
+DEB and RPM declare these dependencies so the package manager installs them.
 
 ## TikTok LIVE client
 
@@ -613,10 +612,10 @@ unsigned IPA, verifies its structure, and uploads it as a GitHub Actions
 artifact. The workflow can be run manually from the **Actions** tab and also
 runs for pull requests, pushes to `main`, and `v*` tags.
 
-Desktop jobs build and verify installers without downloading or bundling
-`yt-dlp`, Deno, or another external YouTube resolver. The TikTok LIVE client is
-also part of the Dart application and needs no additional runtime. Artifacts
-are retained for 30 days:
+Desktop jobs build and verify installers without downloading or bundling an
+external YouTube resolver. The TikTok LIVE client is also part of the Dart
+application and needs no additional runtime. Artifacts are retained for 30
+days:
 
 ```text
 BStream-Music-<version>-Android-armeabi-v7a.apk

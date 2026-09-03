@@ -62,16 +62,6 @@ app.*.map.json
 .env.*
 !.env.example
 
-# Optional bundled desktop tools. Keep each platform README tracked.
-/windows/tools/*.exe
-/windows/tools/ffmpeg/
-/windows/tools/*.dll
-/windows/tools/*.pyd
-/linux/tools/*
-!/linux/tools/README.md
-/macos/tools/*
-!/macos/tools/README.md
-
 # Locally exported packages and user data
 *.apk
 *.aab
