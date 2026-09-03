@@ -18,6 +18,11 @@ Current version: **1.2.6+126**.
   songs, TikTok LIVE, and document-picker backup and CSV export. CI also
   publishes `BStream-Music-<version>-iOS-unsigned.ipa` for testing through a
   compatible external signing or sideloading tool.
+- Use in-process Dart InnerTube services for catalog search, playback, and
+  downloads on every platform. Playback and downloads share the same maintained
+  client ladder and require no vendored extractor library, native extraction
+  runtime, or companion resolver executable.
+
 - Sign in to YouTube Music from an isolated account view without BStream
   intercepting or storing the Google password. Session data is encrypted on
   the device, the first playlist sync requires a separate confirmation, and
@@ -33,6 +38,9 @@ Current version: **1.2.6+126**.
 - Learn account-free Home recommendations from qualified local playback
   history using YouTube Music `/next`, related shelves, mixes, and exact artist
   releases. History can be disabled or cleared without removing the library.
+- Retry an interrupted active stream through the InnerTube client ladder with
+  bounded backoff, while recommendation queues grow as their
+  end approaches and stale navigation work is cancelled.
 - Split the former 3,600-line player controller into focused queue, retry,
   prefetch, crossfade, identity, and history coordinators. Database v8 adds the
   hybrid playlist catalog, bounded history retention, and crash-safe media
@@ -43,6 +51,12 @@ Current version: **1.2.6+126**.
 - Mount the interface before optional native startup services, retry only a
   failed service, harden backup/restore budgets and schema checks, and verify
   Android release APKs exclude obsolete external resolver runtimes.
+- Resolve YouTube manifests directly through a maintained Dart InnerTube
+  client ladder, with EJS challenge solving and optional Web BotGuard PO-token
+  generation when a client requires them.
+- Download native YouTube audio through the same InnerTube resolver, with
+  exact-stream validation, client fallbacks, bounded deadlines, resumable
+  transfers, and safe partial-file publication.
 - Crossfade playback now uses two coordinated decks on Android and desktop and
   can be adjusted to every whole second from 1 to 15 in Playback settings.
 - Romanize lyrics while retaining the original line above a smaller
