@@ -411,7 +411,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('lyrics-route-player-scale-transition')),
+        find.byKey(const ValueKey('lyrics-route-slide-transition')),
         findsOneWidget,
       );
       await tester.pump(const Duration(milliseconds: 420));
@@ -1359,6 +1359,7 @@ void main() {
       );
       final header = find.byKey(const ValueKey('home-tab-header-surface'));
       final context = tester.element(header);
+      final colors = Theme.of(context).colorScheme;
       final headerMaterial = tester.widget<Material>(header);
       final headerDecoration =
           tester
@@ -1438,6 +1439,40 @@ void main() {
       );
       expect(selectionLens, findsOneWidget);
       expect(
+        find.descendant(
+          of: selectionLens,
+          matching: find.byType(BackdropFilter),
+        ),
+        findsNothing,
+        reason:
+            'The selected tab lens must add paint-only depth without a second '
+            'backdrop capture.',
+      );
+      final selectionPaint = tester.widget<CustomPaint>(selectionLens);
+      final selectionRecorder = _SuperellipsePaintRecordingCanvas();
+      selectionPaint.painter!.paint(
+        selectionRecorder,
+        tester.getSize(selectionLens),
+      );
+      final selectionPaints = selectionRecorder.paints;
+      expect(selectionPaints, hasLength(4));
+      expect(selectionPaints[0].style, PaintingStyle.fill);
+      expect(
+        selectionPaints[0].maskFilter,
+        const ui.MaskFilter.blur(ui.BlurStyle.outer, 4.5),
+      );
+      expect(selectionPaints[1].style, PaintingStyle.fill);
+      expect(selectionPaints[1].shader, isNotNull);
+      expect(selectionPaints[1].blendMode, BlendMode.softLight);
+      expect(selectionPaints[2].style, PaintingStyle.stroke);
+      expect(selectionPaints[2].strokeWidth, closeTo(1, 0.000001));
+      expect(selectionPaints[2].shader, isNotNull);
+      expect(selectionPaints[2].blendMode, BlendMode.softLight);
+      expect(selectionPaints[3].style, PaintingStyle.stroke);
+      expect(selectionPaints[3].strokeWidth, closeTo(0.65, 0.000001));
+      expect(selectionPaints[3].shader, isNotNull);
+      expect(selectionPaints[3].blendMode, BlendMode.softLight);
+      expect(
         tester.getCenter(selectionLens).dx,
         closeTo(tester.getCenter(primaryDestination(0)).dx, 0.5),
       );
@@ -1448,9 +1483,10 @@ void main() {
         );
         expect(
           tester.widget<Icon>(icon).color,
-          Colors.black,
+          index == 0 ? colors.primary : colors.onSurfaceVariant,
           reason:
-              'Every expanded Liquid Glass icon must be pure black in light mode.',
+              'Liquid Glass icons should use the theme foreground and accent, '
+              'not a forced pure-black foreground in light mode.',
         );
       }
       expect(
@@ -1466,7 +1502,7 @@ void main() {
               find.descendant(of: detachedSearch, matching: find.byType(Icon)),
             )
             .color,
-        Colors.black,
+        colors.onSurfaceVariant,
       );
       expect(
         tester.getCenter(primaryDestination(0)).dx,
@@ -1673,6 +1709,7 @@ void main() {
       final collapsedHome = find.byKey(
         const ValueKey('bottom-navigation-collapsed-home'),
       );
+      final colors = Theme.of(tester.element(homeScroll)).colorScheme;
       final detachedSearch = find.byKey(
         const ValueKey('bottom-navigation-search-glass'),
       );
@@ -1804,7 +1841,7 @@ void main() {
               ),
             )
             .color,
-        Colors.black,
+        colors.primary,
       );
       expect(expandedDestination(2), findsNothing);
       expect(expandedDestination(3), findsNothing);
@@ -2396,17 +2433,21 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 320));
 
-        expect(currentNavigationOpacity(), 0);
+        expect(
+          currentNavigationOpacity(),
+          1,
+          reason: 'Only Liquid Glass compacts navigation during scrolling.',
+        );
         expect(liquidCollapsedNavigation, findsNothing);
         final hiddenMiniPlayerRect = tester.getRect(miniPlayer);
         expect(
           hiddenMiniPlayerRect.bottom - initialMiniPlayerRect.bottom,
-          closeTo(72, 0.5),
+          closeTo(0, 0.5),
         );
         expect(
           hiddenMiniPlayerRect.bottom,
-          closeTo(800 - 24 - 8, 0.5),
-          reason: 'The mini player keeps its visual safe-area margin.',
+          closeTo(initialMiniPlayerRect.bottom, 0.5),
+          reason: 'Legacy surfaces keep the mini player anchored to the menu.',
         );
 
         await tester.drag(homeScroll, const Offset(0, 80));
@@ -2910,7 +2951,7 @@ void main() {
         tester
             .widget<PlayerPanel>(find.byType(PlayerPanel))
             .trackTransitionsEnabled,
-        isTrue,
+        isFalse,
       );
       await tester.pump(const Duration(milliseconds: 160));
 
@@ -2967,6 +3008,12 @@ void main() {
       expect(
         find.byKey(const ValueKey('shell-background-browsing')),
         findsNothing,
+      );
+      expect(
+        tester
+            .widget<PlayerPanel>(find.byType(PlayerPanel))
+            .trackTransitionsEnabled,
+        isTrue,
       );
 
       await tester.binding.handlePopRoute();
@@ -5734,12 +5781,6 @@ void main() {
     );
     expect(
       find.text(
-        'La reproducci\u00f3n y las descargas de YouTube ahora usan el cliente InnerTube integrado en Dart, sin extractores vendorizados ni ejecutables auxiliares.',
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.text(
         'Liquid Glass renovado con refracci\u00f3n adaptada al color, bordes continuos, hover localizado y transiciones m\u00e1s suaves.',
       ),
       findsOneWidget,
@@ -7406,15 +7447,6 @@ void main() {
           .value,
       inExclusiveRange(0, 1),
     );
-    expect(
-      tester
-          .widget<ScaleTransition>(
-            find.byKey(const ValueKey('lyrics-route-player-scale-transition')),
-          )
-          .scale
-          .value,
-      inExclusiveRange(0.985, 1),
-    );
     await tester.pump(const Duration(milliseconds: 220));
     expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsNothing);
     expect(find.byKey(const ValueKey('player-lyrics-control')), findsOneWidget);
@@ -8432,6 +8464,18 @@ class _IdleYouTubeMusicPlaylistSyncController
   @override
   YouTubeMusicPlaylistSyncState build() =>
       const YouTubeMusicPlaylistSyncState();
+}
+
+class _SuperellipsePaintRecordingCanvas implements ui.Canvas {
+  final List<ui.Paint> paints = <ui.Paint>[];
+
+  @override
+  void drawRSuperellipse(ui.RSuperellipse rsuperellipse, ui.Paint paint) {
+    paints.add(paint);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _FakeSettingsController extends SettingsController {

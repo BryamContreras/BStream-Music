@@ -74,26 +74,25 @@
 - Renamed the visible appearance labels to Liquid Glass Style and Flotante;
   their persisted `liquidGlass` and `capsule` values remain unchanged.
 - Removed the former vendored extractor and companion resolver runtimes.
-  Catalog access, playback, and downloads now use an in-process modular Dart
-  InnerTube architecture on every platform, with one shared resolver for
-  playback and downloads.
+  Catalog access, playback, and downloads now use an in-process modular
+  architecture on every platform, with one shared resolver for playback and
+  downloads.
 - Added maintained client profiles with correctness-first routing, deep ranged
   media validation, health cooldowns, latency tracking, and automatic fallback.
 - Added independent EJS `s`/`n` challenge solving and Web BotGuard PO-token
   support through an isolated headless system WebView, with no custom Kotlin
   extractor or bundled resolver executable.
-- Added page-specific dynamic player bootstrap, three independently validated
-  tokenless profiles, an EJS-backed embedded fallback, anti-bot visitor/player
-  PO escalation, fail-closed integrity tokens, alternate coherent attestation,
-  and capability-level EJS/WebPO circuit breaking.
-- Added raw/tokenless and full resolved client matrices. Raw gated clients are
-  now reported as skipped instead of failed, and every success requires a deep
-  or end-of-file CDN range probe. Strict resolved runs isolate state and enforce
-  success thresholds per profile with separate cold/warm latency reporting.
-- Downloads now prefer audio-only InnerTube formats, retain a validated muxed
-  `.mp4` only as the last resort, and use a resumable `dart:io` transfer with
-  strong representation validators, bounded retries, safe partial files, and
-  atomic promotion.
+- Added page-specific dynamic player bootstrap, independently validated
+  profiles, an embedded fallback, anti-bot visitor/player PO escalation,
+  fail-closed integrity tokens, alternate coherent attestation, and
+  capability-level circuit breaking.
+- Added raw and fully resolved client matrices. Gated clients are now reported
+  as skipped instead of failed, and every success requires a deep or end-of-file
+  CDN range probe. Strict runs isolate state and enforce success thresholds per
+  profile with separate cold/warm latency reporting.
+- Downloads now prefer audio-only formats, retain a validated muxed `.mp4` only
+  as the last resort, and use a resumable transfer with strong representation
+  validators, bounded retries, safe partial files, and atomic promotion.
 - Linux release automation now isolates Ubuntu package sources from unrelated
   runner feeds, declares libsecret for builds and installed packages, and
   extracts both DEB and RPM outputs to validate their complete payloads.
@@ -116,12 +115,12 @@
   history. BStream combines YouTube Music `/next`, related shelves, generated
   mixes, and exact artist pages into **Because you listened**, **Your mixes**,
   **New for you**, and **Discovery for you** sections.
-- Persistent anonymous InnerTube visitor data, related-result caches, and an
+- Persistent anonymous visitor data, related-result caches, and an
   instant stale-while-revalidate Home feed so recommendations survive restarts
   while still refreshing in the background.
 - Privacy controls to pause recommendation learning or clear listening signals
   and personalized caches without deleting downloads, favorites, or playlists.
-- A bounded InnerTube retry policy, crash-safe download-directory migration
+- A bounded retry policy, crash-safe download-directory migration
   journal, playback-history retention, and CI security/size gates for release
   artifacts and dependencies.
 
@@ -145,8 +144,8 @@
 - Personalized AutoMix cards now load their real YouTube Music radio queue,
   and recommendation shelves remain navigable with Previous/Next even when
   downloaded and streaming entries appear together or start with one item.
-- Active streams now retry the complete `youtube_explode_dart` → yt-dlp chain
-  twice with bounded backoff after transient connection loss. Duplicate player
+- Active streams now retry the complete resolver chain twice with bounded
+  backoff after transient connection loss. Duplicate player
   errors share one retry budget, user navigation cancels stale attempts, and a
   terminal TikTok LIVE request advances to the next ready item without looping.
 - Player playback, queue navigation, retry, prefetch, history, and crossfade
@@ -156,9 +155,9 @@
 - Optional native services initialize after the first frame and retry only the
   failed integration. Japanese romanization loads its dictionary lazily from a
   compressed asset and releases the expanded worker after an idle timeout.
-- Android runtime yt-dlp updates are stable-channel by default and must match
-  the official release checksum and the version reported by the executable;
-  invalid copies fall back to the bundled verified binary.
+- Android runtime playback updates are stable-channel by default and must match
+  the official release checksum and the published version; invalid copies fall
+  back to the bundled verified binary.
 - Backup restore validates entry counts, individual and expanded sizes,
   compression ratio, duplicate paths, manifest, and SQLite schema before
   replacing active data.
@@ -184,7 +183,7 @@
   be selected independently and are represented in the live settings preview.
 - Android EJS challenge solving through the bundled QuickJS runtime, optional
   BotGuard WebView PO-token generation, and a shared Deno solver on desktop for
-  reinforced `youtube_explode_dart` requests.
+  reinforced playback requests.
 - Desktop Space-key Play/Pause handling for both player surfaces while leaving
   Search and other focused editable fields untouched.
 
@@ -193,8 +192,8 @@
 - YouTube audio resolution now follows a deterministic client ladder, retries
   solver-dependent clients only when needed, validates the exact selected
   stream, and reports every attempted client when direct resolution fails.
-- Downloads try all reinforced `youtube_explode_dart` candidates before a
-  single serialized yt-dlp fallback. Resolution and transfers use bounded
+- Downloads try all reinforced resolver candidates before a single serialized
+  fallback. Resolution and transfers use bounded
   deadlines, clean partial files, retain native containers, and avoid falling
   back for local filesystem failures.
 - CSV restoration processes up to three tracks concurrently while keeping
@@ -234,10 +233,10 @@
 
 ### Added
 
-- Primary playback resolution and native-container downloads through
-  `youtube_explode_dart`, with an explicit yt-dlp fallback for resolution,
+- Primary playback resolution and native-container downloads through the
+  maintained resolver, with an explicit fallback for resolution,
   stream-validation, player-open, and download failures.
-- Categorized InnerTube search for Songs, Videos, and Albums. Album, playlist,
+- Categorized search for Songs, Videos, and Albums. Album, playlist,
   and mix results open a metadata and track-list page before playback creates
   the remote queue.
 - Refreshable YouTube Music Home shelves with lazy collection lookups and
@@ -245,7 +244,7 @@
 - CSV library import and export with BStream, MetroList, Harmony/RiMusic,
   Soundiiz, Exportify, and common title/artist/album/ISRC layouts. Imports are
   previewed, deduplicated, confirmed, and downloaded sequentially.
-- Native Dart TikTok LIVE support on Android, Windows, Linux, and macOS. LIVE
+- Native TikTok LIVE support on Android, Windows, Linux, and macOS. LIVE
   requests can play remotely without entering the Library or be downloaded and
   saved first through a persistent setting.
 - Four persistent lyrics animation styles with alignment controls and an
@@ -255,24 +254,24 @@
 - Android ARMv7 release artifacts alongside ARMv8 and x86_64 on the existing
   Android 7.0 baseline.
 - Song sharing from the full player with one canonical HTTPS link recognized
-  by chat applications. YouTube Music is preferred for InnerTube catalog
+  by chat applications. YouTube Music is preferred for catalog
   tracks, while generic video results retain a regular YouTube watch URL.
 
 ### Improved
 
-- YouTube Explode now uses isolated, mutable client payloads and starts with a
+- Playback resolution now uses isolated, mutable client payloads and starts with a
   current VisionOS client plus watch-page context. The exact selected audio URL
   is verified with a bounded byte-range request before reaching the player.
 - Audio selection prefers the default audio track and compatible M4A/AAC,
   while retaining WebM/Opus and other available audio-only containers as
   fallbacks without transcoding.
-- yt-dlp fallback playback uses bounded managed downloads, strict cache limits,
+- Fallback playback uses bounded managed downloads, strict cache limits,
   latest-request-wins cancellation, inactivity and total deadlines, and active
   source protection during hand-off.
 - Playback opens, errors, queue mutations, and source changes are generation
   aware on just_audio and MediaKit, preventing stale operations from replacing
   or blocking the current song.
-- Search categories load on demand; yt-dlp discovery fallback is represented as
+- Search categories load on demand; discovery fallback is represented as
   Videos only. Search returns up to 20 results, and empty tabs disappear when
   the query is cleared.
 - Song, Video, and Album search categories now use a short accessible
@@ -301,11 +300,11 @@
   blocking the entire queue without cutting off an active download.
 - Backup, restore, downloads, and migration share an operation coordinator so
   destructive storage work waits for active library commits.
-- Final Android yt-dlp failures show the useful multiline extractor message
+- Final Android resolver failures show the useful multiline extractor message
   directly instead of leading with the Java exception wrapper.
 - Desktop installers no longer bundle the obsolete Python TikTok LIVE bridge;
   release validation rejects stale bridge artifacts and verifies all Android
-  ABIs and bundled yt-dlp resources.
+  ABIs and bundled playback resources.
 - Android and desktop keep up to three upcoming remote tracks prepared without
   restarting the current item; Android uses a rolling native media queue.
 - Desktop remote playback uses a collision-resistant 12-hour application-cache
@@ -360,7 +359,7 @@
 - Android remote playback with earlier source validation, preserved request
   headers, selective extractor updates, one retry, clearer HTTP/format errors,
   and restoration of the bundled extractor after a failed update retry.
-- Android APK builds now bundle checksum-verified stable yt-dlp `2026.07.04`,
+- Android APK builds now bundle checksum-verified stable playback resources,
   matching the desktop release version. Existing installations migrate older
   bundled copies while preserving an equal or newer downloaded update.
 - Long-session resource use with bounded artwork, thumbnail, remote-audio, and
@@ -370,7 +369,7 @@
 - Recent playback retains its playlist context and queue changes remain aligned
   with native media controls.
 - Release automation runs formatting, analysis, and tests before packaging and
-  verifies the yt-dlp resource inside both Android APKs.
+  verifies the playback resource inside both Android APKs.
 
 ### Fixed
 

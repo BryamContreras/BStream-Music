@@ -39,9 +39,11 @@ class _LyricsPageRoute extends PageRouteBuilder<void> {
 
   final bool disableAnimations;
 
-  @override
-  DelegatedTransitionBuilder? get delegatedTransition =>
-      disableAnimations ? null : _buildPlaybackSurfaceTransition;
+  // Do not transform the whole playback route underneath Lyrics. HomePage
+  // keeps every visited tab mounted, so a delegated scale would promote the
+  // complete browsing/player stack to another full-screen layer while the
+  // lyrics page is also being rasterized. The lyrics surface already fades
+  // and slides in, which keeps the handoff fluid without that extra copy.
 }
 
 Widget _buildLyricsTransition(
@@ -62,42 +64,10 @@ Widget _buildLyricsTransition(
         begin: const Offset(0, 0.035),
         end: Offset.zero,
       ).animate(motion),
-      child: ScaleTransition(
-        key: const ValueKey('lyrics-route-scale-transition'),
-        scale: Tween<double>(begin: 0.985, end: 1).animate(motion),
-        child: RepaintBoundary(
-          key: const ValueKey('lyrics-route-repaint-boundary'),
-          child: child,
-        ),
+      child: RepaintBoundary(
+        key: const ValueKey('lyrics-route-repaint-boundary'),
+        child: child,
       ),
-    ),
-  );
-}
-
-Widget? _buildPlaybackSurfaceTransition(
-  BuildContext context,
-  Animation<double> animation,
-  Animation<double> secondaryAnimation,
-  bool allowSnapshotting,
-  Widget? child,
-) {
-  if (child == null) {
-    return null;
-  }
-
-  final motion = secondaryAnimation.drive(
-    CurveTween(curve: Curves.easeInOutCubic),
-  );
-  return SlideTransition(
-    key: const ValueKey('lyrics-route-player-slide-transition'),
-    position: Tween<Offset>(
-      begin: Offset.zero,
-      end: const Offset(0, -0.008),
-    ).animate(motion),
-    child: ScaleTransition(
-      key: const ValueKey('lyrics-route-player-scale-transition'),
-      scale: Tween<double>(begin: 1, end: 0.985).animate(motion),
-      child: RepaintBoundary(child: child),
     ),
   );
 }

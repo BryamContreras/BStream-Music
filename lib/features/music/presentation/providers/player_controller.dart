@@ -3360,13 +3360,65 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       return;
     }
 
+    final completionNavigationGeneration = _queueNavigationGeneration;
+    final completionQueueIndex = _queueIndex;
+    final completionTrackId = snapshot.trackId!;
+    final completionQueueEntryId = snapshot.queueEntryId?.trim();
+    final completionSourceUrl = snapshot.sourceUrl?.trim();
     _handlingCompletion = true;
     Future<void>(() async {
       try {
+        // A native/crossfade handoff may publish the successor after the
+        // outgoing backend has already queued its terminal snapshot. Never let
+        // that stale completion advance from the newly selected item or reopen
+        // it from position zero.
+        if (!_isCurrentTerminalOccurrence(
+          navigationGeneration: completionNavigationGeneration,
+          queueIndex: completionQueueIndex,
+          trackId: completionTrackId,
+          queueEntryId: completionQueueEntryId,
+          sourceUrl: completionSourceUrl,
+        )) {
+          return;
+        }
         await playNext(automatic: true);
       } finally {
         _handlingCompletion = false;
       }
     });
+  }
+
+  bool _isCurrentTerminalOccurrence({
+    required int navigationGeneration,
+    required int queueIndex,
+    required String trackId,
+    required String? queueEntryId,
+    required String? sourceUrl,
+  }) {
+    if (_disposed ||
+        _explicitlyStopped ||
+        navigationGeneration != _queueNavigationGeneration ||
+        queueIndex != _queueIndex) {
+      return false;
+    }
+
+    // Compare the same decorated representation that scheduled this task.
+    // Cached remote sources intentionally have a private native track id and
+    // file URL, while the controller publishes their canonical catalog
+    // identity. Reading the raw service snapshot here would incorrectly
+    // suppress every legitimate cached-track completion.
+    final current = state.value;
+    if (current == null ||
+        (current.status != PlayerStatus.stopped &&
+            current.status != PlayerStatus.completed &&
+            current.status != PlayerStatus.failed) ||
+        current.trackId != trackId) {
+      return false;
+    }
+    final currentQueueEntryId = current.queueEntryId?.trim();
+    if (currentQueueEntryId != queueEntryId) {
+      return false;
+    }
+    return current.sourceUrl?.trim() == sourceUrl;
   }
 }

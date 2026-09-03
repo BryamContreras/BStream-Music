@@ -1296,7 +1296,9 @@ class _LyricsPlaybackCompanion extends ConsumerWidget {
           border: Border.all(color: Colors.transparent),
         ),
         child: Padding(
-          padding: EdgeInsets.all(mobileLayout ? 12 : 18),
+          padding: mobileLayout
+              ? const EdgeInsets.fromLTRB(12, 12, 12, 0)
+              : const EdgeInsets.all(18),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1326,7 +1328,7 @@ class _LyricsPlaybackCompanion extends ConsumerWidget {
                   ),
                 ),
               ),
-              SizedBox(height: mobileLayout ? 6 : 8),
+              SizedBox(height: mobileLayout ? 3 : 8),
               if (!mobileLayout) ...[
                 MarqueeText(
                   title == null || title.isEmpty ? strings.noPlayback : title,

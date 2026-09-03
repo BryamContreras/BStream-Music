@@ -31,7 +31,10 @@ class NotificationArtworkService {
     NotificationArtworkCacheDirectoryProvider? cacheDirectoryProvider,
     NotificationArtworkServerBinder? serverBinder,
     DeviceAudioArtworkLoader? deviceAudioArtworkLoader,
-    this.outputSize = 320,
+    // Android and iOS commonly render lock-screen artwork at 300–400 dp.
+    // Keep a 2x square derivative so the system does not upscale a visibly
+    // soft 320 px bitmap on high-density phones.
+    this.outputSize = 640,
     this.maximumCacheEntries = 128,
     this.maximumRegisteredSources = 512,
     this.maximumConcurrentWork = 2,
@@ -368,7 +371,7 @@ class NotificationArtworkService {
   Future<Uint8List?> _loadNetworkBytes(String source) async {
     final client = HttpClient()..connectionTimeout = sourceIdleTimeout;
     try {
-      for (final candidate in youtubeThumbnailCandidates(source)) {
+      for (final candidate in artworkSourceCandidates(source)) {
         final uri = Uri.tryParse(candidate);
         if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
           continue;
@@ -461,6 +464,9 @@ class NotificationArtworkService {
   }
 
   String? _normalizedSupportedSource(String? rawSource) {
+    // Keep the original CDN URL as the registered source. The network loader
+    // asks for the sharp rendition first and retains this URL as a fallback
+    // when a provider does not expose the requested size.
     final normalized = canonicalYouTubeThumbnailSource(rawSource);
     if (normalized == null || normalized.isEmpty) {
       return null;

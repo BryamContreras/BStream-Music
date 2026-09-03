@@ -164,21 +164,32 @@ void main() {
   // fixed white specular, so blue, amber and red artwork keep those colours
   // along the upper and lower contour instead of being washed to grey.
   float fresnel = lens_progress * lens_progress;
-  float bevel_shoulder = smoothstep(0.18, 0.88, lens_progress);
-  float bevel_lip = smoothstep(0.78, 0.98, lens_progress);
+  float bevel_shoulder = smoothstep(0.12, 0.86, lens_progress);
+  float bevel_lip = smoothstep(0.72, 0.985, lens_progress);
   vec2 light_direction = safe_normalize(vec2(-0.55, -0.84));
   float light_facing = 0.5 + 0.5 * dot(shape_normal, light_direction);
+  float reflected_facing = pow(abs(dot(shape_normal, light_direction)), 0.78);
 
-  color.rgb *= mix(1.0, u_edge_gain, fresnel);
-  color.rgb *= 1.0 - 0.055 * bevel_shoulder * (1.0 - light_facing);
+  color.rgb *= mix(
+      1.0,
+      u_edge_gain,
+      fresnel * (0.72 + 0.28 * reflected_facing)
+  );
+  color.rgb *= 1.0 - 0.075 * bevel_shoulder *
+      (1.0 - reflected_facing) * (1.0 - 0.35 * light_facing);
 
-  vec3 reflected_lift = green.rgb * (
-      0.10 * bevel_shoulder +
-      (0.08 + 0.10 * light_facing) * bevel_lip
+  float reflected_peak = max(green.r, max(green.g, green.b));
+  // Normalising only the reflected hue lets even a dark cover produce a
+  // coloured glint, while the lower bound prevents noise in near-black pixels
+  // from turning into a neon edge.
+  vec3 reflected_hue = green.rgb / max(reflected_peak, 0.18);
+  vec3 reflected_lift = reflected_hue * (
+      (0.022 + 0.018 * reflected_facing) * bevel_shoulder +
+      (0.050 + 0.070 * reflected_facing) * bevel_lip
   );
   // Preserve highlight roll-off over already bright cover art. Per-channel
   // headroom retains hue while avoiding clipped, chalky rims.
   vec3 headroom = max(vec3(0.0), vec3(1.0) - color.rgb);
-  color.rgb += min(reflected_lift, headroom * 0.72);
+  color.rgb += min(reflected_lift, headroom * 0.68);
   frag_color = clamp(color, 0.0, 1.0);
 }

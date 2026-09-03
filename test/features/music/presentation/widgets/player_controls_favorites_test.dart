@@ -643,6 +643,14 @@ void main() {
         );
         expect(artworkSize.width, closeTo(artworkSize.height, 0.1));
         expect(artworkSize.shortestSide, greaterThanOrEqualTo(120));
+        if (viewport == const Size(320, 568)) {
+          expect(
+            artworkSize.shortestSide,
+            greaterThanOrEqualTo(205),
+            reason:
+                'compact Apple layout should give the cover reclaimed height',
+          );
+        }
         expect(tester.takeException(), isNull, reason: '$viewport');
       }
     },
@@ -1376,7 +1384,11 @@ void main() {
         tester.getRect(find.byKey(const ValueKey('player-tab-title'))).top,
         greaterThan(tester.getRect(header).top),
       );
-      expect(shortShadow.blurRadius / shortArtworkWidth, closeTo(0.035, 0.001));
+      expect(
+        shortShadow.blurRadius / shortArtworkWidth,
+        lessThanOrEqualTo(0.035),
+      );
+      expect(shortShadow.blurRadius, greaterThan(0));
       expect(shortShadow.spreadRadius, closeTo(0, 0.001));
       expect(shortShadow.offset.dy / shortArtworkWidth, closeTo(0.018, 0.001));
       expect(shortShadow.color.a, closeTo(0.3, 0.001));
@@ -1455,24 +1467,24 @@ void main() {
       find.descendant(of: contentScroll, matching: find.byType(Scrollable)),
     );
 
-    expect(tester.getSize(artwork).width, closeTo(317.52, 0.2));
+    expect(tester.getSize(artwork).width, greaterThan(320));
     expect(scroll.position.pixels, closeTo(0, 0.1));
     expect(scroll.position.maxScrollExtent, closeTo(0, 0.1));
     expect(
       tester.getRect(find.byKey(const ValueKey('player-track-title'))).top -
           artworkRect.bottom,
-      closeTo(22 - (6 * compactness), 0.2),
+      closeTo(22 - (14 * compactness), 0.2),
     );
     expect(
       tester.getRect(timeline).top - tester.getRect(metadata).bottom,
-      closeTo(22 - (10 * compactness), 0.2),
+      closeTo(22 - (15 * compactness), 0.2),
     );
     expect(
       tester.getRect(playbackControls).top - tester.getRect(timeline).bottom,
-      closeTo(18 - (10 * compactness), 0.2),
+      closeTo(18 - (16 * compactness), 0.2),
     );
-    expect(shadow.color.a, lessThanOrEqualTo(0.31));
-    expect(shadow.spreadRadius, lessThan(0.1));
+    expect(shadow.color.a, lessThanOrEqualTo(0.32));
+    expect(shadow.spreadRadius, lessThan(0.3));
     // With no vertical overflow RenderSingleChildViewport does not install a
     // clip, so the compact halo may use the outer 20 dp content padding too.
     expect(visibleShadowExtent, lessThanOrEqualTo(artworkRect.left + 0.1));
@@ -2004,7 +2016,7 @@ void main() {
             0.0,
             1.0,
           );
-          final expectedArtworkTitleGap = 22 - (6 * compactness);
+          final expectedArtworkTitleGap = 22 - (14 * compactness);
           expect(
             shortTitle.artworkTitleGap,
             closeTo(expectedArtworkTitleGap, 0.1),

@@ -928,6 +928,119 @@ void main() {
   );
 
   test(
+    'a stale remote completion cannot advance past a crossfade handoff',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'bstream-controller-completion-race-',
+      );
+      addTearDown(() async {
+        if (await directory.exists()) {
+          await directory.delete(recursive: true);
+        }
+      });
+      final cachedSuccessor = File('${directory.path}/second.m4a');
+      await cachedSuccessor.writeAsBytes(const [1, 2, 3]);
+      final player = _CrossfadePlayerService();
+      final container = _container(
+        player,
+        remoteCache: _CrossfadeRemotePlaybackCache(
+          cachedTrackId: 'second',
+          file: cachedSuccessor,
+        ),
+        settingsController: _enabledCrossfadeSettings(),
+      );
+      addTearDown(container.dispose);
+      final tracks = [
+        _queuedRemoteTrack('first'),
+        _queuedRemoteTrack('second'),
+        _queuedRemoteTrack('third'),
+      ];
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(
+        () => player.crossfadePreparations
+            .whereType<RemoteCrossfadePlaybackSource>()
+            .isNotEmpty,
+      );
+      final prepared = player.crossfadePreparations
+          .whereType<RemoteCrossfadePlaybackSource>()
+          .first;
+      expect(prepared.source.track.id, 'second');
+      final playCountBeforeHandoff = player.playedRemote.length;
+
+      // The native completed event for A and the logical handoff to B can be
+      // delivered in the same event-loop turn. The deferred completion must
+      // still belong to A when it eventually decides whether to navigate.
+      player.emit(
+        player.currentSnapshot.copyWith(status: PlayerStatus.completed),
+      );
+      player.emitCrossfadeHandoff(prepared.source);
+      await _flushCompletion();
+
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(player.currentSnapshot.trackId, 'second');
+      expect(player.playedRemote, hasLength(playCountBeforeHandoff));
+      expect(player.playedRemote.map((track) => track.id), ['first']);
+    },
+  );
+
+  test(
+    'a stale local completion cannot reopen or skip the crossfade successor',
+    () async {
+      final player = _CrossfadePlayerService(
+        supportsLocalQueueReplacement: true,
+      );
+      final container = _container(
+        player,
+        settingsController: _enabledCrossfadeSettings(),
+      );
+      addTearDown(container.dispose);
+      final tracks = [_track(1), _track(2), _track(3)];
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playLocal(tracks.first, queue: tracks);
+      await _waitUntil(
+        () =>
+            player.preparedCrossfadeSource is LocalCrossfadePlaybackSource &&
+            (player.preparedCrossfadeSource! as LocalCrossfadePlaybackSource)
+                    .track
+                    .id ==
+                tracks[1].id,
+      );
+      final nativeQueueLoadsBeforeHandoff = player.playLocalQueueCalls;
+      final localPlayCountBeforeHandoff = player.playedLocalIds.length;
+
+      player.emit(
+        player.currentSnapshot.copyWith(status: PlayerStatus.completed),
+      );
+      player.emit(
+        PlayerSnapshot(
+          status: PlayerStatus.playing,
+          title: tracks[1].title,
+          artist: tracks[1].artist,
+          album: tracks[1].album,
+          trackId: tracks[1].id,
+          sourceUrl: tracks[1].sourceUrl,
+          duration: tracks[1].duration,
+          isRemote: false,
+        ),
+      );
+      await _flushCompletion();
+
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(player.currentSnapshot.trackId, tracks[1].id);
+      expect(player.playLocalQueueCalls, nativeQueueLoadsBeforeHandoff);
+      expect(player.playedLocalIds, hasLength(localPlayCountBeforeHandoff));
+      expect(player.playedLocalIds, ['track-1']);
+    },
+  );
+
+  test(
     'seek and reorder reprepare crossfade while stop invalidates it',
     () async {
       final player = _CrossfadePlayerService(

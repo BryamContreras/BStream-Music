@@ -405,7 +405,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                     final gap = mobile
                                         ? lerpDouble(
                                             22,
-                                            16,
+                                            8,
                                             mobileFrameCompactness,
                                           )!
                                         : lerpDouble(
@@ -692,12 +692,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       regularExtent = math
           .min(
             constraints.maxWidth - (mobile ? 8 : 16),
-            // The single-line title frees a little vertical room. Use more of
-            // it on tall phones while retaining the compact short-phone
-            // fraction so the lower controls remain reachable.
+            // The single-line title frees a little vertical room. On compact
+            // phones give a little of that recovered budget back to the cover
+            // while the lower controls tighten their own gaps below.
             constraints.maxHeight *
                 (mobile
-                    ? lerpDouble(0.50, 0.47, mobileFrameCompactness)!
+                    ? lerpDouble(0.50, 0.52, mobileFrameCompactness)!
                     : 0.56),
           )
           .clamp(mobile ? 180.0 : 210.0, _mobileArtworkExtentCeiling)
@@ -852,7 +852,11 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                 constraints.maxHeight < 360;
             final stackedContentWidth = math.min(availableWidth, 520.0);
             final roomyArtworkExtent = math.min(stackedContentWidth, 420.0);
-            final compactArtworkExtent = math.min(stackedContentWidth, 220.0);
+            // Compact phones benefit more from the cover than from generous
+            // breathing room between the lower controls. Keep a safe cap so
+            // the complete Apple-style stack remains reachable on 320dp
+            // frames while giving the artwork back the reclaimed height.
+            final compactArtworkExtent = math.min(stackedContentWidth, 252.0);
             final stackedArtworkExtent = lerpDouble(
               roomyArtworkExtent,
               compactArtworkExtent,
@@ -946,7 +950,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                         Expanded(child: artwork)
                       else
                         artwork,
-                      SizedBox(height: lerpDouble(24, 10, heightCompactness)),
+                      SizedBox(height: lerpDouble(24, 4, heightCompactness)),
                       controls,
                     ],
                   ),
@@ -1104,7 +1108,7 @@ class _AppleMusicControls extends ConsumerWidget {
     final foreground = AppColors.playbackControlForegroundFor(context);
     final secondary = AppColors.playbackSecondaryControlForegroundFor(context);
     final active = Theme.of(context).colorScheme.primary;
-    final gap = lerpDouble(22, 12, compactness)!;
+    final gap = lerpDouble(22, 0, compactness)!;
     final isPlaying = snapshot.status == PlayerStatus.playing;
 
     final metadata = Column(
@@ -1262,16 +1266,16 @@ class _AppleMusicControls extends ConsumerWidget {
         metadata,
         SizedBox(height: gap),
         _AppleMusicTimeline(strings: strings),
-        SizedBox(height: lerpDouble(18, 8, compactness)),
+        SizedBox(height: lerpDouble(18, 0, compactness)),
         _AppleTransportControls(
           hasTrack: hasTrack,
           isPlaying: isPlaying,
           compactness: compactness,
           strings: strings,
         ),
-        SizedBox(height: lerpDouble(18, 8, compactness)),
+        SizedBox(height: lerpDouble(18, 0, compactness)),
         _AppleVolumeRow(snapshot: snapshot, strings: strings),
-        SizedBox(height: lerpDouble(16, 6, compactness)),
+        SizedBox(height: lerpDouble(16, 0, compactness)),
         utilityRow,
         if (hasError) ...[
           SizedBox(height: lerpDouble(14, 8, compactness)),
@@ -1301,9 +1305,9 @@ class _AppleTransportControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final foreground = AppColors.playbackControlForegroundFor(context);
-    final sideSize = lerpDouble(80, 68, compactness)!;
-    final sideIconSize = lerpDouble(52, 44, compactness)!;
-    final primarySize = lerpDouble(96, 82, compactness)!;
+    final sideSize = lerpDouble(80, 65, compactness)!;
+    final sideIconSize = lerpDouble(52, 43, compactness)!;
+    final primarySize = lerpDouble(96, 79, compactness)!;
     final primaryIconSize = lerpDouble(
       isPlaying ? 68 : 76,
       isPlaying ? 58 : 66,
@@ -2450,13 +2454,13 @@ class _PlayerControls extends ConsumerWidget {
           ),
           SizedBox(
             height: mobile
-                ? lerpDouble(22, 12, spacingCompactness)
+                ? lerpDouble(22, 7, spacingCompactness)
                 : lerpDouble(compact ? 22 : 36, 14, compactness),
           ),
           _Timeline(spacingCompactness: spacingCompactness),
           SizedBox(
             height: mobile
-                ? lerpDouble(18, 8, spacingCompactness)
+                ? lerpDouble(18, 2, spacingCompactness)
                 : lerpDouble(compact ? 18 : 28, 12, compactness),
           ),
           _PlaybackButtons(

@@ -62,6 +62,32 @@ void main() {
         findsOneWidget,
       );
 
+      final shadowLayer = tester.widget<CustomPaint>(
+        find.byKey(LiquidGlassSurface.shadowKey),
+      );
+      expect(
+        shadowLayer.child,
+        isA<ClipRRect>(),
+        reason:
+            'Exterior depth must wrap the continuously clipped sheet instead '
+            'of darkening the translucent center.',
+      );
+      final materialStack = tester.widget<Stack>(
+        find.descendant(of: surface, matching: find.byType(Stack)).first,
+      );
+      expect(materialStack.children, hasLength(4));
+      expect(
+        (materialStack.children[1] as Positioned).child.key,
+        LiquidGlassSurface.surfaceTintKey,
+        reason: 'The neutral tint must remain directly above the backdrop.',
+      );
+      expect(materialStack.children[2], isA<RepaintBoundary>());
+      expect(
+        materialStack.children.last,
+        isA<Positioned>(),
+        reason: 'Perimeter optics must remain above content and tint.',
+      );
+
       final tint = tester.widget<DecoratedBox>(
         find.byKey(LiquidGlassSurface.surfaceTintKey),
       );
@@ -94,26 +120,32 @@ void main() {
     expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
   });
 
-  testWidgets('perimeter optics leaves chromatic light to the shader', (
+  testWidgets('perimeter optics keeps a colour-preserving convex face', (
     tester,
   ) async {
     await tester.pumpWidget(_harness(child: const SizedBox.expand()));
 
     final paints = _paintOptics(tester);
-    expect(paints, hasLength(1));
-    final highlight = paints.single;
-    expect(highlight.style, PaintingStyle.stroke);
-    expect(highlight.strokeWidth, closeTo(1, 0.000001));
-    expect(highlight.blendMode, BlendMode.srcOver);
-    expect(highlight.maskFilter, isNull);
-    expect(highlight.shader, isNotNull);
-    expect(
-      highlight.color,
-      isNot(Colors.white),
-      reason:
-          'The paint-only contour may add depth, but must not cover the '
-          'backdrop-coloured shader bevel with a white outline.',
-    );
+    expect(paints, hasLength(3));
+
+    final face = paints[0];
+    expect(face.style, PaintingStyle.fill);
+    expect(face.blendMode, BlendMode.softLight);
+    expect(face.shader, isNotNull);
+
+    final outerRim = paints[1];
+    expect(outerRim.style, PaintingStyle.stroke);
+    expect(outerRim.strokeWidth, closeTo(0.9, 0.000001));
+    expect(outerRim.blendMode, BlendMode.softLight);
+    expect(outerRim.maskFilter, isNull);
+    expect(outerRim.shader, isNotNull);
+
+    final innerRim = paints[2];
+    expect(innerRim.style, PaintingStyle.stroke);
+    expect(innerRim.strokeWidth, closeTo(0.8, 0.000001));
+    expect(innerRim.blendMode, BlendMode.softLight);
+    expect(innerRim.maskFilter, isNull);
+    expect(innerRim.shader, isNotNull);
   });
 
   testWidgets('adaptive tint calms both light and dark backdrops', (
@@ -192,6 +224,60 @@ void main() {
     );
   });
 
+  testWidgets(
+    'hover droplet keeps a four-layer convex treatment without recapturing',
+    (tester) async {
+      await tester.pumpWidget(
+        _hoverHarness(
+          brightness: Brightness.dark,
+          disableAnimations: true,
+          child: const SizedBox.expand(),
+        ),
+      );
+
+      final target = find.byType(LiquidGlassHoverTarget);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(tester.getCenter(target));
+      await tester.pump();
+
+      expect(
+        find.descendant(of: target, matching: find.byType(BackdropFilter)),
+        findsNothing,
+        reason:
+            'Hover depth must shade the parent glass instead of sampling it '
+            'through a second blur.',
+      );
+      final paints = _paintHover(tester);
+      expect(paints, hasLength(4));
+
+      expect(paints[0].style, PaintingStyle.fill);
+      expect(
+        paints[0].maskFilter.toString(),
+        contains('MaskFilter.blur(BlurStyle.outer, 4.2)'),
+      );
+      expect(paints[0].shader, isNull);
+
+      expect(paints[1].style, PaintingStyle.fill);
+      expect(paints[1].shader, isNotNull);
+      expect(paints[1].maskFilter, isNull);
+
+      expect(paints[2].style, PaintingStyle.stroke);
+      expect(paints[2].strokeWidth, closeTo(0.85, 0.000001));
+      expect(paints[2].blendMode, BlendMode.softLight);
+      expect(paints[2].shader, isNotNull);
+
+      expect(paints[3].style, PaintingStyle.stroke);
+      expect(paints[3].strokeWidth, closeTo(0.7, 0.000001));
+      expect(paints[3].shader, isNull);
+      expect(paints[3].color.a, closeTo(0.1, 0.000001));
+      expect(paints[3].color.r, 0);
+      expect(paints[3].color.g, 0);
+      expect(paints[3].color.b, 0);
+    },
+  );
+
   testWidgets('dark optical tuning leaves the light hover palette unchanged', (
     tester,
   ) async {
@@ -233,11 +319,12 @@ void main() {
       );
 
       final lightShadowPaints = _paintShadow(tester);
-      expect(lightShadowPaints, hasLength(1));
+      expect(lightShadowPaints, hasLength(2));
       expect(
-        lightShadowPaints.map((paint) => paint.maskFilter),
-        containsAll(<ui.MaskFilter>[
-          const ui.MaskFilter.blur(ui.BlurStyle.outer, 14),
+        lightShadowPaints.map((paint) => paint.maskFilter?.toString()),
+        containsAll([
+          ui.MaskFilter.blur(ui.BlurStyle.outer, 14).toString(),
+          ui.MaskFilter.blur(ui.BlurStyle.outer, 3.4).toString(),
         ]),
         reason:
             'Both the reflected halo and drop shadow must stay outside the '
@@ -250,11 +337,12 @@ void main() {
       );
 
       final darkShadowPaints = _paintShadow(tester);
-      expect(darkShadowPaints, hasLength(1));
+      expect(darkShadowPaints, hasLength(2));
       expect(
-        darkShadowPaints.map((paint) => paint.maskFilter),
-        containsAll(<ui.MaskFilter>[
-          const ui.MaskFilter.blur(ui.BlurStyle.outer, 14),
+        darkShadowPaints.map((paint) => paint.maskFilter?.toString()),
+        containsAll([
+          ui.MaskFilter.blur(ui.BlurStyle.outer, 14).toString(),
+          ui.MaskFilter.blur(ui.BlurStyle.outer, 3.4).toString(),
         ]),
         reason: 'Dark glass must not gain an interior fill from either halo.',
       );
@@ -763,6 +851,18 @@ List<ui.Paint> _paintOptics(WidgetTester tester) {
   opticsPaint.painter!.paint(
     recorder,
     tester.getSize(find.byKey(LiquidGlassSurface.opticsKey)),
+  );
+  return recorder.superellipsePaints;
+}
+
+List<ui.Paint> _paintHover(WidgetTester tester) {
+  final hoverPaint = tester.widget<CustomPaint>(
+    find.byKey(LiquidGlassHoverTarget.effectKey),
+  );
+  final recorder = _RRectPaintRecordingCanvas();
+  hoverPaint.painter!.paint(
+    recorder,
+    tester.getSize(find.byKey(LiquidGlassHoverTarget.effectKey)),
   );
   return recorder.superellipsePaints;
 }

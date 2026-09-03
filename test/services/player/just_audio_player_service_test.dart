@@ -443,7 +443,7 @@ void main() {
 
   group('dual-deck crossfade', () {
     test(
-      'prepares a silent standby and hands off within master volume',
+      'promotes the prepared deck without seeking or reopening it',
       () async {
         final fixture = await _CrossfadeFixture.create();
         try {
@@ -451,98 +451,46 @@ void main() {
 
           expect(fixture.standby.setAudioSourcesCalls, 1);
           expect(_queueEntryId(fixture.standby), 'remote:next');
+          expect(fixture.standby.currentIndex, 1);
           expect(fixture.standby.volumeCalls.first, 0);
           expect(fixture.standby.playCalls, 0);
 
-          final primaryFadeCallStart = fixture.primary.volumeCalls.length;
-          final standbyFadeCallStart = fixture.standby.volumeCalls.length;
+          fixture.standby.emitPosition(const Duration(milliseconds: 850));
           fixture.primary.emitPosition(const Duration(milliseconds: 400));
-          await _waitUntil(() => fixture.standby.playCalls == 1);
-          await _waitUntil(
-            () =>
-                fixture.primary.volumeCalls.any((volume) => volume < 0.72) &&
-                fixture.standby.volumeCalls.any((volume) => volume > 0),
-            attempts: 500,
-          );
-
-          bool hasAudibleEarlyOverlap() {
-            final outgoing = fixture.primary.volumeCalls
-                .skip(primaryFadeCallStart)
-                .toList(growable: false);
-            final incoming = fixture.standby.volumeCalls
-                .skip(standbyFadeCallStart)
-                .toList(growable: false);
-            final count = outgoing.length < incoming.length
-                ? outgoing.length
-                : incoming.length;
-            for (var index = 0; index < count; index++) {
-              if (outgoing[index] > 0.72 * 0.8 &&
-                  incoming[index] > 0.72 * 0.2) {
-                return true;
-              }
-            }
-            return false;
-          }
-
-          await _waitUntil(hasAudibleEarlyOverlap, attempts: 500);
-
-          for (final volume in fixture.primary.volumeCalls.skip(
-            primaryFadeCallStart,
-          )) {
-            expect(volume, inInclusiveRange(0, 0.72));
-          }
-          for (final volume in fixture.standby.volumeCalls.skip(
-            standbyFadeCallStart,
-          )) {
-            expect(volume, inInclusiveRange(0, 0.72));
-          }
-
           await _waitUntil(
             () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
             attempts: 700,
           );
-          expect(fixture.service.currentSnapshot.volume, closeTo(0.72, 1e-9));
-          expect(fixture.primary.currentIndex, 1);
-          expect(fixture.primary.volumeCalls.last, closeTo(0.72, 1e-9));
+
+          expect(fixture.primary.seekCalls, 0);
+          expect(fixture.primary.currentIndex, 0);
+          expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
+          expect(fixture.standby.seekCalls, 0);
+          expect(fixture.standby.setAudioSourcesCalls, 1);
+          expect(fixture.standby.currentIndex, 1);
+          expect(fixture.standby.position, const Duration(milliseconds: 850));
           expect(
-            fixture.primary.volumeCalls.any(
-              (volume) => volume > 0 && volume < 0.72,
-            ),
-            isTrue,
-            reason: 'The synchronized primary must settle in without a jump.',
+            fixture.service.currentSnapshot.position,
+            const Duration(milliseconds: 850),
           );
-          expect(
-            fixture.standby.volumeCalls.any(
-              (volume) => volume > 0 && volume < 0.72,
-            ),
-            isTrue,
-            reason: 'The prepared deck must settle out instead of being muted.',
-          );
-          final primarySettleStart = fixture.primary.volumeCalls.lastIndexWhere(
-            (volume) => volume.abs() <= 0.001,
-          );
-          final standbySettleStart = fixture.standby.volumeCalls.lastIndexWhere(
-            (volume) => (volume - 0.72).abs() <= 0.001,
-          );
-          final primarySettle = fixture.primary.volumeCalls.sublist(
-            primarySettleStart,
-          );
-          final standbySettle = fixture.standby.volumeCalls.sublist(
-            standbySettleStart,
-          );
-          final settleSampleCount = primarySettle.length < standbySettle.length
-              ? primarySettle.length
-              : standbySettle.length;
-          expect(settleSampleCount, greaterThan(2));
-          for (var index = 0; index < settleSampleCount; index++) {
-            expect(
-              primarySettle[index] + standbySettle[index],
-              closeTo(0.72, 0.003),
-              reason: 'Settle gains must remain complementary.',
-            );
-          }
+          expect(fixture.standby.volumeCalls.last, closeTo(0.72, 1e-9));
+          expect(fixture.primary.disposeCalls, 0);
           expect(fixture.standby.disposeCalls, 0);
-          await _waitUntil(() => fixture.standby.disposeCalls == 1);
+
+          fixture.standby.emitPosition(const Duration(milliseconds: 910));
+          fixture.primary.emitPosition(const Duration(milliseconds: 125));
+          await _drainEvents();
+          expect(
+            fixture.service.currentSnapshot.position,
+            const Duration(milliseconds: 910),
+            reason: 'Only the promoted deck may publish the active timeline.',
+          );
+
+          await fixture.service.updateRemoteQueue([_remoteSource('third')]);
+          expect(fixture.standby.setAudioSourcesCalls, 1);
+          expect(fixture.standby.seekCalls, 0);
+          expect(fixture.standby.sequence, hasLength(3));
+          expect(fixture.standby.currentIndex, 1);
         } finally {
           await fixture.dispose();
         }
@@ -579,134 +527,106 @@ void main() {
           expect(volume, inInclusiveRange(0, 0.35));
         }
         expect(fixture.service.currentSnapshot.volume, closeTo(0.35, 1e-9));
-        expect(fixture.primary.volumeCalls.last, closeTo(0.35, 1e-9));
+        expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
+        expect(fixture.standby.volumeCalls.last, closeTo(0.35, 1e-9));
       } finally {
         await fixture.dispose();
       }
     });
 
-    test(
-      'keeps B audible and realigns drift after the primary reports ready',
-      () async {
-        final fixture = await _CrossfadeFixture.create();
-        try {
-          await fixture.playAndPrepare(masterVolume: 0.68);
-          fixture.primary.holdNextIndexedSeekInBuffering = true;
-          fixture.primary.emitPosition(const Duration(milliseconds: 400));
-
-          await _waitUntil(
-            () => fixture.primary.processingState == ProcessingState.buffering,
-            attempts: 700,
-          );
-          fixture.standby.emitPosition(const Duration(milliseconds: 850));
-          await Future<void>.delayed(const Duration(milliseconds: 400));
-
-          expect(
-            fixture.service.currentSnapshot.queueEntryId,
-            'remote:current',
-          );
-          expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
-          expect(fixture.standby.volumeCalls.last, closeTo(0.68, 0.002));
-          expect(fixture.standby.disposeCalls, 0);
-
-          fixture.primary.emitReady();
-          await _waitUntil(
-            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
-            attempts: 700,
-          );
-          expect(fixture.primary.volumeCalls.last, closeTo(0.68, 1e-9));
-          expect(fixture.primary.seekCalls, 2);
-          expect(fixture.primary.position, const Duration(milliseconds: 850));
-          expect(
-            fixture.service.currentSnapshot.position,
-            const Duration(milliseconds: 850),
-          );
-          expect(fixture.standby.disposeCalls, 0);
-          await _waitUntil(
-            () => fixture.standby.disposeCalls == 1,
-            attempts: 700,
-          );
-        } finally {
-          await fixture.dispose();
-        }
-      },
-    );
-
-    test('keeps B authoritative beyond the old readiness timeout', () async {
+    test('reuses the outgoing deck for the following crossfade', () async {
       final fixture = await _CrossfadeFixture.create();
       try {
-        await fixture.playAndPrepare(masterVolume: 0.67);
-        fixture.primary.holdNextIndexedSeekInBuffering = true;
+        await fixture.playAndPrepare(masterVolume: 0.69);
         fixture.primary.emitPosition(const Duration(milliseconds: 400));
-
-        await _waitUntil(
-          () => fixture.primary.processingState == ProcessingState.buffering,
-          attempts: 700,
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 1200));
-
-        expect(fixture.service.currentSnapshot.queueEntryId, 'remote:current');
-        expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
-        expect(fixture.standby.volumeCalls.last, closeTo(0.67, 0.002));
-        expect(fixture.standby.disposeCalls, 0);
-
-        fixture.primary.emitReady();
         await _waitUntil(
           () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
           attempts: 700,
         );
-        expect(fixture.primary.processingState, ProcessingState.ready);
-        expect(fixture.primary.volumeCalls.last, closeTo(0.67, 1e-9));
+
+        await fixture.service.prepareCrossfade(
+          RemoteCrossfadePlaybackSource(_remoteSource('third')),
+        );
+
+        expect(fixture.factoryPlayers, isEmpty);
+        expect(fixture.primary.setAudioSourcesCalls, 2);
+        expect(fixture.primary.currentIndex, 2);
+        expect(_queueEntryId(fixture.primary), 'remote:third');
+        expect(fixture.standby.setAudioSourcesCalls, 1);
+        expect(fixture.primary.stopCalls, 0);
+
+        fixture.standby.emitDuration(const Duration(milliseconds: 800));
+        fixture.primary.emitPosition(const Duration(milliseconds: 875));
+        fixture.standby.emitPosition(const Duration(milliseconds: 400));
+        await _waitUntil(
+          () => fixture.service.currentSnapshot.queueEntryId == 'remote:third',
+          attempts: 700,
+        );
+
+        expect(fixture.factoryPlayers, isEmpty);
+        expect(fixture.primary.seekCalls, 0);
+        expect(
+          fixture.primary.stopCalls,
+          0,
+          reason: 'The cancelled retirement must not stop the reused deck.',
+        );
+        expect(fixture.primary.setAudioSourcesCalls, 2);
+        expect(fixture.standby.setAudioSourcesCalls, 1);
+        expect(
+          fixture.service.currentSnapshot.position,
+          const Duration(milliseconds: 875),
+        );
       } finally {
         await fixture.dispose();
       }
     });
 
     test(
-      'remeasures fresh drift when B advances during the correction seek',
+      'controller-managed local playback promotes singleton B without reload',
       () async {
         final fixture = await _CrossfadeFixture.create();
+        final trackA = _localTrack('a');
+        final trackB = _localTrack('b');
+        final trackC = _localTrack('c');
         try {
-          await fixture.playAndPrepare(masterVolume: 0.69);
-          var advancedDuringCorrection = false;
-          double? primaryGainDuringCorrection;
-          double? standbyGainDuringCorrection;
-          fixture.primary
-            ..holdNextIndexedSeekInBuffering = true
-            ..onUnindexedSeek = (_) {
-              if (advancedDuringCorrection) return;
-              advancedDuringCorrection = true;
-              primaryGainDuringCorrection = fixture.primary.volumeCalls.last;
-              standbyGainDuringCorrection = fixture.standby.volumeCalls.last;
-              fixture.standby.emitPosition(const Duration(milliseconds: 1200));
-            };
+          await fixture.service.setShuffleEnabled(true);
+          await fixture.service.playLocal(trackA);
+          await fixture.service.setVolume(0.63);
+          await fixture.service.configureCrossfade(
+            enabled: true,
+            duration: const Duration(milliseconds: 400),
+          );
+          fixture.primary.emitDuration(const Duration(milliseconds: 800));
+          await _drainEvents();
+
+          await fixture.service.prepareCrossfade(
+            LocalCrossfadePlaybackSource(trackB),
+          );
+          expect(fixture.standby.sequence, hasLength(1));
+          expect(fixture.standby.currentIndex, 0);
+          expect(_trackId(fixture.standby), 'b');
+
+          fixture.standby.emitPosition(const Duration(milliseconds: 840));
           fixture.primary.emitPosition(const Duration(milliseconds: 400));
-
           await _waitUntil(
-            () => fixture.primary.processingState == ProcessingState.buffering,
+            () => fixture.service.currentSnapshot.trackId == 'b',
             attempts: 700,
           );
-          fixture.standby.emitPosition(const Duration(milliseconds: 850));
-          expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
-          expect(fixture.standby.volumeCalls.last, closeTo(0.69, 0.002));
-          fixture.primary.emitReady();
 
-          await _waitUntil(
-            () =>
-                fixture.primary.seekCalls >= 3 &&
-                fixture.service.currentSnapshot.queueEntryId == 'remote:next',
-            attempts: 700,
-          );
-          expect(advancedDuringCorrection, isTrue);
-          expect(primaryGainDuringCorrection, closeTo(0, 1e-9));
-          expect(standbyGainDuringCorrection, closeTo(0.69, 0.002));
-          expect(fixture.primary.seekCalls, 3);
-          expect(fixture.primary.position, const Duration(milliseconds: 1200));
+          expect(fixture.primary.seekCalls, 0);
+          expect(fixture.standby.seekCalls, 0);
+          expect(fixture.standby.setAudioSourcesCalls, 1);
           expect(
             fixture.service.currentSnapshot.position,
-            const Duration(milliseconds: 1200),
+            const Duration(milliseconds: 840),
           );
-          expect(fixture.primary.volumeCalls.last, closeTo(0.69, 1e-9));
+
+          await fixture.service.replaceLocalQueue([trackA, trackB, trackC], 1);
+          expect(fixture.standby.setAudioSourcesCalls, 1);
+          expect(fixture.standby.seekCalls, 0);
+          expect(fixture.standby.sequence, hasLength(3));
+          expect(fixture.standby.currentIndex, 1);
+          expect(fixture.standby.position, const Duration(milliseconds: 840));
         } finally {
           await fixture.dispose();
         }
@@ -714,157 +634,71 @@ void main() {
     );
 
     test(
-      'uses a gapless terminal cutover when clock drift never converges',
+      'native shuffle preserves the exact duplicate occurrence after swap',
       () async {
         final fixture = await _CrossfadeFixture.create();
+        final tracks = [_localTrack('a'), _localTrack('b'), _localTrack('a')];
         try {
-          await fixture.playAndPrepare(masterVolume: 0.71);
-          fixture.primary
-            ..holdNextIndexedSeekInBuffering = true
-            ..onUnindexedSeek = (position) {
-              fixture.standby.emitPosition(
-                position + const Duration(milliseconds: 100),
-              );
-            };
+          await fixture.service.playLocalQueue(tracks, 1);
+          await fixture.service.setShuffleEnabled(true);
+          fixture.primary.setShuffleOrderForTest([1, 2, 0]);
+          await fixture.service.configureCrossfade(
+            enabled: true,
+            duration: const Duration(milliseconds: 400),
+          );
+          fixture.primary.emitDuration(const Duration(milliseconds: 800));
+          await _drainEvents();
+
+          await fixture.service.prepareCrossfade(
+            LocalCrossfadePlaybackSource(tracks[0]),
+          );
+          expect(fixture.standby.currentIndex, 2);
+          expect(_trackId(fixture.standby), 'a');
+          expect(fixture.standby.shuffleIndices, [1, 2, 0]);
+          expect(fixture.standby.nextIndex, 0);
+
           fixture.primary.emitPosition(const Duration(milliseconds: 400));
-
           await _waitUntil(
-            () => fixture.primary.processingState == ProcessingState.buffering,
+            () => fixture.service.currentSnapshot.trackId == 'a',
             attempts: 700,
           );
-          fixture.standby.emitPosition(const Duration(milliseconds: 850));
-          fixture.primary.emitReady();
-
-          await _waitUntil(
-            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
-            attempts: 700,
-          );
-          expect(fixture.primary.seekCalls, 4);
-          expect(fixture.primary.volumeCalls.last, closeTo(0.71, 1e-9));
-          expect(fixture.standby.volumeCalls.last, closeTo(0, 1e-9));
-          expect(
-            fixture.standby.stopCalls,
-            0,
-            reason: 'B must not stop before A owns the terminal gain.',
-          );
-          await _waitUntil(() => fixture.standby.stopCalls > 0, attempts: 700);
+          expect(fixture.standby.nextIndex, 0);
+          expect(fixture.primary.seekCalls, 0);
+          expect(fixture.standby.seekCalls, 0);
         } finally {
           await fixture.dispose();
         }
       },
     );
 
-    test(
-      'restores B and retries if A loses readiness during terminal cutover',
-      () async {
-        final fixture = await _CrossfadeFixture.create();
-        try {
-          const master = 0.73;
-          var readinessDropped = false;
-          await fixture.playAndPrepare(masterVolume: master);
-          fixture.primary
-            ..holdNextIndexedSeekInBuffering = true
-            ..onUnindexedSeek = (position) {
-              fixture.standby.emitPosition(
-                position + const Duration(milliseconds: 100),
-              );
-            }
-            ..onSetVolume = (volume) {
-              if (!readinessDropped &&
-                  fixture.primary.seekCalls == 4 &&
-                  (volume - master).abs() <= 0.001) {
-                readinessDropped = true;
-                fixture.primary.emitBuffering();
-              }
-            };
-          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+    test('repeat changes target both decks while promotion races', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.playAndPrepare(masterVolume: 0.62);
+        fixture.primary.blockNextLoopMode = true;
 
-          await _waitUntil(
-            () => fixture.primary.processingState == ProcessingState.buffering,
-            attempts: 700,
-          );
-          fixture.standby.emitPosition(const Duration(milliseconds: 850));
-          fixture.primary.emitReady();
-          await _waitUntil(
-            () =>
-                readinessDropped &&
-                fixture.primary.volumeCalls.last.abs() <= 0.001 &&
-                (fixture.standby.volumeCalls.last - master).abs() <= 0.002,
-            attempts: 700,
-          );
+        final optionChange = fixture.service.setRepeatMode(
+          PlaybackRepeatMode.one,
+        );
+        await _waitUntil(
+          () => fixture.primary.loopModeWriteStarted.isCompleted,
+        );
 
-          expect(
-            fixture.service.currentSnapshot.queueEntryId,
-            'remote:current',
-          );
-          expect(fixture.standby.stopCalls, 0);
+        fixture.primary.emitPosition(const Duration(milliseconds: 400));
+        await _waitUntil(
+          () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+          attempts: 700,
+        );
+        expect(fixture.standby.appliedLoopMode, LoopMode.one);
 
-          fixture.primary
-            ..onUnindexedSeek = null
-            ..onSetVolume = null
-            ..emitReady();
-          await _waitUntil(
-            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
-            attempts: 700,
-          );
-          expect(fixture.primary.processingState, ProcessingState.ready);
-          expect(fixture.primary.volumeCalls.last, closeTo(master, 1e-9));
-        } finally {
-          await fixture.dispose();
-        }
-      },
-    );
-
-    test(
-      'restores B and retries if A buffers during an intermediate settle gain',
-      () async {
-        final fixture = await _CrossfadeFixture.create();
-        try {
-          const master = 0.74;
-          var readinessDropped = false;
-          double? interruptedGain;
-          await fixture.playAndPrepare(masterVolume: master);
-          fixture.primary.onSetVolume = (volume) {
-            if (!readinessDropped &&
-                fixture.primary.currentIndex == 1 &&
-                volume > 0.02 &&
-                volume < master - 0.02) {
-              readinessDropped = true;
-              interruptedGain = volume;
-              fixture.primary.emitBuffering();
-            }
-          };
-          fixture.primary.emitPosition(const Duration(milliseconds: 400));
-
-          await _waitUntil(
-            () =>
-                readinessDropped &&
-                fixture.primary.volumeCalls.last.abs() <= 0.001 &&
-                (fixture.standby.volumeCalls.last - master).abs() <= 0.002,
-            attempts: 700,
-          );
-          expect(interruptedGain, isNotNull);
-          expect(interruptedGain, inExclusiveRange(0, master));
-          expect(fixture.standby.stopCalls, 0);
-          expect(fixture.standby.disposeCalls, 0);
-
-          fixture.primary
-            ..onSetVolume = null
-            ..emitReady();
-          await _waitUntil(
-            () =>
-                fixture.service.currentSnapshot.queueEntryId == 'remote:next' &&
-                (fixture.primary.volumeCalls.last - master).abs() <= 0.001 &&
-                fixture.standby.volumeCalls.last.abs() <= 0.001,
-            attempts: 700,
-          );
-          expect(fixture.primary.processingState, ProcessingState.ready);
-          expect(fixture.standby.stopCalls, 0);
-        } finally {
-          await fixture.dispose();
-        }
-      },
-    );
+        fixture.primary.releaseLoopModeWrite.complete();
+        await optionChange;
+        expect(fixture.primary.appliedLoopMode, LoopMode.one);
+        expect(fixture.standby.appliedLoopMode, LoopMode.one);
+      } finally {
+        await fixture.dispose();
+      }
+    });
 
     test('disabling before the fade releases the prepared standby', () async {
       final fixture = await _CrossfadeFixture.create();
@@ -918,7 +752,8 @@ void main() {
           observedTrackIds.where((trackId) => trackId == 'next'),
           hasLength(1),
         );
-        expect(fixture.primary.volumeCalls.last, closeTo(0.7, 1e-9));
+        expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
+        expect(fixture.standby.volumeCalls.last, closeTo(0.7, 1e-9));
       } finally {
         await subscription.cancel();
         await fixture.dispose();
@@ -1026,35 +861,6 @@ void main() {
       }
     });
 
-    test(
-      'a post-seek promotion failure keeps metadata authoritative',
-      () async {
-        final fixture = await _CrossfadeFixture.create();
-        try {
-          await fixture.playAndPrepare(masterVolume: 0.61);
-          fixture.primary.failNextSeekAfterMutation = true;
-          fixture.primary.emitPosition(const Duration(milliseconds: 400));
-
-          await _waitUntil(
-            () => fixture.standby.disposeCalls == 1,
-            attempts: 700,
-          );
-          await _waitUntil(
-            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
-            attempts: 200,
-          );
-          expect(fixture.primary.currentIndex, 1);
-          expect(fixture.service.currentSnapshot.queueEntryId, 'remote:next');
-          expect(fixture.service.currentSnapshot.trackId, 'next');
-          expect(fixture.service.currentSnapshot.position, Duration.zero);
-          expect(fixture.service.currentSnapshot.volume, closeTo(0.61, 1e-9));
-          expect(fixture.primary.volumeCalls.last, closeTo(0.61, 1e-9));
-        } finally {
-          await fixture.dispose();
-        }
-      },
-    );
-
     test('stop invalidates blocked preparation and its late load', () async {
       final fixture = await _CrossfadeFixture.create();
       try {
@@ -1144,34 +950,6 @@ void main() {
       }
     });
 
-    test('seek to zero wins over an indexed promotion in flight', () async {
-      final fixture = await _CrossfadeFixture.create();
-      try {
-        await fixture.playAndPrepare(masterVolume: 0.59);
-        fixture.primary.blockNextIndexedSeekAfterMutation = true;
-        fixture.primary.emitPosition(const Duration(milliseconds: 400));
-        await _waitUntil(
-          () => fixture.primary.indexedSeekMutationStarted.isCompleted,
-          attempts: 700,
-        );
-        expect(fixture.primary.currentIndex, 1);
-        expect(fixture.service.currentSnapshot.queueEntryId, 'remote:current');
-
-        final seek = fixture.service.seek(Duration.zero);
-        await _drainEvents();
-        fixture.primary.releaseIndexedSeekMutation.complete();
-        await seek;
-
-        expect(fixture.primary.currentIndex, 0);
-        expect(fixture.primary.position, Duration.zero);
-        expect(fixture.service.currentSnapshot.position, Duration.zero);
-        expect(fixture.service.currentSnapshot.queueEntryId, 'remote:current');
-        expect(fixture.primary.volumeCalls.last, closeTo(0.59, 1e-9));
-      } finally {
-        await fixture.dispose();
-      }
-    });
-
     test(
       'dispose invalidates blocked standby without a late handoff',
       () async {
@@ -1219,35 +997,6 @@ void main() {
         }
       },
     );
-
-    test('dispose waits for a promotion mutation already in flight', () async {
-      final fixture = await _CrossfadeFixture.create();
-      try {
-        await fixture.playAndPrepare(masterVolume: 0.59);
-        fixture.primary.blockNextIndexedSeekAfterMutation = true;
-        fixture.primary.emitPosition(const Duration(milliseconds: 400));
-        await _waitUntil(
-          () => fixture.primary.indexedSeekMutationStarted.isCompleted,
-          attempts: 700,
-        );
-
-        var disposeCompleted = false;
-        final dispose = fixture.service.dispose().whenComplete(
-          () => disposeCompleted = true,
-        );
-        await _drainEvents();
-        expect(disposeCompleted, isFalse);
-        expect(fixture.primary.disposeCalls, 0);
-        expect(fixture.standby.disposeCalls, 0);
-
-        fixture.primary.releaseIndexedSeekMutation.complete();
-        await dispose.timeout(const Duration(seconds: 1));
-        expect(fixture.primary.disposeCalls, 1);
-        expect(fixture.standby.disposeCalls, 1);
-      } finally {
-        await fixture.dispose(serviceAlreadyDisposed: true);
-      }
-    });
   });
 }
 
@@ -1266,8 +1015,15 @@ RemotePlaybackSource _remoteSource(String id) => RemotePlaybackSource(
 
 String? _queueEntryId(_BlockingAudioPlayer backend) {
   if (backend.sequence.isEmpty) return null;
-  return (backend.sequence.single.tag as MediaItem).extras?['queueEntryId']
+  final index = backend.currentIndex ?? 0;
+  return (backend.sequence[index].tag as MediaItem).extras?['queueEntryId']
       ?.toString();
+}
+
+String? _trackId(_BlockingAudioPlayer backend) {
+  if (backend.sequence.isEmpty) return null;
+  final index = backend.currentIndex ?? 0;
+  return (backend.sequence[index].tag as MediaItem).id;
 }
 
 Future<void> _drainEvents() async {
@@ -1326,6 +1082,7 @@ class _CrossfadeFixture {
     this.artwork,
     this.primary,
     this.standby,
+    this.factoryPlayers,
     this.service,
   );
 
@@ -1333,6 +1090,7 @@ class _CrossfadeFixture {
   final NotificationArtworkService artwork;
   final _BlockingAudioPlayer primary;
   final _BlockingAudioPlayer standby;
+  final List<_BlockingAudioPlayer> factoryPlayers;
   final JustAudioPlayerService service;
 
   static Future<_CrossfadeFixture> create() async {
@@ -1344,13 +1102,26 @@ class _CrossfadeFixture {
     );
     final primary = _BlockingAudioPlayer();
     final standby = _BlockingAudioPlayer();
+    final factoryPlayers = <_BlockingAudioPlayer>[];
     final service = JustAudioPlayerService(
       audioPlayer: primary,
       crossfadeAudioPlayer: standby,
+      crossfadePlayerFactory: () {
+        final player = _BlockingAudioPlayer();
+        factoryPlayers.add(player);
+        return player;
+      },
       notificationArtworkService: artwork,
       operationTimeout: const Duration(seconds: 2),
     );
-    return _CrossfadeFixture(directory, artwork, primary, standby, service);
+    return _CrossfadeFixture(
+      directory,
+      artwork,
+      primary,
+      standby,
+      factoryPlayers,
+      service,
+    );
   }
 
   Future<void> playCurrent({required double masterVolume}) async {
@@ -1375,12 +1146,17 @@ class _CrossfadeFixture {
   Future<void> dispose({bool serviceAlreadyDisposed = false}) async {
     if (!primary.releaseMove.isCompleted) primary.releaseMove.complete();
     if (!standby.releaseMove.isCompleted) standby.releaseMove.complete();
-    for (final backend in [primary, standby]) {
+    for (final backend in [primary, standby, ...factoryPlayers]) {
       for (final call in backend.sourceLoadCalls) {
         if (!call.completer.isCompleted) call.completer.complete();
       }
     }
     if (!serviceAlreadyDisposed) await service.dispose();
+    for (final player in factoryPlayers) {
+      if (player.disposeCalls == 0) {
+        await player.dispose();
+      }
+    }
     await artwork.dispose();
     if (await directory.exists()) await directory.delete(recursive: true);
   }
@@ -1411,6 +1187,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   final Completer<void> releaseMove = Completer<void>();
   bool blockMoves = false;
   bool blockNextSourceLoad = false;
+  bool blockNextLoopMode = false;
   bool blockNextIndexedSeekAfterMutation = false;
   bool holdNextIndexedSeekInBuffering = false;
   bool failNextSeekAfterMutation = false;
@@ -1419,6 +1196,9 @@ class _BlockingAudioPlayer extends AudioPlayer {
   bool _playing = false;
   ProcessingState _processingState = ProcessingState.idle;
   int? _currentIndex;
+  bool _shuffleModeEnabled = false;
+  List<int> _shuffleIndices = const [];
+  LoopMode _loopMode = LoopMode.off;
   Duration _position = Duration.zero;
   int _activeQueueMutations = 0;
   int maximumConcurrentQueueMutations = 0;
@@ -1430,6 +1210,8 @@ class _BlockingAudioPlayer extends AudioPlayer {
   int _sourceRevision = 0;
   final Completer<void> indexedSeekMutationStarted = Completer<void>();
   final Completer<void> releaseIndexedSeekMutation = Completer<void>();
+  final Completer<void> loopModeWriteStarted = Completer<void>();
+  final Completer<void> releaseLoopModeWrite = Completer<void>();
   void Function(Duration position)? onUnindexedSeek;
   void Function(double volume)? onSetVolume;
 
@@ -1459,9 +1241,9 @@ class _BlockingAudioPlayer extends AudioPlayer {
   SequenceState get sequenceState => SequenceState(
     sequence: sequence,
     currentIndex: _currentIndex,
-    shuffleIndices: List<int>.generate(sequence.length, (index) => index),
-    shuffleModeEnabled: false,
-    loopMode: LoopMode.off,
+    shuffleIndices: shuffleIndices,
+    shuffleModeEnabled: _shuffleModeEnabled,
+    loopMode: _loopMode,
   );
 
   @override
@@ -1470,6 +1252,30 @@ class _BlockingAudioPlayer extends AudioPlayer {
 
   @override
   int? get currentIndex => _currentIndex;
+
+  @override
+  List<int> get shuffleIndices => _shuffleIndices.length == sequence.length
+      ? List<int>.of(_shuffleIndices)
+      : List<int>.generate(sequence.length, (index) => index);
+
+  @override
+  int? get nextIndex {
+    final current = _currentIndex;
+    if (current == null) return null;
+    final order = _shuffleModeEnabled
+        ? shuffleIndices
+        : List<int>.generate(sequence.length, (index) => index);
+    final position = order.indexOf(current);
+    return position >= 0 && position + 1 < order.length
+        ? order[position + 1]
+        : null;
+  }
+
+  void setShuffleOrderForTest(List<int> indices) {
+    _shuffleIndices = List<int>.of(indices);
+  }
+
+  LoopMode get appliedLoopMode => _loopMode;
 
   @override
   bool get playing => _playing;
@@ -1524,6 +1330,15 @@ class _BlockingAudioPlayer extends AudioPlayer {
       _sources
         ..clear()
         ..addAll(call.sources);
+      if (shuffleOrder != null) {
+        shuffleOrder
+          ..clear()
+          ..insert(0, _sources.length)
+          ..shuffle(initialIndex: call.initialIndex);
+        _shuffleIndices = List<int>.of(shuffleOrder.indices);
+      } else {
+        _shuffleIndices = List<int>.generate(_sources.length, (index) => index);
+      }
       _currentIndex = _sources.isEmpty ? null : (call.initialIndex ?? 0);
       _position = call.initialPosition ?? Duration.zero;
       final duration = nextSourceLoadDuration;
@@ -1572,17 +1387,41 @@ class _BlockingAudioPlayer extends AudioPlayer {
       }
       final moved = _sources.removeAt(currentIndex);
       _sources.insert(newIndex, moved);
+      final active = _currentIndex;
+      if (active == currentIndex) {
+        _currentIndex = newIndex;
+      } else if (active != null &&
+          currentIndex < active &&
+          newIndex >= active) {
+        _currentIndex = active - 1;
+      } else if (active != null &&
+          currentIndex > active &&
+          newIndex <= active) {
+        _currentIndex = active + 1;
+      }
     });
   }
 
   @override
   Future<void> insertAudioSource(int index, AudioSource audioSource) {
-    return _queueMutation(() async => _sources.insert(index, audioSource));
+    return _queueMutation(() async {
+      _sources.insert(index, audioSource);
+      final active = _currentIndex;
+      if (active != null && index <= active) {
+        _currentIndex = active + 1;
+      }
+    });
   }
 
   @override
   Future<void> removeAudioSourceAt(int index) {
-    return _queueMutation(() async => _sources.removeAt(index));
+    return _queueMutation(() async {
+      _sources.removeAt(index);
+      final active = _currentIndex;
+      if (active != null && index < active) {
+        _currentIndex = active - 1;
+      }
+    });
   }
 
   @override
@@ -1659,16 +1498,30 @@ class _BlockingAudioPlayer extends AudioPlayer {
   }
 
   @override
-  Future<void> setLoopMode(LoopMode mode) async {}
+  Future<void> setLoopMode(LoopMode mode) async {
+    if (blockNextLoopMode) {
+      blockNextLoopMode = false;
+      if (!loopModeWriteStarted.isCompleted) {
+        loopModeWriteStarted.complete();
+      }
+      await releaseLoopModeWrite.future;
+    }
+    _loopMode = mode;
+  }
 
   @override
-  Future<void> setShuffleModeEnabled(bool enabled) async {}
+  Future<void> setShuffleModeEnabled(bool enabled) async {
+    _shuffleModeEnabled = enabled;
+  }
 
   @override
   Future<void> dispose() async {
     disposeCalls++;
     if (!releaseIndexedSeekMutation.isCompleted) {
       releaseIndexedSeekMutation.complete();
+    }
+    if (!releaseLoopModeWrite.isCompleted) {
+      releaseLoopModeWrite.complete();
     }
     // AudioPlayer derives internal subjects from these streams. End them
     // before the base class closes those subjects.

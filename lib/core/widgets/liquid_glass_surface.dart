@@ -195,6 +195,7 @@ class LiquidGlassSurface extends StatelessWidget {
                         borderRadius: borderRadius,
                         treatment: resolvedEdgeTreatment,
                         textDirection: textDirection,
+                        brightness: brightness,
                         intensity: intensity,
                         highContrast: highContrast,
                         motion: motion,
@@ -216,6 +217,7 @@ class LiquidGlassSurface extends StatelessWidget {
         painter: _LiquidGlassShadowPainter(
           borderRadius: borderRadius,
           textDirection: textDirection,
+          brightness: brightness,
           intensity: intensity,
           highContrast: highContrast,
         ),
@@ -544,14 +546,21 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
       try {
         final shader = _fragmentShader ??= _fragmentProgram!.fragmentShader();
         final minimumDimension = math.max(1.0, opticalDimension);
-        final opticalStrength = widget.intensity.clamp(0.65, 1.35);
+        final opticalStrength = widget.intensity.clamp(0.72, 1.28);
         final embedded = widget.treatment == LiquidGlassEdgeTreatment.bottom;
-        final refractionHeight =
-            (embedded ? 8.0 : (widget.highContrast ? 10.0 : 8.0)) *
-            opticalStrength;
-        final refractionAmount =
-            (embedded ? 6.0 : (widget.highContrast ? 12.0 : 10.0)) *
-            opticalStrength;
+        // A shallow 8dp band only reads as a blurred outline on a 56-72dp
+        // capsule. Keep a visibly convex shoulder while reserving a broad,
+        // calm centre so bright cover art cannot turn the whole sheet milky.
+        final refractionHeight = embedded
+            ? 8.0 * opticalStrength
+            : (opticalDimension * (widget.highContrast ? 0.28 : 0.25)).clamp(
+                    12.0,
+                    18.0,
+                  ) *
+                  opticalStrength;
+        final refractionAmount = embedded
+            ? 6.0 * opticalStrength
+            : (opticalDimension * 0.34).clamp(16.0, 24.0) * opticalStrength;
         double radiusRatio(Radius radius) =>
             (math.min(radius.x, radius.y) / minimumDimension).clamp(0.0, 0.5);
 
@@ -562,14 +571,19 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
           ..setFloat(3, surfaceSizePx.height)
           ..setFloat(4, (refractionHeight / minimumDimension).clamp(0.0, 0.5))
           ..setFloat(5, (refractionAmount / minimumDimension).clamp(0.0, 0.5))
-          ..setFloat(6, embedded ? 0 : 0.04)
-          ..setFloat(7, embedded ? 0 : 0.05)
+          // The reference shader treats depth as a real on/off term (1.0).
+          // Keep it slightly below that maximum so stretched Flutter pills
+          // bulge without pulling their end caps into a fisheye.
+          ..setFloat(6, embedded ? 0 : (widget.highContrast ? 0.92 : 0.82))
+          // Dispersion stays deliberately restrained: the edge should inherit
+          // the artwork hue, not turn into a detached rainbow fringe.
+          ..setFloat(7, embedded ? 0 : 0.055)
           ..setFloat(8, radiusRatio(borderRadius.topLeft))
           ..setFloat(9, radiusRatio(borderRadius.topRight))
           ..setFloat(10, radiusRatio(borderRadius.bottomRight))
           ..setFloat(11, radiusRatio(borderRadius.bottomLeft))
-          ..setFloat(12, (1 + 0.2 * widget.intensity).clamp(1.0, 1.4))
-          ..setFloat(13, (1 + 0.34 * widget.intensity).clamp(1.0, 1.42))
+          ..setFloat(12, (1 + 0.3 * widget.intensity).clamp(1.0, 1.44))
+          ..setFloat(13, (1 + 0.42 * widget.intensity).clamp(1.0, 1.5))
           ..setFloat(14, embedded ? 1 : 0);
         final lens = ui.ImageFilter.shader(shader);
         _cachedRefractionFilter = ui.ImageFilter.compose(
@@ -685,12 +699,14 @@ class _LiquidGlassShadowPainter extends CustomPainter {
   const _LiquidGlassShadowPainter({
     required this.borderRadius,
     required this.textDirection,
+    required this.brightness,
     required this.intensity,
     required this.highContrast,
   });
 
   final BorderRadiusGeometry borderRadius;
   final TextDirection textDirection;
+  final Brightness brightness;
   final double intensity;
   final bool highContrast;
 
@@ -702,15 +718,33 @@ class _LiquidGlassShadowPainter extends CustomPainter {
     final bounds = Offset.zero & size;
     final shape = borderRadius.resolve(textDirection).toRRect(bounds);
     final contrastBoost = highContrast ? 1.15 : 1.0;
+    final dark = brightness == Brightness.dark;
+    // A broad ambient shadow separates the sheet from busy artwork.
     canvas.drawRRect(
       shape.shift(const Offset(0, 4)),
       Paint()
         ..color = Colors.black.withValues(
-          alpha: (0.1 * intensity * contrastBoost).clamp(0.0, 0.16),
+          alpha: ((dark ? 0.12 : 0.09) * intensity * contrastBoost).clamp(
+            0.0,
+            0.18,
+          ),
         )
         // Android's 24dp BlurMaskFilter maps closely to a 14dp Gaussian sigma.
         // BlurStyle.outer performs the same center cut-out used by backdrop.
         ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 14),
+    );
+    // A compact contact shadow is the missing depth cue when an ancestor clips
+    // most of the ambient halo (for example, the mobile bottom shell).
+    canvas.drawRRect(
+      shape.shift(const Offset(0, 1.4)),
+      Paint()
+        ..color = Colors.black.withValues(
+          alpha: ((dark ? 0.19 : 0.13) * intensity * contrastBoost).clamp(
+            0.0,
+            0.28,
+          ),
+        )
+        ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 3.4),
     );
   }
 
@@ -718,6 +752,7 @@ class _LiquidGlassShadowPainter extends CustomPainter {
   bool shouldRepaint(_LiquidGlassShadowPainter oldDelegate) =>
       oldDelegate.borderRadius != borderRadius ||
       oldDelegate.textDirection != textDirection ||
+      oldDelegate.brightness != brightness ||
       oldDelegate.intensity != intensity ||
       oldDelegate.highContrast != highContrast;
 }
@@ -727,6 +762,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
     required this.borderRadius,
     required this.treatment,
     required this.textDirection,
+    required this.brightness,
     required this.intensity,
     required this.highContrast,
     required this.motion,
@@ -735,6 +771,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
   final BorderRadiusGeometry borderRadius;
   final LiquidGlassEdgeTreatment treatment;
   final TextDirection textDirection;
+  final Brightness brightness;
   final double intensity;
   final bool highContrast;
   final double motion;
@@ -745,21 +782,30 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
       return;
     }
     final contrastBoost = highContrast ? 1.12 : 1.0;
-    // Keep the material alive while it morphs without the conspicuous white
-    // flash produced by the previous +22% sheen amplification.
-    final opticalEnergy = intensity * contrastBoost * (1 + 0.04 * motion);
+    // Move a colour-preserving sheen over the lens while its geometry changes.
+    // This is paint-only, so it does not add another backdrop capture.
+    final opticalEnergy = intensity * contrastBoost * (1 + 0.12 * motion);
     double alpha(double value, [double maximum = 0.7]) =>
         (value * opticalEnergy).clamp(0.0, maximum);
 
     if (treatment == LiquidGlassEdgeTreatment.bottom) {
       final seamY = math.max(0.0, size.height - 0.5);
       canvas.drawLine(
+        Offset(0, math.max(0.0, seamY - 1.1)),
+        Offset(size.width, math.max(0.0, seamY - 1.1)),
+        Paint()
+          ..strokeWidth = highContrast ? 1.8 : 1.4
+          ..blendMode = BlendMode.softLight
+          ..color = Colors.black.withValues(alpha: alpha(0.16, 0.24))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8),
+      );
+      canvas.drawLine(
         Offset(0, seamY),
         Offset(size.width, seamY),
         Paint()
-          ..strokeWidth = highContrast ? 1.2 : 1.0
-          ..blendMode = BlendMode.plus
-          ..color = Colors.white.withValues(alpha: alpha(0.35))
+          ..strokeWidth = highContrast ? 1.1 : 0.8
+          ..blendMode = BlendMode.softLight
+          ..color = Colors.white.withValues(alpha: alpha(0.58))
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.25),
       );
       return;
@@ -771,27 +817,75 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
     final bounds = Offset.zero & size;
     final resolvedRadius = borderRadius.resolve(textDirection);
     final shape = resolvedRadius.toRRect(bounds);
-    // The shader supplies the luminous edge from the refracted backdrop.
-    // This directional micro-shadow only defines the opposite side of the
-    // bevel; keeping white out of this overlay lets the sampled hue remain the
-    // visible highlight on both long pills and circular controls.
+    final dark = brightness == Brightness.dark;
+    final horizontalLightShift = ui.lerpDouble(-0.9, -0.68, motion)!;
+
+    // A very low-energy face gradient gives the clear centre a curved surface
+    // even on renderers that cannot run the runtime refraction shader. Using
+    // softLight changes the luminance of the sampled backdrop without laying a
+    // white film over its hue.
+    canvas.drawRRect(
+      shape,
+      Paint()
+        ..blendMode = BlendMode.softLight
+        ..shader = LinearGradient(
+          begin: Alignment(horizontalLightShift, -1),
+          end: const Alignment(0.82, 1),
+          colors: [
+            Colors.white.withValues(
+              alpha: alpha(dark ? 0.09 : 0.15, dark ? 0.16 : 0.22),
+            ),
+            Colors.white.withValues(alpha: alpha(0.025, 0.05)),
+            Colors.black.withValues(alpha: alpha(dark ? 0.07 : 0.045, 0.1)),
+            Colors.white.withValues(alpha: alpha(dark ? 0.045 : 0.07, 0.11)),
+          ],
+          stops: const [0, 0.26, 0.72, 1],
+        ).createShader(bounds),
+    );
+
+    // The outer keyline behaves like Echo's directional highlight. Soft-light
+    // makes blue, amber and red backdrops produce blue, amber and red light;
+    // it never replaces them with a chalk-white outline.
     canvas.drawRRect(
       shape,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = highContrast ? 1.2 : 1.0
-        ..blendMode = BlendMode.srcOver
+        ..strokeWidth = highContrast ? 1.35 : 0.9
+        ..blendMode = BlendMode.softLight
         ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+          begin: Alignment(horizontalLightShift, -1),
+          end: const Alignment(0.9, 1),
           colors: [
-            Colors.transparent,
-            Colors.black.withValues(alpha: alpha(0.025, 0.05)),
-            Colors.black.withValues(alpha: alpha(0.16, 0.24)),
+            Colors.white.withValues(alpha: alpha(0.52, 0.68)),
+            Colors.white.withValues(alpha: alpha(0.1, 0.16)),
+            Colors.white.withValues(alpha: alpha(0.34, 0.5)),
           ],
-          stops: const [0, 0.54, 1],
+          stops: const [0, 0.52, 1],
         ).createShader(bounds),
     );
+
+    // A recessed inner contour establishes the thickness between the luminous
+    // outer lip and the undistorted centre of the glass.
+    final innerBounds = bounds.deflate(highContrast ? 1.8 : 1.45);
+    if (!innerBounds.isEmpty) {
+      canvas.drawRRect(
+        resolvedRadius.toRRect(innerBounds),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = highContrast ? 1.15 : 0.8
+          ..blendMode = BlendMode.softLight
+          ..shader = LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.black.withValues(alpha: alpha(dark ? 0.18 : 0.12, 0.24)),
+              Colors.transparent,
+              Colors.black.withValues(alpha: alpha(dark ? 0.13 : 0.09, 0.19)),
+            ],
+            stops: const [0, 0.48, 1],
+          ).createShader(innerBounds),
+      );
+    }
   }
 
   @override
@@ -799,6 +893,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
       oldDelegate.borderRadius != borderRadius ||
       oldDelegate.treatment != treatment ||
       oldDelegate.textDirection != textDirection ||
+      oldDelegate.brightness != brightness ||
       oldDelegate.intensity != intensity ||
       oldDelegate.highContrast != highContrast ||
       oldDelegate.motion != motion;

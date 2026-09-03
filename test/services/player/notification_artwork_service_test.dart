@@ -61,8 +61,8 @@ void main() {
       final firstBytes = await _get(uri);
       final first = image.decodeJpg(firstBytes);
       expect(first, isNotNull);
-      expect(first!.width, 320);
-      expect(first.height, 320);
+      expect(first!.width, 640);
+      expect(first.height, 640);
       _expectGreen(first.getPixel(0, 160));
       _expectGreen(first.getPixel(160, 160));
       _expectGreen(first.getPixel(319, 160));
@@ -143,7 +143,7 @@ void main() {
       deviceAudioArtworkLoader: (audioUri, targetWidth) async {
         requests++;
         expect(audioUri, 'ipod-library://item/item.m4a?id=42');
-        expect(targetWidth, 320);
+        expect(targetWidth, 640);
         return Uint8List.fromList(image.encodePng(fixture));
       },
     );
@@ -164,8 +164,8 @@ void main() {
     final bytes = await _get(uri!);
     final decoded = image.decodeJpg(bytes);
     expect(decoded, isNotNull);
-    expect(decoded!.width, 320);
-    expect(decoded.height, 320);
+    expect(decoded!.width, 640);
+    expect(decoded.height, 640);
     expect(requests, 1);
   });
 

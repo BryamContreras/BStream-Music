@@ -1077,10 +1077,6 @@ void main() {
       find.byKey(const ValueKey('lyrics-route-fade-transition')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(const ValueKey('lyrics-route-player-scale-transition')),
-      findsOneWidget,
-    );
 
     await tester.pump(const Duration(milliseconds: 210));
     final enteringOpacity = tester
@@ -1095,18 +1091,11 @@ void main() {
         )
         .position
         .value;
-    final recedingPlayerScale = tester
-        .widget<ScaleTransition>(
-          find.byKey(const ValueKey('lyrics-route-player-scale-transition')),
-        )
-        .scale
-        .value;
     expect(enteringOpacity, inExclusiveRange(0, 1));
     expect(enteringOffset.dy, inExclusiveRange(0, 0.035));
-    expect(recedingPlayerScale, inExclusiveRange(0.985, 1));
 
     await _pumpAnimatedLyrics(tester);
-    expect(route.delegatedTransition, isNotNull);
+    expect(route.delegatedTransition, isNull);
     expect(route.popGestureEnabled, isTrue);
     expect(
       find.byKey(const ValueKey('lyrics-playback-companion')),
@@ -1126,14 +1115,7 @@ void main() {
         )
         .opacity
         .value;
-    final returningPlayerScale = tester
-        .widget<ScaleTransition>(
-          find.byKey(const ValueKey('lyrics-route-player-scale-transition')),
-        )
-        .scale
-        .value;
     expect(leavingOpacity, inExclusiveRange(0, 1));
-    expect(returningPlayerScale, inExclusiveRange(0.985, 1));
 
     await _settleLyricsAnimations(tester);
     expect(find.byKey(const ValueKey('lyrics-host')), findsOneWidget);
@@ -1234,6 +1216,15 @@ void main() {
       findsOneWidget,
     );
     final companionRect = tester.getRect(companion);
+    final artworkRect = tester.getRect(
+      find.byKey(const ValueKey('lyrics-companion-artwork')),
+    );
+    final timelineRect = tester.getRect(
+      find.byKey(const ValueKey('lyrics-companion-timeline')),
+    );
+    expect(artworkRect.left, closeTo(timelineRect.left, 0.1));
+    expect(artworkRect.right, closeTo(timelineRect.right, 0.1));
+    expect(artworkRect.width, closeTo(timelineRect.width, 0.1));
     final lyricsRect = tester.getRect(
       find.byKey(const ValueKey('lyrics-content-region')),
     );

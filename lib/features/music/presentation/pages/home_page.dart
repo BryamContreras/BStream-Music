@@ -130,6 +130,8 @@ class _HomePageState extends ConsumerState<HomePage> {
   final BackdropKey _liquidGlassMiniPlayerBackdropKey = BackdropKey();
   final ValueNotifier<bool> _liquidGlassChromeMoving = ValueNotifier(false);
   Timer? _liquidGlassChromeSettleTimer;
+  Timer? _playerTransitionSettleTimer;
+  bool _playerTransitionActive = false;
   int _rootBackCount = 0;
   DateTime? _lastRootBackAt;
   StreamSubscription<ExternalAudioRequest>? _externalAudioSubscription;
@@ -600,6 +602,28 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
   }
 
+  void _beginPlayerTransition() {
+    _playerTransitionSettleTimer?.cancel();
+    _playerTransitionSettleTimer = null;
+  }
+
+  void _schedulePlayerTransitionSettled(Duration transitionDuration) {
+    _playerTransitionSettleTimer?.cancel();
+    _playerTransitionSettleTimer = null;
+    if (transitionDuration == Duration.zero) {
+      if (_playerTransitionActive && mounted) {
+        setState(() => _playerTransitionActive = false);
+      }
+      return;
+    }
+    _playerTransitionSettleTimer = Timer(transitionDuration, () {
+      _playerTransitionSettleTimer = null;
+      if (mounted && _playerTransitionActive) {
+        setState(() => _playerTransitionActive = false);
+      }
+    });
+  }
+
   void _setBottomNavigationRevealed(bool revealed) {
     if (_bottomNavigationRevealed == revealed || !mounted) {
       return;
@@ -613,6 +637,18 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   bool _handleBrowsingScroll(ScrollNotification notification) {
+    // Scroll-driven chrome changes are part of the Liquid Glass interaction.
+    // Opaque and transparent legacy surfaces keep their navigation anchored
+    // so browsing never makes the menu disappear unexpectedly.
+    final configuredSurfaceMode = ref
+        .read(settingsControllerProvider)
+        .value
+        ?.surfaceBackgroundMode;
+    final surfaceMode =
+        configuredSurfaceMode ?? AppColors.surfaceBackgroundModeFor(context);
+    if (!surfaceMode.isLiquidGlass) {
+      return false;
+    }
     final usesSideNavigation =
         MediaQuery.sizeOf(context).width >= 920 && !_usesMobileNavigation;
     if (_isPlayerSelected ||
@@ -725,8 +761,12 @@ class _HomePageState extends ConsumerState<HomePage> {
         : revealsBottomNavigation
         ? _resolvedMotionDuration(_shellTransitionDuration)
         : null;
+    final playerTransition = enteringPlayer || leavingPlayer;
     if (chromeTransitionDuration != null) {
       _beginLiquidGlassChromeMotion();
+    }
+    if (playerTransition) {
+      _beginPlayerTransition();
     }
     if (leavingPlayer) {
       _removePlayerHistoryEntry();
@@ -742,6 +782,12 @@ class _HomePageState extends ConsumerState<HomePage> {
         }
       }
       _selectedIndex = index;
+      if (playerTransition) {
+        // Keep the panel's track/artwork switchers dormant while the large
+        // player is entering. The shell morph then owns the frame budget and
+        // the panel can start its normal transitions once it is settled.
+        _playerTransitionActive = true;
+      }
       if (index != _playerIndex && revealBottomNavigation) {
         _bottomNavigationRevealed = true;
       }
@@ -749,6 +795,9 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
     if (chromeTransitionDuration != null) {
       _scheduleLiquidGlassChromeSettled(chromeTransitionDuration);
+    }
+    if (playerTransition && chromeTransitionDuration != null) {
+      _schedulePlayerTransitionSettled(chromeTransitionDuration);
     }
     if (index == _playerIndex) {
       _schedulePlayerHistoryEntry();
@@ -911,6 +960,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _settingsNavigationController.dispose();
     _desktopPlaybackShortcutFocus.dispose();
     _liquidGlassChromeSettleTimer?.cancel();
+    _playerTransitionSettleTimer?.cancel();
     _liquidGlassChromeMoving.dispose();
     super.dispose();
   }
@@ -931,12 +981,24 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
 
     final leavingPlayer = _isPlayerSelected && target != _playerIndex;
+    final enteringPlayer = !_isPlayerSelected && target == _playerIndex;
+    final playerTransition = leavingPlayer || enteringPlayer;
+    final playerTransitionDuration = playerTransition
+        ? _resolvedMotionDuration(_playerExpansionDuration)
+        : null;
+    if (playerTransition) {
+      _beginPlayerTransition();
+      _beginLiquidGlassChromeMotion();
+    }
     if (leavingPlayer) {
       _removePlayerHistoryEntry();
     }
     _releaseFocusForViewChange();
     setState(() {
       _selectedIndex = target;
+      if (playerTransition) {
+        _playerTransitionActive = true;
+      }
       if (target != _playerIndex) {
         _bottomNavigationRevealed = true;
       }
@@ -944,6 +1006,10 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
     if (target == _playerIndex) {
       _schedulePlayerHistoryEntry();
+    }
+    if (playerTransitionDuration != null) {
+      _schedulePlayerTransitionSettled(playerTransitionDuration);
+      _scheduleLiquidGlassChromeSettled(playerTransitionDuration);
     }
     return true;
   }
@@ -1143,11 +1209,14 @@ class _HomePageState extends ConsumerState<HomePage> {
         showBottomNavigation &&
         useLiquidBottomNavigation &&
         !_bottomNavigationRevealed;
-    final bottomNavigationVisible =
-        showBottomNavigation &&
-        (useLiquidBottomNavigation || _bottomNavigationRevealed);
+    // Non-Liquid surfaces are always present. Liquid Glass keeps its shell
+    // mounted as well; its content compacts around the mini player instead of
+    // fading a flat menu in and out.
+    final bottomNavigationVisible = showBottomNavigation;
     final miniPlayerNavigationOffset =
-        !useSideNavigation && !_bottomNavigationRevealed
+        useLiquidBottomNavigation &&
+            !useSideNavigation &&
+            !_bottomNavigationRevealed
         ? bottomNavigationBaseHeight
         : 0.0;
     final liquidNavigationHeight = _BottomNavigation.liquidContentHeight(
@@ -1272,6 +1341,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                                               browsingContentBottomPadding,
                                           playerTransitionDuration:
                                               playerExpansionDuration,
+                                          playerTransitionActive:
+                                              _playerTransitionActive,
                                           libraryNavigationController:
                                               _libraryNavigationController,
                                           localMusicNavigationController:
@@ -1939,15 +2010,17 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
     canvas.drawRSuperellipse(
       shape,
       Paint()
+        ..blendMode = BlendMode.softLight
         ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
           colors: [
+            Colors.white.withValues(alpha: dark ? 0.1 : 0.16),
             Colors.transparent,
-            Colors.black.withValues(alpha: dark ? 0.025 : 0.018),
-            Colors.black.withValues(alpha: dark ? 0.13 : 0.075),
+            Colors.black.withValues(alpha: dark ? 0.11 : 0.065),
+            Colors.white.withValues(alpha: dark ? 0.045 : 0.07),
           ],
-          stops: const [0, 0.48, 1],
+          stops: const [0, 0.3, 0.72, 1],
         ).createShader(bounds),
     );
     canvas.drawRSuperellipse(
@@ -1955,13 +2028,14 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = highContrast ? 1.35 : 1.0
+        ..blendMode = BlendMode.softLight
         ..shader = LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            accent.withValues(alpha: dark ? 0.24 : 0.2),
-            accent.withValues(alpha: 0.055),
-            Colors.black.withValues(alpha: dark ? 0.2 : 0.12),
+            Colors.white.withValues(alpha: dark ? 0.52 : 0.64),
+            accent.withValues(alpha: dark ? 0.09 : 0.07),
+            Colors.white.withValues(alpha: dark ? 0.3 : 0.42),
           ],
           stops: const [0, 0.5, 1],
         ).createShader(bounds),
@@ -1975,13 +2049,14 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.65
+          ..blendMode = BlendMode.softLight
           ..shader = LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              accent.withValues(alpha: dark ? 0.12 : 0.09),
+              Colors.black.withValues(alpha: dark ? 0.18 : 0.12),
               Colors.transparent,
-              accent.withValues(alpha: dark ? 0.065 : 0.045),
+              Colors.black.withValues(alpha: dark ? 0.13 : 0.08),
             ],
             stops: const [0, 0.56, 1],
           ).createShader(innerBounds),
@@ -2010,7 +2085,6 @@ class _DetachedSearchButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final lightLiquidIcon = colors.brightness == Brightness.light;
     final duration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : const Duration(milliseconds: 260);
@@ -2025,9 +2099,7 @@ class _DetachedSearchButton extends StatelessWidget {
         child: Icon(
           destination.icon,
           size: 30,
-          color: lightLiquidIcon
-              ? Colors.black
-              : Color.lerp(colors.onSurfaceVariant, colors.primary, value),
+          color: Color.lerp(colors.onSurfaceVariant, colors.primary, value),
         ),
       ),
     );
@@ -2099,8 +2171,6 @@ class _BottomNavigationItem extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final active = colors.primary;
     final inactive = colors.onSurfaceVariant;
-    final lightLiquidIcon =
-        liquidGlass && colors.brightness == Brightness.light;
     final duration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : const Duration(milliseconds: 260);
@@ -2111,13 +2181,12 @@ class _BottomNavigationItem extends StatelessWidget {
       curve: Curves.easeOutCubic,
       builder: (context, value, _) {
         final foreground = Color.lerp(inactive, active, value)!;
-        final iconForeground = lightLiquidIcon ? Colors.black : foreground;
         if (iconOnly) {
           return Center(
             child: Transform.scale(
               key: ValueKey('bottom-navigation-icon-scale-$destinationIndex'),
               scale: lerpDouble(1, 1.12, value)!,
-              child: Icon(icon, color: iconForeground, size: 30),
+              child: Icon(icon, color: foreground, size: 30),
             ),
           );
         }
@@ -2131,7 +2200,7 @@ class _BottomNavigationItem extends StatelessWidget {
               Transform.scale(
                 key: ValueKey('bottom-navigation-icon-scale-$destinationIndex'),
                 scale: lerpDouble(1, 1.12, value)!,
-                child: Icon(icon, color: iconForeground, size: 28),
+                child: Icon(icon, color: foreground, size: 28),
               ),
               const SizedBox(height: 4),
               Text(
@@ -2460,6 +2529,7 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.viewportBottomPadding,
     required this.contentBottomPadding,
     required this.playerTransitionDuration,
+    required this.playerTransitionActive,
     required this.libraryNavigationController,
     required this.localMusicNavigationController,
     required this.settingsNavigationController,
@@ -2481,6 +2551,7 @@ class _PersistentCurrentViews extends StatefulWidget {
   final double viewportBottomPadding;
   final double contentBottomPadding;
   final Duration playerTransitionDuration;
+  final bool playerTransitionActive;
   final LibraryNavigationController libraryNavigationController;
   final LocalMusicNavigationController localMusicNavigationController;
   final SettingsNavigationController settingsNavigationController;
@@ -2565,7 +2636,8 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               style: widget.playerStyle,
               animatedArtworkEnabled: widget.animatedArtworkEnabled,
               trackTransitionsEnabled:
-                  widget.selectedIndex == widget.playerIndex,
+                  widget.selectedIndex == widget.playerIndex &&
+                  !widget.playerTransitionActive,
             ),
           ),
         if (_visitedIndexes.contains(widget.libraryIndex))
