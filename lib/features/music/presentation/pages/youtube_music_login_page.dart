@@ -23,6 +23,7 @@ YouTubeMusicLoginMechanism resolveYouTubeMusicLoginMechanism({
   if (isWeb) return YouTubeMusicLoginMechanism.unsupported;
   return switch (platform) {
     TargetPlatform.android ||
+    TargetPlatform.iOS ||
     TargetPlatform.macOS => YouTubeMusicLoginMechanism.embeddedWebView,
     TargetPlatform.windows ||
     TargetPlatform.linux => YouTubeMusicLoginMechanism.desktopBrowser,
@@ -36,6 +37,7 @@ bool get isYouTubeMusicWebLoginSupported =>
 @visibleForTesting
 bool isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform platform) =>
     platform == TargetPlatform.android ||
+    platform == TargetPlatform.iOS ||
     platform == TargetPlatform.windows ||
     platform == TargetPlatform.macOS;
 
@@ -62,10 +64,13 @@ class YouTubeMusicLoginPage extends ConsumerStatefulWidget {
       javaScriptCanOpenWindowsAutomatically: false,
       useShouldOverrideUrlLoading: true,
       // Windows already receives a brand-new WebView2 user-data directory for
-      // each login. InPrivate would create a second cookie profile while the
-      // stable plugin's CookieManager reads the first one, making the completed
-      // Google session invisible. Android keeps its existing private WebView.
-      incognito: resolvedPlatform != TargetPlatform.windows,
+      // each login. On iOS the plugin's CookieManager reads WKWebView's default
+      // data store, so a non-persistent store would make the completed Google
+      // session invisible. prepare()/cleanup() clear the app-scoped auth data
+      // around both flows. Android keeps its existing private WebView.
+      incognito:
+          resolvedPlatform != TargetPlatform.windows &&
+          resolvedPlatform != TargetPlatform.iOS,
       cacheEnabled: false,
       allowFileAccess: false,
       allowContentAccess: false,
@@ -80,6 +85,15 @@ class YouTubeMusicLoginPage extends ConsumerStatefulWidget {
       thirdPartyCookiesEnabled: true,
       isInspectable: false,
     );
+  }
+
+  @visibleForTesting
+  static bool shouldCancelServerTrustChallenges({TargetPlatform? platform}) {
+    final resolvedPlatform = platform ?? defaultTargetPlatform;
+    // WKWebView must use the operating system's default trust evaluation.
+    // Returning CANCEL from this callback also cancels valid HTTPS challenges
+    // on iOS. Other platforms retain the existing hardened behavior.
+    return resolvedPlatform != TargetPlatform.iOS;
   }
 
   @override
@@ -267,7 +281,7 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
         icon: Icons.desktop_windows_outlined,
         message:
             'El inicio de sesión integrado está disponible en Android, '
-            'Windows y macOS. '
+            'iOS, Windows y macOS. '
             'Puedes seguir usando BStream sin una cuenta.',
       );
     }
@@ -323,10 +337,12 @@ class _YouTubeMusicLoginPageState extends ConsumerState<YouTubeMusicLoginPage> {
                 action: PermissionResponseAction.DENY,
                 resources: request.resources,
               ),
-          onReceivedServerTrustAuthRequest: (controller, challenge) async =>
-              ServerTrustAuthResponse(
-                action: ServerTrustAuthResponseAction.CANCEL,
-              ),
+          onReceivedServerTrustAuthRequest:
+              YouTubeMusicLoginPage.shouldCancelServerTrustChallenges()
+              ? (controller, challenge) async => ServerTrustAuthResponse(
+                  action: ServerTrustAuthResponseAction.CANCEL,
+                )
+              : null,
           onReceivedHttpAuthRequest: (controller, challenge) async =>
               HttpAuthResponse(action: HttpAuthResponseAction.CANCEL),
           onReceivedClientCertRequest: (controller, challenge) async =>

@@ -5,7 +5,6 @@ import 'package:flutter/rendering.dart'
     show ScrollCacheExtent, SliverPaintOrder;
 
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 
 /// Hosts a tab's slivers in one scroll view and pins its dynamic header above
@@ -73,23 +72,29 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
     Widget header, {
     required Duration animationDuration,
   }) {
+    final mode = AppColors.surfaceBackgroundModeFor(context);
+    final liquidGlass = mode.isLiquidGlass;
     final surface = Material(
       key: widget.surfaceKey,
-      color: AppColors.tabHeaderSurfaceFor(
-        context,
-        scrolledUnder: _scrolledUnder,
-      ),
-      elevation: _scrolledUnder ? 1 : 0,
+      color: liquidGlass
+          ? Theme.of(context).colorScheme.surface
+          : AppColors.tabHeaderSurfaceFor(
+              context,
+              scrolledUnder: _scrolledUnder,
+            ),
+      elevation: liquidGlass ? 0 : (_scrolledUnder ? 1 : 0),
       shadowColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       animationDuration: animationDuration,
       child: DecoratedBox(
         key: const ValueKey('tab-header-accent-gradient'),
         decoration: BoxDecoration(
-          gradient: AppColors.glassAccentGradientFor(
-            context,
-            intensity: _scrolledUnder ? 1 : 0.76,
-          ),
+          gradient: liquidGlass
+              ? null
+              : AppColors.glassAccentGradientFor(
+                  context,
+                  intensity: _scrolledUnder ? 1 : 0.76,
+                ),
         ),
         child: Padding(
           padding: EdgeInsets.symmetric(
@@ -103,8 +108,12 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
         ),
       ),
     );
-    if (AppColors.surfaceBackgroundModeFor(context) !=
-        SurfaceBackgroundMode.transparent) {
+    if (!mode.usesBackdrop) {
+      return surface;
+    }
+    if (mode.isLiquidGlass) {
+      // Reserve refractive glass for compact floating pills. Saturated
+      // artwork would otherwise turn this wide title bar into a color band.
       return surface;
     }
     return ClipRect(
@@ -120,29 +129,37 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
     Widget footer, {
     required Duration animationDuration,
   }) {
+    final mode = AppColors.surfaceBackgroundModeFor(context);
+    final liquidGlass = mode.isLiquidGlass;
     final surface = Material(
       key: widget.pinnedFooterSurfaceKey,
-      color: AppColors.tabHeaderSurfaceFor(
-        context,
-        scrolledUnder: _scrolledUnder,
-      ),
-      elevation: _scrolledUnder ? 1 : 0,
+      color: liquidGlass
+          ? Theme.of(context).colorScheme.surface
+          : AppColors.tabHeaderSurfaceFor(
+              context,
+              scrolledUnder: _scrolledUnder,
+            ),
+      elevation: liquidGlass ? 0 : (_scrolledUnder ? 1 : 0),
       shadowColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       animationDuration: animationDuration,
       child: DecoratedBox(
         key: const ValueKey('tab-pinned-footer-accent-gradient'),
         decoration: BoxDecoration(
-          gradient: AppColors.glassAccentGradientFor(
-            context,
-            intensity: _scrolledUnder ? 1 : 0.76,
-          ),
+          gradient: liquidGlass
+              ? null
+              : AppColors.glassAccentGradientFor(
+                  context,
+                  intensity: _scrolledUnder ? 1 : 0.76,
+                ),
         ),
         child: footer,
       ),
     );
-    if (AppColors.surfaceBackgroundModeFor(context) !=
-        SurfaceBackgroundMode.transparent) {
+    if (!mode.usesBackdrop) {
+      return surface;
+    }
+    if (mode.isLiquidGlass) {
       return surface;
     }
     return ClipRect(
@@ -237,8 +254,7 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
           child: CustomScrollView(
             key: widget.scrollKey,
             scrollCacheExtent: widget.scrollCacheExtent,
-            // The first sliver paints last, keeping the glass above content so
-            // BackdropFilter can sample the already-painted rows underneath.
+            // The first sliver paints last, keeping pinned chrome above rows.
             paintOrder: SliverPaintOrder.firstIsTop,
             slivers: [
               if (pinnedHeader != null) PinnedHeaderSliver(child: pinnedHeader),

@@ -126,8 +126,7 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
     final miniPlayerMode = miniPlayerAppearance.mode;
     final underlayMiniPlayer =
         miniPlayerMode == MiniPlayerMode.capsule ||
-        miniPlayerAppearance.backgroundMode ==
-            MiniPlayerBackgroundMode.transparent;
+        miniPlayerAppearance.backgroundMode.usesBackdrop;
     final miniPlayerHeight = miniPlayerHeightFor(context, mode: miniPlayerMode);
     final bottomContentPadding = underlayMiniPlayer
         ? miniPlayerHeight + MediaQuery.viewPaddingOf(context).bottom

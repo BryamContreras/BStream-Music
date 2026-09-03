@@ -5,6 +5,7 @@ import 'android_device_audio_catalog.dart';
 import 'desktop_device_audio_catalog.dart';
 import 'device_audio_catalog.dart';
 import 'device_audio_filter.dart';
+import 'ios_device_audio_catalog.dart';
 
 class DeviceAudioQuery {
   const DeviceAudioQuery({
@@ -30,6 +31,7 @@ class DeviceAudioQuery {
 final deviceAudioCatalogProvider = Provider<DeviceAudioCatalog>((ref) {
   return switch (AppPlatform.current) {
     AppPlatformType.android => AndroidDeviceAudioCatalog(),
+    AppPlatformType.ios => IosDeviceAudioCatalog(),
     AppPlatformType.windows ||
     AppPlatformType.linux ||
     AppPlatformType.macos => DesktopDeviceAudioCatalog(),

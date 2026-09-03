@@ -1,3 +1,4 @@
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
@@ -44,6 +45,13 @@ void main() {
             playerControllerProvider.overrideWith(_IdlePlayerController.new),
           ],
           child: MaterialApp(
+            theme: ThemeData(
+              extensions: const [
+                AppSurfaceTheme(
+                  backgroundMode: SurfaceBackgroundMode.liquidGlass,
+                ),
+              ],
+            ),
             home: Scaffold(body: LibraryPanel(onOpenPlayer: () {})),
           ),
         ),
@@ -55,6 +63,15 @@ void main() {
       final artworkSurface = find.byKey(
         const ValueKey('library-track-artwork-sharp-library-artwork'),
       );
+      final trackSurface = tester.widget<AnimatedContainer>(
+        find
+            .ancestor(
+              of: artworkSurface,
+              matching: find.byType(AnimatedContainer),
+            )
+            .first,
+      );
+      expect((trackSurface.decoration! as BoxDecoration).color?.a, 1);
       final image = tester.widget<ProportionalArtwork>(
         find.descendant(
           of: artworkSurface,
@@ -265,6 +282,13 @@ void main() {
           appStringsProvider.overrideWithValue(strings),
         ],
         child: MaterialApp(
+          theme: ThemeData(
+            extensions: const [
+              AppSurfaceTheme(
+                backgroundMode: SurfaceBackgroundMode.liquidGlass,
+              ),
+            ],
+          ),
           home: Scaffold(
             body: LibraryPanel(onOpenPlayer: () => openedPlayer = true),
           ),
@@ -285,6 +309,15 @@ void main() {
 
     expect(find.text('Remote song'), findsOneWidget);
     expect(find.text(strings.readyForRemotePlayback), findsOneWidget);
+    expect(
+      tester
+          .widget<Material>(
+            find.byKey(const ValueKey('library-live-track-remote-item')),
+          )
+          .color!
+          .a,
+      1,
+    );
     final playButton = tester.widget<IconButton>(
       find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
     );

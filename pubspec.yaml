@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.5+125
+version: 1.2.6+126
 
 environment:
   sdk: ^3.12.0
@@ -72,8 +72,6 @@ dependencies:
   # 12.0.2 keeps the current picker stack compatible and includes the modern
   # SharePlus/ShareParams API on all four supported platforms.
   share_plus: ^12.0.2
-  youtube_explode_dart:
-    path: third_party/youtube_explode_dart
   piratetok_live:
     path: third_party/piratetok_live
 
@@ -111,6 +109,12 @@ flutter:
     - assets/icons/bstream_icon.png
     - assets/fonts/Roboto-LICENSE.txt
     - assets/dictionaries/kuromoji-ipadic.bin.bz2
+    - assets/youtube/po_token.html
+    - assets/youtube/ejs/0.8.0/yt.solver.lib.min.js.b64
+    - assets/youtube/ejs/0.8.0/yt.solver.core.min.js.b64
+
+  shaders:
+    - shaders/liquid_glass_refraction.frag
 
   fonts:
     - family: Roboto

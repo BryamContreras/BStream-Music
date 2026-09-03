@@ -11,7 +11,6 @@ app_bundle="$1"
 signing_identity="${2:--}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 entitlements="${3:-$script_dir/Runner/Release.entitlements}"
-deno_entitlements="$script_dir/Runner/Deno.entitlements"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This script must run on macOS." >&2
@@ -28,17 +27,10 @@ if [[ ! -f "$entitlements" ]]; then
   exit 66
 fi
 
-if [[ ! -f "$deno_entitlements" ]]; then
-  echo "Missing Deno entitlements file: $deno_entitlements" >&2
-  exit 66
-fi
-
 timestamp_args=(--timestamp)
 if [[ "$signing_identity" == "-" ]]; then
   timestamp_args=(--timestamp=none)
 fi
-
-preserved_yt_dlp="$app_bundle/Contents/Resources/tools/yt-dlp"
 
 sign_macho_files() {
   local root="$1"
@@ -47,26 +39,6 @@ sign_macho_files() {
 
   while IFS= read -r -d '' candidate; do
     if /usr/bin/file -b "$candidate" | /usr/bin/grep -q "Mach-O"; then
-      # yt-dlp_macos is a PyInstaller onefile executable. Its Python runtime
-      # lives inside the executable archive, so post-signing only the launcher
-      # with Hardened Runtime makes the extracted Python fail Team ID library
-      # validation. Preserve and validate the complete upstream executable.
-      if [[ "$candidate" == "$preserved_yt_dlp" ]]; then
-        /usr/bin/codesign --verify --strict --verbose=2 "$candidate"
-        continue
-      fi
-
-      if [[ "$candidate" == "$app_bundle/Contents/Resources/tools/deno" ]]; then
-        /usr/bin/codesign \
-          --force \
-          --options runtime \
-          --entitlements "$deno_entitlements" \
-          --sign "$signing_identity" \
-          "${timestamp_args[@]}" \
-          "$candidate"
-        continue
-      fi
-
       /usr/bin/codesign \
         --force \
         --options runtime \
@@ -83,7 +55,6 @@ sign_macho_files() {
 sign_macho_files "$app_bundle/Contents/Frameworks"
 sign_macho_files "$app_bundle/Contents/PlugIns"
 sign_macho_files "$app_bundle/Contents/XPCServices"
-sign_macho_files "$app_bundle/Contents/Resources/tools"
 
 while IFS= read -r -d '' nested_bundle; do
   /usr/bin/codesign \

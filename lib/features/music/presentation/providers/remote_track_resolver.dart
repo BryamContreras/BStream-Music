@@ -61,6 +61,9 @@ TrackInfo _mergeTrackInfo(TrackInfo base, TrackInfo resolved) {
         ? resolved.streamFormatId
         : base.streamFormatId,
     streamCodec: hasResolvedTransport ? resolved.streamCodec : base.streamCodec,
+    streamClientProfileKey: hasResolvedTransport
+        ? resolved.streamClientProfileKey
+        : base.streamClientProfileKey,
     extractor: resolved.extractor ?? base.extractor,
     album: preserveMusicMetadata
         ? _preferredOptionalText(base.album, resolved.album)
@@ -142,22 +145,25 @@ final remoteTrackResolverProvider = Provider<RemoteTrackResolver>((ref) {
 });
 
 class RemoteTrackResolver {
-  RemoteTrackResolver(this._ref, {bool? isAndroid})
-    : _isAndroid = isAndroid ?? AppPlatform.isAndroid;
+  RemoteTrackResolver(this._ref, {bool? useMobileCachePolicy})
+    : _usesMobileCachePolicy = useMobileCachePolicy ?? AppPlatform.isMobile;
 
   static const _ttl = Duration(minutes: 20);
-  static const _prefsKey = 'remote_track_resolution_cache_v4';
+  static const _prefsKey = 'remote_track_resolution_cache_v6';
   static const _legacyPrefsKeys = [
     'remote_track_resolution_cache_v2',
     'remote_track_resolution_cache_v3',
+    'remote_track_resolution_cache_v4',
+    'remote_track_resolution_cache_v5',
   ];
   static const _maxPersistentEntries = 24;
   static const _maxMemoryEntries = 32;
 
   final Ref _ref;
-  final bool _isAndroid;
+  final bool _usesMobileCachePolicy;
   final _entries = <String, _TrackResolutionEntry>{};
   bool _loadedPersistentCache = false;
+  Future<void>? _persistentCacheLoad;
 
   Future<TrackInfo> resolve(
     TrackInfo track, {
@@ -208,7 +214,9 @@ class RemoteTrackResolver {
     final normalizedUrl = track.url.trim();
     if (normalizedUrl.isNotEmpty) {
       try {
-        return 'youtube:${VideoId.fromString(normalizedUrl).value}';
+        final videoId = InnerTubeVideoId.extract(normalizedUrl);
+        if (videoId == null) throw const FormatException('Not YouTube.');
+        return 'youtube:${videoId.value}';
       } catch (_) {
         // A non-YouTube URL is authoritative; do not reinterpret an unrelated
         // eleven-character extractor id as a YouTube video.
@@ -220,7 +228,9 @@ class RemoteTrackResolver {
       return '';
     }
     try {
-      return 'youtube:${VideoId.fromString(normalizedId).value}';
+      final videoId = InnerTubeVideoId.extract(normalizedId);
+      if (videoId == null) throw const FormatException('Not YouTube.');
+      return 'youtube:${videoId.value}';
     } catch (_) {
       return normalizedId;
     }
@@ -254,7 +264,16 @@ class RemoteTrackResolver {
       }
       final merged = _mergeTrackInfo(track, _trackFromResolution(resolved));
       if (_hasPlayableStream(merged) && _isCurrentGeneration(key, generation)) {
-        unawaited(_persistResolvedEntry(key, merged));
+        final entry = _entries[key]!..streamExpiresAt = resolved.expiresAt;
+        if (!entry.isExpired) {
+          unawaited(
+            _persistResolvedEntry(
+              key,
+              merged,
+              streamExpiresAt: resolved.expiresAt,
+            ),
+          );
+        }
       }
       return merged;
     } catch (_) {
@@ -288,6 +307,7 @@ class RemoteTrackResolver {
       streamSource: resolution.source.name,
       streamFormatId: resolution.formatId,
       streamCodec: resolution.codec,
+      streamClientProfileKey: resolution.clientProfileKey,
       httpHeaders: resolution.httpHeaders,
     );
   }
@@ -296,16 +316,36 @@ class RemoteTrackResolver {
     if (_loadedPersistentCache) {
       return;
     }
-    _loadedPersistentCache = true;
+    final pending = _persistentCacheLoad;
+    if (pending != null) {
+      return pending;
+    }
 
+    final completer = Completer<void>();
+    _persistentCacheLoad = completer.future;
+    try {
+      await _readPersistentCacheIntoMemory();
+      _loadedPersistentCache = true;
+      completer.complete();
+    } catch (error, stackTrace) {
+      completer.completeError(error, stackTrace);
+    } finally {
+      if (identical(_persistentCacheLoad, completer.future)) {
+        _persistentCacheLoad = null;
+      }
+    }
+    return completer.future;
+  }
+
+  Future<void> _readPersistentCacheIntoMemory() async {
     final prefs = await SharedPreferences.getInstance();
     for (final legacyKey in _legacyPrefsKeys) {
       await prefs.remove(legacyKey);
     }
 
     // Stream URLs and their headers are signed and short-lived. They must not
-    // survive an Android process restart or be reused after a download.
-    if (_isAndroid) {
+    // survive a mobile process restart or be reused after a download.
+    if (_usesMobileCachePolicy) {
       await prefs.remove(_prefsKey);
       return;
     }
@@ -330,6 +370,7 @@ class RemoteTrackResolver {
       _entries[entry.key] = _TrackResolutionEntry(
         Future.value(track),
         createdAt: _persistentEntryCreatedAt(value),
+        streamExpiresAt: _persistentEntryExpiresAt(value),
       );
     }
 
@@ -339,12 +380,15 @@ class RemoteTrackResolver {
     }
   }
 
-  Future<void> _persistResolvedEntry(String key, TrackInfo track) async {
-    // Managed playback files live in an OS cache directory. Keep them in the
-    // in-memory resolver cache for this session, but never persist paths that
-    // the OS may remove between launches.
+  Future<void> _persistResolvedEntry(
+    String key,
+    TrackInfo track, {
+    required DateTime? streamExpiresAt,
+  }) async {
+    // Local playback files may live in an OS cache directory. Keep them in
+    // memory for this session, but never persist paths the OS may remove.
     final streamUri = Uri.tryParse(track.streamUrl ?? '');
-    if (_isAndroid || !_hasPlayableStream(track)) {
+    if (_usesMobileCachePolicy || !_hasPlayableStream(track)) {
       return;
     }
     if (streamUri?.scheme == 'file') {
@@ -358,6 +402,8 @@ class RemoteTrackResolver {
     cache.removeWhere((_, value) => _isPersistentEntryExpired(value, now));
     cache[key] = {
       'createdAt': now.millisecondsSinceEpoch,
+      if (streamExpiresAt != null)
+        'expiresAt': streamExpiresAt.millisecondsSinceEpoch,
       'track': _trackInfoModel(track).toJson(),
     };
     _trimPersistentCache(cache);
@@ -365,7 +411,7 @@ class RemoteTrackResolver {
   }
 
   Future<void> _removePersistentEntry(String key) async {
-    if (_isAndroid) {
+    if (_usesMobileCachePolicy) {
       return;
     }
 
@@ -468,12 +514,28 @@ class RemoteTrackResolver {
     return DateTime.fromMillisecondsSinceEpoch(milliseconds);
   }
 
+  DateTime? _persistentEntryExpiresAt(Object? value) {
+    if (value is! Map) {
+      return null;
+    }
+    final raw = value['expiresAt'];
+    final milliseconds = raw is num ? raw.toInt() : int.tryParse('$raw');
+    if (milliseconds == null || milliseconds <= 0) {
+      return null;
+    }
+    return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  }
+
   bool _isPersistentEntryExpired(Object? value, DateTime now) {
     final createdAt = _persistentEntryCreatedAt(value);
     if (createdAt == null) {
       return true;
     }
-    return now.difference(createdAt) > _ttl;
+    if (!now.isBefore(createdAt.add(_ttl))) {
+      return true;
+    }
+    final streamExpiresAt = _persistentEntryExpiresAt(value);
+    return streamExpiresAt != null && !now.isBefore(streamExpiresAt);
   }
 
   bool _hasPlayableStream(TrackInfo track) {
@@ -495,6 +557,7 @@ class RemoteTrackResolver {
       streamSource: track.streamSource,
       streamFormatId: track.streamFormatId,
       streamCodec: track.streamCodec,
+      streamClientProfileKey: track.streamClientProfileKey,
       extractor: track.extractor,
       album: track.album,
       albumBrowseId: track.albumBrowseId,
@@ -508,14 +571,22 @@ class RemoteTrackResolver {
 }
 
 class _TrackResolutionEntry {
-  _TrackResolutionEntry(this.future, {Object? generation, DateTime? createdAt})
-    : generation = generation ?? Object(),
-      createdAt = createdAt ?? DateTime.now();
+  _TrackResolutionEntry(
+    this.future, {
+    Object? generation,
+    DateTime? createdAt,
+    this.streamExpiresAt,
+  }) : generation = generation ?? Object(),
+       createdAt = createdAt ?? DateTime.now();
 
   final Future<TrackInfo> future;
   final Object generation;
   final DateTime createdAt;
+  DateTime? streamExpiresAt;
 
-  bool get isExpired =>
-      DateTime.now().difference(createdAt) > RemoteTrackResolver._ttl;
+  bool get isExpired {
+    final now = DateTime.now();
+    return !now.isBefore(createdAt.add(RemoteTrackResolver._ttl)) ||
+        (streamExpiresAt != null && !now.isBefore(streamExpiresAt!));
+  }
 }

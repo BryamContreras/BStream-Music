@@ -758,12 +758,12 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('fallback exposes only Videos and explains yt-dlp', (
+  testWidgets('fallback exposes only Videos and explains InnerTube fallback', (
     tester,
   ) async {
     final fallbackPage = SearchPage(
       category: SearchCategory.videos,
-      backend: SearchBackend.ytDlp,
+      backend: SearchBackend.innerTubeVideoFallback,
       primaryError: StateError('InnerTube unavailable'),
     );
     final controller = _RecordingSearchController(
@@ -790,7 +790,10 @@ void main() {
       find.byKey(const ValueKey('search-fallback-notice')),
       findsOneWidget,
     );
-    expect(find.textContaining('InnerTube no respondió'), findsOneWidget);
+    expect(
+      find.textContaining('fallback de videos de InnerTube'),
+      findsOneWidget,
+    );
   });
 
   testWidgets(

@@ -1044,11 +1044,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
             '(hasStreamUrl=${playableTrack.streamUrl != null && playableTrack.streamUrl!.isNotEmpty}): '
             '${readableAudioStreamError(error)}',
           );
-          if (_isYoutubeExplodeStream(playableTrack) &&
+          if (_isPrimaryInnerTubeStream(playableTrack) &&
               _shouldRecoverRemoteError(playableTrack, error)) {
-            if (_isYoutubeExplodeStream(playableTrack)) {
+            if (_isPrimaryInnerTubeStream(playableTrack)) {
               _showRemoteFallbackNotice(
-                AudioStreamSource.youtubeExplode,
+                _streamSourceFor(playableTrack),
                 error,
                 playableTrack,
                 requestId,
@@ -1166,11 +1166,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
           '(hasStreamUrl=${playableTrack.streamUrl != null && playableTrack.streamUrl!.isNotEmpty}): '
           '${readableAudioStreamError(error)}',
         );
-        if (_isYoutubeExplodeStream(playableTrack) &&
+        if (_isPrimaryInnerTubeStream(playableTrack) &&
             _shouldRecoverRemoteError(playableTrack, error)) {
-          if (_isYoutubeExplodeStream(playableTrack)) {
+          if (_isPrimaryInnerTubeStream(playableTrack)) {
             _showRemoteFallbackNotice(
-              AudioStreamSource.youtubeExplode,
+              _streamSourceFor(playableTrack),
               error,
               playableTrack,
               requestId,
@@ -1244,9 +1244,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (!_isCurrentRemoteSelection(track, requestId, expectedQueueEntryId)) {
       return;
     }
-    final provider = source == AudioStreamSource.youtubeExplode
-        ? 'youtube_explode_dart'
-        : 'yt-dlp';
+    final provider = switch (source) {
+      AudioStreamSource.innerTube => 'InnerTube principal',
+      AudioStreamSource.innerTubeFallback => 'InnerTube alternativo',
+    };
     final detail = readableAudioStreamError(error);
     debugPrint(
       '[PlayerController] $provider failed at resolution stage '
@@ -1254,8 +1255,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       '$detail',
     );
     final message = detail.isEmpty
-        ? '$provider falló. Probando con yt-dlp...'
-        : '$provider falló: $detail. Probando con yt-dlp...';
+        ? '$provider falló. Probando otro cliente InnerTube...'
+        : '$provider falló: $detail. Probando otro cliente InnerTube...';
     _remoteRetry.setNotice(requestId, message);
     final pending = _remoteLoadingSnapshot(
       track,
@@ -1378,8 +1379,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         // A successful fallback load is enough to retire the primary error.
         // Some backends report a ready/stopped snapshot until the user presses
         // Play, so waiting specifically for playing/paused would leave the
-        // youtube_explode warning stuck on screen even though yt-dlp already
-        // prepared a usable source.
+        // primary-client warning stuck on screen even though an alternate
+        // InnerTube client already prepared a usable source.
         final serviceSnapshot = ref
             .read(playerServiceProvider)
             .currentSnapshot
@@ -1423,7 +1424,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
 
     final rejectedPrimary =
-        !failedCachedRemote && _isYoutubeExplodeStream(track);
+        !failedCachedRemote && _isPrimaryInnerTubeStream(track);
     final fallbackOnly = !failedCachedRemote && rejectedPrimary;
     if (!failedCachedRemote &&
         !rejectedPrimary &&
@@ -1447,7 +1448,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
     if (rejectedPrimary) {
       _showRemoteFallbackNotice(
-        AudioStreamSource.youtubeExplode,
+        _streamSourceFor(track),
         snapshot.errorMessage ?? 'Error de reproducción.',
         track,
         requestId,
@@ -1535,12 +1536,18 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     return RemotePlaybackFailureClassifier.shouldRecover(track, error);
   }
 
-  bool _isYoutubeExplodeStream(TrackInfo track) {
-    return RemotePlaybackFailureClassifier.isYoutubeExplodeStream(track);
+  bool _isPrimaryInnerTubeStream(TrackInfo track) {
+    return RemotePlaybackFailureClassifier.isPrimaryInnerTubeStream(track);
   }
 
-  bool _isYtDlpStream(TrackInfo track) {
-    return RemotePlaybackFailureClassifier.isYtDlpStream(track);
+  AudioStreamSource _streamSourceFor(TrackInfo track) {
+    return track.streamSource == AudioStreamSource.innerTubeFallback.name
+        ? AudioStreamSource.innerTubeFallback
+        : AudioStreamSource.innerTube;
+  }
+
+  bool _isFallbackInnerTubeStream(TrackInfo track) {
+    return RemotePlaybackFailureClassifier.isFallbackInnerTubeStream(track);
   }
 
   bool _shouldRefreshRemoteErrorMessage(String? rawMessage) {
@@ -1899,13 +1906,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       }
       final rejectedTrack = resolvedTrack;
       if (rejectedTrack == null ||
-          !_isYoutubeExplodeStream(rejectedTrack) ||
+          !_isPrimaryInnerTubeStream(rejectedTrack) ||
           !_shouldRecoverRemoteError(rejectedTrack, error)) {
         Error.throwWithStackTrace(error, stackTrace);
       }
 
       _showRemoteFallbackNotice(
-        AudioStreamSource.youtubeExplode,
+        _streamSourceFor(rejectedTrack),
         error,
         track,
         requestId,
@@ -2062,7 +2069,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     AudioResolverContinuationCallback? shouldContinue,
   }) async {
     if (!forceRefresh &&
-        !AppPlatform.isAndroid &&
+        !AppPlatform.isMobile &&
         track.streamUrl != null &&
         track.thumbnailUrl != null) {
       return track;
@@ -3190,14 +3197,14 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         _clearRemoteFallbackNotice(_playRequestId);
         snapshot = snapshot.copyWith(errorMessage: null);
       } else if (snapshot.status == PlayerStatus.failed) {
-        if (_isYtDlpStream(remote)) {
+        if (_isFallbackInnerTubeStream(remote)) {
           // The fallback itself failed. Its definitive player error must
           // replace the transient primary-resolver notice and remain visible.
           _clearRemoteFallbackNotice(_playRequestId);
         } else {
           // Some backends publish the rejected primary source through both the
           // load Future and an error stream. Keep the fallback notice until the
-          // queue has actually switched to yt-dlp.
+          // queue has actually switched to an alternate InnerTube client.
           snapshot = snapshot.copyWith(errorMessage: fallbackNotice);
         }
       } else {

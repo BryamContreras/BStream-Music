@@ -213,6 +213,22 @@ void main() {
     },
   );
 
+  test('loads an iOS Media Library item as a URI, not a file path', () async {
+    final fixture = await _Fixture.create();
+    const mediaLibraryURI = 'ipod-library://item/item.m4a?id=42';
+    try {
+      await fixture.service.playLocalQueue([
+        _localTrack('ios-media', filePath: mediaLibraryURI),
+      ], 0);
+
+      final source = fixture.backend.sourceLoadCalls.single.sources.single;
+      expect(source, isA<UriAudioSource>());
+      expect((source as UriAudioSource).uri.toString(), mediaLibraryURI);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   test(
     'uses the loaded media duration when remote catalog metadata omits it',
     () async {
@@ -488,6 +504,44 @@ void main() {
           expect(fixture.service.currentSnapshot.volume, closeTo(0.72, 1e-9));
           expect(fixture.primary.currentIndex, 1);
           expect(fixture.primary.volumeCalls.last, closeTo(0.72, 1e-9));
+          expect(
+            fixture.primary.volumeCalls.any(
+              (volume) => volume > 0 && volume < 0.72,
+            ),
+            isTrue,
+            reason: 'The synchronized primary must settle in without a jump.',
+          );
+          expect(
+            fixture.standby.volumeCalls.any(
+              (volume) => volume > 0 && volume < 0.72,
+            ),
+            isTrue,
+            reason: 'The prepared deck must settle out instead of being muted.',
+          );
+          final primarySettleStart = fixture.primary.volumeCalls.lastIndexWhere(
+            (volume) => volume.abs() <= 0.001,
+          );
+          final standbySettleStart = fixture.standby.volumeCalls.lastIndexWhere(
+            (volume) => (volume - 0.72).abs() <= 0.001,
+          );
+          final primarySettle = fixture.primary.volumeCalls.sublist(
+            primarySettleStart,
+          );
+          final standbySettle = fixture.standby.volumeCalls.sublist(
+            standbySettleStart,
+          );
+          final settleSampleCount = primarySettle.length < standbySettle.length
+              ? primarySettle.length
+              : standbySettle.length;
+          expect(settleSampleCount, greaterThan(2));
+          for (var index = 0; index < settleSampleCount; index++) {
+            expect(
+              primarySettle[index] + standbySettle[index],
+              closeTo(0.72, 0.003),
+              reason: 'Settle gains must remain complementary.',
+            );
+          }
+          expect(fixture.standby.disposeCalls, 0);
           await _waitUntil(() => fixture.standby.disposeCalls == 1);
         } finally {
           await fixture.dispose();
@@ -530,6 +584,287 @@ void main() {
         await fixture.dispose();
       }
     });
+
+    test(
+      'keeps B audible and realigns drift after the primary reports ready',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.68);
+          fixture.primary.holdNextIndexedSeekInBuffering = true;
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+
+          await _waitUntil(
+            () => fixture.primary.processingState == ProcessingState.buffering,
+            attempts: 700,
+          );
+          fixture.standby.emitPosition(const Duration(milliseconds: 850));
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+
+          expect(
+            fixture.service.currentSnapshot.queueEntryId,
+            'remote:current',
+          );
+          expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
+          expect(fixture.standby.volumeCalls.last, closeTo(0.68, 0.002));
+          expect(fixture.standby.disposeCalls, 0);
+
+          fixture.primary.emitReady();
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(fixture.primary.volumeCalls.last, closeTo(0.68, 1e-9));
+          expect(fixture.primary.seekCalls, 2);
+          expect(fixture.primary.position, const Duration(milliseconds: 850));
+          expect(
+            fixture.service.currentSnapshot.position,
+            const Duration(milliseconds: 850),
+          );
+          expect(fixture.standby.disposeCalls, 0);
+          await _waitUntil(
+            () => fixture.standby.disposeCalls == 1,
+            attempts: 700,
+          );
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test('keeps B authoritative beyond the old readiness timeout', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.playAndPrepare(masterVolume: 0.67);
+        fixture.primary.holdNextIndexedSeekInBuffering = true;
+        fixture.primary.emitPosition(const Duration(milliseconds: 400));
+
+        await _waitUntil(
+          () => fixture.primary.processingState == ProcessingState.buffering,
+          attempts: 700,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+        expect(fixture.service.currentSnapshot.queueEntryId, 'remote:current');
+        expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
+        expect(fixture.standby.volumeCalls.last, closeTo(0.67, 0.002));
+        expect(fixture.standby.disposeCalls, 0);
+
+        fixture.primary.emitReady();
+        await _waitUntil(
+          () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+          attempts: 700,
+        );
+        expect(fixture.primary.processingState, ProcessingState.ready);
+        expect(fixture.primary.volumeCalls.last, closeTo(0.67, 1e-9));
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    test(
+      'remeasures fresh drift when B advances during the correction seek',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.69);
+          var advancedDuringCorrection = false;
+          double? primaryGainDuringCorrection;
+          double? standbyGainDuringCorrection;
+          fixture.primary
+            ..holdNextIndexedSeekInBuffering = true
+            ..onUnindexedSeek = (_) {
+              if (advancedDuringCorrection) return;
+              advancedDuringCorrection = true;
+              primaryGainDuringCorrection = fixture.primary.volumeCalls.last;
+              standbyGainDuringCorrection = fixture.standby.volumeCalls.last;
+              fixture.standby.emitPosition(const Duration(milliseconds: 1200));
+            };
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+
+          await _waitUntil(
+            () => fixture.primary.processingState == ProcessingState.buffering,
+            attempts: 700,
+          );
+          fixture.standby.emitPosition(const Duration(milliseconds: 850));
+          expect(fixture.primary.volumeCalls.last, closeTo(0, 1e-9));
+          expect(fixture.standby.volumeCalls.last, closeTo(0.69, 0.002));
+          fixture.primary.emitReady();
+
+          await _waitUntil(
+            () =>
+                fixture.primary.seekCalls >= 3 &&
+                fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(advancedDuringCorrection, isTrue);
+          expect(primaryGainDuringCorrection, closeTo(0, 1e-9));
+          expect(standbyGainDuringCorrection, closeTo(0.69, 0.002));
+          expect(fixture.primary.seekCalls, 3);
+          expect(fixture.primary.position, const Duration(milliseconds: 1200));
+          expect(
+            fixture.service.currentSnapshot.position,
+            const Duration(milliseconds: 1200),
+          );
+          expect(fixture.primary.volumeCalls.last, closeTo(0.69, 1e-9));
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'uses a gapless terminal cutover when clock drift never converges',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.71);
+          fixture.primary
+            ..holdNextIndexedSeekInBuffering = true
+            ..onUnindexedSeek = (position) {
+              fixture.standby.emitPosition(
+                position + const Duration(milliseconds: 100),
+              );
+            };
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+
+          await _waitUntil(
+            () => fixture.primary.processingState == ProcessingState.buffering,
+            attempts: 700,
+          );
+          fixture.standby.emitPosition(const Duration(milliseconds: 850));
+          fixture.primary.emitReady();
+
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(fixture.primary.seekCalls, 4);
+          expect(fixture.primary.volumeCalls.last, closeTo(0.71, 1e-9));
+          expect(fixture.standby.volumeCalls.last, closeTo(0, 1e-9));
+          expect(
+            fixture.standby.stopCalls,
+            0,
+            reason: 'B must not stop before A owns the terminal gain.',
+          );
+          await _waitUntil(() => fixture.standby.stopCalls > 0, attempts: 700);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'restores B and retries if A loses readiness during terminal cutover',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          const master = 0.73;
+          var readinessDropped = false;
+          await fixture.playAndPrepare(masterVolume: master);
+          fixture.primary
+            ..holdNextIndexedSeekInBuffering = true
+            ..onUnindexedSeek = (position) {
+              fixture.standby.emitPosition(
+                position + const Duration(milliseconds: 100),
+              );
+            }
+            ..onSetVolume = (volume) {
+              if (!readinessDropped &&
+                  fixture.primary.seekCalls == 4 &&
+                  (volume - master).abs() <= 0.001) {
+                readinessDropped = true;
+                fixture.primary.emitBuffering();
+              }
+            };
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+
+          await _waitUntil(
+            () => fixture.primary.processingState == ProcessingState.buffering,
+            attempts: 700,
+          );
+          fixture.standby.emitPosition(const Duration(milliseconds: 850));
+          fixture.primary.emitReady();
+          await _waitUntil(
+            () =>
+                readinessDropped &&
+                fixture.primary.volumeCalls.last.abs() <= 0.001 &&
+                (fixture.standby.volumeCalls.last - master).abs() <= 0.002,
+            attempts: 700,
+          );
+
+          expect(
+            fixture.service.currentSnapshot.queueEntryId,
+            'remote:current',
+          );
+          expect(fixture.standby.stopCalls, 0);
+
+          fixture.primary
+            ..onUnindexedSeek = null
+            ..onSetVolume = null
+            ..emitReady();
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(fixture.primary.processingState, ProcessingState.ready);
+          expect(fixture.primary.volumeCalls.last, closeTo(master, 1e-9));
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'restores B and retries if A buffers during an intermediate settle gain',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          const master = 0.74;
+          var readinessDropped = false;
+          double? interruptedGain;
+          await fixture.playAndPrepare(masterVolume: master);
+          fixture.primary.onSetVolume = (volume) {
+            if (!readinessDropped &&
+                fixture.primary.currentIndex == 1 &&
+                volume > 0.02 &&
+                volume < master - 0.02) {
+              readinessDropped = true;
+              interruptedGain = volume;
+              fixture.primary.emitBuffering();
+            }
+          };
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+
+          await _waitUntil(
+            () =>
+                readinessDropped &&
+                fixture.primary.volumeCalls.last.abs() <= 0.001 &&
+                (fixture.standby.volumeCalls.last - master).abs() <= 0.002,
+            attempts: 700,
+          );
+          expect(interruptedGain, isNotNull);
+          expect(interruptedGain, inExclusiveRange(0, master));
+          expect(fixture.standby.stopCalls, 0);
+          expect(fixture.standby.disposeCalls, 0);
+
+          fixture.primary
+            ..onSetVolume = null
+            ..emitReady();
+          await _waitUntil(
+            () =>
+                fixture.service.currentSnapshot.queueEntryId == 'remote:next' &&
+                (fixture.primary.volumeCalls.last - master).abs() <= 0.001 &&
+                fixture.standby.volumeCalls.last.abs() <= 0.001,
+            attempts: 700,
+          );
+          expect(fixture.primary.processingState, ProcessingState.ready);
+          expect(fixture.standby.stopCalls, 0);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
 
     test('disabling before the fade releases the prepared standby', () async {
       final fixture = await _CrossfadeFixture.create();
@@ -1051,12 +1386,12 @@ class _CrossfadeFixture {
   }
 }
 
-LocalTrack _localTrack(String id) {
+LocalTrack _localTrack(String id, {String? filePath}) {
   return LocalTrack(
     id: id,
     title: 'Track $id',
     artist: 'Local artist',
-    filePath: 'C:\\music\\$id.mp3',
+    filePath: filePath ?? 'C:\\music\\$id.mp3',
     addedAt: DateTime(2026),
   );
 }
@@ -1077,10 +1412,12 @@ class _BlockingAudioPlayer extends AudioPlayer {
   bool blockMoves = false;
   bool blockNextSourceLoad = false;
   bool blockNextIndexedSeekAfterMutation = false;
+  bool holdNextIndexedSeekInBuffering = false;
   bool failNextSeekAfterMutation = false;
   PlayerException? failNextSourceLoad;
   Duration? nextSourceLoadDuration;
   bool _playing = false;
+  ProcessingState _processingState = ProcessingState.idle;
   int? _currentIndex;
   Duration _position = Duration.zero;
   int _activeQueueMutations = 0;
@@ -1093,6 +1430,8 @@ class _BlockingAudioPlayer extends AudioPlayer {
   int _sourceRevision = 0;
   final Completer<void> indexedSeekMutationStarted = Completer<void>();
   final Completer<void> releaseIndexedSeekMutation = Completer<void>();
+  void Function(Duration position)? onUnindexedSeek;
+  void Function(double volume)? onSetVolume;
 
   @override
   Stream<Duration> createPositionStream({
@@ -1134,6 +1473,12 @@ class _BlockingAudioPlayer extends AudioPlayer {
 
   @override
   bool get playing => _playing;
+
+  @override
+  ProcessingState get processingState => _processingState;
+
+  @override
+  PlayerState get playerState => PlayerState(_playing, _processingState);
 
   @override
   Duration get position => _position;
@@ -1199,6 +1544,16 @@ class _BlockingAudioPlayer extends AudioPlayer {
     _positions.add(position);
   }
 
+  void emitReady() {
+    _processingState = ProcessingState.ready;
+    _states.add(PlayerState(_playing, _processingState));
+  }
+
+  void emitBuffering() {
+    _processingState = ProcessingState.buffering;
+    _states.add(PlayerState(_playing, _processingState));
+  }
+
   void emitSequenceState({int? currentIndex}) {
     if (currentIndex != null) {
       _currentIndex = currentIndex;
@@ -1249,6 +1604,16 @@ class _BlockingAudioPlayer extends AudioPlayer {
     _position = position ?? Duration.zero;
     if (index != null) {
       _currentIndex = index;
+      if (holdNextIndexedSeekInBuffering) {
+        holdNextIndexedSeekInBuffering = false;
+        _processingState = ProcessingState.buffering;
+        _states.add(PlayerState(_playing, _processingState));
+      } else {
+        emitReady();
+      }
+    }
+    if (index == null) {
+      onUnindexedSeek?.call(_position);
     }
     if (index != null && blockNextIndexedSeekAfterMutation) {
       blockNextIndexedSeekAfterMutation = false;
@@ -1268,13 +1633,13 @@ class _BlockingAudioPlayer extends AudioPlayer {
   Future<void> play() async {
     playCalls++;
     _playing = true;
-    _states.add(PlayerState(true, ProcessingState.ready));
+    emitReady();
   }
 
   @override
   Future<void> pause() async {
     _playing = false;
-    _states.add(PlayerState(false, ProcessingState.ready));
+    emitReady();
   }
 
   @override
@@ -1282,12 +1647,14 @@ class _BlockingAudioPlayer extends AudioPlayer {
     stopCalls++;
     _sourceRevision++;
     _playing = false;
-    _states.add(PlayerState(false, ProcessingState.idle));
+    _processingState = ProcessingState.idle;
+    _states.add(PlayerState(false, _processingState));
   }
 
   @override
   Future<void> setVolume(double volume) async {
     volumeCalls.add(volume);
+    onSetVolume?.call(volume);
     _volumes.add(volume);
   }
 

@@ -507,7 +507,7 @@ void main() {
       },
     );
 
-    test('fills missing InnerTube fields from yt-dlp metadata only', () async {
+    test('fills only missing fields from resolved playback metadata', () async {
       const url = 'https://catalog.example/tracks/incomplete-song';
       final fixture = await _DownloadFixture.create(
         resolvedInfo: const TrackInfo(
@@ -694,75 +694,72 @@ void main() {
       },
     );
 
-    test(
-      'yt-dlp fallback clears the primary error and restarts progress',
-      () async {
-        final releaseDownload = Completer<void>();
-        final fixture = await _DownloadFixture.create(
-          downloadGate: releaseDownload.future,
-        );
-        addTearDown(fixture.dispose);
-        final track = _remoteTrack(url: 'https://catalog.example/tracks/42');
-        await fixture.container
-            .read(downloadControllerProvider.notifier)
-            .downloadAudio(track);
-        await fixture.musicRepository.firstDownloadStarted.future;
-        final task = fixture.container.read(
-          downloadControllerProvider,
-        )[track.url]!;
+    test('fallback clears the primary error and restarts progress', () async {
+      final releaseDownload = Completer<void>();
+      final fixture = await _DownloadFixture.create(
+        downloadGate: releaseDownload.future,
+      );
+      addTearDown(fixture.dispose);
+      final track = _remoteTrack(url: 'https://catalog.example/tracks/42');
+      await fixture.container
+          .read(downloadControllerProvider.notifier)
+          .downloadAudio(track);
+      await fixture.musicRepository.firstDownloadStarted.future;
+      final task = fixture.container.read(
+        downloadControllerProvider,
+      )[track.url]!;
 
-        fixture.progressService.emit(
-          DownloadProgress(
-            taskId: task.taskId,
-            url: track.url,
-            status: DownloadProgressStatus.running,
-            progress: 0.64,
-          ),
-        );
-        fixture.progressService.emit(
-          DownloadProgress(
-            taskId: task.taskId,
-            url: track.url,
-            status: DownloadProgressStatus.failed,
-            progress: 0.64,
-            message: 'youtube_explode_dart fallo; usando yt-dlp',
-          ),
-        );
-        await Future<void>.delayed(Duration.zero);
-        expect(
-          fixture.container
-              .read(downloadControllerProvider)[track.url]
-              ?.errorMessage,
-          contains('youtube_explode_dart'),
-        );
+      fixture.progressService.emit(
+        DownloadProgress(
+          taskId: task.taskId,
+          url: track.url,
+          status: DownloadProgressStatus.running,
+          progress: 0.64,
+        ),
+      );
+      fixture.progressService.emit(
+        DownloadProgress(
+          taskId: task.taskId,
+          url: track.url,
+          status: DownloadProgressStatus.failed,
+          progress: 0.64,
+          message: 'InnerTube principal falló; usando cliente alternativo',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        fixture.container
+            .read(downloadControllerProvider)[track.url]
+            ?.errorMessage,
+        contains('InnerTube principal'),
+      );
 
-        fixture.progressService.emit(
-          DownloadProgress(
-            taskId: task.taskId,
-            url: track.url,
-            status: DownloadProgressStatus.queued,
-            progress: 0,
-            message: 'Preparando yt-dlp',
-          ),
-        );
-        await Future<void>.delayed(Duration.zero);
-        final fallback = fixture.container.read(
-          downloadControllerProvider,
-        )[track.url]!;
-        expect(fallback.status, DownloadProgressStatus.queued);
-        expect(fallback.progress, 0);
-        expect(fallback.errorMessage, isNull);
+      fixture.progressService.emit(
+        DownloadProgress(
+          taskId: task.taskId,
+          url: track.url,
+          status: DownloadProgressStatus.queued,
+          progress: 0,
+          message: 'Preparando cliente InnerTube alternativo',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      final fallback = fixture.container.read(
+        downloadControllerProvider,
+      )[track.url]!;
+      expect(fallback.status, DownloadProgressStatus.queued);
+      expect(fallback.progress, 0);
+      expect(fallback.errorMessage, isNull);
 
-        releaseDownload.complete();
-        await _waitUntil(
-          () =>
-              fixture.container
-                  .read(downloadControllerProvider)[track.url]
-                  ?.status ==
-              DownloadProgressStatus.completed,
-        );
-      },
-    );
+      releaseDownload.complete();
+      await _waitUntil(
+        () =>
+            fixture.container
+                .read(downloadControllerProvider)[track.url]
+                ?.status ==
+            DownloadProgressStatus.completed,
+      );
+    });
   });
 }
 

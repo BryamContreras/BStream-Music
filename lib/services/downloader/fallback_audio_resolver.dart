@@ -48,7 +48,7 @@ class FallbackAudioResolver
             : await resolver.resolve(track);
         _ensureActive(shouldContinue);
         if (result.isUsable) {
-          return result;
+          return result.withSource(_sourceForIndex(index));
         }
         lastError = AudioStreamResolverException(
           'Resolver ${resolver.runtimeType} returned an empty stream.',
@@ -76,8 +76,8 @@ class FallbackAudioResolver
 
   AudioStreamSource _sourceForIndex(int index) {
     return index == 0
-        ? AudioStreamSource.youtubeExplode
-        : AudioStreamSource.ytDlp;
+        ? AudioStreamSource.innerTube
+        : AudioStreamSource.innerTubeFallback;
   }
 
   @override
@@ -103,7 +103,7 @@ List<AudioStreamResolver> startingFrom(
   AudioStreamSource source,
   List<AudioStreamResolver> resolvers,
 ) {
-  if (source == AudioStreamSource.youtubeExplode) {
+  if (source == AudioStreamSource.innerTube) {
     return resolvers;
   }
   return resolvers.skip(1).toList(growable: false);

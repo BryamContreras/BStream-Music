@@ -177,6 +177,7 @@ class _MediaKitPlayerBackend implements MediaKitPlayerBackend {
 
 class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
+  static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
 
   MediaKitPlayerService({
     MediaKitPlayerBackend? backend,
@@ -234,6 +235,7 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
   int _seekRevision = 0;
   Duration _standbyPosition = Duration.zero;
   Duration? _standbyDuration;
+  int _standbyRetirementGeneration = 0;
 
   static bool _initialized = false;
 
@@ -303,7 +305,10 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
     }
 
     final generation = ++_crossfadeGeneration;
-    await _resetCrossfadeState(restoreActiveVolume: true);
+    await _resetCrossfadeState(
+      restoreActiveVolume: true,
+      preserveStandby: true,
+    );
     if (!_isCrossfadeCurrent(generation)) {
       return;
     }
@@ -323,6 +328,9 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
     CrossfadePlaybackSource source,
     int generation,
   ) async {
+    // Promotion leaves the muted outgoing backend available for reuse. Cancel
+    // its delayed stop before opening the next prepared source on that deck.
+    _standbyRetirementGeneration++;
     final standby = _standbyPlayer ??= _createCrossfadeBackend();
     final cancellation = Completer<void>();
     _crossfadePreparationCancellation = cancellation;
@@ -629,11 +637,15 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
       // Keep both decks and their event filters intact until every fallible
       // native gain write has succeeded. A failure before commit can then use
       // the regular reset path and leaves the outgoing deck authoritative.
-      await incoming.setVolume(_masterVolume * 100);
-      if (!isCurrent()) {
-        return;
-      }
-      await outgoing.setVolume(0);
+      // Reassert the terminal gains through the shared parallel write lane.
+      // Besides preserving the transactional failure boundary, this avoids two
+      // serialized native round trips exactly where the audible decks switch.
+      await _writeCrossfadeVolumes(
+        outgoing: outgoing,
+        incoming: incoming,
+        outgoingVolume: 0,
+        incomingVolume: _masterVolume,
+      );
       if (!isCurrent()) {
         return;
       }
@@ -671,7 +683,8 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
         _disableCrossfadeAfterHandoff = false;
         _crossfadeEnabled = false;
       }
-      unawaited(_stopHealthyStandby(outgoing));
+      final retirementGeneration = ++_standbyRetirementGeneration;
+      unawaited(_stopHealthyStandbyAfterGrace(outgoing, retirementGeneration));
     } finally {
       if (!promotionCompletion.isCompleted) {
         promotionCompletion.complete();
@@ -683,7 +696,18 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
     }
   }
 
-  Future<void> _stopHealthyStandby(MediaKitPlayerBackend standby) async {
+  Future<void> _stopHealthyStandbyAfterGrace(
+    MediaKitPlayerBackend standby,
+    int retirementGeneration,
+  ) async {
+    await Future<void>.delayed(_crossfadeRetirementGrace);
+    if (_disposed ||
+        retirementGeneration != _standbyRetirementGeneration ||
+        !identical(standby, _standbyPlayer) ||
+        _preparedCrossfadeSource != null ||
+        _crossfadePreparation != null) {
+      return;
+    }
     try {
       await standby.stop();
     } catch (_) {
@@ -711,7 +735,10 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
   bool _isCrossfadeCurrent(int generation) =>
       !_disposed && _crossfadeEnabled && generation == _crossfadeGeneration;
 
-  Future<void> _resetCrossfadeState({required bool restoreActiveVolume}) async {
+  Future<void> _resetCrossfadeState({
+    required bool restoreActiveVolume,
+    bool preserveStandby = false,
+  }) async {
     _crossfadeRamp?.cancel();
     _crossfadeRamp = null;
     if (_disableCrossfadeAfterHandoff) {
@@ -732,7 +759,7 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
       cancellation.complete();
     }
     await _clearStandbyPlayer(
-      stop: true,
+      stop: !preserveStandby,
       abandonPendingOpen: hadPendingPreparation,
     );
     if (restoreActiveVolume && !_disposed) {
@@ -798,6 +825,7 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
     required bool stop,
     bool abandonPendingOpen = false,
   }) async {
+    _standbyRetirementGeneration++;
     for (final subscription in _standbySubscriptions) {
       await subscription.cancel();
     }
@@ -1297,6 +1325,7 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
     _disposed = true;
     _requestedGeneration++;
     _crossfadeGeneration++;
+    _standbyRetirementGeneration++;
     _backendGeneration = null;
     _cancelActiveOperation();
     _crossfadeRamp?.cancel();

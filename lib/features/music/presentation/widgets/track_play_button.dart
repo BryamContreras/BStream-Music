@@ -18,8 +18,8 @@ class TrackPlayButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final buttonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
-    final iconSize = AppPlatform.isAndroid ? 30.0 : 26.0;
+    final buttonSize = AppPlatform.isMobile ? 48.0 : 52.0;
+    final iconSize = AppPlatform.isMobile ? 30.0 : 26.0;
 
     return SizedBox.square(
       dimension: buttonSize,

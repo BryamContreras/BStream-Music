@@ -41,9 +41,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 260));
 
     Opacity opacityFor(Key? key) => tester.widget<Opacity>(
-      find.byWidgetPredicate(
-        (widget) => widget is Opacity && widget.child?.key == key,
-      ),
+      find.ancestor(of: find.byKey(key!), matching: find.byType(Opacity)).first,
     );
 
     expect(incomingKey, isNot(outgoingKey));

@@ -15,8 +15,7 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
-        android:networkSecurityConfig="@xml/network_security_config"
-        android:extractNativeLibs="true">
+        android:networkSecurityConfig="@xml/network_security_config">
         <!-- Keep the runtime-configured media notification icon in release APKs. -->
         <meta-data
             android:name="bstream_music.notification_icon"

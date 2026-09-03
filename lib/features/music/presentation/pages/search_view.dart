@@ -136,8 +136,8 @@ class SearchView extends ConsumerWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: _FallbackNotice(
                       message: searchState.primaryError == null
-                          ? strings.searchYtDlpVideoOnly
-                          : strings.searchInnerTubeFallback,
+                          ? strings.searchInnerTubeVideoOnly
+                          : strings.searchInnerTubeVideoFallback,
                     ),
                   ),
                 ],

@@ -3,9 +3,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/liquid_glass_surface.dart';
 
 const _glassMenuVerticalPadding = EdgeInsets.symmetric(vertical: 8);
+const _glassMenuBorderRadius = BorderRadius.all(Radius.circular(16));
 
 /// A [PopupMenuButton] that keeps Flutter's route, positioning, focus and
 /// semantics while replacing its solid fill with one continuous glass panel.
@@ -59,11 +60,19 @@ class GlassPopupMenuButton<T> extends PopupMenuButton<T> {
          enabled: enabled,
          color: Colors.transparent,
          surfaceTintColor: Colors.transparent,
+         elevation: 0,
+         shadowColor: Colors.transparent,
+         shape: const RoundedSuperellipseBorder(
+           borderRadius: _glassMenuBorderRadius,
+         ),
          iconColor: iconColor,
          enableFeedback: enableFeedback,
          constraints: constraints,
          position: position,
-         clipBehavior: Clip.antiAlias,
+         // The LiquidGlassSurface clips its interior and owns the only
+         // exterior shadow. Let that shadow paint outside the transparent
+         // popup route instead of clipping or duplicating it here.
+         clipBehavior: Clip.none,
          useRootNavigator: useRootNavigator,
          popUpAnimationStyle: popUpAnimationStyle,
          routeSettings: routeSettings,
@@ -98,13 +107,46 @@ class _GlassPopupMenuEntry<T> extends PopupMenuEntry<T> {
 }
 
 class _GlassPopupMenuEntryState<T> extends State<_GlassPopupMenuEntry<T>> {
+  Animation<double>? _routeAnimation;
+  bool _routeIsAnimating = false;
+
+  static bool _isMoving(AnimationStatus status) =>
+      status == AnimationStatus.forward || status == AnimationStatus.reverse;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final routeAnimation = ModalRoute.of(context)?.animation;
+    if (identical(routeAnimation, _routeAnimation)) {
+      return;
+    }
+    _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
+    _routeAnimation = routeAnimation;
+    _routeIsAnimating =
+        routeAnimation != null && _isMoving(routeAnimation.status);
+    routeAnimation?.addStatusListener(_handleRouteAnimationStatus);
+  }
+
+  void _handleRouteAnimationStatus(AnimationStatus status) {
+    final routeIsAnimating = _isMoving(status);
+    if (!mounted || routeIsAnimating == _routeIsAnimating) {
+      return;
+    }
+    setState(() => _routeIsAnimating = routeIsAnimating);
+  }
+
+  @override
+  void dispose() {
+    _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final configuredSurface = AppColors.menuBackgroundFor(context);
-    final transparent =
-        AppColors.surfaceBackgroundModeFor(context) ==
-        SurfaceBackgroundMode.transparent;
+    final surfaceMode = AppColors.surfaceBackgroundModeFor(context);
+    final transparent = surfaceMode.usesBackdrop;
     final glassSurface = configuredSurface.withValues(
       alpha: transparent
           ? configuredSurface.a
@@ -113,27 +155,59 @@ class _GlassPopupMenuEntryState<T> extends State<_GlassPopupMenuEntry<T>> {
           : 0.88,
     );
 
-    return BackdropFilter(
-      key: const ValueKey('glass-popup-menu-backdrop'),
-      filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-      child: DecoratedBox(
-        key: const ValueKey('glass-popup-menu-surface'),
-        decoration: BoxDecoration(
-          gradient: AppColors.glassSurfaceGradientFor(
-            context,
-            baseColor: glassSurface,
-            intensity: 1.2,
-            begin: AlignmentDirectional.topStart,
-            end: AlignmentDirectional.bottomEnd,
-          ),
+    final panel = DecoratedBox(
+      key: const ValueKey('glass-popup-menu-surface'),
+      decoration: BoxDecoration(
+        color: surfaceMode.isLiquidGlass ? Colors.transparent : null,
+        gradient: surfaceMode.isLiquidGlass
+            ? null
+            : AppColors.glassSurfaceGradientFor(
+                context,
+                baseColor: glassSurface,
+                intensity: 1.2,
+                begin: AlignmentDirectional.topStart,
+                end: AlignmentDirectional.bottomEnd,
+              ),
+      ),
+      child: Padding(
+        padding: _glassMenuVerticalPadding,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: widget.entries,
         ),
-        child: Padding(
-          padding: _glassMenuVerticalPadding,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: widget.entries,
+      ),
+    );
+    if (surfaceMode.isLiquidGlass) {
+      return LiquidGlassSurface(
+        key: const ValueKey('glass-popup-menu-backdrop'),
+        borderRadius: _glassMenuBorderRadius,
+        blurSigma: 8,
+        intensity: 1,
+        edgeTreatment: LiquidGlassEdgeTreatment.perimeter,
+        backdropMotion: _routeIsAnimating,
+        child: panel,
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: _glassMenuBorderRadius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: theme.brightness == Brightness.dark ? 0.28 : 0.14,
+            ),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
           ),
+        ],
+      ),
+      child: ClipRSuperellipse(
+        borderRadius: _glassMenuBorderRadius,
+        child: BackdropFilter(
+          key: const ValueKey('glass-popup-menu-backdrop'),
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: panel,
         ),
       ),
     );

@@ -336,14 +336,17 @@ void main() {
         RemotePlaybackFailureClassifier.shouldRefresh(
           const DownloaderException(
             'connection reset by peer',
-            code: 'ytdl_error',
+            code: 'playback_source_error',
           ),
         ),
         isTrue,
       );
       expect(
         RemotePlaybackFailureClassifier.shouldRefresh(
-          const DownloaderException('Private video', code: 'ytdl_error'),
+          const DownloaderException(
+            'Private video',
+            code: 'playback_source_error',
+          ),
         ),
         isFalse,
       );
@@ -373,10 +376,31 @@ void main() {
       );
     });
 
-    test('allows a known primary format rejection to use yt-dlp once', () {
+    test('treats a superseded InnerTube resolution as cancellation', () {
+      expect(
+        RemotePlaybackFailureClassifier.isCancellation(
+          Exception('Playback resolution was superseded.'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('allows a known primary format rejection to use fallback once', () {
       final primary = _track(
         7,
-      ).copyWith(streamSource: AudioStreamSource.youtubeExplode.name);
+      ).copyWith(streamSource: AudioStreamSource.innerTube.name);
+      final fallback = primary.copyWith(
+        streamSource: AudioStreamSource.innerTubeFallback.name,
+      );
+
+      expect(
+        RemotePlaybackFailureClassifier.isPrimaryInnerTubeStream(primary),
+        isTrue,
+      );
+      expect(
+        RemotePlaybackFailureClassifier.isFallbackInnerTubeStream(fallback),
+        isTrue,
+      );
 
       expect(
         RemotePlaybackFailureClassifier.shouldRecover(
@@ -389,6 +413,13 @@ void main() {
         RemotePlaybackFailureClassifier.shouldRecover(
           primary,
           StateError('Source error: format is not supported'),
+        ),
+        isFalse,
+      );
+      expect(
+        RemotePlaybackFailureClassifier.shouldRecover(
+          fallback,
+          Exception('Source error: format is not supported'),
         ),
         isFalse,
       );

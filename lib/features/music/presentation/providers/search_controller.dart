@@ -175,7 +175,7 @@ class SearchController extends AsyncNotifier<SearchState> {
       final errorState = AsyncError<SearchState>(error, stackTrace);
       // Riverpod has no public error-with-value constructor. Keeping this
       // previous value makes the fallback restriction observable to the UI
-      // even when yt-dlp also fails.
+      // even when the InnerTube video fallback also fails.
       // ignore: invalid_use_of_internal_member
       state = errorState.copyWithPrevious(AsyncData(fallbackState));
     }

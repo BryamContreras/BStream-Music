@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:ui' as ui;
 
 import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/theme/app_ui.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/core/widgets/marquee_text.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
 import 'package:bstream_music/features/music/domain/entities/download_result.dart';
+import 'package:bstream_music/features/music/domain/entities/device_audio_track.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
@@ -37,6 +40,9 @@ import 'package:bstream_music/platform_channels/android_app_activation_channel.d
 import 'package:bstream_music/platform_channels/android_external_audio_channel.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
+import 'package:bstream_music/services/local_media/device_audio_catalog.dart';
+import 'package:bstream_music/services/local_media/device_audio_filter.dart';
+import 'package:bstream_music/services/local_media/local_media_providers.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/recommendations/recommendations.dart';
 import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
@@ -341,6 +347,108 @@ void main() {
   );
 
   testWidgets(
+    'desktop mini player opens lyrics and returns intact with system back',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view
+        ..physicalSize = const Size(1280, 720)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              miniPlayerMode: MiniPlayerMode.standard,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.accent,
+            ),
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Ruta de letras',
+              artist: 'BStream Music',
+              trackId: 'desktop-lyrics-route',
+              position: Duration(seconds: 12),
+              duration: Duration(minutes: 3),
+            ),
+          ),
+          lyricsService: _FakeLyricsService(
+            const LyricsDocument(
+              provider: 'Test',
+              trackName: 'Ruta de letras',
+              artistName: 'BStream Music',
+              lines: [
+                LyricLine(timestamp: Duration.zero, text: 'Primera linea'),
+                LyricLine(
+                  timestamp: Duration(seconds: 20),
+                  text: 'Segunda linea',
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final miniPlayer = find.byType(MiniPlayer);
+      final retainedMiniPlayerElement = tester.element(miniPlayer);
+      await tester.tap(
+        find.byKey(const ValueKey('mini-player-lyrics-control')),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('lyrics-route-fade-transition')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('lyrics-route-player-scale-transition')),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(milliseconds: 420));
+      expect(
+        find.byKey(const ValueKey('lyrics-playback-companion')),
+        findsOneWidget,
+      );
+
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 180));
+      expect(
+        tester
+            .widget<FadeTransition>(
+              find.byKey(const ValueKey('lyrics-route-fade-transition')),
+            )
+            .opacity
+            .value,
+        inExclusiveRange(0, 1),
+      );
+      await tester.pump(const Duration(milliseconds: 220));
+
+      expect(
+        find.byKey(const ValueKey('lyrics-route-fade-transition')),
+        findsNothing,
+      );
+      expect(
+        identical(retainedMiniPlayerElement, tester.element(miniPlayer)),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+    skip: !io.Platform.isWindows,
+  );
+
+  testWidgets(
     'desktop player survives navigation layout resize without rebuilding playback',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
@@ -502,6 +610,192 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     },
     skip: !io.Platform.isWindows,
+  );
+
+  testWidgets(
+    'player style setting updates the active panel without losing its state',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(390, 844)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      final settingsController = _FakeSettingsController(
+        const SettingsState(
+          downloadDirectory: '/tmp/BStream-Music',
+          language: AppLanguage.spanish,
+          playerStyle: PlayerStyle.bstreamMusic,
+        ),
+      );
+      final playerService = _FakePlayerService(
+        snapshot: const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          title: 'Pista que conserva su estado',
+          artist: 'Artista persistente',
+          trackId: 'player-style-persistent-track',
+          position: Duration(seconds: 37),
+          duration: Duration(minutes: 3, seconds: 47),
+        ),
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: settingsController,
+          playerService: playerService,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tapAt(
+        tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final playerPanel = find.byType(PlayerPanel);
+      final playerView = find.byKey(const ValueKey('player-view'));
+      final retainedPlayerElement = tester.element(playerPanel);
+      final retainedPlayerState = tester.state(playerPanel);
+      final retainedPlayerViewElement = tester.element(playerView);
+
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).style,
+        PlayerStyle.bstreamMusic,
+      );
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).animatedArtworkEnabled,
+        isTrue,
+      );
+      expect(
+        find.byKey(const ValueKey('player-content-layout')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('apple-player-layout')), findsNothing);
+      expect(
+        tester
+            .widget<MarqueeText>(
+              find.byKey(const ValueKey('player-track-title')),
+            )
+            .text,
+        'Pista que conserva su estado',
+      );
+
+      await settingsController.setAnimatedArtworkEnabled(false);
+      await tester.pump();
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).animatedArtworkEnabled,
+        isFalse,
+      );
+      expect(identical(retainedPlayerState, tester.state(playerPanel)), isTrue);
+
+      await settingsController.setAnimatedArtworkEnabled(true);
+      await tester.pump();
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).animatedArtworkEnabled,
+        isTrue,
+      );
+
+      await settingsController.setPlayerStyle(PlayerStyle.appleMusic);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).style,
+        PlayerStyle.appleMusic,
+      );
+      expect(find.byKey(const ValueKey('apple-player-layout')), findsOneWidget);
+      expect(find.byKey(const ValueKey('player-content-layout')), findsNothing);
+      expect(
+        identical(retainedPlayerElement, tester.element(playerPanel)),
+        isTrue,
+      );
+      expect(identical(retainedPlayerState, tester.state(playerPanel)), isTrue);
+      expect(
+        identical(retainedPlayerViewElement, tester.element(playerView)),
+        isTrue,
+      );
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).trackTransitionsEnabled,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<MarqueeText>(
+              find.byKey(const ValueKey('player-track-title')),
+            )
+            .text,
+        'Pista que conserva su estado',
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('apple-player-position')))
+            .data,
+        '0:37',
+      );
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('mini-player-shell-opacity')),
+            )
+            .opacity,
+        0,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('apple-player-grabber')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('mini-player-shell-opacity')),
+            )
+            .opacity,
+        1,
+      );
+      expect(
+        identical(retainedPlayerElement, tester.element(playerPanel)),
+        isTrue,
+      );
+
+      await tester.tapAt(
+        tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      await settingsController.setPlayerStyle(PlayerStyle.bstreamMusic);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).style,
+        PlayerStyle.bstreamMusic,
+      );
+      expect(
+        find.byKey(const ValueKey('player-content-layout')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('apple-player-layout')), findsNothing);
+      expect(
+        identical(retainedPlayerElement, tester.element(playerPanel)),
+        isTrue,
+      );
+      expect(identical(retainedPlayerState, tester.state(playerPanel)), isTrue);
+      expect(
+        identical(retainedPlayerViewElement, tester.element(playerView)),
+        isTrue,
+      );
+      expect(playerService.stopCalls, 0);
+      expect(playerService.disposeCalls, 0);
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
   );
 
   testWidgets('android mini player is shorter without shrinking play target', (
@@ -1013,6 +1307,1445 @@ void main() {
   );
 
   testWidgets(
+    'mobile liquid glass keeps the large header tonal and localizes floating chrome',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      final navigation = find.byKey(const ValueKey('bottom-navigation-glass'));
+      final navigationContent = find.byKey(
+        const ValueKey('bottom-navigation-content'),
+      );
+      final detachedSearch = find.byKey(
+        const ValueKey('bottom-navigation-search-glass'),
+      );
+      final miniPlayerGlass = find.byKey(
+        const ValueKey('mini-player-liquid-glass-background'),
+      );
+      final navigationHover = find.byKey(
+        const ValueKey('bottom-navigation-hover-glass-0'),
+      );
+      final searchHover = find.byKey(
+        const ValueKey('bottom-navigation-hover-glass-1'),
+      );
+      final header = find.byKey(const ValueKey('home-tab-header-surface'));
+      final context = tester.element(header);
+      final headerMaterial = tester.widget<Material>(header);
+      final headerDecoration =
+          tester
+                  .widget<DecoratedBox>(
+                    find.descendant(
+                      of: header,
+                      matching: find.byKey(
+                        const ValueKey('tab-header-accent-gradient'),
+                      ),
+                    ),
+                  )
+                  .decoration
+              as BoxDecoration;
+      final storedMode = ProviderScope.containerOf(
+        context,
+      ).read(settingsControllerProvider).value?.surfaceBackgroundMode;
+      final surfaceTheme = Theme.of(context).extension<AppSurfaceTheme>();
+
+      expect(storedMode, SurfaceBackgroundMode.liquidGlass);
+      expect(surfaceTheme?.backgroundMode, SurfaceBackgroundMode.liquidGlass);
+      expect(tester.widget(navigation), isA<LiquidGlassSurface>());
+      expect(tester.widget(detachedSearch), isA<LiquidGlassSurface>());
+      expect(tester.widget(miniPlayerGlass), isA<LiquidGlassSurface>());
+      expect(
+        find.byKey(const ValueKey('tab-header-liquid-glass')),
+        findsNothing,
+      );
+      expect(
+        find.ancestor(of: header, matching: find.byType(LiquidGlassSurface)),
+        findsNothing,
+      );
+      expect(
+        find.ancestor(of: header, matching: find.byType(BackdropFilter)),
+        findsNothing,
+      );
+      expect(headerMaterial.color, Theme.of(context).colorScheme.surface);
+      expect(headerMaterial.color?.a, 1);
+      expect(headerMaterial.elevation, 0);
+      expect(headerDecoration.gradient, isNull);
+      expect(tester.widget(navigationHover), isA<LiquidGlassHoverTarget>());
+      expect(
+        tester.widget<LiquidGlassHoverTarget>(navigationHover).enabled,
+        isFalse,
+      );
+      expect(tester.widget(searchHover), isA<LiquidGlassHoverTarget>());
+      expect(
+        tester.widget<LiquidGlassHoverTarget>(searchHover).enabled,
+        isFalse,
+      );
+      final navigationGlass = tester.widget<LiquidGlassSurface>(navigation);
+      final searchGlass = tester.widget<LiquidGlassSurface>(detachedSearch);
+      final miniGlass = tester.widget<LiquidGlassSurface>(miniPlayerGlass);
+      expect(navigationGlass.backdropGroupKey, isNotNull);
+      expect(
+        identical(
+          navigationGlass.backdropGroupKey,
+          searchGlass.backdropGroupKey,
+        ),
+        isTrue,
+      );
+      expect(
+        identical(navigationGlass.backdropGroupKey, miniGlass.backdropGroupKey),
+        isFalse,
+      );
+      expect(miniGlass.backdropGroupKey, isNotNull);
+      Finder primaryDestination(int index) => find.descendant(
+        of: navigationContent,
+        matching: find.byKey(ValueKey('bottom-navigation-item-$index')),
+      );
+      expect(primaryDestination(0), findsOneWidget);
+      expect(primaryDestination(2), findsOneWidget);
+      expect(primaryDestination(3), findsOneWidget);
+      expect(primaryDestination(4), findsOneWidget);
+      expect(primaryDestination(1), findsNothing);
+      final selectionLens = find.byKey(
+        const ValueKey('bottom-navigation-selection-lens'),
+      );
+      expect(selectionLens, findsOneWidget);
+      expect(
+        tester.getCenter(selectionLens).dx,
+        closeTo(tester.getCenter(primaryDestination(0)).dx, 0.5),
+      );
+      for (final index in const [0, 2, 3, 4]) {
+        final icon = find.descendant(
+          of: primaryDestination(index),
+          matching: find.byType(Icon),
+        );
+        expect(
+          tester.widget<Icon>(icon).color,
+          Colors.black,
+          reason:
+              'Every expanded Liquid Glass icon must be pure black in light mode.',
+        );
+      }
+      expect(
+        find.descendant(
+          of: detachedSearch,
+          matching: find.byKey(const ValueKey('bottom-navigation-item-1')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Icon>(
+              find.descendant(of: detachedSearch, matching: find.byType(Icon)),
+            )
+            .color,
+        Colors.black,
+      );
+      expect(
+        tester.getCenter(primaryDestination(0)).dx,
+        lessThan(tester.getCenter(primaryDestination(2)).dx),
+      );
+      expect(
+        tester.getCenter(primaryDestination(2)).dx,
+        lessThan(tester.getCenter(primaryDestination(3)).dx),
+      );
+      expect(
+        tester.getCenter(primaryDestination(3)).dx,
+        lessThan(tester.getCenter(primaryDestination(4)).dx),
+      );
+      expect(
+        tester.getRect(navigation).right,
+        lessThan(tester.getRect(detachedSearch).left),
+      );
+      expect(tester.getSize(detachedSearch).aspectRatio, closeTo(1, 0.001));
+      expect(
+        (tester
+                    .widget<DecoratedBox>(
+                      find.byKey(
+                        const ValueKey('bottom-navigation-search-surface'),
+                      ),
+                    )
+                    .decoration
+                as BoxDecoration)
+            .shape,
+        BoxShape.circle,
+      );
+      final settingsShortcut = find.byKey(
+        const ValueKey('home-liquid-settings-button'),
+      );
+      final accountButton = find.byKey(
+        const ValueKey('home-youtube-music-account'),
+      );
+      expect(settingsShortcut, findsNothing);
+      expect(accountButton, findsOneWidget);
+      expect(
+        find.descendant(
+          of: navigation,
+          matching: find.byKey(LiquidGlassSurface.backdropKey),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: navigation,
+          matching: find.byKey(LiquidGlassSurface.shadowKey),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.getRect(homeScroll).bottom,
+        greaterThan(tester.getRect(navigation).bottom),
+        reason: 'Content must remain visible behind the floating glass window.',
+      );
+      final navigationSurface = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('bottom-navigation-surface')),
+      );
+      expect(
+        (navigationSurface.decoration as BoxDecoration).color!.a,
+        lessThan(0.5),
+        reason: 'Liquid Glass must not fall back to the opaque accent fill.',
+      );
+
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(tester.getCenter(navigationHover));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      expect(
+        find.descendant(
+          of: navigationHover,
+          matching: find.byKey(LiquidGlassHoverTarget.effectKey),
+        ),
+        findsNothing,
+      );
+      await mouse.moveTo(tester.getCenter(searchHover));
+      await tester.pump(const Duration(milliseconds: 220));
+      expect(
+        find.descendant(
+          of: searchHover,
+          matching: find.byKey(LiquidGlassHoverTarget.effectKey),
+        ),
+        findsNothing,
+        reason:
+            'The emulator mouse must not add a second rim to one Android '
+            'navigation control.',
+      );
+
+      await tester.tap(find.byKey(const ValueKey('bottom-navigation-item-1')));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        tester
+            .widget<AnimatedOpacity>(
+              find.byKey(
+                const ValueKey('bottom-navigation-selection-lens-opacity'),
+              ),
+            )
+            .opacity,
+        0,
+        reason:
+            'Selecting the detached Search orb must hide the lens inside the '
+            'main navigation pill.',
+      );
+
+      await tester.tap(primaryDestination(4));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byKey(const ValueKey('settings-view')), findsOneWidget);
+      expect(find.byType(SettingsPanel), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-item-4')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getCenter(selectionLens).dx,
+        closeTo(tester.getCenter(primaryDestination(4)).dx, 0.5),
+        reason: 'The same convex lens must travel to the selected slot.',
+      );
+      expect(
+        tester
+            .widget<AnimatedOpacity>(
+              find.byKey(
+                const ValueKey('bottom-navigation-selection-lens-opacity'),
+              ),
+            )
+            .opacity,
+        1,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'liquid glass compacts around the mini player and expands from Home or upward scroll',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      var semanticsDisposed = false;
+      void disposeSemantics() {
+        if (semanticsDisposed) return;
+        semantics.dispose();
+        semanticsDisposed = true;
+      }
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      addTearDown(() {
+        disposeSemantics();
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+            ),
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Mini player Liquid compacto',
+              artist: 'BStream Music',
+              trackId: 'liquid-collapsed-mini-player',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+          homeRecommendations: _scrollableHomeRecommendations(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      final rootScrollable = find
+          .descendant(of: homeScroll, matching: find.byType(Scrollable))
+          .first;
+      final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+      final navigationMaterialLayer = find.byKey(
+        const ValueKey('bottom-navigation-shell-opacity'),
+      );
+      final collapsedNavigation = find.byKey(
+        const ValueKey('bottom-navigation-liquid-collapsed'),
+      );
+      final collapsedHome = find.byKey(
+        const ValueKey('bottom-navigation-collapsed-home'),
+      );
+      final detachedSearch = find.byKey(
+        const ValueKey('bottom-navigation-search-glass'),
+      );
+      void expectNavigationMaterialUnfaded() => expect(
+        tester.widget(navigationMaterialLayer),
+        isA<KeyedSubtree>(),
+        reason: 'Liquid chrome must not be composited through Opacity.',
+      );
+      Finder expandedDestination(int index) => find.descendant(
+        of: find.byKey(const ValueKey('bottom-navigation-content')),
+        matching: find.byKey(ValueKey('bottom-navigation-item-$index')),
+      );
+
+      final initialMiniPlayerRect = tester.getRect(miniPlayer);
+      expectNavigationMaterialUnfaded();
+      expect(collapsedNavigation, findsNothing);
+      expect(expandedDestination(0), findsOneWidget);
+      expect(expandedDestination(2), findsOneWidget);
+      expect(expandedDestination(3), findsOneWidget);
+      expect(expandedDestination(4), findsOneWidget);
+
+      final scrollGesture = await tester.startGesture(
+        tester.getCenter(homeScroll),
+      );
+      await scrollGesture.moveBy(const Offset(0, -180));
+      await tester.pump();
+      for (final glassKey in const [
+        ValueKey('bottom-navigation-glass'),
+        ValueKey('mini-player-liquid-glass-background'),
+      ]) {
+        expect(
+          tester
+              .widget<LiquidGlassSurface>(find.byKey(glassKey))
+              .backdropMotion,
+          isTrue,
+          reason: 'Only geometry-changing glass animates its reflection.',
+        );
+      }
+      expect(
+        tester.widget<LiquidGlassSurface>(detachedSearch).backdropMotion,
+        isFalse,
+        reason: 'The fixed search lens does not enter a moving state.',
+      );
+      for (final glassKey in const [
+        ValueKey('bottom-navigation-glass'),
+        ValueKey('bottom-navigation-search-glass'),
+        ValueKey('mini-player-liquid-glass-background'),
+      ]) {
+        final glass = find.byKey(glassKey);
+        final filter = tester.widget<BackdropFilter>(
+          find.descendant(of: glass, matching: find.byType(BackdropFilter)),
+        );
+        expect(
+          filter.enabled,
+          isTrue,
+          reason: 'Blur and refraction stay live through every scroll frame.',
+        );
+      }
+      await scrollGesture.up();
+      await tester.pump();
+      expect(
+        tester.state<ScrollableState>(rootScrollable).position.pixels,
+        greaterThan(0),
+        reason: 'The gesture must scroll the vertical browsing root.',
+      );
+      await tester.pump(const Duration(milliseconds: 320));
+
+      for (final glassKey in const [
+        ValueKey('bottom-navigation-glass'),
+        ValueKey('bottom-navigation-search-glass'),
+        ValueKey('mini-player-liquid-glass-background'),
+      ]) {
+        expect(
+          tester
+              .widget<LiquidGlassSurface>(find.byKey(glassKey))
+              .backdropMotion,
+          isFalse,
+          reason: 'Full glass quality returns after the bounds settle.',
+        );
+      }
+
+      expectNavigationMaterialUnfaded();
+      expect(collapsedNavigation, findsOneWidget);
+      expect(collapsedHome, findsOneWidget);
+      expect(detachedSearch, findsOneWidget);
+      final collapsedHomeLens = find.descendant(
+        of: collapsedNavigation,
+        matching: find.byKey(
+          const ValueKey('bottom-navigation-selection-lens'),
+        ),
+      );
+      expect(
+        collapsedHomeLens,
+        findsOneWidget,
+        reason: 'Collapsed Home keeps the same convex selection lens.',
+      );
+      expect(
+        tester
+            .widget<AnimatedOpacity>(
+              find.descendant(
+                of: collapsedNavigation,
+                matching: find.byKey(
+                  const ValueKey('bottom-navigation-selection-lens-opacity'),
+                ),
+              ),
+            )
+            .opacity,
+        1,
+      );
+      expect(
+        tester.getCenter(collapsedHomeLens),
+        offsetMoreOrLessEquals(tester.getCenter(collapsedHome), epsilon: 0.1),
+      );
+      expect(
+        find.descendant(of: collapsedNavigation, matching: find.text('Inicio')),
+        findsNothing,
+        reason: 'Collapsed Liquid Home is an icon-only circular control.',
+      );
+      expect(
+        find.descendant(of: collapsedNavigation, matching: find.byType(Icon)),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Icon>(
+              find.descendant(
+                of: collapsedNavigation,
+                matching: find.byType(Icon),
+              ),
+            )
+            .color,
+        Colors.black,
+      );
+      expect(expandedDestination(2), findsNothing);
+      expect(expandedDestination(3), findsNothing);
+      expect(expandedDestination(4), findsNothing);
+
+      final homeRect = tester.getRect(collapsedHome);
+      final collapsedMiniPlayerRect = tester.getRect(miniPlayer);
+      final searchRect = tester.getRect(detachedSearch);
+      expect(homeRect.width, closeTo(searchRect.width, 0.1));
+      expect(homeRect.height, closeTo(searchRect.height, 0.1));
+      expect(homeRect.right, lessThan(collapsedMiniPlayerRect.left));
+      expect(collapsedMiniPlayerRect.right, lessThan(searchRect.left));
+      expect(collapsedMiniPlayerRect.center.dy, closeTo(homeRect.center.dy, 2));
+      expect(
+        collapsedMiniPlayerRect.center.dy,
+        closeTo(searchRect.center.dy, 2),
+      );
+      expect(
+        collapsedMiniPlayerRect.bottom - initialMiniPlayerRect.bottom,
+        closeTo(72, 0.5),
+        reason: 'The mini player must occupy the released navigation row.',
+      );
+
+      final homeSemantics = tester
+          .getSemantics(collapsedHome)
+          .getSemanticsData();
+      final searchSemantics = tester
+          .getSemantics(
+            find.byKey(const ValueKey('bottom-navigation-detached-search')),
+          )
+          .getSemanticsData();
+      expect(homeSemantics.label, 'Inicio');
+      expect(homeSemantics.flagsCollection.isButton, isTrue);
+      expect(homeSemantics.flagsCollection.isSelected.toBoolOrNull(), isTrue);
+      expect(homeSemantics.flagsCollection.isExpanded.toBoolOrNull(), isFalse);
+      expect(homeSemantics.hint, isNotEmpty);
+      expect(homeSemantics.hasAction(ui.SemanticsAction.tap), isTrue);
+      expect(searchSemantics.label, 'Buscar');
+      expect(searchSemantics.flagsCollection.isButton, isTrue);
+      expect(searchSemantics.hasAction(ui.SemanticsAction.tap), isTrue);
+
+      await tester.drag(homeScroll, const Offset(0, 80));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+
+      expect(collapsedNavigation, findsNothing);
+      expectNavigationMaterialUnfaded();
+      expect(
+        tester.getRect(miniPlayer),
+        rectMoreOrLessEquals(initialMiniPlayerRect, epsilon: 0.5),
+      );
+      expect(expandedDestination(0), findsOneWidget);
+      expect(expandedDestination(2), findsOneWidget);
+      expect(expandedDestination(3), findsOneWidget);
+      expect(expandedDestination(4), findsOneWidget);
+
+      await tester.drag(homeScroll, const Offset(0, -80));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+      expect(collapsedNavigation, findsOneWidget);
+
+      await tester.tap(collapsedHome);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+
+      expect(collapsedNavigation, findsNothing);
+      expectNavigationMaterialUnfaded();
+      expect(
+        tester.getRect(miniPlayer),
+        rectMoreOrLessEquals(initialMiniPlayerRect, epsilon: 0.5),
+      );
+      expect(expandedDestination(0), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      disposeSemantics();
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'narrow liquid compact chrome keeps controls tappable without overlap',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(320, 720)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.35;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding();
+        tester.platformDispatcher.clearTextScaleFactorTestValue();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+            ),
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Titulo largo para el mini reproductor compacto',
+              artist: 'Artista de nombre largo',
+              trackId: 'narrow-liquid-collapsed-mini-player',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+          homeRecommendations: _scrollableHomeRecommendations(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      await tester.drag(homeScroll, const Offset(0, -180));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+
+      final collapsedHome = find.byKey(
+        const ValueKey('bottom-navigation-collapsed-home'),
+      );
+      final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+      final detachedSearch = find.byKey(
+        const ValueKey('bottom-navigation-search-glass'),
+      );
+      final homeRect = tester.getRect(collapsedHome);
+      final miniRect = tester.getRect(miniPlayer);
+      final searchRect = tester.getRect(detachedSearch);
+
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-liquid-collapsed')),
+        findsOneWidget,
+      );
+      expect(homeRect.right, lessThan(miniRect.left));
+      expect(miniRect.right, lessThan(searchRect.left));
+      expect(homeRect.width, greaterThanOrEqualTo(48));
+      expect(homeRect.height, greaterThanOrEqualTo(48));
+      expect(searchRect.width, greaterThanOrEqualTo(48));
+      expect(searchRect.height, greaterThanOrEqualTo(48));
+      expect(miniRect.width, greaterThan(0));
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'liquid compact mini player keeps its visual hit target and opens player',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+            ),
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Mini player Liquid interactivo',
+              artist: 'BStream Music',
+              trackId: 'liquid-compact-hit-target',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+          homeRecommendations: _scrollableHomeRecommendations(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 1100));
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      await tester.drag(homeScroll, const Offset(0, -180));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+
+      final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-liquid-collapsed')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('home-view')), findsOneWidget);
+      expect(find.byKey(const ValueKey('search-view')), findsNothing);
+
+      await tester.tapAt(tester.getRect(miniPlayer).center);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 160));
+
+      final miniGlass = find.byKey(
+        const ValueKey('mini-player-liquid-glass-background'),
+      );
+      final navigationGlass = find.byKey(
+        const ValueKey('bottom-navigation-glass'),
+      );
+      expect(
+        tester.widget(find.byKey(const ValueKey('mini-player-shell-opacity'))),
+        isA<KeyedSubtree>(),
+      );
+      expect(
+        tester.widget(
+          find.byKey(const ValueKey('bottom-navigation-shell-opacity')),
+        ),
+        isA<KeyedSubtree>(),
+      );
+      for (final glass in [miniGlass, navigationGlass]) {
+        final backdrop = find.descendant(
+          of: glass,
+          matching: find.byKey(LiquidGlassSurface.backdropKey),
+        );
+        expect(backdrop, findsOneWidget);
+        expect(
+          find.ancestor(of: backdrop, matching: find.byType(Opacity)),
+          findsNothing,
+          reason: 'The live backdrop must not fade as a flat composited layer.',
+        );
+      }
+      final miniScale = tester.widget<Transform>(
+        find.byKey(const ValueKey('mini-player-shell-scale')),
+      );
+      expect(miniScale.transform.entry(0, 0), inExclusiveRange(0.94, 1));
+      expect(
+        miniScale.transform.entry(1, 1),
+        1,
+        reason: 'Live glass keeps its physical height during the transition.',
+      );
+      expect(
+        tester
+            .widget<FractionalTranslation>(
+              find.byKey(const ValueKey('mini-player-shell-translation')),
+            )
+            .translation
+            .dy,
+        inExclusiveRange(0, 1),
+      );
+
+      await tester.pump(const Duration(milliseconds: 340));
+
+      expect(find.byKey(const ValueKey('player-view')), findsOneWidget);
+      expect(find.byType(PlayerPanel), findsOneWidget);
+      expect(find.byKey(const ValueKey('search-view')), findsNothing);
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'collapsed Home expands without leaving Local and collapsed Search keeps the compact shell',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      var semanticsDisposed = false;
+      void disposeSemantics() {
+        if (semanticsDisposed) return;
+        semantics.dispose();
+        semanticsDisposed = true;
+      }
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      addTearDown(() {
+        disposeSemantics();
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding();
+      });
+
+      final deviceTracks = List<DeviceAudioTrack>.generate(
+        24,
+        (index) => DeviceAudioTrack(
+          id: 'liquid-local-$index',
+          uri: 'file:///music/liquid-local-$index.m4a',
+          title: 'Cancion local $index',
+          artist: 'BStream Music',
+          duration: const Duration(minutes: 3),
+          folderId: 'liquid-local-folder',
+          folderName: 'Musica',
+        ),
+      );
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+            ),
+          ),
+          deviceAudioCatalog: _StaticDeviceAudioCatalog(
+            DeviceAudioCatalogResult(
+              status: DeviceAudioPermissionStatus.granted,
+              tracks: deviceTracks,
+            ),
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Mini player conserva Local',
+              artist: 'BStream Music',
+              trackId: 'liquid-local-selection-mini-player',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+          homeRecommendations: _scrollableHomeRecommendations(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      Finder expandedDestination(int index) => find.descendant(
+        of: find.byKey(const ValueKey('bottom-navigation-content')),
+        matching: find.byKey(ValueKey('bottom-navigation-item-$index')),
+      );
+      final collapsedNavigation = find.byKey(
+        const ValueKey('bottom-navigation-liquid-collapsed'),
+      );
+      final collapsedHome = find.byKey(
+        const ValueKey('bottom-navigation-collapsed-home'),
+      );
+      double collapsedHomeLensOpacity() => tester
+          .widget<AnimatedOpacity>(
+            find.descendant(
+              of: collapsedNavigation,
+              matching: find.byKey(
+                const ValueKey('bottom-navigation-selection-lens-opacity'),
+              ),
+            ),
+          )
+          .opacity;
+
+      await tester.tap(expandedDestination(2));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.byKey(const ValueKey('local-all-songs-entry')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final localScroll = find.byKey(
+        const ValueKey('local-detail-scroll-device-local:all'),
+      );
+      expect(localScroll, findsOneWidget);
+      await tester.drag(localScroll, const Offset(0, -180));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+
+      expect(collapsedNavigation, findsOneWidget);
+      final collapsedHomeSemantics = tester
+          .getSemantics(collapsedHome)
+          .getSemanticsData();
+      expect(
+        collapsedHomeSemantics.flagsCollection.isSelected.toBoolOrNull(),
+        isFalse,
+        reason: 'Home is an expand control while Local remains selected.',
+      );
+      expect(
+        collapsedHomeLensOpacity(),
+        0,
+        reason: 'The convex Home lens must not imply selection while on Local.',
+      );
+      expect(
+        collapsedHomeSemantics.flagsCollection.isExpanded.toBoolOrNull(),
+        isFalse,
+      );
+      expect(
+        find
+            .byKey(const ValueKey('bottom-navigation-primary-destination-2'))
+            .hitTestable(),
+        findsNothing,
+      );
+
+      await tester.tap(collapsedHome);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+
+      expect(collapsedNavigation, findsNothing);
+      expect(localScroll.hitTestable(), findsOneWidget);
+      final expandedLocalSemantics = tester
+          .getSemantics(
+            find.byKey(
+              const ValueKey('bottom-navigation-primary-destination-2'),
+            ),
+          )
+          .getSemanticsData();
+      final expandedHomeSemantics = tester
+          .getSemantics(
+            find.byKey(
+              const ValueKey('bottom-navigation-primary-destination-0'),
+            ),
+          )
+          .getSemanticsData();
+      expect(
+        expandedLocalSemantics.flagsCollection.isSelected.toBoolOrNull(),
+        isTrue,
+      );
+      expect(
+        expandedHomeSemantics.flagsCollection.isSelected.toBoolOrNull(),
+        isFalse,
+      );
+
+      await tester.tap(expandedDestination(0));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        tester
+            .getSemantics(
+              find.byKey(
+                const ValueKey('bottom-navigation-primary-destination-0'),
+              ),
+            )
+            .getSemanticsData()
+            .flagsCollection
+            .isSelected
+            .toBoolOrNull(),
+        isTrue,
+      );
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      await tester.drag(homeScroll, const Offset(0, -180));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+      expect(collapsedNavigation, findsOneWidget);
+      expect(
+        collapsedHomeLensOpacity(),
+        1,
+        reason: 'Selected Home keeps its convex lens after compacting.',
+      );
+
+      final detachedSearch = find.byKey(
+        const ValueKey('bottom-navigation-detached-search'),
+      );
+      await tester.tap(detachedSearch);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(
+        collapsedNavigation,
+        findsOneWidget,
+        reason: 'Only Home or upward scrolling expands Liquid navigation.',
+      );
+      expect(
+        collapsedHomeLensOpacity(),
+        0,
+        reason: 'Home loses its selection lens when Search becomes active.',
+      );
+      expect(
+        find.byKey(const ValueKey('search-view')).hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .getSemantics(detachedSearch)
+            .getSemanticsData()
+            .flagsCollection
+            .isSelected
+            .toBoolOrNull(),
+        isTrue,
+      );
+
+      await tester.tap(collapsedHome);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 320));
+
+      expect(collapsedNavigation, findsNothing);
+      expect(
+        find.byKey(const ValueKey('search-view')).hitTestable(),
+        findsOneWidget,
+        reason: 'Collapsed Home expands the menu without navigating away.',
+      );
+      expect(
+        tester
+            .getSemantics(detachedSearch)
+            .getSemanticsData()
+            .flagsCollection
+            .isSelected
+            .toBoolOrNull(),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+      disposeSemantics();
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  for (final surfaceCase in const [
+    (label: 'transparent', mode: SurfaceBackgroundMode.transparent),
+    (label: 'accent', mode: SurfaceBackgroundMode.accent),
+  ]) {
+    testWidgets(
+      '${surfaceCase.label} bottom navigation follows user scroll and the mini player takes its space',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        tester.view
+          ..physicalSize = const Size(360, 800)
+          ..devicePixelRatio = 1
+          ..padding = const FakeViewPadding(bottom: 24);
+        addTearDown(() {
+          debugDefaultTargetPlatformOverride = null;
+          tester.view
+            ..resetPhysicalSize()
+            ..resetDevicePixelRatio()
+            ..resetPadding();
+        });
+
+        await tester.pumpWidget(
+          _testApp(
+            settingsController: _FakeSettingsController(
+              SettingsState(
+                downloadDirectory: '/tmp/BStream-Music',
+                language: AppLanguage.spanish,
+                surfaceBackgroundMode: surfaceCase.mode,
+              ),
+            ),
+            playerService: _FakePlayerService(
+              snapshot: const PlayerSnapshot(
+                status: PlayerStatus.playing,
+                title: 'Mini player desplazable',
+                artist: 'BStream Music',
+                trackId: 'scroll-following-mini-player',
+                duration: Duration(minutes: 3),
+              ),
+            ),
+            homeRecommendations: _scrollableHomeRecommendations(),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 800));
+        await tester.pump(const Duration(milliseconds: 300));
+
+        final homeScroll = find.descendant(
+          of: find.byKey(const ValueKey('home-view')),
+          matching: find.byType(CustomScrollView),
+        );
+        final rootScrollable = find
+            .descendant(of: homeScroll, matching: find.byType(Scrollable))
+            .first;
+        final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+        final navigationOpacity = find.byKey(
+          const ValueKey('bottom-navigation-shell-opacity'),
+        );
+        final liquidCollapsedNavigation = find.byKey(
+          const ValueKey('bottom-navigation-liquid-collapsed'),
+        );
+        double currentNavigationOpacity() =>
+            tester.widget<Opacity>(navigationOpacity).opacity;
+
+        expect(homeScroll, findsOneWidget);
+        expect(currentNavigationOpacity(), 1);
+        final initialMiniPlayerRect = tester.getRect(miniPlayer);
+
+        await tester.drag(homeScroll, const Offset(0, -180));
+        await tester.pump();
+        expect(
+          tester.state<ScrollableState>(rootScrollable).position.pixels,
+          greaterThan(0),
+          reason: 'The gesture must scroll the vertical root, not a shelf.',
+        );
+        await tester.pump(const Duration(milliseconds: 320));
+
+        expect(currentNavigationOpacity(), 0);
+        expect(liquidCollapsedNavigation, findsNothing);
+        final hiddenMiniPlayerRect = tester.getRect(miniPlayer);
+        expect(
+          hiddenMiniPlayerRect.bottom - initialMiniPlayerRect.bottom,
+          closeTo(72, 0.5),
+        );
+        expect(
+          hiddenMiniPlayerRect.bottom,
+          closeTo(800 - 24 - 8, 0.5),
+          reason: 'The mini player keeps its visual safe-area margin.',
+        );
+
+        await tester.drag(homeScroll, const Offset(0, 80));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 320));
+
+        expect(currentNavigationOpacity(), 1);
+        expect(
+          tester.getRect(miniPlayer),
+          rectMoreOrLessEquals(initialMiniPlayerRect, epsilon: 0.5),
+        );
+        expect(tester.takeException(), isNull);
+        debugDefaultTargetPlatformOverride = null;
+      },
+    );
+  }
+
+  testWidgets('navigation ignores short and programmatic scrolling', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1
+      ..padding = const FakeViewPadding(bottom: 24);
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio()
+        ..resetPadding();
+    });
+
+    await tester.pumpWidget(
+      _testApp(
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/BStream-Music',
+            language: AppLanguage.spanish,
+            surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+          ),
+        ),
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Mini player robusto',
+            artist: 'BStream Music',
+            trackId: 'robust-navigation-scroll',
+            duration: Duration(minutes: 3),
+          ),
+        ),
+        homeRecommendations: _scrollableHomeRecommendations(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final homeScroll = find.descendant(
+      of: find.byKey(const ValueKey('home-view')),
+      matching: find.byType(CustomScrollView),
+    );
+    final rootScrollable = find
+        .descendant(of: homeScroll, matching: find.byType(Scrollable))
+        .first;
+    ScrollPosition currentPosition() =>
+        tester.state<ScrollableState>(rootScrollable).position;
+    final navigationMaterialLayer = find.byKey(
+      const ValueKey('bottom-navigation-shell-opacity'),
+    );
+    final liquidCollapsedNavigation = find.byKey(
+      const ValueKey('bottom-navigation-liquid-collapsed'),
+    );
+    final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+    void expectNavigationMaterialUnfaded() => expect(
+      tester.widget(navigationMaterialLayer),
+      isA<KeyedSubtree>(),
+      reason: 'Liquid chrome must stay outside an Opacity layer.',
+    );
+    final initialMiniPlayerRect = tester.getRect(miniPlayer);
+
+    await tester.drag(homeScroll, const Offset(0, -20));
+    await tester.pump(const Duration(milliseconds: 320));
+
+    expect(currentPosition().pixels, greaterThan(0));
+    expect(currentPosition().pixels, lessThan(24));
+    expectNavigationMaterialUnfaded();
+    expect(liquidCollapsedNavigation, findsNothing);
+    expect(
+      tester.getRect(miniPlayer),
+      rectMoreOrLessEquals(initialMiniPlayerRect, epsilon: 0.1),
+    );
+
+    currentPosition().jumpTo(140);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 320));
+
+    expect(currentPosition().pixels, closeTo(140, 0.1));
+    expectNavigationMaterialUnfaded();
+    expect(liquidCollapsedNavigation, findsNothing);
+    expect(
+      tester.getRect(miniPlayer),
+      rectMoreOrLessEquals(initialMiniPlayerRect, epsilon: 0.1),
+    );
+
+    final programmaticAnimation = currentPosition().animateTo(
+      280,
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.linear,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expectNavigationMaterialUnfaded();
+    await tester.pump(const Duration(milliseconds: 70));
+    await programmaticAnimation;
+
+    expect(currentPosition().pixels, closeTo(280, 0.1));
+    expectNavigationMaterialUnfaded();
+    expect(liquidCollapsedNavigation, findsNothing);
+    expect(
+      tester.getRect(miniPlayer),
+      rectMoreOrLessEquals(initialMiniPlayerRect, epsilon: 0.1),
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+    'reduced motion scroll chrome settles immediately and keyboard reveals it',
+    (tester) async {
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1
+        ..padding = const FakeViewPadding(bottom: 24);
+      addTearDown(() {
+        tester.platformDispatcher.clearAccessibilityFeaturesTestValue();
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio()
+          ..resetPadding()
+          ..resetViewInsets();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+            ),
+          ),
+          playerService: _FakePlayerService(
+            snapshot: const PlayerSnapshot(
+              status: PlayerStatus.playing,
+              title: 'Mini player sin animacion',
+              artist: 'BStream Music',
+              trackId: 'reduced-motion-scroll-chrome',
+              duration: Duration(minutes: 3),
+            ),
+          ),
+          homeRecommendations: _scrollableHomeRecommendations(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final homeScroll = find.descendant(
+        of: find.byKey(const ValueKey('home-view')),
+        matching: find.byType(CustomScrollView),
+      );
+      final miniPlayer = find.byKey(const ValueKey('mini-player-surface'));
+      final navigationMaterialLayer = find.byKey(
+        const ValueKey('bottom-navigation-shell-opacity'),
+      );
+      final collapsedNavigation = find.byKey(
+        const ValueKey('bottom-navigation-liquid-collapsed'),
+      );
+      void expectNavigationMaterialUnfaded() => expect(
+        tester.widget(navigationMaterialLayer),
+        isA<KeyedSubtree>(),
+        reason: 'Reduced motion must not add Opacity around Liquid Glass.',
+      );
+      final initialMiniPlayerRect = tester.getRect(miniPlayer);
+
+      expect(
+        tester
+            .widget<TweenAnimationBuilder<double>>(
+              find.byKey(const ValueKey('mini-player-navigation-offset')),
+            )
+            .duration,
+        Duration.zero,
+      );
+
+      await tester.drag(homeScroll, const Offset(0, -180));
+      await tester.pump();
+
+      expectNavigationMaterialUnfaded();
+      expect(collapsedNavigation, findsOneWidget);
+      final collapsedMiniPlayerRect = tester.getRect(miniPlayer);
+      expect(
+        collapsedMiniPlayerRect.bottom - initialMiniPlayerRect.bottom,
+        closeTo(72, 0.1),
+      );
+      expect(
+        collapsedMiniPlayerRect.width,
+        lessThan(initialMiniPlayerRect.width),
+      );
+
+      await tester.drag(homeScroll, const Offset(0, 80));
+      await tester.pump();
+
+      expectNavigationMaterialUnfaded();
+      expect(collapsedNavigation, findsNothing);
+      final expandedMiniPlayerRect = tester.getRect(miniPlayer);
+      expect(
+        expandedMiniPlayerRect.left,
+        closeTo(initialMiniPlayerRect.left, 0.1),
+      );
+      expect(
+        expandedMiniPlayerRect.right,
+        closeTo(initialMiniPlayerRect.right, 0.1),
+      );
+      expect(
+        tester.getRect(miniPlayer),
+        rectMoreOrLessEquals(initialMiniPlayerRect, epsilon: 0.1),
+      );
+
+      await tester.drag(homeScroll, const Offset(0, -80));
+      await tester.pump();
+      expectNavigationMaterialUnfaded();
+      expect(collapsedNavigation, findsOneWidget);
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      await tester.pump();
+
+      expectNavigationMaterialUnfaded();
+      expect(collapsedNavigation, findsNothing);
+      final keyboardMiniPlayerRect = tester.getRect(miniPlayer);
+      expect(
+        keyboardMiniPlayerRect.left,
+        closeTo(initialMiniPlayerRect.left, 0.1),
+      );
+      expect(
+        keyboardMiniPlayerRect.right,
+        closeTo(initialMiniPlayerRect.right, 0.1),
+      );
+      expect(
+        tester
+            .widget<Transform>(
+              find.byKey(const ValueKey('mini-player-shell-position')),
+            )
+            .transform
+            .getTranslation()
+            .y,
+        closeTo(0, 0.001),
+      );
+      expect(
+        tester
+            .getBottomLeft(find.byKey(const ValueKey('mini-player-shell-clip')))
+            .dy,
+        closeTo(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey('bottom-navigation-shell-clip')),
+              )
+              .dy,
+          0.1,
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets('desktop liquid glass localizes hover to one side tab', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view
+      ..physicalSize = const Size(1280, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      _testApp(
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/BStream-Music',
+            language: AppLanguage.spanish,
+            surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final navigation = find.byKey(
+      const ValueKey('side-navigation-liquid-glass'),
+    );
+    final hoverTarget = find.byKey(
+      const ValueKey('side-navigation-hover-glass-0'),
+    );
+    expect(navigation, findsOneWidget);
+    expect(hoverTarget, findsOneWidget);
+    expect(tester.widget(navigation), isA<LiquidGlassSurface>());
+    expect(tester.widget(hoverTarget), isA<LiquidGlassHoverTarget>());
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(hoverTarget));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    final paint = tester.widget<CustomPaint>(
+      find.descendant(
+        of: hoverTarget,
+        matching: find.byKey(LiquidGlassHoverTarget.effectKey),
+      ),
+    );
+    final hoverPill = paint.painter! as LiquidGlassHoverPainter;
+    expect(hoverPill.isHovered, isTrue);
+    expect(hoverPill.pointerKind, PointerDeviceKind.mouse);
+    expect(hoverPill.visibility, closeTo(1, 0.001));
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
     'android keyboard keeps mini player attached to bottom navigation',
     (tester) async {
       final navigationInset = keyboardNavigationInsets.currentValue!;
@@ -1144,6 +2877,22 @@ void main() {
         tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
       );
       await tester.pump();
+      expect(
+        tester
+            .widget<AnimatedSlide>(
+              find.byKey(const ValueKey('player-view-slide-transition')),
+            )
+            .offset,
+        const Offset(0, 0.045),
+      );
+      expect(
+        tester
+            .widget<AnimatedScale>(
+              find.byKey(const ValueKey('player-view-scale-transition')),
+            )
+            .scale,
+        0.965,
+      );
       await tester.pump();
 
       final player = find.byKey(const ValueKey('player-view'));
@@ -1157,7 +2906,12 @@ void main() {
         findsOneWidget,
       );
       final retainedPlayerElement = tester.element(find.byType(PlayerPanel));
-
+      expect(
+        tester
+            .widget<PlayerPanel>(find.byType(PlayerPanel))
+            .trackTransitionsEnabled,
+        isTrue,
+      );
       await tester.pump(const Duration(milliseconds: 160));
 
       expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
@@ -1167,6 +2921,27 @@ void main() {
       );
       expect(slotOpacity(home), inExclusiveRange(0, 1));
       expect(slotOpacity(player), inExclusiveRange(0, 1));
+      final miniTranslation = tester.widget<FractionalTranslation>(
+        find.byKey(const ValueKey('mini-player-shell-translation')),
+      );
+      final miniScale = tester.widget<Transform>(
+        find.byKey(const ValueKey('mini-player-shell-scale')),
+      );
+      expect(miniTranslation.translation.dx, 0);
+      expect(miniTranslation.translation.dy, inExclusiveRange(0, 0.36));
+      expect(miniScale.transform.entry(0, 0), inExclusiveRange(0.94, 1));
+      final playerScaleTransform = tester.widget<Transform>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('player-view-scale-transition')),
+              matching: find.byType(Transform),
+            )
+            .first,
+      );
+      expect(
+        playerScaleTransform.transform.entry(0, 0),
+        inExclusiveRange(0.965, 1),
+      );
       expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
       expect(
         tester.getSize(bottomClip).height,
@@ -1178,7 +2953,7 @@ void main() {
       );
       expect(tester.takeException(), isNull);
 
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 280));
 
       expect(shellOpacity('mini-player-shell-opacity'), 0);
       expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
@@ -1211,7 +2986,7 @@ void main() {
         closeTo(tester.getTopLeft(bottomClip).dy, 0.1),
       );
 
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 280));
 
       expect(shellOpacity('mini-player-shell-opacity'), 1);
       expect(shellOpacity('bottom-navigation-shell-opacity'), 1);
@@ -1223,6 +2998,12 @@ void main() {
       expect(slotOpacity(home), 1);
       expect(slotOpacity(player), 0);
       expect(find.byKey(const ValueKey('player-view')), findsOneWidget);
+      expect(
+        tester
+            .widget<PlayerPanel>(find.byType(PlayerPanel))
+            .trackTransitionsEnabled,
+        isFalse,
+      );
       expect(
         identical(
           retainedPlayerElement,
@@ -1553,6 +3334,9 @@ void main() {
     await tester.tapAt(
       tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
     );
+    await tester.pump();
+    // Commit the implicit player transition target before advancing its clock.
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
     final error = find.byKey(const ValueKey('player-error-message'));
@@ -1699,7 +3483,6 @@ void main() {
           .duration,
       Duration.zero,
     );
-
     await tester.tap(find.byKey(const ValueKey('bottom-navigation-item-1')));
     await tester.pump();
     expect(
@@ -1717,6 +3500,14 @@ void main() {
     );
     await tester.pump();
     await tester.pump();
+    expect(
+      tester
+          .widget<AnimatedScale>(
+            find.byKey(const ValueKey('player-view-scale-transition')),
+          )
+          .duration,
+      Duration.zero,
+    );
     expect(
       tester
           .widget<Opacity>(
@@ -1781,9 +3572,20 @@ void main() {
     });
     final repository = _homeCardsRepository();
 
-    await tester.pumpWidget(_testApp(libraryRepository: repository));
+    await tester.pumpWidget(
+      _testApp(
+        libraryRepository: repository,
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/BStream-Music',
+            language: AppLanguage.spanish,
+            surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+          ),
+        ),
+      ),
+    );
     await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
 
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
@@ -1795,13 +3597,25 @@ void main() {
     );
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     final recentCard = find.byKey(const ValueKey('home-recent-card'));
+    final recentContext = tester.element(recentCard);
+    expect(
+      ProviderScope.containerOf(
+        recentContext,
+      ).read(settingsControllerProvider).value?.surfaceBackgroundMode,
+      SurfaceBackgroundMode.liquidGlass,
+    );
+    expect(
+      Theme.of(recentContext).extension<AppSurfaceTheme>()?.backgroundMode,
+      SurfaceBackgroundMode.liquidGlass,
+    );
     final recentMaterial = find
         .descendant(of: recentCard, matching: find.byType(Material))
         .first;
     expect(
       tester.widget<Material>(recentMaterial).color,
-      AppColors.homeCardSurfaceFor(tester.element(recentCard)),
+      AppColors.homeCardSurfaceFor(recentContext, solidInLiquidGlass: true),
     );
+    expect(tester.widget<Material>(recentMaterial).color?.a, 1);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
@@ -3474,6 +5288,20 @@ void main() {
       surfaceMode: SurfaceBackgroundMode.transparent,
       borderAlpha: 0.34,
     ),
+    (
+      label: 'light liquid glass',
+      themeMode: AppThemeMode.light,
+      brightness: Brightness.light,
+      surfaceMode: SurfaceBackgroundMode.liquidGlass,
+      borderAlpha: 0.12,
+    ),
+    (
+      label: 'dark liquid glass',
+      themeMode: AppThemeMode.dark,
+      brightness: Brightness.dark,
+      surfaceMode: SurfaceBackgroundMode.liquidGlass,
+      borderAlpha: 0.2,
+    ),
   ]) {
     testWidgets('${popupCase.label} popup follows the surface palette', (
       tester,
@@ -3528,9 +5356,7 @@ void main() {
       expect(shape.side.color.a, closeTo(popupCase.borderAlpha, 0.001));
       expect(
         popupTheme.color!.a,
-        popupCase.surfaceMode == SurfaceBackgroundMode.transparent
-            ? lessThan(0.75)
-            : greaterThan(0.9),
+        popupCase.surfaceMode.usesBackdrop ? lessThan(0.75) : greaterThan(0.9),
       );
       expect(
         dialogTheme.backgroundColor,
@@ -3902,22 +5728,25 @@ void main() {
       find.byKey(const ValueKey('settings-about-whats-new-dialog')),
       findsOneWidget,
     );
-    expect(find.textContaining('Playlists bidireccionales'), findsOneWidget);
+    expect(
+      find.textContaining('Compatibilidad nativa con iOS 13'),
+      findsOneWidget,
+    );
     expect(
       find.text(
-        'Personaliza las superficies de la app y el mini reproductor con estilos, colores de acento y transparencias.',
+        'La reproducci\u00f3n y las descargas de YouTube ahora usan el cliente InnerTube integrado en Dart, sin yt-dlp, youtube_explode_dart ni ejecutables externos.',
       ),
       findsOneWidget,
     );
     expect(
       find.text(
-        'Convierte letras de otros alfabetos a caracteres latinos para que sean m\u00e1s f\u00e1ciles de seguir.',
+        'Liquid Glass renovado con refracci\u00f3n adaptada al color, bordes continuos, hover localizado y transiciones m\u00e1s suaves.',
       ),
       findsOneWidget,
     );
     expect(
       find.text(
-        'Explora y reproduce la m\u00fasica guardada en tu dispositivo, con filtros para ocultar audios no deseados.',
+        'Elige entre los reproductores BStream Music y Apple Music Style, con portada animada y dise\u00f1os m\u00f3viles adaptables.',
       ),
       findsOneWidget,
     );
@@ -4295,8 +6124,15 @@ void main() {
           ),
           libraryRepositoryProvider.overrideWithValue(_FakeLibraryRepository()),
         ],
-        child: const MaterialApp(
-          home: Scaffold(
+        child: MaterialApp(
+          theme: ThemeData(
+            extensions: const [
+              AppSurfaceTheme(
+                backgroundMode: SurfaceBackgroundMode.liquidGlass,
+              ),
+            ],
+          ),
+          home: const Scaffold(
             body: Center(
               child: SizedBox(
                 width: 600,
@@ -4314,6 +6150,7 @@ void main() {
     );
     var decoration =
         tester.widget<AnimatedContainer>(surface).decoration! as BoxDecoration;
+    expect(decoration.color?.a, 1);
     expect((decoration.border! as Border).top.width, 1);
 
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
@@ -4947,10 +6784,18 @@ void main() {
         ..clearLiveImages();
       for (var attempt = 0; attempt < 5 && directory.existsSync(); attempt++) {
         try {
-          directory.deleteSync(recursive: true);
-        } on io.FileSystemException {
+          await directory.delete(recursive: true);
+        } on io.FileSystemException catch (error) {
           if (attempt == 4) {
-            rethrow;
+            final nativeImageLock =
+                io.Platform.isWindows && error.osError?.errorCode == 32;
+            if (!nativeImageLock) {
+              rethrow;
+            }
+            // flutter_tester can retain the displayed FileImage handle until
+            // its process exits. The fixture lives in the OS temp directory;
+            // keep cleanup strict for every other failure and platform.
+            return;
           }
           await Future<void>.delayed(const Duration(milliseconds: 40));
         }
@@ -5175,8 +7020,10 @@ void main() {
     await tester.tapAt(
       tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
     );
-    await tester.pump(const Duration(milliseconds: 500));
     await tester.pump();
+    // Commit the implicit player transition target before advancing its clock.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
     expect(tester.takeException(), isNull);
 
     expect(find.text('En reproducción'), findsOneWidget);
@@ -5518,6 +7365,7 @@ void main() {
     await tester.ensureVisible(lyricsControl);
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.widget<TextButton>(lyricsButton).onPressed, isNotNull);
+    final retainedPlayerElement = tester.element(find.byType(PlayerPanel));
     await tester.tap(lyricsButton);
     // The synchronized lyrics page intentionally keeps an animation/ticker
     // alive while playback advances, so pumpAndSettle would never be a valid
@@ -5541,6 +7389,43 @@ void main() {
       ),
       findsOneWidget,
     );
+    await tester.pump(const Duration(milliseconds: 420));
+
+    final lyricsContext = tester.element(
+      find.byKey(const ValueKey('synced-lyrics-scroll')),
+    );
+    Navigator.of(lyricsContext).pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 180));
+    expect(
+      tester
+          .widget<FadeTransition>(
+            find.byKey(const ValueKey('lyrics-route-fade-transition')),
+          )
+          .opacity
+          .value,
+      inExclusiveRange(0, 1),
+    );
+    expect(
+      tester
+          .widget<ScaleTransition>(
+            find.byKey(const ValueKey('lyrics-route-player-scale-transition')),
+          )
+          .scale
+          .value,
+      inExclusiveRange(0.985, 1),
+    );
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsNothing);
+    expect(find.byKey(const ValueKey('player-lyrics-control')), findsOneWidget);
+    expect(
+      identical(
+        retainedPlayerElement,
+        tester.element(find.byType(PlayerPanel)),
+      ),
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('player title heart toggles the current local track favorite', (
@@ -6309,6 +8194,26 @@ _FakeLibraryRepository _homeCardsRepository({String? thumbnailUrl}) {
   return repository;
 }
 
+List<HomeRecommendationSection> _scrollableHomeRecommendations() {
+  return List<HomeRecommendationSection>.generate(
+    8,
+    (sectionIndex) => HomeRecommendationSection(
+      title: 'Seccion desplazable $sectionIndex',
+      tracks: List<TrackInfo>.generate(
+        3,
+        (trackIndex) => TrackInfo(
+          id: 'scroll-track-$sectionIndex-$trackIndex',
+          title: 'Cancion $trackIndex',
+          artist: 'Artista $sectionIndex',
+          url:
+              'https://www.youtube.com/watch?v=scroll-$sectionIndex-$trackIndex',
+          thumbnailUrl: '',
+        ),
+      ),
+    ),
+  );
+}
+
 Widget _settingsTestApp({
   required _FakeSettingsController settingsController,
   required DownloadDirectoryPicker directoryPicker,
@@ -6336,6 +8241,7 @@ Widget _testApp({
   SettingsController? settingsController,
   PlayerService? playerService,
   PlayerController? playerController,
+  DeviceAudioCatalog? deviceAudioCatalog,
   LibraryRepository? libraryRepository,
   LyricsService? lyricsService,
   ArtworkProgressColorService? artworkProgressColorService,
@@ -6376,6 +8282,8 @@ Widget _testApp({
         androidAppActivationsProvider.overrideWithValue(androidAppActivations),
       if (settingsController != null)
         settingsControllerProvider.overrideWith(() => settingsController),
+      if (deviceAudioCatalog != null)
+        deviceAudioCatalogProvider.overrideWithValue(deviceAudioCatalog),
       downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
       desktopMediaSessionFactoryProvider.overrideWithValue(() => null),
       playerServiceProvider.overrideWithValue(
@@ -7441,6 +9349,30 @@ CatalogPlaylist _legacyCatalogPlaylist(
     );
   }
   return CatalogPlaylist(playlist: playlist, entries: entries);
+}
+
+class _StaticDeviceAudioCatalog implements DeviceAudioCatalog {
+  const _StaticDeviceAudioCatalog(this.result);
+
+  final DeviceAudioCatalogResult result;
+
+  @override
+  Future<DeviceAudioCatalogResult> load({
+    DeviceAudioFilterOptions options = const DeviceAudioFilterOptions(),
+    String? bstreamRoot,
+  }) async => result;
+
+  @override
+  Future<DeviceAudioCatalogResult> refresh({
+    DeviceAudioFilterOptions options = const DeviceAudioFilterOptions(),
+    String? bstreamRoot,
+  }) async => result;
+
+  @override
+  Future<DeviceAudioCatalogResult> requestPermissionAndLoad({
+    DeviceAudioFilterOptions options = const DeviceAudioFilterOptions(),
+    String? bstreamRoot,
+  }) async => result;
 }
 
 class _FakeLibraryRepository implements LibraryRepository {

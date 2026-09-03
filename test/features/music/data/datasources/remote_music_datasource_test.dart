@@ -154,7 +154,7 @@ void main() {
       expect(downloader.searchQueries, isEmpty);
     });
 
-    test('an InnerTube category failure falls back once to Videos', () async {
+    test('a catalog category failure falls back once to Videos', () async {
       const fallback = TrackInfo(
         id: 'fallback',
         title: 'YouTube result',
@@ -181,7 +181,7 @@ void main() {
 
         expect(downloader.searchQueries, ['Query']);
         expect(page.category, SearchCategory.videos);
-        expect(page.backend, SearchBackend.ytDlp);
+        expect(page.backend, SearchBackend.innerTubeVideoFallback);
         expect(page.tracks, const [fallback]);
         expect(page.albums, isEmpty);
         expect(page.artists, isEmpty);
@@ -190,7 +190,7 @@ void main() {
     });
 
     test(
-      'direct YouTube references bypass InnerTube and expose Videos',
+      'direct YouTube references bypass catalog search and expose Videos',
       () async {
         final catalog = _FakeYouTubeMusicSearch(
           albumError: StateError('must not be called'),
@@ -218,7 +218,7 @@ void main() {
             SearchCategory.albums,
           );
           expect(page.category, SearchCategory.videos);
-          expect(page.backend, SearchBackend.ytDlp);
+          expect(page.backend, SearchBackend.innerTubeVideoFallback);
           expect(page.primaryError, isNull);
         }
 
@@ -231,7 +231,7 @@ void main() {
     );
 
     test(
-      'eleven-letter words are searched through InnerTube instead of yt-dlp',
+      'eleven-letter words use catalog search instead of the video fallback',
       () async {
         final catalog = _FakeYouTubeMusicSearch(
           results: [
@@ -294,7 +294,7 @@ void main() {
       );
     });
 
-    test('maps YouTube Music songs without invoking yt-dlp search', () async {
+    test('maps catalog songs without the video fallback', () async {
       final catalog = _FakeYouTubeMusicSearch(
         results: [
           InnerTubeSong(
@@ -396,7 +396,7 @@ void main() {
     });
 
     test(
-      'does not hide programming errors behind the yt-dlp fallback',
+      'does not hide programming errors behind the InnerTube video fallback',
       () async {
         final failure = StateError('parser invariant was violated');
         final catalog = _FakeYouTubeMusicSearch(error: failure);
@@ -523,7 +523,7 @@ void main() {
       expect(downloader.searchQueries, isEmpty);
     });
 
-    test('sends a direct YouTube URL straight to yt-dlp search', () async {
+    test('direct URL uses the InnerTube video fallback', () async {
       final catalog = _FakeYouTubeMusicSearch(
         results: [
           InnerTubeSong(
@@ -558,7 +558,7 @@ void main() {
       expect(results, const [fallback]);
     });
 
-    test('sends a bare YouTube video ID straight to yt-dlp search', () async {
+    test('sends a bare video ID to the InnerTube video fallback', () async {
       final catalog = _FakeYouTubeMusicSearch(results: const []);
       const fallback = TrackInfo(
         id: 'H9NJenpBV2I',

@@ -15,6 +15,7 @@ class TrackInfo {
     this.streamSource,
     this.streamFormatId,
     this.streamCodec,
+    this.streamClientProfileKey,
     this.extractor,
     this.album,
     this.albumBrowseId,
@@ -41,6 +42,9 @@ class TrackInfo {
   final String? streamSource;
   final String? streamFormatId;
   final String? streamCodec;
+
+  /// Exact InnerTube client profile that produced [streamUrl].
+  final String? streamClientProfileKey;
   final String? extractor;
   final String? album;
   final String? albumBrowseId;
@@ -70,6 +74,7 @@ class TrackInfo {
     String? streamSource,
     String? streamFormatId,
     String? streamCodec,
+    String? streamClientProfileKey,
     String? extractor,
     String? album,
     String? albumBrowseId,
@@ -93,6 +98,8 @@ class TrackInfo {
       streamSource: streamSource ?? this.streamSource,
       streamFormatId: streamFormatId ?? this.streamFormatId,
       streamCodec: streamCodec ?? this.streamCodec,
+      streamClientProfileKey:
+          streamClientProfileKey ?? this.streamClientProfileKey,
       extractor: extractor ?? this.extractor,
       album: album ?? this.album,
       albumBrowseId: albumBrowseId ?? this.albumBrowseId,

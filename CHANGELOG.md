@@ -1,5 +1,100 @@
 # Changelog
 
+## 1.2.6+126 — 2026-09-02
+
+### Changed
+
+- Added the native iOS 13+ runner and completed the mobile platform routing for
+  playback, background audio/Now Playing, secure embedded account login,
+  headless WebView challenges, downloads, TikTok LIVE, deep links, local
+  Media Library songs and artwork, and document-picker backup/CSV export. iOS
+  now rebuilds sandbox-relative media paths after container changes, uses the
+  bounded mobile stream cache, and is validated in CI with focused tests plus
+  unsigned simulator and Release device builds. CI packages the device build
+  as `BStream-Music-<version>-iOS-unsigned.ipa` for use as input to external
+  signing or sideloading tools; the artifact is not directly installable until
+  such a tool signs or re-signs it. Existing Android, Windows, Linux, and macOS
+  platform paths remain unchanged.
+- Added an optional cross-platform Liquid Glass appearance for application
+  surfaces and the mini player, including neutral transparency, continuous
+  superellipse clipping, uniformly backdrop-adaptive edge refraction, and
+  hover-only droplets implemented entirely in Flutter. Song and Settings
+  cards retain their regular Material treatment, and tab headers remain
+  edge-to-edge instead of becoming rounded glass cards. Light mode now adds a
+  milky-white veil and an exterior-only shadow so controls remain legible
+  without giving translucent light surfaces a gray cast. Its navigation icons
+  and mini-player metadata use pure black for reliable contrast. Dark glass
+  now uses a lighter neutral wash and hover droplet so more backdrop chroma
+  remains visible without changing its adaptive rim. Edge-to-edge tab headers
+  now use one flat glass wash without the capsule shadow, Fresnel rim, or
+  duplicate Material overlays that previously appeared as stacked rectangles.
+  Accent and Transparent optics remain unchanged.
+- In Accent and Transparent modes, bottom navigation now hides smoothly during
+  downward browsing and returns on upward scrolling while the mini player
+  occupies the released space. Liquid Glass instead compacts into an animated
+  Home, mini-player, and detached Search row; Home or upward scrolling expands
+  the full Home, Local, Library, and Settings menu again. The compact mini
+  player now keeps its full translated hit-test area, so taps always open the
+  player instead of reaching the browsing content underneath.
+- The compact Liquid Glass Home control is now icon-only, matching the detached
+  Search control while retaining its full accessible label and tap target.
+- Appearance settings now offer BStream Music and Apple Music Style full-player
+  layouts. The Apple layout uses the artwork-blurred background, compact square
+  cover, inline favorite/menu actions, remaining-time seek bar, Apple-like
+  transport and volume rows, and the supported Lyrics, shuffle, repeat, and
+  queue actions. Its cover flexes so standard phones from 320x568 upward and
+  mobile landscape keep the complete player in one non-scrolling viewport;
+  only extreme reduced-height or 300-percent accessibility layouts retain a
+  scroll fallback. The Apple layout uses uniform 7 px progress and volume
+  tracks without circular indicators, while BStream Music retains its animated
+  wave seek bar and compact volume thumb. Metadata actions align with the
+  artist row, transport controls use the reference proportions, and time
+  labels follow the track insets. Share now lives inside the overflow menu in
+  both layouts, while BStream Music also retains its direct shortcut beside
+  Favorites. The Apple trigger keeps a 48 px touch target without applying that
+  constraint to the popup route. Mobile Apple spacing now places the cover
+  closer to the grabber and grows it responsively while preserving safe-area
+  clearance, the non-scrolling short-phone layout, and landscape adaptation.
+- Added an Animated artwork option under Appearance > Player, enabled by
+  default for both new and existing installations. The large player cover uses
+  independent closed loops for a 28-second zoom, 31-second 7 x 4 px pan, and
+  35-second 3D drift capped at +/-0.3 degrees X, +/-0.4 degrees Y, and +/-0.12
+  degrees Z with 0.00085 perspective. A viewport-aware crop guard prevents
+  moving edges from becoming visible. Pausing playback freezes all motion at
+  its current phase and resuming continues without a jump. It remains static
+  for reduced motion, hidden player tabs, app backgrounding, missing artwork,
+  or when the preference is disabled.
+- Mobile Lyrics now morphs smoothly between its portrait header and landscape
+  playback companion after the first stable rotation frame, while preserving
+  the same lyrics scroll state. Its companion uses the same uniform linear
+  Apple seek track without a thumb in every player style. Reduced-motion mode
+  switches immediately, and the active Android lyric now keeps a clean white
+  foreground with a mobile-compensated layered outer glow that remains as visible as desktop,
+  without the former foreground shader or an additional render layer.
+- Renamed the visible appearance labels to Liquid Glass Style and Flotante;
+  their persisted `liquidGlass` and `capsule` values remain unchanged.
+- Removed every resolver/runtime dependency on `youtube_explode_dart`, yt-dlp,
+  Deno, QuickJS, and Android's youtubedl runtime. Catalog access, playback, and
+  downloads now use an in-process modular Dart InnerTube architecture on every
+  platform, with one shared resolver for playback and downloads.
+- Added maintained client profiles with correctness-first routing, deep ranged
+  media validation, health cooldowns, latency tracking, and automatic fallback.
+- Added independent EJS `s`/`n` challenge solving and Web BotGuard PO-token
+  support through an isolated headless system WebView, with no custom Kotlin
+  extractor or bundled resolver executable.
+- Added page-specific dynamic player bootstrap, three independently validated
+  tokenless profiles, an EJS-backed embedded fallback, anti-bot visitor/player
+  PO escalation, fail-closed integrity tokens, alternate coherent attestation,
+  and capability-level EJS/WebPO circuit breaking.
+- Added raw/tokenless and full resolved client matrices. Raw gated clients are
+  now reported as skipped instead of failed, and every success requires a deep
+  or end-of-file CDN range probe. Strict resolved runs isolate state and enforce
+  success thresholds per profile with separate cold/warm latency reporting.
+- Downloads now prefer audio-only InnerTube formats, retain a validated muxed
+  `.mp4` only as the last resort, and use a resumable `dart:io` transfer with
+  strong representation validators, bounded retries, safe partial files, and
+  atomic promotion.
+
 ## 1.2.5+125 — updated 2026-08-22
 
 ### Added

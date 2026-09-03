@@ -19,7 +19,7 @@ enum MiniPlayerMode {
 }
 
 MiniPlayerMode defaultMiniPlayerModeForPlatform(TargetPlatform platform) =>
-    platform == TargetPlatform.android
+    platform == TargetPlatform.android || platform == TargetPlatform.iOS
     ? MiniPlayerMode.capsule
     : MiniPlayerMode.standard;
 

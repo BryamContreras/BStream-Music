@@ -431,9 +431,8 @@ class LocalTrackDownloadHelper {
     }
 
     try {
-      // Metadata enrichment is sourced from the downloader (yt-dlp / Android
-      // youtubedl-android). The audio stream resolver is reserved for
-      // playback streams and only carries transport data.
+      // Metadata enrichment comes from the InnerTube downloader. The audio
+      // stream resolver remains reserved for playback transport data.
       final resolved = await _ref.read(getPlaybackInfoProvider).call(track.url);
       return _mergeTrackInfo(track, resolved);
     } catch (_) {
@@ -710,8 +709,8 @@ class LocalTrackDownloadHelper {
         await file.delete();
       }
     } catch (_) {
-      // Validation after yt-dlp remains authoritative if a locked stale file
-      // cannot be removed before the retry.
+      // Validation after the resumable transfer remains authoritative if a
+      // locked stale file cannot be removed before the retry.
     }
   }
 
@@ -726,8 +725,8 @@ class LocalTrackDownloadHelper {
     final sameDirectory = AppPlatform.isWindows
         ? expectedDirectory.toLowerCase() == actualDirectory.toLowerCase()
         : expectedDirectory == actualDirectory;
-    // yt-dlp may replace the surrounding brackets when restrictFileNames is
-    // enabled, but it preserves the hexadecimal digest itself.
+    // A filesystem-safe download name may change the surrounding brackets,
+    // but it preserves the hexadecimal digest itself.
     final expectedToken = identityDigest.substring(0, 12);
     final valid =
         sameDirectory &&

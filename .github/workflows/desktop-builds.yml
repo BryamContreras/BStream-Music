@@ -20,16 +20,6 @@ concurrency:
 
 env:
   FLUTTER_VERSION: "3.44.0"
-  YT_DLP_VERSION: "2026.07.04"
-  YT_DLP_ANDROID_SHA256: "495be29ff4d9d4e9be7eabdfef225221e5d5282e77f2f505abc6dca80349f3fd"
-  YT_DLP_WINDOWS_SHA256: "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8"
-  YT_DLP_LINUX_X64_SHA256: "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae"
-  YT_DLP_MACOS_SHA256: "498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b"
-  DENO_VERSION: "2.9.4"
-  DENO_WINDOWS_X64_SHA256: "68ed08b05c56cf887e9aa509947dc3f468f7e12f47a13e5c1abd51d46d1453ef"
-  DENO_LINUX_X64_SHA256: "c24f955d9fbfe0ea5ae2b501c8e71ae76e31e4c9782390a54a284b3364fda725"
-  DENO_MACOS_X64_SHA256: "f757df6d3991e37601c69fad56c22b37c4ea77b5dcfad3636a642c2ba4c9b19f"
-  DENO_MACOS_ARM64_SHA256: "6d17647fdbf9c587a581dba205054c4ccf732dae0a196cc1e9b44c07589db412"
 
 jobs:
   quality:
@@ -80,11 +70,38 @@ jobs:
       - name: Run tests
         run: flutter test --coverage
 
-      - name: Test Android yt-dlp update policy
+      - name: Run Android unit tests
         working-directory: android
         run: |
           gradle --version
           gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Enforce self-contained media resolver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Eiq '^[[:space:]]*youtube_explode(_dart)?[[:space:]]*:' pubspec.yaml pubspec.lock; then
+            echo "youtube_explode must not be present in the dependency graph." >&2
+            exit 1
+          fi
+
+          legacy_tools="$(
+            find android windows/tools linux/tools macos/tools \
+              -type f \
+              \( \
+                -iname 'yt-dlp*' -o \
+                -iname 'yt_dlp*' -o \
+                -iname 'ytdlp*' -o \
+                -iname 'deno' -o \
+                -iname 'deno.exe' \
+              \) \
+              -print 2>/dev/null || true
+          )"
+          if [[ -n "$legacy_tools" ]]; then
+            echo "External resolver executables must not be vendored:" >&2
+            printf '%s\n' "$legacy_tools" >&2
+            exit 1
+          fi
 
       - name: Upload coverage report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -93,6 +110,103 @@ jobs:
           path: coverage/lcov.info
           if-no-files-found: error
           retention-days: 14
+          archive: false
+
+  ios:
+    name: iOS unsigned IPA
+    needs: [metadata, quality]
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      APP_VERSION: ${{ needs.metadata.outputs.app_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analyze source on macOS
+        run: flutter analyze
+
+      - name: Run iOS support tests
+        run: >-
+          flutter test
+          test/ios_support_contract_test.dart
+          test/platform_channels/ios_file_export_channel_test.dart
+          test/platform_channels/ios_local_media_channel_test.dart
+          test/services/local_media/ios_device_audio_catalog_test.dart
+          test/services/media_session/desktop_media_session_factory_test.dart
+          --reporter compact
+
+      - name: Build unsigned iOS simulator app
+        run: flutter build ios --simulator --no-codesign
+
+      - name: Build unsigned iOS device app
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned iOS IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/build/ios/iphoneos/Runner.app"
+          stage="$RUNNER_TEMP/bstream-ios-ipa"
+          ipa="$PWD/dist/BStream-Music-$APP_VERSION-iOS-unsigned.ipa"
+
+          test -d "$app"
+          test -f "$app/Info.plist"
+          test -x "$app/Runner"
+          test ! -e "$app/embedded.mobileprovision"
+          test ! -d "$app/_CodeSignature"
+          /usr/bin/lipo "$app/Runner" -verify_arch arm64
+
+          built_version="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleShortVersionString' \
+              "$app/Info.plist"
+          )"
+          test "$built_version" = "$APP_VERSION"
+          if /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1; then
+            echo "Runner.app was expected to be unsigned, but it has a valid signature." >&2
+            exit 1
+          fi
+
+          rm -rf "$stage"
+          mkdir -p "$stage/Payload" "$PWD/dist"
+          /usr/bin/ditto "$app" "$stage/Payload/Runner.app"
+          (
+            cd "$stage"
+            /usr/bin/zip -qry -X "$ipa" Payload
+          )
+
+          /usr/bin/unzip -tqq "$ipa"
+          entries="$(/usr/bin/unzip -Z1 "$ipa")"
+          grep -Fxq "Payload/Runner.app/Info.plist" <<<"$entries"
+          grep -Fxq "Payload/Runner.app/Runner" <<<"$entries"
+          if grep -Eq '^__MACOSX/|^Payload/Runner\.app/_CodeSignature/' <<<"$entries"; then
+            echo "The unsigned IPA contains signing data or AppleDouble metadata." >&2
+            exit 1
+          fi
+          if grep -Fxq "Payload/Runner.app/embedded.mobileprovision" <<<"$entries"; then
+            echo "The unsigned IPA unexpectedly contains a provisioning profile." >&2
+            exit 1
+          fi
+
+      - name: Upload unsigned iOS IPA
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-iOS-unsigned
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-iOS-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
           archive: false
 
   metadata:
@@ -217,9 +331,6 @@ jobs:
             abi="$2"
             entries="$(unzip -Z1 "$apk")"
             printf '%s\n' "$entries" | grep -Fx "lib/$abi/libflutter.so"
-            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libpython.so"
-            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libpython.zip.so"
-            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libqjs.so"
             if printf '%s\n' "$entries" |
               awk -F/ -v expected="$abi" '$1 == "lib" && $2 != expected { print; found=1 } END { exit !found }'
             then
@@ -228,28 +339,41 @@ jobs:
             fi
           }
 
-          verify_ytdlp() {
+          verify_no_obsolete_resolver() {
             apk="$1"
-            verify_dir="$(mktemp -d)"
-            resource_path="$(
-              "$aapt2" dump resources "$apk" |
-                sed -n '/raw\/ytdlp/{n;s/.*(file) \([^ ]*\).*/\1/p;q;}'
+            entries="$(unzip -Z1 "$apk")"
+            obsolete_native="$(
+              printf '%s\n' "$entries" |
+                grep -Ei '^lib/[^/]+/(libpython[^/]*\.so|libqjs\.so)$' || true
             )"
-            test -n "$resource_path"
-            unzip -q -j "$apk" "$resource_path" -d "$verify_dir"
-            extracted="$verify_dir/$(basename "$resource_path")"
-            actual_hash="$(sha256sum "$extracted" | cut -d ' ' -f 1)"
-            test "$actual_hash" = "$YT_DLP_ANDROID_SHA256"
-            actual_version="$(python3 "$extracted" --version)"
-            test "$actual_version" = "$YT_DLP_VERSION"
-            rm -r "$verify_dir"
+            if [[ -n "$obsolete_native" ]]; then
+              echo "APK contains an obsolete native resolver runtime: $apk" >&2
+              printf '%s\n' "$obsolete_native" >&2
+              exit 1
+            fi
+
+            obsolete_archive="$(
+              printf '%s\n' "$entries" |
+                grep -Ei '(^|/)(yt-dlp|yt_dlp|ytdlp)(\.[^/]*)?$' || true
+            )"
+            if [[ -n "$obsolete_archive" ]]; then
+              echo "APK contains an obsolete yt-dlp artifact: $apk" >&2
+              printf '%s\n' "$obsolete_archive" >&2
+              exit 1
+            fi
+
+            resources="$("$aapt2" dump resources "$apk")"
+            if grep -Eiq 'raw/(yt_dlp|ytdlp)([^[:alnum:]_]|$)' <<<"$resources"; then
+              echo "APK resource table still contains raw yt-dlp: $apk" >&2
+              exit 1
+            fi
           }
           verify_abi "$arm32" "armeabi-v7a"
           verify_abi "$arm64" "arm64-v8a"
           verify_abi "$x64" "x86_64"
-          verify_ytdlp "$arm32"
-          verify_ytdlp "$arm64"
-          verify_ytdlp "$x64"
+          verify_no_obsolete_resolver "$arm32"
+          verify_no_obsolete_resolver "$arm64"
+          verify_no_obsolete_resolver "$x64"
 
           mkdir -p dist
           cp "$arm32" "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk"
@@ -258,7 +382,7 @@ jobs:
 
       - name: Enforce Android artifact size budgets
         run: |
-          # About 10% above the measured 1.2.5 artifacts, including IPADIC.
+          # Keep release artifacts within the expected envelope, including IPADIC.
           dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk" 49
           dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk" 51
           dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 51
@@ -324,49 +448,6 @@ jobs:
           flutter clean
           flutter pub get --enforce-lockfile
 
-      - name: Prepare yt-dlp and Deno
-        shell: pwsh
-        run: |
-          $tools = Join-Path $PWD "windows/tools"
-          New-Item -ItemType Directory -Force -Path $tools | Out-Null
-
-          Invoke-WebRequest `
-            -Uri "https://github.com/yt-dlp/yt-dlp/releases/download/$env:YT_DLP_VERSION/yt-dlp.exe" `
-            -OutFile (Join-Path $tools "yt-dlp.exe")
-
-          $ytDlp = Join-Path $tools "yt-dlp.exe"
-          $ytDlpHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ytDlp).Hash.ToLowerInvariant()
-          if ($ytDlpHash -ne $env:YT_DLP_WINDOWS_SHA256) {
-            throw "yt-dlp.exe checksum mismatch: $ytDlpHash"
-          }
-
-          $denoArchive = Join-Path $env:RUNNER_TEMP "deno-windows-x64.zip"
-          Invoke-WebRequest `
-            -Uri "https://github.com/denoland/deno/releases/download/v$env:DENO_VERSION/deno-x86_64-pc-windows-msvc.zip" `
-            -OutFile $denoArchive
-
-          $denoHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $denoArchive).Hash.ToLowerInvariant()
-          if ($denoHash -ne $env:DENO_WINDOWS_X64_SHA256) {
-            throw "Deno archive checksum mismatch: $denoHash"
-          }
-
-          Expand-Archive -LiteralPath $denoArchive -DestinationPath $tools -Force
-          $deno = Join-Path $tools "deno.exe"
-          if (!(Test-Path -LiteralPath $deno)) {
-            throw "Deno executable was not extracted."
-          }
-
-          & $deno --version
-          if ($LASTEXITCODE -ne 0) { throw "Deno could not start: $LASTEXITCODE" }
-          & $deno eval 'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
-          if ($LASTEXITCODE -ne 0) { throw "Deno could not execute JavaScript: $LASTEXITCODE" }
-          & (Join-Path $tools "yt-dlp.exe") `
-            --ignore-config `
-            --js-runtimes "deno:$deno" `
-            --js-runtimes node `
-            --version
-          if ($LASTEXITCODE -ne 0) { throw "yt-dlp rejected Deno: $LASTEXITCODE" }
-
       - name: Build Windows release
         run: flutter build windows --release
 
@@ -404,8 +485,6 @@ jobs:
           $required = @(
             (Join-Path $bundle "bstream_music.exe"),
             (Join-Path $bundle "THIRD_PARTY_NOTICES.md"),
-            (Join-Path $bundle "tools/yt-dlp.exe"),
-            (Join-Path $bundle "tools/deno.exe"),
             (Join-Path $bundle "msvcp140.dll"),
             (Join-Path $bundle "vcruntime140.dll"),
             (Join-Path $bundle "vcruntime140_1.dll")
@@ -417,6 +496,8 @@ jobs:
           }
 
           $obsolete = @(
+            (Join-Path $bundle "tools/yt-dlp.exe"),
+            (Join-Path $bundle "tools/deno.exe"),
             (Join-Path $bundle "tools/tiktok-live-bridge"),
             (Join-Path $bundle "tools/tiktok_live_bridge"),
             (Join-Path $bundle "tools/tiktok_live_bridge.exe"),
@@ -426,21 +507,9 @@ jobs:
           )
           foreach ($path in $obsolete) {
             if (Test-Path -LiteralPath $path) {
-              throw "Obsolete TikTok LIVE Python artifact remains in bundle: $path"
+              throw "Obsolete external runtime remains in bundle: $path"
             }
           }
-
-          $bundledDeno = Join-Path $bundle "tools/deno.exe"
-          & $bundledDeno --version
-          if ($LASTEXITCODE -ne 0) { throw "Bundled Deno could not start: $LASTEXITCODE" }
-          & $bundledDeno eval 'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
-          if ($LASTEXITCODE -ne 0) { throw "Bundled Deno could not execute JavaScript: $LASTEXITCODE" }
-          & (Join-Path $bundle "tools/yt-dlp.exe") `
-            --ignore-config `
-            --js-runtimes "deno:$bundledDeno" `
-            --js-runtimes node `
-            --version
-          if ($LASTEXITCODE -ne 0) { throw "Bundled yt-dlp rejected Deno: $LASTEXITCODE" }
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -481,8 +550,6 @@ jobs:
           $required = @(
             (Join-Path $installDir "bstream_music.exe"),
             (Join-Path $installDir "THIRD_PARTY_NOTICES.md"),
-            (Join-Path $installDir "tools/yt-dlp.exe"),
-            (Join-Path $installDir "tools/deno.exe"),
             (Join-Path $installDir "msvcp140.dll"),
             (Join-Path $installDir "vcruntime140.dll"),
             (Join-Path $installDir "vcruntime140_1.dll")
@@ -494,6 +561,8 @@ jobs:
           }
 
           $obsolete = @(
+            (Join-Path $installDir "tools/yt-dlp.exe"),
+            (Join-Path $installDir "tools/deno.exe"),
             (Join-Path $installDir "tools/tiktok-live-bridge"),
             (Join-Path $installDir "tools/tiktok_live_bridge"),
             (Join-Path $installDir "tools/tiktok_live_bridge.exe"),
@@ -503,21 +572,9 @@ jobs:
           )
           foreach ($path in $obsolete) {
             if (Test-Path -LiteralPath $path) {
-              throw "Obsolete TikTok LIVE Python artifact remains installed: $path"
+              throw "Obsolete external runtime remains installed: $path"
             }
           }
-
-          $installedDeno = Join-Path $installDir "tools/deno.exe"
-          & $installedDeno --version
-          if ($LASTEXITCODE -ne 0) { throw "Installed Deno could not start: $LASTEXITCODE" }
-          & $installedDeno eval 'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
-          if ($LASTEXITCODE -ne 0) { throw "Installed Deno could not execute JavaScript: $LASTEXITCODE" }
-          & (Join-Path $installDir "tools/yt-dlp.exe") `
-            --ignore-config `
-            --js-runtimes "deno:$installedDeno" `
-            --js-runtimes node `
-            --version
-          if ($LASTEXITCODE -ne 0) { throw "Installed yt-dlp rejected Deno: $LASTEXITCODE" }
 
           $uninstaller = Join-Path $installDir "unins000.exe"
           $uninstall = Start-Process `
@@ -575,40 +632,6 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get --enforce-lockfile
 
-      - name: Prepare yt-dlp and Deno
-        shell: bash
-        run: |
-          set -euo pipefail
-          tools="$PWD/linux/tools"
-          mkdir -p "$tools"
-
-          curl --fail --location --retry 3 \
-            "https://github.com/yt-dlp/yt-dlp/releases/download/$YT_DLP_VERSION/yt-dlp_linux" \
-            --output "$tools/yt-dlp"
-
-          echo "$YT_DLP_LINUX_X64_SHA256  $tools/yt-dlp" \
-            | sha256sum --check -
-
-          deno_archive="$RUNNER_TEMP/deno-linux-x64.zip"
-          curl --fail --location --retry 3 \
-            "https://github.com/denoland/deno/releases/download/v$DENO_VERSION/deno-x86_64-unknown-linux-gnu.zip" \
-            --output "$deno_archive"
-
-          echo "$DENO_LINUX_X64_SHA256  $deno_archive" \
-            | sha256sum --check -
-
-          unzip -o "$deno_archive" -d "$tools"
-          chmod 755 "$tools/yt-dlp" "$tools/deno"
-
-          "$tools/deno" --version
-          "$tools/deno" eval \
-            'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
-          "$tools/yt-dlp" \
-            --ignore-config \
-            --js-runtimes "deno:$tools/deno" \
-            --js-runtimes node \
-            --version
-
       - name: Build Linux release
         run: flutter build linux --release
 
@@ -618,16 +641,8 @@ jobs:
           set -euo pipefail
           bundle="$PWD/build/linux/x64/release/bundle"
           test -x "$bundle/bstream_music"
-          test -x "$bundle/tools/yt-dlp"
-          test -x "$bundle/tools/deno"
-          "$bundle/tools/deno" --version
-          "$bundle/tools/deno" eval \
-            'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
-          "$bundle/tools/yt-dlp" \
-            --ignore-config \
-            --js-runtimes "deno:$bundle/tools/deno" \
-            --js-runtimes node \
-            --version
+          test ! -e "$bundle/tools/yt-dlp"
+          test ! -e "$bundle/tools/deno"
           desktop-file-validate packaging/linux/com.bstream.bstream_music.desktop
 
           missing=0
@@ -718,54 +733,6 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get --enforce-lockfile
 
-      - name: Prepare yt-dlp and Deno
-        shell: bash
-        run: |
-          set -euo pipefail
-          tools="$PWD/macos/tools"
-          mkdir -p "$tools"
-
-          curl --fail --location --retry 3 \
-            "https://github.com/yt-dlp/yt-dlp/releases/download/$YT_DLP_VERSION/yt-dlp_macos" \
-            --output "$tools/yt-dlp"
-
-          echo "$YT_DLP_MACOS_SHA256  $tools/yt-dlp" \
-            | shasum -a 256 --check
-
-          case "${{ matrix.host_arch }}" in
-            arm64)
-              deno_target="aarch64-apple-darwin"
-              deno_sha256="$DENO_MACOS_ARM64_SHA256"
-              ;;
-            x86_64)
-              deno_target="x86_64-apple-darwin"
-              deno_sha256="$DENO_MACOS_X64_SHA256"
-              ;;
-            *)
-              echo "Unsupported Deno architecture: ${{ matrix.host_arch }}" >&2
-              exit 1
-              ;;
-          esac
-
-          deno_archive="$RUNNER_TEMP/deno-$deno_target.zip"
-          curl --fail --location --retry 3 \
-            "https://github.com/denoland/deno/releases/download/v$DENO_VERSION/deno-$deno_target.zip" \
-            --output "$deno_archive"
-
-          echo "$deno_sha256  $deno_archive" | shasum -a 256 --check
-          /usr/bin/ditto -x -k "$deno_archive" "$tools"
-          chmod 755 "$tools/yt-dlp" "$tools/deno"
-
-          codesign --verify --strict --verbose=2 "$tools/yt-dlp"
-          "$tools/deno" --version
-          "$tools/deno" eval \
-            'let total = 0; for (let index = 0; index < 100000; index++) total += index; if (total !== 4999950000) Deno.exit(1);'
-          "$tools/yt-dlp" \
-            --ignore-config \
-            --js-runtimes "deno:$tools/deno" \
-            --js-runtimes node \
-            --version
-
       - name: Build macOS release
         run: flutter build macos --release
 
@@ -785,19 +752,8 @@ jobs:
             "$app" \
             "${{ matrix.host_arch }}" \
             "$APP_VERSION"
-
-      - name: Smoke test bundled macOS tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
-          bundled_yt_dlp="$app/Contents/Resources/tools/yt-dlp"
-
-          cmp "$PWD/macos/tools/yt-dlp" "$bundled_yt_dlp"
-          bash macos/verify_bundled_tools.sh \
-            "$app" \
-            "${{ matrix.host_arch }}" \
-            "$YT_DLP_MACOS_SHA256"
+          test ! -e "$app/Contents/Resources/tools/yt-dlp"
+          test ! -e "$app/Contents/Resources/tools/deno"
 
       - name: Smoke test macOS launch
         shell: bash
@@ -829,14 +785,9 @@ jobs:
           set -euo pipefail
           app="$PWD/build/macos/Build/Products/Release/bstream_music.app"
           executable="$app/Contents/MacOS/bstream_music"
-          bundled_tools="$app/Contents/Resources/tools"
           test -x "$executable"
-          test -x "$bundled_tools/yt-dlp"
-          test -x "$bundled_tools/deno"
 
           lipo "$executable" -verify_arch "${{ matrix.host_arch }}"
-          lipo "$bundled_tools/yt-dlp" -verify_arch "${{ matrix.host_arch }}"
-          lipo "$bundled_tools/deno" -verify_arch "${{ matrix.host_arch }}"
 
           payload="$RUNNER_TEMP/bstream-pkg-root"
           staged_app="$payload/Applications/BStream Music.app"
@@ -844,10 +795,6 @@ jobs:
           mkdir -p "$payload/Applications"
           ditto "$app" "$staged_app"
           codesign --verify --deep --strict "$staged_app"
-          bash macos/verify_bundled_tools.sh \
-            "$staged_app" \
-            "${{ matrix.host_arch }}" \
-            "$YT_DLP_MACOS_SHA256"
 
           mkdir -p dist
           package="dist/BStream-Music-$APP_VERSION-macOS-${{ matrix.arch }}.pkg"
@@ -863,12 +810,10 @@ jobs:
           grep -Fq \
             "BStream Music.app/Contents/MacOS/bstream_music" \
             "$payload_files"
-          grep -Fq \
-            "BStream Music.app/Contents/Resources/tools/yt-dlp" \
-            "$payload_files"
-          grep -Fq \
-            "BStream Music.app/Contents/Resources/tools/deno" \
-            "$payload_files"
+          if grep -Eiq '/tools/(yt-dlp|deno)$' "$payload_files"; then
+            echo "Obsolete resolver runtime found in macOS package payload." >&2
+            exit 1
+          fi
 
           expanded_package="$RUNNER_TEMP/bstream-expanded-pkg"
           rm -rf "$expanded_package"
@@ -878,10 +823,7 @@ jobs:
               -print -quit
           )"
           test -n "$packaged_app"
-          bash macos/verify_bundled_tools.sh \
-            "$packaged_app" \
-            "${{ matrix.host_arch }}" \
-            "$YT_DLP_MACOS_SHA256"
+          codesign --verify --deep --strict "$packaged_app"
 
       - name: Enforce macOS installer size budget
         run: >-

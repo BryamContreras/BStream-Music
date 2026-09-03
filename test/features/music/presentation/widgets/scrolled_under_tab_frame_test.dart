@@ -1,5 +1,6 @@
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/presentation/widgets/scrolled_under_tab_frame.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -118,6 +119,145 @@ void main() {
     final itemRect = tester.getRect(find.byKey(const ValueKey('test-item-6')));
     expect(itemRect.top, lessThan(headerRect.bottom));
     expect(itemRect.bottom, greaterThan(headerRect.top));
+  });
+
+  testWidgets('liquid glass keeps large pinned chrome tonal and solid', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      const _FrameHarness(
+        showPinnedFooter: true,
+        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+      ),
+    );
+
+    final headerSurface = find.byKey(const ValueKey('test-tab-header-surface'));
+    final footerSurface = find.byKey(
+      const ValueKey('test-pinned-footer-surface'),
+    );
+    final headerMaterial = tester.widget<Material>(headerSurface);
+    final footerMaterial = tester.widget<Material>(footerSurface);
+    final tonalSurface = Theme.of(
+      tester.element(headerSurface),
+    ).colorScheme.surface;
+
+    expect(
+      find.byKey(const ValueKey('tab-combined-liquid-glass')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('tab-header-liquid-glass')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('tab-pinned-footer-liquid-glass')),
+      findsNothing,
+    );
+    expect(find.byType(LiquidGlassSurface), findsNothing);
+    expect(find.byType(BackdropFilter), findsNothing);
+    expect(headerMaterial.color, tonalSurface);
+    expect(footerMaterial.color, tonalSurface);
+    expect(headerMaterial.color?.a, 1);
+    expect(footerMaterial.color?.a, 1);
+    expect(headerMaterial.elevation, 0);
+    expect(footerMaterial.elevation, 0);
+    expect(headerMaterial.surfaceTintColor, Colors.transparent);
+    expect(footerMaterial.surfaceTintColor, Colors.transparent);
+    expect(tester.getSize(headerSurface).height, 64);
+    expect(tester.getSize(footerSurface).height, 54);
+    expect(
+      (tester
+                  .widget<DecoratedBox>(
+                    find.byKey(const ValueKey('tab-header-accent-gradient')),
+                  )
+                  .decoration
+              as BoxDecoration)
+          .gradient,
+      isNull,
+      reason: 'Large liquid-mode chrome uses one solid tonal fill.',
+    );
+    expect(
+      (tester
+                  .widget<DecoratedBox>(
+                    find.byKey(
+                      const ValueKey('tab-pinned-footer-accent-gradient'),
+                    ),
+                  )
+                  .decoration
+              as BoxDecoration)
+          .gradient,
+      isNull,
+      reason: 'The pinned footer shares the same solid tonal treatment.',
+    );
+
+    final initialHeaderRect = tester.getRect(headerSurface);
+    final initialFooterRect = tester.getRect(footerSurface);
+    expect(initialFooterRect.top, initialHeaderRect.bottom);
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('test-item-0'))).dy,
+      closeTo(initialFooterRect.bottom, 0.01),
+    );
+
+    await tester.drag(
+      find.byKey(const ValueKey('test-tab-scroll')),
+      const Offset(0, -300),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<Material>(headerSurface).elevation, 0);
+    expect(tester.widget<Material>(footerSurface).elevation, 0);
+    final headerRect = tester.getRect(headerSurface);
+    final footerRect = tester.getRect(footerSurface);
+    final itemRect = tester.getRect(find.byKey(const ValueKey('test-item-6')));
+    expect(headerRect, initialHeaderRect);
+    expect(footerRect, initialFooterRect);
+    expect(footerRect.top, headerRect.bottom);
+    expect(itemRect.top, lessThan(footerRect.bottom));
+    expect(itemRect.bottom, greaterThan(headerRect.top));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('liquid glass keeps a lone large pinned header tonal', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const _FrameHarness(
+        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+      ),
+    );
+
+    final headerSurface = find.byKey(const ValueKey('test-tab-header-surface'));
+    final headerMaterial = tester.widget<Material>(headerSurface);
+    final expectedSurface = Theme.of(
+      tester.element(headerSurface),
+    ).colorScheme.surface;
+
+    expect(find.byKey(const ValueKey('tab-header-liquid-glass')), findsNothing);
+    expect(find.byType(LiquidGlassSurface), findsNothing);
+    expect(find.byType(BackdropFilter), findsNothing);
+    expect(headerMaterial.color, expectedSurface);
+    expect(headerMaterial.color?.a, 1);
+    expect(headerMaterial.elevation, 0);
+    expect(headerMaterial.surfaceTintColor, Colors.transparent);
+    expect(
+      (tester
+                  .widget<DecoratedBox>(
+                    find.byKey(const ValueKey('tab-header-accent-gradient')),
+                  )
+                  .decoration
+              as BoxDecoration)
+          .gradient,
+      isNull,
+    );
+    expect(tester.getSize(headerSurface).height, 64);
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('test-item-0'))).dy,
+      closeTo(tester.getBottomLeft(headerSurface).dy, 0.01),
+    );
   });
 
   testWidgets(

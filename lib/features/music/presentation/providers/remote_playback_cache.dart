@@ -31,7 +31,7 @@ class RemotePlaybackCachePolicy {
     partialMaximumAge: Duration.zero,
   );
 
-  static const android = RemotePlaybackCachePolicy(
+  static const mobile = RemotePlaybackCachePolicy(
     enabled: true,
     evictOutsidePlaybackWindow: true,
     useApplicationCacheDirectory: false,
@@ -42,6 +42,10 @@ class RemotePlaybackCachePolicy {
     maximumEntryBytes: 64 * 1024 * 1024,
     partialMaximumAge: Duration.zero,
   );
+
+  // Kept for existing callers and tests; both mobile platforms use the same
+  // bounded, playback-window cache policy.
+  static const android = mobile;
 
   static const desktop = RemotePlaybackCachePolicy(
     enabled: true,
@@ -56,11 +60,15 @@ class RemotePlaybackCachePolicy {
     partialMaximumAge: Duration(hours: 1),
   );
 
-  static RemotePlaybackCachePolicy current() {
-    if (AppPlatform.isAndroid) {
-      return android;
-    }
-    if (AppPlatform.isDesktop) {
+  static RemotePlaybackCachePolicy current() =>
+      forPlatform(AppPlatform.current);
+
+  @visibleForTesting
+  static RemotePlaybackCachePolicy forPlatform(AppPlatformType platform) {
+    if (AppPlatform.isMobileOn(platform)) return mobile;
+    if (platform == AppPlatformType.windows ||
+        platform == AppPlatformType.linux ||
+        platform == AppPlatformType.macos) {
       return desktop;
     }
     return disabled;
@@ -409,7 +417,7 @@ class RemotePlaybackCache {
         await _deleteIfExists(tempFile);
         return null;
       }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (!_isCompleteRemoteCacheResponse(response)) {
         await _deleteIfExists(tempFile);
         return null;
       }
@@ -983,6 +991,40 @@ class RemotePlaybackCache {
     }
     return '.m4a';
   }
+}
+
+bool _isCompleteRemoteCacheResponse(HttpClientResponse response) {
+  if (response.statusCode == HttpStatus.ok) {
+    return true;
+  }
+  if (response.statusCode != HttpStatus.partialContent) {
+    return false;
+  }
+
+  // A few media edges answer an un-ranged GET with 206. Accept that response
+  // only when Content-Range proves it contains the complete entity; otherwise
+  // publishing it would turn a prefix into a corrupt cache hit.
+  final rawRange = response.headers.value(HttpHeaders.contentRangeHeader);
+  if (rawRange == null) {
+    return false;
+  }
+  final match = RegExp(
+    r'^bytes\s+(\d+)-(\d+)/(\d+)$',
+    caseSensitive: false,
+  ).firstMatch(rawRange.trim());
+  if (match == null) {
+    return false;
+  }
+  final start = int.tryParse(match.group(1)!);
+  final end = int.tryParse(match.group(2)!);
+  final total = int.tryParse(match.group(3)!);
+  if (start != 0 || end == null || total == null || total <= 0) {
+    return false;
+  }
+  if (end != total - 1) {
+    return false;
+  }
+  return response.contentLength < 0 || response.contentLength == total;
 }
 
 class _RemoteCacheWarmup {

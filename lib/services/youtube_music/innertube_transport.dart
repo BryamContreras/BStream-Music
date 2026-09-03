@@ -9,11 +9,15 @@ class InnerTubeHttpResponse {
     required this.statusCode,
     required this.body,
     this.headers = const <String, String>{},
+    this.effectiveUri,
   });
 
   final int statusCode;
   final String body;
   final Map<String, String> headers;
+
+  /// Final URI after redirects, when the transport can report it.
+  final Uri? effectiveUri;
 }
 
 abstract interface class InnerTubeTransport {
@@ -133,6 +137,7 @@ class IoInnerTubeTransport implements InnerTubeTransport {
         statusCode: response.statusCode,
         body: utf8.decode(bytes),
         headers: responseHeaders,
+        effectiveUri: _effectiveUri(uri, response.redirects),
       );
     }();
 
@@ -145,6 +150,14 @@ class IoInnerTubeTransport implements InnerTubeTransport {
       activeRequest?.abort(error);
       rethrow;
     }
+  }
+
+  Uri _effectiveUri(Uri initial, List<RedirectInfo> redirects) {
+    var current = initial;
+    for (final redirect in redirects) {
+      current = current.resolveUri(redirect.location);
+    }
+    return current;
   }
 
   @override

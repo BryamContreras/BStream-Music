@@ -9,11 +9,12 @@ import 'package:flutter/services.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_dialog.dart';
-import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/utils/image_source.dart';
+import '../../../../core/utils/share_position_origin.dart';
 import '../../../../core/widgets/marquee_text.dart';
+import '../../../../core/widgets/liquid_glass_surface.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
@@ -23,22 +24,36 @@ import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
+import 'animated_artwork_motion.dart';
 import 'favorite_star_badge.dart';
 import 'glass_popup_menu_button.dart';
-import 'lyrics_page.dart';
+import 'lyrics_page_route.dart';
 import 'now_playing_equalizer.dart';
 import 'playback_gradient_background.dart';
 import 'playlist_artwork.dart';
 import 'playlist_picker_dialog.dart';
 import 'source_image.dart';
 import 'track_change_transition.dart';
+import 'uniform_playback_slider_track_shape.dart';
 import 'wavy_playback_seek_bar.dart';
 
 class PlayerPanel extends ConsumerStatefulWidget {
-  const PlayerPanel({this.onOpenSearch, this.drawBackground = true, super.key});
+  const PlayerPanel({
+    this.onOpenSearch,
+    this.onCollapse,
+    this.drawBackground = true,
+    this.trackTransitionsEnabled = true,
+    this.style = defaultPlayerStyle,
+    this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
+    super.key,
+  });
 
   final VoidCallback? onOpenSearch;
+  final VoidCallback? onCollapse;
   final bool drawBackground;
+  final bool trackTransitionsEnabled;
+  final PlayerStyle style;
+  final bool animatedArtworkEnabled;
 
   @override
   ConsumerState<PlayerPanel> createState() => _PlayerPanelState();
@@ -167,10 +182,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             ),
           );
 
-    return LayoutBuilder(
+    final panel = LayoutBuilder(
       builder: (context, outer) {
         final wide = outer.maxWidth >= 840;
-        final mobile = Theme.of(context).platform == TargetPlatform.android;
+        final mobile = AppPlatform.isMobileTargetPlatform(
+          Theme.of(context).platform,
+        );
         final stackedDesktop = AppPlatform.isDesktop && wide;
         final showSideQueue = AppPlatform.isDesktop && _showPlaybackQueue;
         final disableAnimations = MediaQuery.disableAnimationsOf(context);
@@ -206,202 +223,261 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         final horizontalContentPadding = wide
             ? (showSideQueue ? 16.0 : 34.0)
             : 20.0;
+        void toggleQueue() {
+          if (mobile) {
+            unawaited(_openMobilePlaybackQueue(context));
+            return;
+          }
+          setState(() {
+            _showPlaybackQueue = !_showPlaybackQueue;
+          });
+        }
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
               key: const ValueKey('desktop-player-surface'),
-              child: Stack(
-                children: [
-                  if (widget.drawBackground) ...[
-                    _BlurredPlayerBackground(
-                      url: artworkSource,
-                      fallbackUrl: artworkFallbackSource,
-                    ),
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: playerPlaybackOverlayColors(context),
-                            stops: const [0, 0.38, 0.72, 1],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalContentPadding,
-                      lerpDouble(regularTopPadding, 8, heightCompactness)!,
-                      horizontalContentPadding,
-                      lerpDouble(regularBottomPadding, 8, heightCompactness)!,
-                    ),
-                    child: Column(
+              child: widget.style == PlayerStyle.appleMusic
+                  ? _AppleMusicPlayerLayout(
+                      snapshot: snapshot,
+                      artworkSource: artworkSource,
+                      artworkFallbackSource: artworkFallbackSource,
+                      visualIdentity: visualIdentity,
+                      trackTransitionsEnabled: widget.trackTransitionsEnabled,
+                      animatedArtworkEnabled: widget.animatedArtworkEnabled,
+                      drawBackground: widget.drawBackground,
+                      hasTrack: hasTrack,
+                      isFavorite: isFavorite,
+                      savedTrackId: savedTrackId,
+                      hasError: presentation.hasError,
+                      errorText: presentation.errorText,
+                      queueVisible: showSideQueue,
+                      onToggleQueue: toggleQueue,
+                      onCollapse: widget.onCollapse,
+                      onOpenLyrics: _openLyrics,
+                      onOpenSearch: widget.onOpenSearch,
+                      onOpenArtist: onOpenArtist,
+                      onOpenAlbum: onOpenAlbum,
+                      strings: strings,
+                    )
+                  : Stack(
                       children: [
-                        _PlayerHeader(
-                          snapshot: snapshot,
-                          isFavorite: isFavorite,
-                          savedTrackId: savedTrackId,
-                          onOpenSearch: widget.onOpenSearch,
-                          queueVisible: showSideQueue,
-                          onToggleQueue: () {
-                            if (mobile) {
-                              unawaited(_openMobilePlaybackQueue(context));
-                              return;
-                            }
-                            setState(() {
-                              _showPlaybackQueue = !_showPlaybackQueue;
-                            });
-                          },
-                          onOpenArtist: onOpenArtist,
-                          onOpenAlbum: onOpenAlbum,
-                          strings: strings,
-                        ),
-                        Expanded(
-                          child: LayoutBuilder(
-                            key: const ValueKey('player-content-layout'),
-                            builder: (context, constraints) {
-                              final verticalCompactness = AppPlatform.isDesktop
-                                  ? ((620.0 - constraints.maxHeight) / 140.0)
-                                        .clamp(0.0, 1.0)
-                                  : 0.0;
-                              final regularArtworkExtent = _artworkExtent(
-                                constraints,
-                                stackedDesktop: stackedDesktop,
-                                wide: wide,
-                                mobile: mobile,
-                                compactness: verticalCompactness,
-                                mobileFrameCompactness: mobileFrameCompactness,
-                              );
-                              // Short Android frames keep the regular artwork
-                              // size. Their vertical budget is recovered from
-                              // the surrounding gaps instead of shrinking the
-                              // cover, with scrolling retained only as a
-                              // fallback for exceptional content.
-                              final artworkExtent = regularArtworkExtent;
-                              // A short, narrow phone can make the cover
-                              // width-bound before the frame-height factor is
-                              // large enough to shrink its halo. Once the
-                              // mobile layout has entered its compact range,
-                              // include that measured cover reduction so the
-                              // shadow follows the artwork proportionally.
-                              // Roomy mobile frames retain the original
-                              // shadow values exactly.
-                              final mobileArtworkShadowActivation = mobile
-                                  ? (mobileFrameCompactness /
-                                            _mobileArtworkShadowActivationRange)
-                                        .clamp(0.0, 1.0)
-                                  : 0.0;
-                              final mobileArtworkShadowCompactness =
-                                  ((_mobileArtworkExtentCeiling -
-                                              artworkExtent) /
-                                          _mobileArtworkShadowCompressionRange)
-                                      .clamp(0.0, 1.0) *
-                                  mobileArtworkShadowActivation;
-                              final artworkShadowCompactness = math.max(
-                                verticalCompactness,
-                                math.max(
-                                  mobileFrameCompactness,
-                                  mobileArtworkShadowCompactness,
+                        if (widget.drawBackground) ...[
+                          _BlurredPlayerBackground(
+                            url: artworkSource,
+                            fallbackUrl: artworkFallbackSource,
+                          ),
+                          Positioned.fill(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: playerPlaybackOverlayColors(context),
+                                  stops: const [0, 0.38, 0.72, 1],
                                 ),
-                              );
-                              final maxContentWidth = stackedDesktop
-                                  ? showSideQueue
-                                        ? constraints.maxWidth
-                                        : math
-                                              .min(
-                                                constraints.maxWidth * 0.84,
-                                                1040.0,
-                                              )
-                                              .clamp(700.0, 1040.0)
-                                              .toDouble()
-                                  : 520.0;
-                              final artworkCanvasWidth = math.min(
-                                constraints.maxWidth,
-                                maxContentWidth,
-                              );
-                              final artworkHorizontalClearance = math.max(
-                                0.0,
-                                (artworkCanvasWidth - artworkExtent) / 2,
-                              );
-                              final artwork = Center(
-                                child: _LargeArtwork(
-                                  url: artworkSource,
-                                  fallbackUrl: artworkFallbackSource,
-                                  identity: visualIdentity,
-                                  maxExtent: artworkExtent,
-                                  isFavorite: isFavorite,
-                                  shadowCompactness: artworkShadowCompactness,
-                                  shadowHorizontalClearance:
-                                      artworkHorizontalClearance,
-                                ),
-                              );
-                              final gap = mobile
-                                  ? lerpDouble(22, 16, mobileFrameCompactness)!
-                                  : lerpDouble(26, 12, verticalCompactness)!;
-                              final controlSpacingCompactness = mobile
-                                  ? mobileFrameCompactness
-                                  : verticalCompactness;
-                              final controls = _PlayerControls(
+                              ),
+                            ),
+                          ),
+                        ],
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalContentPadding,
+                            lerpDouble(
+                              regularTopPadding,
+                              8,
+                              heightCompactness,
+                            )!,
+                            horizontalContentPadding,
+                            lerpDouble(
+                              regularBottomPadding,
+                              8,
+                              heightCompactness,
+                            )!,
+                          ),
+                          child: Column(
+                            children: [
+                              _PlayerHeader(
                                 snapshot: snapshot,
-                                hasTrack: hasTrack,
+                                trackTransitionsEnabled:
+                                    widget.trackTransitionsEnabled,
                                 isFavorite: isFavorite,
                                 savedTrackId: savedTrackId,
-                                hasError: presentation.hasError,
-                                errorText: presentation.errorText,
-                                compact: !wide || stackedDesktop,
-                                compactness: verticalCompactness,
-                                spacingCompactness: controlSpacingCompactness,
-                                maxWidth: stackedDesktop
-                                    ? maxContentWidth
-                                    : 520.0,
-                                onOpenLyrics: _openLyrics,
+                                onOpenSearch: widget.onOpenSearch,
+                                queueVisible: showSideQueue,
+                                onToggleQueue: toggleQueue,
                                 onOpenArtist: onOpenArtist,
+                                onOpenAlbum: onOpenAlbum,
                                 strings: strings,
-                              );
+                              ),
+                              Expanded(
+                                child: LayoutBuilder(
+                                  key: const ValueKey('player-content-layout'),
+                                  builder: (context, constraints) {
+                                    final verticalCompactness =
+                                        AppPlatform.isDesktop
+                                        ? ((620.0 - constraints.maxHeight) /
+                                                  140.0)
+                                              .clamp(0.0, 1.0)
+                                        : 0.0;
+                                    final regularArtworkExtent = _artworkExtent(
+                                      constraints,
+                                      stackedDesktop: stackedDesktop,
+                                      wide: wide,
+                                      mobile: mobile,
+                                      compactness: verticalCompactness,
+                                      mobileFrameCompactness:
+                                          mobileFrameCompactness,
+                                    );
+                                    // Short Android frames keep the regular artwork
+                                    // size. Their vertical budget is recovered from
+                                    // the surrounding gaps instead of shrinking the
+                                    // cover, with scrolling retained only as a
+                                    // fallback for exceptional content.
+                                    final artworkExtent = regularArtworkExtent;
+                                    // A short, narrow phone can make the cover
+                                    // width-bound before the frame-height factor is
+                                    // large enough to shrink its halo. Once the
+                                    // mobile layout has entered its compact range,
+                                    // include that measured cover reduction so the
+                                    // shadow follows the artwork proportionally.
+                                    // Roomy mobile frames retain the original
+                                    // shadow values exactly.
+                                    final mobileArtworkShadowActivation = mobile
+                                        ? (mobileFrameCompactness /
+                                                  _mobileArtworkShadowActivationRange)
+                                              .clamp(0.0, 1.0)
+                                        : 0.0;
+                                    final mobileArtworkShadowCompactness =
+                                        ((_mobileArtworkExtentCeiling -
+                                                    artworkExtent) /
+                                                _mobileArtworkShadowCompressionRange)
+                                            .clamp(0.0, 1.0) *
+                                        mobileArtworkShadowActivation;
+                                    final artworkShadowCompactness = math.max(
+                                      verticalCompactness,
+                                      math.max(
+                                        mobileFrameCompactness,
+                                        mobileArtworkShadowCompactness,
+                                      ),
+                                    );
+                                    final maxContentWidth = stackedDesktop
+                                        ? showSideQueue
+                                              ? constraints.maxWidth
+                                              : math
+                                                    .min(
+                                                      constraints.maxWidth *
+                                                          0.84,
+                                                      1040.0,
+                                                    )
+                                                    .clamp(700.0, 1040.0)
+                                                    .toDouble()
+                                        : 520.0;
+                                    final artworkCanvasWidth = math.min(
+                                      constraints.maxWidth,
+                                      maxContentWidth,
+                                    );
+                                    final artworkHorizontalClearance = math.max(
+                                      0.0,
+                                      (artworkCanvasWidth - artworkExtent) / 2,
+                                    );
+                                    final artwork = Center(
+                                      child: _LargeArtwork(
+                                        url: artworkSource,
+                                        fallbackUrl: artworkFallbackSource,
+                                        identity: visualIdentity,
+                                        isPlaying:
+                                            snapshot.status ==
+                                            PlayerStatus.playing,
+                                        trackTransitionsEnabled:
+                                            widget.trackTransitionsEnabled,
+                                        animatedArtworkEnabled:
+                                            widget.animatedArtworkEnabled,
+                                        maxExtent: artworkExtent,
+                                        isFavorite: isFavorite,
+                                        shadowCompactness:
+                                            artworkShadowCompactness,
+                                        shadowHorizontalClearance:
+                                            artworkHorizontalClearance,
+                                      ),
+                                    );
+                                    final gap = mobile
+                                        ? lerpDouble(
+                                            22,
+                                            16,
+                                            mobileFrameCompactness,
+                                          )!
+                                        : lerpDouble(
+                                            26,
+                                            12,
+                                            verticalCompactness,
+                                          )!;
+                                    final controlSpacingCompactness = mobile
+                                        ? mobileFrameCompactness
+                                        : verticalCompactness;
+                                    final controls = _PlayerControls(
+                                      snapshot: snapshot,
+                                      trackTransitionsEnabled:
+                                          widget.trackTransitionsEnabled,
+                                      hasTrack: hasTrack,
+                                      isFavorite: isFavorite,
+                                      savedTrackId: savedTrackId,
+                                      hasError: presentation.hasError,
+                                      errorText: presentation.errorText,
+                                      compact: !wide || stackedDesktop,
+                                      compactness: verticalCompactness,
+                                      spacingCompactness:
+                                          controlSpacingCompactness,
+                                      maxWidth: stackedDesktop
+                                          ? maxContentWidth
+                                          : 520.0,
+                                      onOpenLyrics: _openLyrics,
+                                      onOpenArtist: onOpenArtist,
+                                      strings: strings,
+                                    );
 
-                              return SingleChildScrollView(
-                                key: const ValueKey('player-content-scroll'),
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(
-                                    minHeight: constraints.maxHeight,
-                                  ),
-                                  child: Align(
-                                    alignment: mobile
-                                        ? Alignment.bottomCenter
-                                        : Alignment.center,
-                                    child: ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        maxWidth: maxContentWidth,
+                                    return SingleChildScrollView(
+                                      key: const ValueKey(
+                                        'player-content-scroll',
                                       ),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          artwork,
-                                          SizedBox(
-                                            key: const ValueKey(
-                                              'player-artwork-title-gap',
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          minHeight: constraints.maxHeight,
+                                        ),
+                                        child: Align(
+                                          alignment: mobile
+                                              ? Alignment.bottomCenter
+                                              : Alignment.center,
+                                          child: ConstrainedBox(
+                                            constraints: BoxConstraints(
+                                              maxWidth: maxContentWidth,
                                             ),
-                                            height: gap,
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                artwork,
+                                                SizedBox(
+                                                  key: const ValueKey(
+                                                    'player-artwork-title-gap',
+                                                  ),
+                                                  height: gap,
+                                                ),
+                                                controls,
+                                              ],
+                                            ),
                                           ),
-                                          controls,
-                                        ],
+                                        ),
                                       ),
-                                    ),
-                                  ),
+                                    );
+                                  },
                                 ),
-                              );
-                            },
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
-                  ),
-                ],
-              ),
             ),
             AnimatedSwitcher(
               key: const ValueKey('desktop-playback-queue-switcher'),
@@ -445,6 +521,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         );
       },
     );
+    return panel;
   }
 
   Future<void> _openMobilePlaybackQueue(BuildContext context) async {
@@ -469,9 +546,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
 
   Future<void> _openLyrics() async {
     _hideKeyboard();
-    await Navigator.of(
-      context,
-    ).push<void>(MaterialPageRoute<void>(builder: (_) => const LyricsPage()));
+    await Navigator.of(context).push<void>(buildLyricsPageRoute(context));
     if (mounted) {
       _hideKeyboard();
     }
@@ -672,9 +747,874 @@ class _BlurredPlayerBackground extends StatelessWidget {
   }
 }
 
+class _AppleMusicPlayerLayout extends StatelessWidget {
+  const _AppleMusicPlayerLayout({
+    required this.snapshot,
+    required this.artworkSource,
+    required this.artworkFallbackSource,
+    required this.visualIdentity,
+    required this.trackTransitionsEnabled,
+    required this.animatedArtworkEnabled,
+    required this.drawBackground,
+    required this.hasTrack,
+    required this.isFavorite,
+    required this.savedTrackId,
+    required this.hasError,
+    required this.errorText,
+    required this.queueVisible,
+    required this.onToggleQueue,
+    required this.onCollapse,
+    required this.onOpenLyrics,
+    required this.onOpenSearch,
+    required this.onOpenArtist,
+    required this.onOpenAlbum,
+    required this.strings,
+  });
+
+  final PlayerSnapshot snapshot;
+  final String? artworkSource;
+  final String? artworkFallbackSource;
+  final String visualIdentity;
+  final bool trackTransitionsEnabled;
+  final bool animatedArtworkEnabled;
+  final bool drawBackground;
+  final bool hasTrack;
+  final bool isFavorite;
+  final String? savedTrackId;
+  final bool hasError;
+  final String? errorText;
+  final bool queueVisible;
+  final VoidCallback onToggleQueue;
+  final VoidCallback? onCollapse;
+  final VoidCallback onOpenLyrics;
+  final VoidCallback? onOpenSearch;
+  final VoidCallback? onOpenArtist;
+  final VoidCallback? onOpenAlbum;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    final systemBottomInset = math.max(
+      MediaQuery.viewPaddingOf(context).bottom,
+      MediaQuery.paddingOf(context).bottom,
+    );
+
+    return Stack(
+      key: const ValueKey('apple-player-layout'),
+      fit: StackFit.expand,
+      children: [
+        if (drawBackground) ...[
+          _BlurredPlayerBackground(
+            url: artworkSource,
+            fallbackUrl: artworkFallbackSource,
+          ),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: playerPlaybackOverlayColors(context),
+                  stops: const [0, 0.38, 0.72, 1],
+                ),
+              ),
+            ),
+          ),
+        ],
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final heightCompactness =
+                ((760.0 - (constraints.maxHeight - systemBottomInset)) / 240.0)
+                    .clamp(0.0, 1.0);
+            final horizontalPadding = constraints.maxWidth >= 900
+                ? 44.0
+                : constraints.maxWidth >= 430
+                ? 22.0
+                : 16.0;
+            final topPadding = lerpDouble(8, 4, heightCompactness)!;
+            final bottomPadding =
+                lerpDouble(14, 8, heightCompactness)! + systemBottomInset;
+            final availableWidth = math.max(
+              0.0,
+              constraints.maxWidth - (horizontalPadding * 2),
+            );
+            final twoColumn =
+                (AppPlatform.isDesktop &&
+                    availableWidth >= 820 &&
+                    constraints.maxHeight >= 520) ||
+                (availableWidth >= 700 &&
+                    constraints.maxHeight >= 360 &&
+                    constraints.maxWidth > constraints.maxHeight * 1.35);
+            final effectiveTextScale =
+                MediaQuery.textScalerOf(context).scale(16) / 16;
+            final useScrollableAccessibilityFallback =
+                (effectiveTextScale > 2.2 && constraints.maxHeight < 600) ||
+                constraints.maxHeight < 360;
+            final stackedContentWidth = math.min(availableWidth, 520.0);
+            final roomyArtworkExtent = math.min(stackedContentWidth, 420.0);
+            final compactArtworkExtent = math.min(stackedContentWidth, 220.0);
+            final stackedArtworkExtent = lerpDouble(
+              roomyArtworkExtent,
+              compactArtworkExtent,
+              heightCompactness,
+            )!;
+            final twoColumnArtworkExtent = math
+                .min(
+                  480.0,
+                  math.min(
+                    (availableWidth - 48.0) * 0.5,
+                    constraints.maxHeight - topPadding - bottomPadding - 44.0,
+                  ),
+                )
+                .clamp(220.0, 480.0)
+                .toDouble();
+            final artworkExtent = twoColumn
+                ? twoColumnArtworkExtent
+                : stackedArtworkExtent;
+            final artworkCanvasWidth = twoColumn
+                ? math.min((availableWidth - 48.0) * 0.5, 520.0)
+                : stackedContentWidth;
+            final artwork = Center(
+              child: _LargeArtwork(
+                url: artworkSource,
+                fallbackUrl: artworkFallbackSource,
+                identity: visualIdentity,
+                isPlaying: snapshot.status == PlayerStatus.playing,
+                trackTransitionsEnabled: trackTransitionsEnabled,
+                animatedArtworkEnabled: animatedArtworkEnabled,
+                maxExtent: artworkExtent,
+                isFavorite: false,
+                // Apple Music keeps the cover shadow restrained even on tall
+                // screens; this also prevents a hard lateral clip when the
+                // square uses almost all of a narrow phone's width.
+                shadowCompactness: math.max(0.55, heightCompactness),
+                shadowHorizontalClearance: math.max(
+                  0.0,
+                  (artworkCanvasWidth - artworkExtent) / 2,
+                ),
+                borderRadius: 10,
+              ),
+            );
+            final controls = _AppleMusicControls(
+              snapshot: snapshot,
+              visualIdentity: visualIdentity,
+              trackTransitionsEnabled: trackTransitionsEnabled,
+              hasTrack: hasTrack,
+              isFavorite: isFavorite,
+              savedTrackId: savedTrackId,
+              hasError: hasError,
+              errorText: errorText,
+              compactness: heightCompactness,
+              queueVisible: queueVisible,
+              onToggleQueue: onToggleQueue,
+              onOpenLyrics: onOpenLyrics,
+              onOpenSearch: onOpenSearch,
+              onOpenArtist: onOpenArtist,
+              onOpenAlbum: onOpenAlbum,
+              strings: strings,
+            );
+            Widget buildTwoColumnContent() {
+              return Row(
+                key: const ValueKey('apple-player-adaptive-two-column'),
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(child: artwork),
+                  const SizedBox(width: 48),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: controls,
+                  ),
+                ],
+              );
+            }
+
+            Widget buildStackedContent({required bool fillAvailableHeight}) {
+              return Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: stackedContentWidth),
+                  child: Column(
+                    key: ValueKey(
+                      fillAvailableHeight
+                          ? 'apple-player-adaptive-stack'
+                          : 'apple-player-scroll-content',
+                    ),
+                    mainAxisSize: fillAvailableHeight
+                        ? MainAxisSize.max
+                        : MainAxisSize.min,
+                    children: [
+                      if (fillAvailableHeight)
+                        Expanded(child: artwork)
+                      else
+                        artwork,
+                      SizedBox(height: lerpDouble(24, 10, heightCompactness)),
+                      controls,
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                topPadding,
+                horizontalPadding,
+                bottomPadding,
+              ),
+              child: Column(
+                children: [
+                  _ApplePlayerGrabber(
+                    onCollapse: onCollapse,
+                    label: strings.minimizePlayer,
+                  ),
+                  SizedBox(height: lerpDouble(12, 6, heightCompactness)),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, bodyConstraints) {
+                        if (!useScrollableAccessibilityFallback) {
+                          return twoColumn
+                              ? buildTwoColumnContent()
+                              : buildStackedContent(fillAvailableHeight: true);
+                        }
+                        final content = twoColumn
+                            ? buildTwoColumnContent()
+                            : buildStackedContent(fillAvailableHeight: false);
+                        return SingleChildScrollView(
+                          key: const ValueKey('apple-player-scroll'),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minHeight: bodyConstraints.maxHeight,
+                            ),
+                            child: Align(
+                              alignment: heightCompactness > 0.7
+                                  ? Alignment.topCenter
+                                  : Alignment.center,
+                              child: content,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _ApplePlayerGrabber extends StatelessWidget {
+  const _ApplePlayerGrabber({required this.onCollapse, required this.label});
+
+  final VoidCallback? onCollapse;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final indicator = Center(
+      child: Container(
+        width: 52,
+        height: 5,
+        decoration: BoxDecoration(
+          color: AppColors.playbackControlForegroundFor(
+            context,
+          ).withValues(alpha: 0.46),
+          borderRadius: BorderRadius.circular(99),
+        ),
+      ),
+    );
+    final collapse = onCollapse;
+    if (collapse == null) {
+      return ExcludeSemantics(
+        child: SizedBox(
+          key: const ValueKey('apple-player-grabber'),
+          width: 72,
+          height: 20,
+          child: indicator,
+        ),
+      );
+    }
+
+    return Semantics(
+      key: const ValueKey('apple-player-grabber'),
+      button: true,
+      label: label,
+      onTap: collapse,
+      child: ExcludeSemantics(
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: collapse,
+            onVerticalDragEnd: (details) {
+              if ((details.primaryVelocity ?? 0) > 300) {
+                collapse();
+              }
+            },
+            child: SizedBox(width: 72, height: 20, child: indicator),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AppleMusicControls extends ConsumerWidget {
+  const _AppleMusicControls({
+    required this.snapshot,
+    required this.visualIdentity,
+    required this.trackTransitionsEnabled,
+    required this.hasTrack,
+    required this.isFavorite,
+    required this.savedTrackId,
+    required this.hasError,
+    required this.errorText,
+    required this.compactness,
+    required this.queueVisible,
+    required this.onToggleQueue,
+    required this.onOpenLyrics,
+    required this.onOpenSearch,
+    required this.onOpenArtist,
+    required this.onOpenAlbum,
+    required this.strings,
+  });
+
+  final PlayerSnapshot snapshot;
+  final String visualIdentity;
+  final bool trackTransitionsEnabled;
+  final bool hasTrack;
+  final bool isFavorite;
+  final String? savedTrackId;
+  final bool hasError;
+  final String? errorText;
+  final double compactness;
+  final bool queueVisible;
+  final VoidCallback onToggleQueue;
+  final VoidCallback onOpenLyrics;
+  final VoidCallback? onOpenSearch;
+  final VoidCallback? onOpenArtist;
+  final VoidCallback? onOpenAlbum;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final foreground = AppColors.playbackControlForegroundFor(context);
+    final secondary = AppColors.playbackSecondaryControlForegroundFor(context);
+    final active = Theme.of(context).colorScheme.primary;
+    final gap = lerpDouble(22, 12, compactness)!;
+    final isPlaying = snapshot.status == PlayerStatus.playing;
+
+    final metadata = Column(
+      key: const ValueKey('apple-player-metadata'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TrackChangeTransition(
+          switcherKey: const ValueKey('apple-player-metadata-track-transition'),
+          identity: visualIdentity,
+          enabled: trackTransitionsEnabled,
+          alignment: Alignment.centerLeft,
+          child: MarqueeText(
+            key: const ValueKey('player-track-title'),
+            snapshot.title ?? strings.noPlayback,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              color: foreground,
+              fontWeight: FontWeight.w800,
+              fontSize: lerpDouble(23, 20, compactness),
+            ),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Row(
+          key: const ValueKey('apple-player-artist-actions-row'),
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: TrackChangeTransition(
+                switcherKey: const ValueKey(
+                  'apple-player-artist-track-transition',
+                ),
+                identity: visualIdentity,
+                enabled: trackTransitionsEnabled,
+                alignment: Alignment.centerLeft,
+                child: InkWell(
+                  key: const ValueKey('player-track-artist-action'),
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: onOpenArtist,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Text(
+                      key: const ValueKey('player-track-artist'),
+                      snapshot.artist ?? 'BStream Music',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: secondary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: lerpDouble(18, 16, compactness),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (!snapshot.isExternal) ...[
+              const SizedBox(width: 8),
+              _PlayerFavoriteButton(
+                snapshot: snapshot,
+                isFavorite: isFavorite,
+                savedTrackId: savedTrackId,
+                strings: strings,
+                appleStyle: true,
+              ),
+              const SizedBox(width: 4),
+              _PlayerMenu(
+                snapshot: snapshot,
+                isFavorite: isFavorite,
+                savedTrackId: savedTrackId,
+                onOpenSearch: onOpenSearch,
+                onOpenArtist: onOpenArtist,
+                onOpenAlbum: onOpenAlbum,
+                strings: strings,
+                appleStyle: true,
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+
+    final utilityButtonSize = lerpDouble(52, 48, compactness)!;
+    final utilityIconSize = lerpDouble(27, 24, compactness)!;
+    final utilityRow = Row(
+      key: const ValueKey('apple-player-utility-row'),
+      mainAxisAlignment: MainAxisAlignment.spaceAround,
+      children: [
+        _ControlButton(
+          key: const ValueKey('player-lyrics-control'),
+          size: utilityButtonSize,
+          tooltip: strings.lyrics,
+          iconSize: utilityIconSize,
+          color: foreground,
+          icon: Icons.lyrics_rounded,
+          onPressed: hasTrack ? onOpenLyrics : null,
+        ),
+        _ControlButton(
+          key: const ValueKey('player-shuffle-control'),
+          size: utilityButtonSize,
+          tooltip: snapshot.shuffleEnabled
+              ? strings.deactivateShuffle
+              : strings.activateShuffle,
+          iconSize: utilityIconSize,
+          color: snapshot.shuffleEnabled ? active : secondary,
+          icon: Icons.shuffle_rounded,
+          onPressed: hasTrack
+              ? () =>
+                    ref.read(playerControllerProvider.notifier).toggleShuffle()
+              : null,
+        ),
+        _ControlButton(
+          key: const ValueKey('player-repeat-control'),
+          size: utilityButtonSize,
+          tooltip: switch (snapshot.repeatMode) {
+            PlaybackRepeatMode.off => strings.repeatQueue,
+            PlaybackRepeatMode.all => strings.repeatOne,
+            PlaybackRepeatMode.one => strings.disableRepeat,
+          },
+          iconSize: utilityIconSize,
+          color: snapshot.repeatMode == PlaybackRepeatMode.off
+              ? secondary
+              : active,
+          icon: snapshot.repeatMode == PlaybackRepeatMode.one
+              ? Icons.repeat_one_rounded
+              : Icons.repeat_rounded,
+          onPressed: hasTrack
+              ? () => ref
+                    .read(playerControllerProvider.notifier)
+                    .cycleRepeatMode()
+              : null,
+        ),
+        SizedBox.square(
+          dimension: utilityButtonSize,
+          child: IconButton(
+            key: const ValueKey('player-queue-toggle'),
+            tooltip: strings.playbackQueue,
+            isSelected: queueVisible,
+            padding: EdgeInsets.zero,
+            constraints: BoxConstraints.tight(Size.square(utilityButtonSize)),
+            color: queueVisible ? active : foreground,
+            iconSize: utilityIconSize,
+            icon: const Icon(Icons.queue_music_rounded),
+            selectedIcon: const Icon(Icons.queue_music_rounded),
+            onPressed: onToggleQueue,
+          ),
+        ),
+      ],
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        metadata,
+        SizedBox(height: gap),
+        _AppleMusicTimeline(strings: strings),
+        SizedBox(height: lerpDouble(18, 8, compactness)),
+        _AppleTransportControls(
+          hasTrack: hasTrack,
+          isPlaying: isPlaying,
+          compactness: compactness,
+          strings: strings,
+        ),
+        SizedBox(height: lerpDouble(18, 8, compactness)),
+        _AppleVolumeRow(snapshot: snapshot, strings: strings),
+        SizedBox(height: lerpDouble(16, 6, compactness)),
+        utilityRow,
+        if (hasError) ...[
+          SizedBox(height: lerpDouble(14, 8, compactness)),
+          PlayerErrorMessage(
+            key: const ValueKey('player-error-message'),
+            message: errorText ?? strings.playbackError,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _AppleTransportControls extends ConsumerWidget {
+  const _AppleTransportControls({
+    required this.hasTrack,
+    required this.isPlaying,
+    required this.compactness,
+    required this.strings,
+  });
+
+  final bool hasTrack;
+  final bool isPlaying;
+  final double compactness;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final foreground = AppColors.playbackControlForegroundFor(context);
+    final sideSize = lerpDouble(80, 68, compactness)!;
+    final sideIconSize = lerpDouble(52, 44, compactness)!;
+    final primarySize = lerpDouble(96, 82, compactness)!;
+    final primaryIconSize = lerpDouble(
+      isPlaying ? 68 : 76,
+      isPlaying ? 58 : 66,
+      compactness,
+    )!;
+    final gap = lerpDouble(24, 10, compactness)!;
+
+    return Center(
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          key: const ValueKey('apple-player-transport'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ControlButton(
+              key: const ValueKey('player-previous-control'),
+              size: sideSize,
+              tooltip: strings.previous,
+              iconSize: sideIconSize,
+              color: foreground,
+              icon: Icons.fast_rewind_rounded,
+              onPressed: hasTrack
+                  ? () => ref
+                        .read(playerControllerProvider.notifier)
+                        .playPrevious()
+                  : null,
+            ),
+            SizedBox(width: gap),
+            SizedBox.square(
+              dimension: primarySize,
+              child: IconButton(
+                key: const ValueKey('player-primary-control'),
+                tooltip: isPlaying ? strings.pause : strings.play,
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints.tight(Size.square(primarySize)),
+                color: foreground,
+                disabledColor: foreground.withValues(alpha: 0.38),
+                iconSize: primaryIconSize,
+                icon: Transform.translate(
+                  offset: isPlaying ? Offset.zero : const Offset(1.5, 0),
+                  transformHitTests: false,
+                  child: Icon(
+                    isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  ),
+                ),
+                onPressed: hasTrack
+                    ? () => ref
+                          .read(playerControllerProvider.notifier)
+                          .togglePlayPause()
+                    : null,
+              ),
+            ),
+            SizedBox(width: gap),
+            _ControlButton(
+              key: const ValueKey('player-next-control'),
+              size: sideSize,
+              tooltip: strings.next,
+              iconSize: sideIconSize,
+              color: foreground,
+              icon: Icons.fast_forward_rounded,
+              onPressed: hasTrack
+                  ? () => ref.read(playerControllerProvider.notifier).playNext()
+                  : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AppleVolumeRow extends ConsumerWidget {
+  const _AppleVolumeRow({required this.snapshot, required this.strings});
+
+  final PlayerSnapshot snapshot;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final foreground = AppColors.playbackControlForegroundFor(context);
+    final inactive = foreground.withValues(alpha: 0.28);
+    final volume = snapshot.volume.clamp(0.0, 1.0).toDouble();
+
+    return SizedBox(
+      key: const ValueKey('player-volume-control'),
+      height: 48,
+      child: Row(
+        key: const ValueKey('apple-player-volume-row'),
+        children: [
+          ExcludeSemantics(
+            child: Icon(Icons.volume_mute_rounded, color: foreground, size: 20),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: appleMusicSliderTrackHeight,
+                trackShape: const UniformPlaybackSliderTrackShape(),
+                activeTrackColor: foreground.withValues(alpha: 0.76),
+                inactiveTrackColor: inactive,
+                thumbShape: SliderComponentShape.noThumb,
+                overlayShape: SliderComponentShape.noOverlay,
+              ),
+              child: Slider(
+                key: const ValueKey('apple-player-volume-slider'),
+                value: volume,
+                semanticFormatterCallback: (value) =>
+                    '${strings.volume} ${(value * 100).round()}%',
+                onChanged: (value) => unawaited(
+                  ref.read(playerControllerProvider.notifier).setVolume(value),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ExcludeSemantics(
+            child: Icon(Icons.volume_up_rounded, color: foreground, size: 22),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AppleMusicTimeline extends ConsumerStatefulWidget {
+  const _AppleMusicTimeline({required this.strings});
+
+  final AppStrings strings;
+
+  @override
+  ConsumerState<_AppleMusicTimeline> createState() =>
+      _AppleMusicTimelineState();
+}
+
+class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
+  double? _dragMilliseconds;
+
+  @override
+  Widget build(BuildContext context) {
+    final timeline = ref.watch(
+      playerControllerProvider.select((player) {
+        final snapshot = player.value;
+        return (
+          position: snapshot?.position ?? Duration.zero,
+          duration: snapshot?.duration,
+        );
+      }),
+    );
+    final duration = timeline.duration ?? Duration.zero;
+    final durationMilliseconds = math.max(0, duration.inMilliseconds);
+    final positionMilliseconds = timeline.position.inMilliseconds.clamp(
+      0,
+      durationMilliseconds,
+    );
+    final shownMilliseconds = (_dragMilliseconds ?? positionMilliseconds)
+        .clamp(0.0, durationMilliseconds.toDouble())
+        .toDouble();
+    final shownPosition = Duration(milliseconds: shownMilliseconds.round());
+    final remaining = duration - shownPosition;
+    final increasedPosition = Duration(
+      milliseconds: math.min(
+        durationMilliseconds,
+        shownPosition.inMilliseconds + 10000,
+      ),
+    );
+    final decreasedPosition = Duration(
+      milliseconds: math.max(0, shownPosition.inMilliseconds - 10000),
+    );
+    final canSeek = durationMilliseconds > 0;
+    final foreground = AppColors.playbackControlForegroundFor(context);
+    final secondary = AppColors.playbackSecondaryControlForegroundFor(context);
+    final labelStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+      color: secondary,
+      fontWeight: FontWeight.w700,
+    );
+    final positionLabel = formatDuration(shownPosition);
+    final remainingLabel =
+        '\u2212${formatDuration(remaining.isNegative ? Duration.zero : remaining)}';
+
+    void seekTo(double milliseconds) {
+      final next = Duration(
+        milliseconds: milliseconds
+            .clamp(0.0, durationMilliseconds.toDouble())
+            .round(),
+      );
+      ref.read(playerControllerProvider.notifier).seek(next);
+    }
+
+    void seekBy(Duration delta) {
+      seekTo((shownPosition + delta).inMilliseconds.toDouble());
+    }
+
+    return Column(
+      key: const ValueKey('apple-player-timeline'),
+      children: [
+        Semantics(
+          slider: true,
+          enabled: canSeek,
+          label: widget.strings.nowPlaying,
+          value:
+              '${formatDuration(shownPosition)} / ${formatDuration(duration)}',
+          increasedValue: formatDuration(increasedPosition),
+          decreasedValue: formatDuration(decreasedPosition),
+          onIncrease: canSeek
+              ? () => seekBy(const Duration(seconds: 10))
+              : null,
+          onDecrease: canSeek
+              ? () => seekBy(const Duration(seconds: -10))
+              : null,
+          child: ExcludeSemantics(
+            child: SizedBox(
+              height: 24,
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: appleMusicSliderTrackHeight,
+                  trackShape: const UniformPlaybackSliderTrackShape(),
+                  activeTrackColor: foreground.withValues(alpha: 0.88),
+                  inactiveTrackColor: foreground.withValues(alpha: 0.28),
+                  disabledActiveTrackColor: foreground.withValues(alpha: 0.3),
+                  disabledInactiveTrackColor: foreground.withValues(
+                    alpha: 0.18,
+                  ),
+                  thumbShape: SliderComponentShape.noThumb,
+                  overlayShape: SliderComponentShape.noOverlay,
+                ),
+                child: Slider(
+                  key: const ValueKey('apple-player-linear-seek'),
+                  min: 0,
+                  max: math.max(1, durationMilliseconds).toDouble(),
+                  value: canSeek ? shownMilliseconds : 0.0,
+                  onChangeStart: canSeek
+                      ? (value) => setState(() => _dragMilliseconds = value)
+                      : null,
+                  onChanged: canSeek
+                      ? (value) => setState(() => _dragMilliseconds = value)
+                      : null,
+                  onChangeEnd: canSeek
+                      ? (value) {
+                          setState(() => _dragMilliseconds = null);
+                          seekTo(value);
+                        }
+                      : null,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final textDirection = Directionality.of(context);
+              final textScaler = MediaQuery.textScalerOf(context);
+              double measuredWidth(String value) {
+                final painter = TextPainter(
+                  text: TextSpan(text: value, style: labelStyle),
+                  textDirection: textDirection,
+                  textScaler: textScaler,
+                  maxLines: 1,
+                )..layout();
+                return painter.width;
+              }
+
+              final stackLabels =
+                  measuredWidth(positionLabel) +
+                      measuredWidth(remainingLabel) +
+                      16 >
+                  constraints.maxWidth;
+              final position = Text(
+                key: const ValueKey('apple-player-position'),
+                positionLabel,
+                maxLines: 1,
+                style: labelStyle,
+              );
+              final remainingTime = Text(
+                key: const ValueKey('apple-player-remaining'),
+                remainingLabel,
+                maxLines: 1,
+                style: labelStyle,
+              );
+              if (stackLabels) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: position,
+                    ),
+                    Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: remainingTime,
+                    ),
+                  ],
+                );
+              }
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [position, remainingTime],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _PlayerHeader extends StatelessWidget {
   const _PlayerHeader({
     required this.snapshot,
+    required this.trackTransitionsEnabled,
     required this.isFavorite,
     required this.savedTrackId,
     required this.onOpenSearch,
@@ -686,6 +1626,7 @@ class _PlayerHeader extends StatelessWidget {
   });
 
   final PlayerSnapshot snapshot;
+  final bool trackTransitionsEnabled;
   final bool isFavorite;
   final String? savedTrackId;
   final VoidCallback? onOpenSearch;
@@ -699,6 +1640,13 @@ class _PlayerHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final controlColor = AppColors.playbackControlForegroundFor(context);
+    final visualIdentity = playbackVisualIdentity(
+      trackId: snapshot.trackId,
+      sourceUrl: snapshot.sourceUrl,
+      title: snapshot.title,
+      artist: snapshot.artist,
+      thumbnailUrl: snapshot.thumbnailUrl,
+    );
     return ConstrainedBox(
       key: const ValueKey('player-header'),
       constraints: const BoxConstraints(minHeight: 58),
@@ -727,38 +1675,43 @@ class _PlayerHeader extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  key: const ValueKey('player-tab-title'),
-                  strings.nowPlaying,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
+            child: TrackChangeTransition(
+              switcherKey: const ValueKey('player-header-track-transition'),
+              identity: visualIdentity,
+              enabled: trackTransitionsEnabled,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    key: const ValueKey('player-tab-title'),
+                    strings.nowPlaying,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                InkWell(
-                  key: const ValueKey('player-header-artist-action'),
-                  borderRadius: BorderRadius.circular(6),
-                  onTap: onOpenArtist,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      snapshot.artist ?? 'BStream Music',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: Theme.of(context).colorScheme.primary,
+                  const SizedBox(height: 2),
+                  InkWell(
+                    key: const ValueKey('player-header-artist-action'),
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: onOpenArtist,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        snapshot.artist ?? 'BStream Music',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           _HeaderIconSlot(
@@ -1075,19 +2028,27 @@ class _LargeArtwork extends StatefulWidget {
     required this.url,
     required this.fallbackUrl,
     required this.identity,
+    required this.isPlaying,
+    required this.trackTransitionsEnabled,
+    required this.animatedArtworkEnabled,
     required this.maxExtent,
     required this.isFavorite,
     required this.shadowCompactness,
     required this.shadowHorizontalClearance,
+    this.borderRadius = appArtworkRadius,
   });
 
   final String? url;
   final String? fallbackUrl;
   final String identity;
+  final bool isPlaying;
+  final bool trackTransitionsEnabled;
+  final bool animatedArtworkEnabled;
   final double maxExtent;
   final bool isFavorite;
   final double shadowCompactness;
   final double shadowHorizontalClearance;
+  final double borderRadius;
 
   @override
   State<_LargeArtwork> createState() => _LargeArtworkState();
@@ -1126,6 +2087,19 @@ class _LargeArtworkState extends State<_LargeArtwork> {
     final transitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : const Duration(milliseconds: 420);
+    final artwork = SizedBox.expand(
+      key: ValueKey(_transitionId),
+      child: _PlayerArtworkSurface(
+        url: source,
+        fallbackUrl: widget.fallbackUrl,
+        identity: widget.identity,
+        isPlaying: widget.isPlaying,
+        animatedArtworkEnabled: widget.animatedArtworkEnabled && source != null,
+        compactness: widget.shadowCompactness,
+        horizontalClearance: widget.shadowHorizontalClearance,
+        borderRadius: widget.borderRadius,
+      ),
+    );
     return ConstrainedBox(
       key: const ValueKey('player-large-artwork'),
       constraints: BoxConstraints(
@@ -1137,28 +2111,23 @@ class _LargeArtworkState extends State<_LargeArtwork> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            AnimatedSwitcher(
-              key: const ValueKey('player-artwork-track-transition'),
-              duration: transitionDuration,
-              reverseDuration: transitionDuration,
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              layoutBuilder: (currentChild, previousChildren) => Stack(
-                alignment: Alignment.center,
-                clipBehavior: Clip.none,
-                children: [...previousChildren, ?currentChild],
-              ),
-              transitionBuilder: noDimmingFadeTransitionBuilder,
-              child: SizedBox.expand(
-                key: ValueKey(_transitionId),
-                child: _PlayerArtworkSurface(
-                  url: source,
-                  fallbackUrl: widget.fallbackUrl,
-                  compactness: widget.shadowCompactness,
-                  horizontalClearance: widget.shadowHorizontalClearance,
+            if (widget.trackTransitionsEnabled)
+              AnimatedSwitcher(
+                key: const ValueKey('player-artwork-track-transition'),
+                duration: transitionDuration,
+                reverseDuration: transitionDuration,
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                layoutBuilder: (currentChild, previousChildren) => Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [...previousChildren, ?currentChild],
                 ),
-              ),
-            ),
+                transitionBuilder: smoothTrackChangeTransitionBuilder,
+                child: artwork,
+              )
+            else
+              artwork,
             if (widget.isFavorite)
               const Positioned(
                 top: 6,
@@ -1184,14 +2153,22 @@ class _PlayerArtworkSurface extends StatelessWidget {
   const _PlayerArtworkSurface({
     required this.url,
     required this.fallbackUrl,
+    required this.identity,
+    required this.isPlaying,
+    required this.animatedArtworkEnabled,
     required this.compactness,
     required this.horizontalClearance,
+    required this.borderRadius,
   });
 
   final String? url;
   final String? fallbackUrl;
+  final String identity;
+  final bool isPlaying;
+  final bool animatedArtworkEnabled;
   final double compactness;
   final double horizontalClearance;
+  final double borderRadius;
 
   @override
   Widget build(BuildContext context) {
@@ -1241,15 +2218,18 @@ class _PlayerArtworkSurface extends StatelessWidget {
         return DecoratedBox(
           key: const ValueKey('player-artwork-surface'),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(appArtworkRadius),
+            borderRadius: BorderRadius.circular(borderRadius),
             boxShadow: [shadow],
           ),
           child: Stack(
             fit: StackFit.expand,
             clipBehavior: Clip.none,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(appArtworkRadius),
+              AnimatedArtworkMotion(
+                enabled: animatedArtworkEnabled,
+                isPlaying: isPlaying,
+                identity: identity,
+                borderRadius: BorderRadius.circular(borderRadius),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -1318,6 +2298,7 @@ class _FallbackBackground extends StatelessWidget {
 class _PlayerControls extends ConsumerWidget {
   const _PlayerControls({
     required this.snapshot,
+    required this.trackTransitionsEnabled,
     required this.hasTrack,
     required this.isFavorite,
     required this.savedTrackId,
@@ -1333,6 +2314,7 @@ class _PlayerControls extends ConsumerWidget {
   });
 
   final PlayerSnapshot snapshot;
+  final bool trackTransitionsEnabled;
   final bool hasTrack;
   final bool isFavorite;
   final String? savedTrackId;
@@ -1349,7 +2331,9 @@ class _PlayerControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isPlaying = snapshot.status == PlayerStatus.playing;
-    final mobile = Theme.of(context).platform == TargetPlatform.android;
+    final mobile = AppPlatform.isMobileTargetPlatform(
+      Theme.of(context).platform,
+    );
     final titleStyle = Theme.of(context).textTheme.headlineMedium?.copyWith(
       fontSize: lerpDouble(compact ? 28 : 42, compact ? 24 : 34, compactness),
       fontWeight: FontWeight.w900,
@@ -1460,6 +2444,7 @@ class _PlayerControls extends ConsumerWidget {
           TrackChangeTransition(
             switcherKey: const ValueKey('player-metadata-track-transition'),
             identity: visualIdentity,
+            enabled: trackTransitionsEnabled,
             alignment: Alignment.topLeft,
             child: stableMetadata,
           ),
@@ -1546,28 +2531,26 @@ class _PlayerShareButton extends ConsumerWidget {
     final color = AppColors.playbackSecondaryControlForegroundFor(context);
 
     return Builder(
-      builder: (buttonContext) {
-        return IconButton(
-          key: const ValueKey('player-share-control'),
-          tooltip: strings.shareSong,
-          constraints: const BoxConstraints.tightFor(width: 48, height: 48),
-          padding: const EdgeInsets.all(9),
-          color: color,
-          disabledColor: color.withValues(alpha: 0.38),
-          iconSize: 30,
-          icon: const Icon(Icons.share_rounded),
-          onPressed: canShare
-              ? () => unawaited(
-                  _shareTrack(
-                    context: buttonContext,
-                    ref: ref,
-                    track: track,
-                    strings: strings,
-                  ),
-                )
-              : null,
-        );
-      },
+      builder: (buttonContext) => IconButton(
+        key: const ValueKey('player-share-control'),
+        tooltip: strings.shareSong,
+        constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+        padding: const EdgeInsets.all(9),
+        color: color,
+        disabledColor: color.withValues(alpha: 0.38),
+        iconSize: 30,
+        icon: const Icon(Icons.share_rounded),
+        onPressed: canShare
+            ? () => unawaited(
+                _shareTrack(
+                  context: buttonContext,
+                  ref: ref,
+                  track: track,
+                  strings: strings,
+                ),
+              )
+            : null,
+      ),
     );
   }
 }
@@ -1578,12 +2561,14 @@ class _PlayerFavoriteButton extends ConsumerWidget {
     required this.isFavorite,
     required this.savedTrackId,
     required this.strings,
+    this.appleStyle = false,
   });
 
   final PlayerSnapshot snapshot;
   final bool isFavorite;
   final String? savedTrackId;
   final AppStrings strings;
+  final bool appleStyle;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1595,7 +2580,29 @@ class _PlayerFavoriteButton extends ConsumerWidget {
       context,
     );
 
-    return IconButton(
+    final appleIcon = DecoratedBox(
+      key: const ValueKey('apple-player-favorite-surface'),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.playbackControlForegroundFor(
+          context,
+        ).withValues(alpha: 0.12),
+        border: Border.all(
+          color: AppColors.playbackControlForegroundFor(
+            context,
+          ).withValues(alpha: 0.08),
+        ),
+      ),
+      child: SizedBox.square(
+        dimension: 40,
+        child: Center(
+          child: Icon(
+            isFavorite ? Icons.star_rounded : Icons.star_border_rounded,
+          ),
+        ),
+      ),
+    );
+    final button = IconButton(
       key: const ValueKey('player-favorite-control'),
       tooltip: isFavorite
           ? strings.removeFromFavorites
@@ -1603,11 +2610,15 @@ class _PlayerFavoriteButton extends ConsumerWidget {
       color: isFavorite ? activeColor : inactiveColor,
       disabledColor: inactiveColor.withValues(alpha: 0.38),
       constraints: const BoxConstraints.tightFor(width: 48, height: 48),
-      padding: const EdgeInsets.all(9),
-      iconSize: 30,
-      icon: Icon(
-        isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-      ),
+      padding: EdgeInsets.zero,
+      iconSize: appleStyle ? 22 : 30,
+      icon: appleStyle
+          ? appleIcon
+          : Icon(
+              isFavorite
+                  ? Icons.favorite_rounded
+                  : Icons.favorite_border_rounded,
+            ),
       onPressed: !snapshot.isExternal && hasIdentity
           ? () => unawaited(
               _toggleFavoriteForSnapshot(
@@ -1621,6 +2632,10 @@ class _PlayerFavoriteButton extends ConsumerWidget {
             )
           : null,
     );
+    if (!appleStyle) {
+      return button;
+    }
+    return button;
   }
 }
 
@@ -2006,10 +3021,7 @@ Future<void> _shareTrack({
   required TrackInfo track,
   required AppStrings strings,
 }) async {
-  final renderObject = context.findRenderObject();
-  final origin = renderObject is RenderBox && renderObject.hasSize
-      ? renderObject.localToGlobal(Offset.zero) & renderObject.size
-      : null;
+  final origin = sharePositionOriginForContext(context);
 
   try {
     await ref
@@ -2064,7 +3076,9 @@ class _PlaybackButtons extends ConsumerWidget {
         final width = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : MediaQuery.sizeOf(context).width;
-        final mobile = Theme.of(context).platform == TargetPlatform.android;
+        final mobile = AppPlatform.isMobileTargetPlatform(
+          Theme.of(context).platform,
+        );
         final narrow = width < 360;
         final veryNarrow = width < 300;
         final roomy = width >= 420 || !compact;
@@ -2444,6 +3458,8 @@ class _VolumePopover extends ConsumerWidget {
         ref.watch(playerControllerProvider).value ??
         const PlayerSnapshot(status: PlayerStatus.idle);
     final volume = snapshot.volume.clamp(0.0, 1.0).toDouble();
+    final surfaceMode = AppColors.surfaceBackgroundModeFor(context);
+    final liquidGlass = surfaceMode.isLiquidGlass;
     final menuBackground = AppColors.menuBackgroundFor(context);
     final menuForeground = AppColors.menuForegroundFor(context);
     final menuIcon = AppColors.menuIconFor(context);
@@ -2456,13 +3472,15 @@ class _VolumePopover extends ConsumerWidget {
       width: math.min(244.0, MediaQuery.sizeOf(context).width - 32),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-        gradient: AppColors.glassSurfaceGradientFor(
-          context,
-          baseColor: menuBackground,
-          intensity: 0.82,
-        ),
+        gradient: liquidGlass
+            ? null
+            : AppColors.glassSurfaceGradientFor(
+                context,
+                baseColor: menuBackground,
+                intensity: 0.82,
+              ),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: menuBorder),
+        border: liquidGlass ? null : Border.all(color: menuBorder),
       ),
       child: Semantics(
         key: const ValueKey('volume-popover-semantics'),
@@ -2524,33 +3542,44 @@ class _VolumePopover extends ConsumerWidget {
         ),
       ),
     );
-    final roundedPopover = ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child:
-          AppColors.surfaceBackgroundModeFor(context) ==
-              SurfaceBackgroundMode.transparent
-          ? BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-              child: popover,
-            )
-          : popover,
-    );
+    final roundedPopover = liquidGlass
+        ? LiquidGlassSurface(
+            key: const ValueKey('volume-popover-liquid-glass'),
+            borderRadius: BorderRadius.circular(14),
+            blurSigma: 8,
+            intensity: 1,
+            edgeTreatment: LiquidGlassEdgeTreatment.perimeter,
+            child: popover,
+          )
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: surfaceMode.usesBackdrop
+                ? BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                    child: popover,
+                  )
+                : popover,
+          );
 
     return DecoratedBox(
       key: const ValueKey('volume-popover-shadow'),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(
-              alpha: Theme.of(context).brightness == Brightness.dark
-                  ? 0.38
-                  : 0.2,
-            ),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        // LiquidGlassSurface paints its own shape-aware exterior shadow.
+        // Preserve this legacy shadow only for the non-liquid treatments.
+        boxShadow: liquidGlass
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                    alpha: Theme.of(context).brightness == Brightness.dark
+                        ? 0.38
+                        : 0.2,
+                  ),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
       ),
       child: Material(color: Colors.transparent, child: roundedPopover),
     );
@@ -2666,6 +3695,7 @@ class _PlayerMenu extends ConsumerWidget {
     required this.onOpenArtist,
     required this.onOpenAlbum,
     required this.strings,
+    this.appleStyle = false,
   });
 
   final PlayerSnapshot snapshot;
@@ -2675,22 +3705,79 @@ class _PlayerMenu extends ConsumerWidget {
   final VoidCallback? onOpenArtist;
   final VoidCallback? onOpenAlbum;
   final AppStrings strings;
+  final bool appleStyle;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final menuIconColor = AppColors.menuIconFor(context);
-    return GlassPopupMenuButton<String>(
+    final shareTrack = !snapshot.isExternal
+        ? _shareTrackForSnapshot(
+            snapshot,
+            ref,
+            strings,
+            savedTrackId: savedTrackId,
+          )
+        : null;
+    final shareService = ref.read(trackShareServiceProvider);
+    final canShare = shareTrack != null && shareService.canShare(shareTrack);
+    final appleIcon = DecoratedBox(
+      key: const ValueKey('apple-player-menu-surface'),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.playbackControlForegroundFor(
+          context,
+        ).withValues(alpha: 0.12),
+        border: Border.all(
+          color: AppColors.playbackControlForegroundFor(
+            context,
+          ).withValues(alpha: 0.08),
+        ),
+      ),
+      child: const SizedBox.square(
+        dimension: 40,
+        child: Center(child: Icon(Icons.more_horiz_rounded, size: 22)),
+      ),
+    );
+    final button = GlassPopupMenuButton<String>(
+      key: const ValueKey('player-menu-control'),
       enabled: snapshot.trackId != null,
       tooltip: strings.moreOptions,
+      position: PopupMenuPosition.under,
       padding: EdgeInsets.zero,
+      // PopupMenuButton.constraints sizes the popup route, not its trigger.
+      // Keep Apple's 48 px touch target on the button style so the menu can
+      // retain its intrinsic width and show every action instead of being
+      // clipped down to the first (Share) icon.
+      style: appleStyle
+          ? IconButton.styleFrom(
+              fixedSize: const Size.square(48),
+              padding: EdgeInsets.zero,
+            )
+          : null,
       iconColor: AppColors.playbackControlForegroundFor(context),
-      icon: const Icon(Icons.more_vert_rounded, size: 34),
+      icon: appleStyle
+          ? appleIcon
+          : const Icon(Icons.more_vert_rounded, size: 34),
       onSelected: (value) {
         switch (value) {
+          case 'share':
+            if (shareTrack != null) {
+              unawaited(
+                _shareTrack(
+                  context: context,
+                  ref: ref,
+                  track: shareTrack,
+                  strings: strings,
+                ),
+              );
+            }
+            return;
           case 'download':
             unawaited(_downloadCurrent(context, ref));
+            return;
           case 'playlist':
             unawaited(_showPlaylistPicker(context, ref));
+            return;
           case 'favorite':
             unawaited(
               _toggleFavoriteForSnapshot(
@@ -2702,13 +3789,39 @@ class _PlayerMenu extends ConsumerWidget {
                 strings: strings,
               ),
             );
+            return;
           case 'artist':
             onOpenArtist?.call();
+            return;
           case 'album':
             onOpenAlbum?.call();
+            return;
         }
       },
       itemBuilder: (context) => [
+        PopupMenuItem(
+          key: const ValueKey('player-menu-share'),
+          value: 'share',
+          enabled: canShare,
+          child: Row(
+            children: [
+              Icon(
+                Icons.share_rounded,
+                color: canShare
+                    ? menuIconColor
+                    : menuIconColor.withValues(alpha: 0.38),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  strings.shareSong,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
         if (onOpenArtist != null)
           PopupMenuItem(
             key: const ValueKey('player-menu-go-to-artist'),
@@ -2806,6 +3919,10 @@ class _PlayerMenu extends ConsumerWidget {
         ),
       ],
     );
+    if (!appleStyle) {
+      return button;
+    }
+    return button;
   }
 
   Future<void> _downloadCurrent(BuildContext context, WidgetRef ref) async {

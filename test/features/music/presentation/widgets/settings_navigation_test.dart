@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
@@ -151,6 +152,10 @@ void main() {
       SurfaceBackgroundMode.transparent,
     );
     expect(
+      SurfaceBackgroundMode.fromCode('liquidGlass'),
+      SurfaceBackgroundMode.liquidGlass,
+    );
+    expect(
       MiniPlayerMode.fromCode(null, platform: TargetPlatform.android),
       MiniPlayerMode.capsule,
     );
@@ -175,6 +180,10 @@ void main() {
     expect(
       MiniPlayerBackgroundMode.fromCode('transparent'),
       MiniPlayerBackgroundMode.transparent,
+    );
+    expect(
+      MiniPlayerBackgroundMode.fromCode('liquidGlass'),
+      MiniPlayerBackgroundMode.liquidGlass,
     );
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer(
@@ -225,6 +234,33 @@ void main() {
           .value
           ?.miniPlayerBackgroundMode,
       MiniPlayerBackgroundMode.transparent,
+    );
+
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setSurfaceBackgroundMode(SurfaceBackgroundMode.liquidGlass);
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setMiniPlayerBackgroundMode(MiniPlayerBackgroundMode.liquidGlass);
+
+    expect(
+      preferences.getString('settings.surfaceBackgroundMode'),
+      'liquidGlass',
+    );
+    expect(
+      preferences.getString('settings.miniPlayerBackgroundMode'),
+      'liquidGlass',
+    );
+    expect(
+      container.read(settingsControllerProvider).value?.surfaceBackgroundMode,
+      SurfaceBackgroundMode.liquidGlass,
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value
+          ?.miniPlayerBackgroundMode,
+      MiniPlayerBackgroundMode.liquidGlass,
     );
   });
 
@@ -433,7 +469,7 @@ void main() {
     },
   );
 
-  testWidgets('appearance selects mini player style and background', (
+  testWidgets('appearance selects player, surface, and mini player modes', (
     tester,
   ) async {
     _configureView(tester, const Size(430, 1000));
@@ -448,6 +484,15 @@ void main() {
     await tester.pumpAndSettle();
 
     final selector = find.byKey(const ValueKey('mini-player-mode-selector'));
+    final playerStyleSelector = find.byKey(
+      const ValueKey('player-style-selector'),
+    );
+    final animatedArtworkToggle = find.byKey(
+      const ValueKey('animated-artwork-toggle'),
+    );
+    final animatedArtworkSwitch = find.byKey(
+      const ValueKey('animated-artwork-switch'),
+    );
     final surfaceBackgroundSelector = find.byKey(
       const ValueKey('surface-background-selector'),
     );
@@ -455,16 +500,35 @@ void main() {
       const ValueKey('mini-player-background-selector'),
     );
     expect(selector, findsOneWidget);
+    expect(playerStyleSelector, findsOneWidget);
+    expect(animatedArtworkToggle, findsOneWidget);
+    expect(animatedArtworkSwitch, findsOneWidget);
     expect(surfaceBackgroundSelector, findsOneWidget);
     expect(backgroundSelector, findsOneWidget);
     expect(find.text('Efectos de superficie'), findsOneWidget);
+    expect(find.text('Reproductor'), findsOneWidget);
     expect(find.text('Mini reproductor'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: playerStyleSelector,
+        matching: find.text('BStream Music'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: animatedArtworkToggle,
+        matching: find.text('Portadas animadas'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.widget<Switch>(animatedArtworkSwitch).value, isTrue);
     expect(
       find.descendant(of: selector, matching: find.text('Estilo')),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: selector, matching: find.text('Cápsula')),
+      find.descendant(of: selector, matching: find.text('Flotante')),
       findsOneWidget,
     );
     expect(
@@ -493,8 +557,16 @@ void main() {
       findsOneWidget,
     );
     expect(
-      tester.getTopLeft(selector).dy,
+      tester.getTopLeft(playerStyleSelector).dy,
       greaterThan(tester.getTopLeft(surfaceBackgroundSelector).dy),
+    );
+    expect(
+      tester.getTopLeft(selector).dy,
+      greaterThan(tester.getTopLeft(animatedArtworkToggle).dy),
+    );
+    expect(
+      tester.getTopLeft(animatedArtworkToggle).dy,
+      greaterThan(tester.getTopLeft(playerStyleSelector).dy),
     );
     expect(
       tester.getTopLeft(backgroundSelector).dy,
@@ -514,6 +586,18 @@ void main() {
       find.byKey(const ValueKey('settings-surface-background-option-accent')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(
+        const ValueKey('settings-surface-background-option-transparent'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('settings-surface-background-option-liquid-glass'),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(
       find.byKey(
         const ValueKey('settings-surface-background-option-transparent'),
@@ -528,6 +612,58 @@ void main() {
       ),
       findsOneWidget,
     );
+
+    await tester.tap(surfaceBackgroundSelector);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey('settings-surface-background-option-liquid-glass'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: surfaceBackgroundSelector,
+        matching: find.text('Liquid Glass Style'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.ensureVisible(playerStyleSelector);
+    await tester.tap(playerStyleSelector);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-player-style-dialog')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-player-style-option-bstream-music')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-player-style-option-apple-music')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('settings-player-style-option-apple-music')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: playerStyleSelector,
+        matching: find.text('Apple Music Style'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.ensureVisible(animatedArtworkToggle);
+    await tester.tap(animatedArtworkToggle);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<Switch>(animatedArtworkSwitch).value, isFalse);
 
     await tester.ensureVisible(selector);
     await tester.tap(selector);
@@ -559,7 +695,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.descendant(of: selector, matching: find.text('Cápsula')),
+      find.descendant(of: selector, matching: find.text('Flotante')),
       findsOneWidget,
     );
 
@@ -584,6 +720,18 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(
+      find.byKey(
+        const ValueKey('settings-mini-player-background-option-transparent'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('settings-mini-player-background-option-liquid-glass'),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(
       find.byKey(
         const ValueKey('settings-mini-player-background-option-transparent'),
@@ -599,6 +747,27 @@ void main() {
       find.descendant(
         of: backgroundSelector,
         matching: find.text('Transparente'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(backgroundSelector);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey('settings-mini-player-background-option-liquid-glass'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-mini-player-background-dialog')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: backgroundSelector,
+        matching: find.text('Liquid Glass Style'),
       ),
       findsOneWidget,
     );
@@ -1184,8 +1353,6 @@ void main() {
       findsNothing,
     );
     expect(find.byKey(const ValueKey('settings-card-timer')), findsNothing);
-    expect(find.byKey(const ValueKey('settings-inline-tools')), findsOneWidget);
-    expect(find.byKey(const ValueKey('settings-card-tools')), findsNothing);
     expect(find.byKey(const ValueKey('storage-import-backup')), findsNothing);
     expect(navigationController.canPop, isFalse);
     await tester.ensureVisible(
@@ -1893,6 +2060,34 @@ void main() {
     expect(slotOpacity(settings).opacity, 1);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('Liquid Glass stays off every Settings card surface', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(430, 1600));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final entry = find.byKey(const ValueKey('settings-card-language'));
+    final timer = find.byKey(const ValueKey('settings-inline-timer'));
+    final crossfade = find.byKey(const ValueKey('settings-inline-crossfade'));
+    for (final card in <Finder>[entry, timer, crossfade]) {
+      expect(card, findsOneWidget);
+      expect(
+        find.descendant(of: card, matching: find.byType(LiquidGlassSurface)),
+        findsNothing,
+      );
+      expect(_outerMaterial(tester, card).color?.a, 1);
+    }
+  });
 }
 
 void _configureView(WidgetTester tester, Size size) {
@@ -1911,6 +2106,7 @@ Widget _settingsHarness({
   List<Override> overrides = const [],
   bool disableAnimations = false,
   bool active = true,
+  SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
   SettingsController Function()? settingsControllerBuilder,
 }) {
   return ProviderScope(
@@ -1921,6 +2117,9 @@ Widget _settingsHarness({
       ...overrides,
     ],
     child: MaterialApp(
+      theme: ThemeData(
+        extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
+      ),
       builder: disableAnimations
           ? (context, child) => MediaQuery(
               data: MediaQuery.of(context).copyWith(disableAnimations: true),
@@ -2039,6 +2238,18 @@ class _FixedSettingsController extends SettingsController {
   Future<void> setSurfaceBackgroundMode(SurfaceBackgroundMode mode) async {
     final current = await future;
     state = AsyncData(current.copyWith(surfaceBackgroundMode: mode));
+  }
+
+  @override
+  Future<void> setPlayerStyle(PlayerStyle style) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(playerStyle: style));
+  }
+
+  @override
+  Future<void> setAnimatedArtworkEnabled(bool enabled) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(animatedArtworkEnabled: enabled));
   }
 
   @override

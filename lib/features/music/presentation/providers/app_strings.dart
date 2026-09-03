@@ -4,6 +4,7 @@ import '../../domain/entities/lyrics_romanization_language.dart';
 import 'lyrics_animation_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
+import 'player_style.dart';
 
 enum AppLanguage { spanish, english }
 
@@ -239,6 +240,7 @@ class AppStrings {
   String get refresh => choose('Actualizar', 'Refresh');
   String get library => choose('Biblioteca', 'Library');
   String get settings => choose('Ajustes', 'Settings');
+  String get openSettings => choose('Abrir ajustes', 'Open settings');
   String get searchHint =>
       choose('Canción, artista o álbum', 'Song, artist, or album');
   String get searchEmptyTitle => choose(
@@ -268,13 +270,13 @@ class AppStrings {
     'No encontramos artistas para esta búsqueda.',
     'No artists matched this search.',
   );
-  String get searchInnerTubeFallback => choose(
-    'InnerTube no respondió. Se usó yt-dlp y sólo se muestran videos.',
-    'InnerTube did not respond. yt-dlp was used, so only videos are shown.',
+  String get searchInnerTubeVideoFallback => choose(
+    'El catálogo de YouTube Music no respondió. Se usó el fallback de videos de InnerTube.',
+    'The YouTube Music catalog did not respond. The InnerTube video fallback was used.',
   );
-  String get searchYtDlpVideoOnly => choose(
-    'Esta búsqueda usa yt-dlp y sólo puede mostrar videos.',
-    'This search uses yt-dlp and can only show videos.',
+  String get searchInnerTubeVideoOnly => choose(
+    'Esta búsqueda usa el fallback de videos de InnerTube y sólo puede mostrar videos.',
+    'This search uses the InnerTube video fallback and can only show videos.',
   );
   String openAlbum(String title) =>
       choose('Abrir álbum $title', 'Open album $title');
@@ -299,6 +301,8 @@ class AppStrings {
   String get downloadAudio => choose('Descargar audio', 'Download audio');
   String get noPlayback => choose('Sin reproducción', 'Nothing playing');
   String get nowPlaying => choose('En reproducción', 'Now playing');
+  String get minimizePlayer =>
+      choose('Minimizar reproductor', 'Minimize player');
   String get noTitle => choose('Sin título', 'Untitled');
   String get unknownArtist => choose('Desconocido', 'Unknown');
   String get playbackError => choose('Error de reproducción', 'Playback error');
@@ -794,16 +798,26 @@ class AppStrings {
   String get surfaceBackgroundAccent => choose('Acento', 'Accent');
   String get surfaceBackgroundTransparent =>
       choose('Transparente', 'Transparent');
+  String get surfaceBackgroundLiquidGlass => 'Liquid Glass Style';
+  String get playerStyle => choose('Estilo', 'Style');
+  String get playerStyleBStreamMusic => 'BStream Music';
+  String get playerStyleAppleMusic => 'Apple Music Style';
+  String get animatedArtwork => choose('Portadas animadas', 'Animated artwork');
+  String get animatedArtworkDescription => choose(
+    'Añade movimiento, profundidad y zoom sutiles a la portada del reproductor.',
+    'Adds subtle motion, depth, and zoom to the player artwork.',
+  );
   String get miniPlayer => choose('Mini reproductor', 'Mini player');
   String get miniPlayerStyle => choose('Estilo', 'Style');
   String get miniPlayerClassic => choose('Clásico', 'Classic');
-  String get miniPlayerCapsule => choose('Cápsula', 'Capsule');
+  String get miniPlayerCapsule => choose('Flotante', 'Floating');
   String get miniPlayerBackground =>
       choose('Fondo del Mini reproductor', 'Mini player background');
   String get miniPlayerBackgroundAccent => choose('Acento', 'Accent');
   String get miniPlayerBackgroundArtwork => choose('Portada', 'Artwork');
   String get miniPlayerBackgroundTransparent =>
       choose('Transparente', 'Transparent');
+  String get miniPlayerBackgroundLiquidGlass => 'Liquid Glass Style';
   String accentLabel(AppAccent accent) => switch (accent) {
     AppAccent.white => choose('Blanco', 'White'),
     AppAccent.green => choose('Verde', 'Green'),
@@ -939,7 +953,6 @@ class AppStrings {
     'Ingresa una duración entre 1 y 720 minutos.',
     'Enter a duration between 1 and 720 minutes.',
   );
-  String get desktopTools => choose('Herramientas desktop', 'Desktop tools');
   String get liveConnection => choose('Conexión LIVE', 'LIVE connection');
   String get liveConnectionSummary => choose(
     'Conecta un LIVE y configura quién puede pedir canciones.',
@@ -987,8 +1000,6 @@ class AppStrings {
     'No se pudo guardar la carpeta de descargas.',
     'The downloads folder could not be saved.',
   );
-  String get verify => choose('Verificar', 'Check');
-  String get available => choose('disponible', 'available');
   String get notFound => choose('no encontrado', 'not found');
 
   String themeModeLabel(AppThemeMode mode) => switch (mode) {
@@ -1000,16 +1011,22 @@ class AppStrings {
     MiniPlayerMode.standard => miniPlayerClassic,
     MiniPlayerMode.capsule => miniPlayerCapsule,
   };
+  String playerStyleLabel(PlayerStyle style) => switch (style) {
+    PlayerStyle.bstreamMusic => playerStyleBStreamMusic,
+    PlayerStyle.appleMusic => playerStyleAppleMusic,
+  };
   String surfaceBackgroundModeLabel(SurfaceBackgroundMode mode) =>
       switch (mode) {
         SurfaceBackgroundMode.accent => surfaceBackgroundAccent,
         SurfaceBackgroundMode.transparent => surfaceBackgroundTransparent,
+        SurfaceBackgroundMode.liquidGlass => surfaceBackgroundLiquidGlass,
       };
   String miniPlayerBackgroundModeLabel(MiniPlayerBackgroundMode mode) =>
       switch (mode) {
         MiniPlayerBackgroundMode.accent => miniPlayerBackgroundAccent,
         MiniPlayerBackgroundMode.artwork => miniPlayerBackgroundArtwork,
         MiniPlayerBackgroundMode.transparent => miniPlayerBackgroundTransparent,
+        MiniPlayerBackgroundMode.liquidGlass => miniPlayerBackgroundLiquidGlass,
       };
   String get selectDownloadFolder =>
       choose('Selecciona carpeta de descargas', 'Select downloads folder');

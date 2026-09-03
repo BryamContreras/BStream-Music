@@ -4,9 +4,9 @@ const deviceAudioArtworkScheme = 'bstream-local-artwork';
 
 /// Creates a lightweight artwork reference for one device audio URI.
 ///
-/// The reference does not contain or extract the embedded image. Android
-/// resolves it only when an artwork widget becomes visible, keeping the local
-/// catalog scan independent from the number and size of embedded covers.
+/// The reference does not contain or extract the embedded image. Android and
+/// iOS resolve it only when an artwork widget becomes visible, keeping the
+/// local catalog scan independent from the number and size of embedded covers.
 String? deviceAudioArtworkSourceForUri(String? audioSource) {
   final normalized = audioSource?.trim();
   if (normalized == null || normalized.isEmpty) {

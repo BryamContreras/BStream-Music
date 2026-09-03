@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/app_platform.dart';
@@ -21,7 +22,7 @@ import 'mini_player.dart';
 import 'playback_gradient_background.dart';
 import 'playback_progress_line.dart';
 import 'source_image.dart';
-import 'wavy_playback_seek_bar.dart';
+import 'uniform_playback_slider_track_shape.dart';
 
 bool _usesMobileLyricsLayout(BuildContext context) =>
     switch (Theme.of(context).platform) {
@@ -80,14 +81,20 @@ double _lyricsDesktopCompanionGapFor(
 _lyricsHaloFor(BuildContext context, Color accent) {
   final mobileLayout = _usesMobileLyricsLayout(context);
   final haloColor = accent.computeLuminance() < 0.40
-      ? Color.alphaBlend(Colors.white.withValues(alpha: 0.10), accent)
+      ? Color.alphaBlend(
+          Colors.white.withValues(alpha: mobileLayout ? 0.18 : 0.10),
+          accent,
+        )
       : accent;
   return (
     color: haloColor,
-    innerAlpha: mobileLayout ? 0.40 : 0.30,
-    innerBlur: mobileLayout ? 8 : 10,
-    outerAlpha: mobileLayout ? 0.20 : 0.14,
-    outerBlur: mobileLayout ? 19 : 24,
+    // Smaller mobile glyphs and the artwork-derived background need a little
+    // more contrast than desktop for the same perceived outer glow. Only the
+    // Gaussian shadows are strengthened; the glyph itself remains white.
+    innerAlpha: mobileLayout ? 0.48 : 0.30,
+    innerBlur: 10,
+    outerAlpha: mobileLayout ? 0.24 : 0.14,
+    outerBlur: mobileLayout ? 26 : 24,
   );
 }
 
@@ -104,9 +111,14 @@ class LyricsPage extends ConsumerStatefulWidget {
   ConsumerState<LyricsPage> createState() => _LyricsPageState();
 }
 
-class _LyricsPageState extends ConsumerState<LyricsPage> {
+class _LyricsPageState extends ConsumerState<LyricsPage>
+    with SingleTickerProviderStateMixin {
+  static const _mobileLayoutTransitionDuration = Duration(milliseconds: 500);
+
   final _manualSearchController = TextEditingController();
   final _screenChannel = const AndroidScreenChannel();
+  late final AnimationController _mobileLayoutController;
+  late final Animation<double> _mobileSideLayoutAnimation;
   String? _lookupIdentity;
   bool _showSimilarLyrics = false;
   String _manualSearchTitle = '';
@@ -116,10 +128,22 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
   Future<void> _presentationChromeQueue = Future<void>.value();
   TargetPlatform? _presentationChromePlatform;
   bool _presentationChromeActive = false;
+  bool? _mobileLandscapeTarget;
+  bool? _mobileLayoutReducedMotion;
+  int _mobileLayoutAnimationRevision = 0;
 
   @override
   void initState() {
     super.initState();
+    _mobileLayoutController = AnimationController(
+      vsync: this,
+      duration: _mobileLayoutTransitionDuration,
+    );
+    _mobileSideLayoutAnimation = CurvedAnimation(
+      parent: _mobileLayoutController,
+      curve: Curves.easeInOutCubic,
+      reverseCurve: Curves.easeInOutCubic,
+    );
     _setKeepScreenOn(true);
   }
 
@@ -127,12 +151,13 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
   void dispose() {
     _setKeepScreenOn(false);
     _setPresentationChromeActive(false, platform: _presentationChromePlatform);
+    _mobileLayoutController.dispose();
     _manualSearchController.dispose();
     super.dispose();
   }
 
   void _setKeepScreenOn(bool enabled) {
-    if (AppPlatform.isAndroid) {
+    if (AppPlatform.isMobile) {
       unawaited(_screenChannel.setKeepScreenOn(enabled));
     }
   }
@@ -176,10 +201,49 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final mobileLayout = _usesMobileLyricsLayout(context);
+    final size = MediaQuery.sizeOf(context);
+    final landscapeTarget = mobileLayout && size.width > size.height;
+    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    final previousTarget = _mobileLandscapeTarget;
+    final reducedMotionChanged =
+        _mobileLayoutReducedMotion != null &&
+        _mobileLayoutReducedMotion != reducedMotion;
+    _mobileLandscapeTarget = landscapeTarget;
+    _mobileLayoutReducedMotion = reducedMotion;
+
+    if (previousTarget == null || reducedMotion) {
+      _mobileLayoutAnimationRevision++;
+      _mobileLayoutController.stop();
+      _mobileLayoutController.value = landscapeTarget ? 1 : 0;
+    } else if (previousTarget != landscapeTarget) {
+      final revision = ++_mobileLayoutAnimationRevision;
+      _mobileLayoutController.stop();
+      // Let the first frame at the new size retain the previous arrangement.
+      // Otherwise the platform's own rotation animation can consume most of
+      // this transition before Flutter presents a frame to the user.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            revision != _mobileLayoutAnimationRevision ||
+            _mobileLandscapeTarget != landscapeTarget ||
+            _mobileLayoutReducedMotion == true) {
+          return;
+        }
+        unawaited(
+          _mobileLayoutController.animateTo(
+            landscapeTarget ? 1 : 0,
+            curve: Curves.linear,
+          ),
+        );
+      });
+    } else if (reducedMotionChanged) {
+      _mobileLayoutAnimationRevision++;
+      _mobileLayoutController.stop();
+      _mobileLayoutController.value = landscapeTarget ? 1 : 0;
+    }
+
     if (!mobileLayout) {
       return;
     }
-    final size = MediaQuery.sizeOf(context);
     _setPresentationChromeActive(
       size.width > size.height,
       platform: Theme.of(context).platform,
@@ -228,6 +292,27 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
         ? math.min(mediaSize.width, 1720.0 + sideCompanionGap)
         : mediaSize.width;
     final sideLayoutWidthFactor = sideLayoutWidth / mediaSize.width;
+    final companionLayoutSize = mobileLayout
+        ? Size(
+            math.max(mediaSize.width, mediaSize.height),
+            math.min(mediaSize.width, mediaSize.height),
+          )
+        : Size(sideLayoutWidth, mediaSize.height);
+    final companionWidth = _lyricsCompanionWidthFor(
+      companionLayoutSize,
+      mobileLayout: mobileLayout,
+    );
+    // Base mobile sizing on the orientation-independent long/short sides. The
+    // outgoing companion therefore keeps its landscape width while portrait
+    // clips it away instead of visibly snapping to a narrower width first.
+    final animatedMobileCompanionWidth = math.min(
+      math.max(210.0, companionWidth),
+      math.min(mediaSize.width, mediaSize.height),
+    );
+    final animatedMobileCompanionSlotWidth = math.min(
+      animatedMobileCompanionWidth,
+      math.max(0.0, mediaSize.width - 150),
+    );
     final miniPlayerHeight = miniPlayerHeightFor(context, mode: miniPlayerMode);
     final bottomChromeHeight = !mobileLayout && showBottomMiniPlayer
         ? miniPlayerHeight
@@ -297,6 +382,13 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
                 ),
               );
 
+    final lyricsContentLayer = _buildLyricsContentLayer(
+      content: lyricsPresentation.content,
+      mobileLayout: mobileLayout,
+      showOffset: lyricsPresentation.showOffset,
+      offset: offset,
+    );
+
     return Scaffold(
       backgroundColor: const Color(0xFF030504),
       body: Stack(
@@ -312,112 +404,55 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
               padding: EdgeInsets.only(
                 bottom: systemBottomInset + bottomChromeHeight,
               ),
-              child: Column(
-                children: [
-                  if (!showSideCompanion) _LyricsHeader(lookup: lookup),
-                  Expanded(
-                    child: FractionallySizedBox(
-                      key: const ValueKey('lyrics-side-layout-frame'),
-                      widthFactor: sideLayoutWidthFactor,
-                      alignment: Alignment.center,
-                      child: Row(
-                        children: [
-                          if (showSideCompanion)
-                            SizedBox(
-                              key: const ValueKey('lyrics-companion-width'),
-                              width: _lyricsCompanionWidthFor(
-                                Size(sideLayoutWidth, mediaSize.height),
-                                mobileLayout: mobileLayout,
-                              ),
-                              child: _LyricsPlaybackCompanion(
-                                mobileLayout: mobileLayout,
-                              ),
-                            ),
-                          if (showSideCompanion && !mobileLayout)
-                            SizedBox(
-                              key: const ValueKey(
-                                'lyrics-desktop-companion-gap',
-                              ),
-                              width: sideCompanionGap,
-                            ),
-                          Expanded(
-                            key: const ValueKey('lyrics-content-region'),
-                            child: Stack(
-                              fit: StackFit.expand,
+              child: mobileLayout
+                  ? _LyricsMobileOrientationLayout(
+                      landscape: landscape,
+                      animation: _mobileSideLayoutAnimation,
+                      companionWidth: animatedMobileCompanionWidth,
+                      companionSlotWidth: animatedMobileCompanionSlotWidth,
+                      header: _LyricsHeader(lookup: lookup),
+                      companion: const _LyricsPlaybackCompanion(
+                        mobileLayout: true,
+                      ),
+                      content: lyricsContentLayer,
+                    )
+                  : Column(
+                      children: [
+                        if (!showSideCompanion) _LyricsHeader(lookup: lookup),
+                        Expanded(
+                          child: FractionallySizedBox(
+                            key: const ValueKey('lyrics-side-layout-frame'),
+                            widthFactor: sideLayoutWidthFactor,
+                            alignment: Alignment.center,
+                            child: Row(
                               children: [
-                                lyricsPresentation.content,
-                                if (!mobileLayout ||
-                                    lyricsPresentation.showOffset)
-                                  Align(
-                                    alignment: Alignment.bottomCenter,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(bottom: 8),
-                                      child: Row(
-                                        key: const ValueKey(
-                                          'lyrics-overlay-toolbar',
-                                        ),
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          if (!mobileLayout)
-                                            _LyricsExitButton(
-                                              tooltip: strings.choose(
-                                                'Salir de Letras',
-                                                'Exit Lyrics',
-                                              ),
-                                              onPressed: () => unawaited(
-                                                Navigator.of(
-                                                  context,
-                                                ).maybePop(),
-                                              ),
-                                            ),
-                                          if (!mobileLayout &&
-                                              lyricsPresentation.showOffset)
-                                            const SizedBox(width: 8),
-                                          if (lyricsPresentation.showOffset)
-                                            _LyricsOffsetControls(
-                                              offset: offset,
-                                              onDecrease:
-                                                  offset >
-                                                      LyricsOffsetController
-                                                          .minimum
-                                                  ? ref
-                                                        .read(
-                                                          lyricsOffsetControllerProvider
-                                                              .notifier,
-                                                        )
-                                                        .decrease
-                                                  : null,
-                                              onIncrease:
-                                                  offset <
-                                                      LyricsOffsetController
-                                                          .maximum
-                                                  ? ref
-                                                        .read(
-                                                          lyricsOffsetControllerProvider
-                                                              .notifier,
-                                                        )
-                                                        .increase
-                                                  : null,
-                                              onReset: ref
-                                                  .read(
-                                                    lyricsOffsetControllerProvider
-                                                        .notifier,
-                                                  )
-                                                  .reset,
-                                            ),
-                                        ],
-                                      ),
+                                if (showSideCompanion)
+                                  SizedBox(
+                                    key: const ValueKey(
+                                      'lyrics-companion-width',
+                                    ),
+                                    width: companionWidth,
+                                    child: const _LyricsPlaybackCompanion(
+                                      mobileLayout: false,
                                     ),
                                   ),
+                                if (showSideCompanion)
+                                  SizedBox(
+                                    key: const ValueKey(
+                                      'lyrics-desktop-companion-gap',
+                                    ),
+                                    width: sideCompanionGap,
+                                  ),
+                                Expanded(
+                                  key: const ValueKey('lyrics-content-region'),
+                                  child: lyricsContentLayer,
+                                ),
                               ],
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
             ),
           ),
           if (!mobileLayout && showBottomMiniPlayer)
@@ -437,6 +472,64 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
             ),
         ],
       ),
+    );
+  }
+
+  Widget _buildLyricsContentLayer({
+    required Widget content,
+    required bool mobileLayout,
+    required bool showOffset,
+    required Duration offset,
+  }) {
+    final strings = ref.watch(appStringsProvider);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        content,
+        if (!mobileLayout || showOffset)
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _LyricsToolbarFit(
+                enabled: mobileLayout,
+                child: Row(
+                  key: const ValueKey('lyrics-overlay-toolbar'),
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!mobileLayout)
+                      _LyricsExitButton(
+                        tooltip: strings.choose(
+                          'Salir de Letras',
+                          'Exit Lyrics',
+                        ),
+                        onPressed: () =>
+                            unawaited(Navigator.of(context).maybePop()),
+                      ),
+                    if (!mobileLayout && showOffset) const SizedBox(width: 8),
+                    if (showOffset)
+                      _LyricsOffsetControls(
+                        offset: offset,
+                        onDecrease: offset > LyricsOffsetController.minimum
+                            ? ref
+                                  .read(lyricsOffsetControllerProvider.notifier)
+                                  .decrease
+                            : null,
+                        onIncrease: offset < LyricsOffsetController.maximum
+                            ? ref
+                                  .read(lyricsOffsetControllerProvider.notifier)
+                                  .increase
+                            : null,
+                        onReset: ref
+                            .read(lyricsOffsetControllerProvider.notifier)
+                            .reset,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -752,6 +845,256 @@ class _LyricsPageState extends ConsumerState<LyricsPage> {
       return;
     }
     setState(() => _manualSearchTitle = '');
+  }
+}
+
+/// Applies the new orientation's geometry once, then animates only composited
+/// opacity/translation layers. This avoids remeasuring every lyric line on
+/// each frame while its available width changes.
+class _LyricsMobileOrientationLayout extends AnimatedWidget {
+  const _LyricsMobileOrientationLayout({
+    required this.landscape,
+    required Animation<double> animation,
+    required this.companionWidth,
+    required this.companionSlotWidth,
+    required this.header,
+    required this.companion,
+    required this.content,
+  }) : super(listenable: animation);
+
+  final bool landscape;
+  final double companionWidth;
+  final double companionSlotWidth;
+  final Widget header;
+  final Widget companion;
+  final Widget content;
+
+  Animation<double> get _animation => listenable as Animation<double>;
+
+  @override
+  Widget build(BuildContext context) {
+    final landscapeFactor = _animation.value.clamp(0.0, 1.0).toDouble();
+    final headerFactor = 1 - landscapeFactor;
+    final settleFactor = landscape ? landscapeFactor : headerFactor;
+
+    Widget companionFrame({required Widget child, Key? key}) {
+      return SizedBox(
+        key: key,
+        width: companionSlotWidth,
+        child: ClipRect(
+          child: OverflowBox(
+            alignment: AlignmentDirectional.centerStart,
+            minWidth: companionWidth,
+            maxWidth: companionWidth,
+            child: SizedBox(
+              key: const ValueKey('lyrics-companion-width'),
+              width: companionWidth,
+              child: child,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Stack(
+      key: const ValueKey('lyrics-mobile-orientation-layout'),
+      fit: StackFit.expand,
+      clipBehavior: Clip.hardEdge,
+      children: [
+        Column(
+          children: [
+            if (landscape)
+              const SizedBox.shrink(key: ValueKey('lyrics-mobile-header-slot'))
+            else
+              _LyricsPaintTransition(
+                key: const ValueKey('lyrics-mobile-header-layout-transition'),
+                opacityKey: const ValueKey(
+                  'lyrics-mobile-header-layout-opacity',
+                ),
+                slideKey: const ValueKey('lyrics-mobile-header-layout-slide'),
+                factor: headerFactor,
+                hiddenOffset: const Offset(0, -14),
+                child: header,
+              ),
+            Expanded(
+              key: const ValueKey('lyrics-mobile-row-region'),
+              child: FractionallySizedBox(
+                key: const ValueKey('lyrics-side-layout-frame'),
+                widthFactor: 1,
+                child: Row(
+                  children: [
+                    if (landscape)
+                      companionFrame(
+                        key: const ValueKey('lyrics-mobile-companion-slot'),
+                        child: _LyricsPaintTransition(
+                          key: const ValueKey(
+                            'lyrics-mobile-companion-layout-transition',
+                          ),
+                          opacityKey: const ValueKey(
+                            'lyrics-mobile-companion-layout-opacity',
+                          ),
+                          slideKey: const ValueKey(
+                            'lyrics-mobile-companion-layout-slide',
+                          ),
+                          factor: landscapeFactor,
+                          hiddenOffset: const Offset(-24, 0),
+                          child: companion,
+                        ),
+                      )
+                    else
+                      const SizedBox.shrink(
+                        key: ValueKey('lyrics-mobile-companion-slot'),
+                      ),
+                    Expanded(
+                      key: const ValueKey('lyrics-content-region'),
+                      child: _LyricsContentSettleTransition(
+                        factor: settleFactor,
+                        landscape: landscape,
+                        child: content,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (landscape && headerFactor > 0.001)
+          Align(
+            alignment: Alignment.topCenter,
+            child: _LyricsPaintTransition(
+              key: const ValueKey('lyrics-mobile-header-layout-transition'),
+              opacityKey: const ValueKey('lyrics-mobile-header-layout-opacity'),
+              slideKey: const ValueKey('lyrics-mobile-header-layout-slide'),
+              factor: headerFactor,
+              hiddenOffset: const Offset(0, -14),
+              allowInteraction: false,
+              child: header,
+            ),
+          ),
+        if (!landscape && landscapeFactor > 0.001)
+          PositionedDirectional(
+            start: 0,
+            top: 0,
+            bottom: 0,
+            width: companionSlotWidth,
+            child: companionFrame(
+              child: _LyricsPaintTransition(
+                key: const ValueKey(
+                  'lyrics-mobile-companion-layout-transition',
+                ),
+                opacityKey: const ValueKey(
+                  'lyrics-mobile-companion-layout-opacity',
+                ),
+                slideKey: const ValueKey(
+                  'lyrics-mobile-companion-layout-slide',
+                ),
+                factor: landscapeFactor,
+                hiddenOffset: const Offset(-24, 0),
+                allowInteraction: false,
+                child: companion,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _LyricsPaintTransition extends StatelessWidget {
+  const _LyricsPaintTransition({
+    required this.opacityKey,
+    required this.slideKey,
+    required this.factor,
+    required this.hiddenOffset,
+    required this.child,
+    this.allowInteraction = true,
+    super.key,
+  });
+
+  final Key opacityKey;
+  final Key slideKey;
+  final double factor;
+  final Offset hiddenOffset;
+  final bool allowInteraction;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = factor.clamp(0.0, 1.0).toDouble();
+    return Opacity(
+      key: opacityKey,
+      opacity: progress,
+      child: ExcludeSemantics(
+        excluding: !allowInteraction || progress < 0.999,
+        child: IgnorePointer(
+          ignoring: !allowInteraction || progress < 0.999,
+          child: Transform.translate(
+            key: slideKey,
+            offset: hiddenOffset * (1 - progress),
+            transformHitTests: false,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LyricsContentSettleTransition extends StatelessWidget {
+  const _LyricsContentSettleTransition({
+    required this.factor,
+    required this.landscape,
+    required this.child,
+  });
+
+  final double factor;
+  final bool landscape;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = factor.clamp(0.0, 1.0).toDouble();
+    final hiddenOffset = landscape ? const Offset(18, 0) : const Offset(-18, 0);
+    final transitioning = progress < 0.999;
+    return ExcludeSemantics(
+      excluding: transitioning,
+      child: IgnorePointer(
+        ignoring: transitioning,
+        child: Opacity(
+          key: const ValueKey('lyrics-mobile-content-opacity'),
+          opacity: 0.72 + (0.28 * progress),
+          child: Transform.translate(
+            key: const ValueKey('lyrics-mobile-content-slide'),
+            offset: hiddenOffset * (1 - progress),
+            transformHitTests: false,
+            child: RepaintBoundary(
+              key: const ValueKey('lyrics-mobile-content-repaint-boundary'),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LyricsToolbarFit extends StatelessWidget {
+  const _LyricsToolbarFit({required this.enabled, required this.child});
+
+  final bool enabled;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enabled) {
+      return child;
+    }
+    return FittedBox(
+      key: const ValueKey('lyrics-mobile-toolbar-fit'),
+      fit: BoxFit.scaleDown,
+      child: child,
+    );
   }
 }
 
@@ -1178,7 +1521,6 @@ class _LyricsCompanionTimeline extends ConsumerWidget {
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
-          isPlaying: snapshot?.status == PlayerStatus.playing,
         );
       }),
     );
@@ -1191,7 +1533,6 @@ class _LyricsCompanionTimeline extends ConsumerWidget {
             ),
           )
         : timeline.position;
-    final accent = AppColors.downloadAccentFor(context);
     final labelStyle = TextStyle(
       color: Colors.white.withValues(alpha: 0.68),
       fontSize: mobileLayout ? 10 : 11,
@@ -1225,21 +1566,25 @@ class _LyricsCompanionTimeline extends ConsumerWidget {
             ),
           ],
         ),
-        WavyPlaybackSeekBar(
-          key: const ValueKey('lyrics-companion-timeline'),
-          position: clampedPosition,
-          duration: timeline.duration,
-          isPlaying: timeline.isPlaying,
-          waveColor: accent,
-          colorAnimationKey: const ValueKey(
-            'lyrics-companion-progress-color-animation',
-          ),
-          semanticsLabel: strings.choose(
-            'Barra de reproducción',
-            'Playback timeline',
-          ),
-          onSeek: (position) => unawaited(
-            ref.read(playerControllerProvider.notifier).seek(position),
+        KeyedSubtree(
+          key: const ValueKey('lyrics-companion-linear-timeline'),
+          child: UniformPlaybackSeekBar(
+            key: const ValueKey('lyrics-companion-timeline'),
+            sliderKey: const ValueKey('lyrics-companion-linear-seek'),
+            sliderThemeKey: const ValueKey('lyrics-companion-slider-theme'),
+            position: clampedPosition,
+            duration: timeline.duration,
+            activeTrackColor: Colors.white.withValues(alpha: 0.88),
+            inactiveTrackColor: Colors.white.withValues(alpha: 0.28),
+            disabledActiveTrackColor: Colors.white.withValues(alpha: 0.30),
+            disabledInactiveTrackColor: Colors.white.withValues(alpha: 0.18),
+            semanticsLabel: strings.choose(
+              'Barra de reproducción',
+              'Playback timeline',
+            ),
+            onSeek: (position) => unawaited(
+              ref.read(playerControllerProvider.notifier).seek(position),
+            ),
           ),
         ),
       ],
@@ -1476,19 +1821,28 @@ class _SyncedLyricsTimeline extends ConsumerStatefulWidget {
 }
 
 class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
-  late List<GlobalKey> _lineKeys;
   late int _activeIndex;
+  final ScrollController _scrollController = ScrollController();
   ProviderSubscription<Duration>? _positionSubscription;
   Timer? _resumeAutoScrollTimer;
   bool _autoScrollSuspended = false;
   double? _activeScaledFontSize;
   double? _layoutWidth;
-  int _animationRevision = 0;
+  double? _viewportHeight;
+  List<double> _lineExtents = const [];
+  List<double> _lineOffsets = const [0];
+  double _linesStartOffset = 0;
+  List<LyricLine>? _measuredLines;
+  List<String>? _measuredRomanizedLines;
+  double? _measuredContentWidth;
+  double? _measuredActiveFontSize;
+  TextScaler? _measuredTextScaler;
+  TextDirection? _measuredTextDirection;
+  Locale? _measuredLocale;
 
   @override
   void initState() {
     super.initState();
-    _lineKeys = _createLineKeys();
     _activeIndex = _activeLineIndex(
       widget.lines,
       ref.read(currentPlaybackPositionProvider) + widget.offset,
@@ -1503,17 +1857,13 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   @override
   void didUpdateWidget(covariant _SyncedLyricsTimeline oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.lines, widget.lines)) {
-      _lineKeys = _createLineKeys();
-    }
-    if (oldWidget.animationStyle != widget.animationStyle) {
-      _animationRevision++;
-    }
-    if (!identical(oldWidget.lines, widget.lines) ||
-        oldWidget.offset != widget.offset) {
+    final linesChanged = !identical(oldWidget.lines, widget.lines);
+    if (linesChanged || oldWidget.offset != widget.offset) {
       _updateActiveLine(ref.read(currentPlaybackPositionProvider));
     }
-    if (!identical(oldWidget.romanizedLines, widget.romanizedLines)) {
+    if (linesChanged ||
+        !identical(oldWidget.romanizedLines, widget.romanizedLines)) {
+      _invalidateLineMetrics();
       _scheduleAutoScroll();
     }
   }
@@ -1536,11 +1886,8 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   void dispose() {
     _positionSubscription?.close();
     _resumeAutoScrollTimer?.cancel();
+    _scrollController.dispose();
     super.dispose();
-  }
-
-  List<GlobalKey> _createLineKeys() {
-    return List<GlobalKey>.generate(widget.lines.length, (_) => GlobalKey());
   }
 
   void _updateActiveLine(Duration position) {
@@ -1550,7 +1897,6 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     }
     setState(() {
       _activeIndex = next;
-      _animationRevision++;
     });
     _scheduleAutoScroll();
   }
@@ -1564,31 +1910,132 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
       if (!mounted || _autoScrollSuspended || targetIndex != _activeIndex) {
         return;
       }
-      final targetContext = _lineKeys[targetIndex].currentContext;
-      if (targetContext == null) {
+      if (!_scrollController.hasClients ||
+          targetIndex >= _lineExtents.length ||
+          targetIndex >= _lineOffsets.length) {
         return;
       }
+      final position = _scrollController.position;
+      final lineExtent = _lineExtents[targetIndex];
+      final target =
+          (_linesStartOffset +
+                  _lineOffsets[targetIndex] -
+                  ((position.viewportDimension - lineExtent) * 0.43))
+              .clamp(position.minScrollExtent, position.maxScrollExtent)
+              .toDouble();
+      final distance = (position.pixels - target).abs();
+      if (distance < 0.5) {
+        return;
+      }
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _scrollController.jumpTo(target);
+        return;
+      }
+      final duration = Duration(
+        milliseconds: (190 + (distance * 0.32)).round().clamp(220, 380).toInt(),
+      );
       unawaited(
-        Scrollable.ensureVisible(
-          targetContext,
-          alignment: 0.43,
-          duration: const Duration(milliseconds: 520),
+        _scrollController.animateTo(
+          target,
+          duration: duration,
           curve: Curves.easeOutCubic,
         ),
       );
     });
   }
 
-  void _syncLayoutWidth(double nextLayoutWidth) {
+  void _syncLayoutMetrics({
+    required double nextLayoutWidth,
+    required double nextViewportHeight,
+    required double linesStartOffset,
+    required List<double> lineExtents,
+    required List<double> lineOffsets,
+    required bool metricsChanged,
+  }) {
     final previousLayoutWidth = _layoutWidth;
+    final previousViewportHeight = _viewportHeight;
+    final previousLinesStartOffset = _linesStartOffset;
     _layoutWidth = nextLayoutWidth;
-    if (previousLayoutWidth == null ||
-        (previousLayoutWidth - nextLayoutWidth).abs() < 0.5) {
+    _viewportHeight = nextViewportHeight;
+    _linesStartOffset = linesStartOffset;
+    _lineExtents = lineExtents;
+    _lineOffsets = lineOffsets;
+    if (previousLayoutWidth == null || previousViewportHeight == null) {
+      return;
+    }
+    final geometryChanged =
+        (previousLayoutWidth - nextLayoutWidth).abs() >= 0.5 ||
+        (previousViewportHeight - nextViewportHeight).abs() >= 0.5 ||
+        (previousLinesStartOffset - linesStartOffset).abs() >= 0.5;
+    if (!metricsChanged && !geometryChanged) {
       return;
     }
     _resumeAutoScrollTimer?.cancel();
     _autoScrollSuspended = false;
     _scheduleAutoScroll();
+  }
+
+  void _invalidateLineMetrics() {
+    _measuredLines = null;
+    _measuredRomanizedLines = null;
+    _measuredContentWidth = null;
+    _measuredActiveFontSize = null;
+    _measuredTextScaler = null;
+    _measuredTextDirection = null;
+    _measuredLocale = null;
+  }
+
+  bool _ensureLineMetrics({
+    required double contentWidth,
+    required double activeFontSize,
+    required TextScaler textScaler,
+    required TextDirection textDirection,
+    required Locale? locale,
+  }) {
+    final metricsAreCurrent =
+        identical(_measuredLines, widget.lines) &&
+        identical(_measuredRomanizedLines, widget.romanizedLines) &&
+        _measuredContentWidth != null &&
+        (_measuredContentWidth! - contentWidth).abs() < 0.5 &&
+        _measuredActiveFontSize == activeFontSize &&
+        _measuredTextScaler == textScaler &&
+        _measuredTextDirection == textDirection &&
+        _measuredLocale == locale;
+    if (metricsAreCurrent) {
+      return false;
+    }
+
+    final extents = <double>[
+      for (var index = 0; index < widget.lines.length; index++)
+        _measureLyricLineExtent(
+          originalText: widget.lines[index].text,
+          romanizedText:
+              widget.romanizedLines != null &&
+                  index < widget.romanizedLines!.length
+              ? widget.romanizedLines![index]
+              : null,
+          contentWidth: contentWidth,
+          activeFontSize: activeFontSize,
+          textScaler: textScaler,
+          textDirection: textDirection,
+          locale: locale,
+        ),
+    ];
+    final offsets = List<double>.filled(extents.length + 1, 0);
+    for (var index = 0; index < extents.length; index++) {
+      offsets[index + 1] = offsets[index] + extents[index];
+    }
+
+    _lineExtents = List<double>.unmodifiable(extents);
+    _lineOffsets = List<double>.unmodifiable(offsets);
+    _measuredLines = widget.lines;
+    _measuredRomanizedLines = widget.romanizedLines;
+    _measuredContentWidth = contentWidth;
+    _measuredActiveFontSize = activeFontSize;
+    _measuredTextScaler = textScaler;
+    _measuredTextDirection = textDirection;
+    _measuredLocale = locale;
+    return true;
   }
 
   void _suspendAutoScroll() {
@@ -1610,11 +2057,42 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     final viewportHeight = MediaQuery.sizeOf(context).height;
     final verticalPadding = (viewportHeight * 0.27).clamp(96.0, 260.0);
     final horizontalPadding =
-        Theme.of(context).platform == TargetPlatform.android ? 12.0 : 24.0;
+        AppPlatform.isMobileTargetPlatform(Theme.of(context).platform)
+        ? 12.0
+        : 24.0;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final textDirection = Directionality.of(context);
+    final locale = Localizations.maybeLocaleOf(context);
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        _syncLayoutWidth(constraints.maxWidth);
+        final contentWidth = math.max(
+          1.0,
+          constraints.maxWidth - (horizontalPadding * 2),
+        );
+        final metricsChanged = _ensureLineMetrics(
+          contentWidth: contentWidth,
+          activeFontSize: typography.active,
+          textScaler: textScaler,
+          textDirection: textDirection,
+          locale: locale,
+        );
+        final guidanceExtent = _measureSyncedLyricsGuidanceExtent(
+          source: widget.sourceFooter,
+          seekHint: strings.tapLyricsToSeek,
+          contentWidth: contentWidth,
+          textScaler: textScaler,
+          textDirection: textDirection,
+          locale: locale,
+        );
+        _syncLayoutMetrics(
+          nextLayoutWidth: constraints.maxWidth,
+          nextViewportHeight: constraints.maxHeight,
+          linesStartOffset: verticalPadding + guidanceExtent + 12,
+          lineExtents: _lineExtents,
+          lineOffsets: _lineOffsets,
+          metricsChanged: metricsChanged,
+        );
         return NotificationListener<ScrollStartNotification>(
           onNotification: (notification) {
             if (notification.dragDetails != null) {
@@ -1622,59 +2100,83 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
             }
             return false;
           },
-          child: SingleChildScrollView(
+          child: CustomScrollView(
             key: const ValueKey('synced-lyrics-scroll'),
-            padding: EdgeInsets.fromLTRB(
-              horizontalPadding,
-              verticalPadding,
-              horizontalPadding,
-              verticalPadding,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _SyncedLyricsGuidance(
-                  source: widget.sourceFooter,
-                  placement: 'top',
-                  seekHint: strings.tapLyricsToSeek,
+            controller: _scrollController,
+            scrollCacheExtent: const ScrollCacheExtent.viewport(0.65),
+            slivers: [
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  verticalPadding,
+                  horizontalPadding,
+                  0,
                 ),
-                const SizedBox(height: 12),
-                for (var index = 0; index < widget.lines.length; index++)
-                  KeyedSubtree(
-                    key: _lineKeys[index],
-                    child: _LyricLineTile(
-                      key: ValueKey('lyrics-line-tile-$index'),
-                      contentKey: index == _activeIndex
-                          ? const ValueKey('active-lyric-line')
-                          : ValueKey('lyric-line-$index'),
-                      line: widget.lines[index],
-                      originalText: widget.lines[index].text,
-                      romanizedText:
-                          widget.romanizedLines != null &&
-                              index < widget.romanizedLines!.length
-                          ? widget.romanizedLines![index]
-                          : null,
-                      romanizationKey: ValueKey(
-                        'lyrics-line-romanization-$index',
-                      ),
-                      active: index == _activeIndex,
-                      passed: index < _activeIndex,
-                      lyricsCentered: widget.lyricsCentered,
-                      animationStyle: widget.animationStyle,
-                      animationRevision: _animationRevision,
-                      activeFontSize: typography.active,
-                      inactiveFontSize: typography.inactive,
-                      onTap: () => _seekToLine(widget.lines[index]),
+                sliver: SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: guidanceExtent,
+                    child: _SyncedLyricsGuidance(
+                      source: widget.sourceFooter,
+                      placement: 'top',
+                      seekHint: strings.tapLyricsToSeek,
                     ),
                   ),
-                const SizedBox(height: 20),
-                _SyncedLyricsGuidance(
-                  source: widget.sourceFooter,
-                  placement: 'bottom',
-                  seekHint: strings.tapLyricsToSeek,
                 ),
-              ],
-            ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              SliverPadding(
+                padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+                sliver: SliverVariedExtentList.builder(
+                  key: const ValueKey('synced-lyrics-virtual-list'),
+                  itemCount: widget.lines.length,
+                  itemExtentBuilder: (index, _) => _lineExtents[index],
+                  addAutomaticKeepAlives: false,
+                  addRepaintBoundaries: true,
+                  addSemanticIndexes: false,
+                  itemBuilder: (context, index) => _LyricLineTile(
+                    key: ValueKey('lyrics-line-tile-$index'),
+                    contentKey: index == _activeIndex
+                        ? const ValueKey('active-lyric-line')
+                        : ValueKey('lyric-line-$index'),
+                    originalText: widget.lines[index].text,
+                    romanizedText:
+                        widget.romanizedLines != null &&
+                            index < widget.romanizedLines!.length
+                        ? widget.romanizedLines![index]
+                        : null,
+                    romanizationKey: ValueKey(
+                      'lyrics-line-romanization-$index',
+                    ),
+                    active: index == _activeIndex,
+                    passed: index < _activeIndex,
+                    lyricsCentered: widget.lyricsCentered,
+                    animationStyle: widget.animationStyle,
+                    activeFontSize: typography.active,
+                    inactiveFontSize: typography.inactive,
+                    onTap: () => _seekToLine(widget.lines[index]),
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 20)),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  0,
+                  horizontalPadding,
+                  verticalPadding,
+                ),
+                sliver: SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: guidanceExtent,
+                    child: _SyncedLyricsGuidance(
+                      source: widget.sourceFooter,
+                      placement: 'bottom',
+                      seekHint: strings.tapLyricsToSeek,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -1696,7 +2198,6 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
 class _LyricLineTile extends StatelessWidget {
   const _LyricLineTile({
     required this.contentKey,
-    required this.line,
     required this.originalText,
     required this.romanizedText,
     required this.romanizationKey,
@@ -1704,7 +2205,6 @@ class _LyricLineTile extends StatelessWidget {
     required this.passed,
     required this.lyricsCentered,
     required this.animationStyle,
-    required this.animationRevision,
     required this.activeFontSize,
     required this.inactiveFontSize,
     required this.onTap,
@@ -1712,7 +2212,6 @@ class _LyricLineTile extends StatelessWidget {
   });
 
   final Key contentKey;
-  final LyricLine line;
   final String originalText;
   final String? romanizedText;
   final Key romanizationKey;
@@ -1720,7 +2219,6 @@ class _LyricLineTile extends StatelessWidget {
   final bool passed;
   final bool lyricsCentered;
   final LyricsAnimationStyle animationStyle;
-  final int animationRevision;
   final double activeFontSize;
   final double inactiveFontSize;
   final VoidCallback onTap;
@@ -1728,9 +2226,12 @@ class _LyricLineTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = AppColors.downloadAccentFor(context);
+    final mobileLayout = _usesMobileLyricsLayout(context);
     final halo = _lyricsHaloFor(context, accent);
     final color = active
-        ? Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white)
+        ? mobileLayout
+              ? Colors.white
+              : Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white)
         : Colors.white.withValues(alpha: passed ? 0.62 : 0.38);
     final textStyle = TextStyle(
       color: color,
@@ -1756,11 +2257,11 @@ class _LyricLineTile extends StatelessWidget {
             ]
           : null,
     );
-    final trimmedRomanization = romanizedText?.trim();
-    final showRomanization =
-        trimmedRomanization != null &&
-        trimmedRomanization.isNotEmpty &&
-        trimmedRomanization != originalText.trim();
+    final trimmedRomanization = _displayedRomanization(
+      originalText,
+      romanizedText,
+    );
+    final showRomanization = trimmedRomanization != null;
     final animationDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : const Duration(milliseconds: 240);
@@ -1822,7 +2323,6 @@ class _LyricLineTile extends StatelessWidget {
           active: active,
           accent: accent,
           alignment: lyricsCentered ? Alignment.center : Alignment.centerLeft,
-          revision: animationRevision,
           child: styledLine,
         ),
       ),
@@ -2023,7 +2523,9 @@ class _PlainLyricsView extends ConsumerWidget {
       fontWeight: FontWeight.w600,
     );
     final horizontalPadding =
-        Theme.of(context).platform == TargetPlatform.android ? 16.0 : 28.0;
+        AppPlatform.isMobileTargetPlatform(Theme.of(context).platform)
+        ? 16.0
+        : 28.0;
     return SingleChildScrollView(
       key: const ValueKey('plain-lyrics-scroll'),
       padding: EdgeInsets.fromLTRB(
@@ -2124,6 +2626,7 @@ class _LyricsSourceAttribution extends StatelessWidget {
       style: TextStyle(
         color: Colors.white.withValues(alpha: 0.42),
         fontSize: 11,
+        height: 1.25,
         fontWeight: FontWeight.w700,
       ),
     );
@@ -2155,6 +2658,7 @@ class _SyncedLyricsGuidance extends StatelessWidget {
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.52),
             fontSize: 12,
+            height: 1.25,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -2311,6 +2815,115 @@ String _formatLyricsDuration(Duration duration) {
         '${seconds.toString().padLeft(2, '0')}';
   }
   return '$minutes:${seconds.toString().padLeft(2, '0')}';
+}
+
+double _measureLyricLineExtent({
+  required String originalText,
+  required String? romanizedText,
+  required double contentWidth,
+  required double activeFontSize,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+  required Locale? locale,
+}) {
+  final textWidth = math.max(1.0, contentWidth - 16);
+  final originalHeight = _measureTextHeight(
+    text: originalText,
+    style: TextStyle(
+      fontSize: activeFontSize,
+      height: 1.16,
+      fontWeight: FontWeight.w900,
+      letterSpacing: -0.45,
+    ),
+    maxWidth: textWidth,
+    textScaler: textScaler,
+    textDirection: textDirection,
+    locale: locale,
+  );
+  final displayedRomanization = _displayedRomanization(
+    originalText,
+    romanizedText,
+  );
+  final romanizationHeight = displayedRomanization == null
+      ? 0.0
+      : 5 +
+            _measureTextHeight(
+              text: displayedRomanization,
+              style: TextStyle(
+                fontSize: (activeFontSize * 0.62).clamp(15.0, 22.0).toDouble(),
+                height: 1.25,
+                fontWeight: FontWeight.w700,
+              ),
+              maxWidth: textWidth,
+              textScaler: textScaler,
+              textDirection: textDirection,
+              locale: locale,
+            );
+  // Every row reserves its active-state height. The text can animate without
+  // moving every following lyric or invalidating the sliver's scroll geometry.
+  return (24 + originalHeight + romanizationHeight).ceilToDouble();
+}
+
+double _measureSyncedLyricsGuidanceExtent({
+  required String source,
+  required String seekHint,
+  required double contentWidth,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+  required Locale? locale,
+}) {
+  final sourceHeight = _measureTextHeight(
+    text: source,
+    style: const TextStyle(
+      fontSize: 11,
+      height: 1.25,
+      fontWeight: FontWeight.w700,
+    ),
+    maxWidth: contentWidth,
+    textScaler: textScaler,
+    textDirection: textDirection,
+    locale: locale,
+  );
+  final hintHeight = _measureTextHeight(
+    text: seekHint,
+    style: const TextStyle(
+      fontSize: 12,
+      height: 1.25,
+      fontWeight: FontWeight.w700,
+    ),
+    maxWidth: contentWidth,
+    textScaler: textScaler,
+    textDirection: textDirection,
+    locale: locale,
+  );
+  return (sourceHeight + 6 + hintHeight).ceilToDouble();
+}
+
+double _measureTextHeight({
+  required String text,
+  required TextStyle style,
+  required double maxWidth,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+  required Locale? locale,
+}) {
+  final painter = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: textDirection,
+    textScaler: textScaler,
+    locale: locale,
+  )..layout(maxWidth: maxWidth);
+  final height = painter.height;
+  painter.dispose();
+  return height;
+}
+
+String? _displayedRomanization(String originalText, String? romanizedText) {
+  final trimmed = romanizedText?.trim();
+  if (trimmed == null || trimmed.isEmpty || trimmed == originalText.trim()) {
+    return null;
+  }
+  return trimmed;
 }
 
 int _activeLineIndex(List<LyricLine> lines, Duration effectivePosition) {

@@ -200,6 +200,7 @@ void main() {
         await _waitUntil(() => standby.playCalls == 1);
         await _waitUntil(() => service.currentSnapshot.trackId == 'b');
 
+        expect(active.stopCalls, 0);
         await _waitUntil(() => active.stopCalls == 1);
         expect(active.abandonCalls, 0);
         expect(service.currentSnapshot.status, PlayerStatus.playing);
@@ -222,6 +223,41 @@ void main() {
         expect(service.currentSnapshot.position, const Duration(seconds: 18));
       },
     );
+
+    test('reuses the retired deck without a delayed stop race', () async {
+      final active = _FakeMediaKitBackend();
+      final standby = _FakeMediaKitBackend();
+      final service = MediaKitPlayerService(
+        backend: active,
+        backendFactory: () => standby,
+      );
+      addTearDown(service.dispose);
+
+      await _playAndComplete(service, active, 'a');
+      await service.configureCrossfade(
+        enabled: true,
+        duration: const Duration(milliseconds: 400),
+      );
+      await _prepareAndComplete(service, standby, 'b');
+      active
+        ..emitDuration(const Duration(seconds: 2))
+        ..emitPosition(const Duration(milliseconds: 1600));
+      await _waitUntil(() => service.currentSnapshot.trackId == 'b');
+
+      expect(active.stopCalls, 0);
+      final preparation = service.prepareCrossfade(_crossfadeSource('c'));
+      await _waitUntil(() => active.openCalls.length == 2);
+      expect(active.stopCalls, 0);
+      active.completeOpen(1);
+      await preparation;
+
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(
+        active.stopCalls,
+        0,
+        reason: 'The cancelled retirement must not stop the newly prepared C.',
+      );
+    });
 
     test('keeps deck gains bounded by a changed master volume', () async {
       final active = _FakeMediaKitBackend();

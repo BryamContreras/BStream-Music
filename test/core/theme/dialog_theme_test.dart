@@ -1,6 +1,7 @@
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_dialog.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -52,7 +53,7 @@ void main() {
             scheme,
             backgroundMode: SurfaceBackgroundMode.accent,
           );
-          if (backgroundMode == SurfaceBackgroundMode.transparent) {
+          if (backgroundMode.usesBackdrop) {
             expect(dialogSurface.a, lessThan(accentSurface.a));
             expect(dialogBorder.a, lessThan(accentBorder.a));
             expect(dialogBarrier.a, lessThan(Colors.black54.a));
@@ -131,12 +132,12 @@ void main() {
             Theme.of(tester.element(alertDialog)).dialogTheme.barrierColor,
             dialogBarrier,
           );
-          expect(
-            find.byType(BackdropFilter),
-            backgroundMode == SurfaceBackgroundMode.transparent
-                ? findsOneWidget
-                : findsNothing,
-          );
+          expect(find.byType(BackdropFilter), switch (backgroundMode) {
+            SurfaceBackgroundMode.accent => findsNothing,
+            SurfaceBackgroundMode.transparent => findsOneWidget,
+            // LiquidGlassSurface composes refraction and blur into one capture.
+            SurfaceBackgroundMode.liquidGlass => findsOneWidget,
+          });
           if (backgroundMode == SurfaceBackgroundMode.transparent) {
             expect(
               find.descendant(
@@ -186,6 +187,55 @@ void main() {
                     as LinearGradient;
             expect(gradient.colors, hasLength(3));
             expect(gradient.colors.every((color) => color.a > 0), isTrue);
+          } else if (backgroundMode == SurfaceBackgroundMode.liquidGlass) {
+            final liquidGlass = find.byKey(
+              const ValueKey('app-dialog-liquid-glass'),
+            );
+            final material = tester.widget<LiquidGlassSurface>(liquidGlass);
+
+            expect(liquidGlass, findsOneWidget);
+            expect(material.blurSigma, appDialogBlurSigma);
+            expect(material.borderRadius, BorderRadius.circular(12));
+            expect(
+              find.descendant(
+                of: liquidGlass,
+                matching: find.byKey(LiquidGlassSurface.backdropKey),
+              ),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(
+                of: liquidGlass,
+                matching: find.byKey(LiquidGlassSurface.opticsKey),
+              ),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(
+                of: liquidGlass,
+                matching: find.byKey(LiquidGlassSurface.adaptiveEdgeKey),
+              ),
+              // Refraction is composed into the single backdrop capture.
+              findsNothing,
+            );
+            expect(
+              find.descendant(
+                of: liquidGlass,
+                matching: find.byKey(LiquidGlassSurface.shadowKey),
+              ),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(
+                of: liquidGlass,
+                matching: find.byType(LiquidGlassHoverTarget),
+              ),
+              findsNothing,
+            );
+            expect(
+              find.byKey(const ValueKey('app-dialog-local-backdrop-filter')),
+              findsNothing,
+            );
           }
 
           final route = ModalRoute.of(tester.element(alertDialog));
@@ -372,20 +422,22 @@ Color _expectedDialogSurface(
   SurfaceBackgroundMode backgroundMode,
 ) {
   final isDark = colors.brightness == Brightness.dark;
-  final transparent = backgroundMode == SurfaceBackgroundMode.transparent;
+  if (backgroundMode.isLiquidGlass) {
+    return (isDark ? Colors.black : Colors.white).withValues(
+      alpha: isDark ? 0.2 : 0.26,
+    );
+  }
   final tint = isDark ? accent.seedColor : accent.darkColor;
-  final surfaceAlpha = transparent
-      ? isDark
-            ? 0.7
-            : 0.78
-      : 0.97;
-  final tintStrength = transparent
-      ? isDark
-            ? 0.09
-            : 0.07
-      : isDark
-      ? 0.08
-      : 0.06;
+  final surfaceAlpha = switch (backgroundMode) {
+    SurfaceBackgroundMode.accent => 0.97,
+    SurfaceBackgroundMode.transparent => isDark ? 0.7 : 0.78,
+    SurfaceBackgroundMode.liquidGlass => 0.0,
+  };
+  final tintStrength = switch (backgroundMode) {
+    SurfaceBackgroundMode.accent => isDark ? 0.08 : 0.06,
+    SurfaceBackgroundMode.transparent => isDark ? 0.09 : 0.07,
+    SurfaceBackgroundMode.liquidGlass => 0.0,
+  };
   return Color.alphaBlend(
     tint.withValues(alpha: tintStrength),
     colors.surface.withValues(alpha: surfaceAlpha),
@@ -397,31 +449,38 @@ Color _expectedDialogBorder(
   ColorScheme colors,
   SurfaceBackgroundMode backgroundMode,
 ) {
-  final transparent = backgroundMode == SurfaceBackgroundMode.transparent;
-  final tintStrength = colors.brightness == Brightness.dark
-      ? transparent
-            ? 0.32
-            : 0.24
-      : transparent
-      ? 0.24
-      : 0.18;
+  final isDark = colors.brightness == Brightness.dark;
+  if (backgroundMode.isLiquidGlass) {
+    return (isDark ? Colors.white : Colors.black).withValues(
+      alpha: isDark ? 0.24 : 0.14,
+    );
+  }
+  final tintStrength = switch (backgroundMode) {
+    SurfaceBackgroundMode.accent => isDark ? 0.24 : 0.18,
+    SurfaceBackgroundMode.transparent => isDark ? 0.32 : 0.24,
+    SurfaceBackgroundMode.liquidGlass => isDark ? 0.4 : 0.3,
+  };
   final tint = colors.brightness == Brightness.dark
       ? accent.seedColor
       : accent.darkColor;
   return Color.alphaBlend(
     tint.withValues(alpha: tintStrength),
     colors.outlineVariant,
-  ).withValues(alpha: transparent ? 0.74 : 0.9);
+  ).withValues(alpha: backgroundMode.usesBackdrop ? 0.74 : 0.9);
 }
 
 Color _expectedDialogBarrier(
   ColorScheme colors,
   SurfaceBackgroundMode backgroundMode,
 ) {
-  if (backgroundMode == SurfaceBackgroundMode.accent) {
-    return Colors.black54;
-  }
-  return Colors.black.withValues(
-    alpha: colors.brightness == Brightness.dark ? 0.32 : 0.22,
-  );
+  final isDark = colors.brightness == Brightness.dark;
+  return switch (backgroundMode) {
+    SurfaceBackgroundMode.accent => Colors.black54,
+    SurfaceBackgroundMode.transparent => Colors.black.withValues(
+      alpha: isDark ? 0.32 : 0.22,
+    ),
+    SurfaceBackgroundMode.liquidGlass => Colors.black.withValues(
+      alpha: isDark ? 0.26 : 0.18,
+    ),
+  };
 }

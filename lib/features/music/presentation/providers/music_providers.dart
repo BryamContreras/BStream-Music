@@ -12,7 +12,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart' show VideoId;
 
 import '../../../../core/errors/app_exception.dart';
 import '../../../../core/constants/app_constants.dart';
@@ -21,17 +20,10 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/bounded_byte_stream.dart';
 import '../../../../core/utils/image_source.dart';
 import '../../../../core/utils/safe_file_name.dart';
-import '../../../../platform_channels/android_ytdl_channel.dart';
-import '../../../../services/downloader/android_downloader_service.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
-import '../../../../services/downloader/desktop_tool_locator.dart';
-import '../../../../services/downloader/desktop_downloader_service.dart';
 import '../../../../services/downloader/downloader_service.dart';
-import '../../../../services/downloader/fallback_audio_resolver.dart';
-import '../../../../services/downloader/yt_dlp_audio_resolver.dart';
-import '../../../../services/downloader/adapters/youtube_explode/youtube_explode_audio_resolver.dart';
-import '../../../../services/downloader/adapters/youtube_explode/youtube_explode_download_service.dart';
-import '../../../../services/downloader/adapters/youtube_explode/youtube_explode_runtime.dart';
+import '../../../../services/downloader/innertube_audio_resolver.dart';
+import '../../../../services/downloader/innertube_download_service.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
 import '../../../../services/lyrics/lyrics_romanization_service.dart';
@@ -56,6 +48,7 @@ import '../../../../services/storage/local_database_shutdown_coordinator.dart';
 import '../../../../services/storage/local_library_reconciler.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../../../services/youtube_music/shared_preferences_visitor_data_store.dart';
+import '../../../../services/youtube_music/playback/playback.dart';
 import '../../../../services/youtube_music/account/youtube_music_account.dart'
     as ytm_account;
 import '../../../../services/youtube_music/playlist_sync/playlist_account_sync_coordinator.dart';
@@ -95,6 +88,7 @@ import 'app_strings.dart';
 import 'lyrics_animation_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
+import 'player_style.dart';
 import 'youtube_music_auth_controller.dart';
 import 'player/catalog_playback_item.dart';
 import 'player/catalog_playlist_playback.dart';
@@ -109,6 +103,7 @@ export 'app_strings.dart';
 export 'lyrics_animation_style.dart';
 export 'mini_player_background_mode.dart';
 export 'mini_player_mode.dart';
+export 'player_style.dart';
 export 'player/catalog_playback_item.dart';
 export 'player/catalog_playlist_playback.dart';
 export 'player/playback_identity.dart';
@@ -139,53 +134,47 @@ part 'sleep_timer_controller.dart';
 part 'tiktok_live_controller.dart';
 part 'youtube_music_playlist_sync_controller.dart';
 
-final youtubeExplodeRuntimeProvider = Provider<YoutubeExplodeRuntime>((ref) {
-  final runtime = YoutubeExplodeRuntime(
-    platform: AppPlatform.current,
-    androidChannel: AppPlatform.isAndroid ? AndroidYtdlChannel() : null,
-    denoExecutable: AppPlatform.isDesktop ? findBundledDenoExecutable() : null,
-  );
-  ref.onDispose(runtime.dispose);
-  return runtime;
-});
+String _innerTubeDeviceRegion() {
+  final country = PlatformDispatcher.instance.locale.countryCode
+      ?.trim()
+      .toUpperCase();
+  return country != null && RegExp(r'^[A-Z]{2}$').hasMatch(country)
+      ? country
+      : 'US';
+}
 
-final downloaderServiceProvider = Provider<DownloaderService>((ref) {
-  late final DownloaderService fallback;
-  if (AppPlatform.isAndroid) {
-    fallback = AndroidDownloaderService(AndroidYtdlChannel());
-  } else if (AppPlatform.isDesktop) {
-    final service = DesktopDownloaderService();
-    ref.onDispose(service.dispose);
-    fallback = service;
-  } else {
-    throw const UnsupportedPlatformException(
-      'BStream Music soporta Android, Windows, Linux y macOS.',
-    );
-  }
-
-  final service = YoutubeExplodeDownloadService(
-    fallback: fallback,
-    client: DefaultYoutubeExplodeDownloadClient(
-      runtime: ref.watch(youtubeExplodeRuntimeProvider),
-    ),
+final innerTubePlaybackServiceProvider = Provider<InnerTubePlaybackService>((
+  ref,
+) {
+  final platform = AppPlatform.current;
+  final supportsChallenges =
+      HeadlessInAppWebViewJavaScriptRuntime.supportsPlatform(platform);
+  final service = InnerTubePlaybackService(
+    visitorDataStore: const SharedPreferencesInnerTubeVisitorDataStore(),
+    ejsSolver: supportsChallenges
+        ? EjsSolver(runtime: HeadlessInAppWebViewJavaScriptRuntime())
+        : null,
+    poTokenProvider: supportsChallenges ? BotGuardPoTokenProvider() : null,
+    audioFormatPredicate: platform == AppPlatformType.ios
+        ? isAvFoundationCompatibleInnerTubeAudio
+        : null,
+    language: PlatformDispatcher.instance.locale.languageCode,
+    region: _innerTubeDeviceRegion(),
   );
-  ref.onDispose(service.dispose);
+  ref.onDispose(() => unawaited(service.dispose()));
   return service;
 });
 
-/// The yt-dlp implementation behind the primary download decorator.
-/// Tests and alternate integrations that override [downloaderServiceProvider]
-/// continue to work without knowing about the production wrapper.
-final ytDlpDownloaderServiceProvider = Provider<DownloaderService>((ref) {
-  final service = ref.watch(downloaderServiceProvider);
-  return service is YoutubeExplodeDownloadService ? service.fallback : service;
+final downloaderServiceProvider = Provider<DownloaderService>((ref) {
+  final service = InnerTubeDownloadService(
+    playback: ref.watch(innerTubePlaybackServiceProvider),
+    catalog: ref.watch(youtubeMusicSearchProvider),
+  );
+  ref.onDispose(() => unawaited(service.dispose()));
+  return service;
 });
 
 final downloaderWarmupProvider = FutureProvider<void>((ref) async {
-  final runtime = ref.watch(youtubeExplodeRuntimeProvider);
-  if (AppPlatform.isAndroid) {
-    unawaited(runtime.prewarmPoTokens());
-  }
   await ref.watch(downloaderServiceProvider).initialize();
 });
 
@@ -405,7 +394,7 @@ typedef DesktopMediaSessionFactory = DesktopMediaSession? Function();
 
 final desktopMediaSessionFactoryProvider = Provider<DesktopMediaSessionFactory>(
   (ref) =>
-      () => AppPlatform.isDesktop || AppPlatform.isAndroid
+      () => AppPlatform.isDesktop || AppPlatform.isMobile
       ? createDesktopMediaSession()
       : null,
 );
@@ -582,16 +571,9 @@ final libraryOperationCoordinatorProvider =
     });
 
 final youtubeMusicSearchProvider = Provider<YouTubeMusicSearch>((ref) {
-  final deviceCountry = PlatformDispatcher.instance.locale.countryCode
-      ?.trim()
-      .toUpperCase();
-  final region =
-      deviceCountry != null && RegExp(r'^[A-Z]{2}$').hasMatch(deviceCountry)
-      ? deviceCountry
-      : 'US';
   final service = InnerTubeSearchService(
     visitorDataStore: const SharedPreferencesInnerTubeVisitorDataStore(),
-    region: region,
+    region: _innerTubeDeviceRegion(),
   );
   ref.onDispose(service.dispose);
   return service;
@@ -2609,14 +2591,10 @@ final downloadAudioProvider = Provider<DownloadAudio>((ref) {
 });
 
 final audioStreamResolverProvider = Provider<AudioStreamResolver>((ref) {
-  final primary = YoutubeExplodeAudioResolver(
-    runtime: ref.watch(youtubeExplodeRuntimeProvider),
+  final resolver = InnerTubeAudioResolver(
+    ref.watch(innerTubePlaybackServiceProvider),
   );
-  final fallback = YtDlpAudioResolver(
-    ref.watch(ytDlpDownloaderServiceProvider),
-  );
-  final resolver = FallbackAudioResolver([primary, fallback]);
-  ref.onDispose(resolver.dispose);
+  ref.onDispose(() => unawaited(resolver.dispose()));
   return resolver;
 });
 

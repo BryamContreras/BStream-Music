@@ -73,7 +73,10 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
     final identity = track.id.trim().isNotEmpty ? track.id : track.url;
     final colors = Theme.of(context).colorScheme;
     final borderRadius = BorderRadius.circular(appCardRadius);
-    final baseColor = AppColors.cardSurfaceFor(context);
+    final baseColor = AppColors.cardSurfaceFor(
+      context,
+      solidInLiquidGlass: true,
+    );
     final surfaceColor = isCurrent || _hovered
         ? Color.alphaBlend(
             colors.onSurface.withValues(alpha: _hovered ? 0.09 : 0.075),
@@ -82,7 +85,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
         : baseColor;
     final borderColor = isCurrent || _hovered
         ? colors.primary
-        : AppColors.cardBorderFor(context);
+        : AppColors.cardBorderFor(context, solidInLiquidGlass: true);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -265,10 +268,10 @@ class _TrackResultMenu extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final compactAndroid = AppPlatform.isAndroid;
-    final buttonSize = compactAndroid ? 48.0 : 52.0;
-    final buttonWidth = compactAndroid ? 36.0 : 40.0;
-    final iconSize = compactAndroid ? 32.0 : 24.0;
+    final compactMobile = AppPlatform.isMobile;
+    final buttonSize = compactMobile ? 48.0 : 52.0;
+    final buttonWidth = compactMobile ? 36.0 : 40.0;
+    final iconSize = compactMobile ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
 
     return SizedBox(

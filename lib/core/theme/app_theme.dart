@@ -25,12 +25,18 @@ enum AppThemeMode {
 /// headings and navigation menus.
 enum SurfaceBackgroundMode {
   accent,
-  transparent;
+  transparent,
+  liquidGlass;
 
   String get code => name;
 
+  bool get usesBackdrop => this != SurfaceBackgroundMode.accent;
+
+  bool get isLiquidGlass => this == SurfaceBackgroundMode.liquidGlass;
+
   static SurfaceBackgroundMode fromCode(String? code) => switch (code) {
     'transparent' => SurfaceBackgroundMode.transparent,
+    'liquidGlass' => SurfaceBackgroundMode.liquidGlass,
     _ => SurfaceBackgroundMode.accent,
   };
 }
@@ -164,6 +170,8 @@ class AppSurfaceTheme extends ThemeExtension<AppSurfaceTheme> {
   final SurfaceBackgroundMode backgroundMode;
 
   bool get isTransparent => backgroundMode == SurfaceBackgroundMode.transparent;
+  bool get usesBackdrop => backgroundMode.usesBackdrop;
+  bool get isLiquidGlass => backgroundMode.isLiquidGlass;
 
   @override
   AppSurfaceTheme copyWith({SurfaceBackgroundMode? backgroundMode}) {

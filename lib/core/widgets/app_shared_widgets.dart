@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_ui.dart';
+import 'liquid_glass_surface.dart';
 
 /// Adds the lighter blur used behind text inputs when transparent surfaces are
 /// enabled. The field's themed fill supplies the shared menu tint.
@@ -22,10 +23,17 @@ class AppSurfaceInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!blur ||
-        AppColors.surfaceBackgroundModeFor(context) !=
-            SurfaceBackgroundMode.transparent) {
+    final mode = AppColors.surfaceBackgroundModeFor(context);
+    if (!blur || !mode.usesBackdrop) {
       return child;
+    }
+    if (mode.isLiquidGlass) {
+      return LiquidGlassSurface(
+        borderRadius: BorderRadius.circular(borderRadius),
+        blurSigma: 10,
+        intensity: 0.9,
+        child: child,
+      );
     }
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
@@ -54,15 +62,17 @@ class AppInsetHeaderSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(borderRadius);
-    final transparent =
-        AppColors.surfaceBackgroundModeFor(context) ==
-        SurfaceBackgroundMode.transparent;
+    final mode = AppColors.surfaceBackgroundModeFor(context);
+    final transparent = mode.usesBackdrop;
     final surface = DecoratedBox(
+      key: const ValueKey('app-inset-header-surface'),
       decoration: BoxDecoration(
         color: transparent
             ? null
             : AppColors.tabHeaderSurfaceFor(context, scrolledUnder: true),
-        gradient: transparent
+        gradient: mode.isLiquidGlass
+            ? null
+            : transparent
             ? AppColors.glassSurfaceGradientFor(
                 context,
                 baseColor: AppColors.menuBackgroundFor(context),
@@ -75,6 +85,15 @@ class AppInsetHeaderSurface extends StatelessWidget {
     );
     if (!transparent) {
       return surface;
+    }
+    if (mode.isLiquidGlass) {
+      return LiquidGlassSurface(
+        key: const ValueKey('app-inset-header-liquid-glass'),
+        borderRadius: radius,
+        blurSigma: 12,
+        intensity: 1.02,
+        child: surface,
+      );
     }
     return ClipRRect(
       borderRadius: radius,

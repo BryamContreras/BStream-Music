@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.5"
+  #define MyAppVersion "1.2.6"
 #endif
 
 #define MyAppName "BStream Music"
@@ -62,6 +62,11 @@ spanish.CreateDesktopShortcut=Crear un acceso directo en el &escritorio
 Name: "desktopicon"; Description: "{cm:CreateDesktopShortcut}"; GroupDescription: "{cm:AdditionalShortcuts}"; Flags: unchecked
 
 [InstallDelete]
+; Remove resolver runtimes bundled by versions before the Dart InnerTube client.
+Type: files; Name: "{app}\tools\yt-dlp.exe"
+Type: files; Name: "{app}\tools\yt-dlp"
+Type: files; Name: "{app}\tools\deno.exe"
+Type: files; Name: "{app}\tools\deno"
 ; Remove TikTok LIVE Python bridge files left by versions before the Dart client.
 Type: filesandordirs; Name: "{app}\tools\tiktok-live-bridge"
 Type: filesandordirs; Name: "{app}\tools\tiktok_live_bridge"
@@ -70,6 +75,7 @@ Type: files; Name: "{app}\tools\tiktok-live-bridge.exe"
 Type: files; Name: "{app}\scripts\tiktok_live_bridge.py"
 Type: files; Name: "{app}\scripts\requirements-tiktok.txt"
 Type: dirifempty; Name: "{app}\scripts"
+Type: dirifempty; Name: "{app}\tools"
 
 [Files]
 Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

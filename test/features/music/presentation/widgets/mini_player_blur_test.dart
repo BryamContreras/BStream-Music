@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/core/widgets/marquee_text.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
@@ -88,23 +89,33 @@ void main() {
         title: 'Primera cancion',
         artist: 'Primer artista',
         trackId: 'mini-transition-first',
+        thumbnailUrl: 'https://example.invalid/mini-transition-first.jpg',
       );
       const second = PlayerSnapshot(
         status: PlayerStatus.playing,
         title: 'Segunda cancion',
         artist: 'Segundo artista',
         trackId: 'mini-transition-second',
+        thumbnailUrl: 'https://example.invalid/mini-transition-second.jpg',
       );
       final controller = _TestPlayerController(snapshot: first);
 
       await tester.pumpWidget(_miniPlayerHarness(playerController: controller));
       await tester.pump();
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 530));
 
       final transition = find.byKey(
         const ValueKey('mini-player-track-transition'),
       );
       final switcher = tester.widget<AnimatedSwitcher>(transition);
+      final backgroundTransition = find.byKey(
+        const ValueKey('mini-player-background-track-transition'),
+      );
+      final outgoingBackgroundKey = tester
+          .widget<AnimatedSwitcher>(backgroundTransition)
+          .child!
+          .key!;
       expect(switcher.duration, const Duration(milliseconds: 420));
       expect(find.text(first.title!), findsOneWidget);
 
@@ -117,11 +128,22 @@ void main() {
         find.byKey(const ValueKey('mini-player-artwork')),
         findsNWidgets(2),
       );
+      final backgroundSwitcher = tester.widget<AnimatedSwitcher>(
+        backgroundTransition,
+      );
+      expect(backgroundSwitcher.duration, const Duration(milliseconds: 520));
+      final incomingBackgroundKey = backgroundSwitcher.child!.key!;
+      expect(incomingBackgroundKey, isNot(outgoingBackgroundKey));
+      expect(find.byKey(outgoingBackgroundKey), findsOneWidget);
+      expect(find.byKey(incomingBackgroundKey), findsOneWidget);
 
       await tester.pump(const Duration(milliseconds: 430));
       expect(find.text(first.title!), findsNothing);
       expect(find.text(second.title!), findsOneWidget);
       expect(find.byKey(const ValueKey('mini-player-artwork')), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byKey(outgoingBackgroundKey), findsNothing);
+      expect(find.byKey(incomingBackgroundKey), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -153,6 +175,11 @@ void main() {
     );
     expect(switcher.duration, Duration.zero);
     expect(switcher.reverseDuration, Duration.zero);
+    final backgroundSwitcher = tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('mini-player-background-track-transition')),
+    );
+    expect(backgroundSwitcher.duration, Duration.zero);
+    expect(backgroundSwitcher.reverseDuration, Duration.zero);
 
     controller.emit(second);
     await tester.pump();
@@ -321,6 +348,167 @@ void main() {
       findsOneWidget,
       reason: 'Glass must not decode a hidden background cover.',
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final mode in const [MiniPlayerMode.standard, MiniPlayerMode.capsule]) {
+    testWidgets(
+      'liquid glass ${mode.name} mini-player uses one material without hidden artwork',
+      (tester) async {
+        _configureView(tester, const Size(360, 200));
+        await tester.pumpWidget(
+          _miniPlayerHarness(
+            mode: mode,
+            backgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+          ),
+        );
+        await tester.pump();
+
+        final liquidGlass = find.byKey(
+          const ValueKey('mini-player-liquid-glass-background'),
+        );
+        final container = tester.widget<Container>(
+          find.byKey(const ValueKey('mini-player-container')),
+        );
+        final decoration = container.decoration! as BoxDecoration;
+
+        expect(liquidGlass, findsOneWidget);
+        expect(tester.widget<LiquidGlassSurface>(liquidGlass).blurSigma, 8);
+        expect(tester.widget<LiquidGlassSurface>(liquidGlass).intensity, 1);
+        expect(
+          tester.widget<LiquidGlassSurface>(liquidGlass).adaptiveEdgeEnabled,
+          isTrue,
+        );
+        expect(
+          find.descendant(
+            of: liquidGlass,
+            matching: find.byKey(LiquidGlassSurface.backdropKey),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: liquidGlass,
+            matching: find.byKey(LiquidGlassSurface.opticsKey),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: liquidGlass,
+            matching: find.byKey(LiquidGlassSurface.shadowKey),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: liquidGlass,
+            matching: find.byType(LiquidGlassHoverTarget),
+          ),
+          findsNothing,
+        );
+        expect(
+          container.clipBehavior,
+          Clip.none,
+          reason: 'LiquidGlassSurface owns the only required capsule clip.',
+        );
+        expect(
+          decoration.boxShadow,
+          isNull,
+          reason: 'LiquidGlassSurface owns the only exterior glass shadow.',
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-artwork-background')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-background-overlay')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-accent-background')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-glass-background')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('mini-player-accent-top-border')),
+          findsNothing,
+        );
+        expect(find.byType(ImageFiltered), findsNothing);
+        expect(
+          find.byType(SourceImage),
+          findsOneWidget,
+          reason: 'Only the visible cover should be decoded.',
+        );
+        if (mode == MiniPlayerMode.capsule) {
+          expect(container.foregroundDecoration, isNull);
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'light liquid glass mini-player uses pure black metadata and time',
+    (tester) async {
+      _configureView(tester, const Size(360, 200));
+      await tester.pumpWidget(
+        _miniPlayerHarness(
+          mode: MiniPlayerMode.capsule,
+          backgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+        ),
+      );
+      await tester.pump();
+
+      final title = tester.widget<MarqueeText>(
+        find.byKey(const ValueKey('mini-player-track-title-marquee')),
+      );
+      final artist = tester.widget<Text>(find.text('BStream Music'));
+      final position = tester.widget<Text>(find.text('0:00'));
+
+      expect(title.style?.color, Colors.black);
+      expect(artist.style?.color, Colors.black);
+      expect(position.style?.color, Colors.black);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('mini-player keeps themed text outside light liquid glass', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 200));
+
+    for (final variant in const [
+      (
+        brightness: Brightness.dark,
+        backgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+      ),
+      (
+        brightness: Brightness.light,
+        backgroundMode: MiniPlayerBackgroundMode.accent,
+      ),
+    ]) {
+      await tester.pumpWidget(
+        _miniPlayerHarness(
+          brightness: variant.brightness,
+          mode: MiniPlayerMode.capsule,
+          backgroundMode: variant.backgroundMode,
+        ),
+      );
+      await tester.pump();
+
+      final title = tester.widget<MarqueeText>(
+        find.byKey(const ValueKey('mini-player-track-title-marquee')),
+      );
+      final context = tester.element(
+        find.byKey(const ValueKey('mini-player-surface')),
+      );
+
+      expect(title.style?.color, AppColors.playbackTitleFor(context));
+    }
     expect(tester.takeException(), isNull);
   });
 

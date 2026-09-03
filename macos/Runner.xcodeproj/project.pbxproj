@@ -213,7 +213,7 @@
 				33CC10EB2044A3C60003C045 /* Resources */,
 				33CC110E2044A8840003C045 /* Bundle Framework */,
 				3399D490228B24CF009A79C7 /* ShellScript */,
-				B57EAA012E00000100B57EAA /* Bundle Desktop Tools */,
+				B57EAA012E00000100B57EAA /* Copy Third Party Notices */,
 			);
 			buildRules = (
 			);
@@ -323,23 +323,23 @@
 			shellPath = /bin/sh;
 			shellScript = "echo \"$PRODUCT_NAME.app\" > \"$PROJECT_DIR\"/Flutter/ephemeral/.app_filename && \"$FLUTTER_ROOT\"/packages/flutter_tools/bin/macos_assemble.sh embed\n";
 		};
-		B57EAA012E00000100B57EAA /* Bundle Desktop Tools */ = {
+		B57EAA012E00000100B57EAA /* Copy Third Party Notices */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
-				"$(PROJECT_DIR)/copy_tools.sh",
-				"$(PROJECT_DIR)/tools",
+				"$(PROJECT_DIR)/copy_notices.sh",
+				"$(PROJECT_DIR)/../THIRD_PARTY_NOTICES.md",
 			);
-			name = "Bundle Desktop Tools";
+			name = "Copy Third Party Notices";
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/tools",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/THIRD_PARTY_NOTICES.md",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/bin/sh \"$PROJECT_DIR/copy_tools.sh\"\n";
+			shellScript = "/bin/sh \"$PROJECT_DIR/copy_notices.sh\"\n";
 		};
 		33CC111E2044C6BF0003C045 /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;

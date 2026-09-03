@@ -4,12 +4,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:image/image.dart' as image;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/utils/bounded_byte_stream.dart';
 import '../../core/utils/image_source.dart';
@@ -17,10 +17,12 @@ import '../../core/utils/image_source.dart';
 typedef NotificationArtworkCacheDirectoryProvider =
     Future<Directory> Function();
 typedef NotificationArtworkServerBinder = Future<HttpServer> Function();
+typedef DeviceAudioArtworkLoader =
+    Future<Uint8List?> Function(String audioUri, int targetWidth);
 
-/// Supplies square, center-cropped artwork to Android media notifications.
+/// Supplies square, center-cropped artwork to mobile system media controls.
 ///
-/// [uriFor] is synchronous and never downloads or decodes an image. Android's
+/// [uriFor] is synchronous and never downloads or decodes an image. The mobile
 /// audio service requests the returned loopback URL after playback metadata is
 /// published, so network and image work stay outside the audio startup path.
 /// Generated JPEGs are reused from a small application-cache directory.
@@ -28,6 +30,7 @@ class NotificationArtworkService {
   NotificationArtworkService({
     NotificationArtworkCacheDirectoryProvider? cacheDirectoryProvider,
     NotificationArtworkServerBinder? serverBinder,
+    DeviceAudioArtworkLoader? deviceAudioArtworkLoader,
     this.outputSize = 320,
     this.maximumCacheEntries = 128,
     this.maximumRegisteredSources = 512,
@@ -44,7 +47,9 @@ class NotificationArtworkService {
        assert(sourceTotalTimeout > Duration.zero),
        _cacheDirectoryProvider =
            cacheDirectoryProvider ?? _defaultCacheDirectory,
-       _serverBinder = serverBinder ?? _bindLoopbackServer;
+       _serverBinder = serverBinder ?? _bindLoopbackServer,
+       _deviceAudioArtworkLoader =
+           deviceAudioArtworkLoader ?? _loadDeviceAudioArtwork;
 
   static final NotificationArtworkService instance =
       NotificationArtworkService();
@@ -54,6 +59,7 @@ class NotificationArtworkService {
 
   final NotificationArtworkCacheDirectoryProvider _cacheDirectoryProvider;
   final NotificationArtworkServerBinder _serverBinder;
+  final DeviceAudioArtworkLoader _deviceAudioArtworkLoader;
   final int outputSize;
   final int maximumCacheEntries;
   final int maximumRegisteredSources;
@@ -303,6 +309,14 @@ class NotificationArtworkService {
   }
 
   Future<Uint8List?> _loadSourceBytes(String source) async {
+    final deviceAudioUri = deviceAudioUriFromArtworkSource(source);
+    if (deviceAudioUri != null) {
+      try {
+        return await _deviceAudioArtworkLoader(deviceAudioUri, outputSize);
+      } catch (_) {
+        return null;
+      }
+    }
     if (isNetworkImageSource(source)) {
       return _loadNetworkBytes(source);
     }
@@ -451,6 +465,9 @@ class NotificationArtworkService {
     if (normalized == null || normalized.isEmpty) {
       return null;
     }
+    if (isDeviceAudioArtworkSource(normalized)) {
+      return normalized;
+    }
     if (isNetworkImageSource(normalized)) {
       final uri = Uri.tryParse(normalized);
       return uri != null && uri.hasAuthority ? normalized : null;
@@ -472,6 +489,18 @@ class NotificationArtworkService {
   static Future<Directory> _defaultCacheDirectory() async {
     final root = await getApplicationCacheDirectory();
     return Directory(p.join(root.path, 'notification-artwork'));
+  }
+
+  static Future<Uint8List?> _loadDeviceAudioArtwork(
+    String audioUri,
+    int targetWidth,
+  ) {
+    return const MethodChannel(
+      'bstream_music/local_audio',
+    ).invokeMethod<Uint8List>('loadArtwork', <String, Object>{
+      'audioUri': audioUri,
+      'targetWidth': targetWidth.clamp(32, 1280),
+    });
   }
 
   static String _randomToken() {

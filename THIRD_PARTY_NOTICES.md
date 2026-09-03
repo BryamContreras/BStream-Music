@@ -1,5 +1,15 @@
 # Third-party notices
 
+## Kyant AndroidLiquidGlass 2.0.0
+
+BStream Music's rounded-rectangle refraction shader adapts the optical model
+from Kyant AndroidLiquidGlass, also used by Echo Music.
+
+Source: <https://github.com/Kyant0/AndroidLiquidGlass/tree/2.0.0>
+
+Licensed under the Apache License, Version 2.0. A copy of the license is
+included at `third_party/kyant_android_liquid_glass/LICENSE`.
+
 ## csv 8.0.0
 
 BStream Music uses the `csv` Dart package to parse and encode interoperable
@@ -51,44 +61,87 @@ RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
 NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE
 USE OR PERFORMANCE OF THIS SOFTWARE.
 
-## youtube_explode_dart 3.1.0+1
+## EJS 0.8.0
 
-BStream Music includes a versioned local fork of `youtube_explode_dart` as the
-primary resolver for playback streams. The fork lives under
-`third_party/youtube_explode_dart` and is accessed through
-`lib/services/downloader/adapters/youtube_explode/`. The library is an
-unofficial, reverse-engineered client that does not require a YouTube API key.
-When it cannot produce a usable stream, BStream falls back to the bundled
-`yt-dlp` / `youtubedl-android` extractors without changing the user experience.
+BStream Music directly consumes Base64-encoded copies of the checksum-pinned
+EJS release modules to solve YouTube player challenges inside its isolated
+headless JavaScript runtime. The decoded bytes are verified against the
+upstream SHA-256 values before execution. A download of those same pinned
+release artifacts is kept only as a checksum-verified recovery fallback when a
+bundled asset is missing or corrupt.
 
-Source: <https://github.com/Hexer10/youtube_explode_dart>
+EJS is a separate upstream project hosted under the yt-dlp GitHub organization.
+Its inclusion does not make BStream dependent on the yt-dlp program or Python
+package: BStream neither bundles nor invokes the yt-dlp executable.
 
-BSD 3-Clause License
+Source: <https://github.com/yt-dlp/ejs>
 
-Copyright (c) 2021 Mattia
+The Unlicense
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+This is free and unencumbered software released into the public domain.
 
-1. Redistributions of source code must retain the above copyright notice,
-   this list of conditions and the following disclaimer.
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
+software, either in source code form or as a compiled binary, for any purpose,
+commercial or non-commercial, and by any means.
 
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
+In jurisdictions that recognize copyright laws, the author or authors of this
+software dedicate any and all copyright interest in the software to the public
+domain. We make this dedication for the benefit of the public at large and to
+the detriment of our heirs and successors. We intend this dedication to be an
+overt act of relinquishment in perpetuity of all present and future rights to
+this software under copyright law.
 
-3. Neither the name of the copyright holder nor the names of its contributors
-   may be used to endorse or promote products derived from this software
-   without specific prior written permission.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
+For more information, please refer to <https://unlicense.org>.
+
+### meriyah 6.1.4 (bundled by EJS)
+
+Source: <https://github.com/meriyah/meriyah>
+
+ISC License
+
+Copyright (c) 2019 and later, KFlash and others.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+### astring 1.9.0 (bundled by EJS)
+
+Source: <https://github.com/davidbonnet/astring>
+
+The MIT License (MIT)
+
+Copyright (c) 2015, David Bonnet <david@bonnet.cc>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -1351,7 +1351,7 @@ class LrclibLyricsService implements LyricsService {
       }
     }
 
-    // A side which agrees with yt-dlp metadata is the highest-confidence
+    // A side which agrees with resolved track metadata is the highest-confidence
     // interpretation. For an ambiguous two-sided YouTube title, the common
     // Artist - Title form is tried first, except for semantic continuations
     // such as "Love - Part II". The unsplit form is always retained.

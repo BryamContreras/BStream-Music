@@ -3,9 +3,10 @@ import 'audio_service_desktop_media_session.dart';
 import 'desktop_media_session.dart';
 import 'windows_smtc_media_session.dart';
 
-DesktopMediaSession createDesktopMediaSession() {
-  return switch (AppPlatform.current) {
-    AppPlatformType.android => AudioServiceDesktopMediaSession(),
+DesktopMediaSession createDesktopMediaSession({AppPlatformType? platform}) {
+  return switch (platform ?? AppPlatform.current) {
+    AppPlatformType.android ||
+    AppPlatformType.ios => AudioServiceDesktopMediaSession(),
     AppPlatformType.windows => WindowsSmtcMediaSession(),
     AppPlatformType.linux ||
     AppPlatformType.macos => AudioServiceDesktopMediaSession(),

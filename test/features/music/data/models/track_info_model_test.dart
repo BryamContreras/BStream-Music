@@ -17,7 +17,7 @@ void main() {
     expect(track.artist, 'Artist');
   });
 
-  test('uses yt-dlp artist lists before falling back to the channel', () {
+  test('uses structured artist lists before falling back to the channel', () {
     final track = TrackInfoModel.fromJson({
       'id': 'abc123',
       'title': 'Collaboration',
@@ -41,6 +41,7 @@ void main() {
       duration: const Duration(minutes: 4, seconds: 12),
       thumbnailUrl: 'https://i.ytimg.com/vi/DlFXDl_ROAM/hq720.jpg',
       catalogThumbnailUrl: 'https://music.example/catalog-artwork.jpg',
+      streamClientProfileKey: 'webMusic',
       url: 'https://www.youtube.com/watch?v=DlFXDl_ROAM',
       metadataSource: TrackMetadataSource.youtubeMusic,
     ).toJson();
@@ -54,6 +55,8 @@ void main() {
     expect(track.album, 'MAYHEM');
     expect(track.albumBrowseId, 'MPREmayhem001');
     expect(encoded['album_browse_id'], 'MPREmayhem001');
+    expect(track.streamClientProfileKey, 'webMusic');
+    expect(encoded['stream_client_profile_key'], 'webMusic');
     expect(track.duration, const Duration(minutes: 4, seconds: 12));
     expect(
       track.catalogThumbnailUrl,

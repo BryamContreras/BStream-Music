@@ -24,7 +24,6 @@ class LyricsAnimationTransition extends StatefulWidget {
     required this.accent,
     required this.child,
     this.alignment = Alignment.centerLeft,
-    this.revision = 0,
     super.key,
   });
 
@@ -33,7 +32,6 @@ class LyricsAnimationTransition extends StatefulWidget {
   final Color accent;
   final Widget child;
   final Alignment alignment;
-  final int revision;
 
   @override
   State<LyricsAnimationTransition> createState() =>
@@ -62,12 +60,11 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
   void didUpdateWidget(covariant LyricsAnimationTransition oldWidget) {
     super.didUpdateWidget(oldWidget);
     final styleChanged = oldWidget.style != widget.style;
-    final revisionChanged = oldWidget.revision != widget.revision;
     if (styleChanged) {
       _controller.duration = _durationFor(widget.style);
       _animation = _buildTween(widget.style);
     }
-    if (widget.active != oldWidget.active || styleChanged || revisionChanged) {
+    if (widget.active != oldWidget.active || styleChanged) {
       _controller.stop();
       if (widget.active) {
         _controller.forward(from: 0);

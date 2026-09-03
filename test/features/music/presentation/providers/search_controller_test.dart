@@ -136,7 +136,7 @@ void main() {
     expect(search.loadingCategory, isNull);
   });
 
-  test('fallback drops cached tabs and exposes only yt-dlp Videos', () async {
+  test('fallback keeps only the Videos tab', () async {
     const failure = InnerTubeFormatException('albums endpoint changed');
     final catalog = _FakeCatalog(
       songResults: [
@@ -169,7 +169,7 @@ void main() {
     expect(search.selectedCategory, SearchCategory.videos);
     expect(search.availableCategories, const [SearchCategory.videos]);
     expect(search.pages.keys, const [SearchCategory.videos]);
-    expect(search.backend, SearchBackend.ytDlp);
+    expect(search.backend, SearchBackend.innerTubeVideoFallback);
     expect(search.primaryError, same(failure));
     expect(search.selectedTracks, const [fallback]);
 
@@ -182,7 +182,7 @@ void main() {
     );
   });
 
-  test('yt-dlp failure keeps the error restricted to Videos', () async {
+  test('video fallback failure keeps the error restricted to Videos', () async {
     final catalog = _FakeCatalog(
       songResults: [
         InnerTubeSong(
@@ -193,7 +193,7 @@ void main() {
       ],
       albumError: const InnerTubeFormatException('albums endpoint changed'),
     );
-    final fallbackFailure = StateError('yt-dlp search failed');
+    final fallbackFailure = StateError('InnerTube video fallback failed');
     final downloader = _FakeDownloaderService(searchError: fallbackFailure);
     final container = _container(catalog, downloader);
     addTearDown(container.dispose);

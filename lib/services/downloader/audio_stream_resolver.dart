@@ -1,8 +1,7 @@
 import '../../core/errors/app_exception.dart';
 import '../../features/music/domain/entities/track_info.dart';
 
-/// Produces the useful extractor/player message without transport-layer
-/// wrappers such as `ytdl_error` or `YoutubeDLException`.
+/// Produces the useful resolver/player message without transport wrappers.
 String readableAudioStreamError(Object error) {
   if (error is AudioStreamResolverException) {
     final cause = error.cause;
@@ -25,18 +24,7 @@ String readableAudioStreamError(Object error) {
 
 String _cleanAudioErrorText(String value) {
   var message = value.trim();
-  message = message.replaceFirst(
-    RegExp(r'^ytdl_error:\s*', caseSensitive: false),
-    '',
-  );
-  message = message.replaceFirst(
-    RegExp(
-      r'^(?:[A-Za-z_$][\w$]*\.)*YoutubeDLException:\s*',
-      caseSensitive: false,
-    ),
-    '',
-  );
-  // Extractor/player failures often include the complete signed GoogleVideo
+  // Resolver/player failures often include the complete signed GoogleVideo
   // URL. Its query can be several kilobytes long and contains short-lived
   // signatures that should not be rendered in the UI or copied in a screen
   // capture. Keep the useful host/path while removing query and fragment data.
@@ -64,15 +52,20 @@ class AudioStreamResolverException implements Exception {
 }
 
 /// Which resolver produced a playable stream for a track.
-enum AudioStreamSource { youtubeExplode, ytDlp }
+enum AudioStreamSource {
+  /// The default InnerTube playback client path.
+  innerTube,
+
+  /// An InnerTube client selected after the default path was rejected.
+  innerTubeFallback,
+}
 
 /// Controls which portion of a resolver chain may be used.
 enum AudioResolutionMode {
-  /// Start with youtube_explode_dart and continue with configured fallbacks.
+  /// Start with the verified default InnerTube client, then try fallbacks.
   primaryThenFallback,
 
-  /// Skip the primary resolver. Used after the player rejected a URL that the
-  /// primary resolver had produced.
+  /// Skip the default InnerTube client after the player rejected its URL.
   fallbackOnly,
 }
 
@@ -81,9 +74,9 @@ typedef AudioResolverFailureCallback =
 
 /// Returns whether an in-flight resolution is still useful to its caller.
 ///
-/// Resolvers use this between providers so an obsolete primary request cannot
-/// start an expensive managed yt-dlp fallback after the user selected another
-/// track or replaced the queue.
+/// Resolvers use this between clients so an obsolete request cannot start an
+/// expensive challenge-backed fallback after the user selected another track
+/// or replaced the queue.
 typedef AudioResolverContinuationCallback = bool Function();
 
 /// Result of resolving a playable audio stream for a [TrackInfo].
@@ -101,6 +94,8 @@ class AudioStreamResolution {
     this.videoId,
     this.formatId,
     this.codec,
+    this.clientProfileKey,
+    this.expiresAt,
   });
 
   /// Which resolver produced this result.
@@ -127,6 +122,12 @@ class AudioStreamResolution {
   /// Codec reported by the extractor (for example `mp4a.40.2` or `opus`).
   final String? codec;
 
+  /// Exact InnerTube client profile that produced the signed media URL.
+  final String? clientProfileKey;
+
+  /// Last instant at which the signed URL and any bound token may be reused.
+  final DateTime? expiresAt;
+
   bool get isUsable {
     final uri = Uri.tryParse(streamUrl);
     return uri != null &&
@@ -143,6 +144,8 @@ class AudioStreamResolution {
       videoId: videoId,
       formatId: formatId,
       codec: codec,
+      clientProfileKey: clientProfileKey,
+      expiresAt: expiresAt,
     );
   }
 
@@ -161,11 +164,12 @@ class AudioStreamResolution {
       videoId: track.id.isEmpty ? null : track.id,
       formatId: track.streamFormatId,
       codec: track.streamCodec,
+      clientProfileKey: track.streamClientProfileKey,
     );
   }
 
   static AudioStreamResolution fromFallbackTrack(TrackInfo track) {
-    return fromTrack(track, source: AudioStreamSource.ytDlp);
+    return fromTrack(track, source: AudioStreamSource.innerTubeFallback);
   }
 }
 

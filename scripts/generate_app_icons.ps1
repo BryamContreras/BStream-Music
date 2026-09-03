@@ -110,6 +110,47 @@ function Save-PngIcon {
     $bitmap.Dispose()
 }
 
+function Save-OpaquePngIcon {
+    param(
+        [System.Drawing.Image]$Source,
+        [int]$Size,
+        [string]$Path,
+        [float]$CropInsetFactor = 0.018
+    )
+
+    $directory = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    }
+
+    # Apple applies the final corner mask. AppIcon assets themselves must be
+    # square and opaque, so do not reuse the transparent rounded export.
+    $bitmap = [System.Drawing.Bitmap]::new(
+        $Size,
+        $Size,
+        [System.Drawing.Imaging.PixelFormat]::Format24bppRgb
+    )
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $graphics.Clear([System.Drawing.Color]::Black)
+
+    $sourceRect = Get-CenteredCropRect $Source $CropInsetFactor
+    $graphics.DrawImage(
+        $Source,
+        [System.Drawing.Rectangle]::new(0, 0, $Size, $Size),
+        $sourceRect.X,
+        $sourceRect.Y,
+        $sourceRect.Width,
+        $sourceRect.Height,
+        [System.Drawing.GraphicsUnit]::Pixel
+    )
+    $graphics.Dispose()
+    $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bitmap.Dispose()
+}
+
 function Save-MonochromeNotificationIcon {
     param(
         [System.Drawing.Image]$Source,
@@ -248,6 +289,29 @@ try {
 
     foreach ($size in @(16, 32, 64, 128, 256, 512, 1024)) {
         Save-PngIcon $source $size (Join-Path $Root "macos\Runner\Assets.xcassets\AppIcon.appiconset\app_icon_$size.png")
+    }
+
+    $iosIcons = @{
+        "Icon-App-20x20@1x.png" = 20
+        "Icon-App-20x20@2x.png" = 40
+        "Icon-App-20x20@3x.png" = 60
+        "Icon-App-29x29@1x.png" = 29
+        "Icon-App-29x29@2x.png" = 58
+        "Icon-App-29x29@3x.png" = 87
+        "Icon-App-40x40@1x.png" = 40
+        "Icon-App-40x40@2x.png" = 80
+        "Icon-App-40x40@3x.png" = 120
+        "Icon-App-60x60@2x.png" = 120
+        "Icon-App-60x60@3x.png" = 180
+        "Icon-App-76x76@1x.png" = 76
+        "Icon-App-76x76@2x.png" = 152
+        "Icon-App-83.5x83.5@2x.png" = 167
+        "Icon-App-1024x1024@1x.png" = 1024
+    }
+
+    foreach ($entry in $iosIcons.GetEnumerator()) {
+        Save-OpaquePngIcon $source $entry.Value `
+            (Join-Path $Root "ios\Runner\Assets.xcassets\AppIcon.appiconset\$($entry.Key)")
     }
 
     # Windows renders taskbar icons inside an additional safe area. Use only a

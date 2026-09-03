@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/theme/app_theme.dart';
 
 /// Top chrome for album, mix and artist detail routes.
 ///
@@ -35,18 +34,18 @@ class SurfaceDetailAppBar extends StatelessWidget
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final transparent =
-        AppColors.surfaceBackgroundModeFor(context) ==
-        SurfaceBackgroundMode.transparent;
-    final headerSurfaceColor = AppColors.tabHeaderSurfaceFor(
-      context,
-      scrolledUnder: true,
-    );
+    final surfaceMode = AppColors.surfaceBackgroundModeFor(context);
+    final transparent = surfaceMode.usesBackdrop && !surfaceMode.isLiquidGlass;
+    final headerSurfaceColor = surfaceMode.isLiquidGlass
+        ? theme.colorScheme.surface
+        : AppColors.tabHeaderSurfaceFor(context, scrolledUnder: true);
     final surface = DecoratedBox(
       key: surfaceKey,
       decoration: BoxDecoration(
         color: headerSurfaceColor,
-        gradient: AppColors.glassAccentGradientFor(context, intensity: 0.9),
+        gradient: surfaceMode.isLiquidGlass
+            ? null
+            : AppColors.glassAccentGradientFor(context, intensity: 0.9),
       ),
       // AppBar gives flexibleSpace loose constraints; an empty DecoratedBox
       // would otherwise collapse and leave no painted/blurred surface.
@@ -63,6 +62,17 @@ class SurfaceDetailAppBar extends StatelessWidget
         : surface;
     final statusBarHeight = MediaQuery.paddingOf(context).top;
     final systemBarColor = theme.colorScheme.surface;
+    final flexibleSpace = Column(
+      children: [
+        SizedBox(
+          key: statusBarSurfaceKey,
+          width: double.infinity,
+          height: statusBarHeight,
+          child: ColoredBox(color: systemBarColor),
+        ),
+        Expanded(child: toolbarSurface),
+      ],
+    );
 
     return AppBar(
       key: appBarKey,
@@ -79,17 +89,7 @@ class SurfaceDetailAppBar extends StatelessWidget
       elevation: 0,
       scrolledUnderElevation: 0,
       forceMaterialTransparency: transparent,
-      flexibleSpace: Column(
-        children: [
-          SizedBox(
-            key: statusBarSurfaceKey,
-            width: double.infinity,
-            height: statusBarHeight,
-            child: ColoredBox(color: systemBarColor),
-          ),
-          Expanded(child: toolbarSurface),
-        ],
-      ),
+      flexibleSpace: flexibleSpace,
     );
   }
 }

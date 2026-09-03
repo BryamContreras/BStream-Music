@@ -6,6 +6,7 @@ void main() {
   group('default mini player mode by platform', () {
     const expectations = <TargetPlatform, MiniPlayerMode>{
       TargetPlatform.android: MiniPlayerMode.capsule,
+      TargetPlatform.iOS: MiniPlayerMode.capsule,
       TargetPlatform.linux: MiniPlayerMode.standard,
       TargetPlatform.windows: MiniPlayerMode.standard,
       TargetPlatform.macOS: MiniPlayerMode.standard,
@@ -26,6 +27,7 @@ void main() {
   test('stored mini player modes override every platform default', () {
     for (final platform in <TargetPlatform>[
       TargetPlatform.android,
+      TargetPlatform.iOS,
       TargetPlatform.linux,
       TargetPlatform.windows,
       TargetPlatform.macOS,

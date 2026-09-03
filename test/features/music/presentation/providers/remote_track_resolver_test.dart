@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:bstream_music/core/errors/app_exception.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -13,10 +14,66 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  test(
+    'coalesces concurrent persistent-cache loads before resolving',
+    () async {
+      final now = DateTime.now();
+      SharedPreferences.setMockInitialValues({
+        'remote_track_resolution_cache_v6': jsonEncode({
+          'youtube:abcdefghijk': {
+            'createdAt': now.millisecondsSinceEpoch,
+            'expiresAt': now
+                .add(const Duration(minutes: 10))
+                .millisecondsSinceEpoch,
+            'track': {
+              'id': 'abcdefghijk',
+              'title': 'Persisted track',
+              'artist': 'Persisted artist',
+              'url': 'https://www.youtube.com/watch?v=abcdefghijk',
+              'streamUrl': 'https://media.example/persisted.m4a',
+              'stream_extension': 'm4a',
+              'stream_mime_type': 'audio/mp4',
+              'stream_source': AudioStreamSource.innerTube.name,
+              'stream_client_profile_key': 'androidSdkless',
+            },
+          },
+        }),
+      });
+      final resolver = _FakeAudioResolver(includeStream: true);
+      final container = ProviderContainer(
+        overrides: [
+          audioStreamResolverProvider.overrideWithValue(resolver),
+          remoteTrackResolverProvider.overrideWith(
+            (ref) => RemoteTrackResolver(ref, useMobileCachePolicy: false),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      const track = TrackInfo(
+        id: 'abcdefghijk',
+        title: 'Current metadata',
+        artist: 'Current artist',
+        url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      );
+      final controller = container.read(remoteTrackResolverProvider);
+
+      final results = await Future.wait(<Future<TrackInfo>>[
+        controller.resolve(track),
+        controller.resolve(track),
+      ]);
+
+      expect(
+        results.map((value) => value.streamUrl),
+        everyElement('https://media.example/persisted.m4a'),
+      );
+      expect(resolver.resolveCalls, 0);
+    },
+  );
+
   test('preserves the resolver error when no playable stream exists', () async {
     const error = DownloaderException(
       'YouTube extraction failed.',
-      code: 'ytdl_error',
+      code: 'innertube_playback_failed',
     );
     final resolver = _FakeAudioResolver(error: error);
     final container = ProviderContainer(
@@ -47,7 +104,7 @@ void main() {
   test('falls back to the original track only when it is playable', () async {
     const error = DownloaderException(
       'Could not refresh the stream.',
-      code: 'ytdl_error',
+      code: 'innertube_playback_failed',
     );
     final resolver = _FakeAudioResolver(error: error);
     final container = ProviderContainer(
@@ -74,7 +131,7 @@ void main() {
   test('does not reuse a stream already rejected by the player', () async {
     const error = DownloaderException(
       'Could not refresh the stream.',
-      code: 'ytdl_error',
+      code: 'innertube_playback_failed',
     );
     final resolver = _FakeAudioResolver(error: error);
     final container = ProviderContainer(
@@ -100,9 +157,9 @@ void main() {
   });
 
   test(
-    'managed fallback clears headers from the rejected direct URL',
+    'fallback resolution clears headers from the rejected direct URL',
     () async {
-      final resolver = _ManagedFileAudioResolver();
+      final resolver = _FallbackFileAudioResolver();
       final container = ProviderContainer(
         overrides: [audioStreamResolverProvider.overrideWithValue(resolver)],
       );
@@ -116,7 +173,7 @@ void main() {
         streamUrl: 'https://googlevideo.example/rejected',
         streamExtension: 'webm',
         streamMimeType: 'audio/webm',
-        streamSource: 'youtubeExplode',
+        streamSource: 'innerTube',
         httpHeaders: {'User-Agent': 'rejected-stream-agent'},
       );
 
@@ -127,23 +184,26 @@ void main() {
       expect(resolved.streamUrl, 'file:///cache/video-id.140.m4a');
       expect(resolved.streamExtension, 'm4a');
       expect(resolved.streamMimeType, 'audio/mp4');
-      expect(resolved.streamSource, AudioStreamSource.ytDlp.name);
+      expect(resolved.streamClientProfileKey, 'visionOS');
+      expect(resolved.streamSource, AudioStreamSource.innerTubeFallback.name);
       expect(resolved.httpHeaders, isNull);
     },
   );
 
-  test('does not persist signed streams on Android', () async {
+  test('does not persist signed streams on mobile', () async {
     SharedPreferences.setMockInitialValues({
       'remote_track_resolution_cache_v2': '{"stale":{}}',
       'remote_track_resolution_cache_v3': '{"stale":{}}',
       'remote_track_resolution_cache_v4': '{"stale":{}}',
+      'remote_track_resolution_cache_v5': '{"stale":{}}',
+      'remote_track_resolution_cache_v6': '{"stale":{}}',
     });
     final resolver = _FakeAudioResolver(includeStream: true);
     final container = ProviderContainer(
       overrides: [
         audioStreamResolverProvider.overrideWithValue(resolver),
         remoteTrackResolverProvider.overrideWith(
-          (ref) => RemoteTrackResolver(ref, isAndroid: true),
+          (ref) => RemoteTrackResolver(ref, useMobileCachePolicy: true),
         ),
       ],
     );
@@ -161,13 +221,15 @@ void main() {
     expect(prefs.getString('remote_track_resolution_cache_v2'), isNull);
     expect(prefs.getString('remote_track_resolution_cache_v3'), isNull);
     expect(prefs.getString('remote_track_resolution_cache_v4'), isNull);
+    expect(prefs.getString('remote_track_resolution_cache_v5'), isNull);
+    expect(prefs.getString('remote_track_resolution_cache_v6'), isNull);
     expect(resolver.resolveCalls, 1);
 
     final secondContainer = ProviderContainer(
       overrides: [
         audioStreamResolverProvider.overrideWithValue(resolver),
         remoteTrackResolverProvider.overrideWith(
-          (ref) => RemoteTrackResolver(ref, isAndroid: true),
+          (ref) => RemoteTrackResolver(ref, useMobileCachePolicy: true),
         ),
       ],
     );
@@ -175,6 +237,117 @@ void main() {
     await secondContainer.read(remoteTrackResolverProvider).resolve(track);
 
     expect(resolver.resolveCalls, 2);
+  });
+
+  test('does not reuse an in-memory stream past its signed expiry', () async {
+    final resolver = _FakeAudioResolver(
+      includeStream: true,
+      expiresAt: DateTime.now().subtract(const Duration(seconds: 1)),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        audioStreamResolverProvider.overrideWithValue(resolver),
+        remoteTrackResolverProvider.overrideWith(
+          (ref) => RemoteTrackResolver(ref, useMobileCachePolicy: false),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    const track = TrackInfo(
+      id: 'expiry-test',
+      title: 'Expiry test',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=expiry-test',
+    );
+
+    await container.read(remoteTrackResolverProvider).resolve(track);
+    await container.read(remoteTrackResolverProvider).resolve(track);
+
+    expect(resolver.resolveCalls, 2);
+  });
+
+  test('persists signed expiry alongside the cached track entry', () async {
+    final expiresAt = DateTime.now().add(const Duration(minutes: 8));
+    final resolver = _FakeAudioResolver(
+      includeStream: true,
+      expiresAt: expiresAt,
+      clientProfileKey: 'androidSdkless',
+    );
+    final container = ProviderContainer(
+      overrides: [
+        audioStreamResolverProvider.overrideWithValue(resolver),
+        remoteTrackResolverProvider.overrideWith(
+          (ref) => RemoteTrackResolver(ref, useMobileCachePolicy: false),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    const track = TrackInfo(
+      id: 'expirycache',
+      title: 'Cached expiry',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=expirycache',
+    );
+
+    await container.read(remoteTrackResolverProvider).resolve(track);
+    final prefs = await SharedPreferences.getInstance();
+    String? raw;
+    for (var attempt = 0; attempt < 20 && raw == null; attempt++) {
+      await Future<void>.delayed(Duration.zero);
+      raw = prefs.getString('remote_track_resolution_cache_v6');
+    }
+
+    final cache = jsonDecode(raw!) as Map<String, dynamic>;
+    final entry = cache.values.single as Map<String, dynamic>;
+    final cachedTrack = entry['track'] as Map<String, dynamic>;
+    expect(entry['expiresAt'], expiresAt.millisecondsSinceEpoch);
+    expect(cachedTrack['stream_client_profile_key'], 'androidSdkless');
+  });
+
+  test('local TTL expires an entry before a later signed expiry', () async {
+    final now = DateTime.now();
+    SharedPreferences.setMockInitialValues({
+      'remote_track_resolution_cache_v6': jsonEncode({
+        'youtube:abcdefghijk': {
+          'createdAt': now
+              .subtract(const Duration(minutes: 21))
+              .millisecondsSinceEpoch,
+          'expiresAt': now.add(const Duration(hours: 1)).millisecondsSinceEpoch,
+          'track': {
+            'id': 'abcdefghijk',
+            'title': 'Stale track',
+            'artist': 'Artist',
+            'url': 'https://www.youtube.com/watch?v=abcdefghijk',
+            'streamUrl': 'https://media.example/stale.m4a',
+            'stream_source': AudioStreamSource.innerTube.name,
+            'stream_client_profile_key': 'androidSdkless',
+          },
+        },
+      }),
+    });
+    final resolver = _FakeAudioResolver(includeStream: true);
+    final container = ProviderContainer(
+      overrides: [
+        audioStreamResolverProvider.overrideWithValue(resolver),
+        remoteTrackResolverProvider.overrideWith(
+          (ref) => RemoteTrackResolver(ref, useMobileCachePolicy: false),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    const track = TrackInfo(
+      id: 'abcdefghijk',
+      title: 'Current track',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+    );
+
+    final resolved = await container
+        .read(remoteTrackResolverProvider)
+        .resolve(track);
+
+    expect(resolved.streamUrl, 'https://media.example/abcdefghijk.m4a');
+    expect(resolver.resolveCalls, 1);
   });
 
   test(
@@ -261,7 +434,7 @@ void main() {
     },
   );
 
-  test('fills only missing YouTube Music metadata from yt-dlp', () async {
+  test('fills only missing YouTube Music metadata from playback', () async {
     final resolver = _MetadataOverwritingResolver();
     final container = ProviderContainer(
       overrides: [audioStreamResolverProvider.overrideWithValue(resolver)],
@@ -393,7 +566,7 @@ void main() {
     expect(resolver.resolveCalls, 2);
     resolver.requests[1].complete(
       const AudioStreamResolution(
-        source: AudioStreamSource.youtubeExplode,
+        source: AudioStreamSource.innerTube,
         streamUrl: 'https://media.example/current.m4a',
       ),
     );
@@ -406,7 +579,7 @@ void main() {
   test('retries with the fallback when the primary resolver fails', () async {
     final fallback = _FakeAudioResolver(
       includeStream: true,
-      source: AudioStreamSource.ytDlp,
+      source: AudioStreamSource.innerTubeFallback,
     );
     final primary = _FailingAudioResolver();
     final container = ProviderContainer(
@@ -437,11 +610,11 @@ void main() {
   test('returns the primary result when it is usable', () async {
     final primary = _FakeAudioResolver(
       includeStream: true,
-      source: AudioStreamSource.youtubeExplode,
+      source: AudioStreamSource.innerTube,
     );
     final fallback = _FakeAudioResolver(
       includeStream: true,
-      source: AudioStreamSource.ytDlp,
+      source: AudioStreamSource.innerTubeFallback,
     );
     final container = ProviderContainer(
       overrides: [
@@ -473,12 +646,16 @@ class _FakeAudioResolver implements AudioStreamResolver {
   _FakeAudioResolver({
     this.error,
     this.includeStream = false,
-    this.source = AudioStreamSource.youtubeExplode,
+    this.source = AudioStreamSource.innerTube,
+    this.expiresAt,
+    this.clientProfileKey = 'androidSdkless',
   });
 
   final Object? error;
   final bool includeStream;
   final AudioStreamSource source;
+  final DateTime? expiresAt;
+  final String? clientProfileKey;
 
   int resolveCalls = 0;
 
@@ -497,6 +674,8 @@ class _FakeAudioResolver implements AudioStreamResolver {
       streamUrl: 'https://media.example/$id.m4a',
       streamExtension: 'm4a',
       streamMimeType: 'audio/mp4',
+      clientProfileKey: clientProfileKey,
+      expiresAt: expiresAt,
     );
   }
 
@@ -504,14 +683,15 @@ class _FakeAudioResolver implements AudioStreamResolver {
   Future<void> dispose() async {}
 }
 
-class _ManagedFileAudioResolver implements AudioStreamResolver {
+class _FallbackFileAudioResolver implements AudioStreamResolver {
   @override
   Future<AudioStreamResolution> resolve(TrackInfo track) async {
     return const AudioStreamResolution(
-      source: AudioStreamSource.ytDlp,
+      source: AudioStreamSource.innerTubeFallback,
       streamUrl: 'file:///cache/video-id.140.m4a',
       streamExtension: 'm4a',
       streamMimeType: 'audio/mp4',
+      clientProfileKey: 'visionOS',
       formatId: '140',
       codec: 'mp4a.40.2',
     );
@@ -563,7 +743,7 @@ class _MetadataOverwritingResolver implements AudioStreamResolver {
   Future<AudioStreamResolution> resolve(TrackInfo track) async {
     resolveCalls++;
     return AudioStreamResolution(
-      source: AudioStreamSource.ytDlp,
+      source: AudioStreamSource.innerTubeFallback,
       streamUrl: 'https://media.example/audio.m4a',
       streamExtension: 'm4a',
       streamMimeType: 'audio/mp4',

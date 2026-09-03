@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta data-bstream-runtime-csp="true"
+        http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'">
+  <title>BotGuard</title>
+  <script>
+    // The page is intentionally offline. Dart supplies BotGuard's challenge
+    // and integrity responses and invokes this harness through callAsyncJavaScript.
+    var bgVmFunctions = null;
+    var bgVm = null;
+    var bgProgram = null;
+    var poTokenMinter = null;
+
+    function configureBotGuard(youtubeConfig) {
+      if (!youtubeConfig || typeof youtubeConfig !== 'object') {
+        throw new Error('[BotGuardClient]: YouTube config missing');
+      }
+      // The homepage challenge and EVENT_ID are a single identity snapshot.
+      // Install that exact snapshot before the interpreter creates its VM.
+      window.yt = window.yt || {};
+      window.yt.config_ = youtubeConfig;
+      globalThis.yt = window.yt;
+    }
+
+    function loadBotGuard(challengeData) {
+      bgVm = window[challengeData.globalName];
+      bgProgram = challengeData.program;
+      bgVmFunctions = null;
+      if (!bgVm || !bgVm.a) {
+        throw new Error('[BotGuardClient]: VM not found or invalid');
+      }
+
+      var vmFunctionsCallback = function(
+          asyncSnapshotFunction, shutdownFunction, passEventFunction, checkCameraFunction) {
+        bgVmFunctions = {
+          asyncSnapshotFunction: asyncSnapshotFunction,
+          shutdownFunction: shutdownFunction,
+          passEventFunction: passEventFunction,
+          checkCameraFunction: checkCameraFunction
+        };
+      };
+
+      // BotGuard's current VM contract includes telemetry and five logger
+      // callbacks. They are intentionally local no-ops: the sandbox has no
+      // network access and playback does not need to collect Google telemetry.
+      var vmTelemetryCallback = function() {};
+      var loggerFunctions = [
+        function() {},
+        function() {},
+        function() {},
+        function() {},
+        function() {}
+      ];
+
+      var synchronousSnapshot = bgVm.a(
+          bgProgram,
+          vmFunctionsCallback,
+          true,
+          undefined,
+          vmTelemetryCallback,
+          [[], []],
+          undefined,
+          false,
+          loggerFunctions);
+      // Retain the return value so engines that defer setup cannot collect it
+      // before the asynchronous snapshot callback is installed.
+      window.__bstreamSynchronousSnapshot = synchronousSnapshot &&
+          synchronousSnapshot[0];
+      return new Promise(function(resolve, reject) {
+        var attempts = 0;
+        var timer = setInterval(function() {
+          if (bgVmFunctions && bgVmFunctions.asyncSnapshotFunction) {
+            clearInterval(timer);
+            resolve({vmFunctions: bgVmFunctions, vm: bgVm, program: bgProgram});
+          } else if (++attempts >= 10000) {
+            clearInterval(timer);
+            reject(new Error('[BotGuardClient]: snapshot function timeout'));
+          }
+        }, 1);
+      });
+    }
+
+    function snapshot(botguard) {
+      return new Promise(function(resolve, reject) {
+        if (!botguard.vmFunctions || !botguard.vmFunctions.asyncSnapshotFunction) {
+          reject(new Error('[BotGuardClient]: snapshot function missing'));
+          return;
+        }
+        try {
+          botguard.vmFunctions.asyncSnapshotFunction(
+              function(response) { resolve(response); },
+              [undefined, undefined, window.webPoSignalOutput, undefined]);
+        } catch (error) {
+          reject(new Error('[BotGuardClient]: snapshot failed: ' + error.message));
+        }
+      });
+    }
+
+    function runBotGuard(challengeData) {
+      var interpreter =
+          challengeData.interpreterJavascript.privateDoNotAccessOrElseSafeScriptWrappedValue;
+      if (!interpreter) {
+        throw new Error('[BotGuardClient]: interpreter JavaScript missing');
+      }
+      new Function(interpreter)();
+      window.webPoSignalOutput = [];
+      return loadBotGuard({
+        globalName: challengeData.globalName,
+        program: challengeData.program
+      }).then(function(botguard) {
+        return snapshot(botguard);
+      }).then(function(botguardResponse) {
+        return {
+          webPoSignalOutput: window.webPoSignalOutput,
+          botguardResponse: botguardResponse
+        };
+      });
+    }
+
+    async function createPoTokenMinter(webPoSignalOutput, integrityToken) {
+      var getMinter = webPoSignalOutput[0];
+      if (typeof getMinter !== 'function') {
+        throw new Error('[BotGuardClient]: poToken minter is missing');
+      }
+      var result = getMinter(integrityToken);
+      poTokenMinter = result && typeof result.then === 'function' ? await result : result;
+      if (typeof poTokenMinter !== 'function') {
+        throw new Error('[BotGuardClient]: invalid poToken minter');
+      }
+    }
+
+    async function obtainPoToken(identifier) {
+      if (typeof poTokenMinter !== 'function') {
+        throw new Error('[BotGuardClient]: poToken minter is not initialized');
+      }
+      var result = poTokenMinter(identifier);
+      result = result && typeof result.then === 'function' ? await result : result;
+      if (!(result instanceof Uint8Array)) {
+        throw new Error('[BotGuardClient]: invalid poToken result');
+      }
+      return result;
+    }
+  </script>
+</head>
+<body></body>
+</html>

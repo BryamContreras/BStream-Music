@@ -3,9 +3,19 @@ import 'dart:io';
 
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/core/platform/app_platform.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('iOS uses the bounded mobile playback cache policy', () {
+    final policy = RemotePlaybackCachePolicy.forPlatform(AppPlatformType.ios);
+
+    expect(policy, same(RemotePlaybackCachePolicy.mobile));
+    expect(policy.enabled, isTrue);
+    expect(policy.evictOutsidePlaybackWindow, isTrue);
+    expect(policy.useApplicationCacheDirectory, isFalse);
+  });
+
   late Directory cacheDirectory;
   late HttpServer server;
   late RemotePlaybackCache cache;
@@ -36,6 +46,16 @@ void main() {
         } catch (_) {
           // The cache intentionally closes this connection during dispose.
         }
+        return;
+      }
+      if (request.uri.path.contains('incomplete-206')) {
+        request.response
+          ..statusCode = HttpStatus.partialContent
+          ..contentLength = 1024
+          ..headers.contentType = ContentType('audio', 'mp4')
+          ..headers.set(HttpHeaders.contentRangeHeader, 'bytes 0-1023/2048')
+          ..add(List<int>.filled(1024, 7));
+        await request.response.close();
         return;
       }
       if (request.uri.path.contains('html')) {
@@ -175,6 +195,19 @@ void main() {
     expect(await cache.cachedFile(track), isNull);
     expect(await cacheDirectory.list().toList(), isEmpty);
   });
+
+  test(
+    'an incomplete 206 response is never published as a cache hit',
+    () async {
+      final track = _track(server, 'incomplete-206');
+
+      await cache.retainOnlyTracks([track]);
+
+      expect(await cache.warmResolved(track), isNull);
+      expect(await cache.cachedFile(track), isNull);
+      expect(await cacheDirectory.list().toList(), isEmpty);
+    },
+  );
 
   test(
     'startup cleanup removes partial and expired unprotected files',

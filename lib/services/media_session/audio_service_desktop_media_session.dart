@@ -129,8 +129,8 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
     try {
       return await initialization;
     } catch (_) {
-      // AudioService initialization can fail transiently while Android is
-      // restoring the process. Do not permanently cache a rejected Future.
+      // AudioService initialization can fail transiently while the mobile
+      // process is being restored. Do not permanently cache a rejected Future.
       if (identical(_handlerInitialization, initialization)) {
         _handlerInitialization = null;
       }
@@ -309,7 +309,7 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
     if (value == null || value.isEmpty) {
       return null;
     }
-    if (AppPlatform.isAndroid) {
+    if (AppPlatform.isMobile) {
       final notificationUri = NotificationArtworkService.instance.uriFor(value);
       if (notificationUri != null) {
         return notificationUri;

@@ -2,7 +2,15 @@ import '../../features/music/domain/entities/device_audio_track.dart';
 import 'device_audio_filter.dart';
 import 'device_audio_grouping.dart';
 
-enum DeviceAudioPermissionStatus { granted, denied, notRequired, unsupported }
+enum DeviceAudioPermissionStatus {
+  granted,
+  notDetermined,
+  denied,
+  permanentlyDenied,
+  restricted,
+  notRequired,
+  unsupported,
+}
 
 class DeviceAudioCatalogResult {
   const DeviceAudioCatalogResult({
@@ -13,7 +21,17 @@ class DeviceAudioCatalogResult {
   final DeviceAudioPermissionStatus status;
   final List<DeviceAudioTrack> tracks;
 
-  bool get permissionRequired => status == DeviceAudioPermissionStatus.denied;
+  bool get permissionRequired => switch (status) {
+    DeviceAudioPermissionStatus.notDetermined ||
+    DeviceAudioPermissionStatus.denied ||
+    DeviceAudioPermissionStatus.permanentlyDenied ||
+    DeviceAudioPermissionStatus.restricted => true,
+    _ => false,
+  };
+
+  bool get permissionRequiresSettings =>
+      status == DeviceAudioPermissionStatus.permanentlyDenied ||
+      status == DeviceAudioPermissionStatus.restricted;
 
   bool get isSupported => status != DeviceAudioPermissionStatus.unsupported;
 

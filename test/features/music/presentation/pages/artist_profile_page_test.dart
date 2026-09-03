@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
@@ -13,7 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('artist app bar respects accent and transparent surface modes', (
+  testWidgets('artist app bar respects every surface background mode', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -38,31 +39,54 @@ void main() {
         find.byKey(const ValueKey('artist-profile-app-bar-surface')),
       );
       final decoration = surface.decoration as BoxDecoration;
-      expect(decoration.gradient, isA<LinearGradient>());
+      final appBarFinder = find.byKey(const ValueKey('artist-profile-app-bar'));
+      final appBarWidget = tester.widget<AppBar>(appBarFinder);
+      final tonalSurface = Theme.of(
+        tester.element(appBarFinder),
+      ).colorScheme.surface;
+      final transparent = mode == SurfaceBackgroundMode.transparent;
+      expect(
+        decoration.gradient,
+        mode.isLiquidGlass ? isNull : isA<LinearGradient>(),
+      );
       expect(decoration.border, isNull);
       expect(
         find.byKey(const ValueKey('artist-profile-app-bar-blur')),
-        mode == SurfaceBackgroundMode.transparent
-            ? findsOneWidget
-            : findsNothing,
+        transparent ? findsOneWidget : findsNothing,
+      );
+      if (mode.isLiquidGlass) {
+        expect(decoration.color, tonalSurface);
+      } else {
+        expect(decoration.color!.a, transparent ? lessThan(1) : 1);
+      }
+      expect(
+        find.descendant(
+          of: appBarFinder,
+          matching: find.byType(LiquidGlassSurface),
+        ),
+        findsNothing,
       );
       expect(
-        decoration.color!.a,
-        mode == SurfaceBackgroundMode.transparent ? lessThan(1) : 1,
+        find.descendant(
+          of: appBarFinder,
+          matching: find.byType(BackdropFilter),
+        ),
+        transparent ? findsOneWidget : findsNothing,
       );
-      final appBarFinder = find.byKey(const ValueKey('artist-profile-app-bar'));
-      final appBarWidget = tester.widget<AppBar>(appBarFinder);
+      expect(appBarWidget.forceMaterialTransparency, transparent);
       expect(
-        appBarWidget.forceMaterialTransparency,
-        mode == SurfaceBackgroundMode.transparent,
+        appBarWidget.backgroundColor,
+        transparent ? Colors.transparent : decoration.color,
       );
-      expect(
-        appBarWidget.backgroundColor?.a,
-        mode == SurfaceBackgroundMode.transparent ? 0 : 1,
+      expect(appBarWidget.systemOverlayStyle?.statusBarColor, tonalSurface);
+      final statusBarFinder = find.byKey(
+        const ValueKey('artist-profile-status-bar-surface'),
       );
-      final statusBarRect = tester.getRect(
-        find.byKey(const ValueKey('artist-profile-status-bar-surface')),
+      final statusBarFill = tester.widget<ColoredBox>(
+        find.descendant(of: statusBarFinder, matching: find.byType(ColoredBox)),
       );
+      expect(statusBarFill.color, tonalSurface);
+      final statusBarRect = tester.getRect(statusBarFinder);
       final toolbarSurfaceRect = tester.getRect(
         find.byKey(const ValueKey('artist-profile-app-bar-surface')),
       );

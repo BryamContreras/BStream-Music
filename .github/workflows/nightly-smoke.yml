@@ -14,15 +14,10 @@ concurrency:
 
 env:
   FLUTTER_VERSION: "3.44.0"
-  YT_DLP_VERSION: "2026.07.04"
-  YT_DLP_ANDROID_SHA256: "495be29ff4d9d4e9be7eabdfef225221e5d5282e77f2f505abc6dca80349f3fd"
-  YT_DLP_WINDOWS_SHA256: "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8"
-  DENO_VERSION: "2.9.4"
-  DENO_WINDOWS_X64_SHA256: "68ed08b05c56cf887e9aa509947dc3f468f7e12f47a13e5c1abd51d46d1453ef"
 
 jobs:
   windows-native:
-    name: Windows crossfade and live playback
+    name: Windows crossfade and InnerTube playback
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
@@ -51,38 +46,14 @@ jobs:
           flutter clean
           flutter pub get --enforce-lockfile
 
-      - name: Prepare checksum-pinned desktop tools
-        shell: pwsh
-        run: |
-          $tools = Join-Path $PWD "windows/tools"
-          New-Item -ItemType Directory -Force -Path $tools | Out-Null
-          $ytDlp = Join-Path $tools "yt-dlp.exe"
-          Invoke-WebRequest `
-            -Uri "https://github.com/yt-dlp/yt-dlp/releases/download/$env:YT_DLP_VERSION/yt-dlp.exe" `
-            -OutFile $ytDlp
-          $ytHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ytDlp).Hash.ToLowerInvariant()
-          if ($ytHash -ne $env:YT_DLP_WINDOWS_SHA256) {
-            throw "yt-dlp checksum mismatch: $ytHash"
-          }
-
-          $denoArchive = Join-Path $env:RUNNER_TEMP "deno-windows-x64.zip"
-          Invoke-WebRequest `
-            -Uri "https://github.com/denoland/deno/releases/download/v$env:DENO_VERSION/deno-x86_64-pc-windows-msvc.zip" `
-            -OutFile $denoArchive
-          $denoHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $denoArchive).Hash.ToLowerInvariant()
-          if ($denoHash -ne $env:DENO_WINDOWS_X64_SHA256) {
-            throw "Deno checksum mismatch: $denoHash"
-          }
-          Expand-Archive -LiteralPath $denoArchive -DestinationPath $tools -Force
-
       - name: Run native crossfade smoke
         run: flutter test integration_test/crossfade_native_test.dart -d windows
 
-      - name: Run live YouTube playback smoke
+      - name: Run live InnerTube playback smoke
         run: >-
-          flutter test integration_test/youtube_explode_playback_test.dart
+          flutter test integration_test/innertube_playback_live_test.dart
           -d windows
-          --dart-define=BSTREAM_LIVE_TESTS=true
+          --dart-define=BSTREAM_LIVE_INNERTUBE=true
 
   android-native:
     name: Android native crossfade

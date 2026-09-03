@@ -5,7 +5,7 @@ import 'package:flutter/painting.dart';
 
 import '../../../../platform_channels/android_local_media_channel.dart';
 
-/// Loads artwork embedded in a device audio file through Android on demand.
+/// Loads device-library artwork through the native mobile channel on demand.
 ///
 /// The provider key includes the requested width so a small scrolling-card
 /// rendition never becomes the blurry source for the full player. Flutter's

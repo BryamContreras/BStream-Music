@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
@@ -198,9 +199,20 @@ void main() {
           catalog: catalog,
           tracks: <LocalTrack>[downloaded, stale],
           audioProbe: (path) async => path == downloaded.filePath,
+          surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
         ),
       );
       await tester.pumpAndSettle();
+
+      final remoteSurface = tester.widget<AnimatedContainer>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('library-catalog-entry-remote')),
+              matching: find.byType(AnimatedContainer),
+            )
+            .first,
+      );
+      expect((remoteSurface.decoration! as BoxDecoration).color?.a, 1);
 
       expect(
         find.byKey(const ValueKey('library-catalog-cloud-remote')),
@@ -303,6 +315,7 @@ Widget _playlistHarness({
   required CatalogPlaylist catalog,
   required List<LocalTrack> tracks,
   required LocalAudioUsabilityProbe audioProbe,
+  SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
 }) {
   final navigation = LibraryNavigationController()..openPlaylist(playlist.id);
   return ProviderScope(
@@ -324,6 +337,9 @@ Widget _playlistHarness({
       ),
     ],
     child: MaterialApp(
+      theme: ThemeData(
+        extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
+      ),
       home: Scaffold(
         body: LibraryPanel(
           navigationController: navigation,

@@ -9,6 +9,7 @@ import 'core/platform/app_platform.dart';
 import 'core/startup/app_startup_coordinator.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
+import 'core/widgets/liquid_glass_surface.dart';
 import 'features/music/presentation/pages/home_page.dart';
 import 'features/music/presentation/providers/music_providers.dart';
 import 'services/player/notification_artwork_service.dart';
@@ -19,6 +20,32 @@ void main() {
 }
 
 typedef AppStartupScheduler = void Function(VoidCallback callback);
+
+@visibleForTesting
+Set<OptionalStartupService> startupServicesForPlatform({
+  required AppPlatformType platform,
+  bool? initializeAndroidServices,
+}) {
+  if (initializeAndroidServices != null) {
+    return initializeAndroidServices
+        ? const <OptionalStartupService>{
+            OptionalStartupService.notificationArtwork,
+            OptionalStartupService.audioService,
+          }
+        : const <OptionalStartupService>{};
+  }
+  return switch (platform) {
+    AppPlatformType.android => const <OptionalStartupService>{
+      OptionalStartupService.notificationArtwork,
+      OptionalStartupService.audioService,
+    },
+    AppPlatformType.ios => const <OptionalStartupService>{
+      OptionalStartupService.notificationArtwork,
+      OptionalStartupService.audioService,
+    },
+    _ => const <OptionalStartupService>{},
+  };
+}
 
 void _scheduleStartupAfterFirstFrame(VoidCallback callback) {
   WidgetsBinding.instance.addPostFrameCallback((_) => callback());
@@ -39,22 +66,27 @@ AppStartupCoordinator launchBStreamMusicApp({
   final imageCache = PaintingBinding.instance.imageCache;
   imageCache.maximumSize = 100;
   imageCache.maximumSizeBytes = 48 * 1024 * 1024;
-  final shouldInitializeAndroidServices =
-      initializeAndroidServices ?? AppPlatform.isAndroid;
+  // Begin compiling the optional Impeller lens before Liquid Glass surfaces
+  // mount. Unsupported desktop renderers keep the portable fallback.
+  unawaited(LiquidGlassSurface.warmUp());
+  final startupServices = startupServicesForPlatform(
+    platform: AppPlatform.current,
+    initializeAndroidServices: initializeAndroidServices,
+  );
   final startup = AppStartupCoordinator(
-    operations: shouldInitializeAndroidServices
-        ? <OptionalStartupService, OptionalStartupOperation>{
-            OptionalStartupService.notificationArtwork:
-                initializeNotificationArtwork ??
-                NotificationArtworkService.instance.initialize,
-            OptionalStartupService.audioService:
-                initializeAudioService ??
-                AudioServiceDesktopMediaSession.ensureInitialized,
-          }
-        : const <OptionalStartupService, OptionalStartupOperation>{},
+    operations: <OptionalStartupService, OptionalStartupOperation>{
+      if (startupServices.contains(OptionalStartupService.notificationArtwork))
+        OptionalStartupService.notificationArtwork:
+            initializeNotificationArtwork ??
+            NotificationArtworkService.instance.initialize,
+      if (startupServices.contains(OptionalStartupService.audioService))
+        OptionalStartupService.audioService:
+            initializeAudioService ??
+            AudioServiceDesktopMediaSession.ensureInitialized,
+    },
   );
 
-  // The UI is intentionally mounted before optional Android integrations are
+  // The UI is intentionally mounted before optional mobile integrations are
   // attempted. Transient failures retry in the background with a bounded
   // backoff, without trapping the user on a blank launch screen.
   (runApplication ?? runApp)(

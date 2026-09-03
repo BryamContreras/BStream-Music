@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bstream_music/core/platform/app_platform.dart';
 import 'package:bstream_music/core/startup/app_startup_coordinator.dart';
 import 'package:bstream_music/main.dart' as app;
 import 'package:flutter/widgets.dart';
@@ -7,6 +8,27 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('selects native startup services per mobile platform', () {
+    expect(
+      app.startupServicesForPlatform(platform: AppPlatformType.android),
+      const <OptionalStartupService>{
+        OptionalStartupService.notificationArtwork,
+        OptionalStartupService.audioService,
+      },
+    );
+    expect(
+      app.startupServicesForPlatform(platform: AppPlatformType.ios),
+      const <OptionalStartupService>{
+        OptionalStartupService.notificationArtwork,
+        OptionalStartupService.audioService,
+      },
+    );
+    expect(
+      app.startupServicesForPlatform(platform: AppPlatformType.macos),
+      isEmpty,
+    );
+  });
 
   test(
     'mounts the application before optional startup work completes',

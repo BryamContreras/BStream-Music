@@ -122,21 +122,14 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
-set(BSTREAM_TOOLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools")
-if(EXISTS "${BSTREAM_TOOLS_DIR}")
-  install(DIRECTORY "${BSTREAM_TOOLS_DIR}"
-    DESTINATION "${CMAKE_INSTALL_PREFIX}"
-    CONFIGURATIONS Release Profile
-    COMPONENT Runtime
-    PATTERN "ffmpeg*" EXCLUDE
-    PATTERN "FFmpeg*" EXCLUDE
-    PATTERN "ffprobe*" EXCLUDE
-    PATTERN "FFprobe*" EXCLUDE)
-endif()
-
-# Remove TikTok LIVE Python artifacts left by older incremental builds. The
-# current client is implemented directly in Dart and ships no external bridge.
+# Remove external resolver and TikTok LIVE artifacts left by older incremental
+# builds. Both integrations now run in Dart and ship no companion executables.
 install(CODE "
+  file(REMOVE
+    \"${CMAKE_INSTALL_PREFIX}/tools/yt-dlp.exe\"
+    \"${CMAKE_INSTALL_PREFIX}/tools/yt-dlp\"
+    \"${CMAKE_INSTALL_PREFIX}/tools/deno.exe\"
+    \"${CMAKE_INSTALL_PREFIX}/tools/deno\")
   file(REMOVE
     \"${CMAKE_INSTALL_PREFIX}/scripts/tiktok_live_bridge.py\"
     \"${CMAKE_INSTALL_PREFIX}/scripts/requirements-tiktok.txt\")
@@ -151,6 +144,11 @@ install(CODE "
   file(REMOVE
     \"${CMAKE_INSTALL_PREFIX}/tools/tiktok_live_bridge.exe\"
     \"${CMAKE_INSTALL_PREFIX}/tools/tiktok-live-bridge.exe\")
+  file(GLOB BSTREAM_LEGACY_TOOL_ENTRIES
+    \"${CMAKE_INSTALL_PREFIX}/tools/*\")
+  if(NOT BSTREAM_LEGACY_TOOL_ENTRIES)
+    file(REMOVE_RECURSE \"${CMAKE_INSTALL_PREFIX}/tools\")
+  endif()
   "
   CONFIGURATIONS Release Profile
   COMPONENT Runtime)

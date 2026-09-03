@@ -1,6 +1,9 @@
 import 'dart:io';
 
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/presentation/providers/app_strings.dart';
+import 'package:bstream_music/features/music/presentation/providers/mini_player_background_mode.dart';
+import 'package:bstream_music/features/music/presentation/providers/player_style.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -178,26 +181,76 @@ void main() {
     expect(spanish.surfaceBackground, 'Fondo de las superficies');
     expect(spanish.surfaceBackgroundAccent, 'Acento');
     expect(spanish.surfaceBackgroundTransparent, 'Transparente');
+    expect(spanish.surfaceBackgroundLiquidGlass, 'Liquid Glass Style');
+    expect(spanish.player, 'Reproductor');
+    expect(spanish.playerStyle, 'Estilo');
+    expect(spanish.playerStyleBStreamMusic, 'BStream Music');
+    expect(spanish.playerStyleAppleMusic, 'Apple Music Style');
+    expect(spanish.animatedArtwork, 'Portadas animadas');
+    expect(
+      spanish.animatedArtworkDescription,
+      'Añade movimiento, profundidad y zoom sutiles a la portada del reproductor.',
+    );
     expect(spanish.miniPlayer, 'Mini reproductor');
     expect(spanish.miniPlayerStyle, 'Estilo');
     expect(spanish.miniPlayerClassic, 'Clásico');
-    expect(spanish.miniPlayerCapsule, 'Cápsula');
+    expect(spanish.miniPlayerCapsule, 'Flotante');
     expect(spanish.miniPlayerBackground, 'Fondo del Mini reproductor');
     expect(spanish.miniPlayerBackgroundAccent, 'Acento');
     expect(spanish.miniPlayerBackgroundArtwork, 'Portada');
     expect(spanish.miniPlayerBackgroundTransparent, 'Transparente');
+    expect(spanish.miniPlayerBackgroundLiquidGlass, 'Liquid Glass Style');
     expect(english.surfaceEffects, 'Surface effects');
     expect(english.surfaceBackground, 'Surface background');
     expect(english.surfaceBackgroundAccent, 'Accent');
     expect(english.surfaceBackgroundTransparent, 'Transparent');
+    expect(english.surfaceBackgroundLiquidGlass, 'Liquid Glass Style');
+    expect(english.player, 'Player');
+    expect(english.playerStyle, 'Style');
+    expect(english.playerStyleBStreamMusic, 'BStream Music');
+    expect(english.playerStyleAppleMusic, 'Apple Music Style');
+    expect(english.animatedArtwork, 'Animated artwork');
+    expect(
+      english.animatedArtworkDescription,
+      'Adds subtle motion, depth, and zoom to the player artwork.',
+    );
     expect(english.miniPlayer, 'Mini player');
     expect(english.miniPlayerStyle, 'Style');
     expect(english.miniPlayerClassic, 'Classic');
-    expect(english.miniPlayerCapsule, 'Capsule');
+    expect(english.miniPlayerCapsule, 'Floating');
     expect(english.miniPlayerBackground, 'Mini player background');
     expect(english.miniPlayerBackgroundAccent, 'Accent');
     expect(english.miniPlayerBackgroundArtwork, 'Artwork');
     expect(english.miniPlayerBackgroundTransparent, 'Transparent');
+    expect(english.miniPlayerBackgroundLiquidGlass, 'Liquid Glass Style');
+
+    expect(
+      spanish.surfaceBackgroundModeLabel(SurfaceBackgroundMode.liquidGlass),
+      'Liquid Glass Style',
+    );
+    expect(
+      english.surfaceBackgroundModeLabel(SurfaceBackgroundMode.transparent),
+      'Transparent',
+    );
+    expect(
+      spanish.miniPlayerBackgroundModeLabel(
+        MiniPlayerBackgroundMode.transparent,
+      ),
+      'Transparente',
+    );
+    expect(
+      english.miniPlayerBackgroundModeLabel(
+        MiniPlayerBackgroundMode.liquidGlass,
+      ),
+      'Liquid Glass Style',
+    );
+    expect(spanish.playerStyleLabel(PlayerStyle.bstreamMusic), 'BStream Music');
+    expect(
+      english.playerStyleLabel(PlayerStyle.appleMusic),
+      'Apple Music Style',
+    );
+    expect(spanish.minimizePlayer, 'Minimizar reproductor');
+    expect(english.minimizePlayer, 'Minimize player');
   });
 
   test('Home greeting labels omit account names', () {

@@ -579,12 +579,12 @@ void main() {
       final playerService = _LiveAppendPlayerService();
       final playerController = _TrackingLivePlayerController();
       final primary = _LiveAppendAudioResolver(
-        source: AudioStreamSource.youtubeExplode,
+        source: AudioStreamSource.innerTube,
         succeeds: (trackId, call) =>
             trackId == 'live-a' ? call == 1 : trackId == 'live-b',
       );
       final fallback = _LiveAppendAudioResolver(
-        source: AudioStreamSource.ytDlp,
+        source: AudioStreamSource.innerTubeFallback,
         succeeds: (_, _) => false,
       );
       final retryDurations = <Duration>[];

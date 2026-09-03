@@ -136,4 +136,63 @@ void main() {
     expect(neutralTitle, Colors.white);
     expect(contentTitle, isNot(AppAccent.blue.seedColor));
   });
+
+  testWidgets(
+    'content cards can opt out of Liquid Glass without changing other modes',
+    (tester) async {
+      for (final mode in SurfaceBackgroundMode.values) {
+        late Color inheritedSurface;
+        late Color solidSurface;
+        late Color inheritedBorder;
+        late Color solidBorder;
+        late Color inheritedHomeSurface;
+        late Color solidHomeSurface;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData(
+              scaffoldBackgroundColor: const Color(0xFF030504),
+              extensions: [
+                const AppAccentTheme(accent: AppAccent.blue),
+                AppSurfaceTheme(backgroundMode: mode),
+              ],
+            ),
+            home: Builder(
+              builder: (context) {
+                inheritedSurface = AppColors.cardSurfaceFor(context);
+                solidSurface = AppColors.cardSurfaceFor(
+                  context,
+                  solidInLiquidGlass: true,
+                );
+                inheritedBorder = AppColors.cardBorderFor(context);
+                solidBorder = AppColors.cardBorderFor(
+                  context,
+                  solidInLiquidGlass: true,
+                );
+                inheritedHomeSurface = AppColors.homeCardSurfaceFor(context);
+                solidHomeSurface = AppColors.homeCardSurfaceFor(
+                  context,
+                  solidInLiquidGlass: true,
+                );
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        if (mode.isLiquidGlass) {
+          expect(inheritedSurface.a, lessThan(1));
+          expect(inheritedBorder.a, lessThan(1));
+          expect(inheritedHomeSurface.a, lessThan(1));
+          expect(solidSurface.a, 1);
+          expect(solidBorder.a, 1);
+          expect(solidHomeSurface, solidSurface);
+        } else {
+          expect(solidSurface, inheritedSurface);
+          expect(solidBorder, inheritedBorder);
+          expect(solidHomeSurface, inheritedHomeSurface);
+        }
+      }
+    },
+  );
 }

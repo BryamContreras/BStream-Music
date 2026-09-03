@@ -24,6 +24,17 @@ const supportedCrossfadeDurations = <Duration>[
 ];
 
 const defaultCrossfadeDuration = Duration(seconds: 5);
+const defaultAnimatedArtworkEnabled = true;
+
+/// iOS application containers can receive a different absolute prefix after
+/// an update or restore. Always reconstruct the private media root from the
+/// current container; startup then migrates/rebases any persisted references.
+@visibleForTesting
+String downloadDirectoryForPlatform({
+  required AppPlatformType platform,
+  required String candidateDirectory,
+  required String defaultDirectory,
+}) => platform == AppPlatformType.ios ? defaultDirectory : candidateDirectory;
 
 Duration crossfadeDurationFromStoredSeconds(int? seconds) {
   return supportedCrossfadeDurations.firstWhere(
@@ -81,6 +92,8 @@ class SettingsState {
     this.themeMode = AppThemeMode.system,
     this.accent = AppAccent.white,
     this.surfaceBackgroundMode = SurfaceBackgroundMode.accent,
+    this.playerStyle = defaultPlayerStyle,
+    this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
     this.miniPlayerMode = defaultMiniPlayerMode,
     this.miniPlayerBackgroundMode = defaultMiniPlayerBackgroundMode,
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
@@ -91,8 +104,6 @@ class SettingsState {
     this.localMusicFilters = defaultLocalMusicFilters,
     this.crossfadeEnabled = false,
     this.crossfadeDuration = defaultCrossfadeDuration,
-    this.ytDlpPath,
-    this.hasYtDlp,
   });
 
   final String downloadDirectory;
@@ -100,6 +111,8 @@ class SettingsState {
   final AppThemeMode themeMode;
   final AppAccent accent;
   final SurfaceBackgroundMode surfaceBackgroundMode;
+  final PlayerStyle playerStyle;
+  final bool animatedArtworkEnabled;
   final MiniPlayerMode miniPlayerMode;
   final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final LyricsTextAlignment lyricsTextAlignment;
@@ -110,8 +123,6 @@ class SettingsState {
   final Set<LocalMusicFilter> localMusicFilters;
   final bool crossfadeEnabled;
   final Duration crossfadeDuration;
-  final String? ytDlpPath;
-  final bool? hasYtDlp;
 
   SettingsState copyWith({
     String? downloadDirectory,
@@ -119,6 +130,8 @@ class SettingsState {
     AppThemeMode? themeMode,
     AppAccent? accent,
     SurfaceBackgroundMode? surfaceBackgroundMode,
+    PlayerStyle? playerStyle,
+    bool? animatedArtworkEnabled,
     MiniPlayerMode? miniPlayerMode,
     MiniPlayerBackgroundMode? miniPlayerBackgroundMode,
     LyricsTextAlignment? lyricsTextAlignment,
@@ -129,8 +142,6 @@ class SettingsState {
     Set<LocalMusicFilter>? localMusicFilters,
     bool? crossfadeEnabled,
     Duration? crossfadeDuration,
-    String? ytDlpPath,
-    bool? hasYtDlp,
   }) {
     return SettingsState(
       downloadDirectory: downloadDirectory ?? this.downloadDirectory,
@@ -139,6 +150,9 @@ class SettingsState {
       accent: accent ?? this.accent,
       surfaceBackgroundMode:
           surfaceBackgroundMode ?? this.surfaceBackgroundMode,
+      playerStyle: playerStyle ?? this.playerStyle,
+      animatedArtworkEnabled:
+          animatedArtworkEnabled ?? this.animatedArtworkEnabled,
       miniPlayerMode: miniPlayerMode ?? this.miniPlayerMode,
       miniPlayerBackgroundMode:
           miniPlayerBackgroundMode ?? this.miniPlayerBackgroundMode,
@@ -153,13 +167,20 @@ class SettingsState {
       localMusicFilters: localMusicFilters ?? this.localMusicFilters,
       crossfadeEnabled: crossfadeEnabled ?? this.crossfadeEnabled,
       crossfadeDuration: crossfadeDuration ?? this.crossfadeDuration,
-      ytDlpPath: ytDlpPath ?? this.ytDlpPath,
-      hasYtDlp: hasYtDlp ?? this.hasYtDlp,
     );
   }
 }
 
 class SettingsController extends AsyncNotifier<SettingsState> {
+  SettingsController() : _platformOverride = null;
+
+  @visibleForTesting
+  SettingsController.forPlatform(this._platformOverride);
+
+  final AppPlatformType? _platformOverride;
+
+  AppPlatformType get _platform => _platformOverride ?? AppPlatform.current;
+
   static const _downloadDirectoryKey = 'settings.downloadDirectory';
   static const _downloadDirectoryMigrationJournalKey =
       'settings.downloadDirectoryMigration.v1';
@@ -167,6 +188,8 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _themeModeKey = 'settings.themeMode';
   static const _accentKey = 'settings.accent';
   static const _surfaceBackgroundModeKey = 'settings.surfaceBackgroundMode';
+  static const _playerStyleKey = 'settings.playerStyle';
+  static const _animatedArtworkEnabledKey = 'settings.animatedArtworkEnabled';
   static const _miniPlayerModeKey = 'settings.miniPlayerMode';
   static const _miniPlayerBackgroundModeKey =
       'settings.miniPlayerBackgroundMode';
@@ -183,6 +206,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _crossfadeSecondsKey = 'settings.crossfadeSeconds';
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
+  Future<void> _animatedArtworkWriteTail = Future<void>.value();
   Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
   Future<void> _lyricsRomanizationWriteTail = Future<void>.value();
   Future<void> _recommendationHistoryWriteTail = Future<void>.value();
@@ -203,6 +227,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final surfaceBackgroundMode = SurfaceBackgroundMode.fromCode(
       prefs.getString(_surfaceBackgroundModeKey),
     );
+    final playerStyle = PlayerStyle.fromCode(prefs.getString(_playerStyleKey));
+    final animatedArtworkEnabled =
+        prefs.getBool(_animatedArtworkEnabledKey) ??
+        defaultAnimatedArtworkEnabled;
     final miniPlayerMode = MiniPlayerMode.fromCode(
       prefs.getString(_miniPlayerModeKey),
       platform: defaultTargetPlatform,
@@ -251,6 +279,23 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       await prefs.remove(_downloadDirectoryMigrationJournalKey);
     }
 
+    final iosJournal = pendingMigration;
+    if (_platform == AppPlatformType.ios &&
+        iosJournal != null &&
+        await _isUnreachableIosMigrationJournal(iosJournal)) {
+      // iOS can restore the app's Documents contents under a new container
+      // UUID while SharedPreferences still contains the previous absolute
+      // prefix. Never recreate an unreachable source or target below that old
+      // sandbox. Dropping the journal lets the normal iOS path-rebase branch
+      // below repair persisted database references against today's container.
+      debugPrint(
+        'Discarding a download migration journal from a relocated iOS '
+        'container.',
+      );
+      await prefs.remove(_downloadDirectoryMigrationJournalKey);
+      pendingMigration = null;
+    }
+
     // A journal is untrusted persisted input. Validate its canonical source
     // relationship before entering the exclusive migration phase so a stale,
     // hand-edited, or corrupted journal cannot brick Settings on every start.
@@ -297,9 +342,18 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       );
       var canMigrateStoredDirectory = storedDirectory != null;
       try {
-        downloadDirectory = DownloadDirectoryMigrator.normalizeAbsoluteRoot(
-          candidateDirectory,
-          parameterName: 'downloadDirectory',
+        final normalizedCandidate =
+            DownloadDirectoryMigrator.normalizeAbsoluteRoot(
+              candidateDirectory,
+              parameterName: 'downloadDirectory',
+            );
+        downloadDirectory = downloadDirectoryForPlatform(
+          platform: _platform,
+          candidateDirectory: normalizedCandidate,
+          defaultDirectory: DownloadDirectoryMigrator.normalizeAbsoluteRoot(
+            defaultDirectory,
+            parameterName: 'defaultDownloadDirectory',
+          ),
         );
       } on ArgumentError catch (error) {
         // A download root persisted by an older or hand-edited installation is
@@ -314,12 +368,34 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         );
         canMigrateStoredDirectory = false;
       }
-      if (AppPlatform.isAndroid &&
+      if (_platform == AppPlatformType.android &&
           !await _isAndroidWritableDownloadDirectory(downloadDirectory)) {
         downloadDirectory = DownloadDirectoryMigrator.normalizeAbsoluteRoot(
           defaultDirectory,
           parameterName: 'defaultDownloadDirectory',
         );
+      }
+      if (canMigrateStoredDirectory &&
+          _platform == AppPlatformType.ios &&
+          !DownloadDirectoryMigrator.rootsEqual(
+            storedDirectory!,
+            downloadDirectory,
+          )) {
+        // iOS may relocate the whole app container while preserving its
+        // contents. The previous absolute root is then inaccessible, but the
+        // same relative files already exist below today's container root.
+        // Rebase database references lexically instead of trying to copy from
+        // the stale container path. This is idempotent across interrupted
+        // preference writes.
+        await _ensureMediaDirectories(downloadDirectory);
+        await ref
+            .read(databaseServiceProvider)
+            .rewriteLocalTrackMediaRoot(
+              mediaRoot: downloadDirectory,
+              oldMediaRoot: storedDirectory,
+            );
+        await _writeDownloadDirectoryPreference(prefs, downloadDirectory);
+        canMigrateStoredDirectory = false;
       }
       if (canMigrateStoredDirectory &&
           !DownloadDirectoryMigrator.rootsEqual(
@@ -343,36 +419,14 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       downloadDirectory,
     );
     await _writeDownloadDirectoryPreference(prefs, downloadDirectory);
-    final downloader = ref.read(ytDlpDownloaderServiceProvider);
-
-    if (downloader is DesktopDownloaderService) {
-      return SettingsState(
-        downloadDirectory: downloadDirectory,
-        language: language,
-        themeMode: themeMode,
-        accent: accent,
-        surfaceBackgroundMode: surfaceBackgroundMode,
-        miniPlayerMode: miniPlayerMode,
-        miniPlayerBackgroundMode: miniPlayerBackgroundMode,
-        lyricsTextAlignment: lyricsTextAlignment,
-        lyricsAnimationStyle: lyricsAnimationStyle,
-        lyricsRomanizationEnabled: lyricsRomanizationEnabled,
-        lyricsRomanizationLanguages: lyricsRomanizationLanguages,
-        recommendationHistoryEnabled: recommendationHistoryEnabled,
-        localMusicFilters: localMusicFilters,
-        crossfadeEnabled: crossfadeEnabled,
-        crossfadeDuration: crossfadeDuration,
-        ytDlpPath: await downloader.getYtDlpPath(),
-        hasYtDlp: await downloader.hasYtDlp(),
-      );
-    }
-
     return SettingsState(
       downloadDirectory: downloadDirectory,
       language: language,
       themeMode: themeMode,
       accent: accent,
       surfaceBackgroundMode: surfaceBackgroundMode,
+      playerStyle: playerStyle,
+      animatedArtworkEnabled: animatedArtworkEnabled,
       miniPlayerMode: miniPlayerMode,
       miniPlayerBackgroundMode: miniPlayerBackgroundMode,
       lyricsTextAlignment: lyricsTextAlignment,
@@ -601,6 +655,27 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await prefs.setString(_surfaceBackgroundModeKey, mode.code);
     final current = await future;
     state = AsyncData(current.copyWith(surfaceBackgroundMode: mode));
+  }
+
+  Future<void> setPlayerStyle(PlayerStyle style) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_playerStyleKey, style.code);
+    final current = await future;
+    state = AsyncData(current.copyWith(playerStyle: style));
+  }
+
+  Future<void> setAnimatedArtworkEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.animatedArtworkEnabled == enabled) {
+      return;
+    }
+    state = AsyncData(current.copyWith(animatedArtworkEnabled: enabled));
+    final write = _animatedArtworkWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_animatedArtworkEnabledKey, enabled);
+    });
+    _animatedArtworkWriteTail = write.catchError((_) {});
+    await write;
   }
 
   Future<void> setMiniPlayerMode(MiniPlayerMode mode) async {
@@ -862,36 +937,8 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     }
   }
 
-  Future<void> setYtDlpPath(String path) async {
-    final downloader = ref.read(ytDlpDownloaderServiceProvider);
-    if (downloader is! DesktopDownloaderService) {
-      return;
-    }
-    await downloader.setYtDlpPath(path);
-    final ytDlpPath = await downloader.getYtDlpPath();
-    final hasYtDlp = await downloader.hasYtDlp();
-    final latest = state.asData?.value ?? await future;
-    state = AsyncData(
-      latest.copyWith(ytDlpPath: ytDlpPath, hasYtDlp: hasYtDlp),
-    );
-  }
-
-  Future<void> refreshToolStatus() async {
-    final downloader = ref.read(ytDlpDownloaderServiceProvider);
-    if (downloader is! DesktopDownloaderService) {
-      return;
-    }
-    final ytDlpPath = await downloader.getYtDlpPath();
-    await downloader.setYtDlpPath(ytDlpPath);
-    final hasYtDlp = await downloader.hasYtDlp();
-    final latest = state.asData?.value ?? await future;
-    state = AsyncData(
-      latest.copyWith(ytDlpPath: ytDlpPath, hasYtDlp: hasYtDlp),
-    );
-  }
-
   Future<String> _defaultDownloadDirectory() async {
-    if (AppPlatform.isAndroid) {
+    if (_platform == AppPlatformType.android) {
       final appRoot = await _androidAppDataRootDirectory();
       return p.join(appRoot.path, _mediaRootDirectoryName);
     }
@@ -909,7 +956,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   }
 
   Future<bool> _isAndroidWritableDownloadDirectory(String path) async {
-    if (!AppPlatform.isAndroid || path.trim().isEmpty) {
+    if (_platform != AppPlatformType.android || path.trim().isEmpty) {
       return path.trim().isNotEmpty;
     }
 
@@ -918,6 +965,28 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final normalizedPath = Directory(path).absolute.path;
     return normalizedPath == normalizedBase ||
         normalizedPath.startsWith('$normalizedBase${Platform.pathSeparator}');
+  }
+
+  Future<bool> _isUnreachableIosMigrationJournal(
+    DownloadDirectoryMigrationJournal journal,
+  ) async {
+    final roots = <String>{
+      journal.sourceRoot,
+      journal.targetRoot,
+      journal.referenceSourceRoot,
+    };
+    for (final root in roots) {
+      try {
+        if (await FileSystemEntity.type(root, followLinks: false) !=
+            FileSystemEntityType.notFound) {
+          return false;
+        }
+      } on FileSystemException {
+        // An old iOS container is outside the current sandbox and may report
+        // either "not found" or a permission failure depending on OS version.
+      }
+    }
+    return true;
   }
 
   Future<Directory> _androidAppDataRootDirectory() async {
@@ -942,7 +1011,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       normalized = p.join(p.dirname(normalized), _mediaRootDirectoryName);
     }
 
-    if (AppPlatform.isAndroid &&
+    if (_platform == AppPlatformType.android &&
         p.basename(normalized) == _mediaRootDirectoryName &&
         p.basename(p.dirname(normalized)) == 'app_flutter') {
       final appRootCandidate = p.dirname(p.dirname(normalized));

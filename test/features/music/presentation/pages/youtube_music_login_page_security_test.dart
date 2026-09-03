@@ -47,6 +47,17 @@ void main() {
     expect(settings.isInspectable, isFalse);
   });
 
+  test('iOS uses the cookie store observed by the hardened auth reader', () {
+    final settings = YouTubeMusicLoginPage.secureWebViewSettings(
+      platform: TargetPlatform.iOS,
+    );
+
+    expect(settings.incognito, isFalse);
+    expect(settings.cacheEnabled, isFalse);
+    expect(settings.useShouldOverrideUrlLoading, isTrue);
+    expect(settings.isInspectable, isFalse);
+  });
+
   test('embedded login support has an explicit platform matrix', () {
     expect(
       isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform.android),
@@ -54,6 +65,10 @@ void main() {
     );
     expect(
       isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform.windows),
+      isTrue,
+    );
+    expect(
+      isEmbeddedYouTubeMusicWebLoginSupportedOn(TargetPlatform.iOS),
       isTrue,
     );
     expect(
@@ -71,6 +86,13 @@ void main() {
       resolveYouTubeMusicLoginMechanism(
         isWeb: false,
         platform: TargetPlatform.android,
+      ),
+      YouTubeMusicLoginMechanism.embeddedWebView,
+    );
+    expect(
+      resolveYouTubeMusicLoginMechanism(
+        isWeb: false,
+        platform: TargetPlatform.iOS,
       ),
       YouTubeMusicLoginMechanism.embeddedWebView,
     );

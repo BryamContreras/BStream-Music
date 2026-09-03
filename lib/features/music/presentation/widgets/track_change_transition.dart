@@ -52,35 +52,69 @@ Widget noDimmingFadeTransitionBuilder(
   return _IncomingFadeOverPrevious(animation: animation, child: child);
 }
 
+/// Brings the next song gently into place without moving or dimming the
+/// outgoing one.
+///
+/// Keeping the previous surface still is important when several pieces of the
+/// player (cover, metadata and mini-player) animate at the same time: two
+/// independently moving outgoing trees read as a jump. The incoming surface
+/// uses the same short lift and scale everywhere so the change feels like one
+/// coordinated event instead of unrelated fades.
+Widget smoothTrackChangeTransitionBuilder(
+  Widget child,
+  Animation<double> animation,
+) {
+  return _IncomingFadeOverPrevious(
+    animation: animation,
+    incomingOffset: const Offset(0, 0.025),
+    incomingScale: 0.985,
+    child: child,
+  );
+}
+
 class _IncomingFadeOverPrevious extends AnimatedWidget {
   const _IncomingFadeOverPrevious({
     required Animation<double> animation,
     required this.child,
+    this.incomingOffset = Offset.zero,
+    this.incomingScale = 1,
   }) : super(listenable: animation);
 
   final Widget child;
+  final Offset incomingOffset;
+  final double incomingScale;
 
   Animation<double> get animation => listenable as Animation<double>;
 
   @override
   Widget build(BuildContext context) {
     // AnimatedSwitcher reverses the outgoing child's animation. It remains
-    // the fully opaque base while the new child fades in above it.
-    final opacity = animation.status == AnimationStatus.reverse
+    // the fully opaque, stationary base while the new child fades in above it.
+    final outgoing = animation.status == AnimationStatus.reverse;
+    final progress = outgoing
         ? 1.0
         : animation.value.clamp(0.0, 1.0).toDouble();
-    return Opacity(opacity: opacity, child: child);
+    final translation = Offset.lerp(incomingOffset, Offset.zero, progress)!;
+    final scale = incomingScale + ((1 - incomingScale) * progress);
+    return Opacity(
+      opacity: outgoing ? 1.0 : progress,
+      child: FractionalTranslation(
+        translation: translation,
+        child: Transform.scale(scale: scale, child: child),
+      ),
+    );
   }
 }
 
 /// A short song-change transition that keeps its layout and brightness stable.
-class TrackChangeTransition extends StatelessWidget {
+class TrackChangeTransition extends StatefulWidget {
   const TrackChangeTransition({
     required this.identity,
     required this.child,
     this.duration = const Duration(milliseconds: 420),
     this.alignment = Alignment.center,
     this.switcherKey,
+    this.enabled = true,
     super.key,
   });
 
@@ -89,31 +123,54 @@ class TrackChangeTransition extends StatelessWidget {
   final Duration duration;
   final AlignmentGeometry alignment;
   final Key? switcherKey;
+  final bool enabled;
+
+  @override
+  State<TrackChangeTransition> createState() => _TrackChangeTransitionState();
+}
+
+class _TrackChangeTransitionState extends State<TrackChangeTransition> {
+  int _generation = 0;
+
+  @override
+  void didUpdateWidget(covariant TrackChangeTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.identity != widget.identity) {
+      // A -> B -> A can happen before B's transition is complete when the user
+      // taps next/previous quickly. A generation key prevents the returning A
+      // from colliding with its still-mounted outgoing subtree.
+      _generation += 1;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     // Async player providers briefly expose their idle snapshot while they
     // hydrate. Mount the first real song directly so opening the app never
     // cross-fades from placeholder metadata or duplicates its controls.
-    if (identity == 'idle') {
-      return child;
+    if (!widget.enabled || widget.identity == 'idle') {
+      return widget.child;
     }
 
     final effectiveDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : duration;
+        : widget.duration;
     return AnimatedSwitcher(
-      key: switcherKey,
+      key: widget.switcherKey,
       duration: effectiveDuration,
       reverseDuration: effectiveDuration,
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
       layoutBuilder: (currentChild, previousChildren) => Stack(
-        alignment: alignment,
+        alignment: widget.alignment,
+        clipBehavior: Clip.none,
         children: <Widget>[...previousChildren, ?currentChild],
       ),
-      transitionBuilder: noDimmingFadeTransitionBuilder,
-      child: KeyedSubtree(key: ValueKey(identity), child: child),
+      transitionBuilder: smoothTrackChangeTransitionBuilder,
+      child: KeyedSubtree(
+        key: ValueKey((widget.identity, _generation)),
+        child: widget.child,
+      ),
     );
   }
 }

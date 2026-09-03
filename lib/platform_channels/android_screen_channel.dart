@@ -16,7 +16,7 @@ class AndroidScreenChannel {
         'enabled': enabled,
       });
     } on MissingPluginException {
-      // The channel is Android-only; keep other platforms and old engines safe.
+      // Keep unsupported platforms and old engines safe.
     } on PlatformException {
       // Failing to keep the display awake must not break the lyrics screen.
     }
@@ -28,7 +28,7 @@ class AndroidScreenChannel {
         'hidden': hidden,
       });
     } on MissingPluginException {
-      // The channel is Android-only; keep other platforms and old engines safe.
+      // Keep unsupported platforms and old engines safe.
     } on PlatformException {
       // A cosmetic system-bar failure must not break the lyrics screen.
     }

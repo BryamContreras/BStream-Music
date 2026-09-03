@@ -6,7 +6,7 @@ void main() {
   group('AudioStreamResolution', () {
     test('isUsable returns true for direct media URLs', () {
       const resolution = AudioStreamResolution(
-        source: AudioStreamSource.youtubeExplode,
+        source: AudioStreamSource.innerTube,
         streamUrl: 'https://media.example/file.m4a',
       );
       expect(resolution.isUsable, isTrue);
@@ -14,7 +14,7 @@ void main() {
 
     test('isUsable returns false for empty URLs', () {
       const resolution = AudioStreamResolution(
-        source: AudioStreamSource.youtubeExplode,
+        source: AudioStreamSource.innerTube,
         streamUrl: '',
       );
       expect(resolution.isUsable, isFalse);
@@ -22,7 +22,7 @@ void main() {
 
     test('isUsable accepts managed local files', () {
       const resolution = AudioStreamResolution(
-        source: AudioStreamSource.ytDlp,
+        source: AudioStreamSource.innerTubeFallback,
         streamUrl: 'file:///tmp/audio.m4a',
       );
       expect(resolution.isUsable, isTrue);
@@ -30,35 +30,39 @@ void main() {
 
     test('isUsable rejects unsupported schemes', () {
       const resolution = AudioStreamResolution(
-        source: AudioStreamSource.ytDlp,
+        source: AudioStreamSource.innerTubeFallback,
         streamUrl: 'ftp://media.example/audio.m4a',
       );
       expect(resolution.isUsable, isFalse);
     });
 
     test('withSource replaces the source while preserving transport', () {
-      const original = AudioStreamResolution(
-        source: AudioStreamSource.youtubeExplode,
+      final expiresAt = DateTime.utc(2026, 9, 1);
+      final original = AudioStreamResolution(
+        source: AudioStreamSource.innerTube,
         streamUrl: 'https://media.example/file.m4a',
         streamExtension: 'm4a',
         streamMimeType: 'audio/mp4',
+        clientProfileKey: 'androidSdkless',
+        expiresAt: expiresAt,
       );
-      final copy = original.withSource(AudioStreamSource.ytDlp);
-      expect(copy.source, AudioStreamSource.ytDlp);
+      final copy = original.withSource(AudioStreamSource.innerTubeFallback);
+      expect(copy.source, AudioStreamSource.innerTubeFallback);
       expect(copy.streamUrl, original.streamUrl);
       expect(copy.streamExtension, original.streamExtension);
       expect(copy.streamMimeType, original.streamMimeType);
+      expect(copy.clientProfileKey, 'androidSdkless');
+      expect(copy.expiresAt, same(expiresAt));
     });
   });
 
   group('readableAudioStreamError', () {
-    test('unwraps the final yt-dlp stderr and removes Android wrappers', () {
+    test('unwraps the final resolver cause', () {
       const error = AudioStreamResolverException(
         'All audio stream resolvers failed.',
         cause: DownloaderException(
-          'com.yausername.youtubedl_android.YoutubeDLException: '
           'ERROR: [youtube] Sign in to confirm you are not a bot',
-          code: 'ytdl_error',
+          code: 'innertube_download_failed',
         ),
       );
 
@@ -73,7 +77,7 @@ void main() {
         'ERROR: [youtube] Video unavailable\n'
         'This content is private\n'
         'Use an account with access',
-        code: 'ytdl_error',
+        code: 'innertube_download_failed',
       );
 
       expect(readableAudioStreamError(error), contains('Video unavailable'));

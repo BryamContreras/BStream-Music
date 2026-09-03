@@ -16,6 +16,7 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../platform_channels/android_supported_links_settings_channel.dart';
+import '../../../../platform_channels/ios_file_export_channel.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
@@ -176,7 +177,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     final csvTransfer = ref.watch(libraryCsvTransferControllerProvider);
     final supportsTikTokLive =
         AppPlatform.supportsTikTokLive ||
-        Theme.of(context).platform == TargetPlatform.android;
+        AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
     final tiktokLive = supportsTikTokLive
         ? ref.watch(tiktokLiveControllerProvider)
         : null;
@@ -337,6 +338,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         themeMode: state.themeMode,
         accent: state.accent,
         surfaceBackgroundMode: state.surfaceBackgroundMode,
+        playerStyle: state.playerStyle,
+        animatedArtworkEnabled: state.animatedArtworkEnabled,
         miniPlayerMode: state.miniPlayerMode,
         miniPlayerBackgroundMode: state.miniPlayerBackgroundMode,
         strings: strings,
@@ -347,6 +350,11 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onSurfaceBackgroundModeChanged: (mode) => ref
             .read(settingsControllerProvider.notifier)
             .setSurfaceBackgroundMode(mode),
+        onPlayerStyleChanged: (style) =>
+            ref.read(settingsControllerProvider.notifier).setPlayerStyle(style),
+        onAnimatedArtworkEnabledChanged: (enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .setAnimatedArtworkEnabled(enabled),
         onMiniPlayerModeChanged: (mode) => ref
             .read(settingsControllerProvider.notifier)
             .setMiniPlayerMode(mode),
@@ -431,9 +439,6 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     final showSupportedLinks =
         AppPlatform.isAndroid ||
         Theme.of(context).platform == TargetPlatform.android;
-    final showDesktopTools =
-        AppPlatform.isDesktop &&
-        Theme.of(context).platform != TargetPlatform.android;
     return [
       SliverPadding(
         padding: EdgeInsets.fromLTRB(
@@ -630,32 +635,6 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                           .setSaveRequestsToLibrary(value),
                     ),
                   ],
-                ],
-              ),
-            if (showDesktopTools)
-              _SettingsGroup(
-                title: strings.desktopTools,
-                children: [
-                  Wrap(
-                    key: const ValueKey('settings-inline-tools'),
-                    spacing: 18,
-                    runSpacing: 14,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      _ToolStatus(
-                        label: 'yt-dlp',
-                        available: state.hasYtDlp,
-                        strings: strings,
-                      ),
-                      FilledButton.icon(
-                        icon: const Icon(Icons.refresh_rounded),
-                        label: Text(strings.verify),
-                        onPressed: () => ref
-                            .read(settingsControllerProvider.notifier)
-                            .refreshToolStatus(),
-                      ),
-                    ],
-                  ),
                 ],
               ),
             _SettingsGroup(
@@ -890,6 +869,11 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
           sourcePath: backupFile.path,
           fileName: fileName,
         );
+      } else if (AppPlatform.isIOS) {
+        path = await const IosFileExportChannel().saveFile(
+          sourcePath: backupFile.path,
+          fileName: fileName,
+        );
       } else {
         path = await FilePicker.saveFile(
           dialogTitle: strings.exportBackupTitle,
@@ -1090,6 +1074,12 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       final String? destination;
       if (AppPlatform.isAndroid) {
         destination = await const AndroidFileExportChannel().saveFile(
+          sourcePath: source.path,
+          fileName: fileName,
+          mimeType: 'text/csv',
+        );
+      } else if (AppPlatform.isIOS) {
+        destination = await const IosFileExportChannel().saveFile(
           sourcePath: source.path,
           fileName: fileName,
           mimeType: 'text/csv',
@@ -1587,93 +1577,91 @@ class _SettingsEntryCard extends StatelessWidget {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final highlight = accent ?? colors.primary;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 760),
-      child: Material(
-        color: AppColors.cardSurfaceFor(context),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(appCardRadius),
-          side: BorderSide(color: AppColors.cardBorderFor(context)),
+    final card = Material(
+      color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(appCardRadius),
+        side: BorderSide(
+          color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 78),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-              child: Row(
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: highlight.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(
-                        appListCardIconRadius,
-                      ),
-                      border: Border.all(
-                        color: highlight.withValues(alpha: 0.24),
-                      ),
-                    ),
-                    child: IconTheme.merge(
-                      data: IconThemeData(color: highlight, size: 24),
-                      child: Center(
-                        child:
-                            leading ?? Icon(icon, color: highlight, size: 24),
-                      ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 78),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: highlight.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(appListCardIconRadius),
+                    border: Border.all(
+                      color: highlight.withValues(alpha: 0.24),
                     ),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          subtitle,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: appListCardSubtitleStyle(context),
-                        ),
-                      ],
+                  child: IconTheme.merge(
+                    data: IconThemeData(color: highlight, size: 24),
+                    child: Center(
+                      child: leading ?? Icon(icon, color: highlight, size: 24),
                     ),
                   ),
-                  if (status != null) ...[
-                    const SizedBox(width: 8),
-                    Icon(
-                      status!
-                          ? Icons.check_circle_rounded
-                          : Icons.error_rounded,
-                      color: status! ? colors.primary : colors.error,
-                      size: 19,
-                    ),
-                  ],
-                  if (trailing case final trailing?) ...[
-                    const SizedBox(width: 8),
-                    trailing,
-                  ] else if (onTap != null) ...[
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      color: colors.onSurfaceVariant,
-                    ),
-                  ],
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: appListCardSubtitleStyle(context),
+                      ),
+                    ],
+                  ),
+                ),
+                if (status != null) ...[
+                  const SizedBox(width: 8),
+                  Icon(
+                    status! ? Icons.check_circle_rounded : Icons.error_rounded,
+                    color: status! ? colors.primary : colors.error,
+                    size: 19,
+                  ),
                 ],
-              ),
+                if (trailing case final trailing?) ...[
+                  const SizedBox(width: 8),
+                  trailing,
+                ] else if (onTap != null) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ],
+              ],
             ),
           ),
         ),
       ),
+    );
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 760),
+      child: card,
     );
   }
 }
@@ -1710,9 +1698,8 @@ class _AboutApplicationSettings extends StatelessWidget {
             "What's new in ${AppConstants.appVersion}",
           ),
           subtitle: strings.choose(
-            'Cuenta de YouTube Music, playlists sincronizadas y '
-                'reproducci\u00f3n m\u00e1s robusta',
-            'YouTube Music account, synchronized playlists, and more robust playback',
+            'iOS, InnerTube en Dart y Liquid Glass renovado',
+            'iOS, Dart InnerTube, and renewed Liquid Glass',
           ),
           onTap: () => _showWhatsNew(context),
         ),
@@ -1739,25 +1726,20 @@ class _AboutApplicationSettings extends StatelessWidget {
   Future<void> _showWhatsNew(BuildContext context) async {
     final highlights = strings.isEnglish
         ? const <String>[
-            'Secure YouTube Music sign-in with an explicit confirmation before the first playlist sync.',
-            'Bidirectional playlists that keep streaming-only songs and prefer downloaded audio automatically.',
-            'Personalized Home recommendations, growing queues, and bounded stream recovery after connection loss.',
-            'A cloud marks songs without local audio, and Back from an externally opened player safely returns Home.',
-            'Customize app surfaces and the mini player with styles, accent colors, and transparency effects.',
-            'Convert lyrics written in other scripts to Latin characters so they are easier to follow.',
-            'Browse and play music stored on your device, with filters to hide unwanted audio files.',
+            'Native iOS 13+ support for playback, background audio, Now Playing, account sign-in, Media Library, and file export.',
+            'YouTube playback and downloads now run through the in-process Dart InnerTube pipeline, without yt-dlp, youtube_explode_dart, or external executables.',
+            'Renewed Liquid Glass surfaces with adaptive color refraction, continuous edges, localized hover, and smoother transitions.',
+            'Choose the BStream Music or Apple Music Style player, including animated artwork and responsive mobile layouts.',
+            'TikTok LIVE now uses the same direct Dart transport on Android, iOS, Windows, Linux, and macOS.',
+            'Lyrics romanization, synchronized playlists, personalized recommendations, and bounded stream recovery are now integrated into the new architecture.',
           ]
         : const <String>[
-            'Inicio de sesi\u00f3n seguro en YouTube Music y confirmaci\u00f3n '
-                'expl\u00edcita antes de la primera sincronizaci\u00f3n.',
-            'Playlists bidireccionales que conservan canciones en streaming '
-                'y prefieren autom\u00e1ticamente el audio descargado.',
-            'Recomendaciones personalizadas, colas extensibles y '
-                'recuperaci\u00f3n controlada cuando se pierde la conexi\u00f3n.',
-            'Una nube identifica canciones sin audio local y Volver desde un reproductor externo regresa de forma segura a Inicio.',
-            'Personaliza las superficies de la app y el mini reproductor con estilos, colores de acento y transparencias.',
-            'Convierte letras de otros alfabetos a caracteres latinos para que sean m\u00e1s f\u00e1ciles de seguir.',
-            'Explora y reproduce la m\u00fasica guardada en tu dispositivo, con filtros para ocultar audios no deseados.',
+            'Compatibilidad nativa con iOS 13 o posterior para reproducci\u00f3n, audio en segundo plano, Now Playing, inicio de sesi\u00f3n, biblioteca y exportaci\u00f3n.',
+            'La reproducci\u00f3n y las descargas de YouTube ahora usan el cliente InnerTube integrado en Dart, sin yt-dlp, youtube_explode_dart ni ejecutables externos.',
+            'Liquid Glass renovado con refracci\u00f3n adaptada al color, bordes continuos, hover localizado y transiciones m\u00e1s suaves.',
+            'Elige entre los reproductores BStream Music y Apple Music Style, con portada animada y dise\u00f1os m\u00f3viles adaptables.',
+            'TikTok LIVE ahora utiliza el mismo transporte directo en Dart en Android, iOS, Windows, Linux y macOS.',
+            'La romanizaci\u00f3n de letras, las playlists sincronizadas, las recomendaciones y la recuperaci\u00f3n de streams forman parte de la nueva arquitectura.',
           ];
     await showAppDialog<void>(
       context: context,
@@ -1948,6 +1930,56 @@ class _SettingsDialogOption extends StatelessWidget {
   }
 }
 
+class _PlayerStyleSelectorDialog extends StatelessWidget {
+  const _PlayerStyleSelectorDialog({
+    required this.style,
+    required this.strings,
+  });
+
+  final PlayerStyle style;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppAlertDialog(
+      key: const ValueKey('settings-player-style-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(strings.player),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SettingsDialogOption(
+              key: const ValueKey('settings-player-style-option-bstream-music'),
+              selected: style == PlayerStyle.bstreamMusic,
+              icon: Icons.graphic_eq_rounded,
+              label: strings.playerStyleBStreamMusic,
+              onTap: () => Navigator.of(context).pop(PlayerStyle.bstreamMusic),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey('settings-player-style-option-apple-music'),
+              selected: style == PlayerStyle.appleMusic,
+              icon: Icons.music_note_rounded,
+              label: strings.playerStyleAppleMusic,
+              onTap: () => Navigator.of(context).pop(PlayerStyle.appleMusic),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('settings-player-style-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+      ],
+    );
+  }
+}
+
 class _MiniPlayerModeSelectorDialog extends StatelessWidget {
   const _MiniPlayerModeSelectorDialog({
     required this.mode,
@@ -2044,6 +2076,17 @@ class _SurfaceBackgroundSelectorDialog extends StatelessWidget {
               onTap: () =>
                   Navigator.of(context).pop(SurfaceBackgroundMode.transparent),
             ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-surface-background-option-liquid-glass',
+              ),
+              selected: mode == SurfaceBackgroundMode.liquidGlass,
+              icon: Icons.water_drop_rounded,
+              label: strings.surfaceBackgroundLiquidGlass,
+              onTap: () =>
+                  Navigator.of(context).pop(SurfaceBackgroundMode.liquidGlass),
+            ),
           ],
         ),
       ),
@@ -2112,6 +2155,18 @@ class _MiniPlayerBackgroundSelectorDialog extends StatelessWidget {
                 context,
               ).pop(MiniPlayerBackgroundMode.transparent),
             ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-mini-player-background-option-liquid-glass',
+              ),
+              selected: mode == MiniPlayerBackgroundMode.liquidGlass,
+              icon: Icons.water_drop_rounded,
+              label: strings.miniPlayerBackgroundLiquidGlass,
+              onTap: () => Navigator.of(
+                context,
+              ).pop(MiniPlayerBackgroundMode.liquidGlass),
+            ),
           ],
         ),
       ),
@@ -2131,12 +2186,16 @@ class _AppearanceSettings extends StatelessWidget {
     required this.themeMode,
     required this.accent,
     required this.surfaceBackgroundMode,
+    required this.playerStyle,
+    required this.animatedArtworkEnabled,
     required this.miniPlayerMode,
     required this.miniPlayerBackgroundMode,
     required this.strings,
     required this.onThemeModeChanged,
     required this.onAccentChanged,
     required this.onSurfaceBackgroundModeChanged,
+    required this.onPlayerStyleChanged,
+    required this.onAnimatedArtworkEnabledChanged,
     required this.onMiniPlayerModeChanged,
     required this.onMiniPlayerBackgroundModeChanged,
   });
@@ -2144,6 +2203,8 @@ class _AppearanceSettings extends StatelessWidget {
   final AppThemeMode themeMode;
   final AppAccent accent;
   final SurfaceBackgroundMode surfaceBackgroundMode;
+  final PlayerStyle playerStyle;
+  final bool animatedArtworkEnabled;
   final MiniPlayerMode miniPlayerMode;
   final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final AppStrings strings;
@@ -2151,6 +2212,8 @@ class _AppearanceSettings extends StatelessWidget {
   final ValueChanged<AppAccent> onAccentChanged;
   final Future<void> Function(SurfaceBackgroundMode)
   onSurfaceBackgroundModeChanged;
+  final Future<void> Function(PlayerStyle) onPlayerStyleChanged;
+  final Future<void> Function(bool) onAnimatedArtworkEnabledChanged;
   final Future<void> Function(MiniPlayerMode) onMiniPlayerModeChanged;
   final Future<void> Function(MiniPlayerBackgroundMode)
   onMiniPlayerBackgroundModeChanged;
@@ -2165,6 +2228,18 @@ class _AppearanceSettings extends StatelessWidget {
       return;
     }
     await onMiniPlayerModeChanged(selected);
+  }
+
+  Future<void> _choosePlayerStyle(BuildContext context) async {
+    final selected = await showAppDialog<PlayerStyle>(
+      context: context,
+      builder: (_) =>
+          _PlayerStyleSelectorDialog(style: playerStyle, strings: strings),
+    );
+    if (!context.mounted || selected == null || selected == playerStyle) {
+      return;
+    }
+    await onPlayerStyleChanged(selected);
   }
 
   Future<void> _chooseSurfaceBackgroundMode(BuildContext context) async {
@@ -2301,10 +2376,43 @@ class _AppearanceSettings extends StatelessWidget {
             icon: switch (surfaceBackgroundMode) {
               SurfaceBackgroundMode.accent => Icons.format_color_fill_rounded,
               SurfaceBackgroundMode.transparent => Icons.blur_on_rounded,
+              SurfaceBackgroundMode.liquidGlass => Icons.water_drop_rounded,
             },
             title: strings.surfaceBackground,
             subtitle: strings.surfaceBackgroundModeLabel(surfaceBackgroundMode),
             onTap: () => _chooseSurfaceBackgroundMode(context),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            strings.player,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          _SettingsEntryCard(
+            key: const ValueKey('player-style-selector'),
+            icon: switch (playerStyle) {
+              PlayerStyle.bstreamMusic => Icons.graphic_eq_rounded,
+              PlayerStyle.appleMusic => Icons.music_note_rounded,
+            },
+            title: strings.playerStyle,
+            subtitle: strings.playerStyleLabel(playerStyle),
+            onTap: () => _choosePlayerStyle(context),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('animated-artwork-toggle'),
+            icon: Icons.motion_photos_auto_rounded,
+            title: strings.animatedArtwork,
+            subtitle: strings.animatedArtworkDescription,
+            onTap: () =>
+                onAnimatedArtworkEnabledChanged(!animatedArtworkEnabled),
+            trailing: Switch.adaptive(
+              key: const ValueKey('animated-artwork-switch'),
+              value: animatedArtworkEnabled,
+              onChanged: onAnimatedArtworkEnabledChanged,
+            ),
           ),
           const SizedBox(height: 24),
           Text(
@@ -2332,6 +2440,7 @@ class _AppearanceSettings extends StatelessWidget {
                 Icons.format_color_fill_rounded,
               MiniPlayerBackgroundMode.artwork => Icons.image_rounded,
               MiniPlayerBackgroundMode.transparent => Icons.blur_on_rounded,
+              MiniPlayerBackgroundMode.liquidGlass => Icons.water_drop_rounded,
             },
             title: strings.miniPlayerBackground,
             subtitle: strings.miniPlayerBackgroundModeLabel(
@@ -3070,10 +3179,12 @@ class _SleepTimerSettings extends StatelessWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 520),
       child: Material(
-        color: AppColors.cardSurfaceFor(context),
+        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(appCardRadius),
-          side: BorderSide(color: AppColors.cardBorderFor(context)),
+          side: BorderSide(
+            color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+          ),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -3171,10 +3282,12 @@ class _CrossfadeSettings extends StatelessWidget {
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: desktopLayout ? 760 : 520),
       child: Material(
-        color: AppColors.cardSurfaceFor(context),
+        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(appCardRadius),
-          side: BorderSide(color: AppColors.cardBorderFor(context)),
+          side: BorderSide(
+            color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+          ),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -4396,40 +4509,6 @@ class _PathField extends StatelessWidget {
           ],
         ],
       ),
-    );
-  }
-}
-
-class _ToolStatus extends StatelessWidget {
-  const _ToolStatus({
-    required this.label,
-    required this.available,
-    required this.strings,
-  });
-
-  final String label;
-  final bool? available;
-  final AppStrings strings;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = available == true
-        ? Theme.of(context).colorScheme.primary
-        : Theme.of(context).colorScheme.error;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(
-          available == true ? Icons.check_circle_rounded : Icons.error_rounded,
-          color: color,
-          size: 20,
-        ),
-        const SizedBox(width: 8),
-        Text(
-          '$label ${available == true ? strings.available : strings.notFound}',
-          style: TextStyle(color: color),
-        ),
-      ],
     );
   }
 }

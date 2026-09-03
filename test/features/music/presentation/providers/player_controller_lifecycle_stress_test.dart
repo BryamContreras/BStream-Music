@@ -564,7 +564,7 @@ class _LifecycleAudioResolver implements AudioStreamResolver {
     final uri = Uri.parse(track.url);
     final id = uri.queryParameters['v'] ?? 'unknown';
     return AudioStreamResolution(
-      source: AudioStreamSource.ytDlp,
+      source: AudioStreamSource.innerTubeFallback,
       streamUrl: 'https://media.example/$id-refreshed.m4a',
       streamExtension: 'm4a',
       streamMimeType: 'audio/mp4',

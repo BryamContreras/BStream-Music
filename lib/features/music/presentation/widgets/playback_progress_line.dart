@@ -39,24 +39,30 @@ class PlaybackProgressLine extends StatelessWidget {
             tween: Tween(end: progress),
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
-            builder: (context, animatedProgress, _) {
-              return FractionallySizedBox(
-                widthFactor: animatedProgress,
-                child: TweenAnimationBuilder<Color?>(
-                  key: colorAnimationKey,
-                  tween: ColorTween(end: color),
-                  duration: const Duration(milliseconds: 420),
-                  curve: Curves.easeOutCubic,
-                  builder: (context, animatedColor, child) => ColoredBox(
-                    key: fillKey,
-                    color: (animatedColor ?? ArtworkProgressColor.fallback)
-                        .withAlpha(220),
-                    child: child,
-                  ),
-                  child: const SizedBox.expand(),
-                ),
-              );
-            },
+            // Scaling the already laid-out fill changes only its paint
+            // transform. FractionallySizedBox would relayout this high-traffic
+            // progress line on every animation tick while playback advances.
+            builder: (context, animatedProgress, child) => Transform.scale(
+              scaleX: animatedProgress,
+              alignment: Alignment.centerLeft,
+              transformHitTests: false,
+              child: child,
+            ),
+            // Keep the slower artwork-color tween outside the progress builder
+            // so position ticks do not update its element every frame.
+            child: TweenAnimationBuilder<Color?>(
+              key: colorAnimationKey,
+              tween: ColorTween(end: color),
+              duration: const Duration(milliseconds: 420),
+              curve: Curves.easeOutCubic,
+              builder: (context, animatedColor, child) => ColoredBox(
+                key: fillKey,
+                color: (animatedColor ?? ArtworkProgressColor.fallback)
+                    .withAlpha(220),
+                child: child,
+              ),
+              child: const SizedBox.expand(),
+            ),
           ),
         ),
       ),

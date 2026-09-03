@@ -79,8 +79,8 @@ class RemoteMusicDataSource {
           rethrow;
         }
         // InnerTube is an unofficial, changing endpoint. Search must remain
-        // usable through the existing yt-dlp YouTube fallback whenever its
-        // bootstrap, request, or response format is unavailable.
+        // usable through the downloader-backed InnerTube fallback whenever
+        // the catalog bootstrap, request, or response format is unavailable.
       }
     }
     return _downloaderService.search(query);
@@ -89,9 +89,9 @@ class RemoteMusicDataSource {
   /// Searches one YouTube Music category without eagerly requesting the other
   /// tabs. A successful empty InnerTube response remains an empty page.
   ///
-  /// yt-dlp is used exactly once when InnerTube throws, is unavailable, or the
-  /// query is already a direct YouTube reference. Its `ytsearch` results are
-  /// ordinary YouTube videos, so a fallback always returns the Videos page.
+  /// The downloader-backed InnerTube lookup is used exactly once when the
+  /// catalog throws, is unavailable, or the query is already a direct YouTube
+  /// reference. Its fallback contract always returns the Videos page.
   Future<SearchPage> searchCategory(
     String query,
     SearchCategory category,
@@ -101,7 +101,7 @@ class RemoteMusicDataSource {
       return SearchPage(category: category, backend: SearchBackend.innerTube);
     }
     if (_isDirectYouTubeReference(normalizedQuery)) {
-      return _searchVideosWithYtDlp(normalizedQuery);
+      return _searchVideosWithInnerTubeFallback(normalizedQuery);
     }
 
     final musicSearch = youtubeMusicSearch;
@@ -143,7 +143,10 @@ class RemoteMusicDataSource {
       if (!_isExpectedInnerTubeFailure(error)) {
         rethrow;
       }
-      return _searchVideosWithYtDlp(normalizedQuery, primaryError: error);
+      return _searchVideosWithInnerTubeFallback(
+        normalizedQuery,
+        primaryError: error,
+      );
     }
   }
 
@@ -185,14 +188,14 @@ class RemoteMusicDataSource {
     );
   }
 
-  Future<SearchPage> _searchVideosWithYtDlp(
+  Future<SearchPage> _searchVideosWithInnerTubeFallback(
     String query, {
     Object? primaryError,
   }) async {
     final tracks = await _downloaderService.search(query);
     return SearchPage(
       category: SearchCategory.videos,
-      backend: SearchBackend.ytDlp,
+      backend: SearchBackend.innerTubeVideoFallback,
       tracks: tracks,
       primaryError: primaryError,
     );

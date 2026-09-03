@@ -2,7 +2,7 @@ import 'track_info.dart';
 
 enum SearchCategory { songs, videos, albums, artists }
 
-enum SearchBackend { innerTube, ytDlp }
+enum SearchBackend { innerTube, innerTubeVideoFallback }
 
 class SearchAlbum {
   SearchAlbum({
@@ -89,8 +89,9 @@ class SearchPage {
          SearchCategory.artists => tracks.isEmpty && albums.isEmpty,
        }, 'A search page can contain results only for its category.'),
        assert(
-         backend != SearchBackend.ytDlp || category == SearchCategory.videos,
-         'yt-dlp search results are always YouTube videos.',
+         backend != SearchBackend.innerTubeVideoFallback ||
+             category == SearchCategory.videos,
+         'InnerTube video fallback results are always YouTube videos.',
        ),
        tracks = List.unmodifiable(tracks),
        albums = List.unmodifiable(albums),
@@ -102,13 +103,14 @@ class SearchPage {
   final List<SearchAlbum> albums;
   final List<SearchArtist> artists;
 
-  /// The InnerTube failure that caused this page to use yt-dlp.
+  /// The catalog failure that caused this page to use the InnerTube video
+  /// fallback.
   ///
-  /// Direct YouTube references intentionally use yt-dlp without a primary
-  /// failure, so this remains `null` for those searches.
+  /// Direct YouTube references intentionally use the video fallback without a
+  /// primary failure, so this remains `null` for those searches.
   final Object? primaryError;
 
-  bool get isFallback => backend == SearchBackend.ytDlp;
+  bool get isFallback => backend == SearchBackend.innerTubeVideoFallback;
   bool get isEmpty => tracks.isEmpty && albums.isEmpty && artists.isEmpty;
 }
 

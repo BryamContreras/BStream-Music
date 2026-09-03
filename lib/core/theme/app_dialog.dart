@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app_colors.dart';
 import 'app_theme.dart';
+import '../widgets/liquid_glass_surface.dart';
 
 /// The blur applied inside modal dialog surfaces when glass is enabled.
 const double appDialogBlurSigma = 14;
@@ -134,13 +135,16 @@ class AppAlertDialog extends AlertDialog {
   @override
   Widget build(BuildContext context) {
     final dialog = super.build(context);
-    final transparent =
-        Theme.of(context).extension<AppSurfaceTheme>()?.backgroundMode ==
-        SurfaceBackgroundMode.transparent;
-    if (!transparent || dialog is! Dialog) {
+    final surfaceMode =
+        Theme.of(context).extension<AppSurfaceTheme>()?.backgroundMode ??
+        SurfaceBackgroundMode.accent;
+    if (!surfaceMode.usesBackdrop || dialog is! Dialog) {
       return dialog;
     }
-    return _LocalBackdropDialog(dialog: dialog);
+    return _LocalBackdropDialog(
+      dialog: dialog,
+      liquidGlass: surfaceMode.isLiquidGlass,
+    );
   }
 }
 
@@ -149,9 +153,10 @@ class AppAlertDialog extends AlertDialog {
 /// the same panel Stack and clipped with the resolved shape, pixels outside the
 /// panel remain sharp and dialog text is never filtered.
 class _LocalBackdropDialog extends StatelessWidget {
-  const _LocalBackdropDialog({required this.dialog});
+  const _LocalBackdropDialog({required this.dialog, required this.liquidGlass});
 
   final Dialog dialog;
+  final bool liquidGlass;
 
   @override
   Widget build(BuildContext context) {
@@ -192,64 +197,76 @@ class _LocalBackdropDialog extends StatelessWidget {
         dialogTheme.constraints ??
         const BoxConstraints(minWidth: 280);
 
-    final panel = Stack(
-      fit: StackFit.passthrough,
-      clipBehavior: Clip.none,
-      children: [
-        Positioned.fill(
-          child: ClipPath(
-            key: const ValueKey('app-dialog-local-blur-clip'),
-            clipper: ShapeBorderClipper(shape: shape),
-            clipBehavior: Clip.antiAlias,
-            child: BackdropFilter(
-              key: const ValueKey('app-dialog-local-backdrop-filter'),
-              filter: ui.ImageFilter.blur(
-                sigmaX: appDialogBlurSigma,
-                sigmaY: appDialogBlurSigma,
-              ),
-              child: const SizedBox.expand(),
-            ),
-          ),
-        ),
-        Material(
-          color: backgroundColor,
-          elevation: elevation,
-          shadowColor: shadowColor,
-          surfaceTintColor: surfaceTintColor,
-          shape: shape,
-          type: MaterialType.card,
-          clipBehavior:
-              dialog.clipBehavior ?? dialogTheme.clipBehavior ?? Clip.none,
-          child: Stack(
-            fit: StackFit.passthrough,
-            children: [
-              Positioned.fill(
-                child: ClipPath(
-                  clipper: ShapeBorderClipper(shape: shape),
-                  clipBehavior: Clip.antiAlias,
-                  child: DecoratedBox(
-                    key: const ValueKey('app-dialog-glass-gradient'),
-                    decoration: BoxDecoration(
-                      // The Material owns the surface/tint. This transparent
-                      // base asks the shared helper only for its accent wash,
-                      // layered below text and controls.
-                      gradient: AppColors.glassSurfaceGradientFor(
-                        context,
-                        baseColor: Colors.transparent,
-                        intensity: 0.82,
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
+    final material = Material(
+      color: backgroundColor,
+      elevation: elevation,
+      shadowColor: shadowColor,
+      surfaceTintColor: surfaceTintColor,
+      shape: shape,
+      type: MaterialType.card,
+      clipBehavior:
+          dialog.clipBehavior ?? dialogTheme.clipBehavior ?? Clip.none,
+      child: Stack(
+        fit: StackFit.passthrough,
+        children: [
+          Positioned.fill(
+            child: ClipPath(
+              clipper: ShapeBorderClipper(shape: shape),
+              clipBehavior: Clip.antiAlias,
+              child: DecoratedBox(
+                key: const ValueKey('app-dialog-glass-gradient'),
+                decoration: BoxDecoration(
+                  // The Material owns the surface/tint. This transparent
+                  // base asks the shared helper only for its accent wash,
+                  // layered below text and controls.
+                  gradient: AppColors.glassSurfaceGradientFor(
+                    context,
+                    baseColor: Colors.transparent,
+                    intensity: 0.82,
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
                 ),
               ),
-              ?dialog.child,
-            ],
+            ),
           ),
-        ),
-      ],
+          ?dialog.child,
+        ],
+      ),
     );
+    final panel = liquidGlass
+        ? LiquidGlassSurface(
+            key: const ValueKey('app-dialog-liquid-glass'),
+            borderRadius: switch (shape) {
+              RoundedRectangleBorder(:final borderRadius) => borderRadius,
+              _ => BorderRadius.circular(useMaterial3 ? 28 : 4),
+            },
+            blurSigma: appDialogBlurSigma,
+            intensity: 1,
+            child: material,
+          )
+        : Stack(
+            fit: StackFit.passthrough,
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(
+                child: ClipPath(
+                  key: const ValueKey('app-dialog-local-blur-clip'),
+                  clipper: ShapeBorderClipper(shape: shape),
+                  clipBehavior: Clip.antiAlias,
+                  child: BackdropFilter(
+                    key: const ValueKey('app-dialog-local-backdrop-filter'),
+                    filter: ui.ImageFilter.blur(
+                      sigmaX: appDialogBlurSigma,
+                      sigmaY: appDialogBlurSigma,
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+              material,
+            ],
+          );
 
     return Semantics(
       role: dialog.semanticsRole,

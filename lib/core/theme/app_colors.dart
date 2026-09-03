@@ -48,13 +48,21 @@ abstract final class AppColors {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
-    final transparent =
-        surfaceBackgroundModeFor(context) == SurfaceBackgroundMode.transparent;
-    final surfaceAlpha = transparent
-        ? theme.brightness == Brightness.dark
-              ? transparentDarkAlpha
-              : transparentLightAlpha
-        : accentModeAlpha;
+    final mode = surfaceBackgroundModeFor(context);
+    if (mode.isLiquidGlass) {
+      // LiquidGlassSurface owns the neutral material tint. Callers keep their
+      // content layer clear so navigation, search and mini-player share one
+      // consistent optical density.
+      return Colors.transparent;
+    }
+    final surfaceAlpha = switch (mode) {
+      SurfaceBackgroundMode.accent => accentModeAlpha,
+      SurfaceBackgroundMode.transparent =>
+        theme.brightness == Brightness.dark
+            ? transparentDarkAlpha
+            : transparentLightAlpha,
+      SurfaceBackgroundMode.liquidGlass => 0.0,
+    };
     return Color.alphaBlend(
       accent.withValues(alpha: accentTintAlpha),
       colors.surface.withValues(alpha: surfaceAlpha),
@@ -75,26 +83,37 @@ abstract final class AppColors {
     final accentTheme = theme.extension<AppAccentTheme>();
     final seed = accentTheme?.seed ?? colors.primary;
     final dark = accentTheme?.dark ?? colors.primary;
-    final transparent =
-        surfaceBackgroundModeFor(context) == SurfaceBackgroundMode.transparent;
+    final mode = surfaceBackgroundModeFor(context);
     final isDark = theme.brightness == Brightness.dark;
+    if (mode.isLiquidGlass) {
+      return LinearGradient(
+        begin: begin,
+        end: end,
+        colors: <Color>[
+          Colors.white.withValues(
+            alpha: ((isDark ? 0.025 : 0.065) * intensity).clamp(0, 1),
+          ),
+          Colors.transparent,
+          Colors.black.withValues(
+            alpha: ((isDark ? 0.04 : 0.018) * intensity).clamp(0, 1),
+          ),
+        ],
+        stops: const <double>[0, 0.52, 1],
+      );
+    }
     final edgeAlpha =
-        (transparent
-            ? isDark
-                  ? 0.018
-                  : 0.012
-            : isDark
-            ? 0.012
-            : 0.008) *
+        switch (mode) {
+          SurfaceBackgroundMode.accent => isDark ? 0.012 : 0.008,
+          SurfaceBackgroundMode.transparent => isDark ? 0.018 : 0.012,
+          SurfaceBackgroundMode.liquidGlass => isDark ? 0.032 : 0.022,
+        } *
         intensity;
     final centerAlpha =
-        (transparent
-            ? isDark
-                  ? 0.075
-                  : 0.052
-            : isDark
-            ? 0.045
-            : 0.032) *
+        switch (mode) {
+          SurfaceBackgroundMode.accent => isDark ? 0.045 : 0.032,
+          SurfaceBackgroundMode.transparent => isDark ? 0.075 : 0.052,
+          SurfaceBackgroundMode.liquidGlass => isDark ? 0.105 : 0.074,
+        } *
         intensity;
 
     return LinearGradient(
@@ -178,10 +197,15 @@ abstract final class AppColors {
       SurfaceBackgroundMode.transparent => colors.surface.withValues(
         alpha: isDark ? 0.56 : 0.68,
       ),
+      SurfaceBackgroundMode.liquidGlass =>
+        (isDark ? Colors.black : Colors.white).withValues(
+          alpha: isDark ? 0.16 : 0.22,
+        ),
     };
     final tintStrength = switch (backgroundMode) {
       SurfaceBackgroundMode.accent => isDark ? 0.075 : 0.06,
       SurfaceBackgroundMode.transparent => isDark ? 0.09 : 0.07,
+      SurfaceBackgroundMode.liquidGlass => 0.0,
     };
     return Color.alphaBlend(tint.withValues(alpha: tintStrength), base);
   }
@@ -258,20 +282,21 @@ abstract final class AppColors {
     final isDark = colors.brightness == Brightness.dark;
     final tint = isDark ? seed : dark;
     final base = isDark ? Colors.white : colors.outlineVariant;
-    final tintStrength = backgroundMode == SurfaceBackgroundMode.transparent
-        ? isDark
-              ? 0.3
-              : 0.22
-        : isDark
-        ? 0.22
-        : 0.16;
-    final alpha = backgroundMode == SurfaceBackgroundMode.transparent
-        ? isDark
-              ? 0.34
-              : 0.52
-        : isDark
-        ? 0.22
-        : 0.72;
+    if (backgroundMode.isLiquidGlass) {
+      return (isDark ? Colors.white : Colors.black).withValues(
+        alpha: isDark ? 0.2 : 0.12,
+      );
+    }
+    final tintStrength = switch (backgroundMode) {
+      SurfaceBackgroundMode.accent => isDark ? 0.22 : 0.16,
+      SurfaceBackgroundMode.transparent => isDark ? 0.3 : 0.22,
+      SurfaceBackgroundMode.liquidGlass => isDark ? 0.36 : 0.28,
+    };
+    final alpha = switch (backgroundMode) {
+      SurfaceBackgroundMode.accent => isDark ? 0.22 : 0.72,
+      SurfaceBackgroundMode.transparent => isDark ? 0.34 : 0.52,
+      SurfaceBackgroundMode.liquidGlass => isDark ? 0.46 : 0.64,
+    };
     return Color.alphaBlend(
       tint.withValues(alpha: tintStrength),
       base,
@@ -296,29 +321,59 @@ abstract final class AppColors {
         : colors.outlineVariant.withValues(alpha: 0.8);
   }
 
-  /// Shared translucent surface for cards across both appearance modes. The
-  /// same alpha keeps search/library cards visually comparable while the
-  /// theme supplies the appropriate light or dark base color.
-  static Color cardSurfaceFor(BuildContext context) {
+  /// Shared surface for content cards.
+  ///
+  /// [solidInLiquidGlass] is an explicit opt-out for content that should keep
+  /// a regular Material-card treatment while the surrounding application
+  /// chrome uses Liquid Glass. Accent and transparent modes are unaffected.
+  static Color cardSurfaceFor(
+    BuildContext context, {
+    bool solidInLiquidGlass = false,
+  }) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final mode = surfaceBackgroundModeFor(context);
+    if (mode.isLiquidGlass && !solidInLiquidGlass) {
+      return Colors.white.withValues(
+        alpha: theme.brightness == Brightness.dark ? 0.045 : 0.14,
+      );
+    }
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
     final tintedSurface = Color.alphaBlend(
       accent.withValues(alpha: 0.055),
       colors.surface,
     );
-    return tintedSurface.withValues(alpha: 0.72);
+    final translucentSurface = tintedSurface.withValues(alpha: 0.72);
+    if (!mode.isLiquidGlass) {
+      return translucentSurface;
+    }
+    return Color.alphaBlend(translucentSurface, theme.scaffoldBackgroundColor);
   }
 
-  static Color cardBorderFor(BuildContext context) {
+  static Color cardBorderFor(
+    BuildContext context, {
+    bool solidInLiquidGlass = false,
+  }) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    if (surfaceBackgroundModeFor(context).isLiquidGlass &&
+        !solidInLiquidGlass) {
+      return (theme.brightness == Brightness.dark ? Colors.white : Colors.black)
+          .withValues(alpha: theme.brightness == Brightness.dark ? 0.2 : 0.11);
+    }
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
     final tintedBorder = Color.alphaBlend(
       accent.withValues(alpha: 0.18),
       colors.outlineVariant,
     );
-    return tintedBorder.withValues(alpha: 0.78);
+    final translucentBorder = tintedBorder.withValues(alpha: 0.78);
+    if (!surfaceBackgroundModeFor(context).isLiquidGlass) {
+      return translucentBorder;
+    }
+    return Color.alphaBlend(
+      translucentBorder,
+      cardSurfaceFor(context, solidInLiquidGlass: true),
+    );
   }
 
   /// Shared fill for text inputs. In transparent mode the field remains more
@@ -355,8 +410,13 @@ abstract final class AppColors {
     required ColorScheme colors,
     required SurfaceBackgroundMode backgroundMode,
   }) {
-    if (backgroundMode == SurfaceBackgroundMode.transparent) {
+    if (backgroundMode.usesBackdrop) {
       final isDark = colors.brightness == Brightness.dark;
+      if (backgroundMode.isLiquidGlass) {
+        return (isDark ? Colors.black : Colors.white).withValues(
+          alpha: isDark ? 0.2 : 0.24,
+        );
+      }
       final tint = isDark ? seed : dark;
       final base = colors.surface.withValues(alpha: isDark ? 0.74 : 0.82);
       return Color.alphaBlend(
@@ -381,18 +441,21 @@ abstract final class AppColors {
   }) {
     final isDark = colors.brightness == Brightness.dark;
     final tint = isDark ? accent.seedColor : accent.darkColor;
-    final surfaceAlpha = backgroundMode == SurfaceBackgroundMode.transparent
-        ? isDark
-              ? 0.7
-              : 0.78
-        : 0.97;
-    final tintStrength = backgroundMode == SurfaceBackgroundMode.transparent
-        ? isDark
-              ? 0.09
-              : 0.07
-        : isDark
-        ? 0.08
-        : 0.06;
+    if (backgroundMode.isLiquidGlass) {
+      return (isDark ? Colors.black : Colors.white).withValues(
+        alpha: isDark ? 0.2 : 0.26,
+      );
+    }
+    final surfaceAlpha = switch (backgroundMode) {
+      SurfaceBackgroundMode.accent => 0.97,
+      SurfaceBackgroundMode.transparent => isDark ? 0.7 : 0.78,
+      SurfaceBackgroundMode.liquidGlass => 0.0,
+    };
+    final tintStrength = switch (backgroundMode) {
+      SurfaceBackgroundMode.accent => isDark ? 0.08 : 0.06,
+      SurfaceBackgroundMode.transparent => isDark ? 0.09 : 0.07,
+      SurfaceBackgroundMode.liquidGlass => 0.0,
+    };
     return Color.alphaBlend(
       tint.withValues(alpha: tintStrength),
       colors.surface.withValues(alpha: surfaceAlpha),
@@ -404,21 +467,30 @@ abstract final class AppColors {
     ColorScheme colors, {
     SurfaceBackgroundMode backgroundMode = SurfaceBackgroundMode.accent,
   }) {
-    final transparent = backgroundMode == SurfaceBackgroundMode.transparent;
-    final tintStrength = colors.brightness == Brightness.dark
-        ? transparent
-              ? 0.32
-              : 0.24
-        : transparent
-        ? 0.24
-        : 0.18;
+    final usesBackdrop = backgroundMode.usesBackdrop;
+    if (backgroundMode.isLiquidGlass) {
+      return (colors.brightness == Brightness.dark
+              ? Colors.white
+              : Colors.black)
+          .withValues(
+            alpha: colors.brightness == Brightness.dark ? 0.24 : 0.14,
+          );
+    }
+    final tintStrength = switch (backgroundMode) {
+      SurfaceBackgroundMode.accent =>
+        colors.brightness == Brightness.dark ? 0.24 : 0.18,
+      SurfaceBackgroundMode.transparent =>
+        colors.brightness == Brightness.dark ? 0.32 : 0.24,
+      SurfaceBackgroundMode.liquidGlass =>
+        colors.brightness == Brightness.dark ? 0.4 : 0.3,
+    };
     return Color.alphaBlend(
       (colors.brightness == Brightness.dark
               ? accent.seedColor
               : accent.darkColor)
           .withValues(alpha: tintStrength),
       colors.outlineVariant,
-    ).withValues(alpha: transparent ? 0.74 : 0.9);
+    ).withValues(alpha: usesBackdrop ? 0.74 : 0.9);
   }
 
   static Color dialogBarrierForTheme(
@@ -428,20 +500,39 @@ abstract final class AppColors {
     if (backgroundMode == SurfaceBackgroundMode.accent) {
       return Colors.black54;
     }
+    final liquid = backgroundMode.isLiquidGlass;
     return Colors.black.withValues(
-      alpha: colors.brightness == Brightness.dark ? 0.32 : 0.22,
+      alpha: colors.brightness == Brightness.dark
+          ? liquid
+                ? 0.26
+                : 0.32
+          : liquid
+          ? 0.18
+          : 0.22,
     );
   }
 
-  static Color homeCardSurfaceFor(BuildContext context) {
+  static Color homeCardSurfaceFor(
+    BuildContext context, {
+    bool solidInLiquidGlass = false,
+  }) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    if (surfaceBackgroundModeFor(context).isLiquidGlass) {
+      if (solidInLiquidGlass) {
+        return cardSurfaceFor(context, solidInLiquidGlass: true);
+      }
+      return Colors.white.withValues(
+        alpha: theme.brightness == Brightness.dark ? 0.045 : 0.13,
+      );
+    }
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
     final tintedSurface = Color.alphaBlend(
       accent.withValues(alpha: 0.07),
       colors.surface,
     );
-    return tintedSurface.withValues(alpha: 0.78);
+    final mode = surfaceBackgroundModeFor(context);
+    return tintedSurface.withValues(alpha: mode.isLiquidGlass ? 0.56 : 0.78);
   }
 
   /// Very light wash used by tab surfaces without turning the whole page into
@@ -449,6 +540,9 @@ abstract final class AppColors {
   static Color tabBackgroundOverlayFor(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    if (surfaceBackgroundModeFor(context).isLiquidGlass) {
+      return Colors.transparent;
+    }
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
     return accent.withValues(alpha: 0.025);
   }
@@ -467,8 +561,19 @@ abstract final class AppColors {
     final headerAccent = theme.brightness == Brightness.dark
         ? accent
         : accentDark;
-    if (surfaceBackgroundModeFor(context) ==
-        SurfaceBackgroundMode.transparent) {
+    final surfaceMode = surfaceBackgroundModeFor(context);
+    if (surfaceMode.isLiquidGlass) {
+      final isDark = theme.brightness == Brightness.dark;
+      final alpha = isDark
+          ? scrolledUnder
+                ? 0.12
+                : 0.065
+          : scrolledUnder
+          ? 0.18
+          : 0.11;
+      return (isDark ? Colors.black : Colors.white).withValues(alpha: alpha);
+    }
+    if (surfaceMode.usesBackdrop) {
       final base = colors.surface.withValues(
         alpha: theme.brightness == Brightness.dark
             ? scrolledUnder
@@ -513,11 +618,27 @@ abstract final class AppColors {
     final accent = theme.brightness == Brightness.dark
         ? accentTheme?.seed ?? colors.primary
         : accentTheme?.dark ?? colors.primary;
-    final transparent =
-        surfaceBackgroundModeFor(context) == SurfaceBackgroundMode.transparent;
-    final tintStrength = transparent
+    final surfaceMode = surfaceBackgroundModeFor(context);
+    if (surfaceMode.isLiquidGlass) {
+      return (theme.brightness == Brightness.dark ? Colors.white : Colors.black)
+          .withValues(
+            alpha: scrolledUnder
+                ? theme.brightness == Brightness.dark
+                      ? 0.24
+                      : 0.14
+                : theme.brightness == Brightness.dark
+                ? 0.14
+                : 0.08,
+          );
+    }
+    final usesBackdrop = surfaceMode.usesBackdrop;
+    final tintStrength = usesBackdrop
         ? scrolledUnder
-              ? 0.32
+              ? surfaceMode.isLiquidGlass
+                    ? 0.4
+                    : 0.32
+              : surfaceMode.isLiquidGlass
+              ? 0.3
               : 0.24
         : scrolledUnder
         ? 0.24

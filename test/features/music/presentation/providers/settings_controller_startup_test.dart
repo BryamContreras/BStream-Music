@@ -2,13 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:bstream_music/features/music/domain/entities/download_options.dart';
-import 'package:bstream_music/features/music/domain/entities/download_result.dart';
-import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/core/platform/app_platform.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
-import 'package:bstream_music/services/downloader/desktop_downloader_service.dart';
-import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,6 +20,27 @@ void main() {
 
   late Directory sandbox;
   late String documentsPath;
+
+  test('iOS reconstructs its media root from the current app container', () {
+    expect(
+      downloadDirectoryForPlatform(
+        platform: AppPlatformType.ios,
+        candidateDirectory:
+            '/var/mobile/Containers/Data/Application/OLD/Documents/BStream Music',
+        defaultDirectory:
+            '/var/mobile/Containers/Data/Application/NEW/Documents/BStream Music',
+      ),
+      '/var/mobile/Containers/Data/Application/NEW/Documents/BStream Music',
+    );
+    expect(
+      downloadDirectoryForPlatform(
+        platform: AppPlatformType.android,
+        candidateDirectory: '/data/user/0/com.bstream/files/BStream Music',
+        defaultDirectory: '/data/user/0/com.bstream/files/default',
+      ),
+      '/data/user/0/com.bstream/files/BStream Music',
+    );
+  });
 
   setUp(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -57,13 +74,7 @@ void main() {
       'settings.miniPlayerMode': 'capsule',
       'settings.miniPlayerBackgroundMode': 'transparent',
     });
-    final container = ProviderContainer(
-      overrides: [
-        ytDlpDownloaderServiceProvider.overrideWithValue(
-          const _NoopDownloaderService(),
-        ),
-      ],
-    );
+    final container = ProviderContainer();
     addTearDown(container.dispose);
 
     final settings = await container.read(settingsControllerProvider.future);
@@ -76,26 +87,116 @@ void main() {
     );
   });
 
+  test('startup restores persisted Liquid Glass surface backgrounds', () async {
+    SharedPreferences.setMockInitialValues({
+      'settings.surfaceBackgroundMode': 'liquidGlass',
+      'settings.miniPlayerMode': 'capsule',
+      'settings.miniPlayerBackgroundMode': 'liquidGlass',
+    });
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+
+    expect(settings.surfaceBackgroundMode, SurfaceBackgroundMode.liquidGlass);
+    expect(settings.miniPlayerMode, MiniPlayerMode.capsule);
+    expect(
+      settings.miniPlayerBackgroundMode,
+      MiniPlayerBackgroundMode.liquidGlass,
+    );
+  });
+
+  test('startup restores and persists the full player style', () async {
+    SharedPreferences.setMockInitialValues({
+      'settings.playerStyle': 'appleMusic',
+    });
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+    expect(settings.playerStyle, PlayerStyle.appleMusic);
+
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setPlayerStyle(PlayerStyle.bstreamMusic);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getString('settings.playerStyle'), 'bstreamMusic');
+    expect(
+      container.read(settingsControllerProvider).value?.playerStyle,
+      PlayerStyle.bstreamMusic,
+    );
+  });
+
+  test(
+    'animated artwork defaults on and restores an explicit choice',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final freshContainer = ProviderContainer();
+      await freshContainer.read(settingsControllerProvider.future);
+      final freshPreferences = await SharedPreferences.getInstance();
+
+      expect(
+        freshContainer
+            .read(settingsControllerProvider)
+            .value
+            ?.animatedArtworkEnabled,
+        isTrue,
+      );
+      expect(
+        freshPreferences.containsKey('settings.animatedArtworkEnabled'),
+        isFalse,
+      );
+      freshContainer.dispose();
+
+      SharedPreferences.setMockInitialValues({
+        'settings.animatedArtworkEnabled': false,
+      });
+      final restoredContainer = ProviderContainer();
+      addTearDown(restoredContainer.dispose);
+
+      final restored = await restoredContainer.read(
+        settingsControllerProvider.future,
+      );
+      expect(restored.animatedArtworkEnabled, isFalse);
+
+      await restoredContainer
+          .read(settingsControllerProvider.notifier)
+          .setAnimatedArtworkEnabled(true);
+
+      final restoredPreferences = await SharedPreferences.getInstance();
+      expect(
+        restoredPreferences.getBool('settings.animatedArtworkEnabled'),
+        isTrue,
+      );
+      expect(
+        restoredContainer
+            .read(settingsControllerProvider)
+            .value
+            ?.animatedArtworkEnabled,
+        isTrue,
+      );
+    },
+  );
+
   test('fresh Android startup uses the accent capsule defaults', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues({});
-    final container = ProviderContainer(
-      overrides: [
-        ytDlpDownloaderServiceProvider.overrideWithValue(
-          const _NoopDownloaderService(),
-        ),
-      ],
-    );
+    final container = ProviderContainer();
     addTearDown(container.dispose);
 
     final settings = await container.read(settingsControllerProvider.future);
     final preferences = await SharedPreferences.getInstance();
 
     expect(settings.surfaceBackgroundMode, SurfaceBackgroundMode.accent);
+    expect(settings.playerStyle, PlayerStyle.bstreamMusic);
+    expect(settings.animatedArtworkEnabled, isTrue);
     expect(settings.miniPlayerMode, MiniPlayerMode.capsule);
     expect(settings.miniPlayerBackgroundMode, MiniPlayerBackgroundMode.accent);
     expect(preferences.containsKey('settings.surfaceBackgroundMode'), isFalse);
+    expect(preferences.containsKey('settings.playerStyle'), isFalse);
+    expect(preferences.containsKey('settings.animatedArtworkEnabled'), isFalse);
     expect(preferences.containsKey('settings.miniPlayerMode'), isFalse);
     expect(
       preferences.containsKey('settings.miniPlayerBackgroundMode'),
@@ -115,13 +216,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues({});
-    final container = ProviderContainer(
-      overrides: [
-        ytDlpDownloaderServiceProvider.overrideWithValue(
-          const _NoopDownloaderService(),
-        ),
-      ],
-    );
+    final container = ProviderContainer();
     addTearDown(container.dispose);
 
     final settings = await container.read(settingsControllerProvider.future);
@@ -139,13 +234,7 @@ void main() {
         'futureFilter',
       ],
     });
-    final container = ProviderContainer(
-      overrides: [
-        ytDlpDownloaderServiceProvider.overrideWithValue(
-          const _NoopDownloaderService(),
-        ),
-      ],
-    );
+    final container = ProviderContainer();
     addTearDown(container.dispose);
 
     final settings = await container.read(settingsControllerProvider.future);
@@ -158,13 +247,7 @@ void main() {
 
   test('an explicitly empty local music filter list stays empty', () async {
     SharedPreferences.setMockInitialValues({});
-    final firstContainer = ProviderContainer(
-      overrides: [
-        ytDlpDownloaderServiceProvider.overrideWithValue(
-          const _NoopDownloaderService(),
-        ),
-      ],
-    );
+    final firstContainer = ProviderContainer();
     await firstContainer.read(settingsControllerProvider.future);
     await firstContainer
         .read(settingsControllerProvider.notifier)
@@ -174,13 +257,7 @@ void main() {
     expect(preferences.getStringList('settings.localMusicFilters'), isEmpty);
     firstContainer.dispose();
 
-    final restoredContainer = ProviderContainer(
-      overrides: [
-        ytDlpDownloaderServiceProvider.overrideWithValue(
-          const _NoopDownloaderService(),
-        ),
-      ],
-    );
+    final restoredContainer = ProviderContainer();
     addTearDown(restoredContainer.dispose);
 
     final restored = await restoredContainer.read(
@@ -197,13 +274,7 @@ void main() {
         'settings.miniPlayerMode': 'default',
         'settings.miniPlayerBackgroundMode': 'artwork',
       });
-      final container = ProviderContainer(
-        overrides: [
-          ytDlpDownloaderServiceProvider.overrideWithValue(
-            const _NoopDownloaderService(),
-          ),
-        ],
-      );
+      final container = ProviderContainer();
       addTearDown(container.dispose);
 
       final settings = await container.read(settingsControllerProvider.future);
@@ -239,13 +310,7 @@ void main() {
         }),
       });
 
-      final container = ProviderContainer(
-        overrides: [
-          ytDlpDownloaderServiceProvider.overrideWithValue(
-            const _NoopDownloaderService(),
-          ),
-        ],
-      );
+      final container = ProviderContainer();
       addTearDown(container.dispose);
 
       final settings = await container.read(settingsControllerProvider.future);
@@ -254,6 +319,58 @@ void main() {
       expect(settings.downloadDirectory, p.normalize(currentRoot));
       expect(prefs.containsKey(journalKey), isFalse);
       expect(prefs.getString(downloadDirectoryKey), p.normalize(currentRoot));
+      expect(await Directory(p.join(currentRoot, 'audio')).exists(), isTrue);
+      expect(
+        await Directory(p.join(currentRoot, 'thumbnails')).exists(),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'iOS rebases an unreachable journal instead of recreating its old sandbox',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+      final oldContainer = p.join(
+        sandbox.path,
+        '11111111-1111-1111-1111-111111111111',
+      );
+      final oldRoot = p.join(oldContainer, 'Documents', 'BStream-Music');
+      final oldTarget = p.join(oldContainer, 'Documents', 'alternate-media');
+      final currentRoot = p.normalize(p.join(documentsPath, 'BStream-Music'));
+      final database = _RecordingLocalDatabaseService();
+      SharedPreferences.setMockInitialValues({
+        downloadDirectoryKey: oldRoot,
+        journalKey: jsonEncode(<String, Object?>{
+          'version': 1,
+          'sourceRoot': oldRoot,
+          'targetRoot': oldTarget,
+          'referenceSourceRoot': oldRoot,
+        }),
+      });
+
+      final container = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+          databaseServiceProvider.overrideWithValue(database),
+        ],
+      );
+      addTearDown(container.dispose);
+      addTearDown(database.dispose);
+
+      final settings = await container.read(settingsControllerProvider.future);
+      final prefs = await SharedPreferences.getInstance();
+
+      expect(settings.downloadDirectory, currentRoot);
+      expect(prefs.getString(downloadDirectoryKey), currentRoot);
+      expect(prefs.containsKey(journalKey), isFalse);
+      expect(database.rewrites, <(String, String?)>[(currentRoot, oldRoot)]);
+      expect(await Directory(oldRoot).exists(), isFalse);
+      expect(await Directory(oldTarget).exists(), isFalse);
       expect(await Directory(p.join(currentRoot, 'audio')).exists(), isTrue);
       expect(
         await Directory(p.join(currentRoot, 'thumbnails')).exists(),
@@ -273,12 +390,7 @@ void main() {
       });
 
       final container = ProviderContainer(
-        overrides: [
-          ytDlpDownloaderServiceProvider.overrideWithValue(
-            const _NoopDownloaderService(),
-          ),
-          databaseServiceProvider.overrideWithValue(database),
-        ],
+        overrides: [databaseServiceProvider.overrideWithValue(database)],
       );
       addTearDown(container.dispose);
       addTearDown(database.dispose);
@@ -309,12 +421,7 @@ void main() {
       });
 
       final container = ProviderContainer(
-        overrides: [
-          ytDlpDownloaderServiceProvider.overrideWithValue(
-            const _NoopDownloaderService(),
-          ),
-          databaseServiceProvider.overrideWithValue(database),
-        ],
+        overrides: [databaseServiceProvider.overrideWithValue(database)],
       );
       addTearDown(container.dispose);
       addTearDown(database.dispose);
@@ -332,54 +439,6 @@ void main() {
       expect(settings.themeMode, AppThemeMode.dark);
     },
   );
-
-  test('yt-dlp refresh merges into the latest settings state', () async {
-    SharedPreferences.setMockInitialValues({});
-    final downloader = _BlockingDesktopDownloaderService();
-    final container = ProviderContainer(
-      overrides: [ytDlpDownloaderServiceProvider.overrideWithValue(downloader)],
-    );
-    addTearDown(container.dispose);
-    addTearDown(downloader.dispose);
-    await container.read(settingsControllerProvider.future);
-    final controller = container.read(settingsControllerProvider.notifier);
-
-    downloader.blockAvailabilityCheck = true;
-    final refresh = controller.refreshToolStatus();
-    await downloader.availabilityCheckStarted.future;
-    await controller.setThemeMode(AppThemeMode.light);
-    downloader.allowAvailabilityCheck.complete();
-    await refresh;
-
-    final settings = container.read(settingsControllerProvider).requireValue;
-    expect(settings.themeMode, AppThemeMode.light);
-    expect(settings.ytDlpPath, 'test-yt-dlp');
-    expect(settings.hasYtDlp, isTrue);
-  });
-
-  test('yt-dlp path update merges into the latest settings state', () async {
-    SharedPreferences.setMockInitialValues({});
-    final downloader = _BlockingDesktopDownloaderService();
-    final container = ProviderContainer(
-      overrides: [ytDlpDownloaderServiceProvider.overrideWithValue(downloader)],
-    );
-    addTearDown(container.dispose);
-    addTearDown(downloader.dispose);
-    await container.read(settingsControllerProvider.future);
-    final controller = container.read(settingsControllerProvider.notifier);
-
-    downloader.blockAvailabilityCheck = true;
-    final update = controller.setYtDlpPath('selected-yt-dlp');
-    await downloader.availabilityCheckStarted.future;
-    await controller.setThemeMode(AppThemeMode.dark);
-    downloader.allowAvailabilityCheck.complete();
-    await update;
-
-    final settings = container.read(settingsControllerProvider).requireValue;
-    expect(settings.themeMode, AppThemeMode.dark);
-    expect(settings.ytDlpPath, 'test-yt-dlp');
-    expect(settings.hasYtDlp, isTrue);
-  });
 }
 
 class _BlockingLocalDatabaseService extends LocalDatabaseService {
@@ -402,49 +461,14 @@ class _BlockingLocalDatabaseService extends LocalDatabaseService {
   }
 }
 
-class _BlockingDesktopDownloaderService extends DesktopDownloaderService {
-  bool blockAvailabilityCheck = false;
-  final availabilityCheckStarted = Completer<void>();
-  final allowAvailabilityCheck = Completer<void>();
+class _RecordingLocalDatabaseService extends LocalDatabaseService {
+  final rewrites = <(String, String?)>[];
 
   @override
-  Future<String> getYtDlpPath() async => 'test-yt-dlp';
-
-  @override
-  Future<void> setYtDlpPath(String? path) async {}
-
-  @override
-  Future<bool> hasYtDlp() async {
-    if (!blockAvailabilityCheck) {
-      return false;
-    }
-    if (!availabilityCheckStarted.isCompleted) {
-      availabilityCheckStarted.complete();
-    }
-    await allowAvailabilityCheck.future;
-    return true;
+  Future<void> rewriteLocalTrackMediaRoot({
+    required String mediaRoot,
+    String? oldMediaRoot,
+  }) async {
+    rewrites.add((mediaRoot, oldMediaRoot));
   }
-}
-
-class _NoopDownloaderService implements DownloaderService {
-  const _NoopDownloaderService();
-
-  @override
-  Stream<DownloadProgress> get progressStream => const Stream.empty();
-
-  @override
-  Future<DownloadResult> downloadAudio(String url, DownloadOptions options) =>
-      throw UnimplementedError();
-
-  @override
-  Future<TrackInfo> getInfo(String url) => throw UnimplementedError();
-
-  @override
-  Future<TrackInfo> getPlaybackInfo(String url) => throw UnimplementedError();
-
-  @override
-  Future<void> initialize() async {}
-
-  @override
-  Future<List<TrackInfo>> search(String query) => throw UnimplementedError();
 }

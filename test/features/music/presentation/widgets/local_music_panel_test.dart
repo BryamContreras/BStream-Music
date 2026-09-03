@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/device_audio_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
@@ -44,7 +45,12 @@ void main() {
       addTearDown(navigation.dispose);
 
       await tester.pumpWidget(
-        _harness(catalog: catalog, player: player, navigation: navigation),
+        _harness(
+          catalog: catalog,
+          player: player,
+          navigation: navigation,
+          surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+        ),
       );
       await tester.pumpAndSettle();
 
@@ -80,6 +86,15 @@ void main() {
       expect(find.text('Beta'), findsOneWidget);
       expect(find.text('Gamma'), findsOneWidget);
       expect(find.byType(PopupMenuButton), findsNothing);
+      expect(
+        tester
+            .widget<Material>(
+              find.byKey(const ValueKey('local-track-device:alpha')),
+            )
+            .color!
+            .a,
+        1,
+      );
       final artwork = tester.widget<SourceImage>(
         find.descendant(
           of: find.byKey(const ValueKey('local-track-device:alpha')),
@@ -146,6 +161,7 @@ Widget _harness({
   required _FakeDeviceAudioCatalog catalog,
   _RecordingLocalPlayerController? player,
   LocalMusicNavigationController? navigation,
+  SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
 }) {
   return ProviderScope(
     overrides: [
@@ -156,6 +172,9 @@ Widget _harness({
       ),
     ],
     child: MaterialApp(
+      theme: ThemeData(
+        extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
+      ),
       home: Scaffold(
         body: LocalMusicPanel(
           onOpenPlayer: () {},

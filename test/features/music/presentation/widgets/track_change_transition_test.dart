@@ -32,21 +32,82 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 210));
 
-      Opacity opacityFor(String value) => tester.widget<Opacity>(
-        find.byWidgetPredicate(
-          (widget) =>
-              widget is Opacity &&
-              widget.child is KeyedSubtree &&
-              (widget.child! as KeyedSubtree).key == ValueKey(value),
-        ),
-      );
+      Finder nearestAncestor(String value, Type type) {
+        final candidates = find
+            .ancestor(
+              of: find.byKey(ValueKey('transition-content-$value')),
+              matching: find.byWidgetPredicate(
+                (widget) => widget.runtimeType == type,
+              ),
+            )
+            .evaluate();
+        final nearest = candidates.reduce(
+          (current, candidate) =>
+              candidate.depth > current.depth ? candidate : current,
+        );
+        return find.byElementPredicate(
+          (element) => identical(element, nearest),
+        );
+      }
+
+      Opacity opacityFor(String value) =>
+          tester.widget<Opacity>(nearestAncestor(value, Opacity));
+      FractionalTranslation translationFor(String value) =>
+          tester.widget<FractionalTranslation>(
+            nearestAncestor(value, FractionalTranslation),
+          );
+      Transform scaleFor(String value) =>
+          tester.widget<Transform>(nearestAncestor(value, Transform));
 
       expect(opacityFor('first').opacity, 1);
       expect(opacityFor('second').opacity, greaterThan(0));
       expect(opacityFor('second').opacity, lessThan(1));
+      expect(translationFor('first').translation, Offset.zero);
+      expect(translationFor('second').translation.dy, greaterThan(0));
+      expect(translationFor('second').translation.dy, lessThan(0.025));
+      expect(scaleFor('first').transform.entry(0, 0), 1);
+      expect(
+        scaleFor('second').transform.entry(0, 0),
+        inExclusiveRange(0.985, 1),
+      );
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('rapidly returning to a song keeps transition keys unique', (
+    tester,
+  ) async {
+    var identity = 'first';
+    late StateSetter update;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return TrackChangeTransition(
+              identity: identity,
+              child: SizedBox(
+                key: ValueKey('rapid-$identity'),
+                width: 80,
+                height: 80,
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    update(() => identity = 'second');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    update(() => identity = 'first');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+
+    expect(find.byKey(const ValueKey('rapid-first')), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('disables the song transition when reduced motion is enabled', (
     tester,

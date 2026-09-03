@@ -264,25 +264,12 @@ abstract final class RemotePlaybackFailureClassifier {
   static const _permanentCodes = <String>{
     'invalid_stream_url',
     'missing_stream_url',
-    'yt_dlp_not_found',
-    'yt_dlp_managed_playback_missing',
-    'yt_dlp_managed_playback_too_large',
   };
 
   static const _transientCodes = <String>{
     'media_kit_open_failed',
     'playback_source_error',
     'transient_remote_playback',
-    'youtube_explode_resolve_timeout',
-    'yt_dlp_process_idle_timeout',
-    'yt_dlp_process_resolution_timeout',
-    'yt_dlp_process_total_timeout',
-  };
-
-  static const _conditionallyTransientCodes = <String>{
-    'ytdl_error',
-    'yt_dlp_failed',
-    'yt_dlp_managed_playback_failed',
   };
 
   static const _nonRefreshableMarkers = <String>[
@@ -300,7 +287,6 @@ abstract final class RemotePlaybackFailureClassifier {
     'empty url',
     'without a url',
     'sin una url',
-    'yt_dlp_not_found',
     'permission denied',
     'no space left',
     'file too large',
@@ -395,9 +381,6 @@ abstract final class RemotePlaybackFailureClassifier {
       if (code != null && _transientCodes.contains(code)) {
         return true;
       }
-      if (code != null && _conditionallyTransientCodes.contains(code)) {
-        return _containsTransientMarker(error.message);
-      }
       return false;
     }
     return shouldRefreshMessage(error.toString());
@@ -409,9 +392,7 @@ abstract final class RemotePlaybackFailureClassifier {
     }
     if (error is AppException) {
       final code = error.code?.trim().toLowerCase() ?? '';
-      if (code == 'downloader_disposed' ||
-          code == 'youtube_explode_disposed' ||
-          code == 'yt_dlp_managed_playback_superseded') {
+      if (code == 'downloader_disposed') {
         return true;
       }
     }
@@ -421,6 +402,7 @@ abstract final class RemotePlaybackFailureClassifier {
   static bool isCancellationMessage(String? rawMessage) {
     final message = rawMessage?.trim().toLowerCase() ?? '';
     return message.contains('audio stream resolution was superseded') ||
+        message.contains('playback resolution was superseded') ||
         message.contains('reemplazada por una solicitud más reciente') ||
         message.contains('reemplazada por una pista más reciente');
   }
@@ -430,16 +412,16 @@ abstract final class RemotePlaybackFailureClassifier {
       return false;
     }
     return shouldRefresh(error) ||
-        (isYoutubeExplodeStream(track) &&
+        (isPrimaryInnerTubeStream(track) &&
             _isPrimaryBackendFallbackCandidate(error));
   }
 
-  static bool isYoutubeExplodeStream(TrackInfo track) {
-    return track.streamSource == AudioStreamSource.youtubeExplode.name;
+  static bool isPrimaryInnerTubeStream(TrackInfo track) {
+    return track.streamSource == AudioStreamSource.innerTube.name;
   }
 
-  static bool isYtDlpStream(TrackInfo track) {
-    return track.streamSource == AudioStreamSource.ytDlp.name;
+  static bool isFallbackInnerTubeStream(TrackInfo track) {
+    return track.streamSource == AudioStreamSource.innerTubeFallback.name;
   }
 
   static bool shouldRefreshMessage(String? rawMessage) {

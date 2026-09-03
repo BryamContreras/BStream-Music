@@ -1123,7 +1123,7 @@ void main() {
       final fallback = _SequencedAudioResolver([
         const SocketException('fallback offline cycle 1'),
         const SocketException('fallback offline cycle 2'),
-        _ytDlpResolution('bounded-retry'),
+        _fallbackInnerTubeResolution('bounded-retry'),
       ]);
       final resolver = FallbackAudioResolver([primary, fallback]);
       final container = _container(
@@ -1162,7 +1162,7 @@ void main() {
       expect(player.playedRemote, hasLength(1));
       expect(
         player.playedRemote.single.streamSource,
-        AudioStreamSource.ytDlp.name,
+        AudioStreamSource.innerTubeFallback.name,
       );
       expect(container.read(playbackQueueProvider).currentIndex, 0);
       expect(
@@ -1223,13 +1223,13 @@ void main() {
   test(
     'a duplicate failed snapshot cannot reopen an exhausted retry budget',
     () async {
-      final player = _RejectYoutubeExplodePlayerService();
+      final player = _RejectPrimaryInnerTubePlayerService();
       final retryDelay = _ControlledRetryDelay();
       final resolver = _ScriptedModeAwareAudioResolver(
         primaryOutcomes: [
-          _youtubeExplodeResolution('terminal-duplicate-cycle-1'),
-          _youtubeExplodeResolution('terminal-duplicate-cycle-2'),
-          _youtubeExplodeResolution('terminal-duplicate-cycle-3'),
+          _primaryInnerTubeResolution('terminal-duplicate-cycle-1'),
+          _primaryInnerTubeResolution('terminal-duplicate-cycle-2'),
+          _primaryInnerTubeResolution('terminal-duplicate-cycle-3'),
         ],
         fallbackOutcomes: const [
           SocketException('fallback offline cycle 1'),
@@ -1428,7 +1428,7 @@ void main() {
 
   for (final permanentCode in const [
     'invalid_stream_url',
-    'yt_dlp_managed_playback_too_large',
+    'missing_stream_url',
   ]) {
     test(
       'typed permanent error $permanentCode skips playback backoff',
@@ -1478,9 +1478,8 @@ void main() {
       final fallback = _SequencedAudioResolver([
         const SocketException('fallback offline cycle 1'),
         const SocketException('fallback offline cycle 2'),
-        const AppException(
-          'managed playback was superseded',
-          code: 'yt_dlp_managed_playback_superseded',
+        const AudioStreamResolverException(
+          'Audio stream resolution was superseded.',
         ),
       ]);
       final container = _container(
@@ -1571,18 +1570,18 @@ void main() {
   );
 
   test(
-    'a complete retry still tries yt-dlp when the backend rejects its primary URL',
+    'a complete retry still tries fallback when the backend rejects its primary URL',
     () async {
-      final player = _RejectYoutubeExplodePlayerService();
+      final player = _RejectPrimaryInnerTubePlayerService();
       final retryDelay = _ControlledRetryDelay();
       final resolver = _ScriptedModeAwareAudioResolver(
         primaryOutcomes: [
-          _youtubeExplodeResolution('backend-rejection'),
-          _youtubeExplodeResolution('backend-rejection-retry'),
+          _primaryInnerTubeResolution('backend-rejection'),
+          _primaryInnerTubeResolution('backend-rejection-retry'),
         ],
         fallbackOutcomes: [
-          const SocketException('yt-dlp temporarily offline'),
-          _ytDlpResolution('backend-rejection-fallback'),
+          const SocketException('InnerTube fallback temporarily offline'),
+          _fallbackInnerTubeResolution('backend-rejection-fallback'),
         ],
       );
       final container = _container(
@@ -1618,9 +1617,9 @@ void main() {
         AudioResolutionMode.fallbackOnly,
       ]);
       expect(player.attemptedRemote.map((entry) => entry.streamSource), [
-        AudioStreamSource.youtubeExplode.name,
-        AudioStreamSource.youtubeExplode.name,
-        AudioStreamSource.ytDlp.name,
+        AudioStreamSource.innerTube.name,
+        AudioStreamSource.innerTube.name,
+        AudioStreamSource.innerTubeFallback.name,
       ]);
       expect(container.read(playbackQueueProvider).currentIndex, 0);
       expect(retryDelay.durations, hasLength(1));
@@ -1634,9 +1633,9 @@ void main() {
       final retryDelay = _ControlledRetryDelay();
       final resolver = _ScriptedModeAwareAudioResolver(
         primaryOutcomes: [
-          _youtubeExplodeResolution('pending-original-cycle-1'),
-          _youtubeExplodeResolution('pending-original-cycle-2'),
-          _youtubeExplodeResolution('pending-original-cycle-3'),
+          _primaryInnerTubeResolution('pending-original-cycle-1'),
+          _primaryInnerTubeResolution('pending-original-cycle-2'),
+          _primaryInnerTubeResolution('pending-original-cycle-3'),
         ],
         fallbackOutcomes: const [
           SocketException('fallback offline cycle 1'),
@@ -1706,8 +1705,8 @@ void main() {
       final retryDelay = _ControlledRetryDelay();
       final resolver = _ScriptedModeAwareAudioResolver(
         primaryOutcomes: [
-          _youtubeExplodeResolution('pending-original-success-cycle-1'),
-          _youtubeExplodeResolution('pending-original-success-cycle-2'),
+          _primaryInnerTubeResolution('pending-original-success-cycle-1'),
+          _primaryInnerTubeResolution('pending-original-success-cycle-2'),
         ],
         fallbackOutcomes: const [
           SocketException('fallback offline before retry'),
@@ -1788,8 +1787,8 @@ void main() {
       final retryDelay = _ControlledRetryDelay();
       final resolver = _ScriptedModeAwareAudioResolver(
         primaryOutcomes: [
-          _youtubeExplodeResolution('pending-retry-cycle-1'),
-          _youtubeExplodeResolution('pending-retry-cycle-2'),
+          _primaryInnerTubeResolution('pending-retry-cycle-1'),
+          _primaryInnerTubeResolution('pending-retry-cycle-2'),
         ],
         fallbackOutcomes: const [
           SocketException('fallback offline before retry'),
@@ -2050,85 +2049,90 @@ void main() {
     },
   );
 
-  test('a later yt-dlp failure restarts the complete resolver chain', () async {
-    final player = _RejectYoutubeExplodePlayerService();
-    final resolver = _ModeAwareFallbackAudioResolver();
-    final container = _container(
-      player,
-      audioResolver: resolver,
-      retryDelay: (_) async {},
-    );
-    addTearDown(container.dispose);
-    final observed = <AsyncValue<PlayerSnapshot>>[];
-    final subscription = container.listen<AsyncValue<PlayerSnapshot>>(
-      playerControllerProvider,
-      (_, next) => observed.add(next),
-      fireImmediately: true,
-    );
-    addTearDown(subscription.close);
-    const track = TrackInfo(
-      id: 'q8j3zwNhLNo',
-      title: 'Fallback test',
-      artist: 'Artist',
-      url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
-    );
+  test(
+    'a later fallback failure restarts the complete resolver chain',
+    () async {
+      final player = _RejectPrimaryInnerTubePlayerService();
+      final resolver = _ModeAwareFallbackAudioResolver();
+      final container = _container(
+        player,
+        audioResolver: resolver,
+        retryDelay: (_) async {},
+      );
+      addTearDown(container.dispose);
+      final observed = <AsyncValue<PlayerSnapshot>>[];
+      final subscription = container.listen<AsyncValue<PlayerSnapshot>>(
+        playerControllerProvider,
+        (_, next) => observed.add(next),
+        fireImmediately: true,
+      );
+      addTearDown(subscription.close);
+      const track = TrackInfo(
+        id: 'q8j3zwNhLNo',
+        title: 'Fallback test',
+        artist: 'Artist',
+        url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+      );
 
-    await container.read(playerControllerProvider.future);
-    await container.read(playerControllerProvider.notifier).playRemote(track);
-    await _waitUntil(
-      () => resolver.modes.length == 2 && player.attemptedRemote.length == 2,
-    );
+      await container.read(playerControllerProvider.future);
+      await container.read(playerControllerProvider.notifier).playRemote(track);
+      await _waitUntil(
+        () => resolver.modes.length == 2 && player.attemptedRemote.length == 2,
+      );
 
-    expect(resolver.modes, [
-      AudioResolutionMode.primaryThenFallback,
-      AudioResolutionMode.fallbackOnly,
-    ]);
-    expect(player.attemptedRemote.map((entry) => entry.streamSource), [
-      AudioStreamSource.youtubeExplode.name,
-      AudioStreamSource.ytDlp.name,
-    ]);
-    expect(
-      observed.any(
-        (value) =>
-            value.value?.errorMessage?.contains('youtube_explode_dart falló') ==
-            true,
-      ),
-      isTrue,
-    );
-    final playing = container.read(playerControllerProvider).requireValue;
-    expect(playing.status, PlayerStatus.playing);
-    expect(playing.errorMessage, isNull);
+      expect(resolver.modes, [
+        AudioResolutionMode.primaryThenFallback,
+        AudioResolutionMode.fallbackOnly,
+      ]);
+      expect(player.attemptedRemote.map((entry) => entry.streamSource), [
+        AudioStreamSource.innerTube.name,
+        AudioStreamSource.innerTubeFallback.name,
+      ]);
+      expect(
+        observed.any(
+          (value) =>
+              value.value?.errorMessage?.contains(
+                'InnerTube principal falló',
+              ) ==
+              true,
+        ),
+        isTrue,
+      );
+      final playing = container.read(playerControllerProvider).requireValue;
+      expect(playing.status, PlayerStatus.playing);
+      expect(playing.errorMessage, isNull);
 
-    player.emit(
-      player.currentSnapshot.copyWith(
-        status: PlayerStatus.failed,
-        errorMessage: 'HTTP 403 from yt-dlp fallback',
-      ),
-    );
-    await _waitUntil(
-      () => resolver.modes.length == 4 && player.attemptedRemote.length == 4,
-    );
+      player.emit(
+        player.currentSnapshot.copyWith(
+          status: PlayerStatus.failed,
+          errorMessage: 'HTTP 403 from InnerTube fallback',
+        ),
+      );
+      await _waitUntil(
+        () => resolver.modes.length == 4 && player.attemptedRemote.length == 4,
+      );
 
-    expect(resolver.modes, const [
-      AudioResolutionMode.primaryThenFallback,
-      AudioResolutionMode.fallbackOnly,
-      AudioResolutionMode.primaryThenFallback,
-      AudioResolutionMode.fallbackOnly,
-    ]);
-    expect(
-      container.read(playerControllerProvider).requireValue.status,
-      PlayerStatus.playing,
-    );
-    expect(
-      container.read(playerControllerProvider).requireValue.errorMessage,
-      isNull,
-    );
-  });
+      expect(resolver.modes, const [
+        AudioResolutionMode.primaryThenFallback,
+        AudioResolutionMode.fallbackOnly,
+        AudioResolutionMode.primaryThenFallback,
+        AudioResolutionMode.fallbackOnly,
+      ]);
+      expect(
+        container.read(playerControllerProvider).requireValue.status,
+        PlayerStatus.playing,
+      );
+      expect(
+        container.read(playerControllerProvider).requireValue.errorMessage,
+        isNull,
+      );
+    },
+  );
 
   test(
-    'a prepared yt-dlp fallback clears the primary error before playback starts',
+    'a prepared InnerTube fallback clears the primary error before playback starts',
     () async {
-      final player = _ReadyYtDlpFallbackPlayerService();
+      final player = _ReadyInnerTubeFallbackPlayerService();
       final resolver = _ModeAwareFallbackAudioResolver();
       final container = _container(player, audioResolver: resolver);
       addTearDown(container.dispose);
@@ -2156,60 +2160,61 @@ void main() {
     },
   );
 
-  testWidgets('the mini player paints the primary error until yt-dlp starts', (
-    tester,
-  ) async {
-    final fallbackGate = Completer<void>();
-    final player = _RejectYoutubeExplodePlayerService();
-    final resolver = _ModeAwareFallbackAudioResolver(
-      fallbackGate: fallbackGate.future,
-    );
-    final container = _container(player, audioResolver: resolver);
-    addTearDown(container.dispose);
-    const track = TrackInfo(
-      id: 'visible-fallback-error',
-      title: 'Visible fallback error',
-      artist: 'Artist',
-      url: 'https://www.youtube.com/watch?v=visible-error',
-    );
+  testWidgets(
+    'the mini player paints the primary error until fallback starts',
+    (tester) async {
+      final fallbackGate = Completer<void>();
+      final player = _RejectPrimaryInnerTubePlayerService();
+      final resolver = _ModeAwareFallbackAudioResolver(
+        fallbackGate: fallbackGate.future,
+      );
+      final container = _container(player, audioResolver: resolver);
+      addTearDown(container.dispose);
+      const track = TrackInfo(
+        id: 'visible-fallback-error',
+        title: 'Visible fallback error',
+        artist: 'Artist',
+        url: 'https://www.youtube.com/watch?v=visible-error',
+      );
 
-    await container.read(playerControllerProvider.future);
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: const MaterialApp(
-          home: Scaffold(
-            body: Align(
-              alignment: Alignment.bottomCenter,
-              child: SizedBox(width: 720, child: MiniPlayer()),
+      await container.read(playerControllerProvider.future);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.bottomCenter,
+                child: SizedBox(width: 720, child: MiniPlayer()),
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    final playFuture = container
-        .read(playerControllerProvider.notifier)
-        .playRemote(track);
-    await tester.pump();
+      final playFuture = container
+          .read(playerControllerProvider.notifier)
+          .playRemote(track);
+      await tester.pump();
 
-    expect(find.textContaining('youtube_explode_dart falló'), findsOneWidget);
+      expect(find.textContaining('InnerTube principal falló'), findsOneWidget);
 
-    fallbackGate.complete();
-    await playFuture;
-    await tester.pumpAndSettle();
+      fallbackGate.complete();
+      await playFuture;
+      await tester.pumpAndSettle();
 
-    expect(find.textContaining('youtube_explode_dart falló'), findsNothing);
-    expect(
-      container.read(playerControllerProvider).requireValue.status,
-      PlayerStatus.playing,
-    );
-    await container
-        .read(playerControllerProvider.notifier)
-        .resetRecommendationHistoryTracking();
-  });
+      expect(find.textContaining('InnerTube principal falló'), findsNothing);
+      expect(
+        container.read(playerControllerProvider).requireValue.status,
+        PlayerStatus.playing,
+      );
+      await container
+          .read(playerControllerProvider.notifier)
+          .resetRecommendationHistoryTracking();
+    },
+  );
 
-  testWidgets('the full player shows three lines of the final yt-dlp error', (
+  testWidgets('the full player shows three lines of the final fallback error', (
     tester,
   ) async {
     const message =
@@ -2229,7 +2234,7 @@ void main() {
   });
 
   test(
-    'a late primary Future error cannot replace a successful yt-dlp fallback',
+    'a late primary Future error cannot replace a successful InnerTube fallback',
     () async {
       final player = _LatePrimaryFailurePlayerService();
       final resolver = _ModeAwareFallbackAudioResolver();
@@ -2348,7 +2353,7 @@ void main() {
       expect(controller.enrichCurrentRemoteTrackMetadata(catalog), isTrue);
       resolver.complete(
         const AudioStreamResolution(
-          source: AudioStreamSource.youtubeExplode,
+          source: AudioStreamSource.innerTube,
           streamUrl: 'https://media.example/rick.m4a',
           videoId: 'dQw4w9WgXcQ',
         ),
@@ -4550,18 +4555,18 @@ TrackInfo _unresolvedRemoteTrack(String id) {
   );
 }
 
-AudioStreamResolution _youtubeExplodeResolution(String id) {
+AudioStreamResolution _primaryInnerTubeResolution(String id) {
   return AudioStreamResolution(
-    source: AudioStreamSource.youtubeExplode,
+    source: AudioStreamSource.innerTube,
     streamUrl: 'https://media.example/$id.webm',
     streamExtension: 'webm',
     streamMimeType: 'audio/webm',
   );
 }
 
-AudioStreamResolution _ytDlpResolution(String id) {
+AudioStreamResolution _fallbackInnerTubeResolution(String id) {
   return AudioStreamResolution(
-    source: AudioStreamSource.ytDlp,
+    source: AudioStreamSource.innerTubeFallback,
     streamUrl: 'https://media.example/$id.m4a',
     streamExtension: 'm4a',
     streamMimeType: 'audio/mp4',
@@ -4713,7 +4718,7 @@ class _LiveRetryAudioResolver
       );
     }
     if (track.id == successfulTrackId) {
-      return _ytDlpResolution(track.id);
+      return _fallbackInnerTubeResolution(track.id);
     }
     throw SocketException('offline for ${track.id}');
   }
@@ -5111,13 +5116,13 @@ class _StaleOutgoingRemotePlayerService extends _FakePlayerService {
   }
 }
 
-class _RejectYoutubeExplodePlayerService extends _FakePlayerService {
+class _RejectPrimaryInnerTubePlayerService extends _FakePlayerService {
   final List<TrackInfo> attemptedRemote = [];
 
   @override
   Future<void> playRemote(TrackInfo track) async {
     attemptedRemote.add(track);
-    if (track.streamSource == AudioStreamSource.youtubeExplode.name) {
+    if (track.streamSource == AudioStreamSource.innerTube.name) {
       emit(
         PlayerSnapshot(
           status: PlayerStatus.failed,
@@ -5133,11 +5138,11 @@ class _RejectYoutubeExplodePlayerService extends _FakePlayerService {
   }
 }
 
-class _ReadyYtDlpFallbackPlayerService
-    extends _RejectYoutubeExplodePlayerService {
+class _ReadyInnerTubeFallbackPlayerService
+    extends _RejectPrimaryInnerTubePlayerService {
   @override
   Future<void> playRemote(TrackInfo track) async {
-    if (track.streamSource == AudioStreamSource.youtubeExplode.name) {
+    if (track.streamSource == AudioStreamSource.innerTube.name) {
       return super.playRemote(track);
     }
     attemptedRemote.add(track);
@@ -5164,7 +5169,7 @@ class _LatePrimaryFailurePlayerService extends _FakePlayerService {
   @override
   Future<void> playRemote(TrackInfo track) async {
     attemptedRemote.add(track);
-    if (track.streamSource == AudioStreamSource.youtubeExplode.name) {
+    if (track.streamSource == AudioStreamSource.innerTube.name) {
       emit(
         PlayerSnapshot(
           status: PlayerStatus.failed,
@@ -5319,7 +5324,7 @@ class _ModeAwareFallbackAudioResolver
     }
     return switch (mode) {
       AudioResolutionMode.primaryThenFallback => const AudioStreamResolution(
-        source: AudioStreamSource.youtubeExplode,
+        source: AudioStreamSource.innerTube,
         streamUrl: 'https://media.example/primary.webm',
         streamExtension: 'webm',
         streamMimeType: 'audio/webm',
@@ -5327,7 +5332,7 @@ class _ModeAwareFallbackAudioResolver
         codec: 'opus',
       ),
       AudioResolutionMode.fallbackOnly => const AudioStreamResolution(
-        source: AudioStreamSource.ytDlp,
+        source: AudioStreamSource.innerTubeFallback,
         streamUrl: 'https://media.example/fallback.m4a',
         streamExtension: 'm4a',
         streamMimeType: 'audio/mp4',
@@ -5646,7 +5651,7 @@ class _FakeAudioResolverFromRepository implements AudioStreamResolver {
   Future<AudioStreamResolution> resolve(TrackInfo track) async {
     final response = await _repository.getPlaybackInfo(track.url);
     return AudioStreamResolution(
-      source: AudioStreamSource.ytDlp,
+      source: AudioStreamSource.innerTubeFallback,
       streamUrl: response.streamUrl ?? '',
       streamExtension: response.streamExtension,
       streamMimeType: response.streamMimeType,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
@@ -80,7 +81,8 @@ class LocalMusicPanel extends ConsumerStatefulWidget {
   ConsumerState<LocalMusicPanel> createState() => _LocalMusicPanelState();
 }
 
-class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel> {
+class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
+    with WidgetsBindingObserver {
   late _LocalMusicRoute _route;
   bool _catalogActionBusy = false;
 
@@ -92,6 +94,9 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel> {
     _route =
         widget.navigationController?._route ?? const _LocalMusicRoute.root();
     widget.navigationController?._attach(this);
+    if (AppPlatform.isIOS) {
+      WidgetsBinding.instance.addObserver(this);
+    }
   }
 
   @override
@@ -109,8 +114,18 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel> {
 
   @override
   void dispose() {
+    if (AppPlatform.isIOS) {
+      WidgetsBinding.instance.removeObserver(this);
+    }
     widget.navigationController?._detach(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && AppPlatform.isIOS) {
+      ref.invalidate(deviceAudioCatalogResultProvider);
+    }
   }
 
   void _openRoute(_LocalMusicRoute route) {
@@ -180,6 +195,7 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel> {
           return _LocalPermissionView(
             bottomContentPadding: widget.bottomContentPadding,
             busy: _catalogActionBusy,
+            openSettingsInstead: result.permissionRequiresSettings,
             onRequestPermission: () => _requestPermission(query),
           );
         }
@@ -625,12 +641,14 @@ class _DeviceAudioTrackCard extends StatelessWidget {
     final shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(appCardRadius),
       side: BorderSide(
-        color: isCurrent ? colors.primary : AppColors.cardBorderFor(context),
+        color: isCurrent
+            ? colors.primary
+            : AppColors.cardBorderFor(context, solidInLiquidGlass: true),
       ),
     );
     return Material(
       key: ValueKey('local-track-${track.id}'),
-      color: AppColors.cardSurfaceFor(context),
+      color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
       shape: shape,
       clipBehavior: Clip.antiAlias,
       child: ListTile(
@@ -690,11 +708,13 @@ class _LocalPermissionView extends ConsumerWidget {
   const _LocalPermissionView({
     required this.bottomContentPadding,
     required this.busy,
+    required this.openSettingsInstead,
     required this.onRequestPermission,
   });
 
   final double bottomContentPadding;
   final bool busy;
+  final bool openSettingsInstead;
   final VoidCallback onRequestPermission;
 
   @override
@@ -748,7 +768,11 @@ class _LocalPermissionView extends ConsumerWidget {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.folder_open_rounded),
-                      label: Text(strings.allowMusicAccess),
+                      label: Text(
+                        openSettingsInstead
+                            ? strings.openSettings
+                            : strings.allowMusicAccess,
+                      ),
                     ),
                   ],
                 ),

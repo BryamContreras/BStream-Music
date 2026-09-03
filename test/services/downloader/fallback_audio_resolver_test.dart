@@ -11,7 +11,7 @@ void main() {
       );
       final fallback = _FakeAudioResolver(
         result: const AudioStreamResolution(
-          source: AudioStreamSource.ytDlp,
+          source: AudioStreamSource.innerTubeFallback,
           streamUrl: 'file:///tmp/fallback.m4a',
         ),
       );
@@ -46,13 +46,13 @@ void main() {
       final resolver = FallbackAudioResolver([
         _FakeAudioResolver(
           result: AudioStreamResolution(
-            source: AudioStreamSource.youtubeExplode,
+            source: AudioStreamSource.innerTube,
             streamUrl: 'https://media.example/primary.m4a',
           ),
         ),
         _FakeAudioResolver(
           result: AudioStreamResolution(
-            source: AudioStreamSource.ytDlp,
+            source: AudioStreamSource.innerTubeFallback,
             streamUrl: 'https://media.example/fallback.m4a',
           ),
         ),
@@ -65,7 +65,7 @@ void main() {
           url: 'https://www.youtube.com/watch?v=video-id',
         ),
       );
-      expect(resolved.source, AudioStreamSource.youtubeExplode);
+      expect(resolved.source, AudioStreamSource.innerTube);
       expect(resolved.streamUrl, 'https://media.example/primary.m4a');
     });
 
@@ -76,7 +76,7 @@ void main() {
           _FailingAudioResolver(error: Exception('boom')),
           _FakeAudioResolver(
             result: AudioStreamResolution(
-              source: AudioStreamSource.ytDlp,
+              source: AudioStreamSource.innerTube,
               streamUrl: 'https://media.example/fallback.m4a',
             ),
           ),
@@ -89,7 +89,7 @@ void main() {
             url: 'https://www.youtube.com/watch?v=video-id',
           ),
         );
-        expect(resolved.source, AudioStreamSource.ytDlp);
+        expect(resolved.source, AudioStreamSource.innerTubeFallback);
         expect(resolved.streamUrl, 'https://media.example/fallback.m4a');
       },
     );
@@ -98,13 +98,13 @@ void main() {
       final resolver = FallbackAudioResolver([
         _FakeAudioResolver(
           result: const AudioStreamResolution(
-            source: AudioStreamSource.youtubeExplode,
+            source: AudioStreamSource.innerTube,
             streamUrl: '',
           ),
         ),
         _FakeAudioResolver(
           result: AudioStreamResolution(
-            source: AudioStreamSource.ytDlp,
+            source: AudioStreamSource.innerTubeFallback,
             streamUrl: 'https://media.example/fallback.m4a',
           ),
         ),
@@ -117,14 +117,14 @@ void main() {
           url: 'https://www.youtube.com/watch?v=video-id',
         ),
       );
-      expect(resolved.source, AudioStreamSource.ytDlp);
+      expect(resolved.source, AudioStreamSource.innerTubeFallback);
     });
 
     test('fallback-only mode skips the primary resolver', () async {
       final primary = _FailingAudioResolver(error: Exception('primary'));
       final fallback = _FakeAudioResolver(
         result: const AudioStreamResolution(
-          source: AudioStreamSource.ytDlp,
+          source: AudioStreamSource.innerTubeFallback,
           streamUrl: 'https://media.example/fallback.m4a',
         ),
       );
@@ -140,7 +140,7 @@ void main() {
         mode: AudioResolutionMode.fallbackOnly,
       );
 
-      expect(resolved.source, AudioStreamSource.ytDlp);
+      expect(resolved.source, AudioStreamSource.innerTubeFallback);
       expect(primary.resolveCalls, 0);
       expect(fallback.resolveCalls, 1);
     });
@@ -152,7 +152,7 @@ void main() {
         _FailingAudioResolver(error: failure),
         _FakeAudioResolver(
           result: const AudioStreamResolution(
-            source: AudioStreamSource.ytDlp,
+            source: AudioStreamSource.innerTubeFallback,
             streamUrl: 'https://media.example/fallback.m4a',
           ),
         ),
@@ -171,7 +171,7 @@ void main() {
       );
 
       expect(reports, hasLength(1));
-      expect(reports.single.source, AudioStreamSource.youtubeExplode);
+      expect(reports.single.source, AudioStreamSource.innerTube);
       expect(reports.single.error, same(failure));
     });
 

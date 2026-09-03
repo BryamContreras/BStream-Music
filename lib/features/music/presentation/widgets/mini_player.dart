@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/widgets/marquee_text.dart';
+import '../../../../core/widgets/liquid_glass_surface.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/local_track.dart';
@@ -25,8 +27,10 @@ double miniPlayerHeightFor(
   BuildContext context, {
   MiniPlayerMode mode = MiniPlayerMode.standard,
 }) {
-  final compactAndroid = Theme.of(context).platform == TargetPlatform.android;
-  final baseHeight = compactAndroid
+  final compactMobile = AppPlatform.isMobileTargetPlatform(
+    Theme.of(context).platform,
+  );
+  final baseHeight = compactMobile
       ? 65.0
       : AppPlatform.isDesktop
       ? 98.0
@@ -40,8 +44,10 @@ EdgeInsets _miniPlayerMarginFor(BuildContext context, MiniPlayerMode mode) {
   if (mode != MiniPlayerMode.capsule) {
     return EdgeInsets.zero;
   }
-  final compactAndroid = Theme.of(context).platform == TargetPlatform.android;
-  if (compactAndroid) {
+  final compactMobile = AppPlatform.isMobileTargetPlatform(
+    Theme.of(context).platform,
+  );
+  if (compactMobile) {
     return const EdgeInsets.fromLTRB(8, 5, 8, 8);
   }
   if (AppPlatform.isDesktop) {
@@ -56,6 +62,8 @@ class MiniPlayer extends ConsumerWidget {
     this.onOpenLyrics,
     this.mode = MiniPlayerMode.standard,
     this.backgroundMode = MiniPlayerBackgroundMode.artwork,
+    this.liquidGlassBackdropGroupKey,
+    this.liquidGlassBackdropMotion,
     super.key,
   });
 
@@ -63,6 +71,8 @@ class MiniPlayer extends ConsumerWidget {
   final VoidCallback? onOpenLyrics;
   final MiniPlayerMode mode;
   final MiniPlayerBackgroundMode backgroundMode;
+  final BackdropKey? liquidGlassBackdropGroupKey;
+  final ValueListenable<bool>? liquidGlassBackdropMotion;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -109,23 +119,23 @@ class MiniPlayer extends ConsumerWidget {
       ),
     );
     final theme = Theme.of(context);
-    final compactAndroid = theme.platform == TargetPlatform.android;
-    final usesDesktopLayout = AppPlatform.isDesktop && !compactAndroid;
+    final compactMobile = AppPlatform.isMobileTargetPlatform(theme.platform);
+    final usesDesktopLayout = AppPlatform.isDesktop && !compactMobile;
     final windowsLayout =
         usesDesktopLayout && MediaQuery.sizeOf(context).width >= 360;
-    final horizontalPadding = compactAndroid
+    final horizontalPadding = compactMobile
         ? 12.0
         : windowsLayout
         ? 12.0
         : 20.0;
-    final artworkSize = compactAndroid
+    final artworkSize = compactMobile
         ? 44.0
         : windowsLayout
         ? 64.0
         : 52.0;
     final isPlaying = presentation.status == PlayerStatus.playing;
-    final playControlSize = compactAndroid ? 50.0 : 54.0;
-    final playIconSize = compactAndroid
+    final playControlSize = compactMobile ? 50.0 : 54.0;
+    final playIconSize = compactMobile
         ? isPlaying
               ? 37.0
               : 45.0
@@ -136,9 +146,12 @@ class MiniPlayer extends ConsumerWidget {
         : 35.0;
     final minimumHeight = miniPlayerHeightFor(context);
     final isDark = theme.brightness == Brightness.dark;
+    final liquidLightTextColor = backgroundMode.isLiquidGlass && !isDark
+        ? Colors.black
+        : null;
     final capsule = mode == MiniPlayerMode.capsule;
     final capsuleMargin = _miniPlayerMarginFor(context, mode);
-    final capsuleRadius = compactAndroid
+    final capsuleRadius = compactMobile
         ? 28.0
         : AppPlatform.isDesktop
         ? 40.0
@@ -149,7 +162,7 @@ class MiniPlayer extends ConsumerWidget {
         presentation.status != PlayerStatus.idle &&
         presentation.status != PlayerStatus.stopped &&
         presentation.status != PlayerStatus.failed;
-    final compactErrorText = compactAndroid && presentation.hasError
+    final compactErrorText = compactMobile && presentation.hasError
         ? presentation.errorText ?? strings.playbackError
         : null;
     final visualIdentity = playbackVisualIdentity(
@@ -174,7 +187,7 @@ class MiniPlayer extends ConsumerWidget {
             circular: capsule,
           ),
           SizedBox(
-            width: compactAndroid
+            width: compactMobile
                 ? 8
                 : windowsLayout
                 ? 10
@@ -196,7 +209,9 @@ class MiniPlayer extends ConsumerWidget {
                     fontWeight: windowsLayout
                         ? FontWeight.w900
                         : FontWeight.w800,
-                    color: AppColors.playbackTitleFor(context),
+                    color:
+                        liquidLightTextColor ??
+                        AppColors.playbackTitleFor(context),
                     shadows: isDark
                         ? const [
                             Shadow(color: Color(0xAA000000), blurRadius: 8),
@@ -212,7 +227,8 @@ class MiniPlayer extends ConsumerWidget {
                   style: TextStyle(
                     fontSize: windowsLayout ? 13 : null,
                     color: compactErrorText == null
-                        ? AppColors.contentSubtitleFor(context)
+                        ? liquidLightTextColor ??
+                              AppColors.contentSubtitleFor(context)
                         : theme.colorScheme.error,
                     shadows: compactErrorText == null && isDark
                         ? const [
@@ -261,7 +277,7 @@ class MiniPlayer extends ConsumerWidget {
       tooltip: strings.previous,
       icon: Icons.skip_previous_rounded,
       dimension: 48,
-      iconSize: compactAndroid ? 28 : 30,
+      iconSize: compactMobile ? 28 : 30,
       onPressed: () =>
           ref.read(playerControllerProvider.notifier).playPrevious(),
     );
@@ -270,7 +286,7 @@ class MiniPlayer extends ConsumerWidget {
       tooltip: strings.next,
       icon: Icons.skip_next_rounded,
       dimension: 48,
-      iconSize: compactAndroid ? 28 : 30,
+      iconSize: compactMobile ? 28 : 30,
       onPressed: () => ref.read(playerControllerProvider.notifier).playNext(),
     );
     final desktopShuffle = _MiniTransportButton(
@@ -318,26 +334,36 @@ class MiniPlayer extends ConsumerWidget {
     return Container(
       key: const ValueKey('mini-player-container'),
       margin: capsuleMargin,
-      clipBehavior: backgroundMode == MiniPlayerBackgroundMode.transparent
+      // LiquidGlassSurface already clips its complete child to the same
+      // superellipse. Avoid a second anti-aliased clip around that layer.
+      clipBehavior: backgroundMode.isLiquidGlass
+          ? Clip.none
+          : backgroundMode.usesBackdrop
           ? Clip.antiAlias
           : Clip.antiAliasWithSaveLayer,
       decoration: capsule
           ? BoxDecoration(
               borderRadius: BorderRadius.circular(capsuleRadius),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.08),
-                  blurRadius: compactAndroid ? 6 : 8,
-                  offset: Offset(0, compactAndroid ? 1 : 2),
-                ),
-              ],
+              // LiquidGlassSurface already owns the capsule's optical depth.
+              // Avoid layering a second blurred shadow on the same geometry.
+              boxShadow: backgroundMode.isLiquidGlass
+                  ? null
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(
+                          alpha: isDark ? 0.18 : 0.08,
+                        ),
+                        blurRadius: compactMobile ? 6 : 8,
+                        offset: Offset(0, compactMobile ? 1 : 2),
+                      ),
+                    ],
             )
           : BoxDecoration(
-              borderRadius: compactAndroid
+              borderRadius: compactMobile
                   ? const BorderRadius.vertical(top: Radius.circular(10))
                   : BorderRadius.zero,
             ),
-      foregroundDecoration: capsule
+      foregroundDecoration: capsule && !backgroundMode.isLiquidGlass
           ? BoxDecoration(
               borderRadius: BorderRadius.circular(capsuleRadius),
               border: Border.all(
@@ -349,238 +375,315 @@ class MiniPlayer extends ConsumerWidget {
               ),
             )
           : null,
-      child: Material(
-        key: const ValueKey('mini-player-frame'),
-        color: Colors.transparent,
-        child: Stack(
-          children: [
-            if (backgroundMode == MiniPlayerBackgroundMode.accent)
-              Positioned.fill(
-                child: _MiniAccentBackground(
-                  legacyDesktopKey: usesDesktopLayout,
-                ),
-              )
-            else if (backgroundMode == MiniPlayerBackgroundMode.artwork)
-              Positioned.fill(
-                key: const ValueKey('mini-player-artwork-background'),
-                child: _MiniBlurBackground(
-                  url: hasTrack ? artworkSource : null,
-                  fallbackUrl: artworkFallbackSource,
-                ),
-              ),
-            if (backgroundMode == MiniPlayerBackgroundMode.artwork)
-              Positioned.fill(
-                child: DecoratedBox(
-                  key: const ValueKey('mini-player-background-overlay'),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                      colors: hasTrack
-                          ? isDark
-                                ? const [
-                                    Color(0xDA0A100C),
-                                    Color(0x99112816),
-                                    Color(0xE407100A),
-                                  ]
-                                : const [
-                                    Color(0xEAF5F8F6),
-                                    Color(0xDDEAF3ED),
-                                    Color(0xEEF5F8F6),
-                                  ]
-                          : isDark
-                          ? const [
-                              Color(0xE60B0B0B),
-                              Color(0xD4141414),
-                              Color(0xEB090909),
-                            ]
-                          : const [
-                              Color(0xEDEFEFEF),
-                              Color(0xE2E5E5E5),
-                              Color(0xF2F2F2F2),
-                            ],
+      child: _MiniPlayerBackgroundFrame(
+        backgroundMode: backgroundMode,
+        borderRadius: capsule
+            ? BorderRadius.circular(capsuleRadius)
+            : compactMobile
+            ? const BorderRadius.vertical(top: Radius.circular(10))
+            : BorderRadius.zero,
+        backdropGroupKey: liquidGlassBackdropGroupKey,
+        backdropMotion: liquidGlassBackdropMotion,
+        child: Material(
+          key: const ValueKey('mini-player-frame'),
+          color: Colors.transparent,
+          child: Stack(
+            children: [
+              if (backgroundMode == MiniPlayerBackgroundMode.accent)
+                Positioned.fill(
+                  child: _MiniAccentBackground(
+                    legacyDesktopKey: usesDesktopLayout,
+                  ),
+                )
+              else if (backgroundMode == MiniPlayerBackgroundMode.artwork)
+                Positioned.fill(
+                  key: const ValueKey('mini-player-artwork-background'),
+                  child: TrackChangeTransition(
+                    key: const ValueKey(
+                      'mini-player-background-transition-state',
+                    ),
+                    switcherKey: const ValueKey(
+                      'mini-player-background-track-transition',
+                    ),
+                    identity:
+                        'mini-background:$visualIdentity\u0000${artworkSource ?? ''}'
+                        '\u0000${artworkFallbackSource ?? ''}',
+                    duration: const Duration(milliseconds: 520),
+                    child: RepaintBoundary(
+                      child: _MiniBlurBackground(
+                        url: hasTrack ? artworkSource : null,
+                        fallbackUrl: artworkFallbackSource,
+                      ),
                     ),
                   ),
                 ),
-              ),
-            if (backgroundMode == MiniPlayerBackgroundMode.transparent)
-              const Positioned.fill(child: _MiniGlassBackground()),
-            if (!capsule)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: compactAndroid ? 11 : 1,
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    key: const ValueKey('mini-player-accent-top-border'),
-                    painter: _MiniAccentBorderPainter(
-                      color: AppColors.downloadAccentFor(
-                        context,
-                      ).withValues(alpha: 0.22),
-                      cornerRadius: compactAndroid ? 10 : 0,
+              if (backgroundMode == MiniPlayerBackgroundMode.artwork)
+                Positioned.fill(
+                  child: DecoratedBox(
+                    key: const ValueKey('mini-player-background-overlay'),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                        colors: hasTrack
+                            ? isDark
+                                  ? const [
+                                      Color(0xDA0A100C),
+                                      Color(0x99112816),
+                                      Color(0xE407100A),
+                                    ]
+                                  : const [
+                                      Color(0xEAF5F8F6),
+                                      Color(0xDDEAF3ED),
+                                      Color(0xEEF5F8F6),
+                                    ]
+                            : isDark
+                            ? const [
+                                Color(0xE60B0B0B),
+                                Color(0xD4141414),
+                                Color(0xEB090909),
+                              ]
+                            : const [
+                                Color(0xEDEFEFEF),
+                                Color(0xE2E5E5E5),
+                                Color(0xF2F2F2F2),
+                              ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            if (!windowsLayout && !capsule)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _MiniProgress(
-                  key: const ValueKey('mini-player-progress'),
-                  height: 2,
-                  rounded: true,
-                ),
-              ),
-            InkWell(
-              onTap: onOpenPlayer,
-              child: ConstrainedBox(
-                key: const ValueKey('mini-player-surface'),
-                constraints: BoxConstraints(minHeight: minimumHeight),
-                child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: horizontalPadding,
-                    vertical: windowsLayout ? 1 : 4,
+              if (backgroundMode == MiniPlayerBackgroundMode.transparent)
+                const Positioned.fill(child: _MiniGlassBackground()),
+              if (!capsule && !backgroundMode.isLiquidGlass)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: compactMobile ? 11 : 1,
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      key: const ValueKey('mini-player-accent-top-border'),
+                      painter: _MiniAccentBorderPainter(
+                        color: AppColors.downloadAccentFor(
+                          context,
+                        ).withValues(alpha: 0.22),
+                        cornerRadius: compactMobile ? 10 : 0,
+                      ),
+                    ),
                   ),
-                  child: windowsLayout
-                      ? Column(
-                          children: [
-                            Expanded(
-                              child: Row(
-                                children: [
-                                  Expanded(flex: 3, child: metadata),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    flex: 4,
-                                    child: Center(
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(top: 6),
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                desktopShuffle,
-                                                previousControl,
-                                                primaryControl,
-                                                nextControl,
-                                                desktopRepeat,
-                                              ],
-                                            ),
-                                            const SizedBox(height: 0),
-                                            if (!capsule)
-                                              Align(
-                                                alignment: Alignment.center,
-                                                child: ConstrainedBox(
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                        maxWidth: 480,
-                                                      ),
-                                                  child: const SizedBox(
-                                                    width: double.infinity,
-                                                    child: _MiniProgress(
-                                                      interactive: true,
-                                                      key: ValueKey(
-                                                        'mini-player-progress',
+                ),
+              if (!windowsLayout && !capsule)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _MiniProgress(
+                    key: const ValueKey('mini-player-progress'),
+                    height: 2,
+                    rounded: true,
+                  ),
+                ),
+              InkWell(
+                onTap: onOpenPlayer,
+                child: ConstrainedBox(
+                  key: const ValueKey('mini-player-surface'),
+                  constraints: BoxConstraints(minHeight: minimumHeight),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: horizontalPadding,
+                      vertical: windowsLayout ? 1 : 4,
+                    ),
+                    child: windowsLayout
+                        ? Column(
+                            children: [
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Expanded(flex: 3, child: metadata),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      flex: 4,
+                                      child: Center(
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 6,
+                                          ),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  desktopShuffle,
+                                                  previousControl,
+                                                  primaryControl,
+                                                  nextControl,
+                                                  desktopRepeat,
+                                                ],
+                                              ),
+                                              const SizedBox(height: 0),
+                                              if (!capsule)
+                                                Align(
+                                                  alignment: Alignment.center,
+                                                  child: ConstrainedBox(
+                                                    constraints:
+                                                        const BoxConstraints(
+                                                          maxWidth: 480,
+                                                        ),
+                                                    child: SizedBox(
+                                                      width: double.infinity,
+                                                      child: _MiniProgress(
+                                                        interactive: true,
+                                                        textColor:
+                                                            liquidLightTextColor,
+                                                        key: ValueKey(
+                                                          'mini-player-progress',
+                                                        ),
                                                       ),
                                                     ),
                                                   ),
                                                 ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      flex: 3,
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 8,
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          children: [
+                                            if (presentation.hasError)
+                                              Flexible(
+                                                child: Text(
+                                                  presentation.errorText ??
+                                                      strings.playbackError,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  textAlign: TextAlign.right,
+                                                  style: TextStyle(
+                                                    color:
+                                                        theme.colorScheme.error,
+                                                  ),
+                                                ),
                                               ),
+                                            if (presentation.hasError)
+                                              const SizedBox(width: 12),
+                                            desktopLyrics,
+                                            const SizedBox(width: 4),
+                                            Flexible(child: desktopVolume),
                                           ],
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    flex: 3,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(right: 8),
-                                      child: Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.end,
-                                        children: [
-                                          if (presentation.hasError)
-                                            Flexible(
-                                              child: Text(
-                                                presentation.errorText ??
-                                                    strings.playbackError,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                textAlign: TextAlign.right,
-                                                style: TextStyle(
-                                                  color:
-                                                      theme.colorScheme.error,
-                                                ),
-                                              ),
-                                            ),
-                                          if (presentation.hasError)
-                                            const SizedBox(width: 12),
-                                          desktopLyrics,
-                                          const SizedBox(width: 4),
-                                          Flexible(child: desktopVolume),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
-                        )
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            if (compactAndroid) {
-                              final showPosition = constraints.maxWidth >= 280;
+                            ],
+                          )
+                        : LayoutBuilder(
+                            builder: (context, constraints) {
+                              if (compactMobile) {
+                                final showPosition =
+                                    constraints.maxWidth >= 280;
+                                return Row(
+                                  children: [
+                                    Expanded(child: metadata),
+                                    if (showPosition)
+                                      SizedBox(
+                                        width: 42,
+                                        child: _MiniPositionText(
+                                          color: liquidLightTextColor,
+                                        ),
+                                      ),
+                                    primaryControl,
+                                  ],
+                                );
+                              }
+
                               return Row(
                                 children: [
                                   Expanded(child: metadata),
-                                  if (showPosition)
-                                    const SizedBox(
-                                      width: 42,
-                                      child: _MiniPositionText(),
+                                  if (presentation.hasError)
+                                    Flexible(
+                                      child: Text(
+                                        presentation.errorText ??
+                                            strings.playbackError,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: theme.colorScheme.error,
+                                        ),
+                                      ),
                                     ),
+                                  const SizedBox(width: 14),
+                                  SizedBox(
+                                    width: 54,
+                                    child: _MiniPositionText(
+                                      color: liquidLightTextColor,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
                                   primaryControl,
                                 ],
                               );
-                            }
-
-                            return Row(
-                              children: [
-                                Expanded(child: metadata),
-                                if (presentation.hasError)
-                                  Flexible(
-                                    child: Text(
-                                      presentation.errorText ??
-                                          strings.playbackError,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: theme.colorScheme.error,
-                                      ),
-                                    ),
-                                  ),
-                                const SizedBox(width: 14),
-                                const SizedBox(
-                                  width: 54,
-                                  child: _MiniPositionText(),
-                                ),
-                                const SizedBox(width: 12),
-                                primaryControl,
-                              ],
-                            );
-                          },
-                        ),
+                            },
+                          ),
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _MiniPlayerBackgroundFrame extends StatelessWidget {
+  const _MiniPlayerBackgroundFrame({
+    required this.backgroundMode,
+    required this.borderRadius,
+    required this.backdropGroupKey,
+    required this.backdropMotion,
+    required this.child,
+  });
+
+  final MiniPlayerBackgroundMode backgroundMode;
+  final BorderRadius borderRadius;
+  final BackdropKey? backdropGroupKey;
+  final ValueListenable<bool>? backdropMotion;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!backgroundMode.isLiquidGlass) {
+      return child;
+    }
+    Widget glass(bool moving, Widget child) => LiquidGlassSurface(
+      key: const ValueKey('mini-player-liquid-glass-background'),
+      borderRadius: borderRadius,
+      blurSigma: 8,
+      intensity: 1,
+      backdropGroupKey: backdropGroupKey,
+      backdropMotion: moving,
+      child: child,
+    );
+    final motion = backdropMotion;
+    if (motion == null) {
+      return glass(false, child);
+    }
+    return ValueListenableBuilder<bool>(
+      valueListenable: motion,
+      builder: (context, moving, child) => glass(moving, child!),
+      child: child,
     );
   }
 }
@@ -1048,12 +1151,14 @@ class _MiniProgress extends ConsumerStatefulWidget {
     this.interactive = false,
     this.height = 3,
     this.rounded = false,
+    this.textColor,
     super.key,
   });
 
   final bool interactive;
   final double height;
   final bool rounded;
+  final Color? textColor;
 
   @override
   ConsumerState<_MiniProgress> createState() => _MiniProgressState();
@@ -1152,6 +1257,7 @@ class _MiniProgressState extends ConsumerState<_MiniProgress> {
               duration: position,
               alignment: Alignment.centerRight,
               textAlign: TextAlign.right,
+              color: widget.textColor,
             ),
           ),
           const SizedBox(width: 4),
@@ -1197,6 +1303,7 @@ class _MiniProgressState extends ConsumerState<_MiniProgress> {
               duration: duration,
               alignment: Alignment.centerLeft,
               textAlign: TextAlign.left,
+              color: widget.textColor,
             ),
           ),
         ],
@@ -1210,12 +1317,14 @@ class _MiniTimeText extends StatelessWidget {
     required this.duration,
     required this.alignment,
     required this.textAlign,
+    this.color,
     super.key,
   });
 
   final Duration? duration;
   final Alignment alignment;
   final TextAlign textAlign;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -1228,7 +1337,7 @@ class _MiniTimeText extends StatelessWidget {
         softWrap: false,
         textAlign: textAlign,
         style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: AppColors.contentSubtitleFor(context),
+          color: color ?? AppColors.contentSubtitleFor(context),
         ),
       ),
     );
@@ -1236,7 +1345,9 @@ class _MiniTimeText extends StatelessWidget {
 }
 
 class _MiniPositionText extends ConsumerWidget {
-  const _MiniPositionText();
+  const _MiniPositionText({this.color});
+
+  final Color? color;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1249,6 +1360,7 @@ class _MiniPositionText extends ConsumerWidget {
       duration: Duration(seconds: seconds),
       alignment: Alignment.centerRight,
       textAlign: TextAlign.right,
+      color: color,
     );
   }
 }

@@ -27,7 +27,7 @@ void main() {
       r'#define MyAppVersion "([0-9]+\.[0-9]+\.[0-9]+)"',
     ).firstMatch(windowsInstaller)?.group(1);
 
-    expect(pubspecVersion, '1.2.5+125');
+    expect(pubspecVersion, '1.2.6+126');
     expect(readmeVersion, pubspecVersion);
     expect(changelogVersion, pubspecVersion);
     expect(runtimeVersion, AppConstants.appVersion);
@@ -48,6 +48,31 @@ void main() {
     expect(
       AppConstants.githubRepositoryUrl,
       'https://github.com/BryamContreras/BStream-Music',
+    );
+  });
+
+  test('uses only the in-process Dart YouTube resolver architecture', () {
+    final pubspec = File('pubspec.yaml').readAsStringSync().toLowerCase();
+    final lockfile = File('pubspec.lock').readAsStringSync().toLowerCase();
+    final nightlyWorkflow = File(
+      '.github/workflows/nightly-smoke.yml',
+    ).readAsStringSync();
+
+    expect(pubspec, isNot(contains('youtube_explode_dart')));
+    expect(lockfile, isNot(contains('youtube_explode_dart')));
+    expect(pubspec, isNot(contains('yt-dlp')));
+    expect(lockfile, isNot(contains('yt-dlp')));
+    expect(
+      nightlyWorkflow,
+      contains('integration_test/innertube_playback_live_test.dart'),
+    );
+    expect(
+      nightlyWorkflow,
+      contains('--dart-define=BSTREAM_LIVE_INNERTUBE=true'),
+    );
+    expect(
+      nightlyWorkflow,
+      isNot(contains('youtube_explode_playback_test.dart')),
     );
   });
 }

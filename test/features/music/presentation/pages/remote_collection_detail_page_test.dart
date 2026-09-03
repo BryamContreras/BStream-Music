@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
@@ -584,6 +585,80 @@ void main() {
       appBar.systemOverlayStyle?.statusBarColor,
       Theme.of(tester.element(surfaceFinder)).colorScheme.surface,
     );
+  });
+
+  testWidgets('liquid glass detail surface uses a solid tonal app bar', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(top: 24);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPadding();
+    });
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => _tracks,
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: tracksProvider,
+        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final blurFinder = find.byKey(
+      const ValueKey('remote-collection-app-bar-blur'),
+    );
+    final surfaceFinder = find.byKey(
+      const ValueKey('remote-collection-app-bar-surface'),
+    );
+    final statusBarFinder = find.byKey(
+      const ValueKey('remote-collection-status-bar-surface'),
+    );
+    final appBarFinder = find.byKey(
+      const ValueKey('remote-collection-app-bar'),
+    );
+    final tonalSurface = Theme.of(
+      tester.element(appBarFinder),
+    ).colorScheme.surface;
+
+    expect(blurFinder, findsNothing);
+    expect(
+      find.descendant(
+        of: appBarFinder,
+        matching: find.byType(LiquidGlassSurface),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: appBarFinder, matching: find.byType(BackdropFilter)),
+      findsNothing,
+    );
+    final statusBarRect = tester.getRect(statusBarFinder);
+    final toolbarRect = tester.getRect(surfaceFinder);
+    expect(statusBarRect.height, 24);
+    expect(statusBarRect.bottom, toolbarRect.top);
+    expect(toolbarRect.height, kToolbarHeight);
+
+    final decoration =
+        tester.widget<DecoratedBox>(surfaceFinder).decoration as BoxDecoration;
+    expect(decoration.color, tonalSurface);
+    expect(decoration.gradient, isNull);
+    expect(decoration.border, isNull);
+    final statusBarFill = tester.widget<ColoredBox>(
+      find.descendant(of: statusBarFinder, matching: find.byType(ColoredBox)),
+    );
+    expect(statusBarFill.color, tonalSurface);
+    final appBar = tester.widget<AppBar>(appBarFinder);
+    expect(appBar.forceMaterialTransparency, isFalse);
+    expect(appBar.backgroundColor, tonalSurface);
+    expect(appBar.systemOverlayStyle?.statusBarColor, tonalSurface);
   });
 
   testWidgets(

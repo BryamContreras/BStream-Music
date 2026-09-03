@@ -1,6 +1,7 @@
 import 'dart:ui' show SemanticsRole;
 
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/presentation/widgets/glass_popup_menu_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -46,7 +47,9 @@ void main() {
         )
         .firstWhere((material) => material.color == Colors.transparent);
     expect(popupMaterial.surfaceTintColor, Colors.transparent);
-    expect(popupMaterial.clipBehavior, Clip.antiAlias);
+    expect(popupMaterial.clipBehavior, Clip.none);
+    expect(popupMaterial.elevation, 0);
+    expect(popupMaterial.shadowColor, Colors.transparent);
 
     final surfaceRect = tester.getRect(surface);
     final anchorRect = tester.getRect(anchor);
@@ -103,18 +106,80 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('liquid menu uses one reflective perimeter sheet', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _menuHarness(
+        backgroundMode: SurfaceBackgroundMode.liquidGlass,
+        onSelected: (_) {},
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('test-glass-menu-anchor')));
+    await tester.pumpAndSettle();
+
+    final liquidGlass = find.byType(LiquidGlassSurface);
+    expect(liquidGlass, findsOneWidget);
+    final surface = tester.widget<LiquidGlassSurface>(liquidGlass);
+    expect(surface.blurSigma, 8);
+    expect(surface.intensity, 1);
+    expect(surface.edgeTreatment, LiquidGlassEdgeTreatment.perimeter);
+    expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
+    expect(find.byKey(LiquidGlassSurface.opticsKey), findsOneWidget);
+    expect(find.byKey(LiquidGlassSurface.shadowKey), findsOneWidget);
+
+    final panel = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('glass-popup-menu-surface')),
+    );
+    final decoration = panel.decoration as BoxDecoration;
+    expect(decoration.color, Colors.transparent);
+    expect(decoration.gradient, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('liquid menu energizes its glass while the route animates', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _menuHarness(
+        backgroundMode: SurfaceBackgroundMode.liquidGlass,
+        onSelected: (_) {},
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('test-glass-menu-anchor')));
+    await tester.pump();
+
+    LiquidGlassSurface glass() =>
+        tester.widget<LiquidGlassSurface>(find.byType(LiquidGlassSurface));
+    expect(glass().backdropMotion, isTrue);
+
+    await tester.pumpAndSettle();
+    expect(glass().backdropMotion, isFalse);
+
+    await tester.tap(find.text('Primera'));
+    await tester.pump();
+    expect(find.byType(LiquidGlassSurface), findsOneWidget);
+    expect(glass().backdropMotion, isTrue);
+
+    await tester.pumpAndSettle();
+    expect(find.byType(LiquidGlassSurface), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Widget _menuHarness({
   required ValueChanged<_TestAction> onSelected,
   TextDirection textDirection = TextDirection.ltr,
+  SurfaceBackgroundMode backgroundMode = SurfaceBackgroundMode.transparent,
 }) {
   final theme = ThemeData(
     brightness: Brightness.dark,
     useMaterial3: true,
-    extensions: const <ThemeExtension<dynamic>>[
-      AppAccentTheme(accent: AppAccent.blue),
-      AppSurfaceTheme(backgroundMode: SurfaceBackgroundMode.transparent),
+    extensions: <ThemeExtension<dynamic>>[
+      const AppAccentTheme(accent: AppAccent.blue),
+      AppSurfaceTheme(backgroundMode: backgroundMode),
     ],
     popupMenuTheme: PopupMenuThemeData(
       color: const Color(0xE6101112),

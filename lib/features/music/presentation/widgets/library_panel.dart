@@ -11,6 +11,7 @@ import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/utils/duration_formatter.dart';
+import '../../../../core/utils/share_position_origin.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/player/player_service.dart';
@@ -193,8 +194,9 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
         ? ref.watch(tiktokLiveControllerProvider)
         : null;
     final strings = ref.watch(appStringsProvider);
-    final enablesTrackSelection =
-        Theme.of(context).platform == TargetPlatform.android;
+    final enablesTrackSelection = AppPlatform.isMobileTargetPlatform(
+      Theme.of(context).platform,
+    );
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final transitionDuration = disableAnimations
         ? Duration.zero
@@ -456,7 +458,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
 
   bool get _supportsTikTokLive =>
       AppPlatform.supportsTikTokLive ||
-      Theme.of(context).platform == TargetPlatform.android;
+      AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
 
   void _openPlaylist(String playlistId) {
     _selectedTrackIds.clear();
@@ -1069,18 +1071,21 @@ class _LiveQueueTile extends ConsumerWidget {
       sourceUrl: activeTrack.sourceUrl,
     );
     final statusColor = _statusColor(context, isCurrent: isCurrent);
-    final playButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
-    final playIconSize = AppPlatform.isAndroid ? 30.0 : 26.0;
+    final playButtonSize = AppPlatform.isMobile ? 48.0 : 52.0;
+    final playIconSize = AppPlatform.isMobile ? 30.0 : 26.0;
     final subtitleStyle = appListCardSubtitleStyle(context);
 
     final shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(8),
       side: isCurrent
           ? BorderSide(color: Theme.of(context).colorScheme.primary)
-          : BorderSide(color: AppColors.cardBorderFor(context)),
+          : BorderSide(
+              color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+            ),
     );
     return Material(
-      color: AppColors.cardSurfaceFor(context),
+      key: ValueKey('library-live-track-${item.id}'),
+      color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
       clipBehavior: Clip.antiAlias,
       shape: shape,
       child: ListTile(
@@ -1148,7 +1153,7 @@ class _LiveQueueTile extends ConsumerWidget {
                 icon: const Icon(Icons.play_arrow_rounded),
                 iconSize: playIconSize,
                 padding: EdgeInsets.zero,
-                style: AppPlatform.isAndroid
+                style: AppPlatform.isMobile
                     ? IconButton.styleFrom(
                         fixedSize: Size.square(playButtonSize),
                         minimumSize: Size.square(playButtonSize),
@@ -1528,10 +1533,10 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
         ref
             .watch(localTrackAudioAvailabilityProvider(localTrack))
             .maybeWhen(data: (available) => available, orElse: () => true);
-    final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
+    final menuIconSize = AppPlatform.isMobile ? 32.0 : 28.0;
     final menuIconColor = AppColors.menuIconFor(context);
     final borderRadius = BorderRadius.circular(appCardRadius);
-    final baseColor = appListCardSurface(context);
+    final baseColor = appListCardSurface(context, solidInLiquidGlass: true);
     final activeColor = Color.alphaBlend(
       colors.primary.withValues(alpha: 0.13),
       baseColor,
@@ -1552,7 +1557,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
           border: Border.all(
             color: isCurrent || _hovered
                 ? colors.primary
-                : appListCardBorder(context),
+                : appListCardBorder(context, solidInLiquidGlass: true),
             width: isCurrent || _hovered ? 1.4 : 1,
           ),
         ),
@@ -2206,9 +2211,9 @@ class _PlaylistMenu extends ConsumerWidget {
         isAuthenticated &&
         playlist.id != Playlist.favoritesId;
     final canShare = canShareFromCachedBinding || canResolveShareOnDemand;
-    final buttonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
-    final buttonWidth = AppPlatform.isAndroid ? 36.0 : 40.0;
-    final iconSize = AppPlatform.isAndroid ? 32.0 : 24.0;
+    final buttonSize = AppPlatform.isMobile ? 48.0 : 52.0;
+    final buttonWidth = AppPlatform.isMobile ? 36.0 : 40.0;
+    final iconSize = AppPlatform.isMobile ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
     return SizedBox(
       width: buttonWidth,
@@ -2301,12 +2306,6 @@ class _PlaylistMenu extends ConsumerWidget {
 
   Future<void> _sharePlaylist(BuildContext context, WidgetRef ref) async {
     final strings = ref.read(appStringsProvider);
-    Rect? sharePositionOrigin;
-    final renderObject = context.findRenderObject();
-    if (renderObject is RenderBox && renderObject.attached) {
-      sharePositionOrigin =
-          renderObject.localToGlobal(Offset.zero) & renderObject.size;
-    }
     late final Map<String, YouTubeMusicShareablePlaylistBinding> bindings;
     try {
       bindings = await ref.read(
@@ -2384,13 +2383,16 @@ class _PlaylistMenu extends ConsumerWidget {
     }
 
     try {
+      if (!context.mounted) return;
       await service.sharePlaylist(
         remotePlaylistId: binding.remotePlaylistId,
         playlistName: playlist.name,
         message: strings.sharePlaylistMessage(playlist.name),
         title: strings.sharePlaylistTitle,
         subject: strings.sharePlaylistTitle,
-        sharePositionOrigin: sharePositionOrigin,
+        // Recalculate after any visibility dialog/network wait so iPad never
+        // receives a stale popover anchor after a rotation or layout change.
+        sharePositionOrigin: sharePositionOriginForContext(context),
       );
     } catch (error) {
       debugPrint('Could not share synchronized playlist: $error');
@@ -3097,15 +3099,18 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
     final colors = Theme.of(context).colorScheme;
     final artwork = preferredLocalTrackArtworkSource(track);
-    final menuButtonSize = AppPlatform.isAndroid ? 48.0 : 52.0;
-    final menuButtonWidth = AppPlatform.isAndroid ? 36.0 : 40.0;
-    final menuIconSize = AppPlatform.isAndroid ? 32.0 : 28.0;
+    final menuButtonSize = AppPlatform.isMobile ? 48.0 : 52.0;
+    final menuButtonWidth = AppPlatform.isMobile ? 36.0 : 40.0;
+    final menuIconSize = AppPlatform.isMobile ? 32.0 : 28.0;
     final menuItemIconColor = AppColors.menuIconFor(context);
     final localAudioAvailable = ref
         .watch(localTrackAudioAvailabilityProvider(track))
         .maybeWhen(data: (available) => available, orElse: () => true);
     final borderRadius = BorderRadius.circular(appCardRadius);
-    final baseColor = AppColors.cardSurfaceFor(context);
+    final baseColor = AppColors.cardSurfaceFor(
+      context,
+      solidInLiquidGlass: true,
+    );
     final resolvedSurfaceColor = selected
         ? Color.alphaBlend(colors.primary.withValues(alpha: 0.14), baseColor)
         : isCurrent
@@ -3117,7 +3122,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
         ? colors.primary
         : _hovered
         ? colors.primary
-        : AppColors.cardBorderFor(context);
+        : AppColors.cardBorderFor(context, solidInLiquidGlass: true);
     return Semantics(
       selected: selectionActive ? selected : null,
       container: true,

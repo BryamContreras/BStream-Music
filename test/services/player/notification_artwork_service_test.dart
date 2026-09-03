@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:bstream_music/core/utils/image_source.dart';
 import 'package:bstream_music/services/player/just_audio_player_service.dart';
 import 'package:bstream_music/services/player/notification_artwork_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -127,6 +128,45 @@ void main() {
 
     expect(uri, isNotNull);
     expect(await _get(uri!), orderedEquals(original));
+  });
+
+  test('proxies bounded iOS Media Library artwork for Now Playing', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'bstream-notification-artwork-',
+    );
+    final fixture = image.Image(width: 480, height: 320)
+      ..clear(image.ColorRgb8(12, 180, 90));
+    var requests = 0;
+    final service = NotificationArtworkService(
+      cacheDirectoryProvider: () async =>
+          Directory('${root.path}${Platform.pathSeparator}notification-cache'),
+      deviceAudioArtworkLoader: (audioUri, targetWidth) async {
+        requests++;
+        expect(audioUri, 'ipod-library://item/item.m4a?id=42');
+        expect(targetWidth, 320);
+        return Uint8List.fromList(image.encodePng(fixture));
+      },
+    );
+    addTearDown(() async {
+      await service.dispose();
+      if (await root.exists()) {
+        await root.delete(recursive: true);
+      }
+    });
+
+    await service.initialize();
+    final source = deviceAudioArtworkSourceForUri(
+      'ipod-library://item/item.m4a?id=42',
+    );
+    final uri = service.uriFor(source);
+
+    expect(uri, isNotNull);
+    final bytes = await _get(uri!);
+    final decoded = image.decodeJpg(bytes);
+    expect(decoded, isNotNull);
+    expect(decoded!.width, 320);
+    expect(decoded.height, 320);
+    expect(requests, 1);
   });
 
   test(
