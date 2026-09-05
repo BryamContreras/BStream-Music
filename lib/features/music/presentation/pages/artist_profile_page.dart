@@ -564,6 +564,7 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
             ?release.year?.trim().isEmpty == false ? release.year : null,
           ],
           fallbackIcon: Icons.album_rounded,
+          useCollectionArtworkForTrackFallback: true,
           queueSourceId: 'artist:${widget.artistBrowseId}:${release.browseId}',
           tracksProvider: homeAlbumTracksProvider(release.browseId),
           emptyMessage: strings.albumWithoutSongs,

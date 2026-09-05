@@ -1,10 +1,49 @@
 import 'package:bstream_music/core/utils/image_source.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
+import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playlist_artwork.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('remote song artwork prefers its catalog cover', () {
+    const track = TrackInfo(
+      id: 'video000001',
+      title: 'Song',
+      artist: 'Artist',
+      url: 'https://youtube.com/watch?v=video000001',
+      thumbnailUrl: 'https://i.ytimg.com/vi/video000001/hq720.jpg',
+      catalogThumbnailUrl: 'https://img.test/original-album-cover.jpg',
+    );
+
+    final artwork = preferredRemoteTrackArtworkSource(track);
+
+    expect(artwork?.source, 'https://img.test/original-album-cover.jpg');
+    expect(
+      artwork?.fallbackSource,
+      'https://i.ytimg.com/vi/video000001/hq720.jpg',
+    );
+  });
+
+  test('video result artwork keeps the video thumbnail first', () {
+    const track = TrackInfo(
+      id: 'video000001',
+      title: 'Official video',
+      artist: 'Artist',
+      url: 'https://youtube.com/watch?v=video000001',
+      thumbnailUrl: 'https://i.ytimg.com/vi/video000001/hq720.jpg',
+      catalogThumbnailUrl: 'https://img.test/search-video-frame.jpg',
+    );
+
+    final artwork = preferredRemoteTrackArtworkSource(
+      track,
+      preferCatalogArtwork: false,
+    );
+
+    expect(artwork?.source, 'https://i.ytimg.com/vi/video000001/hq720.jpg');
+    expect(artwork?.fallbackSource, 'https://img.test/search-video-frame.jpg');
+  });
+
   test('local playlist artwork prefers the canonical catalog cover', () {
     final track = LocalTrack(
       id: 'local-track',

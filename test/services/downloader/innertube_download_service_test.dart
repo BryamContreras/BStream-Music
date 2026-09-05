@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:bstream_music/core/errors/app_exception.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
+import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/services/downloader/http_audio_transfer.dart';
 import 'package:bstream_music/services/downloader/innertube_download_service.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
@@ -361,6 +363,147 @@ void main() {
   });
 
   test(
+    'uses bounded URL ranges for GoogleVideo and reuses a supplied filename',
+    () async {
+      final catalog = _Catalog();
+      final transfer = _RecordingAudioTransfer();
+      final playback = InnerTubePlaybackService(
+        transport: _PlayerTransport(
+          'https://rr1---sn.test.googlevideo.com/videoplayback?c=IOS',
+        ),
+        validator: _AlwaysValidStream(),
+        router: InnerTubeClientRouter(
+          profiles: const [InnerTubeClientRegistry.visionOS],
+        ),
+        maxRequestAttempts: 1,
+      );
+      final downloader = InnerTubeDownloadService(
+        playback: playback,
+        catalog: catalog,
+        transfer: transfer,
+      );
+      addTearDown(() async {
+        await downloader.dispose();
+        await playback.dispose();
+      });
+      final directory = await Directory.systemTemp.createTemp(
+        'bstream-innertube-ranged-download-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+
+      await downloader.downloadAudio(
+        'dQw4w9WgXcQ',
+        DownloadOptions(
+          outputDirectory: directory.path,
+          fileName: 'stable-library-name',
+        ),
+      );
+
+      expect(catalog.songLookups, 0);
+      expect(transfer.rangePlan?.totalBytes, 4096);
+      expect(
+        transfer.rangePlan?.transport,
+        HttpAudioRangeTransport.queryParameter,
+      );
+      expect(transfer.rangePlan?.maximumChunkBytes, 8 * 1024 * 1024);
+    },
+  );
+
+  test('uses bounded header ranges for Android GoogleVideo streams', () async {
+    final transfer = _RecordingAudioTransfer();
+    final playback = InnerTubePlaybackService(
+      transport: _PlayerTransport(
+        'https://rr1---sn.test.googlevideo.com/videoplayback?c=ANDROID',
+      ),
+      validator: _AlwaysValidStream(),
+      router: InnerTubeClientRouter(
+        profiles: const [InnerTubeClientRegistry.androidSdkless],
+      ),
+      maxRequestAttempts: 1,
+    );
+    final downloader = InnerTubeDownloadService(
+      playback: playback,
+      catalog: _Catalog(),
+      transfer: transfer,
+    );
+    addTearDown(() async {
+      await downloader.dispose();
+      await playback.dispose();
+    });
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream-innertube-android-range-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+
+    await downloader.downloadAudio(
+      'dQw4w9WgXcQ',
+      DownloadOptions(
+        outputDirectory: directory.path,
+        fileName: 'android-range',
+      ),
+    );
+
+    expect(transfer.rangePlan?.totalBytes, 4096);
+    expect(transfer.rangePlan?.transport, HttpAudioRangeTransport.header);
+  });
+
+  test('cancels one task and removes all partial transfer artifacts', () async {
+    final transfer = _CancellableAudioTransfer();
+    final playback = InnerTubePlaybackService(
+      transport: _PlayerTransport('https://media.example/audio'),
+      validator: _AlwaysValidStream(),
+      router: InnerTubeClientRouter(
+        profiles: const [InnerTubeClientRegistry.androidSdkless],
+      ),
+      maxRequestAttempts: 1,
+    );
+    final downloader = InnerTubeDownloadService(
+      playback: playback,
+      catalog: _Catalog(),
+      transfer: transfer,
+    );
+    addTearDown(() async {
+      await downloader.dispose();
+      await playback.dispose();
+    });
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream-innertube-cancel-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final statuses = <DownloadProgressStatus>[];
+    final subscription = downloader.progressStream.listen(
+      (progress) => statuses.add(progress.status),
+    );
+    addTearDown(subscription.cancel);
+
+    const taskId = 'cancel-this-task';
+    final download = downloader.downloadAudio(
+      'dQw4w9WgXcQ',
+      DownloadOptions(
+        outputDirectory: directory.path,
+        fileName: 'cancelled-track',
+        taskId: taskId,
+      ),
+    );
+    await transfer.started.future;
+
+    await downloader.cancelDownload(taskId);
+
+    await expectLater(
+      download,
+      throwsA(
+        isA<DownloaderException>().having(
+          (error) => error.code,
+          'code',
+          'download_cancelled',
+        ),
+      ),
+    );
+    expect(await directory.list().toList(), isEmpty);
+    expect(statuses, isNot(contains(DownloadProgressStatus.failed)));
+  });
+
+  test(
     'does not mistake an eleven-letter search term for a video ID',
     () async {
       final catalog = _Catalog();
@@ -396,10 +539,13 @@ final class _Catalog implements YouTubeMusicSearch, YouTubeMusicTrackLookup {
     artists: const ['BStream'],
   );
   final List<String> queries = <String>[];
+  int songLookups = 0;
 
   @override
-  Future<InnerTubeSong?> getSong(String videoId) async =>
-      videoId == song.videoId ? song : null;
+  Future<InnerTubeSong?> getSong(String videoId) async {
+    songLookups++;
+    return videoId == song.videoId ? song : null;
+  }
 
   @override
   Future<List<InnerTubeSong>> searchSongs(
@@ -408,6 +554,64 @@ final class _Catalog implements YouTubeMusicSearch, YouTubeMusicTrackLookup {
   }) async {
     queries.add(query);
     return <InnerTubeSong>[song];
+  }
+}
+
+final class _RecordingAudioTransfer extends HttpAudioTransfer {
+  _RecordingAudioTransfer() : super(maxRetries: 0);
+
+  HttpAudioRangePlan? rangePlan;
+
+  @override
+  Future<HttpAudioTransferResult> download({
+    required Uri uri,
+    required File destination,
+    Map<String, String> headers = const <String, String>{},
+    HttpAudioRangePlan? rangePlan,
+    HttpAudioTransferProgressCallback? onProgress,
+    HttpAudioTransferCancellationCallback? isCancelled,
+  }) async {
+    this.rangePlan = rangePlan;
+    await destination.parent.create(recursive: true);
+    await destination.writeAsBytes(const <int>[0x49, 0x44, 0x33, 1]);
+    return HttpAudioTransferResult(
+      file: destination,
+      length: 4,
+      attempts: 1,
+      resumed: false,
+    );
+  }
+}
+
+final class _CancellableAudioTransfer extends HttpAudioTransfer {
+  _CancellableAudioTransfer() : super(maxRetries: 0);
+
+  final started = Completer<void>();
+
+  @override
+  Future<HttpAudioTransferResult> download({
+    required Uri uri,
+    required File destination,
+    Map<String, String> headers = const <String, String>{},
+    HttpAudioRangePlan? rangePlan,
+    HttpAudioTransferProgressCallback? onProgress,
+    HttpAudioTransferCancellationCallback? isCancelled,
+  }) async {
+    await destination.parent.create(recursive: true);
+    await HttpAudioTransfer.partialFileFor(
+      destination,
+    ).writeAsBytes(const <int>[1, 2, 3], flush: true);
+    await File(
+      '${destination.path}.part.if-range',
+    ).writeAsString('etag\n"cancel-test"', flush: true);
+    if (!started.isCompleted) started.complete();
+    while (isCancelled?.call() != true) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    throw const HttpAudioTransferException(
+      'cancelled by test',
+      kind: HttpAudioTransferFailureKind.cancelled,
+    );
   }
 }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 /// Creates the [HttpClient] used for one transfer attempt.
 ///
@@ -13,6 +14,30 @@ typedef HttpAudioTransferProgressCallback =
 
 /// Returns `true` when an in-flight transfer is no longer useful.
 typedef HttpAudioTransferCancellationCallback = bool Function();
+
+/// How a bounded byte range is expressed to an audio CDN.
+enum HttpAudioRangeTransport { header, queryParameter }
+
+/// Splits one logical media entity into bounded sequential requests.
+///
+/// Some media CDNs intentionally pace an unbounded response near playback
+/// speed. Bounded ranges preserve the exact bytes while allowing the CDN to
+/// serve downloads at the available network throughput.
+final class HttpAudioRangePlan {
+  const HttpAudioRangePlan({
+    required this.totalBytes,
+    required this.transport,
+    this.maximumChunkBytes = 8 * 1024 * 1024,
+    this.queryParameterName = 'range',
+  }) : assert(totalBytes > 0),
+       assert(maximumChunkBytes > 0),
+       assert(queryParameterName != '');
+
+  final int totalBytes;
+  final int maximumChunkBytes;
+  final HttpAudioRangeTransport transport;
+  final String queryParameterName;
+}
 
 enum HttpAudioTransferFailureKind {
   httpStatus,
@@ -158,11 +183,22 @@ class HttpAudioTransfer {
     required Uri uri,
     required File destination,
     Map<String, String> headers = const <String, String>{},
+    HttpAudioRangePlan? rangePlan,
     HttpAudioTransferProgressCallback? onProgress,
     HttpAudioTransferCancellationCallback? isCancelled,
   }) {
     if (uri.scheme != 'http' && uri.scheme != 'https') {
       throw ArgumentError.value(uri, 'uri', 'Only HTTP(S) URLs are supported.');
+    }
+    if (rangePlan != null &&
+        (rangePlan.totalBytes <= 0 ||
+            rangePlan.maximumChunkBytes <= 0 ||
+            rangePlan.queryParameterName.trim().isEmpty)) {
+      throw ArgumentError.value(
+        rangePlan,
+        'rangePlan',
+        'Range totals, chunk size, and query parameter must be valid.',
+      );
     }
 
     final destinationKey = _destinationKey(destination);
@@ -180,6 +216,7 @@ class HttpAudioTransfer {
       uri: uri,
       destination: destination,
       headers: Map<String, String>.unmodifiable(headers),
+      rangePlan: rangePlan,
       onProgress: onProgress,
       isCancelled: isCancelled,
     ).run();
@@ -208,6 +245,7 @@ class _HttpAudioTransferRun {
     required this.uri,
     required this.destination,
     required this.headers,
+    required this.rangePlan,
     required this.onProgress,
     required this.isCancelled,
   }) : partFile = HttpAudioTransfer.partialFileFor(destination),
@@ -219,6 +257,7 @@ class _HttpAudioTransferRun {
   final File partFile;
   final File validatorFile;
   final Map<String, String> headers;
+  final HttpAudioRangePlan? rangePlan;
   final HttpAudioTransferProgressCallback? onProgress;
   final HttpAudioTransferCancellationCallback? isCancelled;
 
@@ -308,170 +347,56 @@ class _HttpAudioTransferRun {
   }
 
   Future<int> _attempt(int attempt) async {
-    final requestedOffset = await _resumeOffset();
+    var requestedOffset = await _resumeOffset();
+    final segmented = rangePlan;
+    if (segmented != null && requestedOffset >= segmented.totalBytes) {
+      // The newly resolved representation must still be read before a complete
+      // old `.part` can be trusted. Restart instead of promoting bytes whose
+      // identity was only inferred from length.
+      await _discardPartialForRestart();
+      requestedOffset = 0;
+    }
+    var resumingExistingPartial = requestedOffset > 0;
     final client = owner.clientFactory();
     _activeClient = client;
     client.autoUncompress = false;
     client.connectionTimeout = _phaseTimeout(owner.connectionTimeout);
 
     try {
-      final request = await _awaitConnectionPhase(
-        client.getUrl(uri),
-        'Timed out while connecting to the audio host.',
-      );
-      _activeRequest = request;
-
-      for (final entry in headers.entries) {
-        // The Range value is derived from the actual .part length. Accepting a
-        // caller-provided value could append bytes at the wrong offset.
-        if (entry.key.toLowerCase() == HttpHeaders.rangeHeader) {
-          continue;
-        }
-        request.headers.set(entry.key, entry.value);
-      }
-      if (requestedOffset > 0) {
-        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$requestedOffset-');
-        if (!_containsHeader(headers, HttpHeaders.ifRangeHeader) &&
-            _entityValidator != null) {
-          request.headers.set(
-            HttpHeaders.ifRangeHeader,
-            _entityValidator!.value,
-          );
-        }
-      }
-
-      final response = await _awaitConnectionPhase(
-        request.close(),
-        'Timed out while waiting for audio response headers.',
-      );
-      _pollCancellation();
-      _throwIfTerminal();
-
-      if (response.statusCode == HttpStatus.requestedRangeNotSatisfiable &&
-          requestedOffset > 0) {
-        final remoteLength = _parseUnsatisfiedContentRangeTotal(
-          response.headers.value(HttpHeaders.contentRangeHeader),
+      while (true) {
+        _pollCancellation();
+        _throwIfTerminal();
+        final requestedRange = segmented == null
+            ? null
+            : _RequestedAudioRange(
+                start: requestedOffset,
+                end: math.min(
+                  segmented.totalBytes - 1,
+                  requestedOffset + segmented.maximumChunkBytes - 1,
+                ),
+                total: segmented.totalBytes,
+                transport: segmented.transport,
+                queryParameterName: segmented.queryParameterName,
+              );
+        final completedLength = await _requestAndConsume(
+          client,
+          attempt: attempt,
+          requestedOffset: requestedOffset,
+          requestedRange: requestedRange,
+          resumingExistingPartial: resumingExistingPartial,
         );
-        await response.drain<void>();
-        if (remoteLength == requestedOffset &&
-            _hasStrongResumeIdentity &&
-            _strongResumeIdentityMatches(response.headers)) {
-          _resumed = true;
-          _reportProgress(
-            transferredBytes: requestedOffset,
-            totalBytes: remoteLength,
-            attempt: attempt,
-            resumed: true,
-          );
-          return requestedOffset;
+        if (segmented == null || completedLength >= segmented.totalBytes) {
+          return completedLength;
         }
-        if (remoteLength != null && remoteLength <= requestedOffset) {
-          // Length equality alone does not identify the representation: an
-          // unrelated stale `.part` can have exactly the same size. Without a
-          // strong ETag, fetch the entity again and validate its bytes. A
-          // shorter remote entity always requires the same clean restart.
-          await _discardPartialForRestart();
-          throw _RetryableTransferFailure(
-            remoteLength < requestedOffset
-                ? 'The remote audio is shorter than the saved partial.'
-                : 'HTTP 416 did not strongly identify the saved partial.',
+        if (completedLength <= requestedOffset) {
+          throw const HttpAudioTransferException(
+            'The ranged audio transfer did not make progress.',
             kind: HttpAudioTransferFailureKind.invalidRange,
-            statusCode: HttpStatus.requestedRangeNotSatisfiable,
           );
         }
+        requestedOffset = completedLength;
+        resumingExistingPartial = false;
       }
-
-      if (response.statusCode != HttpStatus.ok &&
-          response.statusCode != HttpStatus.partialContent) {
-        final failure = HttpAudioTransferException(
-          response.reasonPhrase.isEmpty
-              ? 'The audio server rejected the request.'
-              : 'The audio server rejected the request: '
-                    '${response.reasonPhrase}.',
-          kind: HttpAudioTransferFailureKind.httpStatus,
-          statusCode: response.statusCode,
-        );
-        if (_isRetryableHttpStatus(response.statusCode)) {
-          throw _RetryableTransferFailure(
-            failure.message,
-            kind: failure.kind,
-            statusCode: response.statusCode,
-            cause: failure,
-          );
-        }
-        throw failure;
-      }
-
-      final plan = _ResponsePlan.fromResponse(
-        response,
-        requestedOffset: requestedOffset,
-      );
-      _validateContentType(response.headers);
-      final responseValidator = _extractResponseValidator(response.headers);
-      if (response.statusCode == HttpStatus.partialContent &&
-          _entityValidator != null &&
-          !_entityValidator!.matches(response.headers)) {
-        throw const HttpAudioTransferException(
-          'The remote audio entity changed during range continuation.',
-          kind: HttpAudioTransferFailureKind.invalidRange,
-        );
-      }
-      _entityValidator = response.statusCode == HttpStatus.ok
-          ? responseValidator
-          : responseValidator ?? _entityValidator;
-      _reportProgress(
-        transferredBytes: plan.startingBytes,
-        totalBytes: plan.totalBytes,
-        attempt: attempt,
-        resumed: plan.append,
-      );
-      _pollCancellation();
-      _throwIfTerminal();
-
-      final received = await _consumeResponse(
-        response,
-        request: request,
-        plan: plan,
-        attempt: attempt,
-        validator: _entityValidator,
-      );
-
-      if (plan.expectedResponseBytes != null &&
-          received != plan.expectedResponseBytes) {
-        if (received < plan.expectedResponseBytes!) {
-          throw _RetryableTransferFailure(
-            'The audio response ended before all declared bytes arrived.',
-            kind: HttpAudioTransferFailureKind.incomplete,
-          );
-        }
-        throw const HttpAudioTransferException(
-          'The audio response exceeded its declared byte range.',
-          kind: HttpAudioTransferFailureKind.invalidResponse,
-        );
-      }
-
-      final completedLength = plan.startingBytes + received;
-      final total = plan.totalBytes;
-      if (total != null && completedLength != total) {
-        if (completedLength < total) {
-          throw _RetryableTransferFailure(
-            'The audio response did not complete the advertised entity.',
-            kind: HttpAudioTransferFailureKind.incomplete,
-          );
-        }
-        throw const HttpAudioTransferException(
-          'The downloaded audio is larger than the advertised entity.',
-          kind: HttpAudioTransferFailureKind.invalidResponse,
-        );
-      }
-      if (completedLength == 0) {
-        throw const HttpAudioTransferException(
-          'The audio server returned an empty response.',
-          kind: HttpAudioTransferFailureKind.invalidContent,
-        );
-      }
-
-      return completedLength;
     } finally {
       _activeRequest = null;
       client.close(force: true);
@@ -479,6 +404,191 @@ class _HttpAudioTransferRun {
         _activeClient = null;
       }
     }
+  }
+
+  Future<int> _requestAndConsume(
+    HttpClient client, {
+    required int attempt,
+    required int requestedOffset,
+    required _RequestedAudioRange? requestedRange,
+    required bool resumingExistingPartial,
+  }) async {
+    final requestUri = requestedRange?.applyTo(uri) ?? uri;
+    final request = await _awaitConnectionPhase(
+      client.getUrl(requestUri),
+      'Timed out while connecting to the audio host.',
+    );
+    _activeRequest = request;
+
+    for (final entry in headers.entries) {
+      // The Range value is derived from the actual .part length. Accepting a
+      // caller-provided value could append bytes at the wrong offset.
+      if (entry.key.toLowerCase() == HttpHeaders.rangeHeader) {
+        continue;
+      }
+      request.headers.set(entry.key, entry.value);
+    }
+    final headerRange =
+        requestedRange?.transport == HttpAudioRangeTransport.header
+        ? requestedRange
+        : null;
+    if (headerRange != null) {
+      request.headers.set(
+        HttpHeaders.rangeHeader,
+        'bytes=${headerRange.start}-${headerRange.end}',
+      );
+    } else if (requestedRange == null && requestedOffset > 0) {
+      request.headers.set(HttpHeaders.rangeHeader, 'bytes=$requestedOffset-');
+    }
+    if ((headerRange != null && requestedOffset > 0 ||
+            requestedRange == null && requestedOffset > 0) &&
+        !_containsHeader(headers, HttpHeaders.ifRangeHeader) &&
+        _entityValidator != null) {
+      request.headers.set(HttpHeaders.ifRangeHeader, _entityValidator!.value);
+    }
+
+    final response = await _awaitConnectionPhase(
+      request.close(),
+      'Timed out while waiting for audio response headers.',
+    );
+    _pollCancellation();
+    _throwIfTerminal();
+
+    if (response.statusCode == HttpStatus.requestedRangeNotSatisfiable &&
+        requestedOffset > 0) {
+      final remoteLength = _parseUnsatisfiedContentRangeTotal(
+        response.headers.value(HttpHeaders.contentRangeHeader),
+      );
+      await response.drain<void>();
+      if (remoteLength == requestedOffset &&
+          _hasStrongResumeIdentity &&
+          _strongResumeIdentityMatches(response.headers)) {
+        _resumed = true;
+        _reportProgress(
+          transferredBytes: requestedOffset,
+          totalBytes: remoteLength,
+          attempt: attempt,
+          resumed: true,
+        );
+        return requestedOffset;
+      }
+      if (remoteLength != null && remoteLength <= requestedOffset) {
+        // Length equality alone does not identify the representation: an
+        // unrelated stale `.part` can have exactly the same size. Without a
+        // strong ETag, fetch the entity again and validate its bytes. A
+        // shorter remote entity always requires the same clean restart.
+        await _discardPartialForRestart();
+        throw _RetryableTransferFailure(
+          remoteLength < requestedOffset
+              ? 'The remote audio is shorter than the saved partial.'
+              : 'HTTP 416 did not strongly identify the saved partial.',
+          kind: HttpAudioTransferFailureKind.invalidRange,
+          statusCode: HttpStatus.requestedRangeNotSatisfiable,
+        );
+      }
+    }
+
+    if (response.statusCode != HttpStatus.ok &&
+        response.statusCode != HttpStatus.partialContent) {
+      final failure = HttpAudioTransferException(
+        response.reasonPhrase.isEmpty
+            ? 'The audio server rejected the request.'
+            : 'The audio server rejected the request: '
+                  '${response.reasonPhrase}.',
+        kind: HttpAudioTransferFailureKind.httpStatus,
+        statusCode: response.statusCode,
+      );
+      if (_isRetryableHttpStatus(response.statusCode)) {
+        throw _RetryableTransferFailure(
+          failure.message,
+          kind: failure.kind,
+          statusCode: response.statusCode,
+          cause: failure,
+        );
+      }
+      throw failure;
+    }
+
+    final plan = _ResponsePlan.fromResponse(
+      response,
+      requestedOffset: requestedOffset,
+      requestedRange: requestedRange,
+    );
+    _validateContentType(response.headers);
+    final responseValidator = _extractResponseValidator(response.headers);
+    if (plan.append &&
+        _entityValidator != null &&
+        !_entityValidator!.matches(response.headers)) {
+      throw const HttpAudioTransferException(
+        'The remote audio entity changed during range continuation.',
+        kind: HttpAudioTransferFailureKind.invalidRange,
+      );
+    }
+    _entityValidator = plan.append
+        ? responseValidator ?? _entityValidator
+        : responseValidator;
+    if (plan.append && resumingExistingPartial) {
+      _resumed = true;
+    }
+    _reportProgress(
+      transferredBytes: plan.startingBytes,
+      totalBytes: plan.totalBytes,
+      attempt: attempt,
+      resumed: _resumed,
+    );
+    _pollCancellation();
+    _throwIfTerminal();
+
+    final received = await _consumeResponse(
+      response,
+      request: request,
+      plan: plan,
+      attempt: attempt,
+      validator: _entityValidator,
+    );
+
+    if (plan.expectedResponseBytes != null &&
+        received != plan.expectedResponseBytes) {
+      if (received < plan.expectedResponseBytes!) {
+        throw _RetryableTransferFailure(
+          'The audio response ended before all declared bytes arrived.',
+          kind: HttpAudioTransferFailureKind.incomplete,
+        );
+      }
+      throw const HttpAudioTransferException(
+        'The audio response exceeded its declared byte range.',
+        kind: HttpAudioTransferFailureKind.invalidResponse,
+      );
+    }
+
+    final completedLength = plan.startingBytes + received;
+    final total = plan.totalBytes;
+    if (total != null && completedLength != total) {
+      final completedRequestedSegment =
+          requestedRange != null &&
+          completedLength == requestedRange.end + 1 &&
+          completedLength < total;
+      if (!completedRequestedSegment && completedLength < total) {
+        throw _RetryableTransferFailure(
+          'The audio response did not complete the advertised entity.',
+          kind: HttpAudioTransferFailureKind.incomplete,
+        );
+      }
+      if (completedLength > total) {
+        throw const HttpAudioTransferException(
+          'The downloaded audio is larger than the advertised entity.',
+          kind: HttpAudioTransferFailureKind.invalidResponse,
+        );
+      }
+    }
+    if (completedLength == 0) {
+      throw const HttpAudioTransferException(
+        'The audio server returned an empty response.',
+        kind: HttpAudioTransferFailureKind.invalidContent,
+      );
+    }
+
+    return completedLength;
   }
 
   Future<int> _consumeResponse(
@@ -517,9 +627,6 @@ class _HttpAudioTransferRun {
 
     Future<void> writeChunk(List<int> chunk) async {
       await output!.writeFrom(chunk);
-      if (plan.append) {
-        _resumed = true;
-      }
       if (!validatorCommitted) {
         await _commitValidatorForPartial(validator);
         validatorCommitted = true;
@@ -529,7 +636,7 @@ class _HttpAudioTransferRun {
         transferredBytes: plan.startingBytes + writtenBytes,
         totalBytes: plan.totalBytes,
         attempt: attempt,
-        resumed: plan.append,
+        resumed: _resumed,
       );
     }
 
@@ -918,9 +1025,50 @@ class _ResponsePlan {
   factory _ResponsePlan.fromResponse(
     HttpClientResponse response, {
     required int requestedOffset,
+    required _RequestedAudioRange? requestedRange,
   }) {
     if (response.statusCode == HttpStatus.ok) {
       final length = response.contentLength < 0 ? null : response.contentLength;
+      if (requestedRange != null &&
+          requestedRange.transport == HttpAudioRangeTransport.queryParameter) {
+        if (length == null || length == requestedRange.length) {
+          return _ResponsePlan(
+            startingBytes: requestedRange.start,
+            expectedResponseBytes: requestedRange.length,
+            totalBytes: requestedRange.total,
+            append: requestedRange.start > 0,
+          );
+        }
+        // A server may ignore the query range and return the complete entity.
+        // Accept that only when its size proves it is the full expected file;
+        // FileMode.write then restarts safely instead of appending it.
+        if (length == requestedRange.total) {
+          return _ResponsePlan(
+            startingBytes: 0,
+            expectedResponseBytes: length,
+            totalBytes: length,
+            append: false,
+          );
+        }
+        throw const HttpAudioTransferException(
+          'The audio server ignored or changed the requested URL range.',
+          kind: HttpAudioTransferFailureKind.invalidRange,
+        );
+      }
+      if (requestedRange != null) {
+        if (length != null && length != requestedRange.total) {
+          throw const HttpAudioTransferException(
+            'The audio server ignored the byte range with an unexpected size.',
+            kind: HttpAudioTransferFailureKind.invalidRange,
+          );
+        }
+        return _ResponsePlan(
+          startingBytes: 0,
+          expectedResponseBytes: length ?? requestedRange.total,
+          totalBytes: requestedRange.total,
+          append: false,
+        );
+      }
       return _ResponsePlan(
         startingBytes: 0,
         expectedResponseBytes: length,
@@ -949,6 +1097,15 @@ class _ResponsePlan {
       );
     }
 
+    if (requestedRange != null &&
+        (contentRange.end != requestedRange.end ||
+            contentRange.total != requestedRange.total)) {
+      throw const HttpAudioTransferException(
+        'The media server returned a different byte range than requested.',
+        kind: HttpAudioTransferFailureKind.invalidRange,
+      );
+    }
+
     final rangeLength = contentRange.end - contentRange.start + 1;
     if (response.contentLength >= 0 && response.contentLength != rangeLength) {
       throw const HttpAudioTransferException(
@@ -962,6 +1119,36 @@ class _ResponsePlan {
       expectedResponseBytes: rangeLength,
       totalBytes: contentRange.total,
       append: requestedOffset > 0,
+    );
+  }
+}
+
+class _RequestedAudioRange {
+  const _RequestedAudioRange({
+    required this.start,
+    required this.end,
+    required this.total,
+    required this.transport,
+    required this.queryParameterName,
+  });
+
+  final int start;
+  final int end;
+  final int total;
+  final HttpAudioRangeTransport transport;
+  final String queryParameterName;
+
+  int get length => end - start + 1;
+
+  Uri applyTo(Uri source) {
+    if (transport != HttpAudioRangeTransport.queryParameter) {
+      return source;
+    }
+    return source.replace(
+      queryParameters: <String, String>{
+        ...source.queryParameters,
+        queryParameterName: '$start-$end',
+      },
     );
   }
 }

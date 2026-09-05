@@ -1,6 +1,7 @@
 import '../../../../core/utils/image_source.dart';
 import '../../domain/entities/catalog_track.dart';
 import '../../domain/entities/local_track.dart';
+import '../../domain/entities/track_info.dart';
 
 /// One large cover plus two rows of four secondary covers.
 const int playlistArtworkSourceLimit = 9;
@@ -21,6 +22,25 @@ class PlaylistArtworkSource {
 
   @override
   int get hashCode => Object.hash(source, fallbackSource);
+}
+
+/// Selects artwork according to the surface semantics.
+///
+/// Song rows prefer the canonical YouTube Music cover and retain the YouTube
+/// video frame only as a fallback. Video-search rows deliberately invert that
+/// order because their primary artwork is the video thumbnail itself.
+PlaylistArtworkSource? preferredRemoteTrackArtworkSource(
+  TrackInfo track, {
+  bool preferCatalogArtwork = true,
+}) {
+  return _preferredArtworkSource(
+    primaryCandidates: preferCatalogArtwork
+        ? <String?>[track.catalogThumbnailUrl, track.thumbnailUrl]
+        : <String?>[track.thumbnailUrl, track.catalogThumbnailUrl],
+    fallbackCandidates: preferCatalogArtwork
+        ? <String?>[track.thumbnailUrl]
+        : <String?>[track.catalogThumbnailUrl],
+  );
 }
 
 /// Prefers the canonical catalog cover over a saved YouTube video thumbnail.

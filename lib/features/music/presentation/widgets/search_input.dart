@@ -12,6 +12,7 @@ class SearchInput extends StatefulWidget {
     this.initialText = '',
     this.compact = false,
     this.requestFocusOnClear = true,
+    this.autofocus = false,
     super.key,
   });
 
@@ -23,6 +24,7 @@ class SearchInput extends StatefulWidget {
   final String initialText;
   final bool compact;
   final bool requestFocusOnClear;
+  final bool autofocus;
 
   @override
   State<SearchInput> createState() => _SearchInputState();
@@ -65,7 +67,9 @@ class _SearchInputState extends State<SearchInput> {
     void clear() {
       _controller.clear();
       if (widget.requestFocusOnClear) {
-        _focusNode.requestFocus();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _focusNode.requestFocus();
+        });
       }
     }
 
@@ -79,6 +83,7 @@ class _SearchInputState extends State<SearchInput> {
         child: TextField(
           controller: _controller,
           focusNode: _focusNode,
+          autofocus: widget.autofocus,
           textInputAction: TextInputAction.search,
           onSubmitted: (_) => submit(),
           decoration: InputDecoration(

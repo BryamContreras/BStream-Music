@@ -32,6 +32,10 @@ class DownloadTaskState {
   final String? title;
   final bool reusedExisting;
 
+  bool get isCancellable =>
+      status == DownloadProgressStatus.queued ||
+      status == DownloadProgressStatus.running;
+
   DownloadTaskState copyWith({
     DownloadProgressStatus? status,
     Object? progress = _unsetDownloadTaskValue,
@@ -121,6 +125,26 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
     return _enqueue(track, DownloadMediaType.audio);
   }
 
+  /// Removes a queued task or interrupts only its active transfer.
+  Future<bool> cancelDownload(String url) async {
+    final task = state[url];
+    if (task == null || !task.isCancellable) return false;
+
+    _cleanupTimers.remove(url)?.cancel();
+    _queue.removeWhere((track) => track.url == url);
+    state = Map<String, DownloadTaskState>.from(state)..remove(url);
+
+    if (task.status == DownloadProgressStatus.running) {
+      final downloader = ref.read(downloaderServiceProvider);
+      if (downloader is CancellableDownloaderService) {
+        await (downloader as CancellableDownloaderService).cancelDownload(
+          task.taskId,
+        );
+      }
+    }
+    return true;
+  }
+
   Future<LocalTrack> downloadAudioForLibrary(
     TrackInfo track, {
     void Function()? onDownloadStarted,
@@ -184,23 +208,26 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
       track.url: queued.copyWith(status: DownloadProgressStatus.running),
     };
 
+    final helper = ref.read(localTrackDownloadHelperProvider);
+    helper.registerCancellationProbe(
+      taskId,
+      () => state[track.url]?.taskId != taskId,
+    );
     try {
-      final outcome = await ref
-          .read(localTrackDownloadHelperProvider)
-          .resolveForLibrary(
-            track,
-            taskId: taskId,
-            onResolved: (resolved) {
-              final active = state[track.url];
-              if (active?.taskId != taskId) {
-                return;
-              }
-              state = {
-                ...state,
-                track.url: active!.copyWith(title: resolved.title),
-              };
-            },
-          );
+      final outcome = await helper.resolveForLibrary(
+        track,
+        taskId: taskId,
+        onResolved: (resolved) {
+          final active = state[track.url];
+          if (active?.taskId != taskId) {
+            return;
+          }
+          state = {
+            ...state,
+            track.url: active!.copyWith(title: resolved.title),
+          };
+        },
+      );
       final active = state[track.url];
       if (active?.taskId != taskId) {
         return;
@@ -218,11 +245,11 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
       };
       _scheduleCleanup(track.url, const Duration(seconds: 3));
     } catch (error, stackTrace) {
-      debugPrint('Audio download failed: $error\n$stackTrace');
       final active = state[track.url];
       if (active?.taskId != taskId) {
         return;
       }
+      debugPrint('Audio download failed: $error\n$stackTrace');
       state = {
         ...state,
         track.url: active!.copyWith(
@@ -231,6 +258,8 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
         ),
       };
       _scheduleCleanup(track.url, const Duration(seconds: 10));
+    } finally {
+      helper.unregisterCancellationProbe(taskId);
     }
   }
 

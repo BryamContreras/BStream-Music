@@ -33,6 +33,10 @@ void main() {
 
     expect(find.text('camilo'), findsNothing);
     expect(find.byKey(const ValueKey('search-clear-button')), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).focusNode?.hasFocus,
+      isTrue,
+    );
   });
 
   testWidgets('clears the active search when text is deleted manually', (

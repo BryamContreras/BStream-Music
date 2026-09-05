@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/image_source.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../widgets/artwork_gradient_header_background.dart';
@@ -34,6 +35,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
     this.detailsProvider,
     this.metadata = const [],
     this.fallbackIcon = Icons.queue_music_rounded,
+    this.useCollectionArtworkForTrackFallback = false,
     super.key,
   });
 
@@ -49,6 +51,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
   final FutureProvider<RemoteCollectionData>? detailsProvider;
   final List<String> metadata;
   final IconData fallbackIcon;
+  final bool useCollectionArtworkForTrackFallback;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -69,10 +72,13 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
     };
     final resolvedTitle = detail?.title ?? title;
     final resolvedSubtitle = detail?.subtitle ?? subtitle;
+    final collectionArtworkSource = detail?.artworkSource ?? artworkSource;
     final resolvedArtworkSource =
-        detail?.artworkSource ??
-        artworkSource ??
+        collectionArtworkSource ??
         (tracks.isEmpty ? null : tracks.first.thumbnailUrl);
+    final visibleTracks = useCollectionArtworkForTrackFallback
+        ? _withCollectionArtworkFallback(tracks, collectionArtworkSource)
+        : tracks;
     final defaultMode = defaultMiniPlayerModeForPlatform(
       Theme.of(context).platform,
     );
@@ -136,37 +142,38 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
               metadata: metadata,
               fallbackIcon: fallbackIcon,
               trackCount: tracksState is AsyncData<List<TrackInfo>>
-                  ? tracks.length
+                  ? visibleTracks.length
                   : null,
               playLabel: strings.play,
               addToPlaylistLabel: strings.addToPlaylist,
               songsLabel: strings.collectionSongCount,
-              canPlay: tracks.isNotEmpty,
-              onPlay: () => _play(context, ref, tracks.first, tracks),
-              onAddToPlaylist: onAddToPlaylist == null || tracks.isEmpty
+              canPlay: visibleTracks.isNotEmpty,
+              onPlay: () =>
+                  _play(context, ref, visibleTracks.first, visibleTracks),
+              onAddToPlaylist: onAddToPlaylist == null || visibleTracks.isEmpty
                   ? null
                   : () => onAddToPlaylist!(
                       context,
-                      tracks,
+                      visibleTracks,
                       initialPlaylistName: resolvedTitle,
                     ),
             ),
           ),
           switch (tracksState) {
-            AsyncData(:final value) when value.isEmpty => SliverToBoxAdapter(
+            AsyncData() when visibleTracks.isEmpty => SliverToBoxAdapter(
               child: _CollectionStatus(
                 key: const ValueKey('remote-collection-empty'),
                 icon: Icons.music_off_rounded,
                 message: emptyMessage,
               ),
             ),
-            AsyncData(:final value) => SliverPadding(
+            AsyncData() => SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
               sliver: SliverList.separated(
-                itemCount: value.length,
+                itemCount: visibleTracks.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 6),
                 itemBuilder: (context, index) {
-                  final track = value[index];
+                  final track = visibleTracks[index];
                   final identity = track.id.trim().isEmpty
                       ? track.url
                       : track.id;
@@ -177,7 +184,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
                         constraints: const BoxConstraints(maxWidth: 1080),
                         child: TrackResultTile(
                           track: track,
-                          queue: value,
+                          queue: visibleTracks,
                           queueSourceId: queueSourceId,
                           onOpenPlayer: () => _openPlayer(context),
                         ),
@@ -244,6 +251,35 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  List<TrackInfo> _withCollectionArtworkFallback(
+    List<TrackInfo> tracks,
+    String? collectionArtwork,
+  ) {
+    final normalizedArtwork = collectionArtwork?.trim();
+    if (normalizedArtwork == null || normalizedArtwork.isEmpty) return tracks;
+    var changed = false;
+    final result = <TrackInfo>[
+      for (final track in tracks)
+        _hasCanonicalCatalogArtwork(track)
+            ? track
+            : track.copyWith(catalogThumbnailUrl: normalizedArtwork),
+    ];
+    for (var index = 0; index < tracks.length; index++) {
+      if (!identical(tracks[index], result[index])) {
+        changed = true;
+        break;
+      }
+    }
+    return changed ? List<TrackInfo>.unmodifiable(result) : tracks;
+  }
+
+  bool _hasCanonicalCatalogArtwork(TrackInfo track) {
+    final source = track.catalogThumbnailUrl?.trim();
+    return source != null &&
+        source.isNotEmpty &&
+        youtubeVideoIdFromThumbnailSource(source) == null;
   }
 
   void _play(

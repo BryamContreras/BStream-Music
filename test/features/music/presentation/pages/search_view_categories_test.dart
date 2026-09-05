@@ -456,6 +456,11 @@ void main() {
           .top,
       appTabFirstSectionTopGap,
     );
+    expect(find.byType(TextField), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).focusNode?.hasFocus,
+      isTrue,
+    );
 
     await tester.pumpWidget(
       _searchApp(controller: controller, platform: TargetPlatform.windows),
@@ -930,6 +935,7 @@ void main() {
         artists: const ['Artista'],
         year: '2026',
         type: 'Álbum',
+        thumbnailUrl: 'https://lh3.googleusercontent.com/album-cover=w512',
       );
       final tracks = <TrackInfo>[
         const TrackInfo(
@@ -937,6 +943,7 @@ void main() {
           title: 'Primera',
           artist: 'Artista',
           url: 'https://music.youtube.com/watch?v=song-1',
+          thumbnailUrl: 'https://i.ytimg.com/vi/song-1/hq720.jpg',
         ),
         const TrackInfo(
           id: 'song-2',
@@ -999,6 +1006,19 @@ void main() {
       expect(find.textContaining('2026'), findsOneWidget);
       expect(find.text('Primera'), findsOneWidget);
       expect(find.text('Segunda'), findsOneWidget);
+      final firstTrackArtwork = find.descendant(
+        of: find.byKey(const ValueKey('remote-collection-track-song-1')),
+        matching: find.byType(SourceImage),
+      );
+      expect(firstTrackArtwork, findsOneWidget);
+      expect(
+        tester.widget<SourceImage>(firstTrackArtwork).source,
+        'https://lh3.googleusercontent.com/album-cover=w512',
+      );
+      expect(
+        tester.widget<SourceImage>(firstTrackArtwork).fallbackSource,
+        'https://i.ytimg.com/vi/song-1/hq720.jpg',
+      );
       expect(playerController.lastTrack, isNull);
       expect(playerOpens, 0);
 

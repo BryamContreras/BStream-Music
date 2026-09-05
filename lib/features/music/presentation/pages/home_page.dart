@@ -378,6 +378,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             metadata: const [],
             queueSourceId: 'incoming-youtube:${link.kind.name}:$collectionId',
             tracksProvider: tracksProvider,
+            useCollectionArtworkForTrackFallback: isAlbum,
             detailsProvider: isAlbum
                 ? null
                 : isPlaylist
@@ -3750,6 +3751,7 @@ class _RecommendedCollectionCard extends StatelessWidget {
           tracksProvider: collection.isAlbum
               ? homeAlbumTracksProvider(collection.browseId)
               : homeCollectionTracksProvider(collection.browseId),
+          useCollectionArtworkForTrackFallback: collection.isAlbum,
           emptyMessage: strings.homeCollectionEmpty,
           errorMessage: strings.homeCollectionLoadError,
           onOpenPlayer: onOpenPlayer,

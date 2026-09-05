@@ -31,6 +31,7 @@ class LocalTrackDownloadHelper {
   final Ref _ref;
   final Map<String, Future<LocalTrackDownloadResult>> _inFlight = {};
   final Map<String, Future<LocalTrackDownloadResult>> _resolvedInFlight = {};
+  final Map<String, bool Function()> _cancellationProbes = {};
   final Queue<Completer<void>> _downloadPermitWaiters = Queue();
   int _activeDownloads = 0;
   Future<void> _downloadTail = Future<void>.value();
@@ -154,6 +155,7 @@ class LocalTrackDownloadHelper {
     void Function()? onDownloadStarted,
     bool allowConcurrentDownload = false,
   }) {
+    final isCancelled = taskId == null ? null : _cancellationProbes[taskId];
     return _ref
         .read(libraryOperationCoordinatorProvider)
         .runWithGate(
@@ -162,9 +164,18 @@ class LocalTrackDownloadHelper {
             taskId: taskId,
             onResolved: onResolved,
             onDownloadStarted: onDownloadStarted,
+            isCancelled: isCancelled,
             allowConcurrentDownload: allowConcurrentDownload,
           ),
         );
+  }
+
+  void registerCancellationProbe(String taskId, bool Function() probe) {
+    _cancellationProbes[taskId] = probe;
+  }
+
+  void unregisterCancellationProbe(String taskId) {
+    _cancellationProbes.remove(taskId);
   }
 
   Future<LocalTrackDownloadResult> _resolveForLibraryGated(
@@ -172,12 +183,15 @@ class LocalTrackDownloadHelper {
     required String? taskId,
     required void Function(TrackInfo track)? onResolved,
     required void Function()? onDownloadStarted,
+    required bool Function()? isCancelled,
     required bool allowConcurrentDownload,
   }) async {
+    _throwIfDownloadCancelled(isCancelled);
     final identity = _trackIdentity(track);
     final active = _inFlight[identity];
     if (active != null) {
       final result = await active;
+      _throwIfDownloadCancelled(isCancelled);
       onResolved?.call(result.remoteTrack);
       return _asCoalescedReuse(result);
     }
@@ -188,6 +202,7 @@ class LocalTrackDownloadHelper {
       taskId: taskId,
       onResolved: onResolved,
       onDownloadStarted: onDownloadStarted,
+      isCancelled: isCancelled,
       allowConcurrentDownload: allowConcurrentDownload,
     );
     _inFlight[identity] = operation;
@@ -205,15 +220,20 @@ class LocalTrackDownloadHelper {
     required String? taskId,
     required void Function(TrackInfo track)? onResolved,
     required void Function()? onDownloadStarted,
+    required bool Function()? isCancelled,
     required bool allowConcurrentDownload,
   }) async {
+    _throwIfDownloadCancelled(isCancelled);
     final metadataTrack = await _resolveDownloadTrack(track);
+    _throwIfDownloadCancelled(isCancelled);
     onResolved?.call(metadataTrack);
 
     final resolvedIdentity = _trackIdentity(metadataTrack);
     final active = _resolvedInFlight[resolvedIdentity];
     if (active != null) {
-      return _asCoalescedReuse(await active);
+      final result = await active;
+      _throwIfDownloadCancelled(isCancelled);
+      return _asCoalescedReuse(result);
     }
 
     late final Future<LocalTrackDownloadResult> operation;
@@ -221,6 +241,7 @@ class LocalTrackDownloadHelper {
       metadataTrack,
       taskId: taskId,
       onDownloadStarted: onDownloadStarted,
+      isCancelled: isCancelled,
       allowConcurrentDownload: allowConcurrentDownload,
     );
     _resolvedInFlight[resolvedIdentity] = operation;
@@ -237,12 +258,17 @@ class LocalTrackDownloadHelper {
     TrackInfo metadataTrack, {
     required String? taskId,
     required void Function()? onDownloadStarted,
+    required bool Function()? isCancelled,
     required bool allowConcurrentDownload,
   }) async {
+    _throwIfDownloadCancelled(isCancelled);
     final existing = await findExistingLocalTrack(metadataTrack);
+    _throwIfDownloadCancelled(isCancelled);
     if (existing != null) {
       final enriched = await _enrichExistingTrack(existing, metadataTrack);
+      _throwIfDownloadCancelled(isCancelled);
       await _linkCatalogDownload(metadataTrack, enriched);
+      _throwIfDownloadCancelled(isCancelled);
       return LocalTrackDownloadResult(
         track: enriched,
         remoteTrack: metadataTrack,
@@ -251,11 +277,15 @@ class LocalTrackDownloadHelper {
     }
 
     Future<LocalTrackDownloadResult> download() async {
+      _throwIfDownloadCancelled(isCancelled);
       // A different source may have completed while this request waited for
       // the downloader. Recheck immediately before starting the transfer.
       final matching = await _findMatchingLocalTrack(metadataTrack);
+      _throwIfDownloadCancelled(isCancelled);
       if (matching != null && await _isUsableAudioFile(matching.filePath)) {
+        _throwIfDownloadCancelled(isCancelled);
         await _linkCatalogDownload(metadataTrack, matching);
+        _throwIfDownloadCancelled(isCancelled);
         return LocalTrackDownloadResult(
           track: matching,
           remoteTrack: metadataTrack,
@@ -264,11 +294,13 @@ class LocalTrackDownloadHelper {
       }
 
       await _deleteUnusableStaleFile(matching);
+      _throwIfDownloadCancelled(isCancelled);
       onDownloadStarted?.call();
       return _downloadAndSave(
         metadataTrack,
         staleMatch: matching,
         taskId: taskId,
+        isCancelled: isCancelled,
       );
     }
 
@@ -319,10 +351,14 @@ class LocalTrackDownloadHelper {
     TrackInfo metadataTrack, {
     required LocalTrack? staleMatch,
     required String? taskId,
+    required bool Function()? isCancelled,
   }) async {
+    _throwIfDownloadCancelled(isCancelled);
     final audioDirectory = await _audioDirectory();
     final thumbnailsDirectory = await _thumbnailsDirectory();
+    _throwIfDownloadCancelled(isCancelled);
     await _removeMisplacedThumbnailFiles(audioDirectory);
+    _throwIfDownloadCancelled(isCancelled);
     final identityDigest = sha256
         .convert(utf8.encode(_trackIdentity(metadataTrack)))
         .toString();
@@ -335,6 +371,10 @@ class LocalTrackDownloadHelper {
     final result = await _ref
         .read(downloadAudioProvider)
         .call(metadataTrack.url, options);
+    if (_isDownloadCancelled(isCancelled)) {
+      await _deleteFileBestEffort(result.filePath);
+      _throwIfDownloadCancelled(isCancelled);
+    }
     if (!await _isExpectedDownloadedFile(
       result.filePath,
       audioDirectory: audioDirectory,
@@ -346,12 +386,15 @@ class LocalTrackDownloadHelper {
       );
     }
     _SavedThumbnail? savedThumbnail;
+    LocalTrack? persistedTrack;
     try {
       savedThumbnail = await _saveThumbnail(
         metadataTrack,
         thumbnailsDirectory,
         identityDigest,
+        isCancelled: isCancelled,
       );
+      _throwIfDownloadCancelled(isCancelled);
 
       final localTrack = LocalTrack(
         id: staleMatch?.id ?? 'remote-${identityDigest.substring(0, 24)}',
@@ -374,7 +417,10 @@ class LocalTrackDownloadHelper {
       );
 
       await _ref.read(libraryRepositoryProvider).saveLocalTrack(localTrack);
+      persistedTrack = localTrack;
+      _throwIfDownloadCancelled(isCancelled);
       await _linkCatalogDownload(metadataTrack, localTrack);
+      _throwIfDownloadCancelled(isCancelled);
       await _commitSavedThumbnail(savedThumbnail);
       _ref.invalidate(libraryTracksProvider);
 
@@ -390,7 +436,56 @@ class LocalTrackDownloadHelper {
       // thumbnail remains intact when it was overwritten in place.
       await _deleteFileBestEffort(result.filePath);
       await _rollbackSavedThumbnail(savedThumbnail);
+      if (persistedTrack != null) {
+        await _rollbackCancelledLibraryTrack(
+          persistedTrack,
+          staleMatch: staleMatch,
+        );
+      }
       rethrow;
+    }
+  }
+
+  bool _isDownloadCancelled(bool Function()? isCancelled) {
+    if (isCancelled == null) return false;
+    try {
+      return isCancelled();
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _throwIfDownloadCancelled(bool Function()? isCancelled) {
+    if (_isDownloadCancelled(isCancelled)) {
+      throw const DownloaderException(
+        'Descarga cancelada.',
+        code: 'download_cancelled',
+      );
+    }
+  }
+
+  Future<void> _rollbackCancelledLibraryTrack(
+    LocalTrack persistedTrack, {
+    required LocalTrack? staleMatch,
+  }) async {
+    try {
+      final repository = _ref.read(libraryRepositoryProvider);
+      if (staleMatch == null) {
+        await repository.deleteLocalTrack(persistedTrack.id);
+      } else {
+        await repository.saveLocalTrack(staleMatch);
+      }
+      _ref
+        ..invalidate(libraryTracksProvider)
+        ..invalidate(catalogPlaylistsProvider)
+        ..invalidate(catalogPlaylistProvider);
+      await _ref
+          .read(playlistsControllerProvider.notifier)
+          .reloadFromRepository();
+    } catch (error, stackTrace) {
+      debugPrint(
+        'Cancelled download library rollback failed: $error\n$stackTrace',
+      );
     }
   }
 
@@ -433,7 +528,7 @@ class LocalTrackDownloadHelper {
     try {
       // Metadata enrichment comes from the InnerTube downloader. The audio
       // stream resolver remains reserved for playback transport data.
-      final resolved = await _ref.read(getPlaybackInfoProvider).call(track.url);
+      final resolved = await _ref.read(getTrackInfoProvider).call(track.url);
       return _mergeTrackInfo(track, resolved);
     } catch (_) {
       // Metadata enrichment is best effort. The downloader still gets a
@@ -896,8 +991,10 @@ class LocalTrackDownloadHelper {
   Future<_SavedThumbnail?> _saveThumbnail(
     TrackInfo track,
     String directoryPath,
-    String identityDigest,
-  ) async {
+    String identityDigest, {
+    bool Function()? isCancelled,
+  }) async {
+    _throwIfDownloadCancelled(isCancelled);
     final candidates = _thumbnailCandidates(track).toList(growable: false);
     if (candidates.isEmpty) {
       return null;
@@ -907,8 +1004,16 @@ class LocalTrackDownloadHelper {
     await directory.create(recursive: true);
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 12);
+    final cancellationTimer = isCancelled == null
+        ? null
+        : Timer.periodic(const Duration(milliseconds: 50), (_) {
+            if (_isDownloadCancelled(isCancelled)) {
+              client.close(force: true);
+            }
+          });
     try {
       for (final uri in candidates) {
+        _throwIfDownloadCancelled(isCancelled);
         try {
           final saved = await _downloadThumbnail(
             client,
@@ -917,6 +1022,7 @@ class LocalTrackDownloadHelper {
             directory,
             identityDigest,
           );
+          _throwIfDownloadCancelled(isCancelled);
           if (saved != null) {
             return _SavedThumbnail(
               path: saved.path,
@@ -925,14 +1031,17 @@ class LocalTrackDownloadHelper {
             );
           }
         } catch (_) {
+          _throwIfDownloadCancelled(isCancelled);
           // A timeout or TLS failure for one candidate must not prevent the
           // lower-resolution or catalog artwork fallbacks from being tried.
         }
       }
       return null;
     } catch (_) {
+      _throwIfDownloadCancelled(isCancelled);
       return null;
     } finally {
+      cancellationTimer?.cancel();
       client.close(force: true);
     }
   }

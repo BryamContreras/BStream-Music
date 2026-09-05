@@ -17,7 +17,7 @@ import '../widgets/track_result_tile.dart';
 import 'artist_profile_page.dart';
 import 'remote_collection_detail_page.dart';
 
-class SearchView extends ConsumerWidget {
+class SearchView extends ConsumerStatefulWidget {
   const SearchView({
     required this.onOpenPlayer,
     this.onAddToPlaylist,
@@ -32,7 +32,24 @@ class SearchView extends ConsumerWidget {
   final double bottomContentPadding;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SearchView> createState() => _SearchViewState();
+}
+
+class _SearchViewState extends ConsumerState<SearchView> {
+  bool _focusInputAfterClear = false;
+
+  void _clearSearch() {
+    setState(() => _focusInputAfterClear = true);
+    ref.read(searchControllerProvider.notifier).clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _focusInputAfterClear) {
+        setState(() => _focusInputAfterClear = false);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final results = ref.watch(searchControllerProvider);
     final searchState = results.value ?? SearchState();
     final strings = ref.watch(appStringsProvider);
@@ -43,7 +60,7 @@ class SearchView extends ConsumerWidget {
     final showHeading = !isMobile || !searchState.hasQuery;
     final headingTransitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : _headingTransitionDuration;
+        : SearchView._headingTransitionDuration;
 
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('search-tab-header-surface'),
@@ -75,13 +92,13 @@ class SearchView extends ConsumerWidget {
                 initialText: searchState.query,
                 compact: true,
                 requestFocusOnClear: false,
+                autofocus: _focusInputAfterClear,
                 hintText: strings.searchHint,
                 tooltip: strings.search,
                 clearTooltip: strings.clearSearch,
                 onSubmitted: (query) =>
                     ref.read(searchControllerProvider.notifier).submit(query),
-                onCleared: () =>
-                    ref.read(searchControllerProvider.notifier).clear(),
+                onCleared: _clearSearch,
               ),
       ),
       scrollKey: const ValueKey('search-results-scroll'),
@@ -106,14 +123,14 @@ class SearchView extends ConsumerWidget {
                     key: const ValueKey('search-input-container'),
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: SearchInput(
+                      autofocus: _focusInputAfterClear,
                       hintText: strings.searchHint,
                       tooltip: strings.search,
                       clearTooltip: strings.clearSearch,
                       onSubmitted: (query) => ref
                           .read(searchControllerProvider.notifier)
                           .submit(query),
-                      onCleared: () =>
-                          ref.read(searchControllerProvider.notifier).clear(),
+                      onCleared: _clearSearch,
                     ),
                   ),
                 if (searchState.hasQuery) ...[
@@ -148,14 +165,14 @@ class SearchView extends ConsumerWidget {
         _SearchResultsSliver(
           results: results,
           strings: strings,
-          bottomContentPadding: bottomContentPadding,
-          onOpenPlayer: onOpenPlayer,
-          onAddToPlaylist: onAddToPlaylist,
+          bottomContentPadding: widget.bottomContentPadding,
+          onOpenPlayer: widget.onOpenPlayer,
+          onAddToPlaylist: widget.onAddToPlaylist,
         ),
         SliverToBoxAdapter(
           child: SizedBox(
             key: const ValueKey('search-scroll-bottom-reserve'),
-            height: bottomContentPadding + 16,
+            height: widget.bottomContentPadding + 16,
           ),
         ),
       ],
@@ -403,6 +420,8 @@ class _SearchCategoryResultsBody extends StatelessWidget {
             ),
             track: tracks[index],
             queue: tracks,
+            preferCatalogArtwork:
+                state.selectedCategory != SearchCategory.videos,
             onOpenPlayer: onOpenPlayer,
           ),
           if (index < tracks.length - 1) const SizedBox(height: 6),
@@ -988,6 +1007,7 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
           artworkSource: album.thumbnailUrl,
           metadata: metadata,
           fallbackIcon: Icons.album_rounded,
+          useCollectionArtworkForTrackFallback: true,
           queueSourceId: 'album:${album.browseId}',
           tracksProvider: searchAlbumTracksProvider(album.browseId),
           emptyMessage: widget.strings.albumWithoutSongs,

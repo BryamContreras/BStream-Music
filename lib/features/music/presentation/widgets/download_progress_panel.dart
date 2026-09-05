@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -92,6 +94,19 @@ class DownloadProgressPanel extends ConsumerWidget {
                 ],
               ),
             ),
+            if (active.isCancellable) ...[
+              const SizedBox(width: 8),
+              IconButton(
+                key: const ValueKey('download-progress-cancel'),
+                tooltip: strings.cancelDownload,
+                onPressed: () => unawaited(
+                  ref
+                      .read(downloadControllerProvider.notifier)
+                      .cancelDownload(active.url),
+                ),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
           ],
         ),
       ),

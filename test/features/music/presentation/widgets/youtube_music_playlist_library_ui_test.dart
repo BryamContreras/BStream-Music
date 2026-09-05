@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
+import 'package:bstream_music/features/music/domain/entities/download_options.dart';
+import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist_entry.dart';
@@ -212,6 +214,59 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('playlist rows show download progress and offer cancellation', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    const url = 'https://www.youtube.com/watch?v=duplicate-video';
+    final downloads = _PresetDownloadController(<String, DownloadTaskState>{
+      url: const DownloadTaskState(
+        url: url,
+        taskId: 'playlist-download-task',
+        mediaType: DownloadMediaType.audio,
+        status: DownloadProgressStatus.running,
+        progress: 0.42,
+        title: 'Canción repetida',
+      ),
+    });
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        downloads: downloads,
+      ),
+    );
+    await _pumpLibrary(tester);
+
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+
+    expect(
+      find.byKey(const ValueKey('library-catalog-download-occurrence-a')),
+      findsOneWidget,
+    );
+    expect(find.text('42%'), findsNWidgets(2));
+
+    await tester.tap(
+      find.byKey(const ValueKey('library-catalog-menu-occurrence-a')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Cancelar descarga'), findsOneWidget);
+    final cancelItem = find.ancestor(
+      of: find.text('Cancelar descarga'),
+      matching: find.byWidgetPredicate((widget) => widget is PopupMenuItem),
+    );
+    await tester.tap(cancelItem);
+    await tester.pumpAndSettle();
+    expect(downloads.cancelledUrls, <String>[url]);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'synchronized playlist menu shares its real name and remote identity',
@@ -638,6 +693,7 @@ Widget _libraryHarness({
   bool authenticated = false,
   YouTubeMusicPlaylistShareService? playlistShareService,
   YouTubeMusicMakePlaylistUnlistedForSharing? makeUnlisted,
+  DownloadController? downloads,
 }) {
   return ProviderScope(
     overrides: [
@@ -651,6 +707,8 @@ Widget _libraryHarness({
             playlistId == fixture.playlist.id ? fixture.catalog : null,
       ),
       playerControllerProvider.overrideWith(_IdlePlayerController.new),
+      if (downloads != null)
+        downloadControllerProvider.overrideWith(() => downloads),
       youtubeMusicShareablePlaylistBindingDetailsProvider.overrideWith(
         (ref) => shareableBindingsFuture ?? Future.value(shareableBindings),
       ),
@@ -675,6 +733,23 @@ Widget _libraryHarness({
       home: Scaffold(body: LibraryPanel(onOpenPlayer: () {})),
     ),
   );
+}
+
+class _PresetDownloadController extends DownloadController {
+  _PresetDownloadController(this.tasks);
+
+  final Map<String, DownloadTaskState> tasks;
+  final List<String> cancelledUrls = <String>[];
+
+  @override
+  Map<String, DownloadTaskState> build() => tasks;
+
+  @override
+  Future<bool> cancelDownload(String url) async {
+    cancelledUrls.add(url);
+    state = Map<String, DownloadTaskState>.from(state)..remove(url);
+    return true;
+  }
 }
 
 class _RecordingPlaylistsController extends PlaylistsController {

@@ -11,3 +11,8 @@ abstract class DownloaderService {
   Future<List<TrackInfo>> search(String query);
   Future<DownloadResult> downloadAudio(String url, DownloadOptions options);
 }
+
+/// Optional capability for downloaders that can stop an individual transfer.
+abstract interface class CancellableDownloaderService {
+  Future<void> cancelDownload(String taskId);
+}

@@ -16,6 +16,7 @@ import 'gradient_progress_bar.dart';
 import 'glass_popup_menu_button.dart';
 import 'now_playing_equalizer.dart';
 import 'playlist_picker_dialog.dart';
+import 'playlist_artwork.dart';
 import 'source_image.dart';
 import 'track_play_button.dart';
 import '../providers/music_providers.dart';
@@ -28,6 +29,7 @@ class TrackResultTile extends ConsumerStatefulWidget {
     required this.onOpenPlayer,
     this.queue,
     this.queueSourceId,
+    this.preferCatalogArtwork = true,
     super.key,
   });
 
@@ -35,6 +37,7 @@ class TrackResultTile extends ConsumerStatefulWidget {
   final VoidCallback onOpenPlayer;
   final List<TrackInfo>? queue;
   final String? queueSourceId;
+  final bool preferCatalogArtwork;
 
   @override
   ConsumerState<TrackResultTile> createState() => _TrackResultTileState();
@@ -86,6 +89,10 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
     final borderColor = isCurrent || _hovered
         ? colors.primary
         : AppColors.cardBorderFor(context, solidInLiquidGlass: true);
+    final artwork = preferredRemoteTrackArtworkSource(
+      track,
+      preferCatalogArtwork: widget.preferCatalogArtwork,
+    );
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -113,7 +120,10 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                 children: [
                   Stack(
                     children: [
-                      _Thumbnail(url: track.thumbnailUrl),
+                      _Thumbnail(
+                        url: artwork?.source,
+                        fallbackUrl: artwork?.fallbackSource,
+                      ),
                       if (isCurrent || _hovered)
                         NowPlayingEqualizerOverlay(
                           key: ValueKey('track-result-now-playing-$identity'),
@@ -273,6 +283,10 @@ class _TrackResultMenu extends ConsumerWidget {
     final buttonWidth = compactMobile ? 36.0 : 40.0;
     final iconSize = compactMobile ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
+    final downloadTask = ref.watch(
+      downloadControllerProvider.select((tasks) => tasks[track.url]),
+    );
+    final canCancelDownload = downloadTask?.isCancellable == true;
 
     return SizedBox(
       width: buttonWidth,
@@ -291,7 +305,7 @@ class _TrackResultMenu extends ConsumerWidget {
         onSelected: (action) {
           switch (action) {
             case _TrackResultAction.download:
-              _download(ref);
+              _toggleDownload(ref);
             case _TrackResultAction.addToPlaylist:
               unawaited(_addToPlaylist(context, ref));
           }
@@ -301,11 +315,18 @@ class _TrackResultMenu extends ConsumerWidget {
             value: _TrackResultAction.download,
             child: Row(
               children: [
-                Icon(Icons.download_rounded, color: menuIconColor),
+                Icon(
+                  canCancelDownload
+                      ? Icons.close_rounded
+                      : Icons.download_rounded,
+                  color: menuIconColor,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    strings.download,
+                    canCancelDownload
+                        ? strings.cancelDownload
+                        : strings.download,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -334,8 +355,14 @@ class _TrackResultMenu extends ConsumerWidget {
     );
   }
 
-  void _download(WidgetRef ref) {
-    ref.read(downloadControllerProvider.notifier).downloadAudio(track);
+  void _toggleDownload(WidgetRef ref) {
+    final controller = ref.read(downloadControllerProvider.notifier);
+    final task = ref.read(downloadControllerProvider)[track.url];
+    if (task?.isCancellable == true) {
+      unawaited(controller.cancelDownload(track.url));
+      return;
+    }
+    unawaited(controller.downloadAudio(track));
   }
 
   Future<void> _addToPlaylist(BuildContext context, WidgetRef ref) async {
@@ -400,9 +427,10 @@ class _TrackResultMenu extends ConsumerWidget {
 }
 
 class _Thumbnail extends StatelessWidget {
-  const _Thumbnail({required this.url});
+  const _Thumbnail({required this.url, this.fallbackUrl});
 
   final String? url;
+  final String? fallbackUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -413,6 +441,7 @@ class _Thumbnail extends StatelessWidget {
         height: 56,
         child: ProportionalArtwork(
           source: url,
+          fallbackSource: fallbackUrl,
           cacheWidth: 256,
           fallback: const ColoredBox(
             color: Color(0xFF202520),

@@ -18,7 +18,8 @@ import 'downloader_service.dart';
 import 'http_audio_transfer.dart';
 
 /// Downloader and metadata adapter backed only by InnerTube and `dart:io`.
-final class InnerTubeDownloadService implements DownloaderService {
+final class InnerTubeDownloadService
+    implements DownloaderService, CancellableDownloaderService {
   InnerTubeDownloadService({
     required this.playback,
     required this.catalog,
@@ -36,6 +37,8 @@ final class InnerTubeDownloadService implements DownloaderService {
   }
 
   static const Uuid _uuid = Uuid();
+  static const int _maximumCdnChunkBytes = 8 * 1024 * 1024;
+  static const Duration _cancelledTaskRetention = Duration(minutes: 5);
 
   final InnerTubePlaybackService playback;
   final YouTubeMusicSearch catalog;
@@ -44,6 +47,8 @@ final class InnerTubeDownloadService implements DownloaderService {
   final bool disposePlaybackService;
   final StreamController<DownloadProgress> _progress =
       StreamController<DownloadProgress>.broadcast(sync: true);
+  final Set<String> _cancelledTaskIds = <String>{};
+  final Map<String, Timer> _cancelledTaskTimers = <String, Timer>{};
   bool _disposed = false;
 
   @override
@@ -52,6 +57,18 @@ final class InnerTubeDownloadService implements DownloaderService {
   @override
   Future<void> initialize() async {
     _ensureActive();
+  }
+
+  @override
+  Future<void> cancelDownload(String taskId) async {
+    final normalizedTaskId = taskId.trim();
+    if (normalizedTaskId.isEmpty || _disposed) return;
+    _cancelledTaskIds.add(normalizedTaskId);
+    _cancelledTaskTimers.remove(normalizedTaskId)?.cancel();
+    _cancelledTaskTimers[normalizedTaskId] = Timer(_cancelledTaskRetention, () {
+      _cancelledTaskIds.remove(normalizedTaskId);
+      _cancelledTaskTimers.remove(normalizedTaskId);
+    });
   }
 
   @override
@@ -134,29 +151,35 @@ final class InnerTubeDownloadService implements DownloaderService {
     final taskId = requestedId == null || requestedId.isEmpty
         ? _uuid.v4()
         : requestedId;
-    _emit(
-      DownloadProgress(
-        taskId: taskId,
-        url: url,
-        status: DownloadProgressStatus.queued,
-        progress: 0,
-        message: 'Preparando descarga con InnerTube',
-      ),
-    );
+    final destinationPaths = <String>{};
 
     try {
-      final metadata = await getInfo(url);
+      _ensureTaskActive(taskId);
+      _emit(
+        DownloadProgress(
+          taskId: taskId,
+          url: url,
+          status: DownloadProgressStatus.queued,
+          progress: 0,
+          message: 'Preparando descarga con InnerTube',
+        ),
+      );
+      final requestedName = options.fileName?.trim();
+      final metadata = requestedName == null || requestedName.isEmpty
+          ? await getInfo(url)
+          : null;
+      _ensureTaskActive(taskId);
       final excludedProfileKeys = <String>{};
       var resolved = await _resolveDownloadStream(
         url,
         excludedProfileKeys: excludedProfileKeys,
       );
+      _ensureTaskActive(taskId);
       final outputDirectory = Directory(options.outputDirectory);
       await outputDirectory.create(recursive: true);
-      final requestedName = options.fileName?.trim();
       final baseName = safeFileName(
         requestedName == null || requestedName.isEmpty
-            ? _defaultFileName(metadata)
+            ? _defaultFileName(metadata!)
             : requestedName,
       );
       var destination = await _availableDestination(
@@ -164,10 +187,11 @@ final class InnerTubeDownloadService implements DownloaderService {
         baseName,
         resolved.extension,
       );
+      destinationPaths.add(destination.path);
       final stopwatch = Stopwatch()..start();
 
       for (var refresh = 0; ; refresh += 1) {
-        _ensureActive();
+        _ensureTaskActive(taskId);
         _emit(
           DownloadProgress(
             taskId: taskId,
@@ -184,8 +208,10 @@ final class InnerTubeDownloadService implements DownloaderService {
             uri: resolved.uri,
             destination: destination,
             headers: resolved.headers,
-            isCancelled: () => _disposed,
+            rangePlan: _googleVideoRangePlan(resolved),
+            isCancelled: () => _disposed || _isTaskCancelled(taskId),
             onProgress: (value) {
+              if (_isTaskCancelled(taskId)) return;
               final fraction = value.fraction;
               _emit(
                 DownloadProgress(
@@ -206,6 +232,7 @@ final class InnerTubeDownloadService implements DownloaderService {
               );
             },
           );
+          _ensureTaskActive(taskId);
           stopwatch.stop();
           _emit(
             DownloadProgress(
@@ -239,21 +266,32 @@ final class InnerTubeDownloadService implements DownloaderService {
           );
           if (resolved.format.itag != previousFormat.itag ||
               resolved.extension != previousExtension) {
-            final partial = HttpAudioTransfer.partialFileFor(destination);
-            if (await partial.exists()) await partial.delete();
+            await _deletePartialTransferArtifacts(destination.path);
             if (resolved.extension != previousExtension) {
               destination = await _availableDestination(
                 outputDirectory,
                 baseName,
                 resolved.extension,
               );
+              destinationPaths.add(destination.path);
             }
           }
         }
       }
-    } on FileSystemException {
-      rethrow;
     } catch (error, stackTrace) {
+      if (_isExplicitTaskCancellation(taskId, error)) {
+        await _deleteTransferArtifacts(destinationPaths);
+        Error.throwWithStackTrace(
+          const DownloaderException(
+            'Descarga cancelada.',
+            code: 'download_cancelled',
+          ),
+          stackTrace,
+        );
+      }
+      if (error is FileSystemException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
       _emit(
         DownloadProgress(
           taskId: taskId,
@@ -270,6 +308,52 @@ final class InnerTubeDownloadService implements DownloaderService {
               details: error,
             );
       Error.throwWithStackTrace(wrapped, stackTrace);
+    } finally {
+      _forgetTaskCancellation(taskId);
+    }
+  }
+
+  bool _isTaskCancelled(String taskId) => _cancelledTaskIds.contains(taskId);
+
+  bool _isExplicitTaskCancellation(String taskId, Object error) {
+    if (_isTaskCancelled(taskId)) return true;
+    return error is DownloaderException && error.code == 'download_cancelled';
+  }
+
+  void _ensureTaskActive(String taskId) {
+    _ensureActive();
+    if (_isTaskCancelled(taskId)) {
+      throw const DownloaderException(
+        'Descarga cancelada.',
+        code: 'download_cancelled',
+      );
+    }
+  }
+
+  void _forgetTaskCancellation(String taskId) {
+    _cancelledTaskIds.remove(taskId);
+    _cancelledTaskTimers.remove(taskId)?.cancel();
+  }
+
+  Future<void> _deletePartialTransferArtifacts(String destinationPath) async {
+    await _deleteFileBestEffort('$destinationPath.part');
+    await _deleteFileBestEffort('$destinationPath.part.if-range');
+  }
+
+  Future<void> _deleteTransferArtifacts(Iterable<String> paths) async {
+    for (final path in paths) {
+      await _deleteFileBestEffort(path);
+      await _deletePartialTransferArtifacts(path);
+    }
+  }
+
+  Future<void> _deleteFileBestEffort(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    } on FileSystemException {
+      // Cancellation cleanup is best effort and must retain the original
+      // cancellation result if another process briefly holds an artifact.
     }
   }
 
@@ -295,6 +379,32 @@ final class InnerTubeDownloadService implements DownloaderService {
         excludedProfileKeys: excludedProfileKeys,
       );
     }
+  }
+
+  HttpAudioRangePlan? _googleVideoRangePlan(InnerTubeResolvedAudio resolved) {
+    final host = resolved.uri.host.trim().toLowerCase();
+    if (host != 'googlevideo.com' && !host.endsWith('.googlevideo.com')) {
+      return null;
+    }
+    final totalBytes =
+        resolved.probe.contentLength ??
+        resolved.format.contentLength ??
+        int.tryParse(resolved.uri.queryParameters['clen'] ?? '');
+    if (totalBytes == null || totalBytes <= 0) {
+      return null;
+    }
+    final mediaClient =
+        resolved.uri.queryParameters['c'] ?? resolved.profile.clientName;
+    final usesHeaderRange = mediaClient.trim().toUpperCase().startsWith(
+      'ANDROID',
+    );
+    return HttpAudioRangePlan(
+      totalBytes: totalBytes,
+      maximumChunkBytes: _maximumCdnChunkBytes,
+      transport: usesHeaderRange
+          ? HttpAudioRangeTransport.header
+          : HttpAudioRangeTransport.queryParameter,
+    );
   }
 
   TrackInfo _trackFromSong(InnerTubeSong song) => TrackInfo(
@@ -370,6 +480,11 @@ final class InnerTubeDownloadService implements DownloaderService {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    for (final timer in _cancelledTaskTimers.values) {
+      timer.cancel();
+    }
+    _cancelledTaskTimers.clear();
+    _cancelledTaskIds.clear();
     if (disposePlaybackService) await playback.dispose();
     await _progress.close();
   }

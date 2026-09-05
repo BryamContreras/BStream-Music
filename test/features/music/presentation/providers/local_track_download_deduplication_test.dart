@@ -760,6 +760,82 @@ void main() {
             DownloadProgressStatus.completed,
       );
     });
+
+    test('removes a queued download without starting its transfer', () async {
+      final releaseDownload = Completer<void>();
+      final fixture = await _DownloadFixture.create(
+        downloadGate: releaseDownload.future,
+      );
+      addTearDown(fixture.dispose);
+      final first = _remoteTrack(
+        id: 'first-track',
+        url: 'https://catalog.example/tracks/first',
+      );
+      final queued = _remoteTrack(
+        id: 'queued-track',
+        url: 'https://catalog.example/tracks/queued',
+      );
+      final controller = fixture.container.read(
+        downloadControllerProvider.notifier,
+      );
+
+      await controller.downloadAudio(first);
+      await fixture.musicRepository.firstDownloadStarted.future;
+      await controller.downloadAudio(queued);
+      expect(
+        fixture.container.read(downloadControllerProvider)[queued.url]?.status,
+        DownloadProgressStatus.queued,
+      );
+
+      expect(await controller.cancelDownload(queued.url), isTrue);
+      expect(
+        fixture.container.read(downloadControllerProvider),
+        isNot(contains(queued.url)),
+      );
+      expect(fixture.progressService.cancelledTaskIds, isEmpty);
+
+      releaseDownload.complete();
+      await _waitUntil(() => fixture.musicRepository.completedDownloads == 1);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(fixture.musicRepository.downloadCalls, 1);
+    });
+
+    test('cancels an active task and discards its completed residue', () async {
+      final releaseDownload = Completer<void>();
+      final fixture = await _DownloadFixture.create(
+        downloadGate: releaseDownload.future,
+      );
+      addTearDown(fixture.dispose);
+      final track = _remoteTrack(
+        url: 'https://catalog.example/tracks/cancel-active',
+      );
+      final controller = fixture.container.read(
+        downloadControllerProvider.notifier,
+      );
+
+      await controller.downloadAudio(track);
+      await fixture.musicRepository.firstDownloadStarted.future;
+      final taskId = fixture.container
+          .read(downloadControllerProvider)[track.url]!
+          .taskId;
+
+      expect(await controller.cancelDownload(track.url), isTrue);
+      expect(fixture.container.read(downloadControllerProvider), isEmpty);
+      expect(fixture.progressService.cancelledTaskIds, <String>[taskId]);
+
+      releaseDownload.complete();
+      await _waitUntil(() => fixture.musicRepository.completedDownloads == 1);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      expect(fixture.libraryRepository.localTracks, isEmpty);
+      final audioDirectory = Directory(
+        p.join(fixture.tempDirectory.path, 'audio'),
+      );
+      expect(
+        await audioDirectory.list().where((entity) => entity is File).toList(),
+        isEmpty,
+      );
+    });
   });
 }
 
@@ -902,6 +978,7 @@ class _RecordingMusicRepository implements MusicRepository {
   final TrackInfo? resolvedInfo;
   final firstDownloadStarted = Completer<void>();
   int downloadCalls = 0;
+  int completedDownloads = 0;
   int infoCalls = 0;
 
   @override
@@ -923,6 +1000,7 @@ class _RecordingMusicRepository implements MusicRepository {
     final file = File(p.join(options.outputDirectory, fileName));
     await file.parent.create(recursive: true);
     await file.writeAsBytes([1, 2, 3, downloadCalls], flush: true);
+    completedDownloads++;
     return DownloadResult(
       id: id,
       sourceUrl: url,
@@ -957,8 +1035,10 @@ class _RecordingMusicRepository implements MusicRepository {
   Future<List<TrackInfo>> search(String query) => throw UnimplementedError();
 }
 
-class _ProgressOnlyDownloaderService implements DownloaderService {
+class _ProgressOnlyDownloaderService
+    implements DownloaderService, CancellableDownloaderService {
   final _controller = StreamController<DownloadProgress>.broadcast();
+  final List<String> cancelledTaskIds = <String>[];
 
   @override
   Stream<DownloadProgress> get progressStream => _controller.stream;
@@ -966,6 +1046,11 @@ class _ProgressOnlyDownloaderService implements DownloaderService {
   void emit(DownloadProgress progress) => _controller.add(progress);
 
   Future<void> close() => _controller.close();
+
+  @override
+  Future<void> cancelDownload(String taskId) async {
+    cancelledTaskIds.add(taskId);
+  }
 
   @override
   Future<DownloadResult> downloadAudio(String url, DownloadOptions options) =>

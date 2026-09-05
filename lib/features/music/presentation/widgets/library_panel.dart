@@ -17,6 +17,7 @@ import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/player/player_service.dart';
 import '../../../../services/youtube_music/account/youtube_music_account.dart';
 import '../../domain/entities/catalog_playlist.dart';
+import '../../domain/entities/download_result.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/playlist_entry.dart';
@@ -27,6 +28,7 @@ import '../providers/subscribed_artists_controller.dart';
 import '../providers/youtube_music_auth_controller.dart';
 import '../pages/artist_profile_page.dart';
 import 'favorite_star_badge.dart';
+import 'gradient_progress_bar.dart';
 import 'glass_popup_menu_button.dart';
 import 'library_subscribed_artists_shelf.dart';
 import 'now_playing_equalizer.dart';
@@ -1309,6 +1311,59 @@ class _CatalogDisplayItem {
   }
 }
 
+class _PlaylistDownloadProgress extends StatelessWidget {
+  const _PlaylistDownloadProgress({required this.task, super.key});
+
+  final DownloadTaskState task;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = switch (task.status) {
+      DownloadProgressStatus.queued => 0.0,
+      DownloadProgressStatus.running => (task.progress ?? 0).clamp(0.0, 0.98),
+      DownloadProgressStatus.completed => 1.0,
+      DownloadProgressStatus.failed => (task.progress ?? 0).clamp(0.0, 1.0),
+    };
+    final indeterminate =
+        task.status == DownloadProgressStatus.queued ||
+        (task.status == DownloadProgressStatus.running &&
+            task.progress == null);
+    final percentage =
+        task.status == DownloadProgressStatus.running && task.progress != null
+        ? '${(task.progress! * 100).clamp(0, 100).round()}%'
+        : null;
+    final colors = task.status == DownloadProgressStatus.failed
+        ? <Color>[Theme.of(context).colorScheme.error, const Color(0xFFFFA2A2)]
+        : AppColors.downloadGradientFor(context);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: Row(
+        children: [
+          Expanded(
+            child: GradientProgressBar(
+              value: progress,
+              indeterminate: indeterminate,
+              height: 4,
+              colors: colors,
+            ),
+          ),
+          if (percentage != null) ...[
+            const SizedBox(width: 7),
+            Text(
+              percentage,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: AppColors.contentSubtitleFor(context),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 List<_CatalogDisplayItem> _catalogDisplayItems(
   CatalogPlaylist playlist,
   Iterable<LocalTrack> libraryTracks,
@@ -1528,6 +1583,14 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
     final isCurrent = _isCurrentOccurrence(snapshot, queue);
     final isPlaying = isCurrent && snapshot?.status == PlayerStatus.playing;
     final localTrack = widget.item.localTrack;
+    final remoteTrack = widget.item.playback?.remoteTrack;
+    final remoteUrl = remoteTrack?.url;
+    final downloadState = ref.watch(
+      downloadControllerProvider.select(
+        (tasks) => remoteUrl == null ? null : tasks[remoteUrl],
+      ),
+    );
+    final canCancelDownload = downloadState?.isCancellable == true;
     final isDownloaded =
         localTrack != null &&
         ref
@@ -1607,17 +1670,30 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                     : AppColors.contentTitleFor(context),
               ),
             ),
-            subtitle: PlaylistTrackSubtitle(
-              artist: widget.item.artist,
-              duration: formatDuration(widget.item.duration),
-              isDownloaded: isDownloaded,
-              streamOnlyLabel: strings.streamOnlySong,
-              cloudKey: ValueKey(
-                'library-catalog-cloud-${widget.item.entry.id}',
-              ),
-              textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppColors.contentSubtitleFor(context),
-              ),
+            subtitle: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                PlaylistTrackSubtitle(
+                  artist: widget.item.artist,
+                  duration: formatDuration(widget.item.duration),
+                  isDownloaded: isDownloaded,
+                  streamOnlyLabel: strings.streamOnlySong,
+                  cloudKey: ValueKey(
+                    'library-catalog-cloud-${widget.item.entry.id}',
+                  ),
+                  textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.contentSubtitleFor(context),
+                  ),
+                ),
+                if (downloadState != null)
+                  _PlaylistDownloadProgress(
+                    key: ValueKey(
+                      'library-catalog-download-${widget.item.entry.id}',
+                    ),
+                    task: downloadState,
+                  ),
+              ],
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1656,14 +1732,19 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                     itemBuilder: (context) {
                       final entries = <PopupMenuEntry<_TrackMenuAction>>[];
                       final remote = widget.item.playback?.remoteTrack;
-                      if (remote != null && !isDownloaded) {
+                      if (remote != null &&
+                          (!isDownloaded || canCancelDownload)) {
                         entries.add(
                           PopupMenuItem<_TrackMenuAction>(
                             value: _TrackMenuAction.download,
                             child: _trackMenuItem(
                               context,
-                              Icons.download_rounded,
-                              strings.download,
+                              canCancelDownload
+                                  ? Icons.close_rounded
+                                  : Icons.download_rounded,
+                              canCancelDownload
+                                  ? strings.cancelDownload
+                                  : strings.download,
                             ),
                           ),
                         );
@@ -1777,13 +1858,24 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
       case _TrackMenuAction.download:
         final remote = widget.item.playback?.remoteTrack;
         if (remote == null) return;
-        await ref
-            .read(downloadControllerProvider.notifier)
-            .downloadAudio(remote);
+        final downloads = ref.read(downloadControllerProvider);
+        final downloadController = ref.read(
+          downloadControllerProvider.notifier,
+        );
+        final cancelling = downloads[remote.url]?.isCancellable == true;
+        if (cancelling) {
+          await downloadController.cancelDownload(remote.url);
+        } else {
+          await downloadController.downloadAudio(remote);
+        }
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(ref.read(appStringsProvider).downloadQueued),
+              content: Text(
+                cancelling
+                    ? ref.read(appStringsProvider).downloadCancelled
+                    : ref.read(appStringsProvider).downloadQueued,
+              ),
             ),
           );
         }
@@ -3106,6 +3198,16 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     final localAudioAvailable = ref
         .watch(localTrackAudioAvailabilityProvider(track))
         .maybeWhen(data: (available) => available, orElse: () => true);
+    final remoteTrack = mode == _TrackListMode.playlist
+        ? _remoteTrackInfoForLocal(track)
+        : null;
+    final remoteUrl = remoteTrack?.url;
+    final downloadState = ref.watch(
+      downloadControllerProvider.select(
+        (tasks) => remoteUrl == null ? null : tasks[remoteUrl],
+      ),
+    );
+    final canCancelDownload = downloadState?.isCancellable == true;
     final borderRadius = BorderRadius.circular(appCardRadius);
     final baseColor = AppColors.cardSurfaceFor(
       context,
@@ -3180,16 +3282,27 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                   color: AppColors.contentTitleFor(context),
                 ),
               ),
-              subtitle: PlaylistTrackSubtitle(
-                artist: track.artist,
-                duration: formatDuration(track.duration),
-                isDownloaded:
-                    mode != _TrackListMode.playlist || localAudioAvailable,
-                streamOnlyLabel: strings.streamOnlySong,
-                cloudKey: ValueKey('library-legacy-cloud-${track.id}'),
-                textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.contentSubtitleFor(context),
-                ),
+              subtitle: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PlaylistTrackSubtitle(
+                    artist: track.artist,
+                    duration: formatDuration(track.duration),
+                    isDownloaded:
+                        mode != _TrackListMode.playlist || localAudioAvailable,
+                    streamOnlyLabel: strings.streamOnlySong,
+                    cloudKey: ValueKey('library-legacy-cloud-${track.id}'),
+                    textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.contentSubtitleFor(context),
+                    ),
+                  ),
+                  if (downloadState != null)
+                    _PlaylistDownloadProgress(
+                      key: ValueKey('library-legacy-download-${track.id}'),
+                      task: downloadState,
+                    ),
+                ],
               ),
               trailing: selectionActive
                   ? SizedBox.square(
@@ -3307,13 +3420,17 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                                 ),
                               ],
                               _TrackListMode.playlist => [
-                                if (_remoteTrackInfoForLocal(track) != null)
+                                if (remoteTrack != null)
                                   PopupMenuItem(
                                     value: _TrackMenuAction.download,
                                     child: _trackMenuItem(
                                       context,
-                                      Icons.download_rounded,
-                                      strings.download,
+                                      canCancelDownload
+                                          ? Icons.close_rounded
+                                          : Icons.download_rounded,
+                                      canCancelDownload
+                                          ? strings.cancelDownload
+                                          : strings.download,
                                     ),
                                   ),
                                 PopupMenuItem(
@@ -3429,13 +3546,24 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
       case _TrackMenuAction.download:
         final remote = _remoteTrackInfoForLocal(track);
         if (remote == null) return;
-        await ref
-            .read(downloadControllerProvider.notifier)
-            .downloadAudio(remote);
+        final downloads = ref.read(downloadControllerProvider);
+        final downloadController = ref.read(
+          downloadControllerProvider.notifier,
+        );
+        final cancelling = downloads[remote.url]?.isCancellable == true;
+        if (cancelling) {
+          await downloadController.cancelDownload(remote.url);
+        } else {
+          await downloadController.downloadAudio(remote);
+        }
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(ref.read(appStringsProvider).downloadQueued),
+              content: Text(
+                cancelling
+                    ? ref.read(appStringsProvider).downloadCancelled
+                    : ref.read(appStringsProvider).downloadQueued,
+              ),
             ),
           );
         }

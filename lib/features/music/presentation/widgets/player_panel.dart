@@ -668,6 +668,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             emptyMessage: strings.albumWithoutSongs,
             errorMessage: strings.albumLoadError,
             fallbackIcon: Icons.album_rounded,
+            useCollectionArtworkForTrackFallback: true,
             metadata: target.metadata,
             onOpenPlayer: () {},
           ),
@@ -3752,6 +3753,13 @@ class _PlayerMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final menuIconColor = AppColors.menuIconFor(context);
+    final sourceUrl = snapshot.sourceUrl;
+    final downloadTask = ref.watch(
+      downloadControllerProvider.select(
+        (tasks) => sourceUrl == null ? null : tasks[sourceUrl],
+      ),
+    );
+    final canCancelDownload = downloadTask?.isCancellable == true;
     final shareTrack = !snapshot.isExternal
         ? _shareTrackForSnapshot(
             snapshot,
@@ -3906,11 +3914,18 @@ class _PlayerMenu extends ConsumerWidget {
             value: 'download',
             child: Row(
               children: [
-                Icon(Icons.download_rounded, color: menuIconColor),
+                Icon(
+                  canCancelDownload
+                      ? Icons.close_rounded
+                      : Icons.download_rounded,
+                  color: menuIconColor,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    strings.download,
+                    canCancelDownload
+                        ? strings.cancelDownload
+                        : strings.download,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -3973,10 +3988,15 @@ class _PlayerMenu extends ConsumerWidget {
       return;
     }
 
+    final controller = ref.read(downloadControllerProvider.notifier);
+    final cancelling =
+        ref.read(downloadControllerProvider)[sourceUrl]?.isCancellable == true;
     try {
-      await ref
-          .read(downloadControllerProvider.notifier)
-          .downloadAudio(_trackInfoFromSnapshot(sourceUrl, ref));
+      if (cancelling) {
+        await controller.cancelDownload(sourceUrl);
+      } else {
+        await controller.downloadAudio(_trackInfoFromSnapshot(sourceUrl, ref));
+      }
     } catch (_) {
       if (!context.mounted) {
         return;
@@ -3991,7 +4011,13 @@ class _PlayerMenu extends ConsumerWidget {
     }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(strings.downloadQueued)));
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            cancelling ? strings.downloadCancelled : strings.downloadQueued,
+          ),
+        ),
+      );
   }
 
   Future<void> _showPlaylistPicker(BuildContext context, WidgetRef ref) async {

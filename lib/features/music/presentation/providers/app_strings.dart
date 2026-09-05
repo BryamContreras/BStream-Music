@@ -299,6 +299,9 @@ class AppStrings {
   String get next => choose('Siguiente', 'Next');
   String get download => choose('Descargar', 'Download');
   String get downloadAudio => choose('Descargar audio', 'Download audio');
+  String get cancelDownload => choose('Cancelar descarga', 'Cancel download');
+  String get downloadCancelled =>
+      choose('Descarga cancelada', 'Download cancelled');
   String get noPlayback => choose('Sin reproducción', 'Nothing playing');
   String get nowPlaying => choose('En reproducción', 'Now playing');
   String get minimizePlayer =>

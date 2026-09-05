@@ -64,6 +64,141 @@ void main() {
     expect(progress.last.fraction, 1);
   });
 
+  test('downloads URL-ranged media in bounded sequential chunks', () async {
+    final payload = <int>[
+      0x49,
+      0x44,
+      0x33,
+      ...List<int>.generate(22, (index) => index + 1),
+    ];
+    final requestedRanges = <String>[];
+    final server = await _startServer((request) async {
+      final range = request.uri.queryParameters['range']!;
+      requestedRanges.add(range);
+      final bounds = range.split('-').map(int.parse).toList(growable: false);
+      final body = payload.sublist(bounds[0], bounds[1] + 1);
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..contentLength = body.length
+        ..headers.contentType = ContentType('audio', 'mpeg')
+        ..add(body);
+      await request.response.close();
+    });
+    addTearDown(server.close);
+    final progress = <HttpAudioTransferProgress>[];
+
+    final result = await HttpAudioTransfer().download(
+      uri: server.uri,
+      destination: destination,
+      rangePlan: HttpAudioRangePlan(
+        totalBytes: payload.length,
+        maximumChunkBytes: 8,
+        transport: HttpAudioRangeTransport.queryParameter,
+      ),
+      onProgress: progress.add,
+    );
+
+    expect(requestedRanges, <String>['0-7', '8-15', '16-23', '24-24']);
+    expect(await destination.readAsBytes(), payload);
+    expect(result.length, payload.length);
+    expect(result.resumed, isFalse);
+    expect(progress.last.transferredBytes, payload.length);
+    expect(progress.last.totalBytes, payload.length);
+    expect(progress.last.fraction, 1);
+  });
+
+  test(
+    'resumes a validated URL-ranged partial without duplicating bytes',
+    () async {
+      final payload = <int>[
+        0x49,
+        0x44,
+        0x33,
+        ...List<int>.generate(17, (index) => index + 1),
+      ];
+      const partialLength = 6;
+      await HttpAudioTransfer.partialFileFor(
+        destination,
+      ).writeAsBytes(payload.take(partialLength).toList());
+      final requestedRanges = <String>[];
+      final server = await _startServer((request) async {
+        final range = request.uri.queryParameters['range']!;
+        requestedRanges.add(range);
+        final bounds = range.split('-').map(int.parse).toList(growable: false);
+        final body = payload.sublist(bounds[0], bounds[1] + 1);
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..contentLength = body.length
+          ..headers.contentType = ContentType('audio', 'mpeg')
+          ..headers.set(HttpHeaders.etagHeader, '"entity-v1"')
+          ..add(body);
+        await request.response.close();
+      });
+      addTearDown(server.close);
+
+      final result = await HttpAudioTransfer().download(
+        uri: server.uri,
+        destination: destination,
+        headers: const <String, String>{
+          HttpHeaders.ifRangeHeader: '"entity-v1"',
+        },
+        rangePlan: HttpAudioRangePlan(
+          totalBytes: payload.length,
+          maximumChunkBytes: 8,
+          transport: HttpAudioRangeTransport.queryParameter,
+        ),
+      );
+
+      expect(requestedRanges, <String>['6-13', '14-19']);
+      expect(await destination.readAsBytes(), payload);
+      expect(result.resumed, isTrue);
+    },
+  );
+
+  test('downloads header-ranged media in bounded sequential chunks', () async {
+    final payload = <int>[
+      0x49,
+      0x44,
+      0x33,
+      ...List<int>.generate(15, (index) => index + 1),
+    ];
+    final requestedRanges = <String>[];
+    final server = await _startServer((request) async {
+      final header = request.headers.value(HttpHeaders.rangeHeader)!;
+      requestedRanges.add(header);
+      final raw = header.substring('bytes='.length);
+      final bounds = raw.split('-').map(int.parse).toList(growable: false);
+      final body = payload.sublist(bounds[0], bounds[1] + 1);
+      request.response
+        ..statusCode = HttpStatus.partialContent
+        ..contentLength = body.length
+        ..headers.contentType = ContentType('audio', 'mpeg')
+        ..headers.set(HttpHeaders.etagHeader, '"entity-v1"')
+        ..headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes ${bounds[0]}-${bounds[1]}/${payload.length}',
+        )
+        ..add(body);
+      await request.response.close();
+    });
+    addTearDown(server.close);
+
+    final result = await HttpAudioTransfer().download(
+      uri: server.uri,
+      destination: destination,
+      rangePlan: HttpAudioRangePlan(
+        totalBytes: payload.length,
+        maximumChunkBytes: 7,
+        transport: HttpAudioRangeTransport.header,
+      ),
+    );
+
+    expect(requestedRanges, <String>['bytes=0-6', 'bytes=7-13', 'bytes=14-17']);
+    expect(await destination.readAsBytes(), payload);
+    expect(result.length, payload.length);
+    expect(result.resumed, isFalse);
+  });
+
   test('resumes a .part file with a validated byte range', () async {
     final payload = <int>[0x49, 0x44, 0x33, 10, 11, 12, 13, 14, 15, 16];
     const partialLength = 4;
