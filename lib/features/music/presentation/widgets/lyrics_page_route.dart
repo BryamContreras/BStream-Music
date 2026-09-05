@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'lyrics_page.dart';
+import 'playback_page_transition.dart';
 
 const lyricsPageRouteName = '/lyrics';
-
-const _lyricsRouteTransitionDuration = Duration(milliseconds: 420);
-const _lyricsRouteReverseTransitionDuration = Duration(milliseconds: 360);
 
 /// Creates the coordinated transition between the playback surface and Lyrics.
 ///
@@ -23,10 +21,10 @@ class _LyricsPageRoute extends PageRouteBuilder<void> {
         settings: const RouteSettings(name: lyricsPageRouteName),
         transitionDuration: disableAnimations
             ? Duration.zero
-            : _lyricsRouteTransitionDuration,
+            : playbackPageTransitionDuration,
         reverseTransitionDuration: disableAnimations
             ? Duration.zero
-            : _lyricsRouteReverseTransitionDuration,
+            : playbackPageReverseTransitionDuration,
         maintainState: true,
         allowSnapshotting: true,
         pageBuilder: (context, animation, secondaryAnimation) => Semantics(
@@ -52,22 +50,11 @@ Widget _buildLyricsTransition(
   Animation<double> secondaryAnimation,
   Widget child,
 ) {
-  final motion = animation.drive(CurveTween(curve: Curves.easeInOutCubic));
-  final opacity = animation.drive(CurveTween(curve: Curves.easeInOut));
-
-  return FadeTransition(
-    key: const ValueKey('lyrics-route-fade-transition'),
-    opacity: opacity,
-    child: SlideTransition(
-      key: const ValueKey('lyrics-route-slide-transition'),
-      position: Tween<Offset>(
-        begin: const Offset(0, 0.035),
-        end: Offset.zero,
-      ).animate(motion),
-      child: RepaintBoundary(
-        key: const ValueKey('lyrics-route-repaint-boundary'),
-        child: child,
-      ),
-    ),
+  return PlaybackPageTransition(
+    animation: animation,
+    fadeKey: const ValueKey('lyrics-route-fade-transition'),
+    slideKey: const ValueKey('lyrics-route-slide-transition'),
+    repaintBoundaryKey: const ValueKey('lyrics-route-repaint-boundary'),
+    child: child,
   );
 }

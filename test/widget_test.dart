@@ -31,6 +31,7 @@ import 'package:bstream_music/features/music/presentation/widgets/library_panel.
 import 'package:bstream_music/features/music/presentation/widgets/download_progress_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/gradient_progress_bar.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
+import 'package:bstream_music/features/music/presentation/widgets/playback_page_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
@@ -2948,512 +2949,450 @@ void main() {
     variant: keyboardNavigationInsets,
   );
 
-  testWidgets(
-    'android player fades while BStream controls slide in both directions',
-    (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      tester.view.physicalSize = const Size(320, 568);
-      tester.view.devicePixelRatio = 1;
-      tester.view.padding = const FakeViewPadding(bottom: 24);
-      addTearDown(() {
-        debugDefaultTargetPlatformOverride = null;
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-        tester.view.resetPadding();
-      });
-
-      await tester.pumpWidget(
-        _testApp(
-          settingsController: _FakeSettingsController(
-            const SettingsState(
-              downloadDirectory: '/tmp/BStream-Music',
-              language: AppLanguage.spanish,
-              miniPlayerMode: MiniPlayerMode.capsule,
-              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.transparent,
-              playerStyle: PlayerStyle.bstreamMusic,
-            ),
-          ),
-          playerService: _FakePlayerService(
-            snapshot: const PlayerSnapshot(
-              status: PlayerStatus.playing,
-              title: 'Cancion para transicion coordinada',
-              artist: 'BStream Music',
-              trackId: 'coordinated-shell-track',
-              duration: Duration(minutes: 3),
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 600));
-
-      double slotOpacity(Finder slot) {
-        final nearestOpacity = find
-            .descendant(of: slot, matching: find.byType(AnimatedOpacity))
-            .evaluate()
-            .reduce((nearest, candidate) {
-              return candidate.depth < nearest.depth ? candidate : nearest;
-            });
-        return (nearestOpacity.renderObject! as RenderAnimatedOpacity)
-            .opacity
-            .value;
-      }
-
-      double shellOpacity(String key) =>
-          tester.widget<Opacity>(find.byKey(ValueKey(key))).opacity;
-
-      const controlsSlideKey = ValueKey(
-        'bstream-player-controls-slide-transition',
-      );
-
-      Offset controlsSlideTranslation() {
-        final slide = find.byKey(controlsSlideKey);
-        final nearestTranslation = find
-            .descendant(of: slide, matching: find.byType(FractionalTranslation))
-            .evaluate()
-            .reduce((nearest, candidate) {
-              return candidate.depth < nearest.depth ? candidate : nearest;
-            });
-        return (nearestTranslation.widget as FractionalTranslation).translation;
-      }
-
-      double playerFadeOpacity() {
-        return (tester.renderObject(
-                  find.byKey(const ValueKey('player-view-fade-transition')),
-                )
-                as RenderAnimatedOpacity)
-            .opacity
-            .value;
-      }
-
-      final home = find.byKey(const ValueKey('home-view'));
-      final miniClip = find.byKey(const ValueKey('mini-player-shell-clip'));
-      final bottomClip = find.byKey(
-        const ValueKey('bottom-navigation-shell-clip'),
-      );
-      final initialMiniHeight = tester.getSize(miniClip).height;
-      final initialBottomHeight = tester.getSize(bottomClip).height;
-      expect(initialMiniHeight, greaterThan(0));
-      expect(initialBottomHeight, greaterThan(0));
-      final prewarmedPlayer = find.byKey(const ValueKey('player-view'));
-      expect(prewarmedPlayer, findsOneWidget);
-      final playerFade = find.byKey(
-        const ValueKey('player-view-fade-transition'),
-      );
-      final backgroundFade = find.byKey(
-        const ValueKey('shell-player-background-fade-transition'),
-      );
-      expect(
-        find.byKey(const ValueKey('player-view-slide-transition')),
-        findsNothing,
-      );
-      final controlsSlide = tester.widget<AnimatedSlide>(
-        find.byKey(controlsSlideKey),
-      );
-      final hiddenControlsOffset = controlsSlide.offset;
-      expect(hiddenControlsOffset.dx, 0);
-      expect(
-        hiddenControlsOffset.dy,
-        inExclusiveRange(0.04, 0.12),
-        reason: 'Only the player controls should rest below their final place.',
-      );
-      expect(controlsSlide.duration, const Duration(milliseconds: 200));
-      expect(
-        tester.widget<AnimatedOpacity>(playerFade).duration,
-        const Duration(milliseconds: 220),
-      );
-      expect(
-        tester.widget<AnimatedOpacity>(backgroundFade).duration,
-        const Duration(milliseconds: 220),
-      );
-      expect(
-        tester
-            .widget<PlayerPanel>(find.byType(PlayerPanel))
-            .controlsTransitionEnterDelay,
-        const Duration(milliseconds: 100),
-      );
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), 0);
-      expect(
-        find.ancestor(
-          of: find.byKey(const ValueKey('player-large-artwork')),
-          matching: playerFade,
-        ),
-        findsOneWidget,
-        reason: 'The artwork must be part of the fading player layer.',
-      );
-
-      await tester.tapAt(
-        tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
-      );
-      await tester.pump();
-      expect(
-        tester.widget<AnimatedSlide>(find.byKey(controlsSlideKey)).offset,
-        hiddenControlsOffset,
-      );
-      expect(tester.widget<AnimatedOpacity>(playerFade).opacity, 1);
-
-      final player = find.byKey(const ValueKey('player-view'));
-      expect(player, findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('shell-background-browsing')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('shell-background-player')),
-        findsOneWidget,
-      );
-      final retainedPlayerElement = tester.element(find.byType(PlayerPanel));
-      expect(
-        tester
-            .widget<PlayerPanel>(find.byType(PlayerPanel))
-            .trackTransitionsEnabled,
-        isFalse,
-      );
-      await tester.pump(const Duration(milliseconds: 80));
-
-      expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
-      expect(
-        shellOpacity('bottom-navigation-shell-opacity'),
-        inExclusiveRange(0, 1),
-      );
-      // The browsing view stays fully rendered underneath. The player itself
-      // fades first; controls remain still until their 100 ms entrance delay.
-      expect(slotOpacity(home), 1);
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
-      final miniTranslation = tester.widget<FractionalTranslation>(
-        find.byKey(const ValueKey('mini-player-shell-translation')),
-      );
-      final miniScale = tester.widget<Transform>(
-        find.byKey(const ValueKey('mini-player-shell-scale')),
-      );
-      expect(miniTranslation.translation.dx, 0);
-      expect(miniTranslation.translation.dy, inExclusiveRange(0, 0.36));
-      expect(miniScale.transform.entry(0, 0), inExclusiveRange(0.94, 1));
-      expect(
-        find.byKey(const ValueKey('player-view-scale-transition')),
-        findsNothing,
-      );
-      expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
-      expect(
-        tester.getSize(bottomClip).height,
-        closeTo(initialBottomHeight, 0.1),
-      );
-      expect(
-        tester.getBottomLeft(miniClip).dy,
-        closeTo(tester.getTopLeft(bottomClip).dy, 0.1),
-      );
-      expect(tester.takeException(), isNull);
-
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(
-        tester.widget<AnimatedSlide>(find.byKey(controlsSlideKey)).offset,
-        Offset.zero,
-      );
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
-      expect(slotOpacity(home), 1);
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-      );
-
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(playerFadeOpacity(), 1);
-      expect(slotOpacity(home), 0);
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-      );
-
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(shellOpacity('mini-player-shell-opacity'), 0);
-      expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
-      expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
-      expect(
-        tester.getSize(bottomClip).height,
-        closeTo(initialBottomHeight, 0.1),
-      );
-      expect(slotOpacity(home), 0);
-      expect(controlsSlideTranslation(), Offset.zero);
-      expect(playerFadeOpacity(), 1);
-      expect(
-        find.byKey(const ValueKey('shell-background-browsing')),
-        findsOneWidget,
-      );
-      expect(
-        tester
-            .widget<PlayerPanel>(find.byType(PlayerPanel))
-            .trackTransitionsEnabled,
-        isTrue,
-      );
-
-      await tester.binding.handlePopRoute();
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 80));
-
-      expect(shellOpacity('mini-player-shell-opacity'), 0);
-      expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
-      // Returning performs the inverse: controls lead for 100 ms, then the
-      // player fade and browsing chrome overlap the rest of the slide.
-      expect(slotOpacity(home), 0);
-      expect(controlsSlideTranslation().dx, 0);
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-      );
-      expect(playerFadeOpacity(), 1);
-      expect(
-        (tester.renderObject(backgroundFade) as RenderAnimatedOpacity)
-            .opacity
-            .value,
-        1,
-      );
-      expect(
-        tester.getBottomLeft(miniClip).dy,
-        closeTo(tester.getTopLeft(bottomClip).dy, 0.1),
-      );
-
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(tester.widget<AnimatedOpacity>(playerFade).opacity, 0);
-      expect(tester.widget<AnimatedOpacity>(backgroundFade).opacity, 0);
-      expect(playerFadeOpacity(), 1);
-      expect(slotOpacity(home), 1);
-      await tester.pump(const Duration(milliseconds: 60));
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
-      expect(
-        (tester.renderObject(backgroundFade) as RenderAnimatedOpacity)
-            .opacity
-            .value,
-        inExclusiveRange(0, 1),
-      );
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-      );
-      expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
-      expect(
-        shellOpacity('bottom-navigation-shell-opacity'),
-        inExclusiveRange(0, 1),
-      );
-
-      await tester.pump(const Duration(milliseconds: 40));
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
-
-      await tester.pump(const Duration(milliseconds: 120));
-
-      expect(shellOpacity('mini-player-shell-opacity'), 1);
-      expect(shellOpacity('bottom-navigation-shell-opacity'), 1);
-      expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
-      expect(
-        tester.getSize(bottomClip).height,
-        closeTo(initialBottomHeight, 0.1),
-      );
-      expect(slotOpacity(home), 1);
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), 0);
-      expect(find.byKey(const ValueKey('player-view')), findsOneWidget);
-      expect(
-        tester
-            .widget<PlayerPanel>(find.byType(PlayerPanel))
-            .trackTransitionsEnabled,
-        isFalse,
-      );
-      expect(
-        identical(
-          retainedPlayerElement,
-          tester.element(find.byType(PlayerPanel)),
-        ),
-        isTrue,
-      );
-      expect(
-        find.byKey(const ValueKey('shell-background-player')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
+  testWidgets('android BStream player reuses the Lyrics page transition', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(bottom: 24);
+    addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
-    },
-  );
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPadding();
+    });
 
-  testWidgets(
-    'android player fades while Apple controls slide in both directions',
-    (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    await tester.pumpWidget(
+      _testApp(
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/BStream-Music',
+            language: AppLanguage.spanish,
+            miniPlayerMode: MiniPlayerMode.capsule,
+            miniPlayerBackgroundMode: MiniPlayerBackgroundMode.transparent,
+            playerStyle: PlayerStyle.bstreamMusic,
+          ),
+        ),
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Cancion para transicion coordinada',
+            artist: 'BStream Music',
+            trackId: 'coordinated-shell-track',
+            duration: Duration(minutes: 3),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    double slotOpacity(Finder slot) {
+      final nearestOpacity = find
+          .descendant(of: slot, matching: find.byType(AnimatedOpacity))
+          .evaluate()
+          .reduce((nearest, candidate) {
+            return candidate.depth < nearest.depth ? candidate : nearest;
+          });
+      return (nearestOpacity.renderObject! as RenderAnimatedOpacity)
+          .opacity
+          .value;
+    }
+
+    double shellOpacity(String key) =>
+        tester.widget<Opacity>(find.byKey(ValueKey(key))).opacity;
+
+    const controlsSlideKey = ValueKey('player-view-slide-transition');
+
+    Offset controlsSlideTranslation() {
+      final slide = find.byKey(controlsSlideKey);
+      final nearestTranslation = find
+          .descendant(of: slide, matching: find.byType(FractionalTranslation))
+          .evaluate()
+          .reduce((nearest, candidate) {
+            return candidate.depth < nearest.depth ? candidate : nearest;
+          });
+      return (nearestTranslation.widget as FractionalTranslation).translation;
+    }
+
+    double playerFadeOpacity() {
+      return (tester.renderObject(
+                find.byKey(const ValueKey('player-view-fade-transition')),
+              )
+              as RenderAnimatedOpacity)
+          .opacity
+          .value;
+    }
+
+    final home = find.byKey(const ValueKey('home-view'));
+    final miniClip = find.byKey(const ValueKey('mini-player-shell-clip'));
+    final bottomClip = find.byKey(
+      const ValueKey('bottom-navigation-shell-clip'),
+    );
+    final initialMiniHeight = tester.getSize(miniClip).height;
+    final initialBottomHeight = tester.getSize(bottomClip).height;
+    expect(initialMiniHeight, greaterThan(0));
+    expect(initialBottomHeight, greaterThan(0));
+    final prewarmedPlayer = find.byKey(const ValueKey('player-view'));
+    expect(prewarmedPlayer, findsOneWidget);
+    final playerFade = find.byKey(
+      const ValueKey('player-view-fade-transition'),
+    );
+    final backgroundFade = find.byKey(
+      const ValueKey('shell-player-background-fade-transition'),
+    );
+    final backgroundSlide = find.byKey(
+      const ValueKey('shell-player-background-slide-transition'),
+    );
+    expect(
+      find.byKey(const ValueKey('bstream-player-controls-slide-transition')),
+      findsNothing,
+    );
+    final controlsSlide = tester.widget<SlideTransition>(
+      find.byKey(controlsSlideKey),
+    );
+    final hiddenControlsOffset = controlsSlide.position.value;
+    expect(hiddenControlsOffset.dx, 0);
+    expect(
+      hiddenControlsOffset.dy,
+      playbackPageTransitionBeginOffset.dy,
+      reason: 'The complete player must use the Lyrics route travel.',
+    );
+    final playerPageTransition = tester
+        .widget<PlaybackPageVisibilityTransition>(
+          find
+              .ancestor(
+                of: playerFade,
+                matching: find.byType(PlaybackPageVisibilityTransition),
+              )
+              .first,
+        );
+    expect(playerPageTransition.duration, playbackPageTransitionDuration);
+    expect(
+      playerPageTransition.reverseDuration,
+      playbackPageReverseTransitionDuration,
+    );
+    expect(tester.widget<FadeTransition>(backgroundFade).opacity.value, 0);
+    expect(
+      tester.widget<SlideTransition>(backgroundSlide).position.value,
+      playbackPageTransitionBeginOffset,
+    );
+    expect(controlsSlideTranslation(), hiddenControlsOffset);
+    expect(playerFadeOpacity(), 0);
+    expect(
+      find.ancestor(
+        of: find.byKey(const ValueKey('player-large-artwork')),
+        matching: playerFade,
+      ),
+      findsOneWidget,
+      reason: 'The artwork must be part of the fading player layer.',
+    );
+
+    await tester.tapAt(
+      tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<SlideTransition>(find.byKey(controlsSlideKey))
+          .position
+          .value,
+      hiddenControlsOffset,
+    );
+    expect(tester.widget<FadeTransition>(playerFade).opacity.value, 0);
+
+    final player = find.byKey(const ValueKey('player-view'));
+    expect(player, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('shell-background-browsing')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shell-background-player')),
+      findsOneWidget,
+    );
+    final retainedPlayerElement = tester.element(find.byType(PlayerPanel));
+    expect(
+      tester
+          .widget<PlayerPanel>(find.byType(PlayerPanel))
+          .trackTransitionsEnabled,
+      isFalse,
+    );
+    await tester.pump(const Duration(milliseconds: 210));
+
+    // The complete player mirrors Lyrics: fade and 3.5% vertical travel
+    // progress together while the previous surface remains underneath.
+    expect(slotOpacity(home), 1);
+    expect(playerFadeOpacity(), closeTo(0.5, 0.02));
+    expect(
+      controlsSlideTranslation().dy,
+      closeTo(hiddenControlsOffset.dy / 2, 0.003),
+    );
+    expect(
+      tester.widget<FadeTransition>(backgroundFade).opacity.value,
+      closeTo(0.5, 0.02),
+    );
+    expect(
+      tester.widget<SlideTransition>(backgroundSlide).position.value.dy,
+      closeTo(hiddenControlsOffset.dy / 2, 0.003),
+    );
+    expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
+    expect(
+      shellOpacity('bottom-navigation-shell-opacity'),
+      inExclusiveRange(0, 1),
+    );
+    expect(
+      find.byKey(const ValueKey('player-view-scale-transition')),
+      findsNothing,
+    );
+    expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
+    expect(
+      tester.getSize(bottomClip).height,
+      closeTo(initialBottomHeight, 0.1),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.pump(const Duration(milliseconds: 210));
+
+    expect(shellOpacity('mini-player-shell-opacity'), 0);
+    expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
+    expect(slotOpacity(home), 0);
+    expect(controlsSlideTranslation(), Offset.zero);
+    expect(playerFadeOpacity(), 1);
+    expect(tester.widget<FadeTransition>(backgroundFade).opacity.value, 1);
+    expect(
+      tester.widget<SlideTransition>(backgroundSlide).position.value,
+      Offset.zero,
+    );
+    expect(
+      tester
+          .widget<PlayerPanel>(find.byType(PlayerPanel))
+          .trackTransitionsEnabled,
+      isTrue,
+    );
+
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pump();
+
+    // Reverse begins immediately, exactly like popping the Lyrics route.
+    expect(slotOpacity(home), 1);
+    expect(controlsSlideTranslation(), Offset.zero);
+    expect(playerFadeOpacity(), 1);
+
+    await tester.pump(const Duration(milliseconds: 180));
+
+    expect(playerFadeOpacity(), closeTo(0.5, 0.02));
+    expect(
+      controlsSlideTranslation().dy,
+      closeTo(hiddenControlsOffset.dy / 2, 0.003),
+    );
+    expect(
+      tester.widget<FadeTransition>(backgroundFade).opacity.value,
+      closeTo(0.5, 0.02),
+    );
+    expect(
+      tester.widget<SlideTransition>(backgroundSlide).position.value.dy,
+      closeTo(hiddenControlsOffset.dy / 2, 0.003),
+    );
+    expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
+    expect(
+      shellOpacity('bottom-navigation-shell-opacity'),
+      inExclusiveRange(0, 1),
+    );
+
+    await tester.pump(const Duration(milliseconds: 180));
+
+    expect(shellOpacity('mini-player-shell-opacity'), 1);
+    expect(shellOpacity('bottom-navigation-shell-opacity'), 1);
+    expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
+    expect(
+      tester.getSize(bottomClip).height,
+      closeTo(initialBottomHeight, 0.1),
+    );
+    expect(slotOpacity(home), 1);
+    expect(controlsSlideTranslation(), hiddenControlsOffset);
+    expect(playerFadeOpacity(), 0);
+    expect(
+      tester.widget<SlideTransition>(backgroundSlide).position.value,
+      playbackPageTransitionBeginOffset,
+    );
+    expect(find.byKey(const ValueKey('player-view')), findsOneWidget);
+    expect(
+      tester
+          .widget<PlayerPanel>(find.byType(PlayerPanel))
+          .trackTransitionsEnabled,
+      isFalse,
+    );
+    expect(
+      identical(
+        retainedPlayerElement,
+        tester.element(find.byType(PlayerPanel)),
+      ),
+      isTrue,
+    );
+    expect(
+      find.byKey(const ValueKey('shell-background-player')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('android Apple player reuses the Lyrics page transition', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view
+      ..physicalSize = const Size(390, 844)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
       tester.view
-        ..physicalSize = const Size(390, 844)
-        ..devicePixelRatio = 1;
-      addTearDown(() {
-        debugDefaultTargetPlatformOverride = null;
-        tester.view
-          ..resetPhysicalSize()
-          ..resetDevicePixelRatio();
-      });
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
 
-      await tester.pumpWidget(
-        _testApp(
-          settingsController: _FakeSettingsController(
-            const SettingsState(
-              downloadDirectory: '/tmp/BStream-Music',
-              language: AppLanguage.spanish,
-              playerStyle: PlayerStyle.appleMusic,
-            ),
-          ),
-          playerService: _FakePlayerService(
-            snapshot: const PlayerSnapshot(
-              status: PlayerStatus.playing,
-              title: 'Transicion Apple coordinada',
-              artist: 'BStream Music',
-              trackId: 'apple-coordinated-shell-track',
-              duration: Duration(minutes: 3),
-            ),
+    await tester.pumpWidget(
+      _testApp(
+        settingsController: _FakeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/BStream-Music',
+            language: AppLanguage.spanish,
+            playerStyle: PlayerStyle.appleMusic,
           ),
         ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 600));
-
-      const controlsSlideKey = ValueKey(
-        'apple-player-controls-slide-transition',
-      );
-      final controlsSlideFinder = find.byKey(controlsSlideKey);
-      final playerFade = find.byKey(
-        const ValueKey('player-view-fade-transition'),
-      );
-      final backgroundFade = find.byKey(
-        const ValueKey('shell-player-background-fade-transition'),
-      );
-
-      Offset controlsSlideTranslation() {
-        final nearestTranslation = find
-            .descendant(
-              of: controlsSlideFinder,
-              matching: find.byType(FractionalTranslation),
-            )
-            .evaluate()
-            .reduce((nearest, candidate) {
-              return candidate.depth < nearest.depth ? candidate : nearest;
-            });
-        return (nearestTranslation.widget as FractionalTranslation).translation;
-      }
-
-      double playerFadeOpacity() {
-        return (tester.renderObject(playerFade) as RenderAnimatedOpacity)
-            .opacity
-            .value;
-      }
-
-      expect(controlsSlideFinder, findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('bstream-player-controls-slide-transition')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const ValueKey('player-view-slide-transition')),
-        findsNothing,
-      );
-      final controlsSlide = tester.widget<AnimatedSlide>(controlsSlideFinder);
-      final hiddenControlsOffset = controlsSlide.offset;
-      expect(hiddenControlsOffset.dx, 0);
-      expect(hiddenControlsOffset.dy, inExclusiveRange(0.04, 0.12));
-      expect(controlsSlide.duration, const Duration(milliseconds: 200));
-      expect(
-        tester.widget<AnimatedOpacity>(playerFade).duration,
-        const Duration(milliseconds: 220),
-      );
-      expect(
-        tester
-            .widget<PlayerPanel>(find.byType(PlayerPanel))
-            .controlsTransitionEnterDelay,
-        const Duration(milliseconds: 100),
-      );
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), 0);
-
-      await tester.tapAt(
-        tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
-      );
-      await tester.pump();
-      expect(
-        tester.widget<AnimatedSlide>(controlsSlideFinder).offset,
-        hiddenControlsOffset,
-      );
-
-      await tester.pump(const Duration(milliseconds: 80));
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
-
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(
-        tester.widget<AnimatedSlide>(controlsSlideFinder).offset,
-        Offset.zero,
-      );
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-      );
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
-      expect(
-        find.ancestor(
-          of: find.byKey(const ValueKey('player-large-artwork')),
-          matching: playerFade,
+        playerService: _FakePlayerService(
+          snapshot: const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            title: 'Transicion Apple coordinada',
+            artist: 'BStream Music',
+            trackId: 'apple-coordinated-shell-track',
+            duration: Duration(minutes: 3),
+          ),
         ),
-        findsOneWidget,
-      );
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
 
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(playerFadeOpacity(), 1);
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-      );
+    const controlsSlideKey = ValueKey('player-view-slide-transition');
+    final controlsSlideFinder = find.byKey(controlsSlideKey);
+    final playerFade = find.byKey(
+      const ValueKey('player-view-fade-transition'),
+    );
+    final backgroundFade = find.byKey(
+      const ValueKey('shell-player-background-fade-transition'),
+    );
 
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(controlsSlideTranslation(), Offset.zero);
-      expect(playerFadeOpacity(), 1);
+    Offset controlsSlideTranslation() {
+      final nearestTranslation = find
+          .descendant(
+            of: controlsSlideFinder,
+            matching: find.byType(FractionalTranslation),
+          )
+          .evaluate()
+          .reduce((nearest, candidate) {
+            return candidate.depth < nearest.depth ? candidate : nearest;
+          });
+      return (nearestTranslation.widget as FractionalTranslation).translation;
+    }
 
-      await tester.tap(find.byKey(const ValueKey('apple-player-grabber')));
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 80));
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-        reason: 'Apple controls must lead the closing transition.',
-      );
-      expect(playerFadeOpacity(), 1);
+    double playerFadeOpacity() {
+      return (tester.renderObject(playerFade) as RenderAnimatedOpacity)
+          .opacity
+          .value;
+    }
 
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(tester.widget<AnimatedOpacity>(playerFade).opacity, 0);
-      expect(tester.widget<AnimatedOpacity>(backgroundFade).opacity, 0);
-      expect(playerFadeOpacity(), 1);
+    expect(controlsSlideFinder, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('bstream-player-controls-slide-transition')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('apple-player-controls-slide-transition')),
+      findsNothing,
+    );
+    final controlsSlide = tester.widget<SlideTransition>(controlsSlideFinder);
+    final hiddenControlsOffset = controlsSlide.position.value;
+    expect(hiddenControlsOffset.dx, 0);
+    expect(hiddenControlsOffset.dy, playbackPageTransitionBeginOffset.dy);
+    final playerPageTransition = tester
+        .widget<PlaybackPageVisibilityTransition>(
+          find
+              .ancestor(
+                of: playerFade,
+                matching: find.byType(PlaybackPageVisibilityTransition),
+              )
+              .first,
+        );
+    expect(playerPageTransition.duration, playbackPageTransitionDuration);
+    expect(
+      playerPageTransition.reverseDuration,
+      playbackPageReverseTransitionDuration,
+    );
+    expect(controlsSlideTranslation(), hiddenControlsOffset);
+    expect(playerFadeOpacity(), 0);
 
-      await tester.pump(const Duration(milliseconds: 60));
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
-      expect(
-        controlsSlideTranslation().dy,
-        inExclusiveRange(0, hiddenControlsOffset.dy),
-      );
+    await tester.tapAt(
+      tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
+    );
+    await tester.pump();
+    expect(
+      tester.widget<SlideTransition>(controlsSlideFinder).position.value,
+      hiddenControlsOffset,
+    );
 
-      await tester.pump(const Duration(milliseconds: 40));
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
+    await tester.pump(const Duration(milliseconds: 210));
+    expect(playerFadeOpacity(), closeTo(0.5, 0.02));
+    expect(
+      controlsSlideTranslation().dy,
+      closeTo(hiddenControlsOffset.dy / 2, 0.003),
+    );
+    expect(
+      tester.widget<FadeTransition>(backgroundFade).opacity.value,
+      closeTo(0.5, 0.02),
+    );
+    expect(
+      find.ancestor(
+        of: find.byKey(const ValueKey('player-large-artwork')),
+        matching: playerFade,
+      ),
+      findsOneWidget,
+    );
 
-      await tester.pump(const Duration(milliseconds: 120));
-      expect(controlsSlideTranslation(), hiddenControlsOffset);
-      expect(playerFadeOpacity(), 0);
-      expect(tester.takeException(), isNull);
-      debugDefaultTargetPlatformOverride = null;
-    },
-  );
+    await tester.pump(const Duration(milliseconds: 210));
+    expect(controlsSlideTranslation(), Offset.zero);
+    expect(playerFadeOpacity(), 1);
+    expect(tester.widget<FadeTransition>(backgroundFade).opacity.value, 1);
+
+    await tester.tap(find.byKey(const ValueKey('apple-player-grabber')));
+    await tester.pump();
+    await tester.pump();
+
+    await tester.pump(const Duration(milliseconds: 180));
+    expect(
+      controlsSlideTranslation().dy,
+      closeTo(hiddenControlsOffset.dy / 2, 0.003),
+    );
+    expect(playerFadeOpacity(), closeTo(0.5, 0.02));
+    expect(
+      tester.widget<FadeTransition>(backgroundFade).opacity.value,
+      closeTo(0.5, 0.02),
+    );
+
+    await tester.pump(const Duration(milliseconds: 180));
+    expect(controlsSlideTranslation(), hiddenControlsOffset);
+    expect(playerFadeOpacity(), 0);
+    expect(tester.widget<FadeTransition>(backgroundFade).opacity.value, 0);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   for (final playerStyle in PlayerStyle.values) {
     testWidgets(
-      'desktop first ${playerStyle.code} player entry fades while controls slide',
+      'desktop first ${playerStyle.code} player entry reuses Lyrics motion',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
         tester.view
@@ -3488,11 +3427,7 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 500));
 
-        final controlsSlideKey = ValueKey(
-          playerStyle == PlayerStyle.appleMusic
-              ? 'apple-player-controls-slide-transition'
-              : 'bstream-player-controls-slide-transition',
-        );
+        const controlsSlideKey = ValueKey('player-view-slide-transition');
 
         Offset controlsSlideTranslation() {
           final nearestTranslation = find
@@ -3520,65 +3455,57 @@ void main() {
         expect(playerFade, findsOneWidget);
         expect(controlsSlide, findsOneWidget);
         expect(
-          tester.widget<AnimatedSlide>(controlsSlide).offset.dy,
-          greaterThan(0),
+          tester.widget<SlideTransition>(controlsSlide).position.value,
+          playbackPageTransitionBeginOffset,
         );
-        expect(controlsSlideTranslation().dy, greaterThan(0));
+        expect(controlsSlideTranslation(), playbackPageTransitionBeginOffset);
+        expect(
+          find.byKey(
+            ValueKey(
+              playerStyle == PlayerStyle.appleMusic
+                  ? 'apple-player-controls-slide-transition'
+                  : 'bstream-player-controls-slide-transition',
+            ),
+          ),
+          findsNothing,
+        );
 
-        // The first desktop build starts hidden. The following frame sets the
-        // quick fade target; controls deliberately wait another 100 ms.
+        // A first desktop visit is built hidden, then uses the same maintained
+        // page animation that drives the Lyrics route.
         await tester.pump();
         expect(
-          tester.widget<AnimatedSlide>(controlsSlide).offset.dy,
-          greaterThan(0),
+          tester.widget<SlideTransition>(controlsSlide).position.value,
+          playbackPageTransitionBeginOffset,
         );
-        expect(tester.widget<AnimatedOpacity>(playerFade).opacity, 1);
+        expect(tester.widget<FadeTransition>(playerFade).opacity.value, 0);
+        final playerPageTransition = tester
+            .widget<PlaybackPageVisibilityTransition>(
+              find
+                  .ancestor(
+                    of: playerFade,
+                    matching: find.byType(PlaybackPageVisibilityTransition),
+                  )
+                  .first,
+            );
+        expect(playerPageTransition.duration, playbackPageTransitionDuration);
         expect(
-          tester.widget<AnimatedOpacity>(playerFade).duration,
-          const Duration(milliseconds: 220),
-        );
-        expect(
-          tester.widget<AnimatedSlide>(controlsSlide).duration,
-          const Duration(milliseconds: 200),
+          playerPageTransition.reverseDuration,
+          playbackPageReverseTransitionDuration,
         );
 
-        await tester.pump(const Duration(milliseconds: 80));
-        expect(controlsSlideTranslation().dy, 0.08);
+        await tester.pump(const Duration(milliseconds: 210));
         expect(
-          (tester.renderObject(playerFade) as RenderAnimatedOpacity)
-              .opacity
-              .value,
-          inExclusiveRange(0, 1),
+          controlsSlideTranslation().dy,
+          closeTo(playbackPageTransitionBeginOffset.dy / 2, 0.003),
+        );
+        expect(
+          tester.widget<FadeTransition>(playerFade).opacity.value,
+          closeTo(0.5, 0.02),
         );
 
-        await tester.pump(const Duration(milliseconds: 20));
-        expect(tester.widget<AnimatedSlide>(controlsSlide).offset, Offset.zero);
-        await tester.pump(const Duration(milliseconds: 100));
-        expect(controlsSlideTranslation().dy, inExclusiveRange(0, 0.08));
-        expect(
-          (tester.renderObject(playerFade) as RenderAnimatedOpacity)
-              .opacity
-              .value,
-          inExclusiveRange(0, 1),
-        );
-
-        await tester.pump(const Duration(milliseconds: 20));
-        expect(controlsSlideTranslation().dy, inExclusiveRange(0, 0.08));
-        expect(
-          (tester.renderObject(playerFade) as RenderAnimatedOpacity)
-              .opacity
-              .value,
-          1,
-        );
-
-        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 210));
         expect(controlsSlideTranslation(), Offset.zero);
-        expect(
-          (tester.renderObject(playerFade) as RenderAnimatedOpacity)
-              .opacity
-              .value,
-          1,
-        );
+        expect(tester.widget<FadeTransition>(playerFade).opacity.value, 1);
         expect(tester.takeException(), isNull);
         debugDefaultTargetPlatformOverride = null;
       },
@@ -3903,10 +3830,10 @@ void main() {
     await tester.pump();
     // Commit the implicit player transition target before advancing its clock.
     await tester.pump();
-    // Cross the delayed controls start in one frame, then let its 200 ms
-    // slide finish before measuring safe-area geometry.
+    // Let the shared 420 ms Lyrics-style page transition finish before
+    // measuring safe-area geometry.
     await tester.pump(const Duration(milliseconds: 110));
-    await tester.pump(const Duration(milliseconds: 210));
+    await tester.pump(const Duration(milliseconds: 310));
 
     final error = find.byKey(const ValueKey('player-error-message'));
     final control = find.byKey(const ValueKey('player-volume-control'));
@@ -4044,16 +3971,20 @@ void main() {
           .duration,
       Duration.zero,
     );
-    expect(
-      tester
-          .widget<AnimatedOpacity>(
-            find.byKey(
-              const ValueKey('shell-player-background-fade-transition'),
-            ),
-          )
-          .duration,
-      Duration.zero,
+    final backgroundFade = find.byKey(
+      const ValueKey('shell-player-background-fade-transition'),
     );
+    final backgroundPageTransition = tester
+        .widget<PlaybackPageVisibilityTransition>(
+          find
+              .ancestor(
+                of: backgroundFade,
+                matching: find.byType(PlaybackPageVisibilityTransition),
+              )
+              .first,
+        );
+    expect(backgroundPageTransition.duration, Duration.zero);
+    expect(backgroundPageTransition.reverseDuration, Duration.zero);
     await tester.tap(find.byKey(const ValueKey('bottom-navigation-item-1')));
     await tester.pump();
     expect(
@@ -4072,26 +4003,36 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(
-      tester
-          .widget<AnimatedSlide>(
-            find.byKey(
-              const ValueKey('bstream-player-controls-slide-transition'),
-            ),
-          )
-          .duration,
-      Duration.zero,
-    );
-    expect(
-      find.byKey(const ValueKey('player-view-slide-transition')),
+      find.byKey(const ValueKey('bstream-player-controls-slide-transition')),
       findsNothing,
     );
     expect(
+      find.byKey(const ValueKey('player-view-slide-transition')),
+      findsOneWidget,
+    );
+    final playerFade = find.byKey(
+      const ValueKey('player-view-fade-transition'),
+    );
+    final playerPageTransition = tester
+        .widget<PlaybackPageVisibilityTransition>(
+          find
+              .ancestor(
+                of: playerFade,
+                matching: find.byType(PlaybackPageVisibilityTransition),
+              )
+              .first,
+        );
+    expect(playerPageTransition.duration, Duration.zero);
+    expect(playerPageTransition.reverseDuration, Duration.zero);
+    expect(tester.widget<FadeTransition>(playerFade).opacity.value, 1);
+    expect(
       tester
-          .widget<AnimatedOpacity>(
-            find.byKey(const ValueKey('player-view-fade-transition')),
+          .widget<SlideTransition>(
+            find.byKey(const ValueKey('player-view-slide-transition')),
           )
-          .duration,
-      Duration.zero,
+          .position
+          .value,
+      Offset.zero,
     );
     expect(
       tester

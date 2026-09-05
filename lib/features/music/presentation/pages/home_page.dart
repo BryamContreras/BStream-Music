@@ -36,6 +36,7 @@ import '../widgets/local_music_panel.dart';
 import '../widgets/lyrics_page_route.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/playback_gradient_background.dart';
+import '../widgets/playback_page_transition.dart';
 import '../widgets/player_panel.dart';
 import '../widgets/playlist_picker_dialog.dart';
 import '../widgets/scrolled_under_tab_frame.dart';
@@ -109,14 +110,9 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   static const _maxViewHistory = 2;
   static const _shellTransitionDuration = Duration(milliseconds: 320);
-  // Opening: fade 0..220 ms, controls slide 100..300 ms.
-  // Closing keeps the motion responsive: controls slide 0..200 ms and the
-  // fade overlaps from 100..320 ms.
-  static const _playerTransitionDuration = Duration(milliseconds: 320);
-  static const _playerFadeDuration = Duration(milliseconds: 220);
-  static const _playerControlsSlideDuration = Duration(milliseconds: 200);
-  static const _playerControlsEnterDelay = Duration(milliseconds: 100);
-  static const _playerFadeExitDelay = Duration(milliseconds: 100);
+  static const _playerTransitionDuration = playbackPageTransitionDuration;
+  static const _playerReverseTransitionDuration =
+      playbackPageReverseTransitionDuration;
   static const _bottomNavigationHideTravel = 24.0;
   static const _bottomNavigationShowTravel = 12.0;
 
@@ -808,8 +804,10 @@ class _HomePageState extends ConsumerState<HomePage> {
         index != _playerIndex &&
         revealBottomNavigation &&
         !_bottomNavigationRevealed;
-    final chromeTransitionDuration = enteringPlayer || leavingPlayer
+    final chromeTransitionDuration = enteringPlayer
         ? _resolvedMotionDuration(_playerTransitionDuration)
+        : leavingPlayer
+        ? _resolvedMotionDuration(_playerReverseTransitionDuration)
         : revealsBottomNavigation
         ? _resolvedMotionDuration(_shellTransitionDuration)
         : null;
@@ -1035,8 +1033,10 @@ class _HomePageState extends ConsumerState<HomePage> {
     final leavingPlayer = _isPlayerSelected && target != _playerIndex;
     final enteringPlayer = !_isPlayerSelected && target == _playerIndex;
     final playerTransition = leavingPlayer || enteringPlayer;
-    final playerTransitionDuration = playerTransition
+    final playerTransitionDuration = enteringPlayer
         ? _resolvedMotionDuration(_playerTransitionDuration)
+        : leavingPlayer
+        ? _resolvedMotionDuration(_playerReverseTransitionDuration)
         : null;
     if (playerTransition) {
       _beginPlayerTransition();
@@ -1178,26 +1178,18 @@ class _HomePageState extends ConsumerState<HomePage> {
     final shellTransitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : _shellTransitionDuration;
-    final playerFadeDuration = MediaQuery.disableAnimationsOf(context)
+    final playerTransitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : _playerFadeDuration;
-    final playerControlsSlideDuration = MediaQuery.disableAnimationsOf(context)
+        : _playerTransitionDuration;
+    final playerReverseTransitionDuration =
+        MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : _playerControlsSlideDuration;
-    final playerControlsEnterDelay = MediaQuery.disableAnimationsOf(context)
-        ? Duration.zero
-        : _playerControlsEnterDelay;
-    final playerFadeExitDelay = MediaQuery.disableAnimationsOf(context)
-        ? Duration.zero
-        : _playerFadeExitDelay;
-    final revealingChromeAfterPlayer =
-        _playerTransitionActive && !_isPlayerSelected;
-    final chromeVisibilityDuration = revealingChromeAfterPlayer
-        ? playerFadeDuration
+        : _playerReverseTransitionDuration;
+    final chromeVisibilityDuration = _playerTransitionActive
+        ? _isPlayerSelected
+              ? playerTransitionDuration
+              : playerReverseTransitionDuration
         : shellTransitionDuration;
-    final chromeShowDelay = revealingChromeAfterPlayer
-        ? playerFadeExitDelay
-        : Duration.zero;
     final strings = ref.watch(appStringsProvider);
     final destinations = _usesMobileNavigation
         ? [
@@ -1357,13 +1349,20 @@ class _HomePageState extends ConsumerState<HomePage> {
                     key: ValueKey('shell-background-browsing'),
                     child: BrowsingTabBackground(),
                   ),
-                  _DelayedExitFade(
+                  PlaybackPageVisibilityTransition(
                     fadeKey: const ValueKey(
                       'shell-player-background-fade-transition',
                     ),
+                    slideKey: const ValueKey(
+                      'shell-player-background-slide-transition',
+                    ),
+                    repaintBoundaryKey: const ValueKey(
+                      'shell-player-background-repaint-boundary',
+                    ),
                     visible: _isPlayerSelected,
-                    duration: playerFadeDuration,
-                    exitDelay: playerFadeExitDelay,
+                    duration: playerTransitionDuration,
+                    reverseDuration: playerReverseTransitionDuration,
+                    animateInitialEntry: false,
                     child: const SizedBox.expand(
                       key: ValueKey('shell-background-player'),
                       child: PlayerPlaybackGradientBackground(),
@@ -1403,14 +1402,10 @@ class _HomePageState extends ConsumerState<HomePage> {
                                               browsingViewportBottomPadding,
                                           contentBottomPadding:
                                               browsingContentBottomPadding,
-                                          playerFadeDuration:
-                                              playerFadeDuration,
-                                          playerFadeExitDelay:
-                                              playerFadeExitDelay,
-                                          playerControlsSlideDuration:
-                                              playerControlsSlideDuration,
-                                          playerControlsEnterDelay:
-                                              playerControlsEnterDelay,
+                                          playerTransitionDuration:
+                                              playerTransitionDuration,
+                                          playerReverseTransitionDuration:
+                                              playerReverseTransitionDuration,
                                           playerTransitionActive:
                                               _playerTransitionActive,
                                           libraryNavigationController:
@@ -1447,7 +1442,6 @@ class _HomePageState extends ConsumerState<HomePage> {
                                       ),
                                       visible: bottomNavigationVisible,
                                       duration: chromeVisibilityDuration,
-                                      showDelay: chromeShowDelay,
                                       hiddenTranslation: const Offset(0, 1),
                                       preserveBackdropMaterial:
                                           useLiquidBottomNavigation,
@@ -1529,7 +1523,6 @@ class _HomePageState extends ConsumerState<HomePage> {
                               ),
                               visible: !_isPlayerSelected,
                               duration: chromeVisibilityDuration,
-                              showDelay: chromeShowDelay,
                               hiddenTranslation:
                                   miniPlayerAppearance
                                       .backgroundMode
@@ -1576,12 +1569,11 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 }
 
-class _ShellVisibilityTransition extends StatefulWidget {
+class _ShellVisibilityTransition extends StatelessWidget {
   const _ShellVisibilityTransition({
     required this.visible,
     required this.duration,
     required this.child,
-    this.showDelay = Duration.zero,
     this.hiddenTranslation = const Offset(0, 0.08),
     this.hiddenScale = 1,
     this.clipKey,
@@ -1594,7 +1586,6 @@ class _ShellVisibilityTransition extends StatefulWidget {
 
   final bool visible;
   final Duration duration;
-  final Duration showDelay;
   final Widget child;
   final Offset hiddenTranslation;
   final double hiddenScale;
@@ -1605,119 +1596,49 @@ class _ShellVisibilityTransition extends StatefulWidget {
   final bool preserveBackdropMaterial;
 
   @override
-  State<_ShellVisibilityTransition> createState() =>
-      _ShellVisibilityTransitionState();
-}
-
-class _ShellVisibilityTransitionState
-    extends State<_ShellVisibilityTransition> {
-  Timer? _showTimer;
-  late Duration _animationDuration;
-  late bool _targetVisible;
-
-  @override
-  void initState() {
-    super.initState();
-    _animationDuration = widget.duration;
-    _targetVisible = widget.visible && widget.showDelay == Duration.zero;
-    if (widget.visible && !_targetVisible) {
-      _scheduleShow();
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _ShellVisibilityTransition oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!widget.visible) {
-      _showTimer?.cancel();
-      _showTimer = null;
-      _animationDuration = widget.duration;
-      _targetVisible = false;
-      return;
-    }
-    if (!oldWidget.visible ||
-        (widget.showDelay != oldWidget.showDelay && !_targetVisible)) {
-      _scheduleShow(notifyImmediate: false);
-    }
-  }
-
-  void _scheduleShow({bool notifyImmediate = true}) {
-    _showTimer?.cancel();
-    _showTimer = null;
-    if (widget.showDelay == Duration.zero || widget.duration == Duration.zero) {
-      _animationDuration = widget.duration;
-      if (notifyImmediate && mounted) {
-        setState(() => _targetVisible = true);
-      } else {
-        _targetVisible = true;
-      }
-      return;
-    }
-    _showTimer = Timer(widget.showDelay, () {
-      _showTimer = null;
-      if (mounted && widget.visible && !_targetVisible) {
-        setState(() {
-          _animationDuration = widget.duration;
-          _targetVisible = true;
-        });
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _showTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      ignoring: !_targetVisible,
+      ignoring: !visible,
       child: ExcludeSemantics(
-        excluding: !_targetVisible,
+        excluding: !visible,
         child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(end: _targetVisible ? 1 : 0),
-          duration: _animationDuration,
-          curve: _targetVisible ? Curves.easeOutCubic : Curves.easeInCubic,
+          tween: Tween<double>(end: visible ? 1 : 0),
+          duration: duration,
+          curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
           builder: (context, value, child) {
-            final scale = lerpDouble(widget.hiddenScale, 1, value)!;
+            final scale = lerpDouble(hiddenScale, 1, value)!;
             final movingChild = FractionalTranslation(
-              key: widget.translationKey,
-              translation: Offset.lerp(
-                widget.hiddenTranslation,
-                Offset.zero,
-                value,
-              )!,
+              key: translationKey,
+              translation: Offset.lerp(hiddenTranslation, Offset.zero, value)!,
               child: Transform.scale(
-                key: widget.scaleKey,
+                key: scaleKey,
                 scaleX: scale,
                 // A live backdrop must keep its physical height. Scaling it
                 // vertically stretches the captured pixels and flattens the
                 // rim while the sheet is moving.
-                scaleY: widget.preserveBackdropMaterial ? 1 : scale,
+                scaleY: preserveBackdropMaterial ? 1 : scale,
                 alignment: Alignment.bottomCenter,
                 child: child,
               ),
             );
             return ClipRect(
-              key: widget.clipKey,
+              key: clipKey,
               // Keep Liquid Glass out of an Opacity save layer: fading the
               // complete BackdropFilter also fades its sampled background and
               // makes the material look like a flat overlay. Its full-height
               // translation exits through this clip instead. Other surface
               // modes retain their established fade.
-              child: widget.preserveBackdropMaterial
-                  ? KeyedSubtree(key: widget.opacityKey, child: movingChild)
+              child: preserveBackdropMaterial
+                  ? KeyedSubtree(key: opacityKey, child: movingChild)
                   : Opacity(
-                      key: widget.opacityKey,
+                      key: opacityKey,
                       opacity:
                           1 - math.pow(1 - value.clamp(0.0, 1.0), 3).toDouble(),
                       child: movingChild,
                     ),
             );
           },
-          child: widget.child,
+          child: child,
         ),
       ),
     );
@@ -2680,10 +2601,8 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.settingsIndex,
     required this.viewportBottomPadding,
     required this.contentBottomPadding,
-    required this.playerFadeDuration,
-    required this.playerFadeExitDelay,
-    required this.playerControlsSlideDuration,
-    required this.playerControlsEnterDelay,
+    required this.playerTransitionDuration,
+    required this.playerReverseTransitionDuration,
     required this.playerTransitionActive,
     required this.libraryNavigationController,
     required this.localMusicNavigationController,
@@ -2705,10 +2624,8 @@ class _PersistentCurrentViews extends StatefulWidget {
   final int settingsIndex;
   final double viewportBottomPadding;
   final double contentBottomPadding;
-  final Duration playerFadeDuration;
-  final Duration playerFadeExitDelay;
-  final Duration playerControlsSlideDuration;
-  final Duration playerControlsEnterDelay;
+  final Duration playerTransitionDuration;
+  final Duration playerReverseTransitionDuration;
   final bool playerTransitionActive;
   final LibraryNavigationController libraryNavigationController;
   final LocalMusicNavigationController localMusicNavigationController;
@@ -2730,7 +2647,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
   late final bool _playerWasInitialDestination;
   late bool _playerVisuallyCoversBrowsing =
       widget.selectedIndex == widget.playerIndex;
-  Timer? _playerFadeMilestoneTimer;
+  Timer? _playerTransitionMilestoneTimer;
   int? _playerTransitionOriginIndex;
 
   @override
@@ -2759,39 +2676,38 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
         (widget.selectedIndex == widget.playerIndex ||
             oldWidget.selectedIndex == widget.playerIndex)) {
       _playerTransitionOriginIndex = oldWidget.selectedIndex;
-      _schedulePlayerFadeMilestone();
+      _schedulePlayerTransitionMilestone();
     }
     if (!widget.playerTransitionActive) {
-      _playerFadeMilestoneTimer?.cancel();
-      _playerFadeMilestoneTimer = null;
+      _playerTransitionMilestoneTimer?.cancel();
+      _playerTransitionMilestoneTimer = null;
       _playerVisuallyCoversBrowsing =
           widget.selectedIndex == widget.playerIndex;
       _playerTransitionOriginIndex = null;
     }
   }
 
-  void _schedulePlayerFadeMilestone() {
-    _playerFadeMilestoneTimer?.cancel();
-    _playerFadeMilestoneTimer = null;
+  void _schedulePlayerTransitionMilestone() {
+    _playerTransitionMilestoneTimer?.cancel();
+    _playerTransitionMilestoneTimer = null;
     final enteringPlayer = widget.selectedIndex == widget.playerIndex;
     if (!widget.playerTransitionActive) {
       _playerVisuallyCoversBrowsing = enteringPlayer;
       return;
     }
 
-    // Keep browsing content only while it is genuinely needed beneath the
-    // fade. This prevents its headings from showing through the translucent
-    // playback background during the controls-only portion of the motion.
+    // Match a maintained route: browsing remains rendered beneath the full
+    // player while it enters and is revealed immediately when it reverses.
     _playerVisuallyCoversBrowsing = !enteringPlayer;
     final delay = enteringPlayer
-        ? widget.playerFadeDuration
-        : widget.playerFadeExitDelay;
+        ? widget.playerTransitionDuration
+        : Duration.zero;
     if (delay == Duration.zero) {
       _playerVisuallyCoversBrowsing = enteringPlayer;
       return;
     }
-    _playerFadeMilestoneTimer = Timer(delay, () {
-      _playerFadeMilestoneTimer = null;
+    _playerTransitionMilestoneTimer = Timer(delay, () {
+      _playerTransitionMilestoneTimer = null;
       if (mounted) {
         setState(() => _playerVisuallyCoversBrowsing = enteringPlayer);
       }
@@ -2800,7 +2716,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
 
   @override
   void dispose() {
-    _playerFadeMilestoneTimer?.cancel();
+    _playerTransitionMilestoneTimer?.cancel();
     super.dispose();
   }
 
@@ -2913,8 +2829,8 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             selected: widget.selectedIndex == widget.playerIndex,
             bottomPadding: 0,
             transitionStyle: _PersistentViewTransitionStyle.player,
-            transitionDuration: widget.playerFadeDuration,
-            playerExitDelay: widget.playerFadeExitDelay,
+            transitionDuration: widget.playerTransitionDuration,
+            reverseTransitionDuration: widget.playerReverseTransitionDuration,
             keepTickerEnabled: widget.playerTransitionActive,
             animateInitialEntry: !_playerWasInitialDestination,
             child: PlayerPanel(
@@ -2923,12 +2839,6 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               drawBackground: false,
               style: widget.playerStyle,
               animatedArtworkEnabled: widget.animatedArtworkEnabled,
-              controlsTransitionVisible:
-                  widget.selectedIndex == widget.playerIndex,
-              controlsTransitionDuration: widget.playerControlsSlideDuration,
-              controlsTransitionEnterDelay: widget.playerControlsEnterDelay,
-              controlsTransitionAnimateInitialEntry:
-                  widget.playerTransitionActive,
               trackTransitionsEnabled:
                   widget.selectedIndex == widget.playerIndex &&
                   !widget.playerTransitionActive,
@@ -2941,86 +2851,6 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
 
 enum _PersistentViewTransitionStyle { tab, player }
 
-/// Starts an entrance fade immediately, but postpones its exit so a preceding
-/// motion can lead. The child remains mounted at zero opacity, which keeps the
-/// player and its decoded artwork warm between visits without painting it.
-class _DelayedExitFade extends StatefulWidget {
-  const _DelayedExitFade({
-    required this.fadeKey,
-    required this.visible,
-    required this.duration,
-    required this.exitDelay,
-    required this.child,
-  });
-
-  final Key fadeKey;
-  final bool visible;
-  final Duration duration;
-  final Duration exitDelay;
-  final Widget child;
-
-  @override
-  State<_DelayedExitFade> createState() => _DelayedExitFadeState();
-}
-
-class _DelayedExitFadeState extends State<_DelayedExitFade> {
-  Timer? _exitTimer;
-  late bool _targetVisible;
-
-  @override
-  void initState() {
-    super.initState();
-    _targetVisible = widget.visible;
-  }
-
-  @override
-  void didUpdateWidget(covariant _DelayedExitFade oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.visible) {
-      _exitTimer?.cancel();
-      _exitTimer = null;
-      _targetVisible = true;
-      return;
-    }
-    if (oldWidget.visible ||
-        (widget.exitDelay != oldWidget.exitDelay && _targetVisible)) {
-      _scheduleExit();
-    }
-  }
-
-  void _scheduleExit() {
-    _exitTimer?.cancel();
-    _exitTimer = null;
-    if (widget.exitDelay == Duration.zero || widget.duration == Duration.zero) {
-      _targetVisible = false;
-      return;
-    }
-    _exitTimer = Timer(widget.exitDelay, () {
-      _exitTimer = null;
-      if (mounted && !widget.visible && _targetVisible) {
-        setState(() => _targetVisible = false);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _exitTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedOpacity(
-      key: widget.fadeKey,
-      opacity: _targetVisible ? 1 : 0,
-      duration: widget.duration,
-      curve: _targetVisible ? Curves.easeOutCubic : Curves.easeInCubic,
-      child: widget.child,
-    );
-  }
-}
-
 class _PersistentViewSlot extends StatefulWidget {
   const _PersistentViewSlot({
     required this.selected,
@@ -3028,7 +2858,7 @@ class _PersistentViewSlot extends StatefulWidget {
     required this.child,
     this.transitionStyle = _PersistentViewTransitionStyle.tab,
     this.transitionDuration,
-    this.playerExitDelay = Duration.zero,
+    this.reverseTransitionDuration,
     this.keepTickerEnabled = false,
     this.animateInitialEntry = true,
     this.keepVisible = false,
@@ -3041,7 +2871,7 @@ class _PersistentViewSlot extends StatefulWidget {
   final Widget child;
   final _PersistentViewTransitionStyle transitionStyle;
   final Duration? transitionDuration;
-  final Duration playerExitDelay;
+  final Duration? reverseTransitionDuration;
   final bool keepTickerEnabled;
   final bool animateInitialEntry;
   final bool keepVisible;
@@ -3099,29 +2929,29 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
     final duration = disableAnimations || widget.instantVisibilityChange
         ? Duration.zero
         : widget.transitionDuration ?? const Duration(milliseconds: 320);
+    final reverseDuration = disableAnimations || widget.instantVisibilityChange
+        ? Duration.zero
+        : widget.reverseTransitionDuration ?? duration;
     final visible = widget.selected || widget.keepVisible;
     final entered = visible && (_hasEntered || disableAnimations);
     final playerTransition =
         widget.transitionStyle == _PersistentViewTransitionStyle.player;
-    final playerExitDelay = disableAnimations || widget.instantVisibilityChange
-        ? Duration.zero
-        : widget.playerExitDelay;
-    final content = RepaintBoundary(
-      child: TickerMode(
-        enabled: widget.selected || widget.keepTickerEnabled,
-        child: widget.child,
-      ),
+    final tickerContent = TickerMode(
+      enabled: widget.selected || widget.keepTickerEnabled,
+      child: widget.child,
     );
     final transitionedContent = playerTransition
-        // Fade the complete player layer, including its background and cover.
-        // Metadata, bars and controls own a separate internal slide so the
-        // artwork no longer travels with the whole screen.
-        ? _DelayedExitFade(
+        // Use exactly the same maintained-page motion as Lyrics: the artwork,
+        // metadata, bars, and controls travel and fade as one surface.
+        ? PlaybackPageVisibilityTransition(
             fadeKey: const ValueKey('player-view-fade-transition'),
             visible: entered,
             duration: duration,
-            exitDelay: playerExitDelay,
-            child: content,
+            reverseDuration: reverseDuration,
+            animateInitialEntry: widget.animateInitialEntry,
+            slideKey: const ValueKey('player-view-slide-transition'),
+            repaintBoundaryKey: const ValueKey('player-view-repaint-boundary'),
+            child: tickerContent,
           )
         : AnimatedOpacity(
             opacity: entered ? 1 : 0,
@@ -3135,7 +2965,7 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
               offset: entered ? Offset.zero : const Offset(0.018, 0),
               duration: duration,
               curve: Curves.easeOutCubic,
-              child: content,
+              child: RepaintBoundary(child: tickerContent),
             ),
           );
 
