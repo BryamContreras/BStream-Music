@@ -44,10 +44,16 @@ abstract interface class MediaKitPlayerBackend {
 class _MediaKitPlayerBackend implements MediaKitPlayerBackend {
   _MediaKitPlayerBackend() {
     _player = _createPlayer();
+    _playerInitialization = _headlessInitialization(_player);
     _playerSubscriptions = _forwardEvents(_player, _epoch);
   }
 
+  static const _useHeadlessAudio = bool.fromEnvironment(
+    'BSTREAM_HEADLESS_AUDIO',
+  );
+
   late Player _player;
+  Future<void>? _playerInitialization;
   late List<StreamSubscription<Object?>> _playerSubscriptions;
   int _epoch = 0;
   bool _disposed = false;
@@ -63,6 +69,30 @@ class _MediaKitPlayerBackend implements MediaKitPlayerBackend {
   Player _createPlayer() => Player(
     configuration: const PlayerConfiguration(title: AppConstants.appName),
   );
+
+  Future<void>? _headlessInitialization(Player player) =>
+      _useHeadlessAudio ? _configurePlayer(player) : null;
+
+  Future<void> _configurePlayer(Player player) async {
+    final platform = player.platform;
+    if (platform == null) {
+      return;
+    }
+    // GitHub's hosted Windows runners do not expose an audio device. libmpv's
+    // timed null output preserves the real playback clock, allowing native
+    // integration tests to exercise both crossfade decks without changing the
+    // output selected by production builds.
+    await (platform as dynamic).setProperty('ao', 'null');
+  }
+
+  Future<void> _withPlayer(Future<void> Function(Player player) operation) {
+    final player = _player;
+    final initialization = _playerInitialization;
+    if (initialization == null) {
+      return operation(player);
+    }
+    return initialization.then((_) => operation(player));
+  }
 
   List<StreamSubscription<Object?>> _forwardEvents(Player player, int epoch) {
     bool isCurrent() => !_disposed && epoch == _epoch;
@@ -100,6 +130,7 @@ class _MediaKitPlayerBackend implements MediaKitPlayerBackend {
     final retiredSubscriptions = _playerSubscriptions;
     final epoch = ++_epoch;
     _player = _createPlayer();
+    _playerInitialization = _headlessInitialization(_player);
     _playerSubscriptions = _forwardEvents(_player, epoch);
     unawaited(_retire(retiredPlayer, retiredSubscriptions));
   }
@@ -141,17 +172,19 @@ class _MediaKitPlayerBackend implements MediaKitPlayerBackend {
 
   @override
   Future<void> open(Media media, {required bool play}) =>
-      _player.open(media, play: play);
+      _withPlayer((player) => player.open(media, play: play));
   @override
-  Future<void> pause() => _player.pause();
+  Future<void> pause() => _withPlayer((player) => player.pause());
   @override
-  Future<void> play() => _player.play();
+  Future<void> play() => _withPlayer((player) => player.play());
   @override
-  Future<void> stop() => _player.stop();
+  Future<void> stop() => _withPlayer((player) => player.stop());
   @override
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position) =>
+      _withPlayer((player) => player.seek(position));
   @override
-  Future<void> setVolume(double volume) => _player.setVolume(volume);
+  Future<void> setVolume(double volume) =>
+      _withPlayer((player) => player.setVolume(volume));
   @override
   Future<void> dispose() async {
     if (_disposed) {

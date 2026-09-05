@@ -485,6 +485,12 @@ class MiniPlayer extends ConsumerWidget {
                 ),
               InkWell(
                 onTap: onOpenPlayer,
+                splashFactory: backgroundMode.isLiquidGlass
+                    ? NoSplash.splashFactory
+                    : null,
+                overlayColor: backgroundMode.isLiquidGlass
+                    ? const WidgetStatePropertyAll<Color>(Colors.transparent)
+                    : null,
                 child: ConstrainedBox(
                   key: const ValueKey('mini-player-surface'),
                   constraints: BoxConstraints(minHeight: minimumHeight),

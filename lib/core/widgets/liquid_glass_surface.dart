@@ -193,9 +193,18 @@ class LiquidGlassSurface extends StatelessWidget {
                         intensity: intensity,
                         highContrast: highContrast,
                         motion: motion,
-                        useCompatibleBlendMode:
-                            Theme.of(context).platform ==
-                            TargetPlatform.android,
+                        // Impeller's Windows OpenGL backend can replay a
+                        // soft-light paint against the complete backing
+                        // surface when an overlaid control repaints (for
+                        // example, when the mini player receives hover).
+                        // Src-over keeps the optics bounded to this sheet.
+                        useCompatibleBlendMode: switch (Theme.of(
+                          context,
+                        ).platform) {
+                          TargetPlatform.android ||
+                          TargetPlatform.windows => true,
+                          _ => false,
+                        },
                       ),
                     ),
                   ),

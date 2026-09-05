@@ -105,6 +105,7 @@ void main() {
             return 'expected=${next.id}, track=${snapshot.trackId}, '
                 'observed=$observedTrackOrder, position=${snapshot.position}, '
                 'duration=${snapshot.duration}, status=${snapshot.status}, '
+                'error=${snapshot.errorMessage}, '
                 'crossfadeEnabled=${crossfade.crossfadeEnabled}';
           },
         );

@@ -43,19 +43,16 @@ void main() {
 
       service.add(Uri.parse('bstreammusic://track/dQw4w9WgXcQ'));
       await pumpEventQueue();
-      expect(
-        emitted.map((link) => link.videoId),
-        ['dQw4w9WgXcQ'],
-        reason: 'cold/warm duplicate delivery must not autoplay twice',
-      );
+      expect(emitted.map((link) => link.videoId), [
+        'dQw4w9WgXcQ',
+      ], reason: 'cold/warm duplicate delivery must not autoplay twice');
 
       service.add(Uri.parse('bstreammusic://track/M7lc1UVf-VE'));
       await pumpEventQueue();
-      expect(
-        emitted.map((link) => link.videoId),
-        ['dQw4w9WgXcQ', 'M7lc1UVf-VE'],
-        reason: 'deduplication must not discard a different song',
-      );
+      expect(emitted.map((link) => link.videoId), [
+        'dQw4w9WgXcQ',
+        'M7lc1UVf-VE',
+      ], reason: 'deduplication must not discard a different song');
     },
   );
 }

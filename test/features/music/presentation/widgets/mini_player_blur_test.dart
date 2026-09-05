@@ -407,6 +407,23 @@ void main() {
           ),
           findsNothing,
         );
+        final surfaceTapTarget = find.ancestor(
+          of: find.byKey(const ValueKey('mini-player-surface')),
+          matching: find.byType(InkWell),
+        );
+        expect(surfaceTapTarget, findsOneWidget);
+        final surfaceInk = tester.widget<InkWell>(surfaceTapTarget);
+        expect(surfaceInk.splashFactory, same(NoSplash.splashFactory));
+        expect(
+          surfaceInk.overlayColor!.resolve(const {WidgetState.hovered}),
+          Colors.transparent,
+          reason: 'The complete Liquid Glass surface must not react to hover.',
+        );
+        expect(
+          surfaceInk.overlayColor!.resolve(const {WidgetState.pressed}),
+          Colors.transparent,
+          reason: 'Opening the player must not flash the complete glass sheet.',
+        );
         expect(
           container.clipBehavior,
           Clip.none,

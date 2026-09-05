@@ -120,32 +120,55 @@ void main() {
     expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
   });
 
-  testWidgets('perimeter optics keeps a colour-preserving convex face', (
+  testWidgets(
+    'stable desktop compositors keep a colour-preserving convex face',
+    (tester) async {
+      await tester.pumpWidget(
+        _harness(
+          platform: TargetPlatform.macOS,
+          child: const SizedBox.expand(),
+        ),
+      );
+
+      final paints = _paintOptics(tester);
+      expect(paints, hasLength(3));
+
+      final face = paints[0];
+      expect(face.style, PaintingStyle.fill);
+      expect(face.blendMode, BlendMode.softLight);
+      expect(face.shader, isNotNull);
+
+      final outerRim = paints[1];
+      expect(outerRim.style, PaintingStyle.stroke);
+      expect(outerRim.strokeWidth, closeTo(0.9, 0.000001));
+      expect(outerRim.blendMode, BlendMode.softLight);
+      expect(outerRim.maskFilter, isNull);
+      expect(outerRim.shader, isNotNull);
+
+      final innerRim = paints[2];
+      expect(innerRim.style, PaintingStyle.stroke);
+      expect(innerRim.strokeWidth, closeTo(0.8, 0.000001));
+      expect(innerRim.blendMode, BlendMode.softLight);
+      expect(innerRim.maskFilter, isNull);
+      expect(innerRim.shader, isNotNull);
+    },
+  );
+
+  testWidgets('windows optics avoids window-wide hover recomposition', (
     tester,
   ) async {
-    await tester.pumpWidget(_harness(child: const SizedBox.expand()));
+    await tester.pumpWidget(
+      _harness(
+        platform: TargetPlatform.windows,
+        child: const SizedBox.expand(),
+      ),
+    );
 
     final paints = _paintOptics(tester);
     expect(paints, hasLength(3));
-
-    final face = paints[0];
-    expect(face.style, PaintingStyle.fill);
-    expect(face.blendMode, BlendMode.softLight);
-    expect(face.shader, isNotNull);
-
-    final outerRim = paints[1];
-    expect(outerRim.style, PaintingStyle.stroke);
-    expect(outerRim.strokeWidth, closeTo(0.9, 0.000001));
-    expect(outerRim.blendMode, BlendMode.softLight);
-    expect(outerRim.maskFilter, isNull);
-    expect(outerRim.shader, isNotNull);
-
-    final innerRim = paints[2];
-    expect(innerRim.style, PaintingStyle.stroke);
-    expect(innerRim.strokeWidth, closeTo(0.8, 0.000001));
-    expect(innerRim.blendMode, BlendMode.softLight);
-    expect(innerRim.maskFilter, isNull);
-    expect(innerRim.shader, isNotNull);
+    expect(paints[0].blendMode, BlendMode.srcOver);
+    expect(paints[1].blendMode, BlendMode.srcOver);
+    expect(paints[2].blendMode, BlendMode.srcOver);
   });
 
   testWidgets('android perimeter optics avoids unstable soft-light blending', (

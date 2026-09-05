@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  FLUTTER_VERSION: "3.44.0"
+  FLUTTER_VERSION: "3.47.2"
 
 jobs:
   windows-native:
@@ -47,12 +47,16 @@ jobs:
           flutter pub get --enforce-lockfile
 
       - name: Run native crossfade smoke
-        run: flutter test integration_test/crossfade_native_test.dart -d windows
+        run: >-
+          flutter test integration_test/crossfade_native_test.dart
+          -d windows
+          --dart-define=BSTREAM_HEADLESS_AUDIO=true
 
       - name: Run live InnerTube playback smoke
         run: >-
           flutter test integration_test/innertube_playback_live_test.dart
           -d windows
+          --dart-define=BSTREAM_HEADLESS_AUDIO=true
           --dart-define=BSTREAM_LIVE_INNERTUBE=true
 
   android-native:
