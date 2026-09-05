@@ -63,6 +63,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   const pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
+  const playerTransitionDuration = Duration(milliseconds: 320);
   final keyboardNavigationInsets = ValueVariant<double>(<double>{0, 24});
 
   setUp(() {
@@ -3068,11 +3069,8 @@ void main() {
               )
               .first,
         );
-    expect(playerPageTransition.duration, playbackPageTransitionDuration);
-    expect(
-      playerPageTransition.reverseDuration,
-      playbackPageReverseTransitionDuration,
-    );
+    expect(playerPageTransition.duration, playerTransitionDuration);
+    expect(playerPageTransition.reverseDuration, playerTransitionDuration);
     expect(tester.widget<FadeTransition>(backgroundFade).opacity.value, 0);
     expect(
       tester.widget<SlideTransition>(backgroundSlide).position.value,
@@ -3119,7 +3117,7 @@ void main() {
           .trackTransitionsEnabled,
       isFalse,
     );
-    await tester.pump(const Duration(milliseconds: 210));
+    await tester.pump(const Duration(milliseconds: 160));
 
     // The complete player mirrors Lyrics: fade and 3.5% vertical travel
     // progress together while the previous surface remains underneath.
@@ -3153,7 +3151,7 @@ void main() {
     );
     expect(tester.takeException(), isNull);
 
-    await tester.pump(const Duration(milliseconds: 210));
+    await tester.pump(const Duration(milliseconds: 160));
 
     expect(shellOpacity('mini-player-shell-opacity'), 0);
     expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
@@ -3181,7 +3179,7 @@ void main() {
     expect(controlsSlideTranslation(), Offset.zero);
     expect(playerFadeOpacity(), 1);
 
-    await tester.pump(const Duration(milliseconds: 180));
+    await tester.pump(const Duration(milliseconds: 160));
 
     expect(playerFadeOpacity(), closeTo(0.5, 0.02));
     expect(
@@ -3202,7 +3200,7 @@ void main() {
       inExclusiveRange(0, 1),
     );
 
-    await tester.pump(const Duration(milliseconds: 180));
+    await tester.pump(const Duration(milliseconds: 160));
 
     expect(shellOpacity('mini-player-shell-opacity'), 1);
     expect(shellOpacity('bottom-navigation-shell-opacity'), 1);
@@ -3327,11 +3325,8 @@ void main() {
               )
               .first,
         );
-    expect(playerPageTransition.duration, playbackPageTransitionDuration);
-    expect(
-      playerPageTransition.reverseDuration,
-      playbackPageReverseTransitionDuration,
-    );
+    expect(playerPageTransition.duration, playerTransitionDuration);
+    expect(playerPageTransition.reverseDuration, playerTransitionDuration);
     expect(controlsSlideTranslation(), hiddenControlsOffset);
     expect(playerFadeOpacity(), 0);
 
@@ -3344,7 +3339,7 @@ void main() {
       hiddenControlsOffset,
     );
 
-    await tester.pump(const Duration(milliseconds: 210));
+    await tester.pump(const Duration(milliseconds: 160));
     expect(playerFadeOpacity(), closeTo(0.5, 0.02));
     expect(
       controlsSlideTranslation().dy,
@@ -3362,7 +3357,7 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.pump(const Duration(milliseconds: 210));
+    await tester.pump(const Duration(milliseconds: 160));
     expect(controlsSlideTranslation(), Offset.zero);
     expect(playerFadeOpacity(), 1);
     expect(tester.widget<FadeTransition>(backgroundFade).opacity.value, 1);
@@ -3371,7 +3366,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    await tester.pump(const Duration(milliseconds: 180));
+    await tester.pump(const Duration(milliseconds: 160));
     expect(
       controlsSlideTranslation().dy,
       closeTo(hiddenControlsOffset.dy / 2, 0.003),
@@ -3382,7 +3377,7 @@ void main() {
       closeTo(0.5, 0.02),
     );
 
-    await tester.pump(const Duration(milliseconds: 180));
+    await tester.pump(const Duration(milliseconds: 160));
     expect(controlsSlideTranslation(), hiddenControlsOffset);
     expect(playerFadeOpacity(), 0);
     expect(tester.widget<FadeTransition>(backgroundFade).opacity.value, 0);
@@ -3487,13 +3482,10 @@ void main() {
                   )
                   .first,
             );
-        expect(playerPageTransition.duration, playbackPageTransitionDuration);
-        expect(
-          playerPageTransition.reverseDuration,
-          playbackPageReverseTransitionDuration,
-        );
+        expect(playerPageTransition.duration, playerTransitionDuration);
+        expect(playerPageTransition.reverseDuration, playerTransitionDuration);
 
-        await tester.pump(const Duration(milliseconds: 210));
+        await tester.pump(const Duration(milliseconds: 160));
         expect(
           controlsSlideTranslation().dy,
           closeTo(playbackPageTransitionBeginOffset.dy / 2, 0.003),
@@ -3503,7 +3495,7 @@ void main() {
           closeTo(0.5, 0.02),
         );
 
-        await tester.pump(const Duration(milliseconds: 210));
+        await tester.pump(const Duration(milliseconds: 160));
         expect(controlsSlideTranslation(), Offset.zero);
         expect(tester.widget<FadeTransition>(playerFade).opacity.value, 1);
         expect(tester.takeException(), isNull);
@@ -3830,10 +3822,10 @@ void main() {
     await tester.pump();
     // Commit the implicit player transition target before advancing its clock.
     await tester.pump();
-    // Let the shared 420 ms Lyrics-style page transition finish before
+    // Let the 320 ms Lyrics-style player transition finish before
     // measuring safe-area geometry.
     await tester.pump(const Duration(milliseconds: 110));
-    await tester.pump(const Duration(milliseconds: 310));
+    await tester.pump(const Duration(milliseconds: 210));
 
     final error = find.byKey(const ValueKey('player-error-message'));
     final control = find.byKey(const ValueKey('player-volume-control'));

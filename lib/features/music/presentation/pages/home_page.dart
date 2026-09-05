@@ -110,9 +110,8 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   static const _maxViewHistory = 2;
   static const _shellTransitionDuration = Duration(milliseconds: 320);
-  static const _playerTransitionDuration = playbackPageTransitionDuration;
-  static const _playerReverseTransitionDuration =
-      playbackPageReverseTransitionDuration;
+  static const _playerTransitionDuration = Duration(milliseconds: 320);
+  static const _playerReverseTransitionDuration = Duration(milliseconds: 320);
   static const _bottomNavigationHideTravel = 24.0;
   static const _bottomNavigationShowTravel = 12.0;
 
