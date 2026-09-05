@@ -109,7 +109,14 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   static const _maxViewHistory = 2;
   static const _shellTransitionDuration = Duration(milliseconds: 320);
-  static const _playerExpansionDuration = Duration(milliseconds: 420);
+  // Opening: fade 0..200 ms, controls slide 100..420 ms.
+  // Closing reverses that rhythm: controls slide 0..320 ms and the fade runs
+  // 220..420 ms, leaving exactly 100 ms of overlap in either direction.
+  static const _playerTransitionDuration = Duration(milliseconds: 420);
+  static const _playerFadeDuration = Duration(milliseconds: 200);
+  static const _playerControlsSlideDuration = Duration(milliseconds: 320);
+  static const _playerControlsEnterDelay = Duration(milliseconds: 100);
+  static const _playerFadeExitDelay = Duration(milliseconds: 220);
   static const _bottomNavigationHideTravel = 24.0;
   static const _bottomNavigationShowTravel = 12.0;
 
@@ -802,7 +809,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         revealBottomNavigation &&
         !_bottomNavigationRevealed;
     final chromeTransitionDuration = enteringPlayer || leavingPlayer
-        ? _resolvedMotionDuration(_playerExpansionDuration)
+        ? _resolvedMotionDuration(_playerTransitionDuration)
         : revealsBottomNavigation
         ? _resolvedMotionDuration(_shellTransitionDuration)
         : null;
@@ -1029,7 +1036,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final enteringPlayer = !_isPlayerSelected && target == _playerIndex;
     final playerTransition = leavingPlayer || enteringPlayer;
     final playerTransitionDuration = playerTransition
-        ? _resolvedMotionDuration(_playerExpansionDuration)
+        ? _resolvedMotionDuration(_playerTransitionDuration)
         : null;
     if (playerTransition) {
       _beginPlayerTransition();
@@ -1171,9 +1178,26 @@ class _HomePageState extends ConsumerState<HomePage> {
     final shellTransitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : _shellTransitionDuration;
-    final playerExpansionDuration = MediaQuery.disableAnimationsOf(context)
+    final playerFadeDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : _playerExpansionDuration;
+        : _playerFadeDuration;
+    final playerControlsSlideDuration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : _playerControlsSlideDuration;
+    final playerControlsEnterDelay = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : _playerControlsEnterDelay;
+    final playerFadeExitDelay = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : _playerFadeExitDelay;
+    final revealingChromeAfterPlayer =
+        _playerTransitionActive && !_isPlayerSelected;
+    final chromeVisibilityDuration = revealingChromeAfterPlayer
+        ? playerFadeDuration
+        : shellTransitionDuration;
+    final chromeShowDelay = revealingChromeAfterPlayer
+        ? playerFadeExitDelay
+        : Duration.zero;
     final strings = ref.watch(appStringsProvider);
     final destinations = _usesMobileNavigation
         ? [
@@ -1329,25 +1353,20 @@ class _HomePageState extends ConsumerState<HomePage> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  AnimatedSwitcher(
-                    key: const ValueKey('shell-background-transition'),
-                    duration: playerExpansionDuration,
-                    reverseDuration: playerExpansionDuration,
-                    switchInCurve: Curves.easeOutCubic,
-                    switchOutCurve: Curves.easeInCubic,
-                    layoutBuilder: (currentChild, previousChildren) => Stack(
-                      fit: StackFit.expand,
-                      children: <Widget>[...previousChildren, ?currentChild],
+                  const SizedBox.expand(
+                    key: ValueKey('shell-background-browsing'),
+                    child: BrowsingTabBackground(),
+                  ),
+                  _DelayedExitFade(
+                    fadeKey: const ValueKey(
+                      'shell-player-background-fade-transition',
                     ),
-                    child: SizedBox.expand(
-                      key: ValueKey(
-                        _isPlayerSelected
-                            ? 'shell-background-player'
-                            : 'shell-background-browsing',
-                      ),
-                      child: _isPlayerSelected
-                          ? const PlayerPlaybackGradientBackground()
-                          : const BrowsingTabBackground(),
+                    visible: _isPlayerSelected,
+                    duration: playerFadeDuration,
+                    exitDelay: playerFadeExitDelay,
+                    child: const SizedBox.expand(
+                      key: ValueKey('shell-background-player'),
+                      child: PlayerPlaybackGradientBackground(),
                     ),
                   ),
                   SafeArea(
@@ -1359,7 +1378,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                           _SideNavigation(
                             selectedIndex: _selectedIndex,
                             dimPlaybackBackground: _isPlayerSelected,
-                            transitionDuration: playerExpansionDuration,
+                            transitionDuration: shellTransitionDuration,
                             onSelected: _selectIndex,
                             destinations: destinations,
                           ),
@@ -1384,8 +1403,14 @@ class _HomePageState extends ConsumerState<HomePage> {
                                               browsingViewportBottomPadding,
                                           contentBottomPadding:
                                               browsingContentBottomPadding,
-                                          playerTransitionDuration:
-                                              playerExpansionDuration,
+                                          playerFadeDuration:
+                                              playerFadeDuration,
+                                          playerFadeExitDelay:
+                                              playerFadeExitDelay,
+                                          playerControlsSlideDuration:
+                                              playerControlsSlideDuration,
+                                          playerControlsEnterDelay:
+                                              playerControlsEnterDelay,
                                           playerTransitionActive:
                                               _playerTransitionActive,
                                           libraryNavigationController:
@@ -1421,7 +1446,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                                         'bottom-navigation-shell-opacity',
                                       ),
                                       visible: bottomNavigationVisible,
-                                      duration: shellTransitionDuration,
+                                      duration: chromeVisibilityDuration,
+                                      showDelay: chromeShowDelay,
                                       hiddenTranslation: const Offset(0, 1),
                                       preserveBackdropMaterial:
                                           useLiquidBottomNavigation,
@@ -1502,7 +1528,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                                 'mini-player-shell-opacity',
                               ),
                               visible: !_isPlayerSelected,
-                              duration: playerExpansionDuration,
+                              duration: chromeVisibilityDuration,
+                              showDelay: chromeShowDelay,
                               hiddenTranslation:
                                   miniPlayerAppearance
                                       .backgroundMode
@@ -1549,11 +1576,12 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 }
 
-class _ShellVisibilityTransition extends StatelessWidget {
+class _ShellVisibilityTransition extends StatefulWidget {
   const _ShellVisibilityTransition({
     required this.visible,
     required this.duration,
     required this.child,
+    this.showDelay = Duration.zero,
     this.hiddenTranslation = const Offset(0, 0.08),
     this.hiddenScale = 1,
     this.clipKey,
@@ -1566,6 +1594,7 @@ class _ShellVisibilityTransition extends StatelessWidget {
 
   final bool visible;
   final Duration duration;
+  final Duration showDelay;
   final Widget child;
   final Offset hiddenTranslation;
   final double hiddenScale;
@@ -1576,49 +1605,119 @@ class _ShellVisibilityTransition extends StatelessWidget {
   final bool preserveBackdropMaterial;
 
   @override
+  State<_ShellVisibilityTransition> createState() =>
+      _ShellVisibilityTransitionState();
+}
+
+class _ShellVisibilityTransitionState
+    extends State<_ShellVisibilityTransition> {
+  Timer? _showTimer;
+  late Duration _animationDuration;
+  late bool _targetVisible;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationDuration = widget.duration;
+    _targetVisible = widget.visible && widget.showDelay == Duration.zero;
+    if (widget.visible && !_targetVisible) {
+      _scheduleShow();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ShellVisibilityTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.visible) {
+      _showTimer?.cancel();
+      _showTimer = null;
+      _animationDuration = widget.duration;
+      _targetVisible = false;
+      return;
+    }
+    if (!oldWidget.visible ||
+        (widget.showDelay != oldWidget.showDelay && !_targetVisible)) {
+      _scheduleShow(notifyImmediate: false);
+    }
+  }
+
+  void _scheduleShow({bool notifyImmediate = true}) {
+    _showTimer?.cancel();
+    _showTimer = null;
+    if (widget.showDelay == Duration.zero || widget.duration == Duration.zero) {
+      _animationDuration = widget.duration;
+      if (notifyImmediate && mounted) {
+        setState(() => _targetVisible = true);
+      } else {
+        _targetVisible = true;
+      }
+      return;
+    }
+    _showTimer = Timer(widget.showDelay, () {
+      _showTimer = null;
+      if (mounted && widget.visible && !_targetVisible) {
+        setState(() {
+          _animationDuration = widget.duration;
+          _targetVisible = true;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _showTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      ignoring: !visible,
+      ignoring: !_targetVisible,
       child: ExcludeSemantics(
-        excluding: !visible,
+        excluding: !_targetVisible,
         child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(end: visible ? 1 : 0),
-          duration: duration,
-          curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
+          tween: Tween<double>(end: _targetVisible ? 1 : 0),
+          duration: _animationDuration,
+          curve: _targetVisible ? Curves.easeOutCubic : Curves.easeInCubic,
           builder: (context, value, child) {
-            final scale = lerpDouble(hiddenScale, 1, value)!;
+            final scale = lerpDouble(widget.hiddenScale, 1, value)!;
             final movingChild = FractionalTranslation(
-              key: translationKey,
-              translation: Offset.lerp(hiddenTranslation, Offset.zero, value)!,
+              key: widget.translationKey,
+              translation: Offset.lerp(
+                widget.hiddenTranslation,
+                Offset.zero,
+                value,
+              )!,
               child: Transform.scale(
-                key: scaleKey,
+                key: widget.scaleKey,
                 scaleX: scale,
                 // A live backdrop must keep its physical height. Scaling it
                 // vertically stretches the captured pixels and flattens the
                 // rim while the sheet is moving.
-                scaleY: preserveBackdropMaterial ? 1 : scale,
+                scaleY: widget.preserveBackdropMaterial ? 1 : scale,
                 alignment: Alignment.bottomCenter,
                 child: child,
               ),
             );
             return ClipRect(
-              key: clipKey,
+              key: widget.clipKey,
               // Keep Liquid Glass out of an Opacity save layer: fading the
               // complete BackdropFilter also fades its sampled background and
               // makes the material look like a flat overlay. Its full-height
               // translation exits through this clip instead. Other surface
               // modes retain their established fade.
-              child: preserveBackdropMaterial
-                  ? KeyedSubtree(key: opacityKey, child: movingChild)
+              child: widget.preserveBackdropMaterial
+                  ? KeyedSubtree(key: widget.opacityKey, child: movingChild)
                   : Opacity(
-                      key: opacityKey,
+                      key: widget.opacityKey,
                       opacity:
                           1 - math.pow(1 - value.clamp(0.0, 1.0), 3).toDouble(),
                       child: movingChild,
                     ),
             );
           },
-          child: child,
+          child: widget.child,
         ),
       ),
     );
@@ -2581,7 +2680,10 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.settingsIndex,
     required this.viewportBottomPadding,
     required this.contentBottomPadding,
-    required this.playerTransitionDuration,
+    required this.playerFadeDuration,
+    required this.playerFadeExitDelay,
+    required this.playerControlsSlideDuration,
+    required this.playerControlsEnterDelay,
     required this.playerTransitionActive,
     required this.libraryNavigationController,
     required this.localMusicNavigationController,
@@ -2603,7 +2705,10 @@ class _PersistentCurrentViews extends StatefulWidget {
   final int settingsIndex;
   final double viewportBottomPadding;
   final double contentBottomPadding;
-  final Duration playerTransitionDuration;
+  final Duration playerFadeDuration;
+  final Duration playerFadeExitDelay;
+  final Duration playerControlsSlideDuration;
+  final Duration playerControlsEnterDelay;
   final bool playerTransitionActive;
   final LibraryNavigationController libraryNavigationController;
   final LocalMusicNavigationController localMusicNavigationController;
@@ -2623,6 +2728,9 @@ class _PersistentCurrentViews extends StatefulWidget {
 class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
   late final Set<int> _visitedIndexes = {widget.selectedIndex};
   late final bool _playerWasInitialDestination;
+  late bool _playerVisuallyCoversBrowsing =
+      widget.selectedIndex == widget.playerIndex;
+  Timer? _playerFadeMilestoneTimer;
   int? _playerTransitionOriginIndex;
 
   @override
@@ -2651,16 +2759,64 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
         (widget.selectedIndex == widget.playerIndex ||
             oldWidget.selectedIndex == widget.playerIndex)) {
       _playerTransitionOriginIndex = oldWidget.selectedIndex;
+      _schedulePlayerFadeMilestone();
     }
     if (!widget.playerTransitionActive) {
+      _playerFadeMilestoneTimer?.cancel();
+      _playerFadeMilestoneTimer = null;
+      _playerVisuallyCoversBrowsing =
+          widget.selectedIndex == widget.playerIndex;
       _playerTransitionOriginIndex = null;
     }
+  }
+
+  void _schedulePlayerFadeMilestone() {
+    _playerFadeMilestoneTimer?.cancel();
+    _playerFadeMilestoneTimer = null;
+    final enteringPlayer = widget.selectedIndex == widget.playerIndex;
+    if (!widget.playerTransitionActive) {
+      _playerVisuallyCoversBrowsing = enteringPlayer;
+      return;
+    }
+
+    // Keep browsing content only while it is genuinely needed beneath the
+    // fade. This prevents its headings from showing through the translucent
+    // playback background during the controls-only portion of the motion.
+    _playerVisuallyCoversBrowsing = !enteringPlayer;
+    final delay = enteringPlayer
+        ? widget.playerFadeDuration
+        : widget.playerFadeExitDelay;
+    if (delay == Duration.zero) {
+      _playerVisuallyCoversBrowsing = enteringPlayer;
+      return;
+    }
+    _playerFadeMilestoneTimer = Timer(delay, () {
+      _playerFadeMilestoneTimer = null;
+      if (mounted) {
+        setState(() => _playerVisuallyCoversBrowsing = enteringPlayer);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _playerFadeMilestoneTimer?.cancel();
+    super.dispose();
+  }
+
+  bool _isBrowsingViewSelected(int index) {
+    final awaitingExitFade =
+        widget.playerTransitionActive &&
+        _playerTransitionOriginIndex == widget.playerIndex &&
+        _playerVisuallyCoversBrowsing;
+    return widget.selectedIndex == index && !awaitingExitFade;
   }
 
   bool _keepBrowsingViewVisible(int index) {
     return widget.playerTransitionActive &&
         widget.selectedIndex == widget.playerIndex &&
-        _playerTransitionOriginIndex == index;
+        _playerTransitionOriginIndex == index &&
+        !_playerVisuallyCoversBrowsing;
   }
 
   bool _switchBrowsingViewImmediately(int index) {
@@ -2676,7 +2832,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
         if (_visitedIndexes.contains(widget.homeIndex))
           _PersistentViewSlot(
             key: const ValueKey('home-view'),
-            selected: widget.selectedIndex == widget.homeIndex,
+            selected: _isBrowsingViewSelected(widget.homeIndex),
             keepVisible: _keepBrowsingViewVisible(widget.homeIndex),
             instantVisibilityChange: _switchBrowsingViewImmediately(
               widget.homeIndex,
@@ -2691,7 +2847,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
         if (_visitedIndexes.contains(widget.searchIndex))
           _PersistentViewSlot(
             key: const ValueKey('search-view'),
-            selected: widget.selectedIndex == widget.searchIndex,
+            selected: _isBrowsingViewSelected(widget.searchIndex),
             keepVisible: _keepBrowsingViewVisible(widget.searchIndex),
             instantVisibilityChange: _switchBrowsingViewImmediately(
               widget.searchIndex,
@@ -2706,7 +2862,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
         if (_visitedIndexes.contains(widget.localIndex))
           _PersistentViewSlot(
             key: const ValueKey('local-view'),
-            selected: widget.selectedIndex == widget.localIndex,
+            selected: _isBrowsingViewSelected(widget.localIndex),
             keepVisible: _keepBrowsingViewVisible(widget.localIndex),
             instantVisibilityChange: _switchBrowsingViewImmediately(
               widget.localIndex,
@@ -2721,7 +2877,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
         if (_visitedIndexes.contains(widget.libraryIndex))
           _PersistentViewSlot(
             key: const ValueKey('library-view'),
-            selected: widget.selectedIndex == widget.libraryIndex,
+            selected: _isBrowsingViewSelected(widget.libraryIndex),
             keepVisible: _keepBrowsingViewVisible(widget.libraryIndex),
             instantVisibilityChange: _switchBrowsingViewImmediately(
               widget.libraryIndex,
@@ -2736,7 +2892,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
         if (_visitedIndexes.contains(widget.settingsIndex))
           _PersistentViewSlot(
             key: const ValueKey('settings-view'),
-            selected: widget.selectedIndex == widget.settingsIndex,
+            selected: _isBrowsingViewSelected(widget.settingsIndex),
             keepVisible: _keepBrowsingViewVisible(widget.settingsIndex),
             instantVisibilityChange: _switchBrowsingViewImmediately(
               widget.settingsIndex,
@@ -2757,7 +2913,9 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             selected: widget.selectedIndex == widget.playerIndex,
             bottomPadding: 0,
             transitionStyle: _PersistentViewTransitionStyle.player,
-            transitionDuration: widget.playerTransitionDuration,
+            transitionDuration: widget.playerFadeDuration,
+            playerExitDelay: widget.playerFadeExitDelay,
+            keepTickerEnabled: widget.playerTransitionActive,
             animateInitialEntry: !_playerWasInitialDestination,
             child: PlayerPanel(
               onOpenSearch: widget.onOpenSearch,
@@ -2765,6 +2923,12 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               drawBackground: false,
               style: widget.playerStyle,
               animatedArtworkEnabled: widget.animatedArtworkEnabled,
+              controlsTransitionVisible:
+                  widget.selectedIndex == widget.playerIndex,
+              controlsTransitionDuration: widget.playerControlsSlideDuration,
+              controlsTransitionEnterDelay: widget.playerControlsEnterDelay,
+              controlsTransitionAnimateInitialEntry:
+                  widget.playerTransitionActive,
               trackTransitionsEnabled:
                   widget.selectedIndex == widget.playerIndex &&
                   !widget.playerTransitionActive,
@@ -2777,6 +2941,86 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
 
 enum _PersistentViewTransitionStyle { tab, player }
 
+/// Starts an entrance fade immediately, but postpones its exit so a preceding
+/// motion can lead. The child remains mounted at zero opacity, which keeps the
+/// player and its decoded artwork warm between visits without painting it.
+class _DelayedExitFade extends StatefulWidget {
+  const _DelayedExitFade({
+    required this.fadeKey,
+    required this.visible,
+    required this.duration,
+    required this.exitDelay,
+    required this.child,
+  });
+
+  final Key fadeKey;
+  final bool visible;
+  final Duration duration;
+  final Duration exitDelay;
+  final Widget child;
+
+  @override
+  State<_DelayedExitFade> createState() => _DelayedExitFadeState();
+}
+
+class _DelayedExitFadeState extends State<_DelayedExitFade> {
+  Timer? _exitTimer;
+  late bool _targetVisible;
+
+  @override
+  void initState() {
+    super.initState();
+    _targetVisible = widget.visible;
+  }
+
+  @override
+  void didUpdateWidget(covariant _DelayedExitFade oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible) {
+      _exitTimer?.cancel();
+      _exitTimer = null;
+      _targetVisible = true;
+      return;
+    }
+    if (oldWidget.visible ||
+        (widget.exitDelay != oldWidget.exitDelay && _targetVisible)) {
+      _scheduleExit();
+    }
+  }
+
+  void _scheduleExit() {
+    _exitTimer?.cancel();
+    _exitTimer = null;
+    if (widget.exitDelay == Duration.zero || widget.duration == Duration.zero) {
+      _targetVisible = false;
+      return;
+    }
+    _exitTimer = Timer(widget.exitDelay, () {
+      _exitTimer = null;
+      if (mounted && !widget.visible && _targetVisible) {
+        setState(() => _targetVisible = false);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _exitTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      key: widget.fadeKey,
+      opacity: _targetVisible ? 1 : 0,
+      duration: widget.duration,
+      curve: _targetVisible ? Curves.easeOutCubic : Curves.easeInCubic,
+      child: widget.child,
+    );
+  }
+}
+
 class _PersistentViewSlot extends StatefulWidget {
   const _PersistentViewSlot({
     required this.selected,
@@ -2784,6 +3028,8 @@ class _PersistentViewSlot extends StatefulWidget {
     required this.child,
     this.transitionStyle = _PersistentViewTransitionStyle.tab,
     this.transitionDuration,
+    this.playerExitDelay = Duration.zero,
+    this.keepTickerEnabled = false,
     this.animateInitialEntry = true,
     this.keepVisible = false,
     this.instantVisibilityChange = false,
@@ -2795,6 +3041,8 @@ class _PersistentViewSlot extends StatefulWidget {
   final Widget child;
   final _PersistentViewTransitionStyle transitionStyle;
   final Duration? transitionDuration;
+  final Duration playerExitDelay;
+  final bool keepTickerEnabled;
   final bool animateInitialEntry;
   final bool keepVisible;
   final bool instantVisibilityChange;
@@ -2810,9 +3058,8 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
   void initState() {
     super.initState();
     if (widget.selected) {
-      // A player restored as the initial destination has no mini-player to
-      // expand from. Mount it at rest so its controls never begin below the
-      // safe viewport. Later mini/full changes still use the dedicated motion.
+      // A player restored as the initial destination has no preceding shell
+      // state to transition from. Mount it fully visible on its first frame.
       if (!widget.animateInitialEntry) {
         _hasEntered = true;
       } else {
@@ -2856,26 +3103,25 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
     final entered = visible && (_hasEntered || disableAnimations);
     final playerTransition =
         widget.transitionStyle == _PersistentViewTransitionStyle.player;
+    final playerExitDelay = disableAnimations || widget.instantVisibilityChange
+        ? Duration.zero
+        : widget.playerExitDelay;
     final content = RepaintBoundary(
-      child: TickerMode(enabled: widget.selected, child: widget.child),
+      child: TickerMode(
+        enabled: widget.selected || widget.keepTickerEnabled,
+        child: widget.child,
+      ),
     );
     final transitionedContent = playerTransition
-        // The full player behaves like a sheet: it enters from below and the
-        // exact same motion runs in reverse when it is collapsed. Fade that
-        // already-rasterized layer along the same timeline, without bringing
-        // back the scale transform that made the motion feel less direct.
-        ? AnimatedOpacity(
-            key: const ValueKey('player-view-fade-transition'),
-            opacity: entered ? 1 : 0,
+        // Fade the complete player layer, including its background and cover.
+        // Metadata, bars and controls own a separate internal slide so the
+        // artwork no longer travels with the whole screen.
+        ? _DelayedExitFade(
+            fadeKey: const ValueKey('player-view-fade-transition'),
+            visible: entered,
             duration: duration,
-            curve: Curves.easeInOut,
-            child: AnimatedSlide(
-              key: const ValueKey('player-view-slide-transition'),
-              offset: entered ? Offset.zero : const Offset(0, 1),
-              duration: duration,
-              curve: Curves.easeInOutCubic,
-              child: content,
-            ),
+            exitDelay: playerExitDelay,
+            child: content,
           )
         : AnimatedOpacity(
             opacity: entered ? 1 : 0,

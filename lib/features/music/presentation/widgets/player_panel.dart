@@ -43,6 +43,10 @@ class PlayerPanel extends ConsumerStatefulWidget {
     this.onCollapse,
     this.drawBackground = true,
     this.trackTransitionsEnabled = true,
+    this.controlsTransitionVisible = true,
+    this.controlsTransitionDuration = const Duration(milliseconds: 320),
+    this.controlsTransitionEnterDelay = Duration.zero,
+    this.controlsTransitionAnimateInitialEntry = false,
     this.style = defaultPlayerStyle,
     this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
     super.key,
@@ -52,6 +56,10 @@ class PlayerPanel extends ConsumerStatefulWidget {
   final VoidCallback? onCollapse;
   final bool drawBackground;
   final bool trackTransitionsEnabled;
+  final bool controlsTransitionVisible;
+  final Duration controlsTransitionDuration;
+  final Duration controlsTransitionEnterDelay;
+  final bool controlsTransitionAnimateInitialEntry;
   final PlayerStyle style;
   final bool animatedArtworkEnabled;
 
@@ -252,6 +260,14 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                       artworkFallbackSource: artworkFallbackSource,
                       visualIdentity: visualIdentity,
                       trackTransitionsEnabled: widget.trackTransitionsEnabled,
+                      controlsTransitionVisible:
+                          widget.controlsTransitionVisible,
+                      controlsTransitionDuration:
+                          widget.controlsTransitionDuration,
+                      controlsTransitionEnterDelay:
+                          widget.controlsTransitionEnterDelay,
+                      controlsTransitionAnimateInitialEntry:
+                          widget.controlsTransitionAnimateInitialEntry,
                       animatedArtworkEnabled: widget.animatedArtworkEnabled,
                       drawBackground: widget.drawBackground,
                       hasTrack: hasTrack,
@@ -442,25 +458,37 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                     final controlSpacingCompactness = mobile
                                         ? mobileFrameCompactness
                                         : verticalCompactness;
-                                    final controls = _PlayerControls(
-                                      snapshot: snapshot,
-                                      trackTransitionsEnabled:
-                                          widget.trackTransitionsEnabled,
-                                      hasTrack: hasTrack,
-                                      isFavorite: isFavorite,
-                                      savedTrackId: savedTrackId,
-                                      hasError: presentation.hasError,
-                                      errorText: presentation.errorText,
-                                      compact: !wide || stackedDesktop,
-                                      compactness: verticalCompactness,
-                                      spacingCompactness:
-                                          controlSpacingCompactness,
-                                      maxWidth: stackedDesktop
-                                          ? maxContentWidth
-                                          : 520.0,
-                                      onOpenLyrics: _openLyrics,
-                                      onOpenArtist: onOpenArtist,
-                                      strings: strings,
+                                    final controls = _PlayerControlsEntranceTransition(
+                                      slideKey: const ValueKey(
+                                        'bstream-player-controls-slide-transition',
+                                      ),
+                                      visible: widget.controlsTransitionVisible,
+                                      duration:
+                                          widget.controlsTransitionDuration,
+                                      enterDelay:
+                                          widget.controlsTransitionEnterDelay,
+                                      animateInitialEntry: widget
+                                          .controlsTransitionAnimateInitialEntry,
+                                      child: _PlayerControls(
+                                        snapshot: snapshot,
+                                        trackTransitionsEnabled:
+                                            widget.trackTransitionsEnabled,
+                                        hasTrack: hasTrack,
+                                        isFavorite: isFavorite,
+                                        savedTrackId: savedTrackId,
+                                        hasError: presentation.hasError,
+                                        errorText: presentation.errorText,
+                                        compact: !wide || stackedDesktop,
+                                        compactness: verticalCompactness,
+                                        spacingCompactness:
+                                            controlSpacingCompactness,
+                                        maxWidth: stackedDesktop
+                                            ? maxContentWidth
+                                            : 520.0,
+                                        onOpenLyrics: _openLyrics,
+                                        onOpenArtist: onOpenArtist,
+                                        strings: strings,
+                                      ),
                                     );
 
                                     return SingleChildScrollView(
@@ -773,6 +801,106 @@ class _BlurredPlayerBackground extends StatelessWidget {
   }
 }
 
+class _PlayerControlsEntranceTransition extends StatefulWidget {
+  const _PlayerControlsEntranceTransition({
+    required this.slideKey,
+    required this.visible,
+    required this.duration,
+    required this.enterDelay,
+    required this.animateInitialEntry,
+    required this.child,
+  });
+
+  final Key slideKey;
+  final bool visible;
+  final Duration duration;
+  final Duration enterDelay;
+  final bool animateInitialEntry;
+  final Widget child;
+
+  @override
+  State<_PlayerControlsEntranceTransition> createState() =>
+      _PlayerControlsEntranceTransitionState();
+}
+
+class _PlayerControlsEntranceTransitionState
+    extends State<_PlayerControlsEntranceTransition> {
+  Timer? _entryTimer;
+  late bool _entered;
+
+  @override
+  void initState() {
+    super.initState();
+    final animateInitialEntry =
+        widget.visible &&
+        widget.animateInitialEntry &&
+        widget.duration > Duration.zero;
+    _entered = widget.visible && !animateInitialEntry;
+    if (animateInitialEntry) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.visible && !_entered) {
+          _scheduleEntry();
+        }
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlayerControlsEntranceTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.visible) {
+      _entryTimer?.cancel();
+      _entryTimer = null;
+      _entered = false;
+      return;
+    }
+    if (!oldWidget.visible ||
+        (widget.duration == Duration.zero && !_entered) ||
+        (widget.enterDelay != oldWidget.enterDelay && !_entered)) {
+      _scheduleEntry(notifyImmediate: false);
+    }
+  }
+
+  void _scheduleEntry({bool notifyImmediate = true}) {
+    _entryTimer?.cancel();
+    _entryTimer = null;
+    if (widget.duration == Duration.zero ||
+        widget.enterDelay == Duration.zero) {
+      if (!_entered) {
+        if (notifyImmediate) {
+          setState(() => _entered = true);
+        } else {
+          _entered = true;
+        }
+      }
+      return;
+    }
+    _entryTimer = Timer(widget.enterDelay, () {
+      _entryTimer = null;
+      if (mounted && widget.visible && !_entered) {
+        setState(() => _entered = true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _entryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSlide(
+      key: widget.slideKey,
+      offset: _entered ? Offset.zero : const Offset(0, 0.08),
+      duration: widget.duration,
+      curve: Curves.easeInOutCubic,
+      child: widget.child,
+    );
+  }
+}
+
 class _AppleMusicPlayerLayout extends StatelessWidget {
   const _AppleMusicPlayerLayout({
     required this.snapshot,
@@ -780,6 +908,10 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
     required this.artworkFallbackSource,
     required this.visualIdentity,
     required this.trackTransitionsEnabled,
+    required this.controlsTransitionVisible,
+    required this.controlsTransitionDuration,
+    required this.controlsTransitionEnterDelay,
+    required this.controlsTransitionAnimateInitialEntry,
     required this.animatedArtworkEnabled,
     required this.drawBackground,
     required this.hasTrack,
@@ -802,6 +934,10 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
   final String? artworkFallbackSource;
   final String visualIdentity;
   final bool trackTransitionsEnabled;
+  final bool controlsTransitionVisible;
+  final Duration controlsTransitionDuration;
+  final Duration controlsTransitionEnterDelay;
+  final bool controlsTransitionAnimateInitialEntry;
   final bool animatedArtworkEnabled;
   final bool drawBackground;
   final bool hasTrack;
@@ -933,23 +1069,32 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                 borderRadius: 10,
               ),
             );
-            final controls = _AppleMusicControls(
-              snapshot: snapshot,
-              visualIdentity: visualIdentity,
-              trackTransitionsEnabled: trackTransitionsEnabled,
-              hasTrack: hasTrack,
-              isFavorite: isFavorite,
-              savedTrackId: savedTrackId,
-              hasError: hasError,
-              errorText: errorText,
-              compactness: layoutCompactness,
-              queueVisible: queueVisible,
-              onToggleQueue: onToggleQueue,
-              onOpenLyrics: onOpenLyrics,
-              onOpenSearch: onOpenSearch,
-              onOpenArtist: onOpenArtist,
-              onOpenAlbum: onOpenAlbum,
-              strings: strings,
+            final controls = _PlayerControlsEntranceTransition(
+              slideKey: const ValueKey(
+                'apple-player-controls-slide-transition',
+              ),
+              visible: controlsTransitionVisible,
+              duration: controlsTransitionDuration,
+              enterDelay: controlsTransitionEnterDelay,
+              animateInitialEntry: controlsTransitionAnimateInitialEntry,
+              child: _AppleMusicControls(
+                snapshot: snapshot,
+                visualIdentity: visualIdentity,
+                trackTransitionsEnabled: trackTransitionsEnabled,
+                hasTrack: hasTrack,
+                isFavorite: isFavorite,
+                savedTrackId: savedTrackId,
+                hasError: hasError,
+                errorText: errorText,
+                compactness: layoutCompactness,
+                queueVisible: queueVisible,
+                onToggleQueue: onToggleQueue,
+                onOpenLyrics: onOpenLyrics,
+                onOpenSearch: onOpenSearch,
+                onOpenArtist: onOpenArtist,
+                onOpenAlbum: onOpenAlbum,
+                strings: strings,
+              ),
             );
             Widget buildTwoColumnContent() {
               return Row(
