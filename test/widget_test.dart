@@ -817,7 +817,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('apple-player-grabber')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 230));
-      await tester.pump(const Duration(milliseconds: 210));
+      await tester.pump(const Duration(milliseconds: 220));
 
       expect(
         tester
@@ -3057,14 +3057,14 @@ void main() {
         inExclusiveRange(0.04, 0.12),
         reason: 'Only the player controls should rest below their final place.',
       );
-      expect(controlsSlide.duration, const Duration(milliseconds: 320));
+      expect(controlsSlide.duration, const Duration(milliseconds: 200));
       expect(
         tester.widget<AnimatedOpacity>(playerFade).duration,
-        const Duration(milliseconds: 200),
+        const Duration(milliseconds: 220),
       );
       expect(
         tester.widget<AnimatedOpacity>(backgroundFade).duration,
-        const Duration(milliseconds: 200),
+        const Duration(milliseconds: 220),
       );
       expect(
         tester
@@ -3146,12 +3146,20 @@ void main() {
       );
       expect(tester.takeException(), isNull);
 
-      await tester.pump(const Duration(milliseconds: 30));
+      await tester.pump(const Duration(milliseconds: 20));
       expect(
         tester.widget<AnimatedSlide>(find.byKey(controlsSlideKey)).offset,
         Offset.zero,
       );
       await tester.pump(const Duration(milliseconds: 100));
+      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
+      expect(slotOpacity(home), 1);
+      expect(
+        controlsSlideTranslation().dy,
+        inExclusiveRange(0, hiddenControlsOffset.dy),
+      );
+
+      await tester.pump(const Duration(milliseconds: 20));
       expect(playerFadeOpacity(), 1);
       expect(slotOpacity(home), 0);
       expect(
@@ -3159,7 +3167,7 @@ void main() {
         inExclusiveRange(0, hiddenControlsOffset.dy),
       );
 
-      await tester.pump(const Duration(milliseconds: 220));
+      await tester.pump(const Duration(milliseconds: 100));
 
       expect(shellOpacity('mini-player-shell-opacity'), 0);
       expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
@@ -3185,12 +3193,12 @@ void main() {
       await tester.binding.handlePopRoute();
       await tester.pump();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 160));
+      await tester.pump(const Duration(milliseconds: 80));
 
       expect(shellOpacity('mini-player-shell-opacity'), 0);
       expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
-      // Returning performs the inverse: controls slide alone first. Home and
-      // its chrome remain hidden until the final player fade starts.
+      // Returning performs the inverse: controls lead for 100 ms, then the
+      // player fade and browsing chrome overlap the rest of the slide.
       expect(slotOpacity(home), 0);
       expect(controlsSlideTranslation().dx, 0);
       expect(
@@ -3209,12 +3217,12 @@ void main() {
         closeTo(tester.getTopLeft(bottomClip).dy, 0.1),
       );
 
-      await tester.pump(const Duration(milliseconds: 70));
+      await tester.pump(const Duration(milliseconds: 20));
       expect(tester.widget<AnimatedOpacity>(playerFade).opacity, 0);
       expect(tester.widget<AnimatedOpacity>(backgroundFade).opacity, 0);
       expect(playerFadeOpacity(), 1);
       expect(slotOpacity(home), 1);
-      await tester.pump(const Duration(milliseconds: 70));
+      await tester.pump(const Duration(milliseconds: 60));
       expect(playerFadeOpacity(), inExclusiveRange(0, 1));
       expect(
         (tester.renderObject(backgroundFade) as RenderAnimatedOpacity)
@@ -3232,7 +3240,11 @@ void main() {
         inExclusiveRange(0, 1),
       );
 
-      await tester.pump(const Duration(milliseconds: 140));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(controlsSlideTranslation(), hiddenControlsOffset);
+      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
+
+      await tester.pump(const Duration(milliseconds: 120));
 
       expect(shellOpacity('mini-player-shell-opacity'), 1);
       expect(shellOpacity('bottom-navigation-shell-opacity'), 1);
@@ -3347,10 +3359,10 @@ void main() {
       final hiddenControlsOffset = controlsSlide.offset;
       expect(hiddenControlsOffset.dx, 0);
       expect(hiddenControlsOffset.dy, inExclusiveRange(0.04, 0.12));
-      expect(controlsSlide.duration, const Duration(milliseconds: 320));
+      expect(controlsSlide.duration, const Duration(milliseconds: 200));
       expect(
         tester.widget<AnimatedOpacity>(playerFade).duration,
-        const Duration(milliseconds: 200),
+        const Duration(milliseconds: 220),
       );
       expect(
         tester
@@ -3374,7 +3386,7 @@ void main() {
       expect(controlsSlideTranslation(), hiddenControlsOffset);
       expect(playerFadeOpacity(), inExclusiveRange(0, 1));
 
-      await tester.pump(const Duration(milliseconds: 30));
+      await tester.pump(const Duration(milliseconds: 20));
       expect(
         tester.widget<AnimatedSlide>(controlsSlideFinder).offset,
         Offset.zero,
@@ -3384,7 +3396,7 @@ void main() {
         controlsSlideTranslation().dy,
         inExclusiveRange(0, hiddenControlsOffset.dy),
       );
-      expect(playerFadeOpacity(), 1);
+      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
       expect(
         find.ancestor(
           of: find.byKey(const ValueKey('player-large-artwork')),
@@ -3393,14 +3405,21 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.pump(const Duration(milliseconds: 220));
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(playerFadeOpacity(), 1);
+      expect(
+        controlsSlideTranslation().dy,
+        inExclusiveRange(0, hiddenControlsOffset.dy),
+      );
+
+      await tester.pump(const Duration(milliseconds: 100));
       expect(controlsSlideTranslation(), Offset.zero);
       expect(playerFadeOpacity(), 1);
 
       await tester.tap(find.byKey(const ValueKey('apple-player-grabber')));
       await tester.pump();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 160));
+      await tester.pump(const Duration(milliseconds: 80));
       expect(
         controlsSlideTranslation().dy,
         inExclusiveRange(0, hiddenControlsOffset.dy),
@@ -3408,19 +3427,23 @@ void main() {
       );
       expect(playerFadeOpacity(), 1);
 
-      await tester.pump(const Duration(milliseconds: 70));
+      await tester.pump(const Duration(milliseconds: 20));
       expect(tester.widget<AnimatedOpacity>(playerFade).opacity, 0);
       expect(tester.widget<AnimatedOpacity>(backgroundFade).opacity, 0);
       expect(playerFadeOpacity(), 1);
 
-      await tester.pump(const Duration(milliseconds: 70));
+      await tester.pump(const Duration(milliseconds: 60));
       expect(playerFadeOpacity(), inExclusiveRange(0, 1));
       expect(
         controlsSlideTranslation().dy,
         inExclusiveRange(0, hiddenControlsOffset.dy),
       );
 
-      await tester.pump(const Duration(milliseconds: 140));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(controlsSlideTranslation(), hiddenControlsOffset);
+      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
+
+      await tester.pump(const Duration(milliseconds: 120));
       expect(controlsSlideTranslation(), hiddenControlsOffset);
       expect(playerFadeOpacity(), 0);
       expect(tester.takeException(), isNull);
@@ -3512,11 +3535,11 @@ void main() {
         expect(tester.widget<AnimatedOpacity>(playerFade).opacity, 1);
         expect(
           tester.widget<AnimatedOpacity>(playerFade).duration,
-          const Duration(milliseconds: 200),
+          const Duration(milliseconds: 220),
         );
         expect(
           tester.widget<AnimatedSlide>(controlsSlide).duration,
-          const Duration(milliseconds: 320),
+          const Duration(milliseconds: 200),
         );
 
         await tester.pump(const Duration(milliseconds: 80));
@@ -3528,9 +3551,18 @@ void main() {
           inExclusiveRange(0, 1),
         );
 
-        await tester.pump(const Duration(milliseconds: 30));
+        await tester.pump(const Duration(milliseconds: 20));
         expect(tester.widget<AnimatedSlide>(controlsSlide).offset, Offset.zero);
         await tester.pump(const Duration(milliseconds: 100));
+        expect(controlsSlideTranslation().dy, inExclusiveRange(0, 0.08));
+        expect(
+          (tester.renderObject(playerFade) as RenderAnimatedOpacity)
+              .opacity
+              .value,
+          inExclusiveRange(0, 1),
+        );
+
+        await tester.pump(const Duration(milliseconds: 20));
         expect(controlsSlideTranslation().dy, inExclusiveRange(0, 0.08));
         expect(
           (tester.renderObject(playerFade) as RenderAnimatedOpacity)
@@ -3539,7 +3571,7 @@ void main() {
           1,
         );
 
-        await tester.pump(const Duration(milliseconds: 220));
+        await tester.pump(const Duration(milliseconds: 100));
         expect(controlsSlideTranslation(), Offset.zero);
         expect(
           (tester.renderObject(playerFade) as RenderAnimatedOpacity)
@@ -3871,10 +3903,10 @@ void main() {
     await tester.pump();
     // Commit the implicit player transition target before advancing its clock.
     await tester.pump();
-    // Cross the delayed controls start in one frame, then let its 320 ms
+    // Cross the delayed controls start in one frame, then let its 200 ms
     // slide finish before measuring safe-area geometry.
     await tester.pump(const Duration(milliseconds: 110));
-    await tester.pump(const Duration(milliseconds: 330));
+    await tester.pump(const Duration(milliseconds: 210));
 
     final error = find.byKey(const ValueKey('player-error-message'));
     final control = find.byKey(const ValueKey('player-volume-control'));

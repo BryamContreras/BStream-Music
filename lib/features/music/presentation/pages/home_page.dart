@@ -109,14 +109,14 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   static const _maxViewHistory = 2;
   static const _shellTransitionDuration = Duration(milliseconds: 320);
-  // Opening: fade 0..200 ms, controls slide 100..420 ms.
-  // Closing reverses that rhythm: controls slide 0..320 ms and the fade runs
-  // 220..420 ms, leaving exactly 100 ms of overlap in either direction.
-  static const _playerTransitionDuration = Duration(milliseconds: 420);
-  static const _playerFadeDuration = Duration(milliseconds: 200);
-  static const _playerControlsSlideDuration = Duration(milliseconds: 320);
+  // Opening: fade 0..220 ms, controls slide 100..300 ms.
+  // Closing keeps the motion responsive: controls slide 0..200 ms and the
+  // fade overlaps from 100..320 ms.
+  static const _playerTransitionDuration = Duration(milliseconds: 320);
+  static const _playerFadeDuration = Duration(milliseconds: 220);
+  static const _playerControlsSlideDuration = Duration(milliseconds: 200);
   static const _playerControlsEnterDelay = Duration(milliseconds: 100);
-  static const _playerFadeExitDelay = Duration(milliseconds: 220);
+  static const _playerFadeExitDelay = Duration(milliseconds: 100);
   static const _bottomNavigationHideTravel = 24.0;
   static const _bottomNavigationShowTravel = 12.0;
 

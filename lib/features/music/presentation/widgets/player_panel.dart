@@ -44,7 +44,7 @@ class PlayerPanel extends ConsumerStatefulWidget {
     this.drawBackground = true,
     this.trackTransitionsEnabled = true,
     this.controlsTransitionVisible = true,
-    this.controlsTransitionDuration = const Duration(milliseconds: 320),
+    this.controlsTransitionDuration = const Duration(milliseconds: 200),
     this.controlsTransitionEnterDelay = Duration.zero,
     this.controlsTransitionAnimateInitialEntry = false,
     this.style = defaultPlayerStyle,
