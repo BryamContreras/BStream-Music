@@ -58,6 +58,7 @@ jobs:
           -d windows
           --dart-define=BSTREAM_HEADLESS_AUDIO=true
           --dart-define=BSTREAM_LIVE_INNERTUBE=true
+          --dart-define=BSTREAM_ALLOW_ATTESTATION_WITHHELD=true
 
   android-native:
     name: Android native crossfade

@@ -8,6 +8,9 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   const enabled = bool.fromEnvironment('BSTREAM_LIVE_INNERTUBE');
+  const allowAttestationWithheld = bool.fromEnvironment(
+    'BSTREAM_ALLOW_ATTESTATION_WITHHELD',
+  );
 
   testWidgets('production fallback resolves media that passes the deep probe', (
     _,
@@ -32,8 +35,56 @@ void main() {
           : 3 * 1024 * 1024;
       expect(result.probe.probedOffset, greaterThanOrEqualTo(expectedOffset));
       expect(result.expiresAt.isAfter(DateTime.now()), isTrue);
+    } on InnerTubePlaybackException catch (error) {
+      if (!allowAttestationWithheld || !_isAttestationWithheld(error.cause)) {
+        rethrow;
+      }
+      // Public CI addresses may be denied by BotGuard even though the same
+      // production fallback succeeds on residential connections. Keep this
+      // one external refusal advisory without masking resolver regressions.
+      // ignore: avoid_print
+      print('YouTube withheld attestation from the public CI runner.');
     } finally {
       await service.dispose();
     }
   }, skip: !enabled);
+
+  test('only a non-retryable BotGuard attestation denial is advisory', () {
+    expect(
+      _isAttestationWithheld(
+        const PoTokenException(
+          'Homepage integrity was withheld and the attestation fallback '
+          'did not produce a usable token.',
+          retryable: false,
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      _isAttestationWithheld(
+        const PoTokenException(
+          'Homepage integrity was withheld and the attestation fallback '
+          'did not produce a usable token.',
+        ),
+      ),
+      isFalse,
+    );
+    expect(
+      _isAttestationWithheld(
+        const PoTokenException(
+          'A different resolver failure.',
+          retryable: false,
+        ),
+      ),
+      isFalse,
+    );
+  });
+}
+
+bool _isAttestationWithheld(Object? cause) {
+  return cause is PoTokenException &&
+      !cause.retryable &&
+      cause.message ==
+          'Homepage integrity was withheld and the attestation fallback '
+              'did not produce a usable token.';
 }
