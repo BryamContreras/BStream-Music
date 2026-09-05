@@ -385,7 +385,14 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
     final lyricsContentLayer = _buildLyricsContentLayer(
       content: lyricsPresentation.content,
       mobileLayout: mobileLayout,
-      showOffset: lyricsPresentation.showOffset,
+      // The compact landscape layout already gives most of its height to the
+      // artwork/timeline companion. Keep the lyrics unobstructed there; the
+      // timing control remains available in mobile portrait and on desktop.
+      showOffset:
+          lyricsPresentation.showOffset &&
+          (!mobileLayout ||
+              !landscape ||
+              !AppPlatform.isMobileTargetPlatform(Theme.of(context).platform)),
       offset: offset,
     );
 
@@ -1299,67 +1306,90 @@ class _LyricsPlaybackCompanion extends ConsumerWidget {
           padding: mobileLayout
               ? const EdgeInsets.fromLTRB(12, 12, 12, 0)
               : const EdgeInsets.all(18),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Flexible(
-                fit: FlexFit.loose,
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: ClipRRect(
-                    key: const ValueKey('lyrics-companion-artwork'),
-                    borderRadius: BorderRadius.circular(appArtworkRadius),
-                    child: SourceImage(
-                      source: playback.thumbnailUrl,
-                      cacheWidth: mobileLayout ? 512 : 1024,
-                      fallback: ColoredBox(
-                        key: const ValueKey(
-                          'lyrics-companion-artwork-fallback',
-                        ),
-                        color: Colors.white.withValues(alpha: 0.08),
-                        child: Icon(
-                          Icons.music_note_rounded,
-                          size: mobileLayout ? 42 : 58,
-                          color: Colors.white.withValues(alpha: 0.62),
-                        ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // The compact landscape companion has 113 dp of fixed timeline,
+              // transport and spacing. Give the rest to one square and use
+              // that exact width for every playback element, so duration and
+              // progress can never extend beyond the artwork.
+              final mobileArtworkExtent = math.min(
+                constraints.maxWidth,
+                math.max(0.0, constraints.maxHeight - 113.0),
+              );
+              final artwork = AspectRatio(
+                aspectRatio: 1,
+                child: ClipRRect(
+                  key: const ValueKey('lyrics-companion-artwork'),
+                  borderRadius: BorderRadius.circular(appArtworkRadius),
+                  child: SourceImage(
+                    source: playback.thumbnailUrl,
+                    cacheWidth: mobileLayout ? 512 : 1024,
+                    fallback: ColoredBox(
+                      key: const ValueKey('lyrics-companion-artwork-fallback'),
+                      color: Colors.white.withValues(alpha: 0.08),
+                      child: Icon(
+                        Icons.music_note_rounded,
+                        size: mobileLayout ? 42 : 58,
+                        color: Colors.white.withValues(alpha: 0.62),
                       ),
                     ),
                   ),
                 ),
-              ),
-              SizedBox(height: mobileLayout ? 3 : 8),
-              if (!mobileLayout) ...[
-                MarqueeText(
-                  title == null || title.isEmpty ? strings.noPlayback : title,
-                  key: const ValueKey('lyrics-companion-title'),
-                  pause: const Duration(milliseconds: 1700),
-                  travel: const Duration(milliseconds: 6200),
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    color: Colors.white,
-                    fontSize: 21,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  artist == null || artist.isEmpty
-                      ? strings.unknownArtist
-                      : artist,
-                  key: const ValueKey('lyrics-companion-artist'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.68),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-              ],
-              _LyricsCompanionTimeline(mobileLayout: mobileLayout),
-              _LyricsCompanionControls(mobileLayout: mobileLayout),
-            ],
+              );
+              final content = Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (mobileLayout)
+                    SizedBox.square(
+                      dimension: mobileArtworkExtent,
+                      child: artwork,
+                    )
+                  else
+                    Flexible(fit: FlexFit.loose, child: artwork),
+                  SizedBox(height: mobileLayout ? 3 : 8),
+                  if (!mobileLayout) ...[
+                    MarqueeText(
+                      title == null || title.isEmpty
+                          ? strings.noPlayback
+                          : title,
+                      key: const ValueKey('lyrics-companion-title'),
+                      pause: const Duration(milliseconds: 1700),
+                      travel: const Duration(milliseconds: 6200),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        color: Colors.white,
+                        fontSize: 21,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      artist == null || artist.isEmpty
+                          ? strings.unknownArtist
+                          : artist,
+                      key: const ValueKey('lyrics-companion-artist'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.68),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                  _LyricsCompanionTimeline(mobileLayout: mobileLayout),
+                  _LyricsCompanionControls(mobileLayout: mobileLayout),
+                ],
+              );
+              if (!mobileLayout) {
+                return content;
+              }
+              return Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: SizedBox(width: mobileArtworkExtent, child: content),
+              );
+            },
           ),
         ),
       ),

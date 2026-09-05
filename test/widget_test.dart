@@ -38,6 +38,7 @@ import 'package:bstream_music/features/music/presentation/widgets/track_result_t
 import 'package:bstream_music/main.dart';
 import 'package:bstream_music/platform_channels/android_app_activation_channel.dart';
 import 'package:bstream_music/platform_channels/android_external_audio_channel.dart';
+import 'package:bstream_music/services/app_update/github_release_checker.dart';
 import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/lyrics/lyrics_service.dart';
 import 'package:bstream_music/services/local_media/device_audio_catalog.dart';
@@ -95,6 +96,72 @@ void main() {
     );
     expect(find.byIcon(Icons.search_rounded), findsWidgets);
     expect(find.text('Reproductor'), findsNothing);
+  });
+
+  testWidgets('startup checks once and shows a newer release', (tester) async {
+    var checkCount = 0;
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _testApp(
+        settingsController: settingsController,
+        releaseChecker: ({required currentVersion}) async {
+          checkCount += 1;
+          return AppReleaseCheckResult(
+            currentVersion: currentVersion,
+            latestVersion: '1.3.0',
+            releaseTag: 'v1.3.0',
+          );
+        },
+        testHome: const HomePage(checkForUpdatesOnStartup: true),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(checkCount, 1);
+    expect(
+      find.byKey(const ValueKey('settings-update-available-dialog')),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 1));
+    expect(checkCount, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('offline startup update check fails silently', (tester) async {
+    var checkCount = 0;
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _testApp(
+        settingsController: settingsController,
+        releaseChecker: ({required currentVersion}) async {
+          checkCount += 1;
+          throw const io.SocketException('offline');
+        },
+        testHome: const HomePage(checkForUpdatesOnStartup: true),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(checkCount, 1);
+    expect(
+      find.byKey(const ValueKey('settings-update-available-dialog')),
+      findsNothing,
+    );
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.byKey(const ValueKey('home-view')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('home greeting does not include the authenticated account name', (
@@ -1412,6 +1479,16 @@ void main() {
       final navigationGlass = tester.widget<LiquidGlassSurface>(navigation);
       final searchGlass = tester.widget<LiquidGlassSurface>(detachedSearch);
       final miniGlass = tester.widget<LiquidGlassSurface>(miniPlayerGlass);
+      BackdropFilter materialFor(Finder surface) =>
+          tester.widget<BackdropFilter>(
+            find.descendant(
+              of: surface,
+              matching: find.byKey(LiquidGlassSurface.backdropKey),
+            ),
+          );
+      final navigationMaterial = materialFor(navigation);
+      final searchMaterial = materialFor(detachedSearch);
+      final miniMaterial = materialFor(miniPlayerGlass);
       expect(navigationGlass.backdropGroupKey, isNotNull);
       expect(
         identical(
@@ -1425,6 +1502,16 @@ void main() {
         isFalse,
       );
       expect(miniGlass.backdropGroupKey, isNotNull);
+      expect(
+        navigationMaterial.backdropGroupKey,
+        same(searchMaterial.backdropGroupKey),
+        reason: 'Non-overlapping mobile chrome must reuse one backdrop input.',
+      );
+      expect(
+        miniMaterial.backdropGroupKey,
+        isNot(same(navigationMaterial.backdropGroupKey)),
+        reason: 'The mini player can overlap the chrome while it morphs.',
+      );
       Finder primaryDestination(int index) => find.descendant(
         of: navigationContent,
         matching: find.byKey(ValueKey('bottom-navigation-item-$index')),
@@ -1463,15 +1550,15 @@ void main() {
       );
       expect(selectionPaints[1].style, PaintingStyle.fill);
       expect(selectionPaints[1].shader, isNotNull);
-      expect(selectionPaints[1].blendMode, BlendMode.softLight);
+      expect(selectionPaints[1].blendMode, BlendMode.srcOver);
       expect(selectionPaints[2].style, PaintingStyle.stroke);
       expect(selectionPaints[2].strokeWidth, closeTo(1, 0.000001));
       expect(selectionPaints[2].shader, isNotNull);
-      expect(selectionPaints[2].blendMode, BlendMode.softLight);
+      expect(selectionPaints[2].blendMode, BlendMode.srcOver);
       expect(selectionPaints[3].style, PaintingStyle.stroke);
       expect(selectionPaints[3].strokeWidth, closeTo(0.65, 0.000001));
       expect(selectionPaints[3].shader, isNotNull);
-      expect(selectionPaints[3].blendMode, BlendMode.softLight);
+      expect(selectionPaints[3].blendMode, BlendMode.srcOver);
       expect(
         tester.getCenter(selectionLens).dx,
         closeTo(tester.getCenter(primaryDestination(0)).dx, 0.5),
@@ -2903,6 +2990,28 @@ void main() {
       double shellOpacity(String key) =>
           tester.widget<Opacity>(find.byKey(ValueKey(key))).opacity;
 
+      Offset playerSlideTranslation() {
+        final slide = find.byKey(
+          const ValueKey('player-view-slide-transition'),
+        );
+        final nearestTranslation = find
+            .descendant(of: slide, matching: find.byType(FractionalTranslation))
+            .evaluate()
+            .reduce((nearest, candidate) {
+              return candidate.depth < nearest.depth ? candidate : nearest;
+            });
+        return (nearestTranslation.widget as FractionalTranslation).translation;
+      }
+
+      double playerFadeOpacity() {
+        return (tester.renderObject(
+                  find.byKey(const ValueKey('player-view-fade-transition')),
+                )
+                as RenderAnimatedOpacity)
+            .opacity
+            .value;
+      }
+
       final home = find.byKey(const ValueKey('home-view'));
       final miniClip = find.byKey(const ValueKey('mini-player-shell-clip'));
       final bottomClip = find.byKey(
@@ -2912,7 +3021,17 @@ void main() {
       final initialBottomHeight = tester.getSize(bottomClip).height;
       expect(initialMiniHeight, greaterThan(0));
       expect(initialBottomHeight, greaterThan(0));
-      expect(find.byKey(const ValueKey('player-view')), findsNothing);
+      final prewarmedPlayer = find.byKey(const ValueKey('player-view'));
+      expect(prewarmedPlayer, findsOneWidget);
+      expect(
+        tester
+            .widget<AnimatedSlide>(
+              find.byKey(const ValueKey('player-view-slide-transition')),
+            )
+            .offset,
+        const Offset(0, 1),
+      );
+      expect(playerFadeOpacity(), 0);
 
       await tester.tapAt(
         tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
@@ -2924,15 +3043,7 @@ void main() {
               find.byKey(const ValueKey('player-view-slide-transition')),
             )
             .offset,
-        const Offset(0, 0.045),
-      );
-      expect(
-        tester
-            .widget<AnimatedScale>(
-              find.byKey(const ValueKey('player-view-scale-transition')),
-            )
-            .scale,
-        0.965,
+        Offset.zero,
       );
       await tester.pump();
 
@@ -2960,8 +3071,13 @@ void main() {
         shellOpacity('bottom-navigation-shell-opacity'),
         inExclusiveRange(0, 1),
       );
-      expect(slotOpacity(home), inExclusiveRange(0, 1));
-      expect(slotOpacity(player), inExclusiveRange(0, 1));
+      // As with the Lyrics route, only the entering foreground moves. The
+      // browsing view stays fully rendered underneath and is hidden once the
+      // player has completed its upward slide and fade.
+      expect(slotOpacity(home), 1);
+      expect(playerSlideTranslation().dx, 0);
+      expect(playerSlideTranslation().dy, inExclusiveRange(0, 1));
+      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
       final miniTranslation = tester.widget<FractionalTranslation>(
         find.byKey(const ValueKey('mini-player-shell-translation')),
       );
@@ -2971,17 +3087,9 @@ void main() {
       expect(miniTranslation.translation.dx, 0);
       expect(miniTranslation.translation.dy, inExclusiveRange(0, 0.36));
       expect(miniScale.transform.entry(0, 0), inExclusiveRange(0.94, 1));
-      final playerScaleTransform = tester.widget<Transform>(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('player-view-scale-transition')),
-              matching: find.byType(Transform),
-            )
-            .first,
-      );
       expect(
-        playerScaleTransform.transform.entry(0, 0),
-        inExclusiveRange(0.965, 1),
+        find.byKey(const ValueKey('player-view-scale-transition')),
+        findsNothing,
       );
       expect(tester.getSize(miniClip).height, closeTo(initialMiniHeight, 0.1));
       expect(
@@ -3004,7 +3112,8 @@ void main() {
         closeTo(initialBottomHeight, 0.1),
       );
       expect(slotOpacity(home), 0);
-      expect(slotOpacity(player), 1);
+      expect(playerSlideTranslation(), Offset.zero);
+      expect(playerFadeOpacity(), 1);
       expect(
         find.byKey(const ValueKey('shell-background-browsing')),
         findsNothing,
@@ -3026,8 +3135,12 @@ void main() {
         shellOpacity('bottom-navigation-shell-opacity'),
         inExclusiveRange(0, 1),
       );
-      expect(slotOpacity(home), inExclusiveRange(0, 1));
-      expect(slotOpacity(player), inExclusiveRange(0, 1));
+      // Returning performs the inverse: Home is immediately ready underneath
+      // while only the player slides down and fades away.
+      expect(slotOpacity(home), 1);
+      expect(playerSlideTranslation().dx, 0);
+      expect(playerSlideTranslation().dy, inExclusiveRange(0, 1));
+      expect(playerFadeOpacity(), inExclusiveRange(0, 1));
       expect(
         tester.getBottomLeft(miniClip).dy,
         closeTo(tester.getTopLeft(bottomClip).dy, 0.1),
@@ -3043,7 +3156,8 @@ void main() {
         closeTo(initialBottomHeight, 0.1),
       );
       expect(slotOpacity(home), 1);
-      expect(slotOpacity(player), 0);
+      expect(playerSlideTranslation(), const Offset(0, 1));
+      expect(playerFadeOpacity(), 0);
       expect(find.byKey(const ValueKey('player-view')), findsOneWidget);
       expect(
         tester
@@ -3549,8 +3663,16 @@ void main() {
     await tester.pump();
     expect(
       tester
-          .widget<AnimatedScale>(
-            find.byKey(const ValueKey('player-view-scale-transition')),
+          .widget<AnimatedSlide>(
+            find.byKey(const ValueKey('player-view-slide-transition')),
+          )
+          .duration,
+      Duration.zero,
+    );
+    expect(
+      tester
+          .widget<AnimatedOpacity>(
+            find.byKey(const ValueKey('player-view-fade-transition')),
           )
           .duration,
       Duration.zero,
@@ -3771,37 +3893,35 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'home recent cards use larger desktop dimensions',
-    (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-      tester.view.physicalSize = const Size(1280, 900);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(() {
-        debugDefaultTargetPlatformOverride = null;
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-      });
-      final repository = _homeCardsRepository();
-
-      await tester.pumpWidget(_testApp(libraryRepository: repository));
-      await tester.pump(const Duration(seconds: 1));
-      await tester.pump();
-
-      expect(
-        tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
-        176,
-      );
-      expect(
-        tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-        228,
-      );
-      expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
-      expect(tester.takeException(), isNull);
+  testWidgets('home recent cards use larger desktop dimensions', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
-    },
-    skip: !io.Platform.isWindows,
-  );
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final repository = _homeCardsRepository();
+
+    await tester.pumpWidget(_testApp(libraryRepository: repository));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+
+    expect(
+      tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
+      176,
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
+      228,
+    );
+    expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  }, skip: !io.Platform.isWindows);
 
   testWidgets('home shelves fit text scale 3 on a 320x568 phone', (
     tester,
@@ -5869,6 +5989,146 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('version row shows an update dialog without opening a URL', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final checkedVersions = <String>[];
+    final launchedUrls = <Uri>[];
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+        externalLauncher: (url) async {
+          launchedUrls.add(url);
+          return true;
+        },
+        releaseChecker: ({required currentVersion}) async {
+          checkedVersions.add(currentVersion);
+          return AppReleaseCheckResult(
+            currentVersion: currentVersion,
+            latestVersion: '1.3.0',
+            releaseTag: 'v1.3.0',
+          );
+        },
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final about = find.byKey(const ValueKey('settings-card-about'));
+    await tester.scrollUntilVisible(
+      about,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(about);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-about-version')));
+    await tester.pumpAndSettle();
+
+    expect(checkedVersions, [AppConstants.appVersion]);
+    expect(launchedUrls, isEmpty);
+    expect(
+      find.byKey(const ValueKey('settings-update-available-dialog')),
+      findsOneWidget,
+    );
+    expect(find.text('Nueva versión disponible'), findsOneWidget);
+    expect(
+      find.text(
+        'La versión 1.3.0 de BStream Music está disponible. Actualmente tienes la versión ${AppConstants.appVersion}.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-update-available-close')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('settings-update-available-close')),
+    );
+    await tester.pumpAndSettle();
+    expect(launchedUrls, isEmpty);
+    expect(
+      find.byKey(const ValueKey('settings-update-available-dialog')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('settings-about-version')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('settings-update-available-download')),
+    );
+    await tester.pumpAndSettle();
+    expect(checkedVersions, [AppConstants.appVersion, AppConstants.appVersion]);
+    expect(launchedUrls, [Uri.parse(AppConstants.appDownloadUrl)]);
+    expect(
+      find.byKey(const ValueKey('settings-update-available-dialog')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('version row reports when the installed app is current', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+      ),
+    );
+    await tester.pumpWidget(
+      _settingsTestApp(
+        settingsController: settingsController,
+        directoryPicker:
+            ({String? dialogTitle, String? initialDirectory}) async => null,
+        releaseChecker: ({required currentVersion}) async =>
+            AppReleaseCheckResult(
+              currentVersion: currentVersion,
+              latestVersion: '1.2.5',
+              releaseTag: 'v1.2.5',
+            ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final about = find.byKey(const ValueKey('settings-card-about'));
+    await tester.scrollUntilVisible(
+      about,
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(about);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-about-version')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-update-available-dialog')),
+      findsNothing,
+    );
+    expect(find.text('Ya tienes la versión más reciente.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('about card reports when GitHub cannot be opened', (
     tester,
   ) async {
@@ -7319,6 +7579,8 @@ void main() {
     await tester.tapAt(
       tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
     );
+    await tester.pump();
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
     await tester.tap(find.byTooltip('Volumen'));
@@ -7397,6 +7659,8 @@ void main() {
     await tester.tapAt(
       tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
     );
+    await tester.pump();
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     final lyricsControl = find.byKey(const ValueKey('player-lyrics-control'));
     final lyricsButton = find.descendant(
@@ -7589,6 +7853,8 @@ void main() {
       await tester.tapAt(
         tester.getCenter(find.byKey(const ValueKey('mini-player-metadata'))),
       );
+      await tester.pump();
+      await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
 
       final artwork = find.byIcon(Icons.music_note_rounded);
@@ -8250,6 +8516,7 @@ Widget _settingsTestApp({
   required _FakeSettingsController settingsController,
   required DownloadDirectoryPicker directoryPicker,
   SettingsExternalLauncher? externalLauncher,
+  SettingsReleaseChecker? releaseChecker,
   TargetPlatform platform = TargetPlatform.windows,
 }) {
   return ProviderScope(
@@ -8258,6 +8525,8 @@ Widget _settingsTestApp({
       downloadDirectoryPickerProvider.overrideWithValue(directoryPicker),
       if (externalLauncher != null)
         settingsExternalLauncherProvider.overrideWithValue(externalLauncher),
+      if (releaseChecker != null)
+        settingsReleaseCheckerProvider.overrideWithValue(releaseChecker),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),
@@ -8278,6 +8547,8 @@ Widget _testApp({
   LyricsService? lyricsService,
   ArtworkProgressColorService? artworkProgressColorService,
   DownloadDirectoryPicker? directoryPicker,
+  SettingsReleaseChecker? releaseChecker,
+  SettingsExternalLauncher? settingsExternalLauncher,
   FutureOr<List<HomeRecommendationSection>>? homeRecommendations,
   Object? homeRecommendationsError,
   FutureOr<List<HomeRecommendationSection>> Function()?
@@ -8367,6 +8638,12 @@ Widget _testApp({
         ),
       if (directoryPicker != null)
         downloadDirectoryPickerProvider.overrideWithValue(directoryPicker),
+      if (releaseChecker != null)
+        settingsReleaseCheckerProvider.overrideWithValue(releaseChecker),
+      if (settingsExternalLauncher != null)
+        settingsExternalLauncherProvider.overrideWithValue(
+          settingsExternalLauncher,
+        ),
       incomingTrackLinkServiceProvider.overrideWithValue(
         incomingTrackLinkService ?? const _EmptyIncomingTrackLinkService(),
       ),

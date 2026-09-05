@@ -1190,6 +1190,7 @@ void main() {
     expect(find.byKey(const ValueKey('lyrics-exit-button')), findsNothing);
     expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
     expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+    expect(find.byKey(const ValueKey('lyrics-offset-control')), findsNothing);
     final companion = find.byKey(const ValueKey('lyrics-playback-companion'));
     expect(companion, findsOneWidget);
     final companionDecoration =
@@ -1222,9 +1223,17 @@ void main() {
     final timelineRect = tester.getRect(
       find.byKey(const ValueKey('lyrics-companion-timeline')),
     );
+    final positionRect = tester.getRect(
+      find.byKey(const ValueKey('lyrics-companion-position-label')),
+    );
+    final durationRect = tester.getRect(
+      find.byKey(const ValueKey('lyrics-companion-duration-label')),
+    );
     expect(artworkRect.left, closeTo(timelineRect.left, 0.1));
     expect(artworkRect.right, closeTo(timelineRect.right, 0.1));
     expect(artworkRect.width, closeTo(timelineRect.width, 0.1));
+    expect(positionRect.left, closeTo(artworkRect.left, 0.1));
+    expect(durationRect.right, closeTo(artworkRect.right, 0.1));
     final lyricsRect = tester.getRect(
       find.byKey(const ValueKey('lyrics-content-region')),
     );
@@ -1413,7 +1422,7 @@ void main() {
 
       final appleTheme = tester.widget<SliderTheme>(sliderThemeFinder).data;
       const foreground = Colors.white;
-      expect(appleTheme.trackHeight, 7);
+      expect(appleTheme.trackHeight, 8);
       expect(appleTheme.activeTrackColor, foreground.withValues(alpha: 0.88));
       expect(appleTheme.inactiveTrackColor, foreground.withValues(alpha: 0.28));
       expect(appleTheme.thumbShape, same(SliderComponentShape.noThumb));
@@ -1450,7 +1459,7 @@ void main() {
       expect(linearSlider, findsOneWidget);
       expect(find.byType(WavyPlaybackSeekBar), findsNothing);
       final bstreamTheme = tester.widget<SliderTheme>(sliderThemeFinder).data;
-      expect(bstreamTheme.trackHeight, 7);
+      expect(bstreamTheme.trackHeight, 8);
       expect(bstreamTheme.trackShape, isA<UniformPlaybackSliderTrackShape>());
       expect(bstreamTheme.thumbShape, same(SliderComponentShape.noThumb));
       expect(bstreamTheme.overlayShape, same(SliderComponentShape.noOverlay));
@@ -2523,6 +2532,14 @@ void main() {
   testWidgets('advancing lyrics by 0.50 seconds updates the active line', (
     tester,
   ) async {
+    tester.view
+      ..physicalSize = const Size(600, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(
       tester,
@@ -2551,6 +2568,14 @@ void main() {
   testWidgets('lyrics offset is limited to minus and plus ten seconds', (
     tester,
   ) async {
+    tester.view
+      ..physicalSize = const Size(600, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(
       tester,
@@ -2579,6 +2604,14 @@ void main() {
   testWidgets('lyrics offset survives navigation and resets for a new track', (
     tester,
   ) async {
+    tester.view
+      ..physicalSize = const Size(600, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
     final player = _FakePlayerService(lookupSnapshot);
     final container = await _pumpLyricsPage(
       tester,
@@ -2647,6 +2680,14 @@ void main() {
   testWidgets('tapping a synced line seeks with the selected offset', (
     tester,
   ) async {
+    tester.view
+      ..physicalSize = const Size(600, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
     final player = _FakePlayerService(lookupSnapshot);
     await _pumpLyricsPage(
       tester,

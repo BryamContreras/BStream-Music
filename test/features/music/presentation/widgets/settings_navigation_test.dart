@@ -19,7 +19,6 @@ import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_account_client.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_models.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_session_store.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1897,9 +1896,7 @@ void main() {
         overrides: [
           storageImportFilePickerProvider.overrideWithValue(
             ({required dialogTitle, required allowedExtensions}) async =>
-                FilePickerResult([
-                  PlatformFile(name: 'MetroList.csv', size: 42, path: 'x.csv'),
-                ]),
+                'x.csv',
           ),
           libraryCsvTransferControllerProvider.overrideWith(
             () => transferController,

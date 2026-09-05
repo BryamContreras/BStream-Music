@@ -50,6 +50,43 @@ void main() {
     expect(transport.postCount, 1);
   });
 
+  test('resolves the highest-bitrate compatible audio format', () async {
+    final transport = _FakeTransport((_, _) {
+      final response = _playerResponse(
+        videoId: videoId,
+        url: 'https://media.example/aac',
+      );
+      final adaptive =
+          (response['streamingData'] as Map<String, dynamic>)['adaptiveFormats']
+              as List<Map<String, dynamic>>;
+      adaptive.add(<String, dynamic>{
+        'itag': 251,
+        'mimeType': 'audio/webm; codecs="opus"',
+        'bitrate': 192000,
+        'contentLength': '2500000',
+        'url': 'https://media.example/opus',
+      });
+      return response;
+    });
+    final validator = _FakeValidator();
+    final service = InnerTubePlaybackService(
+      transport: transport,
+      validator: validator,
+      router: InnerTubeClientRouter(
+        profiles: const [InnerTubeClientRegistry.visionOS],
+        primaryKey: 'visionOS',
+      ),
+      maxRequestAttempts: 1,
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.resolve(videoId);
+
+    expect(result.format.itag, 251);
+    expect(result.extension, 'webm');
+    expect(validator.uris, [Uri.parse('https://media.example/opus')]);
+  });
+
   test('AVFoundation policy selects AAC when WebM is also available', () async {
     final transport = _FakeTransport((_, _) {
       final response = _playerResponse(

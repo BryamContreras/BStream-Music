@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'innertube_exceptions.dart';
 import 'innertube_models.dart';
@@ -315,6 +316,7 @@ class InnerTubeSearchService
   static const int maxHomeSections = 6;
   static const int _maxHomeContinuationRequests = 1;
   static const int maxDetailContinuationRequests = 4;
+  static const int _artistDurationLookupConcurrency = 3;
   static const String songsFilter = 'EgWKAQIIAWoMEA4QChADEAQQCRAF';
   static const String videosFilter = 'EgWKAQIQAWoMEA4QChADEAQQCRAF';
   static const String albumsFilter = 'EgWKAQIYAWoMEA4QChADEAQQCRAF';
@@ -761,15 +763,12 @@ class InnerTubeSearchService
   @override
   Future<InnerTubeSong?> getSong(String videoId) async {
     _ensureActive();
-    final normalizedVideoId = videoId.trim();
-    if (!_videoIdPattern.hasMatch(normalizedVideoId)) {
-      throw ArgumentError.value(
-        videoId,
-        'videoId',
-        'Must be an 11-character YouTube video ID.',
-      );
-    }
+    final normalizedVideoId = _validateVideoId(videoId);
+    final decoded = await _getPlayerPayload(normalizedVideoId);
+    return _playerParser.parse(decoded, expectedVideoId: normalizedVideoId);
+  }
 
+  Future<Object?> _getPlayerPayload(String normalizedVideoId) async {
     var configuration = await _configuration();
     var response = await _requestPlayer(normalizedVideoId, configuration);
     if (_needsFreshConfiguration(response.statusCode)) {
@@ -782,15 +781,22 @@ class InnerTubeSearchService
       throw InnerTubeHttpException(response.statusCode, response.body);
     }
 
-    late final Object? decoded;
     try {
-      decoded = jsonDecode(response.body);
+      return jsonDecode(response.body);
     } on FormatException catch (error) {
       throw InnerTubeFormatException(
         'YouTube Music returned invalid JSON: ${error.message}',
       );
     }
-    return _playerParser.parse(decoded, expectedVideoId: normalizedVideoId);
+  }
+
+  Future<Duration?> _getSongDuration(String videoId) async {
+    final normalizedVideoId = _validateVideoId(videoId);
+    final decoded = await _getPlayerPayload(normalizedVideoId);
+    return _playerParser.parseDuration(
+      decoded,
+      expectedVideoId: normalizedVideoId,
+    );
   }
 
   @override
@@ -985,13 +991,89 @@ class InnerTubeSearchService
         browseId: normalizedBrowseId,
       );
     }
-    return _artistParser.parse(
+    final profile = _artistParser.parse(
       _decodeDetailResponse(response),
       artistBrowseId: normalizedBrowseId,
       fallbackName: fallbackName,
       fallbackThumbnailUrl: fallbackThumbnailUrl,
       songLimit: songLimit,
       releaseLimit: releaseLimit,
+    );
+    return _enrichArtistSongDurations(profile);
+  }
+
+  /// Artist browse shelves commonly omit their duration column even though
+  /// the player endpoint exposes an exact `lengthSeconds` for the same ID.
+  /// Resolve only missing values, with a small worker pool, and retain every
+  /// richer field parsed from the profile response.
+  Future<InnerTubeArtistProfile> _enrichArtistSongDurations(
+    InnerTubeArtistProfile profile,
+  ) async {
+    final songs = profile.popularSongs;
+    final missingIndexes = <int>[
+      for (var index = 0; index < songs.length; index++)
+        if (songs[index].duration == null) index,
+    ];
+    if (missingIndexes.isEmpty) {
+      return profile;
+    }
+
+    final enrichedSongs = List<InnerTubeSong>.of(songs);
+    var cursor = 0;
+
+    Future<void> resolveNext() async {
+      while (cursor < missingIndexes.length) {
+        final missingIndex = missingIndexes[cursor++];
+        try {
+          final duration = await _getSongDuration(songs[missingIndex].videoId);
+          if (duration != null) {
+            enrichedSongs[missingIndex] = _copySongWithDuration(
+              songs[missingIndex],
+              duration,
+            );
+          }
+        } catch (_) {
+          // Duration enrichment is optional. A transient player-endpoint
+          // failure must not prevent the artist profile itself from opening.
+        }
+      }
+    }
+
+    final workerCount = math.min(
+      _artistDurationLookupConcurrency,
+      missingIndexes.length,
+    );
+    await Future.wait(
+      List<Future<void>>.generate(workerCount, (_) => resolveNext()),
+    );
+
+    return InnerTubeArtistProfile(
+      artist: profile.artist,
+      popularSongs: enrichedSongs,
+      albums: profile.albums,
+      singles: profile.singles,
+      relatedArtists: profile.relatedArtists,
+      description: profile.description,
+      subscriberCount: profile.subscriberCount,
+      monthlyListenerCount: profile.monthlyListenerCount,
+      channelId: profile.channelId,
+      playPlaylistId: profile.playPlaylistId,
+      radioPlaylistId: profile.radioPlaylistId,
+      radioSeedVideoId: profile.radioSeedVideoId,
+      isSubscribed: profile.isSubscribed,
+    );
+  }
+
+  InnerTubeSong _copySongWithDuration(InnerTubeSong song, Duration duration) {
+    return InnerTubeSong(
+      videoId: song.videoId,
+      title: song.title,
+      artists: song.artists,
+      artistBrowseIds: song.artistBrowseIds,
+      album: song.album,
+      albumBrowseId: song.albumBrowseId,
+      duration: duration,
+      thumbnailUrl: song.thumbnailUrl,
     );
   }
 
@@ -4283,6 +4365,38 @@ class InnerTubeRelatedParser {
 
 class InnerTubePlayerParser {
   const InnerTubePlayerParser();
+
+  /// Extracts trusted duration metadata for an exact requested video ID.
+  ///
+  /// YouTube Music can mark anonymous WEB_REMIX player responses unplayable
+  /// while still returning canonical `videoDetails`. This method deliberately
+  /// ignores playability because callers use only the duration, never a stream
+  /// URL or a playable-song decision.
+  Duration? parseDuration(Object? payload, {required String expectedVideoId}) {
+    if (payload is! Map) {
+      return null;
+    }
+    final details = payload['videoDetails'];
+    if (details is! Map || _text(details['videoId']) != expectedVideoId) {
+      return null;
+    }
+    final microformat = payload['microformat'];
+    if (microformat is Map) {
+      final renderer = microformat['microformatDataRenderer'];
+      if (renderer is Map) {
+        final canonicalDetails = renderer['videoDetails'];
+        if (canonicalDetails is Map) {
+          final canonicalDuration = _duration(
+            canonicalDetails['durationSeconds'],
+          );
+          if (canonicalDuration != null) {
+            return canonicalDuration;
+          }
+        }
+      }
+    }
+    return _duration(details['lengthSeconds']);
+  }
 
   InnerTubeSong? parse(Object? payload, {required String expectedVideoId}) {
     if (payload is! Map) {

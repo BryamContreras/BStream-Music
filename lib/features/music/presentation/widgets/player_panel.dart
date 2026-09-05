@@ -220,8 +220,15 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             : wide
             ? (showSideQueue ? 12.0 : 24.0)
             : 20.0 + systemBottomInset;
+        final mobileHorizontalContentPadding = lerpDouble(
+          20,
+          14,
+          ((outer.maxWidth - 360.0) / 24.0).clamp(0.0, 1.0),
+        )!;
         final horizontalContentPadding = wide
             ? (showSideQueue ? 16.0 : 34.0)
+            : mobile
+            ? mobileHorizontalContentPadding
             : 20.0;
         void toggleQueue() {
           if (mobile) {
@@ -321,8 +328,27 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                                   140.0)
                                               .clamp(0.0, 1.0)
                                         : 0.0;
+                                    // Give the timeline and controls the newly
+                                    // reclaimed width without also enlarging
+                                    // the already-approved mobile artwork.
+                                    final artworkWidthReduction = mobile
+                                        ? math.max(
+                                            0.0,
+                                            (20.0 - horizontalContentPadding) *
+                                                2,
+                                          )
+                                        : 0.0;
+                                    final artworkConstraints = mobile
+                                        ? constraints.copyWith(
+                                            maxWidth: math.max(
+                                              0.0,
+                                              constraints.maxWidth -
+                                                  artworkWidthReduction,
+                                            ),
+                                          )
+                                        : constraints;
                                     final regularArtworkExtent = _artworkExtent(
-                                      constraints,
+                                      artworkConstraints,
                                       stackedDesktop: stackedDesktop,
                                       wide: wide,
                                       mobile: mobile,
@@ -826,11 +852,22 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
             final heightCompactness =
                 ((760.0 - (constraints.maxHeight - systemBottomInset)) / 240.0)
                     .clamp(0.0, 1.0);
+            // Narrow flagship phones still have a tight vertical composition:
+            // metadata and controls consume enough height to make Expanded
+            // shrink the cover even when the display is nominally tall. Use
+            // width as a second compactness signal and reclaim spacing for the
+            // artwork. Tablets and wider layouts remain unchanged.
+            final widthCompactness = ((430.0 - constraints.maxWidth) / 96.0)
+                .clamp(0.0, 1.0);
             final horizontalPadding = constraints.maxWidth >= 900
                 ? 44.0
                 : constraints.maxWidth >= 430
                 ? 22.0
-                : 16.0;
+                : lerpDouble(
+                    16,
+                    22,
+                    ((constraints.maxWidth - 390.0) / 40.0).clamp(0.0, 1.0),
+                  )!;
             final topPadding = lerpDouble(8, 4, heightCompactness)!;
             final bottomPadding =
                 lerpDouble(14, 8, heightCompactness)! + systemBottomInset;
@@ -845,6 +882,9 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                 (availableWidth >= 700 &&
                     constraints.maxHeight >= 360 &&
                     constraints.maxWidth > constraints.maxHeight * 1.35);
+            final layoutCompactness = twoColumn
+                ? heightCompactness
+                : math.max(heightCompactness, widthCompactness);
             final effectiveTextScale =
                 MediaQuery.textScalerOf(context).scale(16) / 16;
             final useScrollableAccessibilityFallback =
@@ -852,16 +892,10 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                 constraints.maxHeight < 360;
             final stackedContentWidth = math.min(availableWidth, 520.0);
             final roomyArtworkExtent = math.min(stackedContentWidth, 420.0);
-            // Compact phones benefit more from the cover than from generous
-            // breathing room between the lower controls. Keep a safe cap so
-            // the complete Apple-style stack remains reachable on 320dp
-            // frames while giving the artwork back the reclaimed height.
-            final compactArtworkExtent = math.min(stackedContentWidth, 252.0);
-            final stackedArtworkExtent = lerpDouble(
-              roomyArtworkExtent,
-              compactArtworkExtent,
-              heightCompactness,
-            )!;
+            // Never make the cover itself the compacting mechanism. Expanded
+            // can still constrain it on exceptionally short frames, while the
+            // normal compact path recovers height from the lower controls.
+            final stackedArtworkExtent = roomyArtworkExtent;
             final twoColumnArtworkExtent = math
                 .min(
                   480.0,
@@ -891,7 +925,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                 // Apple Music keeps the cover shadow restrained even on tall
                 // screens; this also prevents a hard lateral clip when the
                 // square uses almost all of a narrow phone's width.
-                shadowCompactness: math.max(0.55, heightCompactness),
+                shadowCompactness: math.max(0.55, layoutCompactness),
                 shadowHorizontalClearance: math.max(
                   0.0,
                   (artworkCanvasWidth - artworkExtent) / 2,
@@ -908,7 +942,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
               savedTrackId: savedTrackId,
               hasError: hasError,
               errorText: errorText,
-              compactness: heightCompactness,
+              compactness: layoutCompactness,
               queueVisible: queueVisible,
               onToggleQueue: onToggleQueue,
               onOpenLyrics: onOpenLyrics,
@@ -950,7 +984,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                         Expanded(child: artwork)
                       else
                         artwork,
-                      SizedBox(height: lerpDouble(24, 4, heightCompactness)),
+                      SizedBox(height: lerpDouble(24, 4, layoutCompactness)),
                       controls,
                     ],
                   ),
@@ -971,7 +1005,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                     onCollapse: onCollapse,
                     label: strings.minimizePlayer,
                   ),
-                  SizedBox(height: lerpDouble(12, 6, heightCompactness)),
+                  SizedBox(height: lerpDouble(12, 6, layoutCompactness)),
                   Expanded(
                     child: LayoutBuilder(
                       builder: (context, bodyConstraints) {
@@ -990,7 +1024,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                               minHeight: bodyConstraints.maxHeight,
                             ),
                             child: Align(
-                              alignment: heightCompactness > 0.7
+                              alignment: layoutCompactness > 0.7
                                   ? Alignment.topCenter
                                   : Alignment.center,
                               child: content,
@@ -1127,7 +1161,7 @@ class _AppleMusicControls extends ConsumerWidget {
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
               color: foreground,
               fontWeight: FontWeight.w800,
-              fontSize: lerpDouble(23, 20, compactness),
+              fontSize: lerpDouble(24, 21, compactness),
             ),
           ),
         ),
@@ -1305,9 +1339,9 @@ class _AppleTransportControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final foreground = AppColors.playbackControlForegroundFor(context);
-    final sideSize = lerpDouble(80, 65, compactness)!;
-    final sideIconSize = lerpDouble(52, 43, compactness)!;
-    final primarySize = lerpDouble(96, 79, compactness)!;
+    final sideSize = lerpDouble(80, 68, compactness)!;
+    final sideIconSize = lerpDouble(52, 44, compactness)!;
+    final primarySize = lerpDouble(96, 82, compactness)!;
     final primaryIconSize = lerpDouble(
       isPlaying ? 68 : 76,
       isPlaying ? 58 : 66,
@@ -1466,7 +1500,6 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
         .clamp(0.0, durationMilliseconds.toDouble())
         .toDouble();
     final shownPosition = Duration(milliseconds: shownMilliseconds.round());
-    final remaining = duration - shownPosition;
     final increasedPosition = Duration(
       milliseconds: math.min(
         durationMilliseconds,
@@ -1484,8 +1517,7 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
       fontWeight: FontWeight.w700,
     );
     final positionLabel = formatDuration(shownPosition);
-    final remainingLabel =
-        '\u2212${formatDuration(remaining.isNegative ? Duration.zero : remaining)}';
+    final durationLabel = formatDuration(duration);
 
     void seekTo(double milliseconds) {
       final next = Duration(
@@ -1555,60 +1587,57 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
             ),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final textDirection = Directionality.of(context);
-              final textScaler = MediaQuery.textScalerOf(context);
-              double measuredWidth(String value) {
-                final painter = TextPainter(
-                  text: TextSpan(text: value, style: labelStyle),
-                  textDirection: textDirection,
-                  textScaler: textScaler,
-                  maxLines: 1,
-                )..layout();
-                return painter.width;
-              }
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final textDirection = Directionality.of(context);
+            final textScaler = MediaQuery.textScalerOf(context);
+            double measuredWidth(String value) {
+              final painter = TextPainter(
+                text: TextSpan(text: value, style: labelStyle),
+                textDirection: textDirection,
+                textScaler: textScaler,
+                maxLines: 1,
+              )..layout();
+              return painter.width;
+            }
 
-              final stackLabels =
-                  measuredWidth(positionLabel) +
-                      measuredWidth(remainingLabel) +
-                      16 >
-                  constraints.maxWidth;
-              final position = Text(
-                key: const ValueKey('apple-player-position'),
-                positionLabel,
-                maxLines: 1,
-                style: labelStyle,
+            final stackLabels =
+                measuredWidth(positionLabel) +
+                    measuredWidth(durationLabel) +
+                    16 >
+                constraints.maxWidth;
+            final position = Text(
+              key: const ValueKey('apple-player-position'),
+              positionLabel,
+              maxLines: 1,
+              style: labelStyle,
+            );
+            final totalDuration = Text(
+              key: const ValueKey('apple-player-duration'),
+              durationLabel,
+              maxLines: 1,
+              style: labelStyle,
+            );
+            if (stackLabels) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: position,
+                  ),
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: totalDuration,
+                  ),
+                ],
               );
-              final remainingTime = Text(
-                key: const ValueKey('apple-player-remaining'),
-                remainingLabel,
-                maxLines: 1,
-                style: labelStyle,
-              );
-              if (stackLabels) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: position,
-                    ),
-                    Align(
-                      alignment: AlignmentDirectional.centerEnd,
-                      child: remainingTime,
-                    ),
-                  ],
-                );
-              }
-              return Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [position, remainingTime],
-              );
-            },
-          ),
+            }
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [position, totalDuration],
+            );
+          },
         ),
       ],
     );
@@ -3083,34 +3112,43 @@ class _PlaybackButtons extends ConsumerWidget {
         final mobile = AppPlatform.isMobileTargetPlatform(
           Theme.of(context).platform,
         );
-        final narrow = width < 360;
-        final veryNarrow = width < 300;
-        final roomy = width >= 420 || !compact;
-        final regularSmallButtonSize = (width * 0.105).clamp(
+        // The old 360 dp threshold was applied after the player's own inset,
+        // so 384/390 dp phones unnecessarily received the tightly packed
+        // control row. At 352 dp the five controls fit without scaling down.
+        final mobileSizingWidth = math.min(
+          width,
+          math.max(0.0, MediaQuery.sizeOf(context).width - 40.0),
+        );
+        final sizingWidth = mobile ? mobileSizingWidth : width;
+        final narrowSizing = sizingWidth < 360;
+        final tightlyPacked = width < (mobile ? 352 : 360);
+        final veryNarrow = sizingWidth < 300;
+        final roomy = sizingWidth >= 420 || !compact;
+        final regularSmallButtonSize = (sizingWidth * 0.105).clamp(
           48.0,
           compact ? 52.0 : 56.0,
         );
-        final compactSmallButtonSize = (width * 0.09).clamp(48.0, 50.0);
+        final compactSmallButtonSize = (sizingWidth * 0.09).clamp(48.0, 50.0);
         final smallButtonSize = lerpDouble(
           regularSmallButtonSize,
           compactSmallButtonSize,
           compactness,
         )!;
-        final regularSideButtonSize = (width * 0.145).clamp(
+        final regularSideButtonSize = (sizingWidth * 0.145).clamp(
           roomy ? 56.0 : 44.0,
           compact ? 62.0 : 72.0,
         );
-        final compactSideButtonSize = (width * 0.115).clamp(48.0, 54.0);
+        final compactSideButtonSize = (sizingWidth * 0.115).clamp(48.0, 54.0);
         final sideButtonSize = lerpDouble(
           regularSideButtonSize,
           compactSideButtonSize,
           compactness,
         )!;
-        final regularPlaySize = (width * 0.22).clamp(
+        final regularPlaySize = (sizingWidth * 0.22).clamp(
           roomy ? 74.0 : 64.0,
           compact ? 88.0 : 104.0,
         );
-        final compactPlaySize = (width * 0.17).clamp(68.0, 78.0);
+        final compactPlaySize = (sizingWidth * 0.17).clamp(68.0, 78.0);
         final playSize = lerpDouble(
           regularPlaySize,
           compactPlaySize,
@@ -3125,17 +3163,17 @@ class _PlaybackButtons extends ConsumerWidget {
           50.0,
         );
         final secondaryControlSize = mobile && !veryNarrow
-            ? narrow
+            ? narrowSizing
                   ? 50.0
                   : (secondarySideButtonSize + 2.0).clamp(50.0, 68.0)
-            : narrow
+            : narrowSizing
             ? smallButtonSize.clamp(48.0, 50.0)
             : secondarySideButtonSize;
         final secondaryControlIconSize = mobile && !veryNarrow
-            ? narrow
+            ? narrowSizing
                   ? 34.0
                   : (secondarySideIconSize + 2.0).clamp(30.0, 52.0)
-            : narrow
+            : narrowSizing
             ? (secondaryControlSize * 0.68).clamp(28.0, 34.0)
             : secondarySideIconSize;
         final sideButtonGrowth = mobile && !veryNarrow ? 6.0 : 4.0;
@@ -3160,22 +3198,22 @@ class _PlaybackButtons extends ConsumerWidget {
             : (enlargedPlaySize * 0.88).clamp(64.0, 104.0);
         final centerGap = veryNarrow
             ? 2.0
-            : narrow
+            : tightlyPacked
             ? 6.0
             : (width * 0.04).clamp(12.0, 34.0);
-        final outerGap = narrow ? 6.0 : (width * 0.075).clamp(16.0, 60.0);
+        final outerGap = tightlyPacked
+            ? 6.0
+            : (width * 0.075).clamp(16.0, 60.0);
         final edgeGap = veryNarrow
             ? 0.0
-            : narrow
+            : tightlyPacked
             ? 6.0
             : (width * 0.025).clamp(10.0, 18.0);
-        final mobileLabelWidth = (width * (narrow ? 0.36 : 0.33)).clamp(
-          112.0,
-          132.0,
-        );
+        final mobileLabelWidth = (sizingWidth * (narrowSizing ? 0.36 : 0.33))
+            .clamp(112.0, 132.0);
         const mobileLabelHeight = 48.0;
         final mobileSecondaryGap = lerpDouble(
-          narrow ? 8.0 : 10.0,
+          narrowSizing ? 8.0 : 10.0,
           6.0,
           spacingCompactness,
         )!;

@@ -31,10 +31,10 @@ class NotificationArtworkService {
     NotificationArtworkCacheDirectoryProvider? cacheDirectoryProvider,
     NotificationArtworkServerBinder? serverBinder,
     DeviceAudioArtworkLoader? deviceAudioArtworkLoader,
-    // Android and iOS commonly render lock-screen artwork at 300–400 dp.
-    // Keep a 2x square derivative so the system does not upscale a visibly
-    // soft 320 px bitmap on high-density phones.
-    this.outputSize = 640,
+    // High-density lock screens can request artwork near the physical width
+    // of the display. Keep enough detail for those surfaces instead of making
+    // the system upscale the smaller notification thumbnail.
+    this.outputSize = 1280,
     this.maximumCacheEntries = 128,
     this.maximumRegisteredSources = 512,
     this.maximumConcurrentWork = 2,
@@ -57,7 +57,8 @@ class NotificationArtworkService {
   static final NotificationArtworkService instance =
       NotificationArtworkService();
 
-  static const _cacheVersion = 'center-crop-v1';
+  static const _cacheVersion = 'center-crop-v2';
+  static const _jpegQuality = 94;
   static const _routePrefix = 'notification-artwork';
 
   final NotificationArtworkCacheDirectoryProvider _cacheDirectoryProvider;
@@ -489,8 +490,9 @@ class NotificationArtworkService {
     return uri != null && uri.scheme == 'file' ? normalized : null;
   }
 
-  String _cacheKey(String source) =>
-      sha256.convert(utf8.encode('$_cacheVersion\u0000$source')).toString();
+  String _cacheKey(String source) => sha256
+      .convert(utf8.encode('$_cacheVersion\u0000$outputSize\u0000$source'))
+      .toString();
 
   static Future<Directory> _defaultCacheDirectory() async {
     final root = await getApplicationCacheDirectory();
@@ -534,7 +536,10 @@ Uint8List? _centerCropJpeg(Uint8List bytes, int outputSize) {
     cropped,
     width: outputSize,
     height: outputSize,
-    interpolation: image.Interpolation.linear,
+    interpolation: image.Interpolation.cubic,
   );
-  return image.encodeJpg(resized, quality: 88);
+  return image.encodeJpg(
+    resized,
+    quality: NotificationArtworkService._jpegQuality,
+  );
 }

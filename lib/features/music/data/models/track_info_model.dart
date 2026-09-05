@@ -342,16 +342,17 @@ class TrackInfoModel extends TrackInfo {
 
     if (audioOnly.isNotEmpty) {
       audioOnly.sort((left, right) {
-        final leftScore = _nativeAudioPreferenceScore(left);
-        final rightScore = _nativeAudioPreferenceScore(right);
-        if (leftScore != rightScore) {
-          return rightScore.compareTo(leftScore);
-        }
         final leftBitrate =
             _intValue(left['abr']) ?? _intValue(left['tbr']) ?? 0;
         final rightBitrate =
             _intValue(right['abr']) ?? _intValue(right['tbr']) ?? 0;
-        return rightBitrate.compareTo(leftBitrate);
+        final bitrateComparison = rightBitrate.compareTo(leftBitrate);
+        if (bitrateComparison != 0) {
+          return bitrateComparison;
+        }
+        final leftScore = _nativeAudioPreferenceScore(left);
+        final rightScore = _nativeAudioPreferenceScore(right);
+        return rightScore.compareTo(leftScore);
       });
       return audioOnly.first;
     }

@@ -1068,6 +1068,27 @@ class AppStrings {
     'Version, support, and repository',
   );
   String get versionLabel => choose('Versión', 'Version');
+  String get updateAvailableTitle =>
+      choose('Nueva versión disponible', 'New version available');
+  String updateAvailableMessage({
+    required String latestVersion,
+    required String currentVersion,
+  }) => choose(
+    'La versión $latestVersion de BStream Music está disponible. Actualmente tienes la versión $currentVersion.',
+    'BStream Music version $latestVersion is available. You currently have version $currentVersion.',
+  );
+  String get appIsUpToDate => choose(
+    'Ya tienes la versión más reciente.',
+    'You already have the latest version.',
+  );
+  String get updateCheckFailed => choose(
+    'No se pudo verificar si hay una nueva versión.',
+    'Could not check for a new version.',
+  );
+  String get updateDownloadOpenFailed => choose(
+    'No se pudo abrir la página de descarga.',
+    'The download page could not be opened.',
+  );
 
   String get supportDevelopmentTitle =>
       choose('Apoyar el desarrollo', 'Support development');

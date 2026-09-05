@@ -17,10 +17,12 @@ import '../../../../core/theme/app_ui.dart';
 import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../platform_channels/android_supported_links_settings_channel.dart';
 import '../../../../platform_channels/ios_file_export_channel.dart';
+import '../../../../services/app_update/github_release_checker.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
 import '../providers/music_providers.dart';
+import 'app_update_dialog.dart';
 import 'lyrics_animation_transition.dart';
 import 'scrolled_under_tab_frame.dart';
 
@@ -38,7 +40,7 @@ final downloadDirectoryPickerProvider = Provider<DownloadDirectoryPicker>((
 });
 
 typedef StorageImportFilePicker =
-    Future<FilePickerResult?> Function({
+    Future<String?> Function({
       required String dialogTitle,
       required List<String> allowedExtensions,
     });
@@ -49,13 +51,16 @@ final storageImportFilePickerProvider = Provider<StorageImportFilePicker>((
   return ({
     required String dialogTitle,
     required List<String> allowedExtensions,
-  }) => FilePicker.pickFiles(
-    dialogTitle: dialogTitle,
-    type: FileType.custom,
-    allowedExtensions: allowedExtensions,
-    withData: false,
-    lockParentWindow: true,
-  );
+  }) async {
+    final file = await FilePicker.pickFile(
+      dialogTitle: dialogTitle,
+      type: FileType.custom,
+      allowedExtensions: allowedExtensions,
+      windowsOptions: const WindowsOptions(lockParentWindow: true),
+      linuxOptions: const LinuxOptions(lockParentWindow: true),
+    );
+    return file?.path;
+  };
 });
 
 typedef SettingsExternalLauncher = Future<bool> Function(Uri url);
@@ -64,6 +69,19 @@ final settingsExternalLauncherProvider = Provider<SettingsExternalLauncher>(
   (ref) =>
       (url) => launchUrl(url, mode: LaunchMode.externalApplication),
 );
+
+typedef SettingsReleaseChecker =
+    Future<AppReleaseCheckResult> Function({required String currentVersion});
+
+final settingsReleaseCheckerProvider = Provider<SettingsReleaseChecker>((ref) {
+  final checker = GitHubReleaseChecker();
+  Future<AppReleaseCheckResult>? pendingCheck;
+  return ({required currentVersion}) {
+    return pendingCheck ??= checker
+        .check(currentVersion: currentVersion)
+        .whenComplete(() => pendingCheck = null);
+  };
+});
 
 typedef SettingsSupportedLinksLauncher = Future<bool> Function();
 
@@ -141,6 +159,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   final _tiktokLiveFocusNode = FocusNode();
   bool _backupBusy = false;
   bool _recommendationClearBusy = false;
+  bool _releaseCheckBusy = false;
   _SettingsRoute _route = _SettingsRoute.root;
 
   @override
@@ -420,6 +439,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               ),
       _SettingsRoute.about => _AboutApplicationSettings(
         strings: strings,
+        checkingForUpdates: _releaseCheckBusy,
+        onVersion: _checkForAppUpdate,
         onSupport: _openSupportDevelopment,
         onGitHub: _openGitHubRepository,
       ),
@@ -777,6 +798,49 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     );
   }
 
+  Future<void> _checkForAppUpdate() async {
+    if (_releaseCheckBusy) {
+      return;
+    }
+    setState(() => _releaseCheckBusy = true);
+    final strings = ref.read(appStringsProvider);
+    AppReleaseCheckResult result;
+    try {
+      result = await ref.read(settingsReleaseCheckerProvider)(
+        currentVersion: AppConstants.appVersion,
+      );
+    } catch (_) {
+      if (mounted && _route == _SettingsRoute.about) {
+        _showSnackBar(strings.updateCheckFailed);
+      }
+      return;
+    } finally {
+      if (mounted) {
+        setState(() => _releaseCheckBusy = false);
+      }
+    }
+    if (!mounted || _route != _SettingsRoute.about) {
+      return;
+    }
+    if (!result.updateAvailable) {
+      _showSnackBar(strings.appIsUpToDate);
+      return;
+    }
+    await showAppUpdateAvailableDialog(
+      context: context,
+      strings: strings,
+      release: result,
+      onDownload: _openUpdateDownloadPage,
+    );
+  }
+
+  Future<void> _openUpdateDownloadPage() async {
+    await _openExternalPage(
+      url: AppConstants.appDownloadUrl,
+      failureMessage: ref.read(appStringsProvider).updateDownloadOpenFailed,
+    );
+  }
+
   Future<void> _openGitHubRepository() async {
     await _openExternalPage(
       url: AppConstants.githubRepositoryUrl,
@@ -875,17 +939,17 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
           fileName: fileName,
         );
       } else {
-        path = await FilePicker.saveFile(
+        final destination = await FilePicker.saveFile(
           dialogTitle: strings.exportBackupTitle,
           fileName: fileName,
+          bytes: await backupFile.readAsBytes(),
           initialDirectory: _downloadPathController.text,
           type: FileType.custom,
           allowedExtensions: const ['zip'],
-          lockParentWindow: true,
+          windowsOptions: const WindowsOptions(lockParentWindow: true),
+          linuxOptions: const LinuxOptions(lockParentWindow: true),
         );
-        if (path != null) {
-          await backupFile.copy(path);
-        }
+        path = destination?.toString();
       }
       if (!mounted) {
         return;
@@ -942,20 +1006,17 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     }
     setState(() => _backupBusy = true);
     try {
-      final result = await ref.read(storageImportFilePickerProvider)(
+      final path = await ref.read(storageImportFilePickerProvider)(
         dialogTitle: strings.importBackupTitle,
         allowedExtensions: const ['zip'],
       );
-      final selected = result?.files.single;
-      if (selected == null) {
+      if (path == null) {
         if (mounted) {
           _showSnackBar(strings.backupCancelled);
         }
         return;
       }
-
-      final path = selected.path;
-      if (path == null) {
+      if (path.trim().isEmpty) {
         throw const FormatException('No se pudo leer el archivo seleccionado.');
       }
       await ref
@@ -984,17 +1045,15 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     final strings = ref.read(appStringsProvider);
     setState(() => _backupBusy = true);
     try {
-      final selection = await ref.read(storageImportFilePickerProvider)(
+      final path = await ref.read(storageImportFilePickerProvider)(
         dialogTitle: strings.importFromCsv,
         allowedExtensions: const ['csv', 'tsv', 'txt'],
       );
-      final selected = selection?.files.single;
-      if (selected == null) {
+      if (path == null) {
         if (mounted) _showSnackBar(strings.backupCancelled);
         return;
       }
-      final path = selected.path;
-      if (path == null || path.trim().isEmpty) {
+      if (path.trim().isEmpty) {
         throw const FormatException('No se pudo leer el archivo seleccionado.');
       }
 
@@ -1088,15 +1147,17 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         final selectedPath = await FilePicker.saveFile(
           dialogTitle: strings.exportToCsv,
           fileName: fileName,
+          bytes: await source.readAsBytes(),
+          mimeType: 'text/csv',
           initialDirectory: _downloadPathController.text,
           type: FileType.custom,
           allowedExtensions: const ['csv'],
-          lockParentWindow: true,
+          windowsOptions: const WindowsOptions(lockParentWindow: true),
+          linuxOptions: const LinuxOptions(lockParentWindow: true),
         );
         destination = selectedPath == null
             ? null
-            : _ensureCsvExtension(selectedPath);
-        if (destination != null) await source.copy(destination);
+            : _ensureCsvExtension(selectedPath.toString());
       }
       if (!mounted) return;
       _showSnackBar(
@@ -1669,11 +1730,15 @@ class _SettingsEntryCard extends StatelessWidget {
 class _AboutApplicationSettings extends StatelessWidget {
   const _AboutApplicationSettings({
     required this.strings,
+    required this.checkingForUpdates,
+    required this.onVersion,
     required this.onSupport,
     required this.onGitHub,
   });
 
   final AppStrings strings;
+  final bool checkingForUpdates;
+  final VoidCallback onVersion;
   final VoidCallback onSupport;
   final VoidCallback onGitHub;
 
@@ -1687,7 +1752,14 @@ class _AboutApplicationSettings extends StatelessWidget {
           icon: Icons.sell_outlined,
           title: strings.versionLabel,
           subtitle: AppConstants.appVersion,
-          onTap: null,
+          onTap: checkingForUpdates ? null : onVersion,
+          trailing: checkingForUpdates
+              ? const SizedBox.square(
+                  key: ValueKey('settings-version-check-progress'),
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.2),
+                )
+              : null,
         ),
         const SizedBox(height: appCardGap),
         _SettingsEntryCard(

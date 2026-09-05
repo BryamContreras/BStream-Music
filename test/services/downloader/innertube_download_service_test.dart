@@ -71,6 +71,65 @@ void main() {
     },
   );
 
+  test('downloads the highest-bitrate compatible audio format', () async {
+    final media = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final bytes = <int>[0x1A, 0x45, 0xDF, 0xA3, 1, 2, 3, 4];
+    final requestedPaths = <String>[];
+    media.listen((request) async {
+      requestedPaths.add(request.uri.path);
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType('audio', 'webm')
+        ..contentLength = bytes.length
+        ..add(bytes);
+      await request.response.close();
+    });
+    addTearDown(() => media.close(force: true));
+
+    final playerTransport = _PlayerTransport(
+      'http://127.0.0.1:${media.port}/aac',
+      additionalAudioFormats: <Map<String, Object?>>[
+        <String, Object?>{
+          'itag': 251,
+          'url': 'http://127.0.0.1:${media.port}/opus',
+          'mimeType': 'audio/webm; codecs="opus"',
+          'bitrate': 192000,
+          'contentLength': bytes.length.toString(),
+        },
+      ],
+    );
+    final playback = InnerTubePlaybackService(
+      transport: playerTransport,
+      validator: _AlwaysValidStream(),
+      router: InnerTubeClientRouter(
+        profiles: const [InnerTubeClientRegistry.androidSdkless],
+      ),
+      maxRequestAttempts: 1,
+    );
+    final downloader = InnerTubeDownloadService(
+      playback: playback,
+      catalog: _Catalog(),
+      transfer: HttpAudioTransfer(maxRetries: 0),
+    );
+    addTearDown(() async {
+      await downloader.dispose();
+      await playback.dispose();
+    });
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream-innertube-bitrate-download-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+
+    final result = await downloader.downloadAudio(
+      'dQw4w9WgXcQ',
+      DownloadOptions(outputDirectory: directory.path),
+    );
+
+    expect(await File(result.filePath).readAsBytes(), bytes);
+    expect(result.fileName, 'BStream - Test Song.webm');
+    expect(requestedPaths, <String>['/opus']);
+  });
+
   test('falls back to a muxed MP4 and preserves its real extension', () async {
     final media = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final bytes = <int>[0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 1, 2, 3];
@@ -359,6 +418,7 @@ final class _PlayerTransport implements InnerTubeTransport {
     this.playabilityStatus = 'OK',
     this.audioItag = 140,
     this.audioMimeType = 'audio/mp4; codecs="mp4a.40.2"',
+    this.additionalAudioFormats = const <Map<String, Object?>>[],
   });
 
   final String mediaUrl;
@@ -366,6 +426,7 @@ final class _PlayerTransport implements InnerTubeTransport {
   final String playabilityStatus;
   final int audioItag;
   final String audioMimeType;
+  final List<Map<String, Object?>> additionalAudioFormats;
   int postCalls = 0;
 
   @override
@@ -393,8 +454,10 @@ final class _PlayerTransport implements InnerTubeTransport {
               'mimeType': muxedOnly
                   ? 'video/mp4; codecs="avc1.42001E, mp4a.40.2"'
                   : audioMimeType,
+              'bitrate': 129000,
               'contentLength': '4096',
             },
+            ...additionalAudioFormats,
           ],
         },
       }),

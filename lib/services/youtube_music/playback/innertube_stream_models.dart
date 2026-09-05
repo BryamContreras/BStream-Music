@@ -263,8 +263,8 @@ final class InnerTubeParsedPlayerResponse {
 /// Selects an audio stream deterministically.
 ///
 /// Explicit default-language tracks win first, then unknown-language tracks,
-/// non-DRC variants, audio-only formats and finally MP4/AAC. Within the
-/// resulting group the highest effective bitrate wins.
+/// non-DRC variants and audio-only formats. Within that compatible group the
+/// highest effective bitrate wins; MP4/AAC is only a tie-breaker.
 InnerTubeAudioFormat? selectPreferredInnerTubeAudio(
   Iterable<InnerTubeAudioFormat> formats, {
   bool allowDrm = false,
@@ -304,7 +304,6 @@ InnerTubeAudioFormat? selectPreferredInnerTubeAudio(
   if (preferAudioOnly) {
     candidates = _preferWhere(candidates, (format) => format.isAudioOnly);
   }
-  candidates = _preferWhere(candidates, (format) => format.isMp4Aac);
 
   candidates.sort(_comparePreferredFormats);
   return candidates.first;
@@ -323,6 +322,10 @@ int _comparePreferredFormats(
   InnerTubeAudioFormat right,
 ) {
   var comparison = right.effectiveBitrate.compareTo(left.effectiveBitrate);
+  if (comparison != 0) {
+    return comparison;
+  }
+  comparison = (right.isMp4Aac ? 1 : 0).compareTo(left.isMp4Aac ? 1 : 0);
   if (comparison != 0) {
     return comparison;
   }

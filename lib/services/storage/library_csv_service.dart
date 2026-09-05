@@ -422,7 +422,7 @@ class LibraryCsvService {
       if (await destination.exists()) {
         await destination.delete();
       }
-      return partial.rename(destination.path);
+      return await partial.rename(destination.path);
     } catch (_) {
       if (await partial.exists()) {
         await partial.delete();

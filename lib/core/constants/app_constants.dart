@@ -16,4 +16,5 @@ class AppConstants {
   static const supportDevelopmentUrl = 'https://ko-fi.com/soybryam06c/donate';
   static const githubRepositoryUrl =
       'https://github.com/BryamContreras/BStream-Music';
+  static const appDownloadUrl = 'https://bstreammusic.pages.dev/';
 }

@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 /// Optical treatment for the exposed edge of a liquid-glass sheet.
 enum LiquidGlassEdgeTreatment {
@@ -120,13 +121,6 @@ class LiquidGlassSurface extends StatelessWidget {
         : LiquidGlassEdgeTreatment.none;
     final hasOpticalEdge =
         resolvedEdgeTreatment != LiquidGlassEdgeTreatment.none;
-    // Blur and refraction share one native filter. Keep Android captures
-    // independent because the mini player crosses the nav during its morph
-    // and overlapping BackdropKeys are undefined.
-    final effectiveBackdropGroupKey =
-        Theme.of(context).platform == TargetPlatform.android
-        ? null
-        : backdropGroupKey;
     final isFloatingSheet =
         resolvedEdgeTreatment == LiquidGlassEdgeTreatment.perimeter;
     final resolvedBorderRadius = borderRadius.resolve(textDirection);
@@ -161,7 +155,7 @@ class LiquidGlassSurface extends StatelessWidget {
           Positioned.fill(
             child: _LiquidGlassBackdrop(
               blurSigma: blurSigma,
-              backdropGroupKey: effectiveBackdropGroupKey,
+              backdropGroupKey: backdropGroupKey,
               refractionEnabled: hasOpticalEdge && adaptiveEdgeEnabled,
               treatment: resolvedEdgeTreatment,
               borderRadius: borderRadius,
@@ -199,6 +193,9 @@ class LiquidGlassSurface extends StatelessWidget {
                         intensity: intensity,
                         highContrast: highContrast,
                         motion: motion,
+                        useCompatibleBlendMode:
+                            Theme.of(context).platform ==
+                            TargetPlatform.android,
                       ),
                     ),
                   ),
@@ -450,6 +447,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
   static const _maximumGroupedSigmaEntries = 8;
 
   double? _cachedBlurSigma;
+  Offset? _cachedSurfaceOriginPx;
   Size? _cachedSurfaceSizePx;
   double? _cachedIntensity;
   BackdropKey? _cachedBackdropGroupKey;
@@ -513,7 +511,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
       _LiquidGlassShaderProgram.isSupported;
 
   ui.ImageFilter _materialFilter({
-    required Size size,
+    required Rect surfaceBoundsPx,
     required double devicePixelRatio,
     required BorderRadius borderRadius,
     required BackdropKey? groupKey,
@@ -522,21 +520,22 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
     if (!_usesRefraction) {
       return blur;
     }
-    // ImageFilter.shader reserves its first vec2 for the backing texture size,
-    // which may include the Gaussian blur's expanded capture. Pass the actual
-    // clipped surface size separately so every pill and orb gets a local SDF.
-    final surfaceSizePx = Size(
-      (size.width * devicePixelRatio * 2).roundToDouble() / 2,
-      (size.height * devicePixelRatio * 2).roundToDouble() / 2,
-    );
-    final opticalDimension = size.shortestSide;
+    // ImageFilter.shader receives coordinates in the backdrop texture's
+    // coordinate space. On a full-window capture that means a small search orb
+    // near the right edge starts around x=1100 instead of x=0. Preserve both
+    // the physical origin and size so the shader can build its SDF locally.
+    final surfaceOriginPx = surfaceBoundsPx.topLeft;
+    final surfaceSizePx = surfaceBoundsPx.size;
+    final opticalDimension = surfaceSizePx.shortestSide / devicePixelRatio;
     if (_cachedRefractionFilter == null ||
         _cachedComposedBlurFilter != blur ||
+        _cachedSurfaceOriginPx != surfaceOriginPx ||
         _cachedSurfaceSizePx != surfaceSizePx ||
         _cachedIntensity != widget.intensity ||
         _cachedBorderRadius != borderRadius ||
         _cachedTreatment != widget.treatment ||
         _cachedHighContrast != widget.highContrast) {
+      _cachedSurfaceOriginPx = surfaceOriginPx;
       _cachedSurfaceSizePx = surfaceSizePx;
       _cachedComposedBlurFilter = blur;
       _cachedIntensity = widget.intensity;
@@ -565,26 +564,29 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
             (math.min(radius.x, radius.y) / minimumDimension).clamp(0.0, 0.5);
 
         // Slots 0-1 are populated by ImageFilter.shader with the backing
-        // texture size. Slots 2-3 preserve this widget's physical dimensions.
+        // texture size. The following slots preserve this widget's physical
+        // dimensions and its origin inside that backing texture.
         shader
           ..setFloat(2, surfaceSizePx.width)
           ..setFloat(3, surfaceSizePx.height)
-          ..setFloat(4, (refractionHeight / minimumDimension).clamp(0.0, 0.5))
-          ..setFloat(5, (refractionAmount / minimumDimension).clamp(0.0, 0.5))
+          ..setFloat(4, surfaceOriginPx.dx)
+          ..setFloat(5, surfaceOriginPx.dy)
+          ..setFloat(6, (refractionHeight / minimumDimension).clamp(0.0, 0.5))
+          ..setFloat(7, (refractionAmount / minimumDimension).clamp(0.0, 0.5))
           // The reference shader treats depth as a real on/off term (1.0).
           // Keep it slightly below that maximum so stretched Flutter pills
           // bulge without pulling their end caps into a fisheye.
-          ..setFloat(6, embedded ? 0 : (widget.highContrast ? 0.92 : 0.82))
+          ..setFloat(8, embedded ? 0 : (widget.highContrast ? 0.92 : 0.82))
           // Dispersion stays deliberately restrained: the edge should inherit
           // the artwork hue, not turn into a detached rainbow fringe.
-          ..setFloat(7, embedded ? 0 : 0.055)
-          ..setFloat(8, radiusRatio(borderRadius.topLeft))
-          ..setFloat(9, radiusRatio(borderRadius.topRight))
-          ..setFloat(10, radiusRatio(borderRadius.bottomRight))
-          ..setFloat(11, radiusRatio(borderRadius.bottomLeft))
-          ..setFloat(12, (1 + 0.3 * widget.intensity).clamp(1.0, 1.44))
-          ..setFloat(13, (1 + 0.42 * widget.intensity).clamp(1.0, 1.5))
-          ..setFloat(14, embedded ? 1 : 0);
+          ..setFloat(9, embedded ? 0 : 0.055)
+          ..setFloat(10, radiusRatio(borderRadius.topLeft))
+          ..setFloat(11, radiusRatio(borderRadius.topRight))
+          ..setFloat(12, radiusRatio(borderRadius.bottomRight))
+          ..setFloat(13, radiusRatio(borderRadius.bottomLeft))
+          ..setFloat(14, (1 + 0.3 * widget.intensity).clamp(1.0, 1.44))
+          ..setFloat(15, (1 + 0.42 * widget.intensity).clamp(1.0, 1.5))
+          ..setFloat(16, embedded ? 1 : 0);
         final lens = ui.ImageFilter.shader(shader);
         _cachedRefractionFilter = ui.ImageFilter.compose(
           inner: blur,
@@ -596,6 +598,30 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
       }
     }
     return _cachedRefractionFilter ?? blur;
+  }
+
+  Rect _surfaceBoundsInPhysicalPixels({
+    required Size fallbackSize,
+    required double devicePixelRatio,
+  }) {
+    Rect logicalBounds = Offset.zero & fallbackSize;
+    final renderObject = context.findRenderObject();
+    if (renderObject is RenderBox &&
+        renderObject.attached &&
+        renderObject.hasSize) {
+      logicalBounds = MatrixUtils.transformRect(
+        renderObject.getTransformTo(null),
+        Offset.zero & renderObject.size,
+      );
+    }
+    double physical(double value) =>
+        (value * devicePixelRatio * 2).roundToDouble() / 2;
+    return Rect.fromLTRB(
+      physical(logicalBounds.left),
+      physical(logicalBounds.top),
+      physical(logicalBounds.right),
+      physical(logicalBounds.bottom),
+    );
   }
 
   static ui.ImageFilter _sharedBlurFilterFor({
@@ -638,20 +664,32 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
           return const SizedBox.shrink();
         }
         final borderRadius = widget.borderRadius.resolve(widget.textDirection);
-        final usesRefraction = _usesRefraction;
-        // A composed runtime filter needs its own capture so the shape-specific
-        // local-size uniforms cannot be shared with a neighbouring surface.
-        final effectiveBackdropGroupKey = usesRefraction
+        // Grouping is safe for identical blur-only sheets. A runtime lens has
+        // size- and shape-specific uniforms, so reusing a grouped backdrop can
+        // make Impeller evaluate that geometry in another surface's bounds.
+        final effectiveBackdropGroupKey = _usesRefraction
             ? null
             : widget.backdropGroupKey;
+        final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+        final positionAwareFilter = _usesRefraction
+            ? _LiquidGlassImageFilterConfig(
+                resolver: (_) => _materialFilter(
+                  surfaceBoundsPx: _surfaceBoundsInPhysicalPixels(
+                    fallbackSize: size,
+                    devicePixelRatio: devicePixelRatio,
+                  ),
+                  devicePixelRatio: devicePixelRatio,
+                  borderRadius: borderRadius,
+                  groupKey: effectiveBackdropGroupKey,
+                ),
+              )
+            : null;
         return BackdropFilter(
           key: LiquidGlassSurface.backdropKey,
-          filter: _materialFilter(
-            size: size,
-            devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
-            borderRadius: borderRadius,
-            groupKey: effectiveBackdropGroupKey,
-          ),
+          filter: positionAwareFilter == null
+              ? _blurFilterForGroup(effectiveBackdropGroupKey)
+              : null,
+          filterConfig: positionAwareFilter,
           backdropGroupKey: effectiveBackdropGroupKey,
           blendMode: BlendMode.srcOver,
           child: const SizedBox.expand(),
@@ -659,6 +697,29 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
       },
     );
   }
+}
+
+@immutable
+class _LiquidGlassImageFilterConfig implements ImageFilterConfig {
+  const _LiquidGlassImageFilterConfig({required this.resolver});
+
+  final ui.ImageFilter Function(ImageFilterContext context) resolver;
+
+  @override
+  ui.ImageFilter resolve(ImageFilterContext context) => resolver(context);
+
+  @override
+  ui.ImageFilter? get filter => null;
+
+  @override
+  String get debugShortDescription => 'position-aware liquid-glass lens';
+
+  @override
+  bool operator ==(Object other) =>
+      other is _LiquidGlassImageFilterConfig && other.resolver == resolver;
+
+  @override
+  int get hashCode => resolver.hashCode;
 }
 
 class _LiquidGlassShaderProgram {
@@ -766,6 +827,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
     required this.intensity,
     required this.highContrast,
     required this.motion,
+    required this.useCompatibleBlendMode,
   });
 
   final BorderRadiusGeometry borderRadius;
@@ -775,6 +837,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
   final double intensity;
   final bool highContrast;
   final double motion;
+  final bool useCompatibleBlendMode;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -785,6 +848,9 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
     // Move a colour-preserving sheen over the lens while its geometry changes.
     // This is paint-only, so it does not add another backdrop capture.
     final opticalEnergy = intensity * contrastBoost * (1 + 0.12 * motion);
+    final opticalBlendMode = useCompatibleBlendMode
+        ? BlendMode.srcOver
+        : BlendMode.softLight;
     double alpha(double value, [double maximum = 0.7]) =>
         (value * opticalEnergy).clamp(0.0, maximum);
 
@@ -795,7 +861,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
         Offset(size.width, math.max(0.0, seamY - 1.1)),
         Paint()
           ..strokeWidth = highContrast ? 1.8 : 1.4
-          ..blendMode = BlendMode.softLight
+          ..blendMode = opticalBlendMode
           ..color = Colors.black.withValues(alpha: alpha(0.16, 0.24))
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8),
       );
@@ -804,7 +870,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
         Offset(size.width, seamY),
         Paint()
           ..strokeWidth = highContrast ? 1.1 : 0.8
-          ..blendMode = BlendMode.softLight
+          ..blendMode = opticalBlendMode
           ..color = Colors.white.withValues(alpha: alpha(0.58))
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.25),
       );
@@ -827,7 +893,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
     canvas.drawRRect(
       shape,
       Paint()
-        ..blendMode = BlendMode.softLight
+        ..blendMode = opticalBlendMode
         ..shader = LinearGradient(
           begin: Alignment(horizontalLightShift, -1),
           end: const Alignment(0.82, 1),
@@ -851,7 +917,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = highContrast ? 1.35 : 0.9
-        ..blendMode = BlendMode.softLight
+        ..blendMode = opticalBlendMode
         ..shader = LinearGradient(
           begin: Alignment(horizontalLightShift, -1),
           end: const Alignment(0.9, 1),
@@ -873,7 +939,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = highContrast ? 1.15 : 0.8
-          ..blendMode = BlendMode.softLight
+          ..blendMode = opticalBlendMode
           ..shader = LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -896,7 +962,8 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
       oldDelegate.brightness != brightness ||
       oldDelegate.intensity != intensity ||
       oldDelegate.highContrast != highContrast ||
-      oldDelegate.motion != motion;
+      oldDelegate.motion != motion ||
+      oldDelegate.useCompatibleBlendMode != useCompatibleBlendMode;
 }
 
 /// Painter exposed for focused hover and performance tests.

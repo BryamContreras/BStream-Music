@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 
+const _wavyPlaybackTrackInset = 3.0;
+
 /// Interactive playback seek bar with the animated wave used by the player.
 class WavyPlaybackSeekBar extends StatefulWidget {
   const WavyPlaybackSeekBar({
@@ -31,7 +33,6 @@ class WavyPlaybackSeekBar extends StatefulWidget {
 
 class _WavyPlaybackSeekBarState extends State<WavyPlaybackSeekBar>
     with SingleTickerProviderStateMixin {
-  static const _trackInset = 10.0;
   late final AnimationController _wavePhase;
   double? _dragFraction;
 
@@ -104,11 +105,14 @@ class _WavyPlaybackSeekBarState extends State<WavyPlaybackSeekBar>
           if (totalMs <= 0) {
             return 0;
           }
-          final trackWidth = constraints.maxWidth - (_trackInset * 2);
+          final trackWidth =
+              constraints.maxWidth - (_wavyPlaybackTrackInset * 2);
           if (trackWidth <= 0) {
             return 0;
           }
-          return ((dx - _trackInset) / trackWidth).clamp(0.0, 1.0).toDouble();
+          return ((dx - _wavyPlaybackTrackInset) / trackWidth)
+              .clamp(0.0, 1.0)
+              .toDouble();
         }
 
         void commitFraction(double nextFraction) {
@@ -191,8 +195,8 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
     required this.isDark,
   }) : super(repaint: phase);
 
-  static const _trackInset = 10.0;
   static const _trackHalfHeight = 3.0;
+  static const _thumbOuterRadius = 12.5;
   static const _maxWaveHeight = 15.5;
 
   final double fraction;
@@ -204,8 +208,8 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final centerY = size.height / 2;
-    final trackStart = _trackInset;
-    final trackEnd = size.width - _trackInset;
+    final trackStart = _wavyPlaybackTrackInset;
+    final trackEnd = size.width - _wavyPlaybackTrackInset;
     final trackWidth = math.max(0.0, trackEnd - trackStart);
     final activeEnd = trackStart + (trackWidth * fraction.clamp(0.0, 1.0));
     final inactivePaint = Paint()
@@ -395,10 +399,14 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
       );
     }
 
-    final thumbCenter = Offset(activeEnd, centerY);
+    final thumbInset = math.min(_thumbOuterRadius, size.width / 2);
+    final thumbCenter = Offset(
+      activeEnd.clamp(thumbInset, size.width - thumbInset).toDouble(),
+      centerY,
+    );
     canvas.drawCircle(
       thumbCenter,
-      12.5,
+      _thumbOuterRadius,
       Paint()..color = Colors.black.withValues(alpha: isDark ? 0.15 : 0.1),
     );
     canvas.drawCircle(

@@ -91,7 +91,9 @@ AppStartupCoordinator launchBStreamMusicApp({
   // backoff, without trapping the user on a blank launch screen.
   (runApplication ?? runApp)(
     const ProviderScope(
-      child: _LocalArtworkMaintenance(child: BStreamMusicApp()),
+      child: _LocalArtworkMaintenance(
+        child: BStreamMusicApp(checkForUpdatesOnStartup: true),
+      ),
     ),
   );
   (scheduleStartup ?? _scheduleStartupAfterFirstFrame)(() {
@@ -144,7 +146,9 @@ class _LocalArtworkMaintenanceState
 }
 
 class BStreamMusicApp extends ConsumerWidget {
-  const BStreamMusicApp({super.key});
+  const BStreamMusicApp({this.checkForUpdatesOnStartup = false, super.key});
+
+  final bool checkForUpdatesOnStartup;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -199,7 +203,7 @@ class BStreamMusicApp extends ConsumerWidget {
       ),
       builder: (context, child) =>
           ScrollNotificationObserver(child: child ?? const SizedBox.shrink()),
-      home: const HomePage(),
+      home: HomePage(checkForUpdatesOnStartup: checkForUpdatesOnStartup),
     );
   }
 }

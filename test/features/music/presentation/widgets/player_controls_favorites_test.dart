@@ -427,6 +427,20 @@ void main() {
 
       expect(find.byType(WavyPlaybackSeekBar), findsOneWidget);
       expect(find.byKey(const ValueKey('player-linear-seek')), findsNothing);
+      final timeline = tester.getRect(
+        find.byKey(const ValueKey('player-timeline')),
+      );
+      expect(timeline.left, closeTo(14, 0.1));
+      expect(timeline.right, closeTo(376, 0.1));
+
+      final shuffle = tester.getRect(
+        find.byKey(const ValueKey('player-shuffle-control')),
+      );
+      final repeat = tester.getRect(
+        find.byKey(const ValueKey('player-repeat-control')),
+      );
+      expect(shuffle.left - timeline.left, lessThan(9));
+      expect(timeline.right - repeat.right, lessThan(9));
       final progressAnimation = find.byKey(
         const ValueKey('player-progress-color-animation'),
       );
@@ -541,7 +555,7 @@ void main() {
         'apple-player-timeline',
         'apple-player-linear-seek',
         'apple-player-position',
-        'apple-player-remaining',
+        'apple-player-duration',
         'apple-player-transport',
         'player-previous-control',
         'player-primary-control',
@@ -587,6 +601,7 @@ void main() {
         Size(320, 568),
         Size(360, 640),
         Size(390, 820),
+        Size(384, 832),
         Size(820, 390),
       ];
       _configureView(tester, viewports.first);
@@ -651,6 +666,31 @@ void main() {
                 'compact Apple layout should give the cover reclaimed height',
           );
         }
+        if (viewport == const Size(384, 832)) {
+          expect(
+            artworkSize.shortestSide,
+            closeTo(352, 0.1),
+            reason:
+                'S22/S25 should keep subtle margins without shrinking the cover excessively',
+          );
+          final artworkRect = tester.getRect(
+            find.byKey(const ValueKey('player-large-artwork')),
+          );
+          expect(artworkRect.left, closeTo(16, 0.1));
+          expect(artworkRect.right, closeTo(368, 0.1));
+        }
+        if (viewport == const Size(390, 820)) {
+          final title = tester.widget<MarqueeText>(
+            find.byKey(const ValueKey('player-track-title')),
+          );
+          expect(title.style?.fontSize, closeTo(22.75, 0.1));
+        }
+        if (viewport == const Size(820, 390)) {
+          final title = tester.widget<MarqueeText>(
+            find.byKey(const ValueKey('player-track-title')),
+          );
+          expect(title.style?.fontSize, closeTo(21, 0.1));
+        }
         expect(tester.takeException(), isNull, reason: '$viewport');
       }
     },
@@ -709,7 +749,7 @@ void main() {
         );
         expect(
           artwork.top - grabber.bottom,
-          lessThanOrEqualTo(12.1),
+          lessThanOrEqualTo(35),
           reason: '$testCase',
         );
         expect(
@@ -790,35 +830,46 @@ void main() {
       final previous = find.byKey(const ValueKey('player-previous-control'));
       final primary = find.byKey(const ValueKey('player-primary-control'));
       final next = find.byKey(const ValueKey('player-next-control'));
-      expect(tester.getSize(previous), const Size.square(80));
-      expect(tester.getSize(primary), const Size.square(96));
-      expect(tester.getSize(next), const Size.square(80));
+      expect(tester.getSize(previous).shortestSide, inInclusiveRange(74, 76));
+      expect(tester.getSize(primary).shortestSide, inInclusiveRange(89, 91));
+      expect(tester.getSize(next).shortestSide, inInclusiveRange(74, 76));
       expect(
         tester
             .widget<IconButton>(
               find.descendant(of: previous, matching: find.byType(IconButton)),
             )
             .iconSize,
-        52,
+        inInclusiveRange(48, 50),
       );
-      expect(tester.widget<IconButton>(primary).iconSize, 76);
+      expect(
+        tester.widget<IconButton>(primary).iconSize,
+        inInclusiveRange(71, 73),
+      );
       expect(
         tester
             .widget<IconButton>(
               find.descendant(of: next, matching: find.byType(IconButton)),
             )
             .iconSize,
-        52,
+        inInclusiveRange(48, 50),
       );
 
       final position = tester.getRect(
         find.byKey(const ValueKey('apple-player-position')),
       );
-      final remaining = tester.getRect(
-        find.byKey(const ValueKey('apple-player-remaining')),
+      final duration = tester.getRect(
+        find.byKey(const ValueKey('apple-player-duration')),
       );
-      expect(position.left, greaterThanOrEqualTo(metadata.left + 11.5));
-      expect(remaining.right, lessThanOrEqualTo(metadata.right - 11.5));
+      expect(position.left, closeTo(metadata.left, 0.1));
+      expect(duration.right, closeTo(metadata.right, 0.1));
+      final artwork = tester.getRect(
+        find.byKey(const ValueKey('player-large-artwork')),
+      );
+      final timelineSlider = tester.getRect(
+        find.byKey(const ValueKey('apple-player-linear-seek')),
+      );
+      expect(artwork.left, closeTo(timelineSlider.left, 0.1));
+      expect(artwork.right, closeTo(timelineSlider.right, 0.1));
 
       SliderThemeData localSliderTheme(String sliderKey) {
         final themes = find.ancestor(
@@ -831,8 +882,8 @@ void main() {
 
       final seekTheme = localSliderTheme('apple-player-linear-seek');
       final volumeTheme = localSliderTheme('apple-player-volume-slider');
-      expect(seekTheme.trackHeight, 7);
-      expect(volumeTheme.trackHeight, 7);
+      expect(seekTheme.trackHeight, 8);
+      expect(volumeTheme.trackHeight, 8);
       expect(
         seekTheme.trackShape.runtimeType,
         volumeTheme.trackShape.runtimeType,
@@ -947,7 +998,7 @@ void main() {
   );
 
   testWidgets(
-    'Apple Music Style timeline commits one final seek and shows remaining time',
+    'Apple Music Style timeline commits one final seek and shows total duration',
     (tester) async {
       _configureView(tester, const Size(390, 820));
       final controller = _TestPlayerController(
@@ -969,9 +1020,9 @@ void main() {
 
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('apple-player-remaining')))
+            .widget<Text>(find.byKey(const ValueKey('apple-player-duration')))
             .data,
-        '\u22121:19',
+        '3:00',
       );
 
       final seek = find.byKey(const ValueKey('apple-player-linear-seek'));
@@ -1486,7 +1537,7 @@ void main() {
     expect(shadow.color.a, lessThanOrEqualTo(0.32));
     expect(shadow.spreadRadius, lessThan(0.3));
     // With no vertical overflow RenderSingleChildViewport does not install a
-    // clip, so the compact halo may use the outer 20 dp content padding too.
+    // clip, so the compact halo may use the widened control canvas too.
     expect(visibleShadowExtent, lessThanOrEqualTo(artworkRect.left + 0.1));
     expect(
       visibleShadowExtent,

@@ -433,7 +433,7 @@ class InAppWebViewYouTubeMusicWebAuthPort implements YouTubeMusicWebAuthPort {
 
       // Platform deletion booleans differ when a cookie disappears
       // concurrently. Read-back from every trusted origin is authoritative.
-      return _authenticationCookiesAreGone(cookieManager);
+      return await _authenticationCookiesAreGone(cookieManager);
     } on Object {
       return false;
     }

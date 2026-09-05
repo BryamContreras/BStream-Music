@@ -148,6 +148,23 @@ void main() {
     expect(innerRim.shader, isNotNull);
   });
 
+  testWidgets('android perimeter optics avoids unstable soft-light blending', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _harness(
+        platform: TargetPlatform.android,
+        child: const SizedBox.expand(),
+      ),
+    );
+
+    final paints = _paintOptics(tester);
+    expect(paints, hasLength(3));
+    expect(paints[0].blendMode, BlendMode.srcOver);
+    expect(paints[1].blendMode, BlendMode.srcOver);
+    expect(paints[2].blendMode, BlendMode.srcOver);
+  });
+
   testWidgets('adaptive tint calms both light and dark backdrops', (
     tester,
   ) async {
@@ -515,7 +532,7 @@ void main() {
     expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
   });
 
-  testWidgets('android keeps its sole capture active throughout motion', (
+  testWidgets('android retains its shared capture throughout motion', (
     tester,
   ) async {
     final sharedBackdrop = BackdropKey();
@@ -532,7 +549,7 @@ void main() {
     );
     final restingFilter = restingMaterial.filter;
     expect(find.byType(BackdropFilter), findsOneWidget);
-    expect(restingMaterial.backdropGroupKey, isNull);
+    expect(restingMaterial.backdropGroupKey, same(sharedBackdrop));
     expect(restingMaterial.enabled, isTrue);
     expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
 
@@ -548,6 +565,7 @@ void main() {
       find.byKey(LiquidGlassSurface.backdropKey),
     );
     expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(movingMaterial.backdropGroupKey, same(sharedBackdrop));
     expect(movingMaterial.enabled, isTrue);
     expect(identical(movingMaterial.filter, restingFilter), isTrue);
     expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
@@ -563,6 +581,7 @@ void main() {
       find.byKey(LiquidGlassSurface.backdropKey),
     );
     expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(settledMaterial.backdropGroupKey, same(sharedBackdrop));
     expect(settledMaterial.enabled, isTrue);
     expect(identical(settledMaterial.filter, restingFilter), isTrue);
   });

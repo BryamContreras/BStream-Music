@@ -28,6 +28,7 @@ import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 import '../../domain/usecases/get_track_info.dart';
 import '../providers/music_providers.dart';
+import '../widgets/app_update_dialog.dart';
 import '../widgets/bstream_logo.dart';
 import '../widgets/favorite_star_badge.dart';
 import '../widgets/library_panel.dart';
@@ -95,9 +96,11 @@ class HomePage extends ConsumerStatefulWidget {
   const HomePage({
     super.key,
     this.initialDestination = HomeInitialDestination.home,
+    this.checkForUpdatesOnStartup = false,
   });
 
   final HomeInitialDestination initialDestination;
+  final bool checkForUpdatesOnStartup;
 
   @override
   ConsumerState<HomePage> createState() => _HomePageState();
@@ -172,6 +175,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       if (mounted) {
         _ensurePlayerHistoryEntry();
         unawaited(_reconcileLocalLibrary());
+        if (widget.checkForUpdatesOnStartup) {
+          unawaited(_checkForAppUpdateAtStartup());
+        }
       }
     });
     _externalAudioSubscription = ref
@@ -383,6 +389,45 @@ class _HomePageState extends ConsumerState<HomePage> {
         ),
       ),
     );
+  }
+
+  Future<void> _checkForAppUpdateAtStartup() async {
+    try {
+      final result = await ref.read(settingsReleaseCheckerProvider)(
+        currentVersion: AppConstants.appVersion,
+      );
+      if (!mounted || !result.updateAvailable) {
+        return;
+      }
+      await showAppUpdateAvailableDialog(
+        context: context,
+        strings: ref.read(appStringsProvider),
+        release: result,
+        onDownload: _openStartupUpdateDownloadPage,
+      );
+    } catch (_) {
+      // Startup update checks are optional. Offline launches and transient
+      // GitHub failures must never interrupt, delay or notify the user.
+    }
+  }
+
+  Future<void> _openStartupUpdateDownloadPage() async {
+    final strings = ref.read(appStringsProvider);
+    try {
+      final opened = await ref.read(settingsExternalLauncherProvider)(
+        Uri.parse(AppConstants.appDownloadUrl),
+      );
+      if (!mounted || opened) {
+        return;
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(strings.updateDownloadOpenFailed)));
   }
 
   Future<void> _addRemoteTracksToPlaylist(
@@ -1938,6 +1983,8 @@ class _LiquidNavigationSelectionLayerState
                 brightness: colors.brightness,
                 accent: colors.primary,
                 highContrast: highContrast,
+                useCompatibleBlendMode:
+                    Theme.of(context).platform == TargetPlatform.android,
               ),
               child: const SizedBox.expand(),
             ),
@@ -1983,17 +2030,22 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
     required this.brightness,
     required this.accent,
     required this.highContrast,
+    required this.useCompatibleBlendMode,
   });
 
   final Brightness brightness;
   final Color accent;
   final bool highContrast;
+  final bool useCompatibleBlendMode;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final dark = brightness == Brightness.dark;
     final contrast = highContrast ? 1.25 : 1.0;
+    final opticalBlendMode = useCompatibleBlendMode
+        ? BlendMode.srcOver
+        : BlendMode.softLight;
     final bounds = (Offset.zero & size).deflate(0.75);
     final radius = BorderRadius.circular(bounds.height / 2);
     final shape = radius.toRSuperellipse(bounds);
@@ -2010,7 +2062,7 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
     canvas.drawRSuperellipse(
       shape,
       Paint()
-        ..blendMode = BlendMode.softLight
+        ..blendMode = opticalBlendMode
         ..shader = LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -2028,7 +2080,7 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = highContrast ? 1.35 : 1.0
-        ..blendMode = BlendMode.softLight
+        ..blendMode = opticalBlendMode
         ..shader = LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -2049,7 +2101,7 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.65
-          ..blendMode = BlendMode.softLight
+          ..blendMode = opticalBlendMode
           ..shader = LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
@@ -2068,7 +2120,8 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
   bool shouldRepaint(_LiquidNavigationSelectionPainter oldDelegate) =>
       oldDelegate.brightness != brightness ||
       oldDelegate.accent != accent ||
-      oldDelegate.highContrast != highContrast;
+      oldDelegate.highContrast != highContrast ||
+      oldDelegate.useCompatibleBlendMode != useCompatibleBlendMode;
 }
 
 class _DetachedSearchButton extends StatelessWidget {
@@ -2570,17 +2623,49 @@ class _PersistentCurrentViews extends StatefulWidget {
 class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
   late final Set<int> _visitedIndexes = {widget.selectedIndex};
   late final bool _playerWasInitialDestination;
+  int? _playerTransitionOriginIndex;
 
   @override
   void initState() {
     super.initState();
     _playerWasInitialDestination = widget.selectedIndex == widget.playerIndex;
+    if (!_playerWasInitialDestination &&
+        AppPlatform.isMobileTargetPlatform(defaultTargetPlatform)) {
+      // Construct the full player after the first visible frame. Its artwork
+      // can then decode while the user is still browsing instead of during
+      // the first mini-player expansion.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _visitedIndexes.contains(widget.playerIndex)) {
+          return;
+        }
+        setState(() => _visitedIndexes.add(widget.playerIndex));
+      });
+    }
   }
 
   @override
   void didUpdateWidget(covariant _PersistentCurrentViews oldWidget) {
     super.didUpdateWidget(oldWidget);
     _visitedIndexes.add(widget.selectedIndex);
+    if (widget.selectedIndex != oldWidget.selectedIndex &&
+        (widget.selectedIndex == widget.playerIndex ||
+            oldWidget.selectedIndex == widget.playerIndex)) {
+      _playerTransitionOriginIndex = oldWidget.selectedIndex;
+    }
+    if (!widget.playerTransitionActive) {
+      _playerTransitionOriginIndex = null;
+    }
+  }
+
+  bool _keepBrowsingViewVisible(int index) {
+    return widget.playerTransitionActive &&
+        widget.selectedIndex == widget.playerIndex &&
+        _playerTransitionOriginIndex == index;
+  }
+
+  bool _switchBrowsingViewImmediately(int index) {
+    return widget.selectedIndex == widget.playerIndex ||
+        (widget.playerTransitionActive && widget.selectedIndex == index);
   }
 
   @override
@@ -2592,6 +2677,10 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('home-view'),
             selected: widget.selectedIndex == widget.homeIndex,
+            keepVisible: _keepBrowsingViewVisible(widget.homeIndex),
+            instantVisibilityChange: _switchBrowsingViewImmediately(
+              widget.homeIndex,
+            ),
             bottomPadding: widget.viewportBottomPadding,
             child: _HomeView(
               bottomContentPadding: widget.contentBottomPadding,
@@ -2603,6 +2692,10 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('search-view'),
             selected: widget.selectedIndex == widget.searchIndex,
+            keepVisible: _keepBrowsingViewVisible(widget.searchIndex),
+            instantVisibilityChange: _switchBrowsingViewImmediately(
+              widget.searchIndex,
+            ),
             bottomPadding: widget.viewportBottomPadding,
             child: SearchView(
               bottomContentPadding: widget.contentBottomPadding,
@@ -2614,6 +2707,10 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           _PersistentViewSlot(
             key: const ValueKey('local-view'),
             selected: widget.selectedIndex == widget.localIndex,
+            keepVisible: _keepBrowsingViewVisible(widget.localIndex),
+            instantVisibilityChange: _switchBrowsingViewImmediately(
+              widget.localIndex,
+            ),
             bottomPadding: widget.viewportBottomPadding,
             child: LocalMusicPanel(
               bottomContentPadding: widget.contentBottomPadding,
@@ -2621,6 +2718,39 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               navigationController: widget.localMusicNavigationController,
             ),
           ),
+        if (_visitedIndexes.contains(widget.libraryIndex))
+          _PersistentViewSlot(
+            key: const ValueKey('library-view'),
+            selected: widget.selectedIndex == widget.libraryIndex,
+            keepVisible: _keepBrowsingViewVisible(widget.libraryIndex),
+            instantVisibilityChange: _switchBrowsingViewImmediately(
+              widget.libraryIndex,
+            ),
+            bottomPadding: widget.viewportBottomPadding,
+            child: LibraryPanel(
+              bottomContentPadding: widget.contentBottomPadding,
+              onOpenPlayer: widget.onOpenPlayer,
+              navigationController: widget.libraryNavigationController,
+            ),
+          ),
+        if (_visitedIndexes.contains(widget.settingsIndex))
+          _PersistentViewSlot(
+            key: const ValueKey('settings-view'),
+            selected: widget.selectedIndex == widget.settingsIndex,
+            keepVisible: _keepBrowsingViewVisible(widget.settingsIndex),
+            instantVisibilityChange: _switchBrowsingViewImmediately(
+              widget.settingsIndex,
+            ),
+            bottomPadding: widget.viewportBottomPadding,
+            child: SettingsPanel(
+              bottomContentPadding: widget.contentBottomPadding,
+              active: widget.selectedIndex == widget.settingsIndex,
+              navigationController: widget.settingsNavigationController,
+            ),
+          ),
+        // The player is the transition foreground. Keeping it last lets the
+        // outgoing browsing view remain perfectly still underneath, just as
+        // it does while the Lyrics route enters and leaves.
         if (_visitedIndexes.contains(widget.playerIndex))
           _PersistentViewSlot(
             key: const ValueKey('player-view'),
@@ -2640,28 +2770,6 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
                   !widget.playerTransitionActive,
             ),
           ),
-        if (_visitedIndexes.contains(widget.libraryIndex))
-          _PersistentViewSlot(
-            key: const ValueKey('library-view'),
-            selected: widget.selectedIndex == widget.libraryIndex,
-            bottomPadding: widget.viewportBottomPadding,
-            child: LibraryPanel(
-              bottomContentPadding: widget.contentBottomPadding,
-              onOpenPlayer: widget.onOpenPlayer,
-              navigationController: widget.libraryNavigationController,
-            ),
-          ),
-        if (_visitedIndexes.contains(widget.settingsIndex))
-          _PersistentViewSlot(
-            key: const ValueKey('settings-view'),
-            selected: widget.selectedIndex == widget.settingsIndex,
-            bottomPadding: widget.viewportBottomPadding,
-            child: SettingsPanel(
-              bottomContentPadding: widget.contentBottomPadding,
-              active: widget.selectedIndex == widget.settingsIndex,
-              navigationController: widget.settingsNavigationController,
-            ),
-          ),
       ],
     );
   }
@@ -2677,6 +2785,8 @@ class _PersistentViewSlot extends StatefulWidget {
     this.transitionStyle = _PersistentViewTransitionStyle.tab,
     this.transitionDuration,
     this.animateInitialEntry = true,
+    this.keepVisible = false,
+    this.instantVisibilityChange = false,
     super.key,
   });
 
@@ -2686,6 +2796,8 @@ class _PersistentViewSlot extends StatefulWidget {
   final _PersistentViewTransitionStyle transitionStyle;
   final Duration? transitionDuration;
   final bool animateInitialEntry;
+  final bool keepVisible;
+  final bool instantVisibilityChange;
 
   @override
   State<_PersistentViewSlot> createState() => _PersistentViewSlotState();
@@ -2715,8 +2827,14 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
   void didUpdateWidget(covariant _PersistentViewSlot oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.selected && !oldWidget.selected) {
-      setState(() => _hasEntered = false);
-      _scheduleEntryAnimation();
+      if (widget.instantVisibilityChange) {
+        _hasEntered = true;
+      } else if (!_hasEntered) {
+        // Newly mounted destinations still need one hidden frame. A retained
+        // destination is already resting at its hidden offset, so changing
+        // its target immediately avoids adding a frame of input latency.
+        _scheduleEntryAnimation();
+      }
     }
   }
 
@@ -2731,16 +2849,49 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
   @override
   Widget build(BuildContext context) {
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    final duration = disableAnimations
+    final duration = disableAnimations || widget.instantVisibilityChange
         ? Duration.zero
         : widget.transitionDuration ?? const Duration(milliseconds: 320);
-    final entered = widget.selected && (_hasEntered || disableAnimations);
+    final visible = widget.selected || widget.keepVisible;
+    final entered = visible && (_hasEntered || disableAnimations);
     final playerTransition =
         widget.transitionStyle == _PersistentViewTransitionStyle.player;
-    final hiddenOffset = playerTransition
-        ? const Offset(0, 0.045)
-        : const Offset(0.018, 0);
-    final hiddenScale = playerTransition ? 0.965 : 1.0;
+    final content = RepaintBoundary(
+      child: TickerMode(enabled: widget.selected, child: widget.child),
+    );
+    final transitionedContent = playerTransition
+        // The full player behaves like a sheet: it enters from below and the
+        // exact same motion runs in reverse when it is collapsed. Fade that
+        // already-rasterized layer along the same timeline, without bringing
+        // back the scale transform that made the motion feel less direct.
+        ? AnimatedOpacity(
+            key: const ValueKey('player-view-fade-transition'),
+            opacity: entered ? 1 : 0,
+            duration: duration,
+            curve: Curves.easeInOut,
+            child: AnimatedSlide(
+              key: const ValueKey('player-view-slide-transition'),
+              offset: entered ? Offset.zero : const Offset(0, 1),
+              duration: duration,
+              curve: Curves.easeInOutCubic,
+              child: content,
+            ),
+          )
+        : AnimatedOpacity(
+            opacity: entered ? 1 : 0,
+            duration: duration,
+            // A symmetric fade keeps the outgoing view visible while a newly
+            // visited, data-heavy tab completes its first frame. An ease-out
+            // here made both slots nearly transparent at once and produced a
+            // brief dark flash on slower Android devices.
+            curve: Curves.easeInOutCubic,
+            child: AnimatedSlide(
+              offset: entered ? Offset.zero : const Offset(0.018, 0),
+              duration: duration,
+              curve: Curves.easeOutCubic,
+              child: content,
+            ),
+          );
 
     return Positioned.fill(
       child: Padding(
@@ -2751,38 +2902,7 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
             excluding: !widget.selected,
             child: ExcludeSemantics(
               excluding: !widget.selected,
-              child: AnimatedOpacity(
-                opacity: entered ? 1 : 0,
-                duration: duration,
-                // A symmetric fade keeps the outgoing view visible while a newly
-                // visited, data-heavy tab completes its first frame. An ease-out
-                // here made both slots nearly transparent at once and produced a
-                // brief dark flash on slower Android devices.
-                curve: Curves.easeInOutCubic,
-                child: AnimatedSlide(
-                  key: playerTransition
-                      ? const ValueKey('player-view-slide-transition')
-                      : null,
-                  offset: entered ? Offset.zero : hiddenOffset,
-                  duration: duration,
-                  curve: Curves.easeOutCubic,
-                  child: AnimatedScale(
-                    key: playerTransition
-                        ? const ValueKey('player-view-scale-transition')
-                        : null,
-                    scale: entered ? 1 : hiddenScale,
-                    duration: duration,
-                    curve: Curves.easeOutCubic,
-                    alignment: Alignment.bottomCenter,
-                    child: RepaintBoundary(
-                      child: TickerMode(
-                        enabled: widget.selected,
-                        child: widget.child,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+              child: transitionedContent,
             ),
           ),
         ),

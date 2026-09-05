@@ -562,6 +562,93 @@ void main() {
       },
     );
 
+    test(
+      'fills artist shelf durations from player metadata without replacing profile fields',
+      () async {
+        transport.responses.addAll([
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode({
+              'header': {
+                'musicImmersiveHeaderRenderer': {
+                  'title': {
+                    'runs': [
+                      {'text': 'Profile artist'},
+                    ],
+                  },
+                },
+              },
+              'contents': [
+                {
+                  'musicShelfRenderer': {
+                    'title': {
+                      'runs': [
+                        {'text': 'Canciones más populares'},
+                      ],
+                    },
+                    'contents': [
+                      _songRenderer(
+                        videoId: 'popular0001',
+                        title: 'Profile title',
+                        artists: const ['Profile artist'],
+                        album: 'Profile album',
+                      ),
+                      _songRenderer(
+                        videoId: 'popular0002',
+                        title: 'Already complete',
+                        artists: const ['Profile artist'],
+                        duration: '3:05',
+                      ),
+                    ],
+                  },
+                },
+              ],
+            }),
+          ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode({
+              ..._playerPayload(
+                videoId: 'popular0001',
+                title: 'Different player title',
+                author: 'Player artist',
+                lengthSeconds: '389',
+              ),
+              // Anonymous WEB_REMIX sometimes reports this while still
+              // exposing trustworthy metadata for the exact requested ID.
+              'playabilityStatus': {'status': 'UNPLAYABLE'},
+              'microformat': {
+                'microformatDataRenderer': {
+                  'videoDetails': {'durationSeconds': '390'},
+                },
+              },
+            }),
+          ),
+        ]);
+        final service = createService();
+
+        final profile = await service.getArtistProfile('UCartist123');
+
+        expect(profile.popularSongs, hasLength(2));
+        expect(
+          profile.popularSongs.first.duration,
+          const Duration(minutes: 6, seconds: 30),
+        );
+        expect(profile.popularSongs.first.title, 'Profile title');
+        expect(profile.popularSongs.first.artists, const ['Profile artist']);
+        expect(profile.popularSongs.first.album, 'Profile album');
+        expect(
+          profile.popularSongs.last.duration,
+          const Duration(minutes: 3, seconds: 5),
+        );
+        expect(transport.requests.map((request) => request.uri.path), [
+          '/browse',
+          '/player',
+        ]);
+        expect(transport.requests.last.body['videoId'], 'popular0001');
+      },
+    );
+
     test('returns null when the player reports an unavailable video', () async {
       transport.response = InnerTubeHttpResponse(
         statusCode: HttpStatus.ok,

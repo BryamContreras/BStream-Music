@@ -10,6 +10,7 @@ precision highp float;
 uniform vec2 u_size;
 // Explicit local bounds of the clipped glass surface in physical pixels.
 uniform vec2 u_surface_size_px;
+uniform vec2 u_surface_origin_px;
 uniform float u_band_ratio;
 uniform float u_amount_ratio;
 uniform float u_depth_effect;
@@ -70,7 +71,9 @@ vec2 rounded_rect_normal(
 vec4 sample_backdrop(vec2 pixel_coordinate) {
   vec2 half_texel = 0.5 / max(u_size, vec2(1.0));
   vec2 uv = clamp(pixel_coordinate / u_size, half_texel, 1.0 - half_texel);
-#ifdef IMPELLER_TARGET_OPENGLES
+#if defined(IMPELLER_TARGET_OPENGLES) && !defined(IMPELLER_OPENGLES_UNFLIPPED_DEPRECATED)
+  // Flutter <= 3.44 stored OpenGLES render targets bottom-up. Flutter 3.47+
+  // normalizes them to top-down and defines the compatibility macro above.
   uv.y = 1.0 - uv.y;
 #endif
   return texture(u_backdrop, uv);
@@ -94,13 +97,9 @@ float circle_map(float value) {
 void main() {
   vec2 coordinate = FlutterFragCoord().xy;
   vec2 surface_size = min(max(u_surface_size_px, vec2(1.0)), u_size);
-  // FlutterFragCoord tracks the backing texture for sampling. gl_FragCoord is
-  // local to this runtime-filter target, so the SDF stays attached to every
-  // pill and orb regardless of its position on screen.
-  vec2 local_coordinate = gl_FragCoord.xy;
-#ifdef IMPELLER_TARGET_OPENGLES
-  local_coordinate.y = surface_size.y - local_coordinate.y;
-#endif
+  vec2 local_coordinate = coordinate - u_surface_origin_px;
+  // Build the lens in this widget's local coordinate space while retaining
+  // the backing texture coordinates for sampling.
   vec2 half_size = surface_size * 0.5;
   vec2 centered = local_coordinate - half_size;
   float minimum_size = max(min(surface_size.x, surface_size.y), 1.0);

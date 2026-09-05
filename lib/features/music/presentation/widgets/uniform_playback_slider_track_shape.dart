@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 /// Shared geometry for Apple Music Style seek and volume tracks.
-const appleMusicSliderTrackHeight = 7.0;
+const appleMusicSliderTrackHeight = 8.0;
 
 /// Keeps the active and inactive portions at exactly the same thickness.
 ///

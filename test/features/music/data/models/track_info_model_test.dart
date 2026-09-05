@@ -133,7 +133,7 @@ void main() {
     expect(track.httpHeaders, {'User-Agent': 'Mozilla/5.0', 'Accept': '*/*'});
   });
 
-  test('prefers m4a audio streams over webm when both are available', () {
+  test('prefers a higher bitrate stream before m4a', () {
     final track = TrackInfoModel.fromJson({
       'id': 'abc123',
       'title': 'Example Song',
@@ -157,10 +157,10 @@ void main() {
       ],
     });
 
-    expect(track.streamUrl, 'https://example.com/audio.m4a');
+    expect(track.streamUrl, 'https://example.com/audio.webm');
   });
 
-  test('prefers native AAC audio over a higher bitrate fallback codec', () {
+  test('prefers native AAC when the bitrate is equal', () {
     final track = TrackInfoModel.fromJson({
       'id': 'abc123',
       'title': 'Example Song',
@@ -172,7 +172,7 @@ void main() {
           'ext': 'webm',
           'vcodec': 'none',
           'acodec': 'opus',
-          'abr': 160,
+          'abr': 128,
         },
         {
           'url': 'https://example.com/audio.aac',
@@ -213,8 +213,8 @@ void main() {
       ],
     });
 
-    expect(track.streamUrl, 'https://example.com/audio.m4a');
-    expect(track.httpHeaders, {'X-Format': 'aac'});
+    expect(track.streamUrl, 'https://example.com/audio.webm');
+    expect(track.httpHeaders, {'X-Format': 'opus'});
   });
 
   test('prefers the highest bitrate within the preferred native format', () {

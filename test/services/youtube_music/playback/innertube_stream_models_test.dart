@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('selectPreferredInnerTubeAudio', () {
-    test('prefers default, non-DRC, audio-only MP4/AAC in that order', () {
+    test('keeps language, non-DRC and audio-only preferences', () {
       final formats = <InnerTubeAudioFormat>[
         _format(
           itag: 251,
@@ -21,17 +21,23 @@ void main() {
       expect(selectPreferredInnerTubeAudio(formats)?.itag, 140);
     });
 
-    test(
-      'uses bitrate as a deterministic tie-break within preferred group',
-      () {
-        final formats = <InnerTubeAudioFormat>[
-          _format(itag: 139, bitrate: 48000),
-          _format(itag: 140, bitrate: 128000),
-        ];
+    test('prefers higher bitrate before MP4/AAC', () {
+      final formats = <InnerTubeAudioFormat>[
+        _format(itag: 140, bitrate: 128000),
+        _format(itag: 251, container: 'webm', codec: 'opus', bitrate: 192000),
+      ];
 
-        expect(selectPreferredInnerTubeAudio(formats)?.itag, 140);
-      },
-    );
+      expect(selectPreferredInnerTubeAudio(formats)?.itag, 251);
+    });
+
+    test('uses MP4/AAC as the tie-breaker for equal bitrate', () {
+      final formats = <InnerTubeAudioFormat>[
+        _format(itag: 251, container: 'webm', codec: 'opus', bitrate: 128000),
+        _format(itag: 140, bitrate: 128000),
+      ];
+
+      expect(selectPreferredInnerTubeAudio(formats)?.itag, 140);
+    });
 
     test('excludes DRM unless explicitly allowed', () {
       final drm = _format(itag: 140, bitrate: 128000, isDrm: true);

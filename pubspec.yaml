@@ -51,7 +51,7 @@ dependencies:
   crypto: ^3.0.7
   image: ^4.8.0
   uuid: ^4.5.3
-  file_picker: ^11.0.3
+  file_picker: ^12.2.0
   media_kit: ^1.2.6
   media_kit_libs_windows_audio: ^1.0.9
   media_kit_libs_linux: ^1.2.1
@@ -64,14 +64,11 @@ dependencies:
   csv: ^8.0.0
   url_launcher: ^6.3.2
   app_links: ^7.2.1
-  # Keep these exact while file_picker 11 pins the Windows stack to win32 5.
-  # flutter_secure_storage 11 currently requires win32 6 on Windows.
   flutter_inappwebview: 6.1.5
+  # Version 11 requires Android SDK 37/AGP 9, while the latest
+  # flutter_inappwebview Android plugin is not yet compatible with AGP 9.
   flutter_secure_storage: 10.0.0
-  # 13.1+ requires win32 6, while file_picker 11 is still on win32 5.
-  # 12.0.2 keeps the current picker stack compatible and includes the modern
-  # SharePlus/ShareParams API on all four supported platforms.
-  share_plus: ^12.0.2
+  share_plus: ^13.3.0
   piratetok_live:
     path: third_party/piratetok_live
 
