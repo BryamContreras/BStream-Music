@@ -153,19 +153,24 @@ void main() {
       expect(sectionRect.left, closeTo(fieldRect.left, 0.1));
       expect(sectionRect.right, closeTo(fieldRect.right, 0.1));
     }
-    expect(
-      tester.getTopLeft(audienceSections[1]).dy,
-      greaterThan(tester.getBottomLeft(audienceSections[0]).dy),
-    );
-    expect(
-      tester.getTopLeft(audienceSections[2]).dy,
-      greaterThan(tester.getBottomLeft(audienceSections[1]).dy),
-    );
+    for (var index = 1; index < audienceSections.length; index++) {
+      expect(
+        tester.getTopLeft(audienceSections[index]).dy,
+        greaterThan(tester.getBottomLeft(audienceSections[index - 1]).dy),
+      );
+    }
     expect(find.text('Todos'), findsOneWidget);
+    expect(find.text('Seguidores'), findsOneWidget);
     expect(find.text('Moderadores'), findsOneWidget);
     expect(find.text('Suscriptores'), findsOneWidget);
-    expect(find.text('!stop'), findsNWidgets(3));
-    expect(find.text('Pausa la canción LIVE actual.'), findsNWidgets(3));
+    expect(
+      find.text('!stop'),
+      findsNWidgets(TikTokCommandAudience.values.length),
+    );
+    expect(
+      find.text('Pausa la canción LIVE actual.'),
+      findsNWidgets(TikTokCommandAudience.values.length),
+    );
 
     for (final audience in TikTokCommandAudience.values) {
       for (final command in TikTokLiveCommand.values) {
@@ -183,6 +188,11 @@ void main() {
     );
     expect(inheritedModeratorPlay.value, isTrue);
     expect(inheritedModeratorPlay.onChanged, isNull);
+    final inheritedFollowerPlay = tester.widget<CheckboxListTile>(
+      find.byKey(const ValueKey('tiktok-command-followers-play')),
+    );
+    expect(inheritedFollowerPlay.value, isTrue);
+    expect(inheritedFollowerPlay.onChanged, isNull);
 
     final moderatorRevoke = find.byKey(
       const ValueKey('tiktok-command-moderators-revoke'),
@@ -194,6 +204,24 @@ void main() {
           matching: find.byType(Scrollable),
         )
         .first;
+    final followerSkip = find.byKey(
+      const ValueKey('tiktok-command-followers-skip'),
+    );
+    expect(tester.widget<CheckboxListTile>(followerSkip).value, isFalse);
+    await tester.scrollUntilVisible(
+      followerSkip,
+      240,
+      scrollable: detailScrollable,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(followerSkip);
+    await tester.pump();
+    expect(liveController.commandPermissionCalls.last, (
+      audience: TikTokCommandAudience.followers,
+      command: TikTokLiveCommand.skip,
+      enabled: true,
+    ));
+
     await tester.scrollUntilVisible(
       moderatorRevoke,
       240,
@@ -243,7 +271,7 @@ void main() {
       command: TikTokLiveCommand.skip,
       enabled: true,
     ));
-    expect(liveController.commandPermissionCalls, hasLength(3));
+    expect(liveController.commandPermissionCalls, hasLength(4));
     expect(tester.takeException(), isNull);
 
     debugDefaultTargetPlatformOverride = null;

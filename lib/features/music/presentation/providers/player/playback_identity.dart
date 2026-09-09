@@ -97,6 +97,19 @@ abstract final class PlaybackIdentity {
   }
 
   static String? stableRemoteThumbnail(TrackInfo track, [String? fallback]) {
+    final catalogArtwork = optionalText(track.catalogThumbnailUrl);
+    final catalogVideoId = youtubeVideoIdFromThumbnailSource(catalogArtwork);
+    final trackVideoId =
+        canonicalYoutubeVideoId(id: track.id, url: track.url) ??
+        youtubeVideoIdFromThumbnailSource(track.thumbnailUrl);
+    if (catalogArtwork != null &&
+        catalogVideoId != null &&
+        catalogVideoId == trackVideoId) {
+      // Video-search results already carry an exact thumbnail selected by
+      // InnerTube. Preserve it instead of replacing it with a synthesized
+      // hq720 URL that may not exist for older uploads.
+      return catalogArtwork;
+    }
     final fromTrack = canonicalYouTubeThumbnailSource(track.thumbnailUrl);
     if (fromTrack != null) {
       return fromTrack;

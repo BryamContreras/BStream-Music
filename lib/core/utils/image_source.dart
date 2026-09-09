@@ -104,6 +104,99 @@ List<String> youtubeThumbnailCandidates(String? source) {
   return candidates.toSet().toList(growable: false);
 }
 
+/// Returns the broadly available YouTube rendition used when the native-ratio
+/// preview is unavailable.
+///
+/// Unlike `hq720` and `maxresdefault`, `hqdefault` is also generated for many
+/// older videos. Keeping this URL separate lets artwork avoid a serial chain
+/// of 404 responses without making it the first choice when a 16:9 preview is
+/// available.
+String? youtubeThumbnailPreviewSourceForVideoId(String? videoId) {
+  final normalized = videoId?.trim();
+  if (normalized == null ||
+      !RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(normalized)) {
+    return null;
+  }
+  return 'https://i.ytimg.com/vi/$normalized/hqdefault.jpg';
+}
+
+/// Returns fast, low-risk preview candidates for a YouTube thumbnail.
+///
+/// When InnerTube supplied an exact thumbnail for the same video it is tried
+/// first because it is known to exist. `mqdefault` keeps the same native video
+/// framing as the larger renditions; `hqdefault` then covers older edge cases.
+List<String> youtubeThumbnailPreviewCandidates(
+  String? source, {
+  String? preferredSource,
+}) {
+  final normalized = source?.trim();
+  final preferred = preferredSource?.trim();
+  final videoId =
+      youtubeVideoIdFromThumbnailSource(normalized) ??
+      youtubeVideoIdFromThumbnailSource(preferred);
+  if (videoId == null) {
+    return normalized == null || normalized.isEmpty
+        ? const []
+        : <String>[normalized];
+  }
+
+  final candidates = <String>[
+    if (preferred != null &&
+        preferred.isNotEmpty &&
+        youtubeVideoIdFromThumbnailSource(preferred) == videoId)
+      preferred,
+    if (normalized != null &&
+        normalized.isNotEmpty &&
+        normalized != youtubeThumbnailSourceForVideoId(videoId))
+      normalized,
+    'https://i.ytimg.com/vi/$videoId/mqdefault.jpg',
+    youtubeThumbnailPreviewSourceForVideoId(videoId)!,
+    'https://i.ytimg.com/vi/$videoId/0.jpg',
+    'https://i.ytimg.com/vi/$videoId/default.jpg',
+    if (normalized != null && normalized.isNotEmpty) normalized,
+  ];
+  return candidates.toSet().toList(growable: false);
+}
+
+/// Returns only the useful upgrade attempts for a large YouTube surface.
+///
+/// Only `hq720` is composited over a live preview because it preserves the
+/// preview's 16:9 framing. `sddefault` is useful for durable downloads, but is
+/// commonly 4:3 and would create a visible crop change in the large player.
+List<String> youtubeThumbnailUpgradeCandidates(String? source) {
+  final videoId = youtubeVideoIdFromThumbnailSource(source);
+  if (videoId == null) {
+    return const [];
+  }
+  return <String>[youtubeThumbnailSourceForVideoId(videoId)!];
+}
+
+/// Orders artwork candidates for durable offline storage.
+///
+/// An exact YouTube URL returned by the catalog is already known to exist, so
+/// it precedes synthesized variants. Google Music CDN covers retain their
+/// large rendition first to avoid persisting a card-sized 120 px image.
+List<String> artworkDownloadSourceCandidates(String? source) {
+  final normalized = source?.trim();
+  if (normalized == null || normalized.isEmpty) {
+    return const [];
+  }
+  if (youtubeVideoIdFromThumbnailSource(normalized) == null) {
+    return artworkSourceCandidates(normalized);
+  }
+
+  final videoId = youtubeVideoIdFromThumbnailSource(normalized)!;
+  return <String>{
+    normalized,
+    ...youtubeThumbnailUpgradeCandidates(normalized),
+    'https://i.ytimg.com/vi/$videoId/sddefault.jpg',
+    youtubeThumbnailPreviewSourceForVideoId(videoId)!,
+    'https://i.ytimg.com/vi/$videoId/mqdefault.jpg',
+    'https://i.ytimg.com/vi/$videoId/0.jpg',
+    'https://i.ytimg.com/vi/$videoId/default.jpg',
+  }.toList(growable: false);
+}
+
 /// Returns display/download candidates ordered from the sharpest known
 /// rendition to the original source.
 ///

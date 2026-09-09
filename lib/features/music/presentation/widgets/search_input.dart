@@ -34,6 +34,7 @@ class _SearchInputState extends State<SearchInput> {
   late final TextEditingController _controller;
   final _focusNode = FocusNode();
   bool _hadText = false;
+  bool _synchronizingInitialText = false;
 
   @override
   void initState() {
@@ -43,13 +44,35 @@ class _SearchInputState extends State<SearchInput> {
     _controller.addListener(_handleTextChanged);
   }
 
+  @override
+  void didUpdateWidget(covariant SearchInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialText == oldWidget.initialText ||
+        widget.initialText == _controller.text) {
+      return;
+    }
+
+    // A browse-category card can submit a query without typing into this
+    // field. Keep the visible value aligned with that external state change,
+    // without treating an externally supplied empty value as a user clear.
+    _synchronizingInitialText = true;
+    _controller.value = TextEditingValue(
+      text: widget.initialText,
+      selection: TextSelection.collapsed(offset: widget.initialText.length),
+    );
+    _hadText = widget.initialText.isNotEmpty;
+    _synchronizingInitialText = false;
+  }
+
   void _handleTextChanged() {
     final hasText = _controller.text.isNotEmpty;
-    if (_hadText && !hasText) {
+    if (!_synchronizingInitialText && _hadText && !hasText) {
       widget.onCleared?.call();
     }
     _hadText = hasText;
-    setState(() {});
+    if (!_synchronizingInitialText) {
+      setState(() {});
+    }
   }
 
   @override

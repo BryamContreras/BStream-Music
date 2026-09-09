@@ -34,6 +34,8 @@ class SourceImage extends StatefulWidget {
 }
 
 class _SourceImageState extends State<SourceImage> {
+  static const _youtubeUpgradeMinimumDecodeWidth = 640;
+
   String? _localSource;
   Future<bool>? _localExists;
 
@@ -77,8 +79,9 @@ class _SourceImageState extends State<SourceImage> {
     if (isNetworkImageSource(normalized)) {
       final sizedSource =
           sizedGoogleArtworkSource(normalized, widget.cacheWidth) ?? normalized;
-      return _networkArtwork(
-        candidates: youtubeThumbnailCandidates(sizedSource),
+      return _networkArtworkForSource(
+        source: sizedSource,
+        fallbackSource: widget.fallbackSource,
         fit: widget.fit,
         fallback: fallback,
       );
@@ -147,6 +150,7 @@ class _SourceImageState extends State<SourceImage> {
     required List<String> candidates,
     required BoxFit fit,
     required Widget fallback,
+    bool fadeIn = false,
   }) {
     Widget buildCandidate(int index) {
       if (index >= candidates.length) {
@@ -160,11 +164,94 @@ class _SourceImageState extends State<SourceImage> {
         fit: fit,
         filterQuality: widget.filterQuality,
         gaplessPlayback: true,
+        frameBuilder: fadeIn
+            ? (context, child, frame, wasSynchronouslyLoaded) {
+                return AnimatedOpacity(
+                  opacity: wasSynchronouslyLoaded || frame != null ? 1 : 0,
+                  duration: wasSynchronouslyLoaded
+                      ? Duration.zero
+                      : const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  child: child,
+                );
+              }
+            : null,
         errorBuilder: (_, _, _) => buildCandidate(index + 1),
       );
     }
 
     return buildCandidate(0);
+  }
+
+  Widget _networkArtworkForSource({
+    required String source,
+    required String? fallbackSource,
+    required BoxFit fit,
+    required Widget fallback,
+  }) {
+    final youtubeVideoId = youtubeVideoIdFromThumbnailSource(source);
+    final eagerLocalFallback = _isLocalFallbackSource(fallbackSource);
+    if (youtubeVideoId == null) {
+      final network = _networkArtwork(
+        candidates: <String>[source],
+        fit: fit,
+        fallback: eagerLocalFallback ? const SizedBox.shrink() : fallback,
+      );
+      return eagerLocalFallback
+          ? _layerArtwork(base: fallback, overlay: network)
+          : network;
+    }
+
+    // Search mounts a bounded page of rows eagerly. A single known-good
+    // preview per small row avoids both the old 404 waterfall and a second
+    // high-resolution request that cannot improve a 56 px surface.
+    final preview = _networkArtwork(
+      candidates: youtubeThumbnailPreviewCandidates(
+        source,
+        preferredSource: fallbackSource,
+      ),
+      fit: fit,
+      fallback: eagerLocalFallback ? const SizedBox.shrink() : fallback,
+    );
+    final visiblePreview = eagerLocalFallback
+        ? _layerArtwork(base: fallback, overlay: preview)
+        : preview;
+    if (widget.cacheWidth < _youtubeUpgradeMinimumDecodeWidth) {
+      return visiblePreview;
+    }
+
+    // Large player artwork keeps the preview visible while the sharper
+    // rendition resolves. Missing variants therefore never leave a blank
+    // cover, and a successful upgrade does not change layout geometry.
+    final upgradeCandidates = youtubeThumbnailUpgradeCandidates(source);
+    if (upgradeCandidates.isEmpty) {
+      return visiblePreview;
+    }
+    final upgrade = _networkArtwork(
+      candidates: upgradeCandidates,
+      fit: fit,
+      fallback: const SizedBox.shrink(),
+      fadeIn: true,
+    );
+    return _layerArtwork(base: visiblePreview, overlay: upgrade);
+  }
+
+  bool _isLocalFallbackSource(String? source) {
+    final normalized = source?.trim();
+    return normalized != null &&
+        normalized.isNotEmpty &&
+        !isNetworkImageSource(normalized) &&
+        normalized != widget.source?.trim();
+  }
+
+  Widget _layerArtwork({required Widget base, required Widget overlay}) {
+    return Stack(
+      fit: StackFit.passthrough,
+      children: <Widget>[
+        base,
+        Positioned.fill(child: overlay),
+      ],
+    );
   }
 }
 

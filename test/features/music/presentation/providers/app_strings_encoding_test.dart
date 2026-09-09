@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/presentation/providers/app_strings.dart';
 import 'package:bstream_music/features/music/presentation/providers/mini_player_background_mode.dart';
+import 'package:bstream_music/features/music/presentation/providers/player_artwork_style.dart';
 import 'package:bstream_music/features/music/presentation/providers/player_style.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -68,11 +69,17 @@ void main() {
     expect(strings.liveQueueEmpty, 'Los pedidos !play aparecerán aquí.');
     expect(strings.commandPermissions, 'Quién puede usar los comandos');
     expect(strings.everyone, 'Todos');
+    expect(strings.follower, 'Seguidor');
+    expect(strings.followers, 'Seguidores');
     expect(strings.moderators, 'Moderadores');
     expect(strings.subscribers, 'Suscriptores');
     expect(
       strings.everyoneCommandPermissionsHint,
       'Comandos disponibles para cualquier espectador.',
+    );
+    expect(
+      strings.followerCommandPermissionsHint,
+      'Permisos adicionales para seguidores.',
     );
     expect(
       strings.moderatorCommandPermissionsHint,
@@ -110,7 +117,68 @@ void main() {
       'Conexión LIVE no disponible en este dispositivo.',
     );
     expect(strings.readyForRemotePlayback, 'Lista para reproducción remota');
+    expect(strings.liveOverlay, 'Overlay LIVE local');
+    expect(
+      strings.liveOverlayStarting,
+      'Preparando el dominio local para TikTok LIVE Studio...',
+    );
+    expect(strings.copyOverlayUrl, 'Copiar URL');
+    expect(strings.openOverlayPreview, 'Abrir vista previa');
+    expect(
+      strings.liveOverlayPermissionError,
+      'Windows no pudo configurar el dominio local. Inténtalo de nuevo y '
+      'acepta el permiso de administrador.',
+    );
+    expect(
+      strings.liveOverlayWindowsRequestTimeoutError,
+      'Windows no mostró o no completó a tiempo la solicitud de permiso. '
+      'Vuelve a intentarlo y revisa si el aviso de Control de cuentas de '
+      'usuario (UAC) quedó detrás de otra ventana.',
+    );
+    expect(
+      strings.liveOverlayPermissionCancelledError,
+      'Se canceló el permiso de administrador. La overlay no realizó cambios.',
+    );
+    expect(
+      strings.liveOverlayPolicyBlockedError,
+      contains('política de seguridad de Windows'),
+    );
+    expect(
+      strings.liveOverlayPowerShellUnavailableError,
+      contains('Windows PowerShell 5.1'),
+    );
+    expect(
+      strings.liveOverlayHostsConflictError('overlay.bstreammusic.test'),
+      'La configuración de la overlay tiene un conflicto en el archivo hosts. '
+      'Corrige la entrada de overlay.bstreammusic.test y vuelve a intentarlo.',
+    );
+    expect(
+      strings.liveOverlayPortUnavailableError,
+      'El puerto 80 no está disponible. Cierra la aplicación que lo esté usando '
+      'y vuelve a intentarlo.',
+    );
+    expect(
+      strings.liveOverlayEndpointVerificationError,
+      contains('proxy, VPN o antivirus'),
+    );
+    expect(strings.liveOverlayPortInUseError, contains('usando el puerto 80'));
+    expect(
+      strings.liveOverlayPortAccessError,
+      contains('reservó el puerto 80'),
+    );
     expect(strings.lastCommand, 'Último comando');
+  });
+
+  test('LIVE overlay status labels are localized', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(spanish.liveOverlayResolving, 'BUSCANDO');
+    expect(spanish.liveOverlayLoading, 'CARGANDO');
+    expect(spanish.noTitle, 'Sin título');
+    expect(english.liveOverlayResolving, 'SEARCHING');
+    expect(english.liveOverlayLoading, 'LOADING');
+    expect(english.noTitle, 'Untitled');
   });
 
   test('privacy and recommendation labels are localized', () {
@@ -191,6 +259,9 @@ void main() {
       spanish.animatedArtworkDescription,
       'Añade movimiento, profundidad y zoom sutiles a la portada del reproductor.',
     );
+    expect(spanish.playerArtworkStyle, 'Estilo de las portadas');
+    expect(spanish.playerArtworkStyleClassic, 'Clásico');
+    expect(spanish.playerArtworkStyleExpanded, 'Expandido');
     expect(spanish.miniPlayer, 'Mini reproductor');
     expect(spanish.miniPlayerStyle, 'Estilo');
     expect(spanish.miniPlayerClassic, 'Clásico');
@@ -214,6 +285,9 @@ void main() {
       english.animatedArtworkDescription,
       'Adds subtle motion, depth, and zoom to the player artwork.',
     );
+    expect(english.playerArtworkStyle, 'Artwork style');
+    expect(english.playerArtworkStyleClassic, 'Classic');
+    expect(english.playerArtworkStyleExpanded, 'Expanded');
     expect(english.miniPlayer, 'Mini player');
     expect(english.miniPlayerStyle, 'Style');
     expect(english.miniPlayerClassic, 'Classic');
@@ -248,6 +322,14 @@ void main() {
     expect(
       english.playerStyleLabel(PlayerStyle.appleMusic),
       'Apple Music Style',
+    );
+    expect(
+      spanish.playerArtworkStyleLabel(PlayerArtworkStyle.classic),
+      'Clásico',
+    );
+    expect(
+      english.playerArtworkStyleLabel(PlayerArtworkStyle.expanded),
+      'Expanded',
     );
     expect(spanish.minimizePlayer, 'Minimizar reproductor');
     expect(english.minimizePlayer, 'Minimize player');

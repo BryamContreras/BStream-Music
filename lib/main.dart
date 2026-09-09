@@ -115,15 +115,60 @@ class _LocalArtworkMaintenance extends ConsumerStatefulWidget {
 }
 
 class _LocalArtworkMaintenanceState
-    extends ConsumerState<_LocalArtworkMaintenance> {
+    extends ConsumerState<_LocalArtworkMaintenance>
+    with WidgetsBindingObserver {
+  static const _resumeRepairCooldown = Duration(seconds: 30);
+
+  Future<void>? _repairInFlight;
+  DateTime? _lastRepairStartedAt;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        unawaited(_repairStoredArtwork());
+        _requestArtworkRepair(force: true);
       }
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      // A legacy download may have started while offline or before artwork
+      // persistence existed. Resuming gives the cache/network repair another
+      // chance without touching its already downloaded audio.
+      _requestArtworkRepair();
+    }
+  }
+
+  void _requestArtworkRepair({bool force = false}) {
+    if (_repairInFlight != null) {
+      return;
+    }
+    final now = DateTime.now();
+    final previousStart = _lastRepairStartedAt;
+    if (!force &&
+        previousStart != null &&
+        now.difference(previousStart) < _resumeRepairCooldown) {
+      return;
+    }
+    _lastRepairStartedAt = now;
+    late final Future<void> repair;
+    repair = _repairStoredArtwork().whenComplete(() {
+      if (identical(_repairInFlight, repair)) {
+        _repairInFlight = null;
+      }
+    });
+    _repairInFlight = repair;
+    unawaited(repair);
   }
 
   Future<void> _repairStoredArtwork() async {

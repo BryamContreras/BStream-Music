@@ -21,6 +21,7 @@ import '../../../../services/app_update/github_release_checker.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
+import '../providers/live_overlay_controller.dart';
 import '../providers/music_providers.dart';
 import 'app_update_dialog.dart';
 import 'lyrics_animation_transition.dart';
@@ -359,6 +360,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         surfaceBackgroundMode: state.surfaceBackgroundMode,
         playerStyle: state.playerStyle,
         animatedArtworkEnabled: state.animatedArtworkEnabled,
+        playerArtworkStyle: state.playerArtworkStyle,
         miniPlayerMode: state.miniPlayerMode,
         miniPlayerBackgroundMode: state.miniPlayerBackgroundMode,
         strings: strings,
@@ -374,6 +376,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onAnimatedArtworkEnabledChanged: (enabled) => ref
             .read(settingsControllerProvider.notifier)
             .setAnimatedArtworkEnabled(enabled),
+        onPlayerArtworkStyleChanged: (style) => ref
+            .read(settingsControllerProvider.notifier)
+            .setPlayerArtworkStyle(style),
         onMiniPlayerModeChanged: (mode) => ref
             .read(settingsControllerProvider.notifier)
             .setMiniPlayerMode(mode),
@@ -1770,8 +1775,8 @@ class _AboutApplicationSettings extends StatelessWidget {
             "What's new in ${AppConstants.appVersion}",
           ),
           subtitle: strings.choose(
-            'iOS y Liquid Glass renovado',
-            'iOS and renewed Liquid Glass',
+            'Búsqueda, portadas, permisos LIVE y Overlay local para Windows',
+            'Search, artwork, LIVE permissions, and local overlay for Windows',
           ),
           onTap: () => _showWhatsNew(context),
         ),
@@ -1798,18 +1803,20 @@ class _AboutApplicationSettings extends StatelessWidget {
   Future<void> _showWhatsNew(BuildContext context) async {
     final highlights = strings.isEnglish
         ? const <String>[
-            'Native iOS 13+ support for playback, background audio, Now Playing, account sign-in, Media Library, and file export.',
-            'Renewed Liquid Glass surfaces with adaptive color refraction, continuous edges, localized hover, and smoother transitions.',
-            'Choose the BStream Music or Apple Music Style player, including animated artwork and responsive mobile layouts.',
-            'TikTok LIVE now uses the same direct transport on Android, iOS, Windows, Linux, and macOS.',
-            'Lyrics romanization, synchronized playlists, personalized recommendations, and bounded stream recovery are now integrated into the new architecture.',
+            'Search now includes a responsive discovery grid with YouTube Music moods and genres plus offline-safe fallback categories.',
+            'Fixed delays when loading song and video artwork, including during playback and offline use of downloaded songs.',
+            'The new Expanded artwork style is now available, extending and blurring the cover in both player layouts.',
+            'Improved animated artwork with more natural, varied, and fluid particle motion.',
+            'Expanded the permission filters for LIVE connection commands, including the Followers option.',
+            'Local LIVE overlay is now available on Windows through a TikTok LIVE Studio-compatible local domain, with the BStream logo beside the current song title and the LIVE queue.',
           ]
         : const <String>[
-            'Compatibilidad nativa con iOS 13 o posterior para reproducci\u00f3n, audio en segundo plano, Now Playing, inicio de sesi\u00f3n, biblioteca y exportaci\u00f3n.',
-            'Liquid Glass renovado con refracci\u00f3n adaptada al color, bordes continuos, hover localizado y transiciones m\u00e1s suaves.',
-            'Elige entre los reproductores BStream Music y Apple Music Style, con portada animada y dise\u00f1os m\u00f3viles adaptables.',
-            'TikTok LIVE ahora utiliza el mismo transporte directo en Android, iOS, Windows, Linux y macOS.',
-            'La romanizaci\u00f3n de letras, las playlists sincronizadas, las recomendaciones y la recuperaci\u00f3n de streams forman parte de la nueva arquitectura.',
+            'Búsqueda ahora incluye una cuadrícula adaptable de estados de ánimo y géneros de YouTube Music, con categorías de respaldo disponibles sin conexión.',
+            'Se solucionaron los retrasos al cargar las portadas de canciones y videos, incluso durante la reproducción y al usar descargas sin conexión.',
+            'Ya está disponible el nuevo estilo de portadas Expandido, que extiende y difumina la imagen en ambos estilos de reproductor.',
+            'Se mejoraron las portadas animadas con partículas más naturales, variadas y fluidas.',
+            'Se ampliaron los filtros de permisos para los comandos de la conexión LIVE, incluida la opción Seguidores.',
+            'Overlay LIVE local ya está disponible en Windows mediante un dominio local compatible con TikTok LIVE Studio, con el logo de BStream junto al título de la canción actual y la cola LIVE.',
           ];
     await showAppDialog<void>(
       context: context,
@@ -2050,6 +2057,62 @@ class _PlayerStyleSelectorDialog extends StatelessWidget {
   }
 }
 
+class _PlayerArtworkStyleSelectorDialog extends StatelessWidget {
+  const _PlayerArtworkStyleSelectorDialog({
+    required this.style,
+    required this.strings,
+  });
+
+  final PlayerArtworkStyle style;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppAlertDialog(
+      key: const ValueKey('settings-player-artwork-style-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(strings.playerArtworkStyle),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-player-artwork-style-option-classic',
+              ),
+              selected: style == PlayerArtworkStyle.classic,
+              icon: Icons.crop_square_rounded,
+              label: strings.playerArtworkStyleClassic,
+              onTap: () =>
+                  Navigator.of(context).pop(PlayerArtworkStyle.classic),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey(
+                'settings-player-artwork-style-option-expanded',
+              ),
+              selected: style == PlayerArtworkStyle.expanded,
+              icon: Icons.aspect_ratio_rounded,
+              label: strings.playerArtworkStyleExpanded,
+              onTap: () =>
+                  Navigator.of(context).pop(PlayerArtworkStyle.expanded),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('settings-player-artwork-style-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+      ],
+    );
+  }
+}
+
 class _MiniPlayerModeSelectorDialog extends StatelessWidget {
   const _MiniPlayerModeSelectorDialog({
     required this.mode,
@@ -2258,6 +2321,7 @@ class _AppearanceSettings extends StatelessWidget {
     required this.surfaceBackgroundMode,
     required this.playerStyle,
     required this.animatedArtworkEnabled,
+    required this.playerArtworkStyle,
     required this.miniPlayerMode,
     required this.miniPlayerBackgroundMode,
     required this.strings,
@@ -2266,6 +2330,7 @@ class _AppearanceSettings extends StatelessWidget {
     required this.onSurfaceBackgroundModeChanged,
     required this.onPlayerStyleChanged,
     required this.onAnimatedArtworkEnabledChanged,
+    required this.onPlayerArtworkStyleChanged,
     required this.onMiniPlayerModeChanged,
     required this.onMiniPlayerBackgroundModeChanged,
   });
@@ -2275,6 +2340,7 @@ class _AppearanceSettings extends StatelessWidget {
   final SurfaceBackgroundMode surfaceBackgroundMode;
   final PlayerStyle playerStyle;
   final bool animatedArtworkEnabled;
+  final PlayerArtworkStyle playerArtworkStyle;
   final MiniPlayerMode miniPlayerMode;
   final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final AppStrings strings;
@@ -2284,6 +2350,7 @@ class _AppearanceSettings extends StatelessWidget {
   onSurfaceBackgroundModeChanged;
   final Future<void> Function(PlayerStyle) onPlayerStyleChanged;
   final Future<void> Function(bool) onAnimatedArtworkEnabledChanged;
+  final Future<void> Function(PlayerArtworkStyle) onPlayerArtworkStyleChanged;
   final Future<void> Function(MiniPlayerMode) onMiniPlayerModeChanged;
   final Future<void> Function(MiniPlayerBackgroundMode)
   onMiniPlayerBackgroundModeChanged;
@@ -2310,6 +2377,22 @@ class _AppearanceSettings extends StatelessWidget {
       return;
     }
     await onPlayerStyleChanged(selected);
+  }
+
+  Future<void> _choosePlayerArtworkStyle(BuildContext context) async {
+    final selected = await showAppDialog<PlayerArtworkStyle>(
+      context: context,
+      builder: (_) => _PlayerArtworkStyleSelectorDialog(
+        style: playerArtworkStyle,
+        strings: strings,
+      ),
+    );
+    if (!context.mounted ||
+        selected == null ||
+        selected == playerArtworkStyle) {
+      return;
+    }
+    await onPlayerArtworkStyleChanged(selected);
   }
 
   Future<void> _chooseSurfaceBackgroundMode(BuildContext context) async {
@@ -2483,6 +2566,17 @@ class _AppearanceSettings extends StatelessWidget {
               value: animatedArtworkEnabled,
               onChanged: onAnimatedArtworkEnabledChanged,
             ),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('player-artwork-style-selector'),
+            icon: switch (playerArtworkStyle) {
+              PlayerArtworkStyle.classic => Icons.crop_square_rounded,
+              PlayerArtworkStyle.expanded => Icons.aspect_ratio_rounded,
+            },
+            title: strings.playerArtworkStyle,
+            subtitle: strings.playerArtworkStyleLabel(playerArtworkStyle),
+            onTap: () => _choosePlayerArtworkStyle(context),
           ),
           const SizedBox(height: 24),
           Text(
@@ -4308,6 +4402,57 @@ class _TikTokLiveSettings extends StatelessWidget {
             },
           ),
           const SizedBox(height: 12),
+          Column(
+            key: const ValueKey('tiktok-live-session-details'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(_statusIcon(state.status), color: statusColor, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      state.message,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: statusColor),
+                    ),
+                  ),
+                ],
+              ),
+              if (state.roomId != null && state.roomId!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '${strings.roomId}: ${state.roomId}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+              if (state.pendingPlayCommands > 0) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '${strings.pendingRequests}: ${state.pendingPlayCommands}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+              if (state.lastCommand != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '${strings.lastCommand}: ${state.lastCommand!.text}'
+                  '${_commandRoleSuffix(state.lastCommand!, strings)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ],
+          ),
+          const _LiveOverlayServerControl(),
+          const SizedBox(height: 12),
           Text(
             strings.commandPermissions,
             style: appSecondaryLabelStyle(context),
@@ -4315,6 +4460,13 @@ class _TikTokLiveSettings extends StatelessWidget {
           const SizedBox(height: 8),
           _TikTokCommandAudienceSection(
             audience: TikTokCommandAudience.everyone,
+            permissions: state.commandPermissions,
+            strings: strings,
+            onChanged: onCommandPermissionChanged,
+          ),
+          const SizedBox(height: 10),
+          _TikTokCommandAudienceSection(
+            audience: TikTokCommandAudience.followers,
             permissions: state.commandPermissions,
             strings: strings,
             onChanged: onCommandPermissionChanged,
@@ -4333,50 +4485,6 @@ class _TikTokLiveSettings extends StatelessWidget {
             strings: strings,
             onChanged: onCommandPermissionChanged,
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Icon(_statusIcon(state.status), color: statusColor, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  state.message,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: statusColor),
-                ),
-              ),
-            ],
-          ),
-          if (state.roomId != null && state.roomId!.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-              '${strings.roomId}: ${state.roomId}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-          if (state.pendingPlayCommands > 0) ...[
-            const SizedBox(height: 6),
-            Text(
-              '${strings.pendingRequests}: ${state.pendingPlayCommands}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.primary,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-          if (state.lastCommand != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              '${strings.lastCommand}: ${state.lastCommand!.text}'
-              '${_commandRoleSuffix(state.lastCommand!, strings)}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
         ],
       ),
     );
@@ -4395,9 +4503,119 @@ class _TikTokLiveSettings extends StatelessWidget {
   String _commandRoleSuffix(TikTokLiveChatCommand command, AppStrings strings) {
     final roles = <String>[
       if (command.isModerator) strings.moderator,
+      if (command.isFollower) strings.follower,
       if (command.isSubscriber) strings.subscriber,
     ];
     return roles.isEmpty ? '' : ' - ${roles.join(', ')}';
+  }
+}
+
+class _LiveOverlayServerControl extends ConsumerWidget {
+  const _LiveOverlayServerControl();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final available = ref.watch(liveOverlayAvailableProvider);
+    if (!available || Theme.of(context).platform != TargetPlatform.windows) {
+      return const SizedBox.shrink();
+    }
+
+    final overlay = ref.watch(liveOverlayControllerProvider);
+    final live = ref.watch(tiktokLiveControllerProvider).value;
+    final strings = ref.watch(appStringsProvider);
+    final connected = live?.isConnected ?? false;
+    final canStop = overlay.isActive;
+    final canStart =
+        connected &&
+        !overlay.isBusy &&
+        !overlay.isActive &&
+        overlay.status != LiveOverlayStatus.unsupported;
+    final canToggle = canStop || canStart;
+    final subtitle = switch (overlay.status) {
+      LiveOverlayStatus.inactive =>
+        connected
+            ? strings.liveOverlayInactive
+            : strings.liveOverlayConnectFirst,
+      LiveOverlayStatus.starting => strings.liveOverlayStarting,
+      LiveOverlayStatus.active =>
+        overlay.error ??
+            strings.liveOverlayActive(
+              (overlay.url ?? Uri.parse(liveOverlayUrl)).toString(),
+            ),
+      LiveOverlayStatus.stopping => strings.liveOverlayStopping,
+      LiveOverlayStatus.unsupported =>
+        overlay.error ?? strings.liveOverlayUnsupported,
+      LiveOverlayStatus.error => overlay.error ?? strings.liveOverlayError,
+    };
+
+    void toggle() {
+      final controller = ref.read(liveOverlayControllerProvider.notifier);
+      if (overlay.isActive) {
+        unawaited(controller.stop());
+      } else if (canStart) {
+        unawaited(controller.start());
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: _SettingsEntryCard(
+        key: const ValueKey('tiktok-live-overlay-card'),
+        icon: overlay.isActive ? Icons.language_rounded : Icons.web_rounded,
+        title: strings.liveOverlay,
+        subtitle: subtitle,
+        onTap: canToggle ? toggle : null,
+        accent:
+            overlay.status == LiveOverlayStatus.error ||
+                overlay.status == LiveOverlayStatus.unsupported
+            ? Theme.of(context).colorScheme.error
+            : null,
+        trailing: overlay.isBusy
+            ? const SizedBox.square(
+                key: ValueKey('tiktok-live-overlay-progress'),
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.4),
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (overlay.isActive) ...[
+                    IconButton(
+                      key: const ValueKey('tiktok-live-overlay-copy-url'),
+                      tooltip: strings.copyOverlayUrl,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => unawaited(
+                        Clipboard.setData(
+                          ClipboardData(
+                            text: (overlay.url ?? Uri.parse(liveOverlayUrl))
+                                .toString(),
+                          ),
+                        ),
+                      ),
+                      icon: const Icon(Icons.content_copy_rounded, size: 20),
+                    ),
+                    IconButton(
+                      key: const ValueKey('tiktok-live-overlay-preview'),
+                      tooltip: strings.openOverlayPreview,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => unawaited(
+                        launchUrl(
+                          overlay.url ?? Uri.parse(liveOverlayUrl),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                      ),
+                      icon: const Icon(Icons.open_in_new_rounded, size: 20),
+                    ),
+                  ],
+                  Switch.adaptive(
+                    key: const ValueKey('tiktok-live-overlay-switch'),
+                    value: overlay.isActive,
+                    onChanged: canToggle ? (_) => toggle() : null,
+                  ),
+                ],
+              ),
+      ),
+    );
   }
 }
 
@@ -4501,18 +4719,21 @@ class _TikTokCommandAudienceSection extends StatelessWidget {
 
   IconData get _icon => switch (audience) {
     TikTokCommandAudience.everyone => Icons.groups_rounded,
+    TikTokCommandAudience.followers => Icons.person_add_alt_1_rounded,
     TikTokCommandAudience.moderators => Icons.shield_rounded,
     TikTokCommandAudience.subscribers => Icons.workspace_premium_rounded,
   };
 
   String get _title => switch (audience) {
     TikTokCommandAudience.everyone => strings.everyone,
+    TikTokCommandAudience.followers => strings.followers,
     TikTokCommandAudience.moderators => strings.moderators,
     TikTokCommandAudience.subscribers => strings.subscribers,
   };
 
   String get _hint => switch (audience) {
     TikTokCommandAudience.everyone => strings.everyoneCommandPermissionsHint,
+    TikTokCommandAudience.followers => strings.followerCommandPermissionsHint,
     TikTokCommandAudience.moderators => strings.moderatorCommandPermissionsHint,
     TikTokCommandAudience.subscribers =>
       strings.subscriberCommandPermissionsHint,

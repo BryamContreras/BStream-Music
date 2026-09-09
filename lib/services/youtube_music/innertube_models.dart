@@ -190,6 +190,70 @@ class InnerTubeArtist {
   int get hashCode => Object.hash(browseId, name, thumbnailUrl);
 }
 
+/// Opaque navigation target advertised by a YouTube Music browse response.
+///
+/// [params] is intentionally kept as an uninterpreted string. Mood and genre
+/// buttons commonly share a browse ID and are distinguished only by this
+/// server-provided value, so callers must preserve the pair exactly.
+final class InnerTubeBrowseTarget {
+  const InnerTubeBrowseTarget({required this.browseId, required this.params});
+
+  final String browseId;
+  final String params;
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is InnerTubeBrowseTarget &&
+            browseId == other.browseId &&
+            params == other.params;
+  }
+
+  @override
+  int get hashCode => Object.hash(browseId, params);
+}
+
+/// One navigable mood or genre exposed by YouTube Music.
+final class InnerTubeMoodGenreCategory {
+  const InnerTubeMoodGenreCategory({required this.title, required this.target});
+
+  final String title;
+  final InnerTubeBrowseTarget target;
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is InnerTubeMoodGenreCategory &&
+            title == other.title &&
+            target == other.target;
+  }
+
+  @override
+  int get hashCode => Object.hash(title, target);
+}
+
+/// A localized group of mood/genre buttons, such as "Genres" or "Moods".
+final class InnerTubeMoodGenreSection {
+  InnerTubeMoodGenreSection({
+    required this.title,
+    required List<InnerTubeMoodGenreCategory> categories,
+  }) : categories = List<InnerTubeMoodGenreCategory>.unmodifiable(categories);
+
+  final String title;
+  final List<InnerTubeMoodGenreCategory> categories;
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is InnerTubeMoodGenreSection &&
+            title == other.title &&
+            InnerTubeSong._listsEqual(categories, other.categories);
+  }
+
+  @override
+  int get hashCode => Object.hash(title, Object.hashAll(categories));
+}
+
 /// Structured content exposed by a YouTube Music artist browse page.
 class InnerTubeArtistProfile {
   InnerTubeArtistProfile({
@@ -419,4 +483,31 @@ class InnerTubeHomeSection {
 
   @override
   int get hashCode => Object.hash(title, Object.hashAll(items));
+}
+
+/// One page of content for a selected mood or genre.
+///
+/// Sections deliberately reuse the same heterogeneous Home item model because
+/// category pages expose the same song, artist, album-like playlist and mix
+/// renderers. [continuation] is opaque and can be passed to the corresponding
+/// continuation API without retaining the initial browse parameters.
+final class InnerTubeMoodGenrePage {
+  InnerTubeMoodGenrePage({
+    required List<InnerTubeHomeSection> sections,
+    this.continuation,
+  }) : sections = List<InnerTubeHomeSection>.unmodifiable(sections);
+
+  final List<InnerTubeHomeSection> sections;
+  final String? continuation;
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is InnerTubeMoodGenrePage &&
+            continuation == other.continuation &&
+            InnerTubeSong._listsEqual(sections, other.sections);
+  }
+
+  @override
+  int get hashCode => Object.hash(Object.hashAll(sections), continuation);
 }

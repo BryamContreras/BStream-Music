@@ -131,6 +131,21 @@ void main() {
       );
     });
 
+    test('keeps the exact catalog frame for a video search result', () {
+      const exact =
+          'https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg?catalog=1';
+      const track = TrackInfo(
+        id: 'abcdefghijk',
+        title: 'Video',
+        artist: 'Artist',
+        url: 'https://www.youtube.com/watch?v=abcdefghijk',
+        thumbnailUrl: 'https://i.ytimg.com/vi/abcdefghijk/hq720.jpg',
+        catalogThumbnailUrl: exact,
+      );
+
+      expect(PlaybackIdentity.stableRemoteThumbnail(track), exact);
+    });
+
     test('prefers queue identity when matching a pending snapshot', () {
       const pending = PlayerSnapshot(
         status: PlayerStatus.loading,

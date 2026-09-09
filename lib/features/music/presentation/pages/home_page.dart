@@ -1146,6 +1146,8 @@ class _HomePageState extends ConsumerState<HomePage> {
               defaultMiniPlayerBackgroundMode,
           surfaceMode: settings.value?.surfaceBackgroundMode,
           playerStyle: settings.value?.playerStyle ?? defaultPlayerStyle,
+          playerArtworkStyle:
+              settings.value?.playerArtworkStyle ?? defaultPlayerArtworkStyle,
           animatedArtworkEnabled:
               settings.value?.animatedArtworkEnabled ??
               defaultAnimatedArtworkEnabled,
@@ -1154,6 +1156,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
     final miniPlayerMode = miniPlayerAppearance.mode;
     final playerStyle = miniPlayerAppearance.playerStyle;
+    final playerArtworkStyle = miniPlayerAppearance.playerArtworkStyle;
     final animatedArtworkEnabled = miniPlayerAppearance.animatedArtworkEnabled;
     // ThemeExtension modes switch halfway through AnimatedTheme.lerp. Use the
     // persisted setting for structural shell behavior so a scroll gesture
@@ -1415,6 +1418,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                                           settingsNavigationController:
                                               _settingsNavigationController,
                                           playerStyle: playerStyle,
+                                          playerArtworkStyle:
+                                              playerArtworkStyle,
                                           animatedArtworkEnabled:
                                               animatedArtworkEnabled,
                                           onOpenPlayer: _openPlayer,
@@ -2608,6 +2613,7 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.localMusicNavigationController,
     required this.settingsNavigationController,
     required this.playerStyle,
+    required this.playerArtworkStyle,
     required this.animatedArtworkEnabled,
     required this.onOpenPlayer,
     required this.onCollapsePlayer,
@@ -2631,6 +2637,7 @@ class _PersistentCurrentViews extends StatefulWidget {
   final LocalMusicNavigationController localMusicNavigationController;
   final SettingsNavigationController settingsNavigationController;
   final PlayerStyle playerStyle;
+  final PlayerArtworkStyle playerArtworkStyle;
   final bool animatedArtworkEnabled;
   final VoidCallback onOpenPlayer;
   final VoidCallback onCollapsePlayer;
@@ -2770,6 +2777,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             ),
             bottomPadding: widget.viewportBottomPadding,
             child: SearchView(
+              active: widget.selectedIndex == widget.searchIndex,
               bottomContentPadding: widget.contentBottomPadding,
               onOpenPlayer: widget.onOpenPlayer,
               onAddToPlaylist: widget.onAddRemoteTracksToPlaylist,
@@ -2838,6 +2846,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               onCollapse: widget.onCollapsePlayer,
               drawBackground: false,
               style: widget.playerStyle,
+              artworkStyle: widget.playerArtworkStyle,
               animatedArtworkEnabled: widget.animatedArtworkEnabled,
               trackTransitionsEnabled:
                   widget.selectedIndex == widget.playerIndex &&

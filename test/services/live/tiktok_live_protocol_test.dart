@@ -17,10 +17,12 @@ void main() {
     final user = protoWrite((writer) {
       writer.writeStringField(3, 'Moderator');
       writer.writeStringField(38, 'mod.viewer');
+      writer.writeBoolField(1029, true);
       writer.writeBoolField(1090, true);
     });
     final identity = protoWrite((writer) {
       writer.writeBoolField(2, true);
+      writer.writeBoolField(4, true);
       writer.writeBoolField(5, true);
     });
     final message = protoWrite((writer) {
@@ -39,7 +41,16 @@ void main() {
       'mod.viewer',
     );
     expect(
+      (decoded.data['user'] as Map<String, dynamic>)['isFollower'],
+      isTrue,
+    );
+    expect(
       (decoded.data['user'] as Map<String, dynamic>)['isSubscribe'],
+      isTrue,
+    );
+    expect(
+      (decoded.data['userIdentity']
+          as Map<String, dynamic>)['isFollowerOfAnchor'],
       isTrue,
     );
     expect(

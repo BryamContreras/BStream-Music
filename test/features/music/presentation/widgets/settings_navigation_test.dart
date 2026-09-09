@@ -492,6 +492,9 @@ void main() {
     final animatedArtworkSwitch = find.byKey(
       const ValueKey('animated-artwork-switch'),
     );
+    final playerArtworkStyleSelector = find.byKey(
+      const ValueKey('player-artwork-style-selector'),
+    );
     final surfaceBackgroundSelector = find.byKey(
       const ValueKey('surface-background-selector'),
     );
@@ -502,6 +505,7 @@ void main() {
     expect(playerStyleSelector, findsOneWidget);
     expect(animatedArtworkToggle, findsOneWidget);
     expect(animatedArtworkSwitch, findsOneWidget);
+    expect(playerArtworkStyleSelector, findsOneWidget);
     expect(surfaceBackgroundSelector, findsOneWidget);
     expect(backgroundSelector, findsOneWidget);
     expect(find.text('Efectos de superficie'), findsOneWidget);
@@ -522,6 +526,20 @@ void main() {
       findsOneWidget,
     );
     expect(tester.widget<Switch>(animatedArtworkSwitch).value, isTrue);
+    expect(
+      find.descendant(
+        of: playerArtworkStyleSelector,
+        matching: find.text('Estilo de las portadas'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: playerArtworkStyleSelector,
+        matching: find.text('Clásico'),
+      ),
+      findsOneWidget,
+    );
     expect(
       find.descendant(of: selector, matching: find.text('Estilo')),
       findsOneWidget,
@@ -561,11 +579,15 @@ void main() {
     );
     expect(
       tester.getTopLeft(selector).dy,
-      greaterThan(tester.getTopLeft(animatedArtworkToggle).dy),
+      greaterThan(tester.getTopLeft(playerArtworkStyleSelector).dy),
     );
     expect(
       tester.getTopLeft(animatedArtworkToggle).dy,
       greaterThan(tester.getTopLeft(playerStyleSelector).dy),
+    );
+    expect(
+      tester.getTopLeft(playerArtworkStyleSelector).dy,
+      greaterThan(tester.getTopLeft(animatedArtworkToggle).dy),
     );
     expect(
       tester.getTopLeft(backgroundSelector).dy,
@@ -663,6 +685,45 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.widget<Switch>(animatedArtworkSwitch).value, isFalse);
+
+    await tester.ensureVisible(playerArtworkStyleSelector);
+    await tester.tap(playerArtworkStyleSelector);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-player-artwork-style-dialog')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('settings-player-artwork-style-option-classic'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('settings-player-artwork-style-option-expanded'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        const ValueKey('settings-player-artwork-style-option-expanded'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-player-artwork-style-dialog')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: playerArtworkStyleSelector,
+        matching: find.text('Expandido'),
+      ),
+      findsOneWidget,
+    );
 
     await tester.ensureVisible(selector);
     await tester.tap(selector);
@@ -2247,6 +2308,12 @@ class _FixedSettingsController extends SettingsController {
   Future<void> setAnimatedArtworkEnabled(bool enabled) async {
     final current = await future;
     state = AsyncData(current.copyWith(animatedArtworkEnabled: enabled));
+  }
+
+  @override
+  Future<void> setPlayerArtworkStyle(PlayerArtworkStyle style) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(playerArtworkStyle: style));
   }
 
   @override

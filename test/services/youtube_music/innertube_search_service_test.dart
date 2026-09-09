@@ -563,6 +563,75 @@ void main() {
     );
 
     test(
+      'resolves canonical duration even when anonymous playback is rejected',
+      () async {
+        const videoId = 'Duration_01';
+        transport.response = InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: jsonEncode({
+            ..._playerPayload(
+              videoId: videoId,
+              title: 'Canonical duration',
+              author: 'Artist',
+              lengthSeconds: '239',
+            ),
+            'playabilityStatus': {'status': 'UNPLAYABLE'},
+            'microformat': {
+              'microformatDataRenderer': {
+                'videoDetails': {'durationSeconds': '240'},
+              },
+            },
+          }),
+        );
+        final service = createService();
+
+        final duration = await service.getSongDuration(videoId);
+
+        expect(duration, const Duration(minutes: 4));
+        expect(transport.requests.single.uri.path, '/player');
+        expect(transport.requests.single.body['videoId'], videoId);
+      },
+    );
+
+    test(
+      'deduplicates concurrent duration lookups and caches successes',
+      () async {
+        const videoId = 'Duration_02';
+        transport.response = InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: jsonEncode(
+            _playerPayload(
+              videoId: videoId,
+              title: 'Cached duration',
+              author: 'Artist',
+              lengthSeconds: '211',
+            ),
+          ),
+        );
+        final requestGate = Completer<void>();
+        transport.postJsonGate = requestGate;
+        final service = createService();
+
+        final first = service.getSongDuration(videoId);
+        await _waitUntil(() => transport.requests.length == 1);
+        final concurrent = service.getSongDuration(videoId);
+
+        expect(transport.requests, hasLength(1));
+        requestGate.complete();
+        expect(
+          await Future.wait(<Future<Duration?>>[first, concurrent]),
+          everyElement(const Duration(minutes: 3, seconds: 31)),
+        );
+
+        expect(
+          await service.getSongDuration(videoId),
+          const Duration(minutes: 3, seconds: 31),
+        );
+        expect(transport.requests, hasLength(1));
+      },
+    );
+
+    test(
       'fills artist shelf durations from player metadata without replacing profile fields',
       () async {
         transport.responses.addAll([
@@ -1921,6 +1990,280 @@ void main() {
         isTrue,
       );
     });
+
+    test(
+      'discovers localized moods and genres from the fixed browse root',
+      () async {
+        transport.response = InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: jsonEncode(
+            _moodsAndGenresPayload([
+              _moodGenreSection(
+                title: 'Estados de ánimo y momentos',
+                buttons: [
+                  _moodGenreButton(
+                    title: 'Relajación',
+                    browseId: 'FEmusic_moods_and_genres_category',
+                    params: 'ggMPOg1yZWxheA%3D%3D',
+                  ),
+                  _moodGenreButton(
+                    title: 'Energía',
+                    browseId: 'FEmusic_moods_and_genres_category',
+                    params: 'ggMPOgZlbmVyZ3k%3D',
+                    useNavigationEndpoint: true,
+                  ),
+                ],
+              ),
+              _moodGenreSection(
+                title: 'Géneros',
+                rendererName: 'musicGridRenderer',
+                buttons: [
+                  _moodGenreButton(
+                    title: 'Rock',
+                    browseId: 'FEmusic_moods_and_genres_category',
+                    params: 'ggMPOgRyb2Nr',
+                  ),
+                ],
+              ),
+            ]),
+          ),
+        );
+        final service = createService();
+
+        final sections = await service.getMoodsAndGenres();
+
+        expect(sections.map((section) => section.title), [
+          'Estados de ánimo y momentos',
+          'Géneros',
+        ]);
+        expect(sections.first.categories.map((category) => category.title), [
+          'Relajación',
+          'Energía',
+        ]);
+        expect(
+          sections.first.categories.last.target,
+          const InnerTubeBrowseTarget(
+            browseId: 'FEmusic_moods_and_genres_category',
+            params: 'ggMPOgZlbmVyZ3k%3D',
+          ),
+        );
+        expect(sections.last.categories.single.title, 'Rock');
+
+        final request = transport.requests.single;
+        expect(request.uri.path, '/browse');
+        expect(
+          request.body['browseId'],
+          InnerTubeSearchService.moodsAndGenresBrowseId,
+        );
+        expect(request.body, isNot(contains('params')));
+        expect(request.body, isNot(contains('continuation')));
+        expect(transport.getRequests, hasLength(1));
+      },
+    );
+
+    test(
+      'category detail sends opaque params and continuation sends only its token',
+      () async {
+        transport.responses.addAll([
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(
+              _moodGenreDetailPayload(continuation: 'MOOD_PAGE_2'),
+            ),
+          ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(
+              _moodGenreShelfContinuationPayload(continuation: 'MOOD_PAGE_3'),
+            ),
+          ),
+        ]);
+        final service = createService();
+
+        final first = await service.getMoodOrGenre(
+          const InnerTubeBrowseTarget(
+            browseId: ' FEmusic_moods_and_genres_category ',
+            params: ' ggMPOg1yZWxheA%3D%3D ',
+          ),
+        );
+        final second = await service.getMoodOrGenreContinuation(
+          ' MOOD_PAGE_2 ',
+        );
+
+        expect(first.sections.map((section) => section.title), [
+          'Playlists para relajarte',
+          'Canciones para relajarte',
+        ]);
+        expect(
+          first.sections.first.collections.single.browseId,
+          'VLPLmoodrelax001',
+        );
+        expect(first.sections.last.songs.single.videoId, 'mood-song-1');
+        expect(first.continuation, 'MOOD_PAGE_2');
+        expect(second.sections.single.title, isEmpty);
+        expect(second.sections.single.songs.single.videoId, 'mood-page-2');
+        expect(second.continuation, 'MOOD_PAGE_3');
+
+        expect(transport.requests, hasLength(2));
+        expect(
+          transport.requests.first.body['browseId'],
+          'FEmusic_moods_and_genres_category',
+        );
+        expect(transport.requests.first.body['params'], 'ggMPOg1yZWxheA%3D%3D');
+        expect(transport.requests.first.body, isNot(contains('continuation')));
+        expect(transport.requests.last.body['continuation'], 'MOOD_PAGE_2');
+        expect(transport.requests.last.body, isNot(contains('browseId')));
+        expect(transport.requests.last.body, isNot(contains('params')));
+        expect(transport.getRequests, hasLength(1));
+      },
+    );
+
+    test(
+      'mood and genre validation rejects unsafe values before bootstrap',
+      () async {
+        final service = createService();
+
+        await expectLater(
+          service.getMoodsAndGenres(maxSections: 0),
+          throwsRangeError,
+        );
+        await expectLater(
+          service.getMoodsAndGenres(
+            maxCategoriesPerSection:
+                InnerTubeSearchService.maxMoodGenreCategoriesPerSection + 1,
+          ),
+          throwsRangeError,
+        );
+        await expectLater(
+          service.getMoodOrGenre(
+            const InnerTubeBrowseTarget(
+              browseId: 'FEmusic invalid',
+              params: 'opaque',
+            ),
+          ),
+          throwsArgumentError,
+        );
+        await expectLater(
+          service.getMoodOrGenre(
+            const InnerTubeBrowseTarget(
+              browseId: 'FEmusic_moods_and_genres_category',
+              params: ' ',
+            ),
+          ),
+          throwsArgumentError,
+        );
+        await expectLater(
+          service.getMoodOrGenre(
+            InnerTubeBrowseTarget(
+              browseId: 'FEmusic_moods_and_genres_category',
+              params: 'x${String.fromCharCode(0)}y',
+            ),
+          ),
+          throwsArgumentError,
+        );
+        await expectLater(
+          service.getMoodOrGenre(
+            InnerTubeBrowseTarget(
+              browseId: 'FEmusic_moods_and_genres_category',
+              params: List<String>.filled(8193, 'x').join(),
+            ),
+          ),
+          throwsArgumentError,
+        );
+        await expectLater(
+          service.getMoodOrGenre(
+            const InnerTubeBrowseTarget(
+              browseId: 'FEmusic_moods_and_genres_category',
+              params: 'opaque',
+            ),
+            maxItemsPerSection: 0,
+          ),
+          throwsRangeError,
+        );
+        await expectLater(
+          service.getMoodOrGenreContinuation(
+            'bad${String.fromCharCode(10)}token',
+          ),
+          throwsArgumentError,
+        );
+
+        expect(transport.getRequests, isEmpty);
+        expect(transport.requests, isEmpty);
+      },
+    );
+
+    test(
+      'category browse refreshes bootstrap once and preserves its target',
+      () async {
+        transport.responses.addAll([
+          const InnerTubeHttpResponse(
+            statusCode: HttpStatus.forbidden,
+            body: '{"error":"stale client"}',
+          ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(_moodGenreDetailPayload()),
+          ),
+        ]);
+        final service = createService();
+        const target = InnerTubeBrowseTarget(
+          browseId: 'FEmusic_moods_and_genres_category',
+          params: 'opaque-category-params',
+        );
+
+        final page = await service.getMoodOrGenre(target);
+
+        expect(page.sections, isNotEmpty);
+        expect(transport.getRequests, hasLength(2));
+        expect(transport.requests, hasLength(2));
+        expect(
+          transport.requests.map((request) => request.body['browseId']),
+          everyElement(target.browseId),
+        );
+        expect(
+          transport.requests.map((request) => request.body['params']),
+          everyElement(target.params),
+        );
+      },
+    );
+
+    test(
+      'mood and genre browse preserves typed HTTP and JSON errors',
+      () async {
+        transport.response = const InnerTubeHttpResponse(
+          statusCode: HttpStatus.tooManyRequests,
+          body: '{"error":"slow down moods"}',
+        );
+        final service = createService();
+
+        await expectLater(
+          service.getMoodsAndGenres(),
+          throwsA(
+            isA<InnerTubeHttpException>()
+                .having((error) => error.statusCode, 'statusCode', 429)
+                .having(
+                  (error) => error.body,
+                  'body',
+                  contains('slow down moods'),
+                ),
+          ),
+        );
+
+        transport.response = const InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: 'not-json',
+        );
+        await expectLater(
+          service.getMoodOrGenre(
+            const InnerTubeBrowseTarget(
+              browseId: 'FEmusic_moods_and_genres_category',
+              params: 'opaque-category-params',
+            ),
+          ),
+          throwsA(isA<InnerTubeFormatException>()),
+        );
+      },
+    );
   });
 
   group('InnerTubeSearchParser', () {
@@ -1948,6 +2291,39 @@ void main() {
         result.single.duration,
         const Duration(hours: 1, minutes: 2, seconds: 3),
       );
+    });
+
+    test('extracts duration from compact structured renderer fields', () {
+      final lengthTextItem = _songRenderer(
+        videoId: 'length-text',
+        title: 'Length text',
+        artists: const ['Artist'],
+      );
+      final lengthTextRenderer =
+          lengthTextItem['musicResponsiveListItemRenderer']!
+              as Map<String, Object>;
+      lengthTextRenderer['lengthText'] = const <String, Object>{
+        'simpleText': '3:47',
+      };
+
+      final secondsItem = _songRenderer(
+        videoId: 'duration-seconds',
+        title: 'Duration seconds',
+        artists: const ['Artist'],
+      );
+      final secondsRenderer =
+          secondsItem['musicResponsiveListItemRenderer']!
+              as Map<String, Object>;
+      secondsRenderer['playbackData'] = const <String, Object>{
+        'durationSeconds': '248',
+      };
+
+      final result = parser.parse(
+        _searchPayload(<Map<String, Object>>[lengthTextItem, secondsItem]),
+      );
+
+      expect(result.first.duration, const Duration(minutes: 3, seconds: 47));
+      expect(result.last.duration, const Duration(minutes: 4, seconds: 8));
     });
 
     test('uses watchEndpoint when playlistItemData is absent', () {
@@ -2199,6 +2575,114 @@ void main() {
         ),
         throwsRangeError,
       );
+    });
+  });
+
+  group('InnerTubeMoodsAndGenresParser', () {
+    const parser = InnerTubeMoodsAndGenresParser();
+
+    test('supports clickCommand and navigationEndpoint with stable dedupe', () {
+      final duplicate = _moodGenreButton(
+        title: 'Duplicate title',
+        browseId: 'FEmusic_moods_and_genres_category',
+        params: 'same-target',
+      );
+      final sections = parser.parse(
+        _moodsAndGenresPayload([
+          _moodGenreSection(
+            title: 'Moods',
+            buttons: [
+              duplicate,
+              duplicate,
+              _moodGenreButton(
+                title: 'Same ID, another category',
+                browseId: 'FEmusic_moods_and_genres_category',
+                params: 'another-target',
+                useNavigationEndpoint: true,
+              ),
+              _moodGenreButton(
+                title: 'Missing params',
+                browseId: 'FEmusic_moods_and_genres_category',
+              ),
+            ],
+          ),
+          _moodGenreSection(title: 'Genres', buttons: [duplicate]),
+        ]),
+      );
+
+      expect(sections, hasLength(1));
+      expect(sections.single.categories.map((category) => category.title), [
+        'Duplicate title',
+        'Same ID, another category',
+      ]);
+      expect(
+        sections.single.categories.map((category) => category.target.params),
+        ['same-target', 'another-target'],
+      );
+    });
+
+    test('supports grid shelves and bounds category counts', () {
+      final sections = parser.parse(
+        _moodsAndGenresPayload([
+          _moodGenreSection(
+            title: 'Genres',
+            rendererName: 'musicGridRenderer',
+            buttons: [
+              _moodGenreButton(
+                title: 'Rock',
+                browseId: 'FEmusic_moods_and_genres_category',
+                params: 'rock',
+              ),
+              _moodGenreButton(
+                title: 'Pop',
+                browseId: 'FEmusic_moods_and_genres_category',
+                params: 'pop',
+              ),
+            ],
+          ),
+        ]),
+        maxCategoriesPerSection: 1,
+      );
+
+      expect(sections.single.title, 'Genres');
+      expect(sections.single.categories.single.title, 'Rock');
+    });
+
+    test('rejects invalid roots and limits and skips unsafe strings', () {
+      expect(
+        () => parser.parse(const []),
+        throwsA(isA<InnerTubeFormatException>()),
+      );
+      expect(() => parser.parse(const {}, maxSections: 0), throwsRangeError);
+      expect(
+        () => parser.parse(
+          const {},
+          maxCategoriesPerSection:
+              InnerTubeSearchService.maxMoodGenreCategoriesPerSection + 1,
+        ),
+        throwsRangeError,
+      );
+
+      final sections = parser.parse(
+        _moodsAndGenresPayload([
+          _moodGenreSection(
+            title: 'Genres',
+            buttons: [
+              _moodGenreButton(
+                title: 'Bad browse ID',
+                browseId: 'not valid',
+                params: 'opaque',
+              ),
+              _moodGenreButton(
+                title: 'Control parameter',
+                browseId: 'FEmusic_moods_and_genres_category',
+                params: 'bad${String.fromCharCode(0)}value',
+              ),
+            ],
+          ),
+        ]),
+      );
+      expect(sections, isEmpty);
     });
   });
 
@@ -2903,6 +3387,158 @@ Map<String, Object> _albumNavigationEndpoint(String browseId) {
   };
 }
 
+Map<String, Object> _moodsAndGenresPayload(List<Map<String, Object>> sections) {
+  return {
+    'contents': {
+      'singleColumnBrowseResultsRenderer': {
+        'tabs': [
+          {
+            'tabRenderer': {
+              'content': {
+                'sectionListRenderer': {'contents': sections},
+              },
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+Map<String, Object> _moodGenreSection({
+  required String title,
+  required List<Map<String, Object>> buttons,
+  String rendererName = 'musicCarouselShelfRenderer',
+}) {
+  final isGrid =
+      rendererName == 'musicGridRenderer' || rendererName == 'gridRenderer';
+  final headerRenderer = <String, Object>{
+    'title': {
+      'runs': [
+        {'text': title},
+      ],
+    },
+  };
+  return {
+    rendererName: {
+      'header': {
+        if (isGrid)
+          'gridHeaderRenderer': headerRenderer
+        else
+          'musicCarouselShelfBasicHeaderRenderer': headerRenderer,
+      },
+      if (isGrid) 'items': buttons else 'contents': buttons,
+    },
+  };
+}
+
+Map<String, Object> _moodGenreButton({
+  required String title,
+  required String browseId,
+  String? params,
+  bool useNavigationEndpoint = false,
+}) {
+  final endpoint = <String, Object>{
+    'browseEndpoint': <String, Object>{'browseId': browseId, 'params': ?params},
+  };
+  return {
+    'musicNavigationButtonRenderer': {
+      'buttonText': {
+        'runs': [
+          {'text': title},
+        ],
+      },
+      if (useNavigationEndpoint)
+        'navigationEndpoint': endpoint
+      else
+        'clickCommand': endpoint,
+    },
+  };
+}
+
+Map<String, Object> _moodGenreDetailPayload({String? continuation}) {
+  return {
+    'contents': {
+      'singleColumnBrowseResultsRenderer': {
+        'tabs': [
+          {
+            'tabRenderer': {
+              'content': {
+                'sectionListRenderer': {
+                  'contents': [
+                    {
+                      'musicGridRenderer': {
+                        'title': {
+                          'runs': [
+                            {'text': 'Playlists para relajarte'},
+                          ],
+                        },
+                        'items': [
+                          _collectionRenderer(
+                            title: 'Relax playlist',
+                            browseId: 'VLPLmoodrelax001',
+                            playlistId: 'PLmoodrelax001',
+                          ),
+                        ],
+                      },
+                    },
+                    {
+                      'musicPlaylistShelfRenderer': {
+                        'title': {
+                          'runs': [
+                            {'text': 'Canciones para relajarte'},
+                          ],
+                        },
+                        'contents': [
+                          _songRenderer(
+                            videoId: 'mood-song-1',
+                            title: 'Mood song',
+                            artists: const ['Mood artist'],
+                          ),
+                        ],
+                        if (continuation != null)
+                          'continuations': [
+                            {
+                              'nextContinuationData': {
+                                'continuation': continuation,
+                              },
+                            },
+                          ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+Map<String, Object> _moodGenreShelfContinuationPayload({String? continuation}) {
+  return {
+    'continuationContents': {
+      'musicShelfContinuation': {
+        'contents': [
+          _songRenderer(
+            videoId: 'mood-page-2',
+            title: 'Continued mood song',
+            artists: const ['Mood artist'],
+          ),
+        ],
+        if (continuation != null)
+          'continuations': [
+            {
+              'nextContinuationData': {'continuation': continuation},
+            },
+          ],
+      },
+    },
+  };
+}
+
 Map<String, Object> _homePayload(
   List<Map<String, Object>> shelves, {
   String? continuation,
@@ -3503,6 +4139,7 @@ class _FakeInnerTubeTransport implements InnerTubeTransport {
   Object? error;
   Object? bootstrapError;
   Completer<void>? freshBootstrapGate;
+  Completer<void>? postJsonGate;
   final List<_RecordedRequest> requests = [];
   final List<_RecordedGetRequest> getRequests = [];
   int closeCount = 0;
@@ -3544,6 +4181,7 @@ class _FakeInnerTubeTransport implements InnerTubeTransport {
         timeout: timeout,
       ),
     );
+    await postJsonGate?.future;
     if (error != null) {
       throw error!;
     }

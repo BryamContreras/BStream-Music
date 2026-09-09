@@ -135,6 +135,62 @@ void main() {
     );
   });
 
+  testWidgets(
+    'small YouTube artwork uses one exact preview without upgrade requests',
+    (tester) async {
+      const exact =
+          'https://i.ytimg.com/vi/dmW68lzaaqs/mqdefault.jpg?catalog=1';
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SizedBox.square(
+            dimension: 56,
+            child: SourceImage(
+              source: 'https://i.ytimg.com/vi/dmW68lzaaqs/hq720.jpg',
+              fallbackSource: exact,
+              cacheWidth: 256,
+              fallback: Text('fallback'),
+            ),
+          ),
+        ),
+      );
+
+      final images = tester.widgetList<Image>(find.byType(Image)).toList();
+      expect(images, hasLength(1));
+      final resized = images.single.image as ResizeImage;
+      final cached = resized.imageProvider as CachedArtworkImageProvider;
+      expect(cached.url, exact);
+    },
+  );
+
+  testWidgets('large YouTube artwork keeps a preview under its sharp upgrade', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SizedBox.square(
+          dimension: 360,
+          child: SourceImage(
+            source: 'https://i.ytimg.com/vi/dmW68lzaaqs/hq720.jpg',
+            cacheWidth: 1280,
+            fallback: Text('fallback'),
+          ),
+        ),
+      ),
+    );
+
+    final urls = tester
+        .widgetList<Image>(find.byType(Image))
+        .map((image) => image.image as ResizeImage)
+        .map((image) => (image.imageProvider as CachedArtworkImageProvider).url)
+        .toList();
+    expect(urls, <String>[
+      'https://i.ytimg.com/vi/dmW68lzaaqs/mqdefault.jpg',
+      'https://i.ytimg.com/vi/dmW68lzaaqs/hq720.jpg',
+    ]);
+    expect(find.byType(Stack), findsOneWidget);
+    expect(find.byType(AnimatedOpacity), findsOneWidget);
+  });
+
   testWidgets('SourceImage loads embedded device artwork only when rendered', (
     tester,
   ) async {

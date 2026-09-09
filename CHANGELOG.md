@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.2.7+127 — 2026-09-08
+
+### Added
+
+- Added a responsive Search discovery grid with localized YouTube Music moods
+  and genres. It keeps an offline-safe curated catalog and falls back to the
+  regular music search when a remote category layout is unavailable.
+- Added the Expanded artwork style, which extends and blurs the cover
+  continuously in both full-player layouts.
+- Expanded TikTok LIVE command permissions with audience filters for Everyone,
+  Followers, Moderators, and Subscribers.
+- Added Local LIVE overlay on Windows: a transparent, loopback-only web overlay
+  at a TikTok LIVE Studio-compatible local domain. It shows the current song,
+  playback progress, artwork, and up to four upcoming LIVE requests.
+
+### Changed
+
+- Improved animated artwork with smaller and more varied particles, mixed
+  focus, smoother trajectories, and more natural wind-like movement.
+- Refined the Local LIVE overlay with compact cards, elapsed and duration
+  counters, artwork-aware accent colors, an inline BStream logo beside the
+  current song title, and keyed queue transitions without flicker when requests
+  are added, removed, or updated.
+- Hardened Local LIVE overlay startup on Windows with strict loopback DNS and
+  HTTP health verification, bounded retries, complete socket cleanup, and
+  distinct diagnostics for occupied or reserved ports, cancelled elevation,
+  unavailable PowerShell, and managed-device policy blocks.
+
+### Fixed
+
+- Fixed delayed song and video artwork loading in search, playback, and
+  downloaded/offline tracks by preserving and resolving the correct cached
+  artwork source.
+
 ## 1.2.6+126 — 2026-09-02
 
 ### Changed

@@ -62,6 +62,7 @@ void main() {
           ),
         );
         await tester.pump();
+        await tester.pump();
 
         final artwork = find.byKey(const ValueKey('player-large-artwork'));
         final motion = find.descendant(
@@ -71,6 +72,13 @@ void main() {
         expect(motion, findsOneWidget);
         expect(tester.widget<AnimatedArtworkMotion>(motion).enabled, isTrue);
         expect(tester.widget<AnimatedArtworkMotion>(motion).isPlaying, isFalse);
+        expect(
+          find.descendant(
+            of: artwork,
+            matching: find.byKey(const ValueKey('animated-artwork-particles')),
+          ),
+          findsOneWidget,
+        );
 
         await tester.pumpWidget(
           _playerHarness(
@@ -107,10 +115,763 @@ void main() {
               .isPlaying,
           isTrue,
         );
+        expect(
+          find.byKey(const ValueKey('animated-artwork-particles')),
+          findsNothing,
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            key: ValueKey('${style.name}-reduced-motion-particles'),
+            platform: TargetPlatform.android,
+            snapshot: snapshot.copyWith(status: PlayerStatus.playing),
+            localTrack: trackWithArtwork,
+            playlists: _TestPlaylistsController(),
+            style: style,
+            animatedArtworkEnabled: true,
+            disableAnimations: true,
+          ),
+        );
+        await tester.pump();
+        await tester.pump();
+
+        expect(
+          find.byKey(const ValueKey('animated-artwork-particles')),
+          findsNothing,
+        );
         expect(tester.takeException(), isNull);
       },
     );
+
+    testWidgets(
+      '${style.name} keeps classic artwork and renders the expanded layers',
+      (tester) async {
+        _configureView(tester, const Size(390, 820));
+        final trackWithArtwork = LocalTrack(
+          id: trackId,
+          title: 'Cancion de prueba',
+          artist: 'BStream Music',
+          filePath: '/tmp/player-controls-track.m4a',
+          thumbnailPath: '/tmp/player-expanded-cover.jpg',
+          addedAt: DateTime(2026),
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            key: ValueKey('${style.name}-classic-artwork'),
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: trackWithArtwork,
+            playlists: _TestPlaylistsController(),
+            style: style,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        expect(
+          find.byKey(const ValueKey('player-expanded-artwork')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('player-artwork-presentation-scale')),
+          findsNothing,
+        );
+        final classicArtworkRect = tester.getRect(
+          find.byKey(const ValueKey('player-large-artwork')),
+        );
+        final classicTitleRect = tester.getRect(
+          find.byKey(const ValueKey('player-track-title')),
+        );
+        final classicPrimaryControlRect = tester.getRect(
+          find.byKey(const ValueKey('player-primary-control')),
+        );
+
+        final controller = _TestPlayerController(snapshot);
+        await tester.pumpWidget(
+          _playerHarness(
+            key: ValueKey('${style.name}-expanded-artwork'),
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: trackWithArtwork,
+            playlists: _TestPlaylistsController(),
+            playerController: controller,
+            style: style,
+            artworkStyle: PlayerArtworkStyle.expanded,
+            animatedArtworkEnabled: true,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        final largeArtwork = find.byKey(const ValueKey('player-large-artwork'));
+        final hero = find.byKey(const ValueKey('player-expanded-artwork-hero'));
+        expect(hero, findsOneWidget);
+        expect(
+          find.descendant(
+            of: hero,
+            matching: find.byKey(const ValueKey('player-expanded-artwork')),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('player-expanded-artwork-blur')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('player-expanded-artwork-blurred-image')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('player-expanded-artwork-focused-image')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: hero,
+            matching: find.byType(AnimatedArtworkMotion),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: hero,
+            matching: find.byKey(const ValueKey('animated-artwork-particles')),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: largeArtwork,
+            matching: find.byType(AnimatedArtworkMotion),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('player-artwork-presentation-scale')),
+          findsNothing,
+        );
+        expect(tester.getRect(largeArtwork), classicArtworkRect);
+        expect(
+          tester.getRect(find.byKey(const ValueKey('player-track-title'))),
+          classicTitleRect,
+        );
+        expect(
+          tester.getRect(find.byKey(const ValueKey('player-primary-control'))),
+          classicPrimaryControlRect,
+        );
+        final heroRect = tester.getRect(hero);
+        final foregroundAnchor = style == PlayerStyle.bstreamMusic
+            ? find.byKey(const ValueKey('player-header'))
+            : find.byKey(const ValueKey('apple-player-grabber'));
+        final foregroundRect = tester.getRect(foregroundAnchor);
+        expect(heroRect.left, closeTo(0, 0.1));
+        expect(heroRect.right, closeTo(390, 0.1));
+        expect(heroRect.top, lessThan(0));
+        expect(heroRect.bottom, greaterThan(classicArtworkRect.bottom));
+        expect(heroRect.top, lessThan(foregroundRect.bottom));
+        expect(heroRect.bottom, greaterThan(foregroundRect.top));
+        expect(
+          find.byKey(const ValueKey('player-artwork-track-transition')),
+          findsOneWidget,
+        );
+
+        controller.emit(
+          snapshot.copyWith(
+            title: 'Segunda portada expandida',
+            trackId: '${style.name}-expanded-next',
+            thumbnailUrl: '/tmp/player-expanded-next-cover.jpg',
+          ),
+        );
+        await tester.pump();
+
+        expect(
+          find.byKey(const ValueKey('player-expanded-artwork')),
+          findsNWidgets(2),
+        );
+        expect(
+          find.byKey(const ValueKey('player-artwork-surface')),
+          findsNWidgets(2),
+        );
+
+        await tester.pump(const Duration(milliseconds: 430));
+
+        expect(
+          find.byKey(const ValueKey('player-expanded-artwork')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: hero,
+            matching: find.byType(AnimatedArtworkMotion),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      '${style.name} expanded artwork fits a compact mobile viewport',
+      (tester) async {
+        _configureView(tester, const Size(320, 568), bottomPadding: 24);
+        final trackWithArtwork = LocalTrack(
+          id: trackId,
+          title: 'Cancion de prueba',
+          artist: 'BStream Music',
+          filePath: '/tmp/player-controls-track.m4a',
+          thumbnailPath: '/tmp/player-expanded-compact-cover.jpg',
+          addedAt: DateTime(2026),
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: trackWithArtwork,
+            playlists: _TestPlaylistsController(),
+            style: style,
+            artworkStyle: PlayerArtworkStyle.expanded,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        expect(
+          find.byKey(const ValueKey('player-expanded-artwork')),
+          findsOneWidget,
+        );
+        final largeArtwork = find.byKey(const ValueKey('player-large-artwork'));
+        final artworkSize = tester.getSize(largeArtwork);
+        final hero = find.byKey(const ValueKey('player-expanded-artwork-hero'));
+        final heroRect = tester.getRect(hero);
+        expect(artworkSize.shortestSide, greaterThan(0));
+        expect(heroRect.left, closeTo(0, 0.1));
+        expect(heroRect.right, closeTo(320, 0.1));
+        expect(heroRect.top, lessThan(0));
+        expect(
+          heroRect.bottom,
+          greaterThan(tester.getRect(largeArtwork).bottom),
+        );
+        expect(
+          find.byKey(const ValueKey('player-artwork-presentation-scale')),
+          findsNothing,
+        );
+        if (style == PlayerStyle.bstreamMusic) {
+          expect(
+            tester
+                .widget<SingleChildScrollView>(
+                  find.byKey(const ValueKey('player-content-scroll')),
+                )
+                .clipBehavior,
+            Clip.hardEdge,
+          );
+          expect(
+            find.byKey(const ValueKey('player-expanded-artwork-viewport')),
+            findsNothing,
+          );
+        }
+        final primaryControl = tester.getRect(
+          find.byKey(const ValueKey('player-primary-control')),
+        );
+        expect(primaryControl.center.dy, inInclusiveRange(0, 568));
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      '${style.name} keeps expanded artwork bounded in mobile landscape',
+      (tester) async {
+        _configureView(tester, const Size(820, 390));
+        final trackWithArtwork = LocalTrack(
+          id: trackId,
+          title: 'Cancion de prueba',
+          artist: 'BStream Music',
+          filePath: '/tmp/player-controls-track.m4a',
+          thumbnailPath: '/tmp/player-expanded-landscape-cover.jpg',
+          addedAt: DateTime(2026),
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: trackWithArtwork,
+            playlists: _TestPlaylistsController(),
+            style: style,
+            artworkStyle: PlayerArtworkStyle.expanded,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        final scale = tester
+            .widget<Transform>(
+              find.byKey(const ValueKey('player-artwork-presentation-scale')),
+            )
+            .transform
+            .getMaxScaleOnAxis();
+        expect(scale, lessThanOrEqualTo(1.181));
+        if (style == PlayerStyle.bstreamMusic) {
+          expect(
+            find.byKey(const ValueKey('bstream-player-adaptive-landscape')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('bstream-player-landscape-artwork-pane')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('player-content-scroll')),
+            findsNothing,
+          );
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      '${style.name} uses a bounded two-pane player on compact and large mobile landscape',
+      (tester) async {
+        const viewports = [
+          Size(568, 320),
+          Size(640, 360),
+          Size(740, 360),
+          Size(844, 390),
+          Size(915, 412),
+        ];
+        final landscapeTrack = LocalTrack(
+          id: trackId,
+          title: 'Cancion de prueba',
+          artist: 'BStream Music',
+          filePath: '/tmp/player-controls-track.m4a',
+          thumbnailPath: '/tmp/player-landscape-cover.jpg',
+          addedAt: DateTime(2026),
+        );
+        _configureView(tester, viewports.first);
+
+        for (final artworkStyle in PlayerArtworkStyle.values) {
+          for (final viewport in viewports) {
+            tester.view.physicalSize = viewport;
+            await tester.pumpWidget(
+              _playerHarness(
+                key: ValueKey(
+                  '${style.name}-${artworkStyle.name}-landscape-${viewport.width}x${viewport.height}',
+                ),
+                platform: TargetPlatform.android,
+                snapshot: snapshot.copyWith(
+                  position: const Duration(minutes: 1),
+                ),
+                localTrack: landscapeTrack,
+                playlists: _TestPlaylistsController(),
+                style: style,
+                artworkStyle: artworkStyle,
+              ),
+            );
+            await tester.pump(const Duration(milliseconds: 500));
+            await tester.pump();
+
+            final landscapeLayout = find.byKey(
+              ValueKey(
+                style == PlayerStyle.bstreamMusic
+                    ? 'bstream-player-adaptive-landscape'
+                    : 'apple-player-adaptive-two-column',
+              ),
+            );
+            expect(
+              landscapeLayout,
+              findsOneWidget,
+              reason: '$style $artworkStyle $viewport',
+            );
+
+            final artwork = find.byKey(const ValueKey('player-large-artwork'));
+            final rightPaneBlocks = style == PlayerStyle.bstreamMusic
+                ? <Finder>[
+                    find.byKey(const ValueKey('player-track-title')),
+                    find.byKey(const ValueKey('player-timeline')),
+                    find.byKey(const ValueKey('player-playback-controls')),
+                  ]
+                : <Finder>[
+                    find.byKey(const ValueKey('apple-player-metadata')),
+                    find.byKey(const ValueKey('apple-player-timeline')),
+                    find.byKey(const ValueKey('apple-player-transport')),
+                    find.byKey(const ValueKey('apple-player-volume-row')),
+                    find.byKey(const ValueKey('apple-player-utility-row')),
+                  ];
+
+            expect(
+              artwork,
+              findsOneWidget,
+              reason: '$style $artworkStyle $viewport artwork',
+            );
+            for (final block in rightPaneBlocks) {
+              expect(
+                block,
+                findsOneWidget,
+                reason: '$style $artworkStyle $viewport $block',
+              );
+            }
+
+            final artworkRect = tester.getRect(artwork);
+            expect(
+              artworkRect.shortestSide,
+              greaterThanOrEqualTo(190),
+              reason: '$style $artworkStyle $viewport artwork prominence',
+            );
+            final visibleElements = <({String name, Finder finder})>[
+              (name: 'landscape layout', finder: landscapeLayout),
+              (name: 'artwork', finder: artwork),
+              for (var index = 0; index < rightPaneBlocks.length; index += 1)
+                (
+                  name: 'right pane block $index',
+                  finder: rightPaneBlocks[index],
+                ),
+            ];
+
+            for (final element in visibleElements) {
+              final rect = tester.getRect(element.finder);
+              expect(
+                rect.left,
+                greaterThanOrEqualTo(-0.1),
+                reason: '$style $artworkStyle $viewport ${element.name} left',
+              );
+              expect(
+                rect.top,
+                greaterThanOrEqualTo(-0.1),
+                reason: '$style $artworkStyle $viewport ${element.name} top',
+              );
+              expect(
+                rect.right,
+                lessThanOrEqualTo(viewport.width + 0.1),
+                reason: '$style $artworkStyle $viewport ${element.name} right',
+              );
+              expect(
+                rect.bottom,
+                lessThanOrEqualTo(viewport.height + 0.1),
+                reason: '$style $artworkStyle $viewport ${element.name} bottom',
+              );
+            }
+
+            for (var index = 0; index < rightPaneBlocks.length; index += 1) {
+              final blockRect = tester.getRect(rightPaneBlocks[index]);
+              expect(
+                artworkRect.right,
+                lessThanOrEqualTo(blockRect.left + 0.1),
+                reason:
+                    '$style $artworkStyle $viewport artwork must be left of right pane block $index',
+              );
+            }
+
+            expect(
+              tester.takeException(),
+              isNull,
+              reason: '$style $artworkStyle $viewport',
+            );
+          }
+        }
+      },
+    );
+
+    testWidgets(
+      '${style.name} keeps landscape artwork fixed when controls need accessibility scrolling',
+      (tester) async {
+        const viewport = Size(568, 320);
+        _configureView(
+          tester,
+          viewport,
+          textScaleFactor: 1.5,
+          bottomPadding: 24,
+        );
+        final trackWithArtwork = LocalTrack(
+          id: trackId,
+          title: 'Cancion de prueba',
+          artist: 'BStream Music',
+          filePath: '/tmp/player-controls-track.m4a',
+          thumbnailPath: '/tmp/player-landscape-accessibility-cover.jpg',
+          addedAt: DateTime(2026),
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: trackWithArtwork,
+            playlists: _TestPlaylistsController(),
+            style: style,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        final artwork = find.byKey(const ValueKey('player-large-artwork'));
+        final controlsScroll = find.byKey(
+          ValueKey(
+            style == PlayerStyle.bstreamMusic
+                ? 'bstream-player-controls-scroll'
+                : 'apple-player-controls-scroll',
+          ),
+        );
+        final lastControl = style == PlayerStyle.bstreamMusic
+            ? find.byKey(const ValueKey('player-volume-control'))
+            : find.byKey(const ValueKey('apple-player-utility-row'));
+        final artworkBeforeScroll = tester.getRect(artwork);
+
+        expect(controlsScroll, findsOneWidget);
+        expect(
+          find.byKey(
+            ValueKey(
+              style == PlayerStyle.bstreamMusic
+                  ? 'player-content-scroll'
+                  : 'apple-player-scroll',
+            ),
+          ),
+          findsNothing,
+        );
+
+        await tester.ensureVisible(lastControl);
+        await tester.pump();
+
+        expect(tester.getRect(artwork), artworkBeforeScroll);
+        final controlRect = tester.getRect(lastControl);
+        expect(controlRect.top, greaterThanOrEqualTo(0));
+        expect(controlRect.bottom, lessThanOrEqualTo(viewport.height - 24));
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      '${style.name} fits a compact landscape frame after system insets',
+      (tester) async {
+        // 537 dp mirrors the usable width left by a compact landscape phone
+        // after its camera cutout/side safe area has been consumed.
+        const viewport = Size(537, 268);
+        const bottomInset = 24.0;
+        _configureView(tester, viewport, bottomPadding: bottomInset);
+        final trackWithArtwork = LocalTrack(
+          id: trackId,
+          title: 'Cancion de prueba',
+          artist: 'BStream Music',
+          filePath: '/tmp/player-controls-track.m4a',
+          thumbnailPath: '/tmp/player-inset-landscape-cover.jpg',
+          addedAt: DateTime(2026),
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: trackWithArtwork,
+            playlists: _TestPlaylistsController(),
+            style: style,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        final landscapeLayout = find.byKey(
+          ValueKey(
+            style == PlayerStyle.bstreamMusic
+                ? 'bstream-player-adaptive-landscape'
+                : 'apple-player-adaptive-two-column',
+          ),
+        );
+        final artwork = find.byKey(const ValueKey('player-large-artwork'));
+        final lastBlock = style == PlayerStyle.bstreamMusic
+            ? find.byKey(const ValueKey('player-volume-control'))
+            : find.byKey(const ValueKey('apple-player-utility-row'));
+
+        expect(landscapeLayout, findsOneWidget);
+        expect(artwork, findsOneWidget);
+        expect(lastBlock, findsOneWidget);
+        expect(tester.getSize(artwork).shortestSide, greaterThanOrEqualTo(190));
+        expect(tester.getRect(lastBlock).top, greaterThanOrEqualTo(0));
+        expect(
+          tester.getRect(lastBlock).bottom,
+          lessThanOrEqualTo(viewport.height - bottomInset + 0.1),
+        );
+        if (style == PlayerStyle.bstreamMusic) {
+          expect(
+            tester.getSize(find.byType(WavyPlaybackSeekBar)).height,
+            greaterThanOrEqualTo(48),
+          );
+          for (final key in const [
+            'player-shuffle-control',
+            'player-previous-control',
+            'player-primary-control',
+            'player-next-control',
+            'player-repeat-control',
+            'player-lyrics-control',
+            'player-volume-control',
+          ]) {
+            expect(
+              tester.getSize(find.byKey(ValueKey(key))).shortestSide,
+              greaterThanOrEqualTo(48),
+              reason: '$key touch target',
+            );
+          }
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      '${style.name} switches cleanly between portrait and landscape',
+      (tester) async {
+        _configureView(tester, const Size(390, 820));
+        final controller = _TestPlayerController(
+          snapshot.copyWith(position: const Duration(seconds: 42)),
+        );
+
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.android,
+            snapshot: controller.snapshot,
+            localTrack: localTrack,
+            playlists: _TestPlaylistsController(),
+            playerController: controller,
+            style: style,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+
+        final portraitLayoutKey = ValueKey(
+          style == PlayerStyle.bstreamMusic
+              ? 'player-content-scroll'
+              : 'apple-player-adaptive-stack',
+        );
+        final landscapeLayoutKey = ValueKey(
+          style == PlayerStyle.bstreamMusic
+              ? 'bstream-player-adaptive-landscape'
+              : 'apple-player-adaptive-two-column',
+        );
+        expect(find.byKey(portraitLayoutKey), findsOneWidget);
+        expect(find.byKey(landscapeLayoutKey), findsNothing);
+
+        tester.view.physicalSize = const Size(844, 390);
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.byKey(portraitLayoutKey), findsNothing);
+        expect(find.byKey(landscapeLayoutKey), findsOneWidget);
+        for (final key in const [
+          'player-large-artwork',
+          'player-track-title',
+          'player-primary-control',
+        ]) {
+          expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
+        }
+        expect(controller.snapshot.position, const Duration(seconds: 42));
+        expect(tester.takeException(), isNull);
+
+        tester.view.physicalSize = const Size(390, 820);
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.byKey(portraitLayoutKey), findsOneWidget);
+        expect(find.byKey(landscapeLayoutKey), findsNothing);
+        expect(
+          find.byKey(const ValueKey('player-primary-control')),
+          findsOneWidget,
+        );
+        expect(controller.snapshot.position, const Duration(seconds: 42));
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('${style.name} bounds expanded artwork on a portrait tablet', (
+      tester,
+    ) async {
+      _configureView(tester, const Size(768, 1024));
+      final trackWithArtwork = LocalTrack(
+        id: trackId,
+        title: 'Cancion de prueba',
+        artist: 'BStream Music',
+        filePath: '/tmp/player-controls-track.m4a',
+        thumbnailPath: '/tmp/player-expanded-tablet-cover.jpg',
+        addedAt: DateTime(2026),
+      );
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: trackWithArtwork,
+          playlists: _TestPlaylistsController(),
+          style: style,
+          artworkStyle: PlayerArtworkStyle.expanded,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      final scale = tester
+          .widget<Transform>(
+            find.byKey(const ValueKey('player-artwork-presentation-scale')),
+          )
+          .transform
+          .getMaxScaleOnAxis();
+      expect(scale, lessThanOrEqualTo(1.181));
+      expect(
+        find.byKey(const ValueKey('player-expanded-artwork-viewport')),
+        findsNothing,
+      );
+      if (style == PlayerStyle.bstreamMusic) {
+        expect(
+          tester
+              .widget<SingleChildScrollView>(
+                find.byKey(const ValueKey('player-content-scroll')),
+              )
+              .clipBehavior,
+          Clip.hardEdge,
+        );
+      }
+      expect(tester.takeException(), isNull);
+    });
   }
+
+  testWidgets('BStream landscape header stays legible in a light theme', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(568, 320));
+    final trackWithArtwork = LocalTrack(
+      id: trackId,
+      title: 'Cancion de prueba',
+      artist: 'BStream Music',
+      filePath: '/tmp/player-controls-track.m4a',
+      thumbnailPath: '/tmp/player-light-landscape-cover.jpg',
+      addedAt: DateTime(2026),
+    );
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: trackWithArtwork,
+        playlists: _TestPlaylistsController(),
+        brightness: Brightness.light,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    final header = find.byKey(const ValueKey('player-header'));
+    final queueButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('player-queue-toggle')),
+    );
+    final menuButton = tester.widget<PopupMenuButton<String>>(
+      find.byKey(const ValueKey('player-menu-control')),
+    );
+
+    expect(header, findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('player-tab-title')))
+          .style
+          ?.color,
+      Colors.white,
+    );
+    expect(queueButton.style?.foregroundColor?.resolve({}), Colors.white);
+    expect(menuButton.iconColor, Colors.white);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('downloaded playback replaces a soft file with catalog artwork', (
     tester,
@@ -2926,13 +3687,15 @@ Widget _playerHarness({
   bool disableAnimations = false,
   ValueListenable<bool>? trackTransitionsEnabledListenable,
   PlayerStyle style = defaultPlayerStyle,
+  PlayerArtworkStyle artworkStyle = defaultPlayerArtworkStyle,
   bool animatedArtworkEnabled = false,
   SurfaceBackgroundMode backgroundMode = SurfaceBackgroundMode.accent,
+  Brightness brightness = Brightness.dark,
 }) {
   const accent = AppAccent.blue;
   final scheme = ColorScheme.fromSeed(
     seedColor: accent.seedColor,
-    brightness: Brightness.dark,
+    brightness: brightness,
   ).copyWith(primary: accent.seedColor);
 
   return ProviderScope(
@@ -2980,6 +3743,7 @@ Widget _playerHarness({
                 drawBackground: false,
                 onOpenSearch: onOpenSearch,
                 style: style,
+                artworkStyle: artworkStyle,
                 animatedArtworkEnabled: animatedArtworkEnabled,
               )
             : ValueListenableBuilder<bool>(
@@ -2989,6 +3753,7 @@ Widget _playerHarness({
                   onOpenSearch: onOpenSearch,
                   trackTransitionsEnabled: enabled,
                   style: style,
+                  artworkStyle: artworkStyle,
                   animatedArtworkEnabled: animatedArtworkEnabled,
                 ),
               ),

@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -79,6 +81,31 @@ void main() {
         ArtworkProgressColor.fallback,
       );
     });
+
+    testWidgets(
+      'keeps a shared lookup alive until its final lease is released',
+      (tester) async {
+        final service = ArtworkProgressColorService(
+          imageProviderForSource: (_) => _HangingImageProvider(),
+        );
+        addTearDown(service.dispose);
+
+        final first = service.acquire(' https://example.com/cover.jpg ');
+        final second = service.acquire('https://example.com/cover.jpg');
+        var completed = false;
+        second.future.then((_) => completed = true);
+
+        expect(second.future, same(first.future));
+        first.release();
+        await tester.pump();
+        expect(completed, isFalse);
+
+        second.release();
+        await tester.pump();
+        expect(await second.future, ArtworkProgressColor.fallback);
+        expect(completed, isTrue);
+      },
+    );
   });
 
   group('artwork progress color providers', () {
@@ -153,8 +180,22 @@ class _RecordingArtworkProgressColorService
   final List<String?> sources = <String?>[];
 
   @override
-  Future<Color> resolve(String? rawSource) async {
+  ArtworkProgressColorLease acquire(String? rawSource) {
     sources.add(rawSource);
-    return color;
+    return ArtworkProgressColorLease(future: Future<Color>.value(color));
+  }
+}
+
+class _HangingImageProvider extends ImageProvider<_HangingImageProvider> {
+  @override
+  Future<_HangingImageProvider> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<_HangingImageProvider>(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _HangingImageProvider key,
+    ImageDecoderCallback decode,
+  ) {
+    return OneFrameImageStreamCompleter(Completer<ImageInfo>().future);
   }
 }

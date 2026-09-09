@@ -3,6 +3,7 @@ import 'package:bstream_music/core/theme/app_ui.dart';
 import 'package:bstream_music/features/music/domain/entities/search_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
+import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
@@ -14,45 +15,317 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('shows an adaptive browse grid above the reserved player space', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    const bottomContentPadding = 120.0;
+    final controller = _RecordingSearchController(SearchState());
+
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        bottomContentPadding: bottomContentPadding,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Explorar todo'), findsOneWidget);
+    expect(find.text('Busca canciones, artistas o álbumes'), findsNothing);
+    expect(find.byKey(const ValueKey('search-browse-grid')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-browse-card-pop')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('search-browse-card-party')),
+      findsOneWidget,
+    );
+    final popRect = tester.getRect(
+      find.byKey(const ValueKey('search-browse-card-pop')),
+    );
+    final partyRect = tester.getRect(
+      find.byKey(const ValueKey('search-browse-card-party')),
+    );
+    expect(popRect.top, closeTo(partyRect.top, 0.1));
+    expect(popRect.width, closeTo(partyRect.width, 0.1));
+    expect(popRect.height, greaterThanOrEqualTo(48));
+
+    final popSurface = tester.widget<Ink>(
+      find.byKey(const ValueKey('search-browse-surface-pop')),
+    );
+    expect((popSurface.decoration as BoxDecoration).gradient, isNotNull);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('search-browse-grid')),
+        matching: find.byType(Scrollable),
+      ),
+      findsNothing,
+    );
+    final scrollView = tester.widget<CustomScrollView>(
+      find.byKey(const ValueKey('search-results-scroll')),
+    );
+    final reserveSliver = scrollView.slivers.last as SliverToBoxAdapter;
+    expect((reserveSliver.child as SizedBox).height, bottomContentPadding + 16);
+  });
+
+  testWidgets('gives real YouTube Music categories distinct semantic artwork', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    const categories = <SearchBrowseCategory>[
+      SearchBrowseCategory(
+        id: 'energy',
+        title: 'Energ\u00eda',
+        searchQuery: 'Energ\u00eda',
+      ),
+      SearchBrowseCategory(
+        id: 'exercise',
+        title: 'Ejercicio',
+        searchQuery: 'Ejercicio',
+      ),
+      SearchBrowseCategory(
+        id: 'christmas',
+        title: 'Navidad',
+        searchQuery: 'Navidad',
+      ),
+      SearchBrowseCategory(
+        id: 'road',
+        title: 'Para el camino',
+        searchQuery: 'Para el camino',
+      ),
+      SearchBrowseCategory(
+        id: 'feel-good',
+        title: 'Para sentirse bien',
+        searchQuery: 'Para sentirse bien',
+      ),
+      SearchBrowseCategory(
+        id: 'focus',
+        title: 'Concentraci\u00f3n',
+        searchQuery: 'Concentraci\u00f3n',
+      ),
+      SearchBrowseCategory(id: 'sleep', title: 'Dormir', searchQuery: 'Dormir'),
+      SearchBrowseCategory(
+        id: 'relaxation',
+        title: 'Relajaci\u00f3n',
+        searchQuery: 'Relajaci\u00f3n',
+      ),
+      SearchBrowseCategory(
+        id: 'gaming',
+        title: 'Gaming',
+        searchQuery: 'Gaming',
+      ),
+    ];
+    const expectedIcons = <String, IconData>{
+      'energy': Icons.electric_bolt_rounded,
+      'exercise': Icons.fitness_center_rounded,
+      'christmas': Icons.card_giftcard_rounded,
+      'road': Icons.directions_car_rounded,
+      'feel-good': Icons.sentiment_very_satisfied_rounded,
+      'focus': Icons.center_focus_strong_rounded,
+      'sleep': Icons.bedtime_rounded,
+      'relaxation': Icons.air_rounded,
+      'gaming': Icons.sports_esports_rounded,
+    };
+    final controller = _RecordingSearchController(SearchState());
+
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        browseCatalog: SearchBrowseCatalog(
+          categories: categories,
+          usesLiveYouTubeMusicCategories: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final visibleIcons = <int>{};
+    for (final entry in expectedIcons.entries) {
+      final iconFinder = find.byKey(
+        ValueKey('search-browse-icon-${entry.key}'),
+      );
+      expect(iconFinder, findsOneWidget);
+      final icon = tester.widget<Icon>(iconFinder);
+      expect(icon.icon, entry.value);
+      expect(visibleIcons.add(icon.icon!.codePoint), isTrue);
+      expect(
+        find.byKey(ValueKey('search-browse-pattern-${entry.key}')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(ValueKey('search-browse-art-${entry.key}')),
+        findsOneWidget,
+      );
+    }
+    expect(visibleIcons, hasLength(categories.length));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
-    'centers the initial prompt above reserved player space and names albums',
+    'keeps two browse columns tappable on a compact high-scale screen',
     (tester) async {
-      tester.view.physicalSize = const Size(400, 800);
+      tester.view.physicalSize = const Size(320, 568);
       tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 3;
       addTearDown(() {
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();
+        tester.platformDispatcher.clearTextScaleFactorTestValue();
       });
-      const bottomContentPadding = 120.0;
       final controller = _RecordingSearchController(SearchState());
+      final selected = <SearchBrowseCategory>[];
 
       await tester.pumpWidget(
         _searchApp(
           controller: controller,
-          bottomContentPadding: bottomContentPadding,
+          onBrowseCategorySelected: selected.add,
         ),
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Busca canciones, artistas o álbumes'), findsOneWidget);
-      expect(find.textContaining('enlaces'), findsNothing);
-
-      final availableArea = find.byKey(
-        const ValueKey('search-initial-empty-available-area'),
+      final popRect = tester.getRect(
+        find.byKey(const ValueKey('search-browse-card-pop')),
       );
-      final areaRect = tester.getRect(availableArea);
-      expect(areaRect.bottom, closeTo(800, 0.1));
-
-      final iconRect = tester.getRect(find.byIcon(Icons.search_rounded).last);
-      final subtitleRect = tester.getRect(
-        find.text('Los resultados aparecerán aquí.'),
+      final partyRect = tester.getRect(
+        find.byKey(const ValueKey('search-browse-card-party')),
       );
-      final promptCenter = (iconRect.top + subtitleRect.bottom) / 2;
-      final usableAreaCenter =
-          (areaRect.top + areaRect.bottom - bottomContentPadding) / 2;
-      expect(promptCenter, closeTo(usableAreaCenter, 0.1));
+      expect(popRect.top, closeTo(partyRect.top, 0.1));
+      expect(popRect.left, lessThan(partyRect.left));
+      expect(popRect.height, greaterThanOrEqualTo(48));
+      final popLabelRect = tester.getRect(find.text('Pop'));
+      final popArtworkRect = tester.getRect(
+        find.byKey(const ValueKey('search-browse-art-pop')),
+      );
+      expect(popLabelRect.overlaps(popArtworkRect), isFalse);
+      expect(tester.takeException(), isNull);
+
+      final popAction = find.byKey(const ValueKey('search-browse-action-pop'));
+      await tester.ensureVisible(popAction);
+      await tester.pumpAndSettle();
+      await tester.tap(popAction);
+      await tester.pump();
+
+      expect(selected.single.id, 'pop');
+      expect(controller.submittedQueries, isEmpty);
     },
   );
+
+  testWidgets('expands the browse grid to four columns on a wide viewport', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(844, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final controller = _RecordingSearchController(SearchState());
+
+    await tester.pumpWidget(_searchApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final firstRow = ['pop', 'party', 'reggae', 'chill']
+        .map(
+          (id) =>
+              tester.getRect(find.byKey(ValueKey('search-browse-card-$id'))),
+        )
+        .toList(growable: false);
+    for (final rect in firstRow.skip(1)) {
+      expect(rect.top, closeTo(firstRow.first.top, 0.1));
+    }
+    expect(
+      tester.getRect(find.byKey(const ValueKey('search-browse-card-love'))).top,
+      greaterThan(firstRow.first.bottom),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop input follows a query changed programmatically', (
+    tester,
+  ) async {
+    final controller = _RecordingSearchController(SearchState());
+
+    await tester.pumpWidget(
+      _searchApp(controller: controller, platform: TargetPlatform.windows),
+    );
+    await tester.pumpAndSettle();
+
+    controller.replaceState(
+      SearchState(
+        query: 'música electrónica',
+        loadingCategory: SearchCategory.songs,
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      'música electrónica',
+    );
+
+    controller.replaceState(SearchState());
+    await tester.pump();
+
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      '',
+    );
+    expect(controller.clearCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('browse cards open their collection detail by default', (
+    tester,
+  ) async {
+    const pop = SearchBrowseCategory(
+      id: 'pop',
+      title: 'Pop',
+      searchQuery: 'pop music',
+    );
+    final controller = _RecordingSearchController(SearchState());
+    var categoryLoads = 0;
+
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        browseCatalog: SearchBrowseCatalog(
+          categories: const [pop],
+          usesLiveYouTubeMusicCategories: false,
+        ),
+        extraOverrides: [
+          searchBrowseCategoryTracksProvider.overrideWith((ref, category) {
+            categoryLoads++;
+            expect(category, pop);
+            return Stream.value(const <TrackInfo>[]);
+          }),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('search-browse-action-pop')));
+    await tester.pumpAndSettle();
+
+    final detail = tester.widget<RemoteCollectionDetailPage>(
+      find.byType(RemoteCollectionDetailPage),
+    );
+    expect(detail.title, 'Pop');
+    expect(detail.subtitle, 'YouTube Music');
+    expect(detail.queueSourceId, 'search-browse:pop');
+    expect(categoryLoads, 1);
+    expect(controller.submittedQueries, isEmpty);
+  });
 
   testWidgets('hides categories until a search is submitted', (tester) async {
     final controller = _RecordingSearchController(SearchState());
@@ -1118,16 +1391,26 @@ void main() {
 Widget _searchApp({
   required _RecordingSearchController controller,
   VoidCallback? onOpenPlayer,
+  ValueChanged<SearchBrowseCategory>? onBrowseCategorySelected,
+  SearchBrowseCatalog? browseCatalog,
   List<Override> extraOverrides = const [],
   TargetPlatform? platform,
   bool disableAnimations = false,
   double bottomContentPadding = 0,
 }) {
+  const strings = AppStrings(AppLanguage.spanish);
+  final resolvedBrowseCatalog =
+      browseCatalog ??
+      SearchBrowseCatalog(
+        categories: fallbackSearchBrowseCategories(strings),
+        usesLiveYouTubeMusicCategories: false,
+      );
   return ProviderScope(
     overrides: [
       searchControllerProvider.overrideWith(() => controller),
-      appStringsProvider.overrideWithValue(
-        const AppStrings(AppLanguage.spanish),
+      appStringsProvider.overrideWithValue(strings),
+      searchBrowseCatalogProvider.overrideWithValue(
+        AsyncData(resolvedBrowseCatalog),
       ),
       ...extraOverrides,
     ],
@@ -1144,6 +1427,7 @@ Widget _searchApp({
       home: Scaffold(
         body: SearchView(
           onOpenPlayer: onOpenPlayer ?? () {},
+          onBrowseCategorySelected: onBrowseCategorySelected,
           bottomContentPadding: bottomContentPadding,
         ),
       ),

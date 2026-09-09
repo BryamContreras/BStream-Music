@@ -744,6 +744,53 @@ void main() {
     );
   });
 
+  testWidgets('keeps artist and duration in one compact subtitle', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    const track = TrackInfo(
+      id: 'long-artist',
+      title: 'Canción con muchos colaboradores',
+      artist:
+          'Primer artista, Segundo artista, Tercer artista y Cuarto artista',
+      duration: Duration(hours: 1, minutes: 2, seconds: 3),
+      url: 'https://www.youtube.com/watch?v=longartist1',
+    );
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => const <TrackInfo>[track],
+      retry: (_, _) => null,
+    );
+
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: tracksProvider,
+        disableAnimations: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('remote-collection-track-long-artist')),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'Primer artista, Segundo artista, Tercer artista y Cuarto artista'
+        '  -  1:02:03',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('stays usable at 320x568 with text scale 3', (tester) async {
     tester.view.physicalSize = const Size(320, 568);
     tester.view.devicePixelRatio = 1;

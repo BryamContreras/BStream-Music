@@ -13,8 +13,13 @@ import 'package:bstream_music/services/downloader/downloader_service.dart';
 import 'package:bstream_music/services/storage/library_operation_coordinator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as image;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
+
+final List<int> _validArtworkBytes = image.encodePng(
+  image.Image(width: 2, height: 2),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -350,7 +355,7 @@ void main() {
         requestedPaths.add(request.uri.path);
         if (request.uri.path == '/catalog.jpg') {
           request.response.headers.contentType = ContentType('image', 'jpeg');
-          request.response.add(const [0xFF, 0xD8, 0xFF, 0xD9]);
+          request.response.add(_validArtworkBytes);
         } else {
           request.response.statusCode = HttpStatus.notFound;
         }
@@ -390,13 +395,56 @@ void main() {
       );
     });
 
+    test('rejects an HTML response disguised as JPEG artwork', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requestedPaths = <String>[];
+      server.listen((request) async {
+        requestedPaths.add(request.uri.path);
+        request.response.headers.contentType = ContentType('image', 'jpeg');
+        if (request.uri.path == '/primary.jpg') {
+          request.response.add(_validArtworkBytes);
+        } else {
+          request.response.add('<html>not an image</html>'.codeUnits);
+        }
+        await request.response.close();
+      });
+      final origin = 'http://${server.address.address}:${server.port}';
+      final fixture = await _DownloadFixture.create();
+      addTearDown(fixture.dispose);
+      final track = TrackInfo(
+        id: 'validated-art-id',
+        title: 'Validated artwork song',
+        artist: 'Artist',
+        artists: const ['Artist'],
+        album: 'Album',
+        url: 'https://catalog.example/tracks/validated-art',
+        thumbnailUrl: '$origin/primary.jpg',
+        catalogThumbnailUrl: '$origin/catalog.jpg',
+        duration: const Duration(minutes: 3),
+        metadataSource: TrackMetadataSource.youtubeMusic,
+      );
+
+      final result = await HttpOverrides.runWithHttpOverrides(
+        () => fixture.helper.resolveForLibrary(track),
+        _RealHttpOverrides(),
+      );
+
+      expect(requestedPaths, ['/catalog.jpg', '/primary.jpg']);
+      expect(result.track.thumbnailUrl, '$origin/primary.jpg');
+      expect(
+        await File(result.track.thumbnailPath!).readAsBytes(),
+        _validArtworkBytes,
+      );
+    });
+
     test(
       'repairs legacy local artwork from the catalog without downloading audio',
       () async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(() => server.close(force: true));
         final requestedPaths = <String>[];
-        const sharpArtwork = [0xFF, 0xD8, 0xFF, 0x10, 0x20, 0xFF, 0xD9];
+        final sharpArtwork = _validArtworkBytes;
         server.listen((request) async {
           requestedPaths.add(request.uri.path);
           if (request.uri.path == '/catalog.jpg') {
@@ -461,13 +509,121 @@ void main() {
     );
 
     test(
+      'repairs a missing legacy cover from the persistent display cache',
+      () async {
+        const exact =
+            'https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg?catalog=1';
+        late File cachedArtwork;
+        final cacheLookups = <String>[];
+        final fixture = await _DownloadFixture.create(
+          artworkCacheFileLookup: (source) async {
+            cacheLookups.add(source);
+            return source == exact ? cachedArtwork : null;
+          },
+        );
+        addTearDown(fixture.dispose);
+        cachedArtwork = File(
+          p.join(fixture.tempDirectory.path, 'cached-preview.jpg'),
+        );
+        await cachedArtwork.writeAsBytes(_validArtworkBytes);
+        final legacy = LocalTrack(
+          id: 'legacy-cache-track',
+          title: 'Cached legacy artwork',
+          artist: 'Artist',
+          filePath: p.join(fixture.tempDirectory.path, 'audio.m4a'),
+          addedAt: DateTime(2025),
+          sourceUrl: 'https://youtube.com/watch?v=abcdefghijk',
+          thumbnailUrl: 'https://i.ytimg.com/vi/abcdefghijk/hq720.jpg',
+          catalogThumbnailUrl: exact,
+          sourceId: 'abcdefghijk',
+        );
+        fixture.libraryRepository.localTracks.add(legacy);
+
+        final repaired = await fixture.helper.repairStoredArtwork([legacy]);
+        final updated = fixture.libraryRepository.localTracks.single;
+
+        expect(repaired, 1);
+        expect(cacheLookups, [exact]);
+        expect(updated.thumbnailUrl, exact);
+        expect(updated.thumbnailPath, isNotNull);
+        expect(updated.thumbnailPath, isNot(cachedArtwork.path));
+        expect(
+          await File(updated.thumbnailPath!).readAsBytes(),
+          await cachedArtwork.readAsBytes(),
+        );
+        expect(fixture.musicRepository.downloadCalls, 0);
+      },
+    );
+
+    test(
+      'keeps a valid stored fallback without redownloading an ideal variant',
+      () async {
+        final fixture = await _DownloadFixture.create();
+        addTearDown(fixture.dispose);
+        final artwork = File(
+          p.join(fixture.tempDirectory.path, 'stored-fallback.jpg'),
+        );
+        await artwork.writeAsBytes(_validArtworkBytes);
+        final local = LocalTrack(
+          id: 'stored-fallback-track',
+          title: 'Stored fallback',
+          artist: 'Artist',
+          filePath: p.join(fixture.tempDirectory.path, 'audio.m4a'),
+          addedAt: DateTime(2026),
+          sourceUrl: 'https://youtube.com/watch?v=abcdefghijk',
+          thumbnailUrl: 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg',
+          catalogThumbnailUrl: 'https://i.ytimg.com/vi/abcdefghijk/hq720.jpg',
+          thumbnailPath: artwork.path,
+        );
+
+        final repaired = await fixture.helper.repairStoredArtwork([local]);
+
+        expect(repaired, 0);
+      },
+    );
+
+    test(
+      'accepts a valid direct fallback when distinct catalog art was unavailable',
+      () async {
+        final cacheLookups = <String>[];
+        final fixture = await _DownloadFixture.create(
+          artworkCacheFileLookup: (source) async {
+            cacheLookups.add(source);
+            return null;
+          },
+        );
+        addTearDown(fixture.dispose);
+        final artwork = File(
+          p.join(fixture.tempDirectory.path, 'stored-direct-fallback.png'),
+        );
+        await artwork.writeAsBytes(_validArtworkBytes);
+        final local = LocalTrack(
+          id: 'stored-direct-family-track',
+          title: 'Stored direct family',
+          artist: 'Artist',
+          filePath: p.join(fixture.tempDirectory.path, 'audio.m4a'),
+          addedAt: DateTime(2026),
+          sourceUrl: 'https://catalog.example/tracks/direct-family',
+          thumbnailUrl: 'https://images.example/direct.png',
+          catalogThumbnailUrl: 'https://images.example/missing-catalog.png',
+          thumbnailPath: artwork.path,
+        );
+
+        final repaired = await fixture.helper.repairStoredArtwork([local]);
+
+        expect(repaired, 0);
+        expect(cacheLookups, isEmpty);
+      },
+    );
+
+    test(
       'rolls back newly downloaded audio and artwork when persistence fails',
       () async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(() => server.close(force: true));
         server.listen((request) async {
           request.response.headers.contentType = ContentType('image', 'jpeg');
-          request.response.add(const [0xFF, 0xD8, 0xFF, 0xD9]);
+          request.response.add(_validArtworkBytes);
           await request.response.close();
         });
         final fixture = await _DownloadFixture.create(
@@ -887,6 +1043,7 @@ class _DownloadFixture {
     bool returnUnrelatedFile = false,
     TrackInfo? resolvedInfo,
     bool failSavingLocalTrack = false,
+    ArtworkCacheFileLookup? artworkCacheFileLookup,
   }) async {
     final tempDirectory = await Directory.systemTemp.createTemp(
       'bstream-download-dedupe-',
@@ -907,6 +1064,9 @@ class _DownloadFixture {
         musicRepositoryProvider.overrideWithValue(musicRepository),
         downloaderServiceProvider.overrideWithValue(progressService),
         settingsControllerProvider.overrideWith(() => settingsController),
+        artworkCacheFileLookupProvider.overrideWithValue(
+          artworkCacheFileLookup ?? (_) async => null,
+        ),
       ],
     );
     return _DownloadFixture._(

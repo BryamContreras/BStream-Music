@@ -6,6 +6,13 @@ final localTrackDownloadHelperProvider = Provider<LocalTrackDownloadHelper>((
   return LocalTrackDownloadHelper(ref);
 });
 
+typedef ArtworkCacheFileLookup = Future<File?> Function(String source);
+
+final artworkCacheFileLookupProvider = Provider<ArtworkCacheFileLookup>((ref) {
+  final cache = BStreamArtworkCacheManager();
+  return (source) async => (await cache.getFileFromCache(source))?.file;
+});
+
 class LocalTrackDownloadResult {
   const LocalTrackDownloadResult({
     required this.track,
@@ -26,6 +33,8 @@ class LocalTrackDownloadHelper {
   static const _maxThumbnailBytes = 10 * 1024 * 1024;
   static const _thumbnailIdleTimeout = Duration(seconds: 10);
   static const _thumbnailTotalTimeout = Duration(seconds: 30);
+  static const _thumbnailCandidateTimeout = Duration(seconds: 20);
+  static const _thumbnailSaveBudget = Duration(seconds: 45);
   static const _maximumParallelDownloads = 3;
 
   final Ref _ref;
@@ -34,10 +43,11 @@ class LocalTrackDownloadHelper {
   final Map<String, bool Function()> _cancellationProbes = {};
   final Queue<Completer<void>> _downloadPermitWaiters = Queue();
   int _activeDownloads = 0;
+  int _thumbnailWriteSequence = 0;
   Future<void> _downloadTail = Future<void>.value();
   Future<int>? _storedArtworkRepair;
 
-  /// Replaces legacy, low-resolution library artwork without touching audio.
+  /// Restores missing or unreadable library artwork without touching audio.
   ///
   /// Repairs run sequentially so a large local library cannot create the same
   /// burst of network work as a batch media download. After two consecutive
@@ -49,13 +59,14 @@ class LocalTrackDownloadHelper {
     }
 
     late final Future<int> repair;
-    repair = _repairStoredArtwork(tracks.toList(growable: false)).whenComplete(
-      () {
-        if (identical(_storedArtworkRepair, repair)) {
-          _storedArtworkRepair = null;
-        }
-      },
-    );
+    repair = _ref
+        .read(libraryOperationCoordinatorProvider)
+        .runWithGate(() => _repairStoredArtwork(tracks.toList(growable: false)))
+        .whenComplete(() {
+          if (identical(_storedArtworkRepair, repair)) {
+            _storedArtworkRepair = null;
+          }
+        });
     _storedArtworkRepair = repair;
     return repair;
   }
@@ -68,6 +79,7 @@ class LocalTrackDownloadHelper {
     final thumbnailsDirectory = await _thumbnailsDirectory();
     var repaired = 0;
     var consecutiveFailures = 0;
+    final repairBudget = Stopwatch()..start();
     for (final localTrack in tracks) {
       if (localTrack.isExternal) {
         continue;
@@ -79,14 +91,17 @@ class LocalTrackDownloadHelper {
         continue;
       }
 
-      final desiredSource = candidates.first.toString();
       final currentPath = localTrack.thumbnailPath?.trim();
       final hasStoredArtwork =
           currentPath != null &&
           currentPath.isNotEmpty &&
-          await _isUsableFile(currentPath);
-      if (hasStoredArtwork &&
-          localTrack.thumbnailUrl?.trim() == desiredSource) {
+          await _isUsableThumbnailFile(currentPath);
+      final storedSource = localTrack.thumbnailUrl?.trim();
+      final storedSourceIsCurrent =
+          storedSource != null &&
+          storedSource.isNotEmpty &&
+          _acceptedThumbnailSources(track).contains(storedSource);
+      if (hasStoredArtwork && storedSourceIsCurrent) {
         consecutiveFailures = 0;
         continue;
       }
@@ -101,7 +116,11 @@ class LocalTrackDownloadHelper {
       );
       if (savedThumbnail == null) {
         consecutiveFailures++;
-        if (consecutiveFailures >= 2) {
+        // Fast permanent failures (for example, an old video's missing SD
+        // rendition) must not prevent later cached covers from being fixed.
+        // Two slow/offline failures still bound background startup work.
+        if (consecutiveFailures >= 2 &&
+            repairBudget.elapsed >= const Duration(seconds: 15)) {
           break;
         }
         continue;
@@ -614,7 +633,7 @@ class LocalTrackDownloadHelper {
     final hasUsableThumbnail =
         currentThumbnailPath != null &&
         currentThumbnailPath.isNotEmpty &&
-        await _isUsableFile(currentThumbnailPath);
+        await _isUsableThumbnailFile(currentThumbnailPath);
     final incomingThumbnail = metadata.thumbnailUrl?.trim();
     final shouldRefreshThumbnail =
         !hasUsableThumbnail ||
@@ -789,6 +808,22 @@ class LocalTrackDownloadHelper {
     try {
       final file = File(path);
       return await file.exists() && await file.length() > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _isUsableThumbnailFile(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) {
+        return false;
+      }
+      final length = await file.length();
+      if (length <= 0 || length > _maxThumbnailBytes) {
+        return false;
+      }
+      return await _thumbnailExtension(await file.readAsBytes()) != null;
     } catch (_) {
       return false;
     }
@@ -1002,69 +1037,96 @@ class LocalTrackDownloadHelper {
 
     final directory = Directory(directoryPath);
     await directory.create(recursive: true);
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 12);
-    final cancellationTimer = isCancelled == null
-        ? null
-        : Timer.periodic(const Duration(milliseconds: 50), (_) {
-            if (_isDownloadCancelled(isCancelled)) {
-              client.close(force: true);
-            }
-          });
+    final cached = await _saveCachedThumbnail(
+      candidates,
+      track,
+      directory,
+      identityDigest,
+      isCancelled: isCancelled,
+    );
+    if (cached != null) {
+      return cached;
+    }
+
+    final saveBudget = Stopwatch()..start();
     try {
       for (final uri in candidates) {
+        if (saveBudget.elapsed >= _thumbnailSaveBudget) {
+          break;
+        }
         _throwIfDownloadCancelled(isCancelled);
+        final client = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 12);
+        final cancellationTimer = isCancelled == null
+            ? null
+            : Timer.periodic(const Duration(milliseconds: 50), (_) {
+                if (_isDownloadCancelled(isCancelled)) {
+                  client.close(force: true);
+                }
+              });
         try {
-          final saved = await _downloadThumbnail(
-            client,
-            uri,
-            track,
-            directory,
-            identityDigest,
-          );
+          final saved =
+              await _downloadThumbnail(
+                client,
+                uri,
+                track,
+                directory,
+                identityDigest,
+              ).timeout(
+                _thumbnailCandidateTimeout,
+                onTimeout: () {
+                  client.close(force: true);
+                  throw TimeoutException(
+                    'Artwork candidate exceeded its bounded download time.',
+                    _thumbnailCandidateTimeout,
+                  );
+                },
+              );
           _throwIfDownloadCancelled(isCancelled);
           if (saved != null) {
             return _SavedThumbnail(
               path: saved.path,
               sourceUrl: uri.toString(),
               createdNewFile: saved.createdNewFile,
+              replacedBytes: saved.replacedBytes,
             );
           }
         } catch (_) {
           _throwIfDownloadCancelled(isCancelled);
           // A timeout or TLS failure for one candidate must not prevent the
           // lower-resolution or catalog artwork fallbacks from being tried.
+        } finally {
+          cancellationTimer?.cancel();
+          client.close(force: true);
         }
       }
       return null;
     } catch (_) {
       _throwIfDownloadCancelled(isCancelled);
       return null;
-    } finally {
-      cancellationTimer?.cancel();
-      client.close(force: true);
     }
   }
 
-  Future<({String path, bool createdNewFile})?> _downloadThumbnail(
+  Future<({String path, bool createdNewFile, Uint8List? replacedBytes})?>
+  _downloadThumbnail(
     HttpClient client,
     Uri uri,
     TrackInfo track,
     Directory directory,
     String identityDigest,
   ) async {
-    final request = await client.getUrl(uri);
+    final request = await client.getUrl(uri).timeout(_thumbnailIdleTimeout);
     request.headers.set(
       HttpHeaders.userAgentHeader,
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     );
     request.headers.set(
       HttpHeaders.acceptHeader,
-      'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      'image/webp,image/png,image/jpeg,*/*;q=0.5',
     );
-    final response = await request.close();
+    final response = await request.close().timeout(_thumbnailIdleTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      await response.drain<void>();
+      await response.drain<void>().timeout(_thumbnailIdleTimeout);
       return null;
     }
 
@@ -1077,19 +1139,82 @@ class LocalTrackDownloadHelper {
       idleTimeout: _thumbnailIdleTimeout,
       totalTimeout: _thumbnailTotalTimeout,
     );
-    final extension = _thumbnailExtension(
-      uri,
-      response.headers.contentType?.mimeType,
-      bytes,
-    );
+    final extension = await _thumbnailExtension(bytes);
     if (bytes.isEmpty || extension == null) {
       return null;
     }
 
+    return _storeThumbnailBytes(
+      bytes,
+      extension,
+      track,
+      directory,
+      identityDigest,
+    );
+  }
+
+  Future<_SavedThumbnail?> _saveCachedThumbnail(
+    List<Uri> candidates,
+    TrackInfo track,
+    Directory directory,
+    String identityDigest, {
+    required bool Function()? isCancelled,
+  }) async {
+    final findCachedFile = _ref.read(artworkCacheFileLookupProvider);
+    for (final uri in candidates) {
+      _throwIfDownloadCancelled(isCancelled);
+      if (!isNetworkImageSource(uri.toString())) {
+        continue;
+      }
+      try {
+        final cachedFile = await findCachedFile(uri.toString());
+        if (cachedFile == null) {
+          continue;
+        }
+        final length = await cachedFile.length();
+        if (length <= 0 || length > _maxThumbnailBytes) {
+          continue;
+        }
+        final bytes = await cachedFile.readAsBytes();
+        final extension = await _thumbnailExtension(bytes);
+        if (extension == null) {
+          continue;
+        }
+        final saved = await _storeThumbnailBytes(
+          bytes,
+          extension,
+          track,
+          directory,
+          identityDigest,
+        );
+        return _SavedThumbnail(
+          path: saved.path,
+          sourceUrl: uri.toString(),
+          createdNewFile: saved.createdNewFile,
+          replacedBytes: saved.replacedBytes,
+        );
+      } catch (_) {
+        _throwIfDownloadCancelled(isCancelled);
+        // Cache access is only an offline optimization. A stale entry or an
+        // unavailable cache database must never prevent the normal request.
+      }
+    }
+    return null;
+  }
+
+  Future<({String path, bool createdNewFile, Uint8List? replacedBytes})>
+  _storeThumbnailBytes(
+    List<int> bytes,
+    String extension,
+    TrackInfo track,
+    Directory directory,
+    String identityDigest,
+  ) async {
     final baseName = _identityFileName(track, identityDigest, digestLength: 16);
     final file = File(p.join(directory.path, '$baseName$extension'));
     final createdNewFile = !await file.exists();
-    final partial = File('${file.path}.part');
+    final replacedBytes = createdNewFile ? null : await file.readAsBytes();
+    final partial = File(_thumbnailPartialPath(file.path, 'write'));
     await _deleteFileBestEffort(partial.path);
     try {
       await partial.writeAsBytes(bytes, flush: true);
@@ -1098,7 +1223,11 @@ class LocalTrackDownloadHelper {
         // reject replacement, in which case the bounded fallback below keeps
         // the non-atomic window as short as possible.
         final saved = await partial.rename(file.path);
-        return (path: saved.path, createdNewFile: createdNewFile);
+        return (
+          path: saved.path,
+          createdNewFile: createdNewFile,
+          replacedBytes: replacedBytes,
+        );
       } on FileSystemException {
         if (!await file.exists()) {
           rethrow;
@@ -1106,7 +1235,21 @@ class LocalTrackDownloadHelper {
         await file.delete();
       }
       final saved = await partial.rename(file.path);
-      return (path: saved.path, createdNewFile: createdNewFile);
+      return (
+        path: saved.path,
+        createdNewFile: createdNewFile,
+        replacedBytes: replacedBytes,
+      );
+    } catch (_) {
+      if (!createdNewFile && replacedBytes != null && !await file.exists()) {
+        try {
+          await file.writeAsBytes(replacedBytes, flush: true);
+        } catch (_) {
+          // Preserve the original storage failure; rollback after a failed
+          // replacement is best effort just like the database rollback.
+        }
+      }
+      rethrow;
     } finally {
       await _deleteFileBestEffort(partial.path);
     }
@@ -1154,10 +1297,33 @@ class LocalTrackDownloadHelper {
   }
 
   Future<void> _rollbackSavedThumbnail(_SavedThumbnail? thumbnail) async {
-    if (thumbnail == null || !thumbnail.createdNewFile) {
+    if (thumbnail == null) {
       return;
     }
-    await _deleteFileBestEffort(thumbnail.path);
+    if (thumbnail.createdNewFile) {
+      await _deleteFileBestEffort(thumbnail.path);
+      return;
+    }
+    final replacedBytes = thumbnail.replacedBytes;
+    if (replacedBytes == null) {
+      return;
+    }
+    final file = File(thumbnail.path);
+    final partial = File(_thumbnailPartialPath(file.path, 'rollback'));
+    await _deleteFileBestEffort(partial.path);
+    try {
+      await partial.writeAsBytes(replacedBytes, flush: true);
+      try {
+        await partial.rename(file.path);
+      } on FileSystemException {
+        if (await file.exists()) {
+          await file.delete();
+        }
+        await partial.rename(file.path);
+      }
+    } finally {
+      await _deleteFileBestEffort(partial.path);
+    }
   }
 
   Future<void> _deleteFileBestEffort(String path) async {
@@ -1171,6 +1337,11 @@ class LocalTrackDownloadHelper {
     }
   }
 
+  String _thumbnailPartialPath(String destination, String operation) {
+    final sequence = _thumbnailWriteSequence++;
+    return '$destination.$operation-$sequence.part';
+  }
+
   Iterable<Uri> _thumbnailCandidates(TrackInfo track) sync* {
     final seen = <String>{};
     final direct = track.thumbnailUrl?.trim();
@@ -1182,9 +1353,9 @@ class LocalTrackDownloadHelper {
     // legacy rows predate metadataSource persistence, so its presence is more
     // authoritative than the enum when choosing artwork.
     final candidates = <String>[
-      ...artworkSourceCandidates(catalog),
-      ...artworkSourceCandidates(direct),
-      ...artworkSourceCandidates(videoArtwork),
+      ...artworkDownloadSourceCandidates(catalog),
+      ...artworkDownloadSourceCandidates(direct),
+      ...artworkDownloadSourceCandidates(videoArtwork),
     ];
     for (final source in candidates) {
       final uri = Uri.tryParse(source);
@@ -1192,6 +1363,19 @@ class LocalTrackDownloadHelper {
         yield uri;
       }
     }
+  }
+
+  Set<String> _acceptedThumbnailSources(TrackInfo track) {
+    final direct = track.thumbnailUrl?.trim();
+    final catalog = track.catalogThumbnailUrl?.trim();
+    final videoArtwork = youtubeThumbnailSourceForVideoId(
+      _youtubeVideoId(track),
+    );
+    return <String>{
+      ...artworkDownloadSourceCandidates(catalog),
+      ...artworkDownloadSourceCandidates(direct),
+      ...artworkDownloadSourceCandidates(videoArtwork),
+    };
   }
 
   String? _youtubeVideoId(TrackInfo track) {
@@ -1227,47 +1411,81 @@ class LocalTrackDownloadHelper {
     return null;
   }
 
-  String? _thumbnailExtension(Uri uri, String? mimeType, List<int> bytes) {
-    final pathExtension = p.extension(uri.path).toLowerCase();
-    if (const {'.jpg', '.jpeg', '.png', '.webp'}.contains(pathExtension)) {
-      return pathExtension == '.jpeg' ? '.jpg' : pathExtension;
+  Future<String?> _thumbnailExtension(List<int> bytes) async {
+    final data = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+    if (_thumbnailMagicExtension(data) == null) {
+      return null;
     }
-
-    return switch (mimeType?.toLowerCase()) {
-      'image/jpeg' => '.jpg',
-      'image/png' => '.png',
-      'image/webp' => '.webp',
-      _ => _extensionFromMagicBytes(bytes),
-    };
+    try {
+      // Decode away from the UI/raster threads. Invoking a Flutter GPU codec
+      // from post-frame library maintenance can race Android surface startup,
+      // while the CPU decoder verifies the complete frame safely.
+      return await compute(_validatedThumbnailExtension, data);
+    } catch (_) {
+      // A matching filename or magic prefix is insufficient: truncated image
+      // data would otherwise become the permanent local-first cover.
+      return null;
+    }
   }
+}
 
-  String? _extensionFromMagicBytes(List<int> bytes) {
-    if (bytes.length >= 3 &&
-        bytes[0] == 0xFF &&
-        bytes[1] == 0xD8 &&
-        bytes[2] == 0xFF) {
-      return '.jpg';
-    }
-    if (bytes.length >= 8 &&
-        bytes[0] == 0x89 &&
-        bytes[1] == 0x50 &&
-        bytes[2] == 0x4E &&
-        bytes[3] == 0x47) {
-      return '.png';
-    }
-    if (bytes.length >= 12 &&
-        bytes[0] == 0x52 &&
-        bytes[1] == 0x49 &&
-        bytes[2] == 0x46 &&
-        bytes[3] == 0x46 &&
-        bytes[8] == 0x57 &&
-        bytes[9] == 0x45 &&
-        bytes[10] == 0x42 &&
-        bytes[11] == 0x50) {
-      return '.webp';
-    }
+String? _validatedThumbnailExtension(Uint8List bytes) {
+  final expectedExtension = _thumbnailMagicExtension(bytes);
+  if (expectedExtension == null) {
     return null;
   }
+  try {
+    final decoder = image.findDecoderForData(bytes);
+    final decodedExtension = switch (decoder?.format) {
+      image.ImageFormat.jpg => '.jpg',
+      image.ImageFormat.png => '.png',
+      image.ImageFormat.webp => '.webp',
+      _ => null,
+    };
+    if (decodedExtension != expectedExtension || decoder == null) {
+      return null;
+    }
+    final info = decoder.startDecode(bytes);
+    if (info == null ||
+        info.width <= 0 ||
+        info.height <= 0 ||
+        info.width > 8192 ||
+        info.height > 8192 ||
+        info.width * info.height > 24000000) {
+      return null;
+    }
+    return decoder.decodeFrame(0) == null ? null : decodedExtension;
+  } catch (_) {
+    return null;
+  }
+}
+
+String? _thumbnailMagicExtension(List<int> bytes) {
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xFF &&
+      bytes[1] == 0xD8 &&
+      bytes[2] == 0xFF) {
+    return '.jpg';
+  }
+  if (bytes.length >= 8 &&
+      bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4E &&
+      bytes[3] == 0x47) {
+    return '.png';
+  }
+  if (bytes.length >= 12 &&
+      bytes[0] == 0x52 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x46 &&
+      bytes[8] == 0x57 &&
+      bytes[9] == 0x45 &&
+      bytes[10] == 0x42 &&
+      bytes[11] == 0x50) {
+    return '.webp';
+  }
+  return null;
 }
 
 class _SavedThumbnail {
@@ -1275,9 +1493,11 @@ class _SavedThumbnail {
     required this.path,
     required this.sourceUrl,
     required this.createdNewFile,
+    required this.replacedBytes,
   });
 
   final String path;
   final String sourceUrl;
   final bool createdNewFile;
+  final Uint8List? replacedBytes;
 }

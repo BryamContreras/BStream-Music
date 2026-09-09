@@ -32,6 +32,7 @@ class TikTokLiveChatCommand {
     required this.text,
     this.query,
     this.isModerator = false,
+    this.isFollower = false,
     this.isSubscriber = false,
   });
 
@@ -40,6 +41,7 @@ class TikTokLiveChatCommand {
   final String text;
   final String? query;
   final bool isModerator;
+  final bool isFollower;
   final bool isSubscriber;
 
   factory TikTokLiveChatCommand.fromJson(Map<String, dynamic> json) {
@@ -49,6 +51,7 @@ class TikTokLiveChatCommand {
       user: json['user']?.toString() ?? 'unknown',
       text: json['text']?.toString() ?? '',
       isModerator: _jsonBool(json['is_moderator']),
+      isFollower: _jsonBool(json['is_follower'] ?? json['isFollower']),
       isSubscriber: _jsonBool(json['is_subscriber'] ?? json['isSubscriber']),
     );
   }

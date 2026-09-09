@@ -94,6 +94,7 @@ class SettingsState {
     this.surfaceBackgroundMode = SurfaceBackgroundMode.accent,
     this.playerStyle = defaultPlayerStyle,
     this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
+    this.playerArtworkStyle = defaultPlayerArtworkStyle,
     this.miniPlayerMode = defaultMiniPlayerMode,
     this.miniPlayerBackgroundMode = defaultMiniPlayerBackgroundMode,
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
@@ -113,6 +114,7 @@ class SettingsState {
   final SurfaceBackgroundMode surfaceBackgroundMode;
   final PlayerStyle playerStyle;
   final bool animatedArtworkEnabled;
+  final PlayerArtworkStyle playerArtworkStyle;
   final MiniPlayerMode miniPlayerMode;
   final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final LyricsTextAlignment lyricsTextAlignment;
@@ -132,6 +134,7 @@ class SettingsState {
     SurfaceBackgroundMode? surfaceBackgroundMode,
     PlayerStyle? playerStyle,
     bool? animatedArtworkEnabled,
+    PlayerArtworkStyle? playerArtworkStyle,
     MiniPlayerMode? miniPlayerMode,
     MiniPlayerBackgroundMode? miniPlayerBackgroundMode,
     LyricsTextAlignment? lyricsTextAlignment,
@@ -153,6 +156,7 @@ class SettingsState {
       playerStyle: playerStyle ?? this.playerStyle,
       animatedArtworkEnabled:
           animatedArtworkEnabled ?? this.animatedArtworkEnabled,
+      playerArtworkStyle: playerArtworkStyle ?? this.playerArtworkStyle,
       miniPlayerMode: miniPlayerMode ?? this.miniPlayerMode,
       miniPlayerBackgroundMode:
           miniPlayerBackgroundMode ?? this.miniPlayerBackgroundMode,
@@ -190,6 +194,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _surfaceBackgroundModeKey = 'settings.surfaceBackgroundMode';
   static const _playerStyleKey = 'settings.playerStyle';
   static const _animatedArtworkEnabledKey = 'settings.animatedArtworkEnabled';
+  static const _playerArtworkStyleKey = 'settings.playerArtworkStyle';
   static const _miniPlayerModeKey = 'settings.miniPlayerMode';
   static const _miniPlayerBackgroundModeKey =
       'settings.miniPlayerBackgroundMode';
@@ -231,6 +236,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final animatedArtworkEnabled =
         prefs.getBool(_animatedArtworkEnabledKey) ??
         defaultAnimatedArtworkEnabled;
+    final playerArtworkStyle = PlayerArtworkStyle.fromCode(
+      prefs.getString(_playerArtworkStyleKey),
+    );
     final miniPlayerMode = MiniPlayerMode.fromCode(
       prefs.getString(_miniPlayerModeKey),
       platform: defaultTargetPlatform,
@@ -427,6 +435,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       surfaceBackgroundMode: surfaceBackgroundMode,
       playerStyle: playerStyle,
       animatedArtworkEnabled: animatedArtworkEnabled,
+      playerArtworkStyle: playerArtworkStyle,
       miniPlayerMode: miniPlayerMode,
       miniPlayerBackgroundMode: miniPlayerBackgroundMode,
       lyricsTextAlignment: lyricsTextAlignment,
@@ -676,6 +685,13 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     });
     _animatedArtworkWriteTail = write.catchError((_) {});
     await write;
+  }
+
+  Future<void> setPlayerArtworkStyle(PlayerArtworkStyle style) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_playerArtworkStyleKey, style.code);
+    final current = await future;
+    state = AsyncData(current.copyWith(playerArtworkStyle: style));
   }
 
   Future<void> setMiniPlayerMode(MiniPlayerMode mode) async {

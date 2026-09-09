@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/image_source.dart';
@@ -43,7 +44,7 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
   final String subtitle;
   final String? artworkSource;
   final String queueSourceId;
-  final FutureProvider<List<TrackInfo>> tracksProvider;
+  final ProviderListenable<AsyncValue<List<TrackInfo>>> tracksProvider;
   final String emptyMessage;
   final String errorMessage;
   final VoidCallback onOpenPlayer;
@@ -205,8 +206,9 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
                     final provider = detailsProvider;
                     if (provider != null) {
                       ref.invalidate(provider);
-                    } else {
-                      ref.invalidate(tracksProvider);
+                    } else if (tracksProvider
+                        case final ProviderOrFamily provider) {
+                      ref.invalidate(provider);
                     }
                   },
                   style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),

@@ -31,6 +31,7 @@ void main() {
         '  !PlAy   La pareja del año  ',
         user: 'viewer.one',
         isModerator: true,
+        isFollower: true,
         isSubscriber: true,
       );
 
@@ -40,6 +41,7 @@ void main() {
       expect(command.user, 'viewer.one');
       expect(command.text, '!PlAy   La pareja del año');
       expect(command.isModerator, isTrue);
+      expect(command.isFollower, isTrue);
       expect(command.isSubscriber, isTrue);
     });
 
@@ -48,9 +50,11 @@ void main() {
         'action': 'skip',
         'user': 'subscriber.viewer',
         'text': '!skip',
+        'is_follower': true,
         'is_subscriber': true,
       });
 
+      expect(command.isFollower, isTrue);
       expect(command.isSubscriber, isTrue);
       expect(command.isModerator, isFalse);
     });
@@ -204,6 +208,65 @@ void main() {
     });
   });
 
+  group('isTikTokLiveFollower', () {
+    test('supports anchor identity in camelCase and snake_case', () {
+      expect(
+        isTikTokLiveFollower(
+          const {},
+          eventData: const {
+            'userIdentity': {'isFollowerOfAnchor': true},
+          },
+        ),
+        isTrue,
+      );
+      expect(
+        isTikTokLiveFollower(const {
+          'user_identity': {'is_follower_of_anchor': true},
+        }),
+        isTrue,
+      );
+      expect(isTikTokLiveFollower(const {'isFollowerOfAnchor': true}), isTrue);
+      expect(
+        isTikTokLiveFollower(const {
+          'userIdentity': {
+            'isFollowerOfAnchor': false,
+            'isMutualFollowingWithAnchor': true,
+          },
+        }),
+        isTrue,
+      );
+    });
+
+    test('supports normalized User.isFollower metadata', () {
+      for (final user in <Map<String, dynamic>>[
+        {'isFollower': true},
+        {'is_follower': true},
+      ]) {
+        expect(isTikTokLiveFollower(user), isTrue, reason: '$user');
+      }
+      expect(
+        isTikTokLiveFollower(const {
+          'userIdentity': {'isMutualFollowingWithAnchor': false},
+          'isFollower': true,
+        }),
+        isTrue,
+        reason: 'not mutual does not mean the viewer is not a follower',
+      );
+    });
+
+    test('anchor identity is authoritative over the user fallback', () {
+      expect(isTikTokLiveFollower(null), isFalse);
+      expect(isTikTokLiveFollower(const {}), isFalse);
+      expect(
+        isTikTokLiveFollower(const {
+          'userIdentity': {'isFollowerOfAnchor': false},
+          'isFollower': true,
+        }),
+        isFalse,
+      );
+    });
+  });
+
   group('TikTokLiveDartAdapter', () {
     late List<_FakeTikTokLiveDartClient> clients;
     late TikTokLiveDartAdapter adapter;
@@ -291,7 +354,10 @@ void main() {
         data: const {
           'comment': '!play Hello',
           'user': {'uniqueId': 'moderator.viewer', 'isModeratorOfAnchor': true},
-          'userIdentity': {'isSubscriberOfAnchor': true},
+          'userIdentity': {
+            'isFollowerOfAnchor': true,
+            'isSubscriberOfAnchor': true,
+          },
         },
         roomId: 'room-1',
       );
@@ -302,6 +368,7 @@ void main() {
       expect(event.command?.query, 'Hello');
       expect(event.command?.user, 'moderator.viewer');
       expect(event.command?.isModerator, isTrue);
+      expect(event.command?.isFollower, isTrue);
       expect(event.command?.isSubscriber, isTrue);
       expect(event.roomId, 'room-1');
     });

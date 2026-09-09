@@ -29,6 +29,7 @@ void main() {
         query: 'La pareja del año',
         user: 'viewer',
         isModerator: true,
+        isFollower: true,
         isSubscriber: true,
         text: '!play La pareja del año',
       ),
@@ -39,6 +40,7 @@ void main() {
     expect(event.command?.query, 'La pareja del año');
     expect(event.command?.user, 'viewer');
     expect(event.command?.isModerator, isTrue);
+    expect(event.command?.isFollower, isTrue);
     expect(event.command?.isSubscriber, isTrue);
   });
 
@@ -54,13 +56,15 @@ void main() {
     );
 
     expect(event.command?.isModerator, isFalse);
+    expect(event.command?.isFollower, isFalse);
     expect(event.command?.isSubscriber, isFalse);
   });
 
   test('command permissions combine public and privileged audiences', () {
     const permissions = TikTokCommandPermissions(
       everyone: {TikTokLiveCommand.play},
-      moderators: {TikTokLiveCommand.skip, TikTokLiveCommand.stop},
+      followers: {TikTokLiveCommand.skip},
+      moderators: {TikTokLiveCommand.stop},
       subscribers: {TikTokLiveCommand.revoke},
     );
 
@@ -71,8 +75,13 @@ void main() {
         reason: 'viewer: $action',
       );
       expect(
+        canUseTikTokCommand(permissions, _command(action, isFollower: true)),
+        action == 'play' || action == 'skip',
+        reason: 'follower: $action',
+      );
+      expect(
         canUseTikTokCommand(permissions, _command(action, isModerator: true)),
-        action == 'play' || action == 'skip' || action == 'stop',
+        action == 'play' || action == 'stop',
         reason: 'moderator: $action',
       );
       expect(
@@ -83,10 +92,15 @@ void main() {
       expect(
         canUseTikTokCommand(
           permissions,
-          _command(action, isModerator: true, isSubscriber: true),
+          _command(
+            action,
+            isModerator: true,
+            isFollower: true,
+            isSubscriber: true,
+          ),
         ),
         isTrue,
-        reason: 'moderator and subscriber: $action',
+        reason: 'combined privileged roles: $action',
       );
     }
 
@@ -94,7 +108,7 @@ void main() {
   });
 
   test(
-    'controller defaults every command to everyone and stores v3 JSON',
+    'controller defaults every command to everyone and stores v4 JSON',
     () async {
       SharedPreferences.setMockInitialValues({});
       final fixture = _LiveControllerFixture();
@@ -105,13 +119,15 @@ void main() {
       );
 
       expect(state.commandPermissions.everyone, allTikTokLiveCommands);
+      expect(state.commandPermissions.followers, isEmpty);
       expect(state.commandPermissions.moderators, isEmpty);
       expect(state.commandPermissions.subscribers, isEmpty);
 
       final prefs = await SharedPreferences.getInstance();
-      expect(jsonDecode(prefs.getString('tiktokLive.commandPermissions.v3')!), {
-        'version': 3,
+      expect(jsonDecode(prefs.getString('tiktokLive.commandPermissions.v4')!), {
+        'version': 4,
         'everyone': ['play', 'skip', 'revoke', 'stop'],
+        'followers': <Object>[],
         'moderators': <Object>[],
         'subscribers': <Object>[],
       });
@@ -132,6 +148,7 @@ void main() {
       );
 
       expect(state.commandPermissions.everyone, isEmpty);
+      expect(state.commandPermissions.followers, isEmpty);
       expect(state.commandPermissions.moderators, allTikTokLiveCommands);
       expect(state.commandPermissions.subscribers, isEmpty);
       expect(
@@ -147,9 +164,10 @@ void main() {
       );
 
       final prefs = await SharedPreferences.getInstance();
-      expect(jsonDecode(prefs.getString('tiktokLive.commandPermissions.v3')!), {
-        'version': 3,
+      expect(jsonDecode(prefs.getString('tiktokLive.commandPermissions.v4')!), {
+        'version': 4,
         'everyone': <Object>[],
+        'followers': <Object>[],
         'moderators': ['play', 'skip', 'revoke', 'stop'],
         'subscribers': <Object>[],
       });
@@ -177,6 +195,7 @@ void main() {
       TikTokLiveCommand.revoke,
       TikTokLiveCommand.stop,
     });
+    expect(state.commandPermissions.followers, isEmpty);
     expect(state.commandPermissions.moderators, {TikTokLiveCommand.skip});
     expect(state.commandPermissions.subscribers, {
       TikTokLiveCommand.revoke,
@@ -184,16 +203,17 @@ void main() {
     });
 
     final prefs = await SharedPreferences.getInstance();
-    expect(jsonDecode(prefs.getString('tiktokLive.commandPermissions.v3')!), {
-      'version': 3,
+    expect(jsonDecode(prefs.getString('tiktokLive.commandPermissions.v4')!), {
+      'version': 4,
       'everyone': ['play', 'revoke', 'stop'],
+      'followers': <Object>[],
       'moderators': ['skip'],
       'subscribers': ['revoke', 'stop'],
     });
   });
 
   test(
-    'v3 restores revoke enabled and stop disabled without coupling',
+    'v3 migrates without coupling commands or granting follower access',
     () async {
       final stored = jsonEncode({
         'version': 3,
@@ -212,6 +232,7 @@ void main() {
       );
 
       expect(state.commandPermissions.everyone, {TikTokLiveCommand.revoke});
+      expect(state.commandPermissions.followers, isEmpty);
       expect(state.commandPermissions.moderators, {TikTokLiveCommand.stop});
       expect(state.commandPermissions.subscribers, isEmpty);
       expect(
@@ -224,7 +245,13 @@ void main() {
       );
 
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('tiktokLive.commandPermissions.v3'), stored);
+      expect(jsonDecode(prefs.getString('tiktokLive.commandPermissions.v4')!), {
+        'version': 4,
+        'everyone': ['revoke'],
+        'followers': <Object>[],
+        'moderators': ['stop'],
+        'subscribers': <Object>[],
+      });
     },
   );
 
@@ -242,6 +269,11 @@ void main() {
           TikTokCommandAudience.everyone,
           TikTokLiveCommand.skip,
           false,
+        );
+        await controller.setCommandPermission(
+          TikTokCommandAudience.followers,
+          TikTokLiveCommand.skip,
+          true,
         );
         await controller.setCommandPermission(
           TikTokCommandAudience.moderators,
@@ -263,15 +295,17 @@ void main() {
           TikTokLiveCommand.revoke,
           TikTokLiveCommand.stop,
         });
+        expect(permissions.followers, {TikTokLiveCommand.skip});
         expect(permissions.moderators, {TikTokLiveCommand.skip});
         expect(permissions.subscribers, {TikTokLiveCommand.revoke});
 
         final prefs = await SharedPreferences.getInstance();
         expect(
-          jsonDecode(prefs.getString('tiktokLive.commandPermissions.v3')!),
+          jsonDecode(prefs.getString('tiktokLive.commandPermissions.v4')!),
           {
-            'version': 3,
+            'version': 4,
             'everyone': ['play', 'revoke', 'stop'],
+            'followers': ['skip'],
             'moderators': ['skip'],
             'subscribers': ['revoke'],
           },
@@ -289,6 +323,9 @@ void main() {
         TikTokLiveCommand.play,
         TikTokLiveCommand.revoke,
         TikTokLiveCommand.stop,
+      });
+      expect(restoredState.commandPermissions.followers, {
+        TikTokLiveCommand.skip,
       });
       expect(restoredState.commandPermissions.moderators, {
         TikTokLiveCommand.skip,
@@ -365,6 +402,7 @@ void main() {
 TikTokLiveChatCommand _command(
   String action, {
   bool isModerator = false,
+  bool isFollower = false,
   bool isSubscriber = false,
 }) {
   return TikTokLiveChatCommand(
@@ -372,6 +410,7 @@ TikTokLiveChatCommand _command(
     user: 'viewer',
     text: '!$action',
     isModerator: isModerator,
+    isFollower: isFollower,
     isSubscriber: isSubscriber,
   );
 }

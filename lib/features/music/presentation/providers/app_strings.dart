@@ -4,6 +4,7 @@ import '../../domain/entities/lyrics_romanization_language.dart';
 import 'lyrics_animation_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
+import 'player_artwork_style.dart';
 import 'player_style.dart';
 
 enum AppLanguage { spanish, english }
@@ -249,6 +250,15 @@ class AppStrings {
   );
   String get searchEmptySubtitle =>
       choose('Los resultados aparecerán aquí.', 'Results will appear here.');
+  String get searchBrowseAll => choose('Explorar todo', 'Browse all');
+  String get searchBrowseEmpty => choose(
+    'No encontramos canciones en esta categoría.',
+    'No songs were found in this category.',
+  );
+  String get searchBrowseError => choose(
+    'No se pudo cargar esta categoría.',
+    'This category could not be loaded.',
+  );
   String get searchErrorTitle => choose('No se pudo buscar', 'Search failed');
   String get searchSongs => choose('Canciones', 'Songs');
   String get searchVideos => choose('Videos', 'Videos');
@@ -514,12 +524,18 @@ class AppStrings {
   String get commandPermissions =>
       choose('Quién puede usar los comandos', 'Who can use commands');
   String get everyone => choose('Todos', 'Everyone');
+  String get follower => choose('Seguidor', 'Follower');
+  String get followers => choose('Seguidores', 'Followers');
   String get moderators => choose('Moderadores', 'Moderators');
   String get subscriber => choose('Suscriptor', 'Subscriber');
   String get subscribers => choose('Suscriptores', 'Subscribers');
   String get everyoneCommandPermissionsHint => choose(
     'Comandos disponibles para cualquier espectador.',
     'Commands available to any viewer.',
+  );
+  String get followerCommandPermissionsHint => choose(
+    'Permisos adicionales para seguidores.',
+    'Additional permissions for followers.',
   );
   String get moderatorCommandPermissionsHint => choose(
     'Permisos adicionales para moderadores.',
@@ -810,6 +826,10 @@ class AppStrings {
     'Añade movimiento, profundidad y zoom sutiles a la portada del reproductor.',
     'Adds subtle motion, depth, and zoom to the player artwork.',
   );
+  String get playerArtworkStyle =>
+      choose('Estilo de las portadas', 'Artwork style');
+  String get playerArtworkStyleClassic => choose('Clásico', 'Classic');
+  String get playerArtworkStyleExpanded => choose('Expandido', 'Expanded');
   String get miniPlayer => choose('Mini reproductor', 'Mini player');
   String get miniPlayerStyle => choose('Estilo', 'Style');
   String get miniPlayerClassic => choose('Clásico', 'Classic');
@@ -992,6 +1012,103 @@ class AppStrings {
       choose('Lista para reproducción remota', 'Ready for remote playback');
   String get connect => choose('Conectar', 'Connect');
   String get disconnect => choose('Desconectar', 'Disconnect');
+  String get liveOverlay => choose('Overlay LIVE local', 'Local LIVE overlay');
+  String get liveOverlayResolving => choose('BUSCANDO', 'SEARCHING');
+  String get liveOverlayLoading => choose('CARGANDO', 'LOADING');
+  String get liveOverlayConnectFirst => choose(
+    'Conecta un LIVE para comenzar a mostrar la cola.',
+    'Connect a LIVE to start showing the queue.',
+  );
+  String get liveOverlayInactive => choose(
+    'Activa una fuente web transparente con la canción actual y 4 más. '
+        'La primera vez Windows pedirá permiso para configurar su dominio local.',
+    'Enable a transparent browser source with the current song and 4 more. '
+        'The first time, Windows will request permission to configure its local domain.',
+  );
+  String liveOverlayActive(String url) => choose(
+    'Servidor activo en $url. Añádelo como fuente web en TikTok LIVE Studio.',
+    'Server active at $url. Add it as a browser source in TikTok LIVE Studio.',
+  );
+  String get liveOverlayStarting => choose(
+    'Preparando el dominio local para TikTok LIVE Studio...',
+    'Preparing the local domain for TikTok LIVE Studio...',
+  );
+  String get liveOverlayStopping =>
+      choose('Deteniendo la overlay local...', 'Stopping the local overlay...');
+  String get liveOverlayUnsupported => choose(
+    'Esta función está disponible únicamente en la versión para PC.',
+    'This feature is available only in the PC version.',
+  );
+  String get liveOverlayError => choose(
+    'No se pudo iniciar el servidor local de la overlay.',
+    'The local overlay server could not be started.',
+  );
+  String get liveOverlayPermissionError => choose(
+    'Windows no pudo configurar el dominio local. Inténtalo de nuevo y acepta '
+        'el permiso de administrador.',
+    'Windows could not configure the local domain. Try again and accept the '
+        'administrator permission.',
+  );
+  String get liveOverlayWindowsRequestTimeoutError => choose(
+    'Windows no mostró o no completó a tiempo la solicitud de permiso. '
+        'Vuelve a intentarlo y revisa si el aviso de Control de cuentas de '
+        'usuario (UAC) quedó detrás de otra ventana.',
+    'Windows did not show or complete the permission request in time. Try '
+        'again and check whether the User Account Control (UAC) prompt '
+        'appeared behind another window.',
+  );
+  String get liveOverlayPermissionCancelledError => choose(
+    'Se canceló el permiso de administrador. La overlay no realizó cambios.',
+    'The administrator permission was cancelled. The overlay made no changes.',
+  );
+  String get liveOverlayPolicyBlockedError => choose(
+    'Una política de seguridad de Windows bloqueó la configuración de la '
+        'overlay. En un equipo administrado debe autorizarla el administrador.',
+    'A Windows security policy blocked the overlay configuration. On a managed '
+        'PC, an administrator must allow it.',
+  );
+  String get liveOverlayPowerShellUnavailableError => choose(
+    'Windows PowerShell 5.1 no está disponible. Actívalo o solicita ayuda al '
+        'administrador para configurar la overlay.',
+    'Windows PowerShell 5.1 is unavailable. Enable it or ask the administrator '
+        'to configure the overlay.',
+  );
+  String liveOverlayHostsConflictError(String host) => choose(
+    'La configuración de la overlay tiene un conflicto en el archivo hosts. '
+        'Corrige la entrada de $host y vuelve a intentarlo.',
+    'The overlay configuration conflicts with the hosts file. Correct the '
+        '$host entry and try again.',
+  );
+  String get liveOverlayHostsVerificationError => choose(
+    'Windows no pudo confirmar el dominio local. Reinicia BStream y vuelve a '
+        'intentarlo.',
+    'Windows could not verify the local domain. Restart BStream and try again.',
+  );
+  String get liveOverlayEndpointVerificationError => choose(
+    'El dominio quedó configurado, pero BStream no pudo abrir la overlay por '
+        'DNS o HTTP. Revisa el proxy, VPN o antivirus y vuelve a intentarlo.',
+    'The domain was configured, but BStream could not open the overlay through '
+        'DNS or HTTP. Check the proxy, VPN, or antivirus and try again.',
+  );
+  String get liveOverlayPortInUseError => choose(
+    'Otra aplicación ya está usando el puerto 80. Ciérrala y vuelve a activar '
+        'la overlay.',
+    'Another application is already using port 80. Close it and enable the '
+        'overlay again.',
+  );
+  String get liveOverlayPortAccessError => choose(
+    'Windows bloqueó o reservó el puerto 80. Revisa las políticas o reservas '
+        'del sistema y vuelve a intentarlo.',
+    'Windows blocked or reserved port 80. Check system policies or reservations '
+        'and try again.',
+  );
+  String get liveOverlayPortUnavailableError => choose(
+    'El puerto 80 no está disponible. Cierra la aplicación que lo esté usando '
+        'y vuelve a intentarlo.',
+    'Port 80 is unavailable. Close the application using it and try again.',
+  );
+  String get copyOverlayUrl => choose('Copiar URL', 'Copy URL');
+  String get openOverlayPreview => choose('Abrir vista previa', 'Open preview');
   String get connected => choose('conectado', 'connected');
   String get disconnected => choose('desconectado', 'disconnected');
   String get lastCommand => choose('Último comando', 'Last command');
@@ -1017,6 +1134,10 @@ class AppStrings {
   String playerStyleLabel(PlayerStyle style) => switch (style) {
     PlayerStyle.bstreamMusic => playerStyleBStreamMusic,
     PlayerStyle.appleMusic => playerStyleAppleMusic,
+  };
+  String playerArtworkStyleLabel(PlayerArtworkStyle style) => switch (style) {
+    PlayerArtworkStyle.classic => playerArtworkStyleClassic,
+    PlayerArtworkStyle.expanded => playerArtworkStyleExpanded,
   };
   String surfaceBackgroundModeLabel(SurfaceBackgroundMode mode) =>
       switch (mode) {

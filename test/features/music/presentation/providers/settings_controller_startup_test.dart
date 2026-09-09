@@ -128,6 +128,28 @@ void main() {
     );
   });
 
+  test('startup restores and persists the player artwork style', () async {
+    SharedPreferences.setMockInitialValues({
+      'settings.playerArtworkStyle': 'expanded',
+    });
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+    expect(settings.playerArtworkStyle, PlayerArtworkStyle.expanded);
+
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setPlayerArtworkStyle(PlayerArtworkStyle.classic);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getString('settings.playerArtworkStyle'), 'classic');
+    expect(
+      container.read(settingsControllerProvider).value?.playerArtworkStyle,
+      PlayerArtworkStyle.classic,
+    );
+  });
+
   test(
     'animated artwork defaults on and restores an explicit choice',
     () async {
@@ -191,11 +213,13 @@ void main() {
 
     expect(settings.surfaceBackgroundMode, SurfaceBackgroundMode.accent);
     expect(settings.playerStyle, PlayerStyle.bstreamMusic);
+    expect(settings.playerArtworkStyle, PlayerArtworkStyle.classic);
     expect(settings.animatedArtworkEnabled, isTrue);
     expect(settings.miniPlayerMode, MiniPlayerMode.capsule);
     expect(settings.miniPlayerBackgroundMode, MiniPlayerBackgroundMode.accent);
     expect(preferences.containsKey('settings.surfaceBackgroundMode'), isFalse);
     expect(preferences.containsKey('settings.playerStyle'), isFalse);
+    expect(preferences.containsKey('settings.playerArtworkStyle'), isFalse);
     expect(preferences.containsKey('settings.animatedArtworkEnabled'), isFalse);
     expect(preferences.containsKey('settings.miniPlayerMode'), isFalse);
     expect(

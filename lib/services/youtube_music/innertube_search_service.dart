@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -56,10 +57,41 @@ abstract interface class YouTubeMusicTrackLookup {
   Future<InnerTubeSong?> getSong(String videoId);
 }
 
+/// Resolves duration independently from playability or media classification.
+///
+/// Anonymous WEB_REMIX player responses can expose trustworthy canonical
+/// duration metadata while reporting a song or music video as unplayable.
+/// Keeping this contract separate preserves [YouTubeMusicTrackLookup]'s
+/// playable-song semantics.
+abstract interface class YouTubeMusicDurationLookup {
+  Future<Duration?> getSongDuration(String videoId);
+}
+
 abstract interface class YouTubeMusicHome {
   Future<List<InnerTubeHomeSection>> getHome({
     int maxSections = 2,
     int maxItemsPerSection = 8,
+  });
+}
+
+/// Discovers YouTube Music's localized moods and genres and follows one of its
+/// opaque browse targets.
+abstract interface class YouTubeMusicMoodsAndGenres {
+  Future<List<InnerTubeMoodGenreSection>> getMoodsAndGenres({
+    int maxSections = 12,
+    int maxCategoriesPerSection = 50,
+  });
+
+  Future<InnerTubeMoodGenrePage> getMoodOrGenre(
+    InnerTubeBrowseTarget target, {
+    int maxSections = 6,
+    int maxItemsPerSection = 20,
+  });
+
+  Future<InnerTubeMoodGenrePage> getMoodOrGenreContinuation(
+    String continuation, {
+    int maxSections = 6,
+    int maxItemsPerSection = 20,
   });
 }
 
@@ -146,7 +178,9 @@ class InnerTubeSearchService
         YouTubeMusicCatalogSearch,
         YouTubeMusicArtistSearch,
         YouTubeMusicTrackLookup,
+        YouTubeMusicDurationLookup,
         YouTubeMusicHome,
+        YouTubeMusicMoodsAndGenres,
         YouTubeMusicCollectionLookup,
         YouTubeMusicCollectionDetailLookup,
         YouTubeMusicAlbumLookup,
@@ -162,6 +196,8 @@ class InnerTubeSearchService
     InnerTubeArtistSearchParser artistSearchParser =
         const InnerTubeArtistSearchParser(),
     InnerTubeHomeParser homeParser = const InnerTubeHomeParser(),
+    InnerTubeMoodsAndGenresParser moodsAndGenresParser =
+        const InnerTubeMoodsAndGenresParser(),
     InnerTubePlayerParser playerParser = const InnerTubePlayerParser(),
     InnerTubeNextParser nextParser = const InnerTubeNextParser(),
     InnerTubeRelatedParser relatedParser = const InnerTubeRelatedParser(),
@@ -208,6 +244,7 @@ class InnerTubeSearchService
       albumParser: albumParser,
       artistSearchParser: artistSearchParser,
       homeParser: homeParser,
+      moodsAndGenresParser: moodsAndGenresParser,
       playerParser: playerParser,
       nextParser: nextParser,
       relatedParser: relatedParser,
@@ -242,6 +279,7 @@ class InnerTubeSearchService
     required InnerTubeAlbumParser albumParser,
     required InnerTubeArtistSearchParser artistSearchParser,
     required InnerTubeHomeParser homeParser,
+    required InnerTubeMoodsAndGenresParser moodsAndGenresParser,
     required InnerTubePlayerParser playerParser,
     required InnerTubeNextParser nextParser,
     required InnerTubeRelatedParser relatedParser,
@@ -266,6 +304,7 @@ class InnerTubeSearchService
          albumParser,
          artistSearchParser,
          homeParser,
+         moodsAndGenresParser,
          playerParser,
          nextParser,
          relatedParser,
@@ -292,6 +331,7 @@ class InnerTubeSearchService
     this._albumParser,
     this._artistSearchParser,
     this._homeParser,
+    this._moodsAndGenresParser,
     this._playerParser,
     this._nextParser,
     this._relatedParser,
@@ -314,13 +354,17 @@ class InnerTubeSearchService
   static const int maxResults = 20;
   static const int maxDetailResults = innerTubeDetailResultLimit;
   static const int maxHomeSections = 6;
+  static const int maxMoodGenreSections = 12;
+  static const int maxMoodGenreCategoriesPerSection = 50;
   static const int _maxHomeContinuationRequests = 1;
   static const int maxDetailContinuationRequests = 4;
   static const int _artistDurationLookupConcurrency = 3;
+  static const int _durationCacheCapacity = 256;
   static const String songsFilter = 'EgWKAQIIAWoMEA4QChADEAQQCRAF';
   static const String videosFilter = 'EgWKAQIQAWoMEA4QChADEAQQCRAF';
   static const String albumsFilter = 'EgWKAQIYAWoMEA4QChADEAQQCRAF';
   static const String artistsFilter = 'EgWKAQIgAWoMEA4QChADEAQQCRAF';
+  static const String moodsAndGenresBrowseId = 'FEmusic_moods_and_genres';
   static const String defaultUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -332,6 +376,7 @@ class InnerTubeSearchService
   final InnerTubeAlbumParser _albumParser;
   final InnerTubeArtistSearchParser _artistSearchParser;
   final InnerTubeHomeParser _homeParser;
+  final InnerTubeMoodsAndGenresParser _moodsAndGenresParser;
   final InnerTubePlayerParser _playerParser;
   final InnerTubeNextParser _nextParser;
   final InnerTubeRelatedParser _relatedParser;
@@ -353,6 +398,10 @@ class InnerTubeSearchService
   bool _disposed = false;
   Future<InnerTubeConfiguration>? _configurationFuture;
   Future<InnerTubeConfiguration>? _freshConfigurationFuture;
+  final LinkedHashMap<String, Duration> _durationCache =
+      LinkedHashMap<String, Duration>();
+  final Map<String, Future<Duration?>> _durationLookupsInFlight =
+      <String, Future<Duration?>>{};
 
   @override
   Future<List<InnerTubeSong>> searchSongs(
@@ -530,6 +579,127 @@ class InnerTubeSearchService
       }
     }
     return List.unmodifiable(sections);
+  }
+
+  @override
+  Future<List<InnerTubeMoodGenreSection>> getMoodsAndGenres({
+    int maxSections = maxMoodGenreSections,
+    int maxCategoriesPerSection = maxMoodGenreCategoriesPerSection,
+  }) async {
+    _ensureActive();
+    _validateMoodGenreCatalogLimits(
+      maxSections: maxSections,
+      maxCategoriesPerSection: maxCategoriesPerSection,
+    );
+    final payload = await _loadBrowsePayload(browseId: moodsAndGenresBrowseId);
+    return _moodsAndGenresParser.parse(
+      payload,
+      maxSections: maxSections,
+      maxCategoriesPerSection: maxCategoriesPerSection,
+    );
+  }
+
+  @override
+  Future<InnerTubeMoodGenrePage> getMoodOrGenre(
+    InnerTubeBrowseTarget target, {
+    int maxSections = maxHomeSections,
+    int maxItemsPerSection = maxResults,
+  }) async {
+    _ensureActive();
+    _validateHomeLimits(
+      maxSections: maxSections,
+      maxItemsPerSection: maxItemsPerSection,
+    );
+    final normalizedTarget = _validateMoodGenreTarget(target);
+    final payload = await _loadBrowsePayload(
+      browseId: normalizedTarget.browseId,
+      params: normalizedTarget.params,
+    );
+    return _parseMoodGenrePage(
+      payload,
+      maxSections: maxSections,
+      maxItemsPerSection: maxItemsPerSection,
+    );
+  }
+
+  @override
+  Future<InnerTubeMoodGenrePage> getMoodOrGenreContinuation(
+    String continuation, {
+    int maxSections = maxHomeSections,
+    int maxItemsPerSection = maxResults,
+  }) async {
+    _ensureActive();
+    _validateHomeLimits(
+      maxSections: maxSections,
+      maxItemsPerSection: maxItemsPerSection,
+    );
+    final normalizedContinuation = _validateContinuation(continuation);
+    final payload = await _loadBrowsePayload(
+      continuation: normalizedContinuation,
+    );
+    return _parseMoodGenrePage(
+      payload,
+      maxSections: maxSections,
+      maxItemsPerSection: maxItemsPerSection,
+      allowUntitledSections: true,
+    );
+  }
+
+  Future<Object?> _loadBrowsePayload({
+    String? browseId,
+    String? params,
+    String? continuation,
+  }) async {
+    var configuration = await _configuration();
+    var response = await _requestBrowse(
+      configuration,
+      browseId: browseId,
+      params: params,
+      continuation: continuation,
+    );
+    if (_needsFreshConfiguration(response.statusCode)) {
+      configuration = await _freshConfiguration();
+      response = await _requestBrowse(
+        configuration,
+        browseId: browseId,
+        params: params,
+        continuation: continuation,
+      );
+    }
+    return _decodeHomeResponse(response);
+  }
+
+  InnerTubeMoodGenrePage _parseMoodGenrePage(
+    Object? payload, {
+    required int maxSections,
+    required int maxItemsPerSection,
+    bool allowUntitledSections = false,
+  }) {
+    return InnerTubeMoodGenrePage(
+      sections: _homeParser._parse(
+        payload,
+        maxSections: maxSections,
+        maxItemsPerSection: maxItemsPerSection,
+        seenVideoIds: <String>{},
+        seenBrowseIds: <String>{},
+        seenArtistBrowseIds: <String>{},
+        // Shelf continuations do not repeat their localized heading. An empty
+        // title marks a fragment that belongs to the preceding shelf while
+        // retaining its playable items for non-visual consumers.
+        untitledSectionTitle: allowUntitledSections ? '' : null,
+      ),
+      continuation: _validatedResponseContinuation(payload),
+    );
+  }
+
+  String? _validatedResponseContinuation(Object? payload) {
+    final continuation = _homeContinuationToken(payload);
+    if (continuation == null) return null;
+    try {
+      return _validateContinuation(continuation);
+    } on ArgumentError {
+      return null;
+    }
   }
 
   Object? _decodeHomeResponse(InnerTubeHttpResponse response) {
@@ -768,6 +938,37 @@ class InnerTubeSearchService
     return _playerParser.parse(decoded, expectedVideoId: normalizedVideoId);
   }
 
+  @override
+  Future<Duration?> getSongDuration(String videoId) {
+    _ensureActive();
+    final normalizedVideoId = _validateVideoId(videoId);
+    final cached = _durationCache.remove(normalizedVideoId);
+    if (cached != null) {
+      // Reinsertion keeps the bounded map in least-recently-used order.
+      _durationCache[normalizedVideoId] = cached;
+      return Future<Duration?>.value(cached);
+    }
+
+    final inFlight = _durationLookupsInFlight[normalizedVideoId];
+    if (inFlight != null) return inFlight;
+
+    late final Future<Duration?> request;
+    request = _loadSongDuration(normalizedVideoId)
+        .then((duration) {
+          if (!_disposed && duration != null && duration > Duration.zero) {
+            _rememberSongDuration(normalizedVideoId, duration);
+          }
+          return duration;
+        })
+        .whenComplete(() {
+          if (identical(_durationLookupsInFlight[normalizedVideoId], request)) {
+            _durationLookupsInFlight.remove(normalizedVideoId);
+          }
+        });
+    _durationLookupsInFlight[normalizedVideoId] = request;
+    return request;
+  }
+
   Future<Object?> _getPlayerPayload(String normalizedVideoId) async {
     var configuration = await _configuration();
     var response = await _requestPlayer(normalizedVideoId, configuration);
@@ -790,8 +991,7 @@ class InnerTubeSearchService
     }
   }
 
-  Future<Duration?> _getSongDuration(String videoId) async {
-    final normalizedVideoId = _validateVideoId(videoId);
+  Future<Duration?> _loadSongDuration(String normalizedVideoId) async {
     final decoded = await _getPlayerPayload(normalizedVideoId);
     return _playerParser.parseDuration(
       decoded,
@@ -1025,7 +1225,7 @@ class InnerTubeSearchService
       while (cursor < missingIndexes.length) {
         final missingIndex = missingIndexes[cursor++];
         try {
-          final duration = await _getSongDuration(songs[missingIndex].videoId);
+          final duration = await getSongDuration(songs[missingIndex].videoId);
           if (duration != null) {
             enrichedSongs[missingIndex] = _copySongWithDuration(
               songs[missingIndex],
@@ -1091,15 +1291,82 @@ class InnerTubeSearchService
 
   String _validateContinuation(String continuation) {
     final normalized = continuation.trim();
-    if (normalized.isEmpty || normalized.length > 4096) {
+    if (normalized.isEmpty ||
+        normalized.length > 4096 ||
+        _containsControlCharacter(normalized)) {
       throw ArgumentError.value(
         continuation,
         'continuation',
-        'Must be a non-empty YouTube continuation token.',
+        'Must be a bounded YouTube continuation token without control characters.',
       );
     }
     return normalized;
   }
+
+  void _validateMoodGenreCatalogLimits({
+    required int maxSections,
+    required int maxCategoriesPerSection,
+  }) {
+    if (maxSections < 1 || maxSections > maxMoodGenreSections) {
+      throw RangeError.range(
+        maxSections,
+        1,
+        maxMoodGenreSections,
+        'maxSections',
+      );
+    }
+    if (maxCategoriesPerSection < 1 ||
+        maxCategoriesPerSection > maxMoodGenreCategoriesPerSection) {
+      throw RangeError.range(
+        maxCategoriesPerSection,
+        1,
+        maxMoodGenreCategoriesPerSection,
+        'maxCategoriesPerSection',
+      );
+    }
+  }
+
+  void _validateHomeLimits({
+    required int maxSections,
+    required int maxItemsPerSection,
+  }) {
+    if (maxSections < 1 || maxSections > maxHomeSections) {
+      throw RangeError.range(maxSections, 1, maxHomeSections, 'maxSections');
+    }
+    if (maxItemsPerSection < 1 || maxItemsPerSection > maxResults) {
+      throw RangeError.range(
+        maxItemsPerSection,
+        1,
+        maxResults,
+        'maxItemsPerSection',
+      );
+    }
+  }
+
+  InnerTubeBrowseTarget _validateMoodGenreTarget(InnerTubeBrowseTarget target) {
+    final browseId = target.browseId.trim();
+    if (!_genericBrowseIdPattern.hasMatch(browseId)) {
+      throw ArgumentError.value(
+        target.browseId,
+        'target.browseId',
+        'Must be a bounded YouTube Music browse ID.',
+      );
+    }
+    final params = target.params.trim();
+    if (params.isEmpty ||
+        params.length > 8192 ||
+        _containsControlCharacter(params)) {
+      throw ArgumentError.value(
+        target.params,
+        'target.params',
+        'Must be a bounded opaque browse parameter without control characters.',
+      );
+    }
+    return InnerTubeBrowseTarget(browseId: browseId, params: params);
+  }
+
+  bool _containsControlCharacter(String value) =>
+      value.contains(RegExp(r'[\x00-\x1F\x7F]'));
 
   String _validateRelatedBrowseId(String browseId) {
     final normalized = browseId.trim();
@@ -1259,12 +1526,16 @@ class InnerTubeSearchService
   Future<InnerTubeHttpResponse> _requestBrowse(
     InnerTubeConfiguration configuration, {
     String? browseId,
+    String? params,
     String? continuation,
   }) async {
     if ((browseId == null) == (continuation == null)) {
       throw ArgumentError(
         'Exactly one of browseId or continuation must be provided.',
       );
+    }
+    if (params != null && browseId == null) {
+      throw ArgumentError('Browse params require an initial browse ID.');
     }
     final uri = _browseEndpoint.replace(
       queryParameters: <String, String>{
@@ -1284,6 +1555,7 @@ class InnerTubeSearchService
         },
       },
       'browseId': ?browseId,
+      'params': ?params,
       'continuation': ?continuation,
     };
 
@@ -1494,7 +1766,17 @@ class InnerTubeSearchService
       return;
     }
     _disposed = true;
+    _durationCache.clear();
+    _durationLookupsInFlight.clear();
     _transport.close();
+  }
+
+  void _rememberSongDuration(String videoId, Duration duration) {
+    _durationCache.remove(videoId);
+    _durationCache[videoId] = duration;
+    while (_durationCache.length > _durationCacheCapacity) {
+      _durationCache.remove(_durationCache.keys.first);
+    }
   }
 
   void _ensureActive() {
@@ -1516,6 +1798,9 @@ class InnerTubeSearchService
   }
 
   static final RegExp _videoIdPattern = RegExp(r'^[A-Za-z0-9_-]{11}$');
+  static final RegExp _genericBrowseIdPattern = RegExp(
+    r'^[A-Za-z0-9_-]{2,256}$',
+  );
   static final RegExp _albumBrowseIdPattern = RegExp(
     r'^MPRE[A-Za-z0-9_-]{1,200}$',
   );
@@ -1668,7 +1953,7 @@ class InnerTubeSearchParser {
     final artistBrowseIds = <String?>[];
     String? album;
     String? albumBrowseId;
-    Duration? duration;
+    Duration? duration = _durationFromRenderer(renderer);
     for (final run in metadataRuns) {
       final text = _text(run['text']);
       if (text == null) {
@@ -1739,7 +2024,7 @@ class InnerTubeSearchParser {
     final artistBrowseIds = <String?>[];
     String? album;
     String? albumBrowseId;
-    Duration? duration;
+    Duration? duration = _durationFromRenderer(renderer);
     for (final run in metadataRuns) {
       final text = _text(run['text']);
       if (text == null) {
@@ -1980,6 +2265,43 @@ class InnerTubeSearchParser {
       seconds = (seconds * 60) + part;
     }
     return seconds <= 0 ? null : Duration(seconds: seconds);
+  }
+
+  /// Extracts duration metadata that is not part of the visible subtitle
+  /// columns. Browse and mood shelves have used all of these structured forms
+  /// over time, especially for compact/two-row cards.
+  Duration? _durationFromRenderer(Map<dynamic, dynamic> renderer) {
+    return _findStructuredDuration(renderer);
+  }
+
+  Duration? _findStructuredDuration(Object? node, [int depth = 0]) {
+    if (depth > 8) return null;
+    if (node is Map) {
+      for (final entry in node.entries) {
+        final key = entry.key.toString();
+        final value = entry.value;
+        if (key == 'lengthText' || key == 'durationText') {
+          final duration = _parseDuration(_text(value) ?? '');
+          if (duration != null) return duration;
+        }
+        if (key == 'lengthSeconds' || key == 'durationSeconds') {
+          final seconds = _integer(value);
+          if (seconds != null && seconds > 0) {
+            return Duration(seconds: seconds);
+          }
+        }
+      }
+      for (final value in node.values) {
+        final duration = _findStructuredDuration(value, depth + 1);
+        if (duration != null) return duration;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final duration = _findStructuredDuration(value, depth + 1);
+        if (duration != null) return duration;
+      }
+    }
+    return null;
   }
 
   bool _isSeparator(String value) {
@@ -3549,6 +3871,189 @@ class _InnerTubeArtistRadio {
   final String videoId;
 }
 
+/// Parses the localized navigation buttons from the moods-and-genres root.
+///
+/// YouTube treats browse parameters as opaque protobuf values. This parser
+/// deliberately validates their bounds but never decodes or synthesizes them.
+class InnerTubeMoodsAndGenresParser {
+  const InnerTubeMoodsAndGenresParser({
+    this._textParser = const InnerTubeSearchParser(),
+  });
+
+  final InnerTubeSearchParser _textParser;
+
+  List<InnerTubeMoodGenreSection> parse(
+    Object? payload, {
+    int maxSections = 12,
+    int maxCategoriesPerSection = 50,
+  }) {
+    if (maxSections < 1 ||
+        maxSections > InnerTubeSearchService.maxMoodGenreSections) {
+      throw RangeError.range(
+        maxSections,
+        1,
+        InnerTubeSearchService.maxMoodGenreSections,
+        'maxSections',
+      );
+    }
+    if (maxCategoriesPerSection < 1 ||
+        maxCategoriesPerSection >
+            InnerTubeSearchService.maxMoodGenreCategoriesPerSection) {
+      throw RangeError.range(
+        maxCategoriesPerSection,
+        1,
+        InnerTubeSearchService.maxMoodGenreCategoriesPerSection,
+        'maxCategoriesPerSection',
+      );
+    }
+    if (payload is! Map) {
+      throw const InnerTubeFormatException(
+        'YouTube Music moods and genres response must be a JSON object.',
+      );
+    }
+
+    final sections = <InnerTubeMoodGenreSection>[];
+    final seenTargets = <InnerTubeBrowseTarget>{};
+    for (final renderer in _sectionRenderers(payload)) {
+      final title = _sectionTitle(renderer);
+      if (title == null) continue;
+
+      final categories = <InnerTubeMoodGenreCategory>[];
+      for (final content in <Object?>[
+        renderer['contents'],
+        renderer['items'],
+      ]) {
+        for (final button in _navigationButtonRenderers(content)) {
+          final category = _parseCategory(button);
+          if (category == null || !seenTargets.add(category.target)) continue;
+          categories.add(category);
+          if (categories.length == maxCategoriesPerSection) break;
+        }
+        if (categories.length == maxCategoriesPerSection) break;
+      }
+      if (categories.isEmpty) continue;
+      sections.add(
+        InnerTubeMoodGenreSection(title: title, categories: categories),
+      );
+      if (sections.length == maxSections) break;
+    }
+    return List<InnerTubeMoodGenreSection>.unmodifiable(sections);
+  }
+
+  Iterable<Map<dynamic, dynamic>> _sectionRenderers(Object? node) sync* {
+    if (node is Map) {
+      for (final key in const <String>[
+        'musicCarouselShelfRenderer',
+        'musicImmersiveCarouselShelfRenderer',
+        'musicShelfRenderer',
+        'musicGridRenderer',
+        'gridRenderer',
+      ]) {
+        final renderer = node[key];
+        if (renderer is Map) yield renderer;
+      }
+      for (final value in node.values) {
+        yield* _sectionRenderers(value);
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        yield* _sectionRenderers(value);
+      }
+    }
+  }
+
+  Iterable<Map<dynamic, dynamic>> _navigationButtonRenderers(
+    Object? node,
+  ) sync* {
+    if (node is Map) {
+      final renderer = node['musicNavigationButtonRenderer'];
+      if (renderer is Map) yield renderer;
+      for (final value in node.values) {
+        yield* _navigationButtonRenderers(value);
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        yield* _navigationButtonRenderers(value);
+      }
+    }
+  }
+
+  InnerTubeMoodGenreCategory? _parseCategory(Map<dynamic, dynamic> renderer) {
+    final title =
+        _textFromRenderer(renderer['buttonText']) ??
+        _textFromRenderer(renderer['title']);
+    if (title == null) return null;
+
+    for (final endpoint in <Object?>[
+      renderer['clickCommand'],
+      renderer['navigationEndpoint'],
+    ]) {
+      if (endpoint is! Map) continue;
+      final browse = endpoint['browseEndpoint'];
+      if (browse is! Map) continue;
+      final browseId = _boundedString(browse['browseId'], maximum: 256);
+      final params = _boundedString(browse['params'], maximum: 8192);
+      if (browseId == null ||
+          params == null ||
+          !InnerTubeSearchService._genericBrowseIdPattern.hasMatch(browseId)) {
+        continue;
+      }
+      return InnerTubeMoodGenreCategory(
+        title: title,
+        target: InnerTubeBrowseTarget(browseId: browseId, params: params),
+      );
+    }
+    return null;
+  }
+
+  String? _sectionTitle(Map<dynamic, dynamic> renderer) {
+    final direct = _textFromRenderer(renderer['title']);
+    if (direct != null) return direct;
+    final header = renderer['header'];
+    if (header is! Map) return null;
+    final headerTitle = _textFromRenderer(header['title']);
+    if (headerTitle != null) return headerTitle;
+    for (final key in const <String>[
+      'musicCarouselShelfBasicHeaderRenderer',
+      'musicImmersiveCarouselShelfHeaderRenderer',
+      'musicShelfBasicHeaderRenderer',
+      'musicGridHeaderRenderer',
+      'gridHeaderRenderer',
+      'musicHeaderRenderer',
+    ]) {
+      final candidate = header[key];
+      if (candidate is! Map) continue;
+      final title = _textFromRenderer(candidate['title']);
+      if (title != null) return title;
+    }
+    return null;
+  }
+
+  String? _textFromRenderer(Object? renderer) {
+    if (renderer is String) {
+      return _boundedString(renderer, maximum: 512);
+    }
+    if (renderer is! Map) return null;
+    final simpleText = _boundedString(renderer['simpleText'], maximum: 512);
+    if (simpleText != null) return simpleText;
+    return _boundedString(
+      _textParser._firstText(_textParser._runs(renderer)),
+      maximum: 512,
+    );
+  }
+
+  String? _boundedString(Object? value, {required int maximum}) {
+    if (value is! String) return null;
+    final normalized = value.trim();
+    if (normalized.isEmpty ||
+        normalized.length > maximum ||
+        normalized.contains(RegExp(r'[\x00-\x1F\x7F]'))) {
+      return null;
+    }
+    return normalized;
+  }
+}
+
 class InnerTubeHomeParser {
   const InnerTubeHomeParser({this._songParser = const InnerTubeSearchParser()});
 
@@ -3576,6 +4081,7 @@ class InnerTubeHomeParser {
     required Set<String> seenVideoIds,
     required Set<String> seenBrowseIds,
     required Set<String> seenArtistBrowseIds,
+    String? untitledSectionTitle,
   }) {
     if (maxSections < 1 ||
         maxSections > InnerTubeSearchService.maxHomeSections) {
@@ -3603,13 +4109,16 @@ class InnerTubeHomeParser {
 
     final sections = <InnerTubeHomeSection>[];
     for (final shelf in _shelfRenderers(payload)) {
-      final title = _shelfTitle(shelf);
+      final title = _shelfTitle(shelf) ?? untitledSectionTitle;
       if (title == null) {
         continue;
       }
 
       final items = <InnerTubeHomeItem>[];
-      for (final candidate in _maps(shelf['contents'])) {
+      for (final candidate in <Map<dynamic, dynamic>>[
+        ..._maps(shelf['contents']),
+        ..._maps(shelf['items']),
+      ]) {
         final responsive = candidate['musicResponsiveListItemRenderer'];
         final twoRow = candidate['musicTwoRowItemRenderer'];
         InnerTubeSong? song;
@@ -3656,6 +4165,11 @@ class InnerTubeHomeParser {
         'musicCarouselShelfRenderer',
         'musicShelfRenderer',
         'musicImmersiveCarouselShelfRenderer',
+        'musicPlaylistShelfRenderer',
+        'musicGridRenderer',
+        'musicShelfContinuation',
+        'musicPlaylistShelfContinuation',
+        'musicGridContinuation',
       ]) {
         final renderer = node[key];
         if (renderer is Map) {
@@ -3685,6 +4199,8 @@ class InnerTubeHomeParser {
       'musicCarouselShelfBasicHeaderRenderer',
       'musicImmersiveCarouselShelfHeaderRenderer',
       'musicShelfBasicHeaderRenderer',
+      'musicGridHeaderRenderer',
+      'gridHeaderRenderer',
     ]) {
       final renderer = header[key];
       if (renderer is Map) {

@@ -63,6 +63,50 @@ void main() {
     expect(youtubeVideoIdFromThumbnailSource(candidates.last), 'dmW68lzaaqs');
   });
 
+  test('uses an exact catalog thumbnail as the fast YouTube preview', () {
+    const source = 'https://i.ytimg.com/vi/dmW68lzaaqs/hq720.jpg';
+    const exact = 'https://i.ytimg.com/vi/dmW68lzaaqs/mqdefault.jpg?catalog=1';
+
+    final previews = youtubeThumbnailPreviewCandidates(
+      source,
+      preferredSource: exact,
+    );
+
+    expect(previews.first, exact);
+    expect(
+      previews,
+      contains('https://i.ytimg.com/vi/dmW68lzaaqs/hqdefault.jpg'),
+    );
+    expect(youtubeThumbnailUpgradeCandidates(source), <String>[
+      'https://i.ytimg.com/vi/dmW68lzaaqs/hq720.jpg',
+    ]);
+  });
+
+  test('orders exact YouTube download art before synthesized fallbacks', () {
+    const exact = 'https://i.ytimg.com/vi/dmW68lzaaqs/sddefault.jpg?catalog=1';
+
+    final candidates = artworkDownloadSourceCandidates(exact);
+
+    expect(candidates.first, exact);
+    expect(
+      candidates,
+      contains('https://i.ytimg.com/vi/dmW68lzaaqs/hqdefault.jpg'),
+    );
+  });
+
+  test('tries SD before small previews when synthesized hq720 is missing', () {
+    const synthesized = 'https://i.ytimg.com/vi/dmW68lzaaqs/hq720.jpg';
+
+    expect(artworkDownloadSourceCandidates(synthesized), <String>[
+      synthesized,
+      'https://i.ytimg.com/vi/dmW68lzaaqs/sddefault.jpg',
+      'https://i.ytimg.com/vi/dmW68lzaaqs/hqdefault.jpg',
+      'https://i.ytimg.com/vi/dmW68lzaaqs/mqdefault.jpg',
+      'https://i.ytimg.com/vi/dmW68lzaaqs/0.jpg',
+      'https://i.ytimg.com/vi/dmW68lzaaqs/default.jpg',
+    ]);
+  });
+
   test('requests a large Google catalog cover before the card-sized URL', () {
     const small =
         'https://lh3.googleusercontent.com/music-cover=w120-h120-l90-rj';
@@ -71,6 +115,7 @@ void main() {
 
     expect(highResolutionGoogleArtworkSource(small), large);
     expect(artworkSourceCandidates(small), <String>[large, small]);
+    expect(artworkDownloadSourceCandidates(small), <String>[large, small]);
   });
 
   test('keeps the original CDN URL as fallback when it has no size suffix', () {

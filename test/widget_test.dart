@@ -742,6 +742,10 @@ void main() {
         isTrue,
       );
       expect(
+        tester.widget<PlayerPanel>(playerPanel).artworkStyle,
+        PlayerArtworkStyle.classic,
+      );
+      expect(
         find.byKey(const ValueKey('player-content-layout')),
         findsOneWidget,
       );
@@ -769,6 +773,16 @@ void main() {
         tester.widget<PlayerPanel>(playerPanel).animatedArtworkEnabled,
         isTrue,
       );
+
+      await settingsController.setPlayerArtworkStyle(
+        PlayerArtworkStyle.expanded,
+      );
+      await tester.pump();
+      expect(
+        tester.widget<PlayerPanel>(playerPanel).artworkStyle,
+        PlayerArtworkStyle.expanded,
+      );
+      expect(identical(retainedPlayerState, tester.state(playerPanel)), isTrue);
 
       await settingsController.setPlayerStyle(PlayerStyle.appleMusic);
       await tester.pump();
@@ -6245,19 +6259,33 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('Compatibilidad nativa con iOS 13'),
+      find.textContaining('Búsqueda ahora incluye una cuadrícula adaptable'),
       findsOneWidget,
     );
     expect(
-      find.text(
-        'Liquid Glass renovado con refracci\u00f3n adaptada al color, bordes continuos, hover localizado y transiciones m\u00e1s suaves.',
+      find.textContaining(
+        'Se solucionaron los retrasos al cargar las portadas',
       ),
       findsOneWidget,
     );
     expect(
       find.text(
-        'Elige entre los reproductores BStream Music y Apple Music Style, con portada animada y dise\u00f1os m\u00f3viles adaptables.',
+        'Ya está disponible el nuevo estilo de portadas Expandido, que extiende y difumina la imagen en ambos estilos de reproductor.',
       ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'Se mejoraron las portadas animadas con partículas más naturales, variadas y fluidas.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Se ampliaron los filtros de permisos'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Overlay LIVE local ya está disponible en Windows'),
       findsOneWidget,
     );
     await tester.tap(
@@ -6839,6 +6867,16 @@ void main() {
         overrides: [
           searchControllerProvider.overrideWith(
             () => _FakeSearchController(tracks),
+          ),
+          searchBrowseCatalogProvider.overrideWithValue(
+            AsyncData(
+              SearchBrowseCatalog(
+                categories: fallbackSearchBrowseCategories(
+                  const AppStrings(AppLanguage.spanish),
+                ),
+                usesLiveYouTubeMusicCategories: false,
+              ),
+            ),
           ),
           downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
           playerServiceProvider.overrideWithValue(_FakePlayerService()),
@@ -8426,9 +8464,10 @@ void main() {
       final artworkAt839 = tester.getSize(artwork);
 
       expect(
-        find.byKey(const ValueKey('player-content-scroll')),
+        find.byKey(const ValueKey('bstream-player-adaptive-landscape')),
         findsOneWidget,
       );
+      expect(find.byKey(const ValueKey('player-content-scroll')), findsNothing);
       expect(
         find.byKey(const ValueKey('player-previous-control')),
         findsOneWidget,
@@ -8450,11 +8489,15 @@ void main() {
       expect(identical(retainedTitle, tester.element(title)), isTrue);
       expect(identical(retainedTrack, tester.element(track)), isTrue);
       expect(identical(retainedArtwork, tester.element(artwork)), isTrue);
-      expect(tester.getSize(artwork).width, lessThan(artworkAt839.width));
       expect(
-        find.byKey(const ValueKey('player-content-scroll')),
+        (tester.getSize(artwork).width - artworkAt839.width).abs(),
+        lessThanOrEqualTo(1),
+      );
+      expect(
+        find.byKey(const ValueKey('bstream-player-adaptive-landscape')),
         findsOneWidget,
       );
+      expect(find.byKey(const ValueKey('player-content-scroll')), findsNothing);
       expect(
         find.byKey(const ValueKey('player-previous-control')),
         findsOneWidget,
@@ -8926,6 +8969,16 @@ Widget _testApp({
     overrides: [
       homeGreetingClockProvider.overrideWithValue(
         () => homeGreetingTime ?? DateTime(2026, 8, 24, 9),
+      ),
+      searchBrowseCatalogProvider.overrideWithValue(
+        AsyncData(
+          SearchBrowseCatalog(
+            categories: fallbackSearchBrowseCategories(
+              const AppStrings(AppLanguage.spanish),
+            ),
+            usesLiveYouTubeMusicCategories: false,
+          ),
+        ),
       ),
       if (externalAudioRequests != null)
         androidExternalAudioRequestsProvider.overrideWithValue(

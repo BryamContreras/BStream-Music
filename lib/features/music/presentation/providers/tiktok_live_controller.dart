@@ -24,7 +24,7 @@ enum TikTokLiveCommand {
   }
 }
 
-enum TikTokCommandAudience { everyone, moderators, subscribers }
+enum TikTokCommandAudience { everyone, followers, moderators, subscribers }
 
 const Set<TikTokLiveCommand> allTikTokLiveCommands = {
   TikTokLiveCommand.play,
@@ -40,17 +40,20 @@ const defaultTikTokCommandPermissions = TikTokCommandPermissions(
 class TikTokCommandPermissions {
   const TikTokCommandPermissions({
     this.everyone = const <TikTokLiveCommand>{},
+    this.followers = const <TikTokLiveCommand>{},
     this.moderators = const <TikTokLiveCommand>{},
     this.subscribers = const <TikTokLiveCommand>{},
   });
 
   final Set<TikTokLiveCommand> everyone;
+  final Set<TikTokLiveCommand> followers;
   final Set<TikTokLiveCommand> moderators;
   final Set<TikTokLiveCommand> subscribers;
 
   Set<TikTokLiveCommand> forAudience(TikTokCommandAudience audience) {
     return switch (audience) {
       TikTokCommandAudience.everyone => everyone,
+      TikTokCommandAudience.followers => followers,
       TikTokCommandAudience.moderators => moderators,
       TikTokCommandAudience.subscribers => subscribers,
     };
@@ -69,6 +72,7 @@ class TikTokCommandPermissions {
       return false;
     }
     return everyone.contains(liveCommand) ||
+        (command.isFollower && followers.contains(liveCommand)) ||
         (command.isModerator && moderators.contains(liveCommand)) ||
         (command.isSubscriber && subscribers.contains(liveCommand));
   }
@@ -88,16 +92,25 @@ class TikTokCommandPermissions {
     return switch (audience) {
       TikTokCommandAudience.everyone => TikTokCommandPermissions(
         everyone: immutable,
+        followers: followers,
+        moderators: moderators,
+        subscribers: subscribers,
+      ),
+      TikTokCommandAudience.followers => TikTokCommandPermissions(
+        everyone: everyone,
+        followers: immutable,
         moderators: moderators,
         subscribers: subscribers,
       ),
       TikTokCommandAudience.moderators => TikTokCommandPermissions(
         everyone: everyone,
+        followers: followers,
         moderators: immutable,
         subscribers: subscribers,
       ),
       TikTokCommandAudience.subscribers => TikTokCommandPermissions(
         everyone: everyone,
+        followers: followers,
         moderators: moderators,
         subscribers: immutable,
       ),
@@ -111,8 +124,9 @@ class TikTokCommandPermissions {
     ];
 
     return {
-      'version': 3,
+      'version': 4,
       'everyone': encode(everyone),
+      'followers': encode(followers),
       'moderators': encode(moderators),
       'subscribers': encode(subscribers),
     };
@@ -123,7 +137,7 @@ class TikTokCommandPermissions {
       return null;
     }
     final version = value['version'];
-    if (version != 2 && version != 3) {
+    if (version != 2 && version != 3 && version != 4) {
       return null;
     }
 
@@ -138,7 +152,7 @@ class TikTokCommandPermissions {
             .whereType<TikTokLiveCommand>(),
       };
       // Until v2, !stop was an alias of !revoke. Copy that permission only
-      // while migrating so v3 can persist both choices independently.
+      // while migrating so newer schemas can persist both choices independently.
       if (version == 2 && commands.contains(TikTokLiveCommand.revoke)) {
         commands.add(TikTokLiveCommand.stop);
       }
@@ -146,13 +160,20 @@ class TikTokCommandPermissions {
     }
 
     final everyone = decode('everyone');
+    final followers = version == 4
+        ? decode('followers')
+        : const <TikTokLiveCommand>{};
     final moderators = decode('moderators');
     final subscribers = decode('subscribers');
-    if (everyone == null || moderators == null || subscribers == null) {
+    if (everyone == null ||
+        followers == null ||
+        moderators == null ||
+        subscribers == null) {
       return null;
     }
     return TikTokCommandPermissions(
       everyone: everyone,
+      followers: followers,
       moderators: moderators,
       subscribers: subscribers,
     );
@@ -410,8 +431,10 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
 
   static const _creatorInputKey = 'tiktokLive.creatorInput';
   static const _commandAccessKey = 'tiktokLive.commandAccess';
-  static const _commandPermissionsKey = 'tiktokLive.commandPermissions.v3';
-  static const _legacyCommandPermissionsKey =
+  static const _commandPermissionsKey = 'tiktokLive.commandPermissions.v4';
+  static const _legacyCommandPermissionsV3Key =
+      'tiktokLive.commandPermissions.v3';
+  static const _legacyCommandPermissionsV2Key =
       'tiktokLive.commandPermissions.v2';
   static const _saveRequestsToLibraryKey = 'tiktokLive.saveRequestsToLibrary';
 
@@ -461,7 +484,8 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     final restoredStoredPermissions = storedPermissions != null;
     var commandPermissions =
         storedPermissions ??
-        decodePermissions(prefs.getString(_legacyCommandPermissionsKey));
+        decodePermissions(prefs.getString(_legacyCommandPermissionsV3Key)) ??
+        decodePermissions(prefs.getString(_legacyCommandPermissionsV2Key));
     commandPermissions ??= _migrateCommandPermissions(
       prefs.getString(_commandAccessKey),
     );

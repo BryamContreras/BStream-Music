@@ -538,6 +538,7 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
   String text, {
   required String user,
   bool isModerator = false,
+  bool isFollower = false,
   bool isSubscriber = false,
 }) {
   final message = text.trim();
@@ -551,6 +552,7 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
       user: user,
       text: message,
       isModerator: isModerator,
+      isFollower: isFollower,
       isSubscriber: isSubscriber,
     );
   }
@@ -574,6 +576,7 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
       user: user,
       text: message,
       isModerator: isModerator,
+      isFollower: isFollower,
       isSubscriber: isSubscriber,
     );
   }
@@ -591,6 +594,7 @@ TikTokLiveChatCommand? parseTikTokLiveCommand(
     user: user,
     text: message,
     isModerator: isModerator,
+    isFollower: isFollower,
     isSubscriber: isSubscriber,
   );
 }
@@ -694,6 +698,45 @@ bool isTikTokLiveSubscriber(
       false;
 }
 
+/// Reads whether the chat author follows the active LIVE creator.
+///
+/// The anchor-specific identity is authoritative. Alternate names and the
+/// normalized `User.isFollower` field keep the adapter compatible with raw
+/// protobuf maps and transports that serialize fields differently.
+bool isTikTokLiveFollower(
+  Map<String, dynamic>? user, {
+  Map<String, dynamic>? eventData,
+}) {
+  final identityCandidates = <Map<String, dynamic>>[
+    ?_mapAt(user, 'userIdentity'),
+    ?_mapAt(user, 'user_identity'),
+    ?_mapAt(eventData, 'userIdentity'),
+    ?_mapAt(eventData, 'user_identity'),
+    ?user,
+    ?eventData,
+  ];
+  final anchorFollower = _firstKnownBool(identityCandidates, const [
+    'isFollowerOfAnchor',
+    'is_follower_of_anchor',
+  ]);
+  final mutualFollower = _firstKnownBool(identityCandidates, const [
+    'isMutualFollowingWithAnchor',
+    'is_mutual_following_with_anchor',
+  ]);
+  if (anchorFollower == true || mutualFollower == true) {
+    return true;
+  }
+  if (anchorFollower != null) {
+    return false;
+  }
+
+  return _firstKnownBool(
+        [?user, ?eventData],
+        const ['isFollower', 'is_follower'],
+      ) ??
+      false;
+}
+
 TikTokLiveChatCommand? _commandFromChatEvent(Map<String, dynamic>? data) {
   if (data == null) {
     return null;
@@ -719,6 +762,7 @@ TikTokLiveChatCommand? _commandFromChatEvent(Map<String, dynamic>? data) {
     content,
     user: username.isEmpty ? 'unknown' : username,
     isModerator: isTikTokLiveModerator(user, eventData: data),
+    isFollower: isTikTokLiveFollower(user, eventData: data),
     isSubscriber: isTikTokLiveSubscriber(user, eventData: data),
   );
 }

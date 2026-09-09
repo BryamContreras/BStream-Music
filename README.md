@@ -2,7 +2,7 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, iOS, Windows, Linux, and macOS.
 
-Current version: **1.2.6+126**.
+Current version: **1.2.7+127**.
 
 > The repository does not store media content. YouTube search, playback, and
 > downloads use BStream's self-contained Dart InnerTube pipeline. Supported
@@ -11,70 +11,20 @@ Current version: **1.2.6+126**.
 
 <img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
 
-## What's new in 1.2.6
+## What's new in 1.2.7
 
-- Run BStream on iOS 13 or newer with embedded account login, background audio
-  and Now Playing controls, native access to downloaded non-DRM Media Library
-  songs, TikTok LIVE, and document-picker backup and CSV export. CI also
-  publishes `BStream-Music-<version>-iOS-unsigned.ipa` for testing through a
-  compatible external signing or sideloading tool.
-- Use in-process Dart InnerTube services for catalog search, playback, and
-  downloads on every platform. Playback and downloads share the same maintained
-  client ladder and require no vendored extractor library, native extraction
-  runtime, or companion resolver executable.
-
-- Sign in to YouTube Music from an isolated account view without BStream
-  intercepting or storing the Google password. Session data is encrypted on
-  the device, the first playlist sync requires a separate confirmation, and
-  the Home avatar exposes channel selection, sync, conflicts, and logout.
-- Synchronize local and YouTube Music playlists by stable identities with a
-  conservative three-way merge. Local playlists are retained, remote copies
-  are private by default, and BStream Favorites is synchronized with YouTube
-  Music's **Liked Music** collection. Remote deletion always requires a
-  separate explicit confirmation.
-- Keep streaming-only songs and duplicate occurrences inside imported
-  playlists. Playback uses a valid downloaded file first and falls back to the
-  matching stream.
-- Learn account-free Home recommendations from qualified local playback
-  history using YouTube Music `/next`, related shelves, mixes, and exact artist
-  releases. History can be disabled or cleared without removing the library.
-- Retry an interrupted active stream through the InnerTube client ladder with
-  bounded backoff, while recommendation queues grow as their
-  end approaches and stale navigation work is cancelled.
-- Split the former 3,600-line player controller into focused queue, retry,
-  prefetch, crossfade, identity, and history coordinators. Database v8 adds the
-  hybrid playlist catalog, bounded history retention, and crash-safe media
-  migration.
-- Open the full player safely from a notification or launcher entry: Back now
-  returns to Home even when no previous in-app destination exists, while Queue
-  still consumes its own Back action first.
-- Mount the interface before optional native startup services, retry only a
-  failed service, harden backup/restore budgets and schema checks, and verify
-  Android release APKs exclude obsolete external resolver runtimes.
-- Resolve YouTube manifests directly through a maintained Dart InnerTube
-  client ladder, with EJS challenge solving and optional Web BotGuard PO-token
-  generation when a client requires them.
-- Download native YouTube audio through the same InnerTube resolver, with
-  exact-stream validation, client fallbacks, bounded deadlines, resumable
-  transfers, and safe partial-file publication.
-- Crossfade playback now uses two coordinated decks on Android and desktop and
-  can be adjusted to every whole second from 1 to 15 in Playback settings.
-- Romanize lyrics while retaining the original line above a smaller
-  transliteration. Japanese, Korean, Chinese, Cyrillic, Arabic, and Hebrew can
-  be enabled independently, and the live appearance preview shows the result.
-- Restore CSV libraries with up to three bounded concurrent resolutions and
-  downloads while preserving playlist order, deduplication, cancellation, and
-  per-track failure reporting.
-- Refine the full and mini players across compact Android screens and desktop,
-  including clearer transport controls, denser timelines, safer CJK metadata,
-  and an independent accent-tinted desktop mini-player surface.
-- Toggle desktop playback with Space from either player without intercepting
-  typing in Search or another editable field.
-- Use consistent compact cards and larger artwork across Library and Settings,
-  a wider desktop playback queue, and smoother Search and navigation changes.
-- Remove the obsolete no-animation lyrics option and default legacy preferences
-  safely to Smooth. On mobile, Lyrics uses its artwork as Back, provides a
-  larger Play/Pause action in the header, and does not duplicate the mini-player.
+- Added a responsive category grid to empty Search, backed by localized YouTube
+  Music moods and genres with offline-safe fallback cards.
+- Fixed delays when loading song and video artwork, including during playback
+  and offline use of downloaded songs.
+- Added the Expanded artwork style, which extends and blurs the cover in both
+  player layouts.
+- Improved animated artwork with more natural, varied, and fluid particle
+  motion.
+- Expanded the permission filters for LIVE connection commands, including the
+  Followers option.
+- Added Local LIVE overlay on Windows to display the current song and LIVE
+  queue in TikTok LIVE Studio through a transparent loopback-only web source.
 
 ## Main features
 
@@ -92,6 +42,10 @@ Current version: **1.2.6+126**.
   artwork, metadata, and album queues loaded only when selected.
 - InnerTube discovery keeps Songs, Videos, Albums, artists, and releases on the
   same Dart transport used by playback.
+- Empty Search offers responsive mood and genre cards. Live YouTube Music
+  browse targets are preserved exactly, playlist-only shelves are expanded
+  into bounded song queues, and curated/search fallbacks keep the view useful
+  when the device is offline or the remote layout changes.
 - Search text remains available between searches and has an inline clear action.
 - Remote song rows in Search and album, playlist, and mix details provide a
   dedicated Play/Pause control and a More menu for Download and Add to
@@ -218,8 +172,9 @@ Available features:
 
 - Connect using `@username` or `https://www.tiktok.com/@username/live`.
 - Detect the user who requested each track.
-- Identify moderators.
-- Configure command permissions for **Everyone** or **Moderators only**.
+- Identify followers, subscribers, and moderators from each chat message.
+- Configure every command independently for **Everyone**, **Followers**,
+  **Subscribers**, and **Moderators**.
 - LIVE queue states for searching, downloading, ready, and failed requests.
 - A bounded 50-request queue that rejects additional commands explicitly
   instead of allowing an unbounded search/download backlog.
@@ -232,6 +187,11 @@ Available features:
 - Reuse tracks that already exist in the library.
 - Dynamic synchronization: new requests are added without replacing the current playback.
 - Automatically skip requests that fail during download.
+- On Windows, expose the current LIVE song and the next four requests as a
+  transparent browser overlay at
+  `http://overlay.bstreammusic.test/overlay`. Playback, queue, artwork,
+  progress, accent, and language changes are pushed immediately over the
+  integrated `ws://overlay.bstreammusic.test/ws` connection.
 
 Recognized commands:
 
@@ -247,6 +207,52 @@ revoke!
 `!play` searches for the first result, prepares it, and adds it to the queue.
 `!skip`/`!next` advance playback. `!revoke`/`revoke!` remove the last request
 from the LIVE queue, while `!stop` pauses the current LIVE song.
+
+The local LIVE overlay is available only in the Windows build. Connect to LIVE
+and enable **Local LIVE overlay** immediately below the connection control.
+On first use, Windows asks for administrator confirmation once so BStream can
+add its marked `hosts` entry:
+
+```text
+127.0.0.1 overlay.bstreammusic.test
+```
+
+Afterward, activating the overlay does not need elevation. The name uses the
+reserved `.test` namespace, contains neither `localhost` nor a raw IP, and has
+no explicit port, while Windows still resolves it directly to this PC. BStream
+listens exclusively on `127.0.0.1`; it does not publish the server to the LAN
+or Internet. No HTTPS
+certificate is created or installed for the overlay.
+
+BStream reports the overlay as active only after the hostname resolves safely
+and a direct request to its local `/health` endpoint succeeds. These checks use
+bounded retries, never use an HTTP proxy, and release port `80` completely if
+startup cannot be verified.
+
+Windows compatibility and environmental limits for this local overlay are
+documented in [Windows LIVE overlay compatibility](docs/windows_live_overlay_compatibility.md).
+In short, Windows 11 x64 is supported, Windows 10 22H2 x64 is retained as
+legacy compatibility, and Windows 11 ARM64 is experimental through x64
+emulation; this is not a guarantee for every Windows device or policy.
+
+In TikTok LIVE Studio, add a web/browser source with these settings:
+
+- URL: `http://overlay.bstreammusic.test/overlay`
+- Canvas: `1280 × 760`
+- Background: transparent; no chroma-key filter is necessary
+
+Keep BStream running while the source is in use. The page contains its own
+HTML, CSS, and JavaScript and receives queue updates from BStream over WS; it
+does not contact an external overlay service. Port `80` must be free because an
+HTTP URL without an explicit port necessarily uses it; BStream reports an error
+instead of stopping or reconfiguring another application that already owns the
+port. If Windows access is declined, the rest of BStream remains unaffected and
+the overlay can be activated again later.
+
+To preview and style the real HTTP/WS overlay without installing or
+connecting the app, run `dart run tool/live_overlay_preview.dart`, open the
+printed URL, and press `Ctrl+C` when finished. The same one-time Windows
+confirmation is required if the local domain has not been configured yet.
 
 On Android, the connection can continue while the app is normally in the
 background as long as its Flutter process remains alive. Force-stopping the app
@@ -265,7 +271,7 @@ actually delivers to the WebSocket client.
 | --- | --- | --- | --- |
 | Android | `just_audio` + `audio_service` | Dart InnerTube | `minSdk 24`; optional headless WebView for EJS and Web BotGuard PO tokens; TikTok LIVE; open local audio from Android; release APKs support `armeabi-v7a`, `arm64-v8a`, and `x86_64` |
 | iOS | `just_audio` + `audio_service` | Dart InnerTube | iOS 13 or newer; embedded account login and optional headless WebView challenges; background audio and Now Playing; TikTok LIVE; native access to locally available, non-DRM songs in the Media Library; CI publishes an unsigned IPA for use with a compatible external signing tool |
-| Windows | `media_kit` | Dart InnerTube | Optional headless WebView for EJS and Web BotGuard PO tokens; SMTC controls, TikTok LIVE, and queue side panel |
+| Windows | `media_kit` | Dart InnerTube | Optional headless WebView for EJS and Web BotGuard PO tokens; SMTC controls, TikTok LIVE, queue side panel, and the integrated loopback-only HTTP/WS LIVE overlay |
 | Linux | `media_kit` | Dart InnerTube | Three tokenless/JS-less InnerTube identities (`visionOS`, `androidSdkless`, `visionOS01`); MPRIS controls; TikTok LIVE; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, SQLite, and libsecret |
 | macOS | `media_kit` | Dart InnerTube | Optional headless WebView for EJS and Web BotGuard PO tokens; Now Playing controls, TikTok LIVE, separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
 
@@ -641,7 +647,10 @@ BStream-Music-<version>-iOS-unsigned.ipa
   unsigned and cannot be installed directly without being signed or re-signed
   by that tool. For Apple's supported development path, run it from Xcode or
   Flutter on a Mac with a development team configured.
-- **Windows 64-bit:** open `Setup.exe`. The installer shows a language selector, creates a Start Menu shortcut, and lets you choose whether to create a desktop shortcut. The uninstaller entry is displayed as `BStream Music` without the version number.
+- **Windows 64-bit:** open `Setup.exe`. The per-user installer does not require
+  administrator access, shows a language selector, creates a Start Menu
+  shortcut, and lets you choose whether to create a desktop shortcut. The
+  uninstaller entry is displayed as `BStream Music` without the version number.
 - **Ubuntu, Debian, Linux Mint, and derivatives:** install the `.deb` with `sudo apt install ./BStream-Music-<version>-linux-amd64.deb`.
 - **Fedora, RHEL, and derivatives:** install the `.rpm` with `sudo dnf install ./BStream-Music-<version>-linux-x86_64.rpm`.
 - **Mac with Apple Silicon (M1, M2, M3, M4, or later):** open `BStream-Music-<version>-macOS-arm64.pkg`.

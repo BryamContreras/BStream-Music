@@ -27,7 +27,7 @@ void main() {
       r'#define MyAppVersion "([0-9]+\.[0-9]+\.[0-9]+)"',
     ).firstMatch(windowsInstaller)?.group(1);
 
-    expect(pubspecVersion, '1.2.6+126');
+    expect(pubspecVersion, '1.2.7+127');
     expect(readmeVersion, pubspecVersion);
     expect(changelogVersion, pubspecVersion);
     expect(runtimeVersion, AppConstants.appVersion);
