@@ -15,9 +15,17 @@ import 'player_service.dart';
 
 typedef JustAudioOperationDeadline = Future<void> Function(Duration duration);
 typedef JustAudioPlayerFactory = AudioPlayer Function();
+typedef JustAudioRemoteDiagnosticProbe =
+    Future<String?> Function(TrackInfo track);
+
+enum _SkipSilenceWriteResult { applied, failed, timedOut }
 
 class JustAudioPlayerService
-    implements PlayerService, NativeRemoteQueuePlayer, CrossfadeCapablePlayer {
+    implements
+        PlayerService,
+        NativeRemoteQueuePlayer,
+        CrossfadeCapablePlayer,
+        SkipSilenceCapablePlayer {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
   static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
 
@@ -26,19 +34,27 @@ class JustAudioPlayerService
     AudioPlayer? audioPlayer,
     AudioPlayer? crossfadeAudioPlayer,
     JustAudioPlayerFactory? crossfadePlayerFactory,
+    bool? supportsSkipSilence,
+    Duration skipSilenceWriteTimeout = const Duration(seconds: 2),
     Duration operationTimeout = const Duration(seconds: 45),
     JustAudioOperationDeadline? operationDeadline,
+    JustAudioRemoteDiagnosticProbe? remoteDiagnosticProbe,
   }) : _notificationArtworkService =
            notificationArtworkService ?? NotificationArtworkService.instance,
        _player = audioPlayer ?? _createAudioPlayer(),
        _injectedCrossfadePlayer = crossfadeAudioPlayer,
        _crossfadePlayerFactory =
            crossfadePlayerFactory ?? _createCrossfadeAudioPlayer,
+       _supportsSkipSilence = supportsSkipSilence ?? Platform.isAndroid,
+       _skipSilenceWriteTimeout = skipSilenceWriteTimeout,
        _operationTimeout = operationTimeout,
-       // Public injection name is intentional; the stored hook stays private.
+       // Public injection names are intentional; stored hooks stay private.
+       // ignore: prefer_initializing_formals
+       _remoteDiagnosticProbe = remoteDiagnosticProbe,
        // ignore: prefer_initializing_formals
        _operationDeadline = operationDeadline,
-       assert(operationTimeout > Duration.zero) {
+       assert(operationTimeout > Duration.zero),
+       assert(skipSilenceWriteTimeout > Duration.zero) {
     // main() starts this before the mobile UI is shown. Keep this best-effort
     // warmup for tests and alternate entry points that construct the service
     // directly; image generation itself is deferred to the system request.
@@ -122,7 +138,26 @@ class JustAudioPlayerService
         };
         if (_crossfadeRamp != null &&
             state.processingState == ProcessingState.completed) {
+          // Silence skipping can consume a long tail faster than the planned
+          // gain ramp. Once the outgoing deck has no audio left, promote the
+          // already-playing incoming deck instead of stretching a fade-in
+          // across several seconds of silence.
+          unawaited(_promotePreparedCrossfadeImmediately());
           return;
+        }
+        if (_crossfadeStartGeneration != null &&
+            state.processingState == ProcessingState.completed) {
+          return;
+        }
+        if (state.processingState == ProcessingState.completed) {
+          final duration = _usableDuration(_snapshot.duration);
+          final position = duration != null && player.position < duration
+              ? duration
+              : player.position;
+          _maybeStartCrossfade(positionOverride: position);
+          if (_crossfadeRamp != null || _crossfadeStartGeneration != null) {
+            return;
+          }
         }
         _emit(_snapshot.copyWith(status: status));
         _maybeStartCrossfade();
@@ -131,19 +166,33 @@ class JustAudioPlayerService
         if (!identical(player, _player)) {
           return;
         }
-        if (_crossfadeRamp != null) {
-          unawaited(_promoteCrossfadeAfterOutgoingFailure());
-          return;
-        }
         final sequenceTags = player.sequence
             .map((source) => source.tag)
             .toList(growable: false);
-        if (!justAudioErrorBelongsToSnapshot(
+        final belongsToCurrentItem = justAudioErrorBelongsToSnapshot(
           error,
           sequenceTags: sequenceTags,
           currentIndex: player.currentIndex,
           snapshot: _snapshot,
-        )) {
+        );
+        final failedTrack =
+            _remoteTrackForError(error, sequenceTags) ?? _activeRemoteTrack;
+        final failedPlaybackGeneration = _playbackGeneration;
+        if (_crossfadeRamp != null) {
+          unawaited(
+            _promotePreparedCrossfadeImmediately(
+              onPromotionFailure: belongsToCurrentItem
+                  ? () => _reportPlaybackFailure(
+                      error,
+                      failedPlaybackGeneration,
+                      failedTrack,
+                    )
+                  : null,
+            ),
+          );
+          return;
+        }
+        if (!belongsToCurrentItem) {
           developer.log(
             'ignored stale playback error for source index ${error.index}',
             name: 'BStreamPlayback',
@@ -152,11 +201,7 @@ class JustAudioPlayerService
           return;
         }
         unawaited(
-          _reportPlaybackFailure(
-            error,
-            _playbackGeneration,
-            _remoteTrackForError(error, sequenceTags) ?? _activeRemoteTrack,
-          ),
+          _reportPlaybackFailure(error, failedPlaybackGeneration, failedTrack),
         );
       }),
       player.sequenceStateStream.listen((state) {
@@ -189,9 +234,20 @@ class JustAudioPlayerService
       tag: tag,
       queueEntryId: queueEntryId,
     );
-    if (!force && _crossfadeRamp != null && !sameLogicalItem) {
+    if (!force && _crossfadeStartGeneration != null && !sameLogicalItem) {
+      // The native primary queue won the race while crossfade startup was
+      // waiting for a serialized AudioSink option write. Cancel the unopened
+      // attempt and accept the primary's authoritative transition; starting
+      // the standby now would replay the successor from zero on a second deck.
+      _crossfadeGeneration++;
+      _crossfadeStartGeneration = null;
+      unawaited(_resetCrossfadeState(restorePrimaryVolume: true));
+    } else if (!force && _crossfadeRamp != null && !sameLogicalItem) {
       // The primary playlist may reach its boundary a few milliseconds before
-      // the volume ramp. Keep the old logical item visible until handoff.
+      // the volume ramp. Its native queue is now decoding the successor that
+      // the standby deck already plays, so finish the role swap immediately
+      // to prevent an audible duplicate/echo while keeping metadata atomic.
+      unawaited(_promotePreparedCrossfadeImmediately());
       return;
     }
     if (isRemote && queueEntryId != null) {
@@ -203,6 +259,7 @@ class JustAudioPlayerService
       }
       if (_snapshot.queueEntryId != queueEntryId) {
         _reportedFailureGeneration = null;
+        _reportedFailureToken = null;
         _diagnosticGeneration = null;
         _diagnosticFuture = null;
       }
@@ -223,6 +280,40 @@ class JustAudioPlayerService
         isExternal: tag.extras?['isExternal'] == true,
       ),
     );
+  }
+
+  void _reconcilePrimaryAfterCrossfadeAbort(
+    AudioPlayer expectedPrimary, {
+    int? expectedIndex,
+    int? expectedPlaybackGeneration,
+  }) {
+    if (_disposed || !identical(expectedPrimary, _player)) {
+      return;
+    }
+    if (expectedPlaybackGeneration != null &&
+        (expectedPlaybackGeneration != _playbackGeneration ||
+            expectedPrimary.currentIndex != expectedIndex)) {
+      // An explicit load or a native playlist advance already established a
+      // newer authoritative item; never overwrite it with the old terminal
+      // event that was deferred during crossfade startup.
+      return;
+    }
+    _handlePrimarySequenceState(expectedPrimary.sequenceState, force: true);
+    final processingState = expectedPrimary.processingState;
+    final status = switch (processingState) {
+      ProcessingState.loading || ProcessingState.buffering =>
+        expectedPrimary.playing ? PlayerStatus.playing : PlayerStatus.loading,
+      ProcessingState.completed => PlayerStatus.completed,
+      _ => expectedPrimary.playing ? PlayerStatus.playing : PlayerStatus.paused,
+    };
+    final duration = _usableDuration(_snapshot.duration);
+    final reportedPosition =
+        processingState == ProcessingState.completed &&
+            duration != null &&
+            expectedPrimary.position < duration
+        ? duration
+        : expectedPrimary.position;
+    _emit(_snapshot.copyWith(position: reportedPosition, status: status));
   }
 
   bool get _primaryStillRepresentsSnapshot {
@@ -273,11 +364,14 @@ class JustAudioPlayerService
   late AudioPlayer _player;
   final AudioPlayer? _injectedCrossfadePlayer;
   final JustAudioPlayerFactory _crossfadePlayerFactory;
+  final bool _supportsSkipSilence;
+  final Duration _skipSilenceWriteTimeout;
   AudioPlayer? _crossfadePlayer;
   bool _injectedCrossfadePlayerUsed = false;
   final NotificationArtworkService _notificationArtworkService;
   final Duration _operationTimeout;
   final JustAudioOperationDeadline? _operationDeadline;
+  final JustAudioRemoteDiagnosticProbe? _remoteDiagnosticProbe;
   final _snapshotController = StreamController<PlayerSnapshot>.broadcast();
 
   final List<StreamSubscription<dynamic>> _primarySubscriptions = [];
@@ -286,6 +380,7 @@ class JustAudioPlayerService
   double _masterVolume = 1;
   int _playbackGeneration = 0;
   int? _reportedFailureGeneration;
+  Object? _reportedFailureToken;
   int? _diagnosticGeneration;
   Future<String>? _diagnosticFuture;
   TrackInfo? _activeRemoteTrack;
@@ -312,6 +407,18 @@ class JustAudioPlayerService
   Completer<void>? _crossfadePromotionCompletion;
   bool _disableCrossfadeAfterHandoff = false;
   bool _crossfadePaused = false;
+  int? _crossfadeStartGeneration;
+  bool _skipSilenceEnabled = false;
+  bool _appliedSkipSilenceEnabled = false;
+  bool _skipSilenceConfigurationPending = false;
+  bool _skipSilenceDeckMismatch = false;
+  final Set<AudioPlayer> _uncertainSkipSilencePlayers = <AudioPlayer>{};
+  final Map<AudioPlayer, Object> _timedOutSkipSilenceWriteTokens =
+      <AudioPlayer, Object>{};
+  int _skipSilenceRevision = 0;
+  Future<void> _skipSilenceWriteTail = Future<void>.value();
+  final Map<AudioPlayer, int> _crossfadePlayLeases = <AudioPlayer, int>{};
+  int _nextCrossfadePlayLease = 0;
   double _crossfadePrimaryGain = 1;
   double _crossfadeIncomingGain = 0;
   Future<void> _crossfadeVolumeWriteTail = Future<void>.value();
@@ -346,6 +453,284 @@ class JustAudioPlayerService
 
   @override
   bool get crossfadeEnabled => _crossfadeEnabled;
+
+  @override
+  bool get supportsSkipSilence => _supportsSkipSilence;
+
+  @override
+  bool get skipSilenceEnabled => _skipSilenceEnabled;
+
+  @override
+  Future<void> configureSkipSilence({required bool enabled}) async {
+    _skipSilenceEnabled = enabled;
+    final revision = ++_skipSilenceRevision;
+    if (_disposed || !_supportsSkipSilence) {
+      return;
+    }
+    if (_crossfadeRamp != null ||
+        _crossfadeStartGeneration != null ||
+        _crossfadePromotionInProgress) {
+      // Reconfiguring ExoPlayer's AudioSink while both decks are audible can
+      // produce a discontinuity. Keep this transition untouched and apply the
+      // newest value immediately after its atomic promotion or reset.
+      _skipSilenceConfigurationPending = true;
+      return;
+    }
+    _skipSilenceConfigurationPending = false;
+    final synchronized = await _scheduleSkipSilenceApply(revision);
+    if (!synchronized && revision == _skipSilenceRevision) {
+      final hadMismatchedStandby = _skipSilenceDeckMismatch;
+      await _discardUnsynchronizedCrossfadeDeck();
+      if (!hadMismatchedStandby && revision == _skipSilenceRevision) {
+        // With only the active deck there is nothing to quarantine. Perform
+        // one forced, bounded resynchronization now instead of leaving the
+        // preference pending until a future standby happens to be prepared.
+        await _flushPendingSkipSilenceConfiguration();
+      }
+    } else if (synchronized &&
+        revision == _skipSilenceRevision &&
+        !_skipSilenceConfigurationPending) {
+      // This write may have superseded a flush that an already-due crossfade
+      // was waiting on. Wake that handoff even when the outgoing deck has
+      // completed and can no longer publish another position event.
+      _maybeStartCrossfade();
+    }
+  }
+
+  Future<bool> _scheduleSkipSilenceApply(int revision) {
+    final previous = _skipSilenceWriteTail;
+    final write = previous.catchError((_) {}).then<bool>((_) async {
+      if (_disposed ||
+          !_supportsSkipSilence ||
+          revision != _skipSilenceRevision) {
+        return true;
+      }
+      if (_crossfadeRamp != null ||
+          _crossfadeStartGeneration != null ||
+          _crossfadePromotionInProgress) {
+        _skipSilenceConfigurationPending = true;
+        return true;
+      }
+      final enabled = _skipSilenceEnabled;
+      final players = <AudioPlayer>{_player, ?_crossfadePlayer}.toList();
+      final results = await Future.wait<_SkipSilenceWriteResult>([
+        for (final player in players)
+          _applySkipSilenceToPlayer(player, enabled, logFailure: false),
+      ]);
+      if (_disposed || revision != _skipSilenceRevision) {
+        // A newer serialized write will converge every surviving deck. Never
+        // let this obsolete result discard a standby prepared for that value.
+        return true;
+      }
+      if (results.contains(_SkipSilenceWriteResult.timedOut)) {
+        // The call may have reached ExoPlayer even though its channel response
+        // was lost. Do not retry the same value (just_audio may short-circuit
+        // it locally) and never let an uncertain standby become audible.
+        if (players.length > 1) {
+          _skipSilenceDeckMismatch = true;
+        }
+        _skipSilenceConfigurationPending = true;
+        return false;
+      }
+      final failedPlayers = <AudioPlayer>[
+        for (var index = 0; index < players.length; index++)
+          if (results[index] == _SkipSilenceWriteResult.failed) players[index],
+      ];
+      if (failedPlayers.isNotEmpty) {
+        // Player activation can briefly race the first platform-channel call.
+        // Retry only the failed decks once; successful decks are left alone.
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        if (_disposed || revision != _skipSilenceRevision) {
+          return true;
+        }
+        final retryResults = await Future.wait<_SkipSilenceWriteResult>([
+          for (final player in failedPlayers)
+            _applySkipSilenceToPlayer(player, enabled),
+        ]);
+        if (_disposed || revision != _skipSilenceRevision) {
+          return true;
+        }
+        if (retryResults.any(
+          (result) => result != _SkipSilenceWriteResult.applied,
+        )) {
+          if (players.length > 1) {
+            // Never allow a mismatched standby to become audible.
+            _skipSilenceDeckMismatch = true;
+          }
+          if (revision == _skipSilenceRevision) {
+            _skipSilenceConfigurationPending = true;
+          }
+          return false;
+        }
+      }
+      _appliedSkipSilenceEnabled = enabled;
+      _skipSilenceDeckMismatch = false;
+      if (revision == _skipSilenceRevision) {
+        _skipSilenceConfigurationPending = false;
+      }
+      return true;
+    });
+    _skipSilenceWriteTail = write.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return write;
+  }
+
+  Future<_SkipSilenceWriteResult> _applySkipSilenceToPlayer(
+    AudioPlayer player,
+    bool enabled, {
+    bool logFailure = true,
+  }) async {
+    if (_timedOutSkipSilenceWriteTokens.containsKey(player)) {
+      // The original method-channel call is still alive. A second write could
+      // appear to succeed and then be rolled back when that older Future
+      // finally fails inside just_audio, so wait for its settlement callback.
+      _uncertainSkipSilencePlayers.add(player);
+      return _SkipSilenceWriteResult.timedOut;
+    }
+    final requiresForcedResynchronization = _uncertainSkipSilencePlayers
+        .contains(player);
+
+    Future<_SkipSilenceWriteResult> writeValue(bool value) async {
+      final nativeWrite = player.setSkipSilenceEnabled(value);
+      try {
+        await nativeWrite.timeout(_skipSilenceWriteTimeout);
+        return _SkipSilenceWriteResult.applied;
+      } on TimeoutException catch (error, stackTrace) {
+        _uncertainSkipSilencePlayers.add(player);
+        _trackTimedOutSkipSilenceWrite(player, nativeWrite);
+        developer.log(
+          'skip silence configuration timed out',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        return _SkipSilenceWriteResult.timedOut;
+      } catch (error, stackTrace) {
+        if (requiresForcedResynchronization) {
+          _uncertainSkipSilencePlayers.add(player);
+        }
+        // This is an auxiliary audio processor. Its failure must never stop,
+        // seek, reload or dismantle either crossfade deck.
+        if (logFailure) {
+          developer.log(
+            'skip silence configuration failed after retry',
+            name: 'BStreamPlayback',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
+        return _SkipSilenceWriteResult.failed;
+      }
+    }
+
+    // just_audio updates its local value before awaiting the Android method
+    // channel. Once an ambiguous call has actually settled, toggle through the
+    // opposite value so the desired write cannot be satisfied by that cache.
+    if (requiresForcedResynchronization) {
+      final reset = await writeValue(!enabled);
+      if (reset != _SkipSilenceWriteResult.applied) {
+        return reset;
+      }
+    }
+    final result = await writeValue(enabled);
+    if (result == _SkipSilenceWriteResult.applied) {
+      _uncertainSkipSilencePlayers.remove(player);
+    }
+    return result;
+  }
+
+  void _trackTimedOutSkipSilenceWrite(
+    AudioPlayer player,
+    Future<void> nativeWrite,
+  ) {
+    final token = Object();
+    _timedOutSkipSilenceWriteTokens[player] = token;
+    unawaited(
+      nativeWrite.then<void>(
+        (_) => _handleTimedOutSkipSilenceWriteSettlement(player, token),
+        onError: (Object _, StackTrace _) =>
+            _handleTimedOutSkipSilenceWriteSettlement(player, token),
+      ),
+    );
+  }
+
+  void _handleTimedOutSkipSilenceWriteSettlement(
+    AudioPlayer player,
+    Object token,
+  ) {
+    if (!identical(_timedOutSkipSilenceWriteTokens[player], token)) {
+      return;
+    }
+    _timedOutSkipSilenceWriteTokens.remove(player);
+    if (_disposed ||
+        (!identical(player, _player) && !identical(player, _crossfadePlayer))) {
+      _uncertainSkipSilencePlayers.remove(player);
+      return;
+    }
+    // Whether the old call eventually succeeded or rolled its optimistic
+    // cache back, its ordering is now known and a forced latest-value write is
+    // safe. Recover asynchronously without blocking stop/seek/UI operations.
+    _skipSilenceConfigurationPending = true;
+    unawaited(_recoverSkipSilenceAfterTimedOutWrite());
+  }
+
+  Future<void> _recoverSkipSilenceAfterTimedOutWrite() async {
+    try {
+      await _flushPendingSkipSilenceConfiguration();
+    } catch (error, stackTrace) {
+      if (!_disposed) {
+        developer.log(
+          'skip silence timeout recovery failed',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+  }
+
+  bool get _hasUncertainSkipSilenceDecks {
+    bool isUncertain(AudioPlayer player) =>
+        _uncertainSkipSilencePlayers.contains(player) ||
+        _timedOutSkipSilenceWriteTokens.containsKey(player);
+    final standby = _crossfadePlayer;
+    return isUncertain(_player) || (standby != null && isUncertain(standby));
+  }
+
+  Future<void> _discardUnsynchronizedCrossfadeDeck() async {
+    if (_disposed || !_skipSilenceDeckMismatch || _crossfadePlayer == null) {
+      return;
+    }
+    _crossfadeGeneration++;
+    await _resetCrossfadeState(restorePrimaryVolume: true);
+  }
+
+  Future<void> _flushPendingSkipSilenceConfiguration() async {
+    if (!_skipSilenceConfigurationPending ||
+        _disposed ||
+        _crossfadeRamp != null ||
+        _crossfadeStartGeneration != null ||
+        _crossfadePromotionInProgress) {
+      return;
+    }
+    _skipSilenceConfigurationPending = false;
+    final revision = _skipSilenceRevision;
+    final synchronized = await _scheduleSkipSilenceApply(revision);
+    if (!synchronized && revision == _skipSilenceRevision) {
+      await _discardUnsynchronizedCrossfadeDeck();
+      return;
+    }
+    if (synchronized &&
+        revision == _skipSilenceRevision &&
+        !_skipSilenceConfigurationPending) {
+      // A crossfade startup may have yielded specifically for this write.
+      // Re-evaluate immediately; a completed outgoing deck will not emit
+      // another position tick to wake the handoff up.
+      _maybeStartCrossfade();
+    }
+  }
 
   @override
   Future<void> configureCrossfade({
@@ -469,6 +854,14 @@ class JustAudioPlayerService
       // reused standby never auto-starts the next song at volume zero.
       await incoming.pause();
       await incoming.setVolume(0);
+      if (_supportsSkipSilence) {
+        final synchronized = await _scheduleSkipSilenceApply(
+          _skipSilenceRevision,
+        );
+        if (!synchronized) {
+          throw StateError('Crossfade decks could not synchronize silence.');
+        }
+      }
       if (!_isCrossfadeCurrent(generation) ||
           !identical(incoming, _crossfadePlayer)) {
         return;
@@ -609,6 +1002,7 @@ class JustAudioPlayerService
   }) async {
     _crossfadeRamp?.cancel();
     _crossfadeRamp = null;
+    _crossfadeStartGeneration = null;
     _crossfadePrimaryGain = 1;
     _crossfadeIncomingGain = 0;
     if (_disableCrossfadeAfterHandoff) {
@@ -624,13 +1018,23 @@ class JustAudioPlayerService
     _preparedCrossfadePlan = null;
     _crossfadePreparation = null;
     final incoming = _crossfadePlayer;
-    await _crossfadeErrorSubscription?.cancel();
-    _crossfadeErrorSubscription = null;
     if (!preserveStandby) {
       _standbyRetirementGeneration++;
+      // Detach synchronously before the first await. Any setting change that
+      // arrives while reset is cancelling subscriptions will then target only
+      // the surviving primary deck, never a player about to be disposed.
       _crossfadePlayer = null;
+      _skipSilenceDeckMismatch = false;
     }
+    await _crossfadeErrorSubscription?.cancel();
+    _crossfadeErrorSubscription = null;
     if (incoming != null && !preserveStandby) {
+      // A setter already in flight may still reference the detached deck.
+      // Let that in-flight native write finish before teardown.
+      await _skipSilenceWriteTail;
+      _uncertainSkipSilencePlayers.remove(incoming);
+      _timedOutSkipSilenceWriteTokens.remove(incoming);
+      _crossfadePlayLeases.remove(incoming);
       try {
         await incoming.stop().timeout(const Duration(seconds: 2));
       } catch (_) {
@@ -651,6 +1055,7 @@ class JustAudioPlayerService
         // The next explicit load restores the logical master volume.
       }
     }
+    await _flushPendingSkipSilenceConfiguration();
   }
 
   Future<void> _invalidateCrossfadeForExplicitAction() async {
@@ -671,6 +1076,7 @@ class JustAudioPlayerService
       await Future.wait<void>([
         if (promotion != null) promotion.future,
         _crossfadeVolumeWriteTail,
+        _skipSilenceWriteTail,
       ]).timeout(timeout);
     } catch (_) {
       // AudioPlayer.dispose is the bounded fallback for an unresponsive native
@@ -679,59 +1085,114 @@ class JustAudioPlayerService
     }
   }
 
-  void _maybeStartCrossfade() {
+  void _maybeStartCrossfade({Duration? positionOverride}) {
+    if (_skipSilenceDeckMismatch ||
+        _skipSilenceConfigurationPending ||
+        _hasUncertainSkipSilenceDecks) {
+      return;
+    }
+    final trackDuration = _usableDuration(_snapshot.duration);
+    final outgoingCompleted =
+        _player.processingState == ProcessingState.completed;
     final effectiveDuration = crossfadeStartDuration(
       enabled: _crossfadeEnabled,
       disposed: _disposed,
-      overlapActive: _crossfadeRamp != null,
+      overlapActive:
+          _crossfadeRamp != null || _crossfadeStartGeneration != null,
       promotionInProgress: _crossfadePromotionInProgress,
       sourcePrepared: _preparedCrossfadeSource != null,
       standbyReady: _crossfadePlayer != null,
-      playing: _snapshot.status == PlayerStatus.playing,
-      trackDuration: _usableDuration(_snapshot.duration),
-      position: _snapshot.position,
+      playing: _snapshot.status == PlayerStatus.playing || outgoingCompleted,
+      trackDuration: trackDuration,
+      position:
+          positionOverride ??
+          (outgoingCompleted && trackDuration != null
+              ? trackDuration
+              : _snapshot.position),
       configuredDuration: _crossfadeDuration,
+      allowLateStart:
+          outgoingCompleted ||
+          (_supportsSkipSilence && _appliedSkipSilenceEnabled),
     );
     if (effectiveDuration == null) return;
-    unawaited(_runCrossfade(_crossfadeGeneration, effectiveDuration));
+    final generation = _crossfadeGeneration;
+    _crossfadeStartGeneration = generation;
+    unawaited(_runCrossfade(generation, effectiveDuration));
   }
 
   Future<void> _runCrossfade(int generation, Duration duration) async {
-    final outgoing = _player;
-    final incoming = _crossfadePlayer;
-    final source = _preparedCrossfadeSource;
-    if (incoming == null ||
-        source == null ||
-        !_isCrossfadeCurrent(generation) ||
-        _crossfadeRamp != null) {
-      return;
-    }
-    late final CrossfadeRamp ramp;
-    ramp = CrossfadeRamp(
-      duration: duration,
-      applyGains: (gains) async {
-        if (!_isCrossfadeCurrent(generation) ||
-            !identical(_crossfadeRamp, ramp) ||
-            !identical(_player, outgoing) ||
-            !identical(_crossfadePlayer, incoming)) {
-          return;
-        }
-        _crossfadePrimaryGain = gains.outgoing;
-        _crossfadeIncomingGain = gains.incoming;
-        final master = _masterVolume;
-        await _writeCrossfadeVolumes(
-          outgoing: outgoing,
-          incoming: incoming,
-          outgoingVolume: gains.outgoing * master,
-          incomingVolume: gains.incoming * master,
-        );
-      },
-    );
-    _crossfadeRamp = ramp;
+    final startupPrimary = _player;
+    final startupPrimaryIndex = startupPrimary.currentIndex;
+    final startupPlaybackGeneration = _playbackGeneration;
     try {
-      unawaited(_playCrossfadeIncoming(incoming, generation));
+      // A native AudioSink option write and the first volume ramp must never
+      // start concurrently. Once this lane drains, the pending marker keeps
+      // newer skip-silence writes deferred until promotion.
+      await _skipSilenceWriteTail;
+      final outgoing = _player;
+      final incoming = _crossfadePlayer;
+      final source = _preparedCrossfadeSource;
+      if (incoming == null ||
+          source == null ||
+          !_isCrossfadeCurrent(generation) ||
+          _crossfadeRamp != null ||
+          _skipSilenceDeckMismatch ||
+          _skipSilenceConfigurationPending ||
+          _hasUncertainSkipSilenceDecks ||
+          _crossfadeStartGeneration != generation) {
+        return;
+      }
+      final trackDuration = _usableDuration(_snapshot.duration);
+      final outgoingCompleted =
+          outgoing.processingState == ProcessingState.completed;
+      final currentPosition = outgoingCompleted && trackDuration != null
+          ? trackDuration
+          : outgoing.position;
+      final currentRampDuration = crossfadeStartDuration(
+        enabled: _crossfadeEnabled,
+        disposed: _disposed,
+        overlapActive: false,
+        promotionInProgress: _crossfadePromotionInProgress,
+        sourcePrepared: true,
+        standbyReady: true,
+        playing: _snapshot.status == PlayerStatus.playing || outgoingCompleted,
+        trackDuration: trackDuration,
+        position: currentPosition,
+        configuredDuration: duration,
+        allowLateStart:
+            outgoingCompleted ||
+            (_supportsSkipSilence && _appliedSkipSilenceEnabled),
+      );
+      if (currentRampDuration == null) {
+        return;
+      }
+      late final CrossfadeRamp ramp;
+      ramp = CrossfadeRamp(
+        duration: currentRampDuration,
+        applyGains: (gains) async {
+          if (!_isCrossfadeCurrent(generation) ||
+              !identical(_crossfadeRamp, ramp) ||
+              !identical(_player, outgoing) ||
+              !identical(_crossfadePlayer, incoming)) {
+            return;
+          }
+          _crossfadePrimaryGain = gains.outgoing;
+          _crossfadeIncomingGain = gains.incoming;
+          final master = _masterVolume;
+          await _writeCrossfadeVolumes(
+            outgoing: outgoing,
+            incoming: incoming,
+            outgoingVolume: gains.outgoing * master,
+            incomingVolume: gains.incoming * master,
+          );
+        },
+      );
+      _crossfadeRamp = ramp;
+      _crossfadeStartGeneration = null;
+      unawaited(_playCrossfadeIncoming(incoming, generation, source));
       final completion = ramp.start();
-      if (_crossfadePaused || _snapshot.status != PlayerStatus.playing) {
+      if (_crossfadePaused ||
+          (_snapshot.status != PlayerStatus.playing && !outgoingCompleted)) {
         ramp.pause();
         await incoming.pause();
       }
@@ -762,16 +1223,26 @@ class JustAudioPlayerService
           // Promotion may already have moved the primary playlist before a
           // later native option/volume write failed. Reflect its authoritative
           // item so metadata can never remain on the outgoing song.
-          _handlePrimarySequenceState(_player.sequenceState, force: true);
-          _emit(
-            _snapshot.copyWith(
-              position: _player.position,
-              status: _player.playing
-                  ? PlayerStatus.playing
-                  : PlayerStatus.paused,
-            ),
-          );
+          _reconcilePrimaryAfterCrossfadeAbort(_player);
         }
+      }
+    } finally {
+      final ownedPendingStart = _crossfadeStartGeneration == generation;
+      if (ownedPendingStart) {
+        _crossfadeStartGeneration = null;
+      }
+      if (ownedPendingStart) {
+        await _flushPendingSkipSilenceConfiguration();
+      }
+      if (_crossfadeRamp == null &&
+          _crossfadeStartGeneration == null &&
+          !_crossfadePromotionInProgress &&
+          startupPrimary.processingState == ProcessingState.completed) {
+        _reconcilePrimaryAfterCrossfadeAbort(
+          startupPrimary,
+          expectedIndex: startupPrimaryIndex,
+          expectedPlaybackGeneration: startupPlaybackGeneration,
+        );
       }
     }
   }
@@ -779,38 +1250,140 @@ class JustAudioPlayerService
   Future<void> _playCrossfadeIncoming(
     AudioPlayer incoming,
     int generation,
+    CrossfadePlaybackSource source,
   ) async {
+    final lease = ++_nextCrossfadePlayLease;
+    _crossfadePlayLeases[incoming] = lease;
+    final playbackGeneration = _playbackGeneration;
+    final expectedSourceTag = incoming.sequenceState.currentSource?.tag;
+    bool ownsSource() =>
+        _crossfadePlayLeases[incoming] == lease &&
+        expectedSourceTag != null &&
+        identical(incoming.sequenceState.currentSource?.tag, expectedSourceTag);
     try {
       await incoming.play();
     } catch (error, stackTrace) {
-      if (_isCrossfadeCurrent(generation) &&
-          identical(incoming, _crossfadePlayer)) {
-        developer.log(
-          'just_audio standby play failed',
-          name: 'BStreamPlayback',
-          error: error,
-          stackTrace: stackTrace,
-        );
-        await _abortCrossfadeGeneration(generation);
+      try {
+        if (ownsSource() &&
+            _isCrossfadeCurrent(generation) &&
+            identical(incoming, _crossfadePlayer)) {
+          developer.log(
+            'just_audio standby play failed',
+            name: 'BStreamPlayback',
+            error: error,
+            stackTrace: stackTrace,
+          );
+          await _abortCrossfadeGeneration(generation);
+        } else if (ownsSource() &&
+            !_disposed &&
+            playbackGeneration == _playbackGeneration &&
+            identical(incoming, _player)) {
+          // play() may fail after this physical deck has already been promoted.
+          // Follow the deck across the role swap instead of dropping that late
+          // failure merely because it is no longer named `_crossfadePlayer`.
+          developer.log(
+            'promoted crossfade deck failed to start',
+            name: 'BStreamPlayback',
+            error: error,
+            stackTrace: stackTrace,
+          );
+          await _reportPlaybackFailure(
+            error,
+            playbackGeneration,
+            switch (source) {
+              RemoteCrossfadePlaybackSource(:final source) => source.track,
+              _ => null,
+            },
+            isStillCurrent: () =>
+                ownsSource() &&
+                playbackGeneration == _playbackGeneration &&
+                identical(incoming, _player),
+          );
+        }
+      } catch (recoveryError, recoveryStackTrace) {
+        if (!_disposed) {
+          developer.log(
+            'crossfade play failure recovery failed',
+            name: 'BStreamPlayback',
+            error: recoveryError,
+            stackTrace: recoveryStackTrace,
+          );
+        }
+      }
+    } finally {
+      if (_crossfadePlayLeases[incoming] == lease) {
+        _crossfadePlayLeases.remove(incoming);
       }
     }
   }
 
-  Future<void> _promoteCrossfadeAfterOutgoingFailure() async {
+  Future<void> _promotePreparedCrossfadeImmediately({
+    Future<void> Function()? onPromotionFailure,
+  }) async {
     final outgoing = _player;
     final incoming = _crossfadePlayer;
     final source = _preparedCrossfadeSource;
     final ramp = _crossfadeRamp;
-    if (incoming == null || source == null || ramp == null) {
+    final generation = _crossfadeGeneration;
+    if (incoming == null ||
+        source == null ||
+        ramp == null ||
+        _crossfadePromotionInProgress) {
       return;
     }
-    ramp.cancel();
-    await _promoteCrossfadePlayer(
-      generation: _crossfadeGeneration,
-      outgoing: outgoing,
-      incoming: incoming,
-      source: source,
-    );
+    try {
+      if (!_isCrossfadeCurrent(generation) ||
+          !identical(outgoing, _player) ||
+          !identical(incoming, _crossfadePlayer) ||
+          !identical(ramp, _crossfadeRamp) ||
+          _crossfadePromotionInProgress) {
+        return;
+      }
+      ramp.cancel();
+      await _promoteCrossfadePlayer(
+        generation: generation,
+        outgoing: outgoing,
+        incoming: incoming,
+        source: source,
+      );
+      if (!identical(incoming, _player) &&
+          !_crossfadePromotionInProgress &&
+          _isCrossfadeCurrent(generation) &&
+          identical(outgoing, _player) &&
+          identical(ramp, _crossfadeRamp)) {
+        throw StateError('Immediate crossfade promotion did not complete.');
+      }
+    } catch (error, stackTrace) {
+      if (!_disposed) {
+        developer.log(
+          'immediate crossfade promotion failed',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+      try {
+        if (_isCrossfadeCurrent(generation) &&
+            identical(outgoing, _player) &&
+            identical(incoming, _crossfadePlayer)) {
+          _crossfadeGeneration++;
+          await _resetCrossfadeState(restorePrimaryVolume: true);
+          _reconcilePrimaryAfterCrossfadeAbort(outgoing);
+          if (onPromotionFailure != null) {
+            await onPromotionFailure();
+          }
+        }
+      } catch (recoveryError, recoveryStackTrace) {
+        if (!_disposed) {
+          developer.log(
+            'immediate crossfade recovery failed',
+            name: 'BStreamPlayback',
+            error: recoveryError,
+            stackTrace: recoveryStackTrace,
+          );
+        }
+      }
+    }
   }
 
   Future<void> _promoteCrossfadePlayer({
@@ -900,6 +1473,7 @@ class JustAudioPlayerService
         _crossfadePromotionCompletion = null;
       }
       _crossfadePromotionInProgress = false;
+      await _flushPendingSkipSilenceConfiguration();
     }
   }
 
@@ -1013,24 +1587,41 @@ class JustAudioPlayerService
     AudioPlayer player,
     int retirementGeneration,
   ) async {
+    bool canRetire() =>
+        !_disposed &&
+        retirementGeneration == _standbyRetirementGeneration &&
+        identical(player, _crossfadePlayer) &&
+        _preparedCrossfadeSource == null &&
+        _crossfadePreparation == null;
+
     await Future<void>.delayed(_crossfadeRetirementGrace);
-    if (_disposed ||
-        retirementGeneration != _standbyRetirementGeneration ||
-        !identical(player, _crossfadePlayer) ||
-        _preparedCrossfadeSource != null ||
-        _crossfadePreparation != null) {
+    if (!canRetire()) {
       return;
     }
-    try {
-      await player.stop().timeout(const Duration(seconds: 2));
-    } catch (_) {
-      // Promotion is already complete; retirement cannot affect playback.
-    }
-    try {
-      await player.setVolume(0).timeout(const Duration(seconds: 2));
-    } catch (_) {
-      // The next preparation will assert the muted standby gain again.
-    }
+    // Stop/reuse and AudioSink configuration share one lane. Otherwise a
+    // preference change arriving exactly at the 250 ms retirement boundary
+    // could address a deck while it is being stopped.
+    final previous = _skipSilenceWriteTail;
+    final retirement = previous.catchError((_) {}).then<void>((_) async {
+      if (!canRetire()) {
+        return;
+      }
+      try {
+        await player.stop().timeout(const Duration(seconds: 2));
+      } catch (_) {
+        // Promotion is already complete; retirement cannot affect playback.
+      }
+      try {
+        await player.setVolume(0).timeout(const Duration(seconds: 2));
+      } catch (_) {
+        // The next preparation will assert the muted standby gain again.
+      }
+    });
+    _skipSilenceWriteTail = retirement.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    await retirement;
   }
 
   void _scheduleCrossfadeRetirement(AudioPlayer player) {
@@ -1087,6 +1678,7 @@ class JustAudioPlayerService
     _localQueueTracks = const [];
     _nativeLocalQueueLoaded = false;
     _reportedFailureGeneration = null;
+    _reportedFailureToken = null;
     _diagnosticGeneration = null;
     _diagnosticFuture = null;
     _emit(
@@ -1742,9 +2334,10 @@ class JustAudioPlayerService
   Future<void> resume() async {
     _startPlayback(_playbackGeneration);
     final incoming = _crossfadePlayer;
+    final source = _preparedCrossfadeSource;
     _crossfadePaused = false;
-    if (_crossfadeRamp != null && incoming != null) {
-      unawaited(_playCrossfadeIncoming(incoming, _crossfadeGeneration));
+    if (_crossfadeRamp != null && incoming != null && source != null) {
+      unawaited(_playCrossfadeIncoming(incoming, _crossfadeGeneration, source));
       _crossfadeRamp?.resume();
     }
     _emit(_snapshot.copyWith(status: PlayerStatus.playing));
@@ -1903,6 +2496,9 @@ class JustAudioPlayerService
     _cancelActiveQueueOperation();
     final incoming = _crossfadePlayer;
     _crossfadePlayer = null;
+    _uncertainSkipSilencePlayers.clear();
+    _timedOutSkipSilenceWriteTokens.clear();
+    _crossfadePlayLeases.clear();
     await _crossfadeErrorSubscription?.cancel();
     _crossfadeErrorSubscription = null;
     await _detachPrimaryPlayer();
@@ -2128,16 +2724,34 @@ class JustAudioPlayerService
   Future<void> _reportPlaybackFailure(
     Object error,
     int generation,
-    TrackInfo? track,
-  ) async {
+    TrackInfo? track, {
+    bool Function()? isStillCurrent,
+  }) async {
+    bool stillOwnsReport() {
+      try {
+        return isStillCurrent?.call() ?? true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     if (generation != _playbackGeneration ||
-        _reportedFailureGeneration == generation) {
+        _reportedFailureGeneration == generation ||
+        !stillOwnsReport()) {
       return;
     }
+    final token = Object();
     _reportedFailureGeneration = generation;
+    _reportedFailureToken = token;
 
     final message = await _diagnosticMessage(error, generation, track);
-    if (generation != _playbackGeneration) {
+    if (generation != _playbackGeneration ||
+        !stillOwnsReport() ||
+        !identical(_reportedFailureToken, token)) {
+      if (identical(_reportedFailureToken, token)) {
+        _reportedFailureGeneration = null;
+        _reportedFailureToken = null;
+      }
       return;
     }
     developer.log(
@@ -2199,7 +2813,10 @@ class JustAudioPlayerService
       return baseMessage;
     }
 
-    final detail = await _probeRemoteSource(track);
+    final injectedProbe = _remoteDiagnosticProbe;
+    final detail = await (injectedProbe == null
+        ? _probeRemoteSource(track)
+        : injectedProbe(track));
     return detail == null ? baseMessage : '$baseMessage: $detail';
   }
 

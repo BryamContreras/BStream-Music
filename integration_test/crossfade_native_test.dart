@@ -51,6 +51,10 @@ void main() {
         ? JustAudioPlayerService()
         : MediaKitPlayerService();
     final crossfade = service as CrossfadeCapablePlayer;
+    if (service case final SkipSilenceCapablePlayer skipSilence
+        when skipSilence.supportsSkipSilence) {
+      await skipSilence.configureSkipSilence(enabled: true);
+    }
     final observedTrackOrder = <String>[];
     final observedPositions = <String, List<Duration>>{};
     final snapshotSubscription = service.snapshotStream.listen((snapshot) {

@@ -105,6 +105,7 @@ class SettingsState {
     this.localMusicFilters = defaultLocalMusicFilters,
     this.crossfadeEnabled = false,
     this.crossfadeDuration = defaultCrossfadeDuration,
+    this.skipSilenceEnabled = false,
   });
 
   final String downloadDirectory;
@@ -125,6 +126,7 @@ class SettingsState {
   final Set<LocalMusicFilter> localMusicFilters;
   final bool crossfadeEnabled;
   final Duration crossfadeDuration;
+  final bool skipSilenceEnabled;
 
   SettingsState copyWith({
     String? downloadDirectory,
@@ -145,6 +147,7 @@ class SettingsState {
     Set<LocalMusicFilter>? localMusicFilters,
     bool? crossfadeEnabled,
     Duration? crossfadeDuration,
+    bool? skipSilenceEnabled,
   }) {
     return SettingsState(
       downloadDirectory: downloadDirectory ?? this.downloadDirectory,
@@ -171,6 +174,7 @@ class SettingsState {
       localMusicFilters: localMusicFilters ?? this.localMusicFilters,
       crossfadeEnabled: crossfadeEnabled ?? this.crossfadeEnabled,
       crossfadeDuration: crossfadeDuration ?? this.crossfadeDuration,
+      skipSilenceEnabled: skipSilenceEnabled ?? this.skipSilenceEnabled,
     );
   }
 }
@@ -209,6 +213,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _localMusicFiltersKey = 'settings.localMusicFilters';
   static const _crossfadeEnabledKey = 'settings.crossfadeEnabled';
   static const _crossfadeSecondsKey = 'settings.crossfadeSeconds';
+  static const _skipSilenceEnabledKey = 'settings.skipSilenceEnabled';
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
   Future<void> _animatedArtworkWriteTail = Future<void>.value();
@@ -217,6 +222,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   Future<void> _recommendationHistoryWriteTail = Future<void>.value();
   Future<void> _localMusicFiltersWriteTail = Future<void>.value();
   Future<void> _crossfadeWriteTail = Future<void>.value();
+  Future<void> _skipSilenceWriteTail = Future<void>.value();
 
   @override
   Future<SettingsState> build() async {
@@ -276,6 +282,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       crossfadeSeconds,
     );
     final crossfadeEnabled = prefs.getBool(_crossfadeEnabledKey) ?? false;
+    final skipSilenceEnabled = prefs.getBool(_skipSilenceEnabledKey) ?? false;
     final storedDirectory = prefs.getString(_downloadDirectoryKey);
     final encodedMigrationJournal = prefs.getString(
       _downloadDirectoryMigrationJournalKey,
@@ -446,6 +453,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       localMusicFilters: localMusicFilters,
       crossfadeEnabled: crossfadeEnabled,
       crossfadeDuration: crossfadeDuration,
+      skipSilenceEnabled: skipSilenceEnabled,
     );
   }
 
@@ -908,6 +916,20 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       await prefs.setInt(_crossfadeSecondsKey, duration.inSeconds);
     });
     _crossfadeWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> setSkipSilenceEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.skipSilenceEnabled == enabled) {
+      return;
+    }
+    state = AsyncData(current.copyWith(skipSilenceEnabled: enabled));
+    final write = _skipSilenceWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_skipSilenceEnabledKey, enabled);
+    });
+    _skipSilenceWriteTail = write.catchError((_) {});
     await write;
   }
 

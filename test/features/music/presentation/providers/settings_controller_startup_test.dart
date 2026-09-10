@@ -150,6 +150,28 @@ void main() {
     );
   });
 
+  test('startup restores and persists skip silence', () async {
+    SharedPreferences.setMockInitialValues({
+      'settings.skipSilenceEnabled': true,
+    });
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final settings = await container.read(settingsControllerProvider.future);
+    expect(settings.skipSilenceEnabled, isTrue);
+
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setSkipSilenceEnabled(false);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getBool('settings.skipSilenceEnabled'), isFalse);
+    expect(
+      container.read(settingsControllerProvider).value?.skipSilenceEnabled,
+      isFalse,
+    );
+  });
+
   test(
     'animated artwork defaults on and restores an explicit choice',
     () async {

@@ -133,6 +133,35 @@ void main() {
     );
   });
 
+  test('skip silence defaults off and persists the latest toggle', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(
+          _PersistingCrossfadeSettingsController.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final initial = await container.read(settingsControllerProvider.future);
+    expect(initial.skipSilenceEnabled, isFalse);
+
+    final controller = container.read(settingsControllerProvider.notifier);
+    await Future.wait([
+      controller.setSkipSilenceEnabled(true),
+      controller.setSkipSilenceEnabled(false),
+      controller.setSkipSilenceEnabled(true),
+    ]);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getBool('settings.skipSilenceEnabled'), isTrue);
+    expect(
+      container.read(settingsControllerProvider).value?.skipSilenceEnabled,
+      isTrue,
+    );
+  });
+
   test('missing or invalid stored crossfade seconds keep the 5 s default', () {
     expect(crossfadeDurationFromStoredSeconds(null), defaultCrossfadeDuration);
     expect(crossfadeDurationFromStoredSeconds(0), defaultCrossfadeDuration);
@@ -1078,6 +1107,124 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('Android shows skip silence directly below crossfade', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    _configureView(tester, const Size(760, 1400));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        overrides: [skipSilenceSupportedProvider.overrideWithValue(true)],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final crossfadeCard = find.byKey(
+      const ValueKey('settings-inline-crossfade'),
+    );
+    final skipSilenceCard = find.byKey(
+      const ValueKey('settings-inline-skip-silence'),
+    );
+    final skipSilenceSwitch = find.byKey(
+      const ValueKey('settings-skip-silence-switch'),
+    );
+    expect(skipSilenceCard, findsOneWidget);
+    expect(skipSilenceSwitch, findsOneWidget);
+    expect(
+      tester.getTopLeft(skipSilenceCard).dy -
+          tester.getBottomLeft(crossfadeCard).dy,
+      closeTo(6, 0.1),
+    );
+    expect(tester.getSize(skipSilenceCard).width, closeTo(520, 0.1));
+
+    await tester.tap(skipSilenceSwitch);
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(skipSilenceCard),
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .requireValue
+          .skipSilenceEnabled,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('skip silence is not presented as supported on iOS', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    _configureView(tester, const Size(760, 1400));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        overrides: [skipSilenceSupportedProvider.overrideWithValue(false)],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-inline-skip-silence')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('skip silence fits a compact Android view at large text', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.platformDispatcher.textScaleFactorTestValue = 3;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+    });
+    _configureView(tester, const Size(320, 568));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        overrides: [skipSilenceSupportedProvider.overrideWithValue(true)],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(const ValueKey('settings-inline-skip-silence'));
+    await tester.scrollUntilVisible(
+      card,
+      180,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('settings-root')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+
+    final rect = tester.getRect(card);
+    expect(rect.left, greaterThanOrEqualTo(0));
+    expect(rect.right, lessThanOrEqualTo(320));
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+    tester.platformDispatcher.clearTextScaleFactorTestValue();
   });
 
   testWidgets('lyrics appearance offers animation, alignment, and preview', (
@@ -2364,6 +2511,12 @@ class _FixedSettingsController extends SettingsController {
   Future<void> setCrossfadeDuration(Duration duration) async {
     final current = await future;
     state = AsyncData(current.copyWith(crossfadeDuration: duration));
+  }
+
+  @override
+  Future<void> setSkipSilenceEnabled(bool enabled) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(skipSilenceEnabled: enabled));
   }
 }
 

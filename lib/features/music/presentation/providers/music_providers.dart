@@ -191,6 +191,10 @@ final playerServiceProvider = Provider<PlayerService>((ref) {
   return service;
 });
 
+final skipSilenceSupportedProvider = Provider<bool>(
+  (ref) => AppPlatform.supportsSkipSilence,
+);
+
 final trackShareServiceProvider = Provider<TrackShareService>((ref) {
   return const SharePlusTrackShareService();
 });

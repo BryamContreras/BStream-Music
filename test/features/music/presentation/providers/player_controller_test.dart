@@ -773,6 +773,88 @@ void main() {
     },
   );
 
+  test(
+    'skip silence configures independently and preserves rapid changes',
+    () async {
+      final player = _CrossfadePlayerService();
+      final settings = _CrossfadeSettingsController(
+        const SettingsState(
+          downloadDirectory: '/tmp/bstream-skip-silence-test',
+          language: AppLanguage.spanish,
+          skipSilenceEnabled: true,
+        ),
+      );
+      final container = _container(player, settingsController: settings);
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await _waitUntil(() => player.skipSilenceConfigurations.isNotEmpty);
+      expect(player.skipSilenceConfigurations, [true]);
+
+      settings.setUnrelatedLanguage(AppLanguage.english);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(
+        player.skipSilenceConfigurations,
+        [true],
+        reason: 'Unrelated settings must not reconfigure the native processor.',
+      );
+
+      final settingsNotifier = container.read(
+        settingsControllerProvider.notifier,
+      );
+      await Future.wait([
+        settingsNotifier.setSkipSilenceEnabled(false),
+        settingsNotifier.setSkipSilenceEnabled(true),
+        settingsNotifier.setSkipSilenceEnabled(false),
+      ]);
+      await _waitUntil(() => player.skipSilenceConfigurations.length == 4);
+
+      expect(player.skipSilenceConfigurations, [true, false, true, false]);
+      expect(player.skipSilenceEnabled, isFalse);
+    },
+  );
+
+  test('skip silence ignores a backend that does not support it', () async {
+    final player = _CrossfadePlayerService(supportsSkipSilence: false);
+    final settings = _CrossfadeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream-unsupported-skip-silence-test',
+        language: AppLanguage.spanish,
+        skipSilenceEnabled: true,
+      ),
+    );
+    final container = _container(player, settingsController: settings);
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(player.skipSilenceConfigurations, isEmpty);
+    expect(player.skipSilenceEnabled, isFalse);
+  });
+
+  test('a failed skip silence write does not poison later changes', () async {
+    final player = _CrossfadePlayerService()..skipSilenceFailuresRemaining = 1;
+    final settings = _CrossfadeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream-skip-silence-failure-test',
+        language: AppLanguage.spanish,
+        skipSilenceEnabled: true,
+      ),
+    );
+    final container = _container(player, settingsController: settings);
+    addTearDown(container.dispose);
+
+    await container.read(playerControllerProvider.future);
+    await _waitUntil(() => player.skipSilenceConfigurations.length == 1);
+
+    await settings.setSkipSilenceEnabled(false);
+    await _waitUntil(() => player.skipSilenceConfigurations.length == 2);
+
+    expect(player.skipSilenceConfigurations, [true, false]);
+    expect(player.skipSilenceEnabled, isFalse);
+  });
+
   test('changing only crossfade duration keeps the prepared deck', () async {
     final player = _CrossfadePlayerService();
     final settings = _CrossfadeSettingsController(
@@ -5022,20 +5104,41 @@ class _BlockingPlaybackOptionsPlayerService extends _FakePlayerService {
 }
 
 class _CrossfadePlayerService extends _FakePlayerService
-    implements CrossfadeCapablePlayer {
-  _CrossfadePlayerService({super.supportsLocalQueueReplacement});
+    implements CrossfadeCapablePlayer, SkipSilenceCapablePlayer {
+  _CrossfadePlayerService({
+    super.supportsLocalQueueReplacement,
+    this.supportsSkipSilence = true,
+  });
 
   final List<({bool enabled, Duration duration})> crossfadeConfigurations = [];
   final List<CrossfadePlaybackSource?> crossfadePreparations = [];
+  final List<bool> skipSilenceConfigurations = [];
+  @override
+  final bool supportsSkipSilence;
   CrossfadePlaybackSource? preparedCrossfadeSource;
   int seekCrossfadeInvalidations = 0;
   int stopCrossfadeInvalidations = 0;
   bool _crossfadeEnabled = false;
+  bool _skipSilenceEnabled = false;
+  int skipSilenceFailuresRemaining = 0;
   bool blockSeeks = false;
   final List<Completer<void>> blockedSeeks = [];
 
   @override
   bool get crossfadeEnabled => _crossfadeEnabled;
+
+  @override
+  bool get skipSilenceEnabled => _skipSilenceEnabled;
+
+  @override
+  Future<void> configureSkipSilence({required bool enabled}) async {
+    skipSilenceConfigurations.add(enabled);
+    if (skipSilenceFailuresRemaining > 0) {
+      skipSilenceFailuresRemaining--;
+      throw StateError('skip silence configuration failed');
+    }
+    _skipSilenceEnabled = enabled;
+  }
 
   @override
   Future<void> configureCrossfade({
@@ -5147,6 +5250,13 @@ class _CrossfadeSettingsController extends SettingsController {
   Future<void> setCrossfadeDuration(Duration duration) {
     final current = state.asData?.value ?? initialState;
     state = AsyncData(current.copyWith(crossfadeDuration: duration));
+    return Future<void>.value();
+  }
+
+  @override
+  Future<void> setSkipSilenceEnabled(bool enabled) {
+    final current = state.asData?.value ?? initialState;
+    state = AsyncData(current.copyWith(skipSilenceEnabled: enabled));
     return Future<void>.value();
   }
 

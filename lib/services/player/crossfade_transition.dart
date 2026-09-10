@@ -72,6 +72,7 @@ Duration? crossfadeStartDuration({
   required Duration position,
   required Duration configuredDuration,
   Duration minimumRemaining = const Duration(milliseconds: 350),
+  bool allowLateStart = false,
 }) {
   if (!enabled ||
       disposed ||
@@ -85,8 +86,19 @@ Duration? crossfadeStartDuration({
     return null;
   }
   final remaining = trackDuration - position;
-  if (remaining > configuredDuration || remaining < minimumRemaining) {
+  if (remaining > configuredDuration) {
     return null;
+  }
+  if (remaining < minimumRemaining) {
+    if (!allowLateStart) {
+      return null;
+    }
+    // Silence skipping may advance the source clock across the whole
+    // crossfade window in one native position update. Use a short fade-in in
+    // that case instead of losing the prepared handoff altogether.
+    return configuredDuration < minimumRemaining
+        ? configuredDuration
+        : minimumRemaining;
   }
   return remaining < configuredDuration ? remaining : configuredDuration;
 }

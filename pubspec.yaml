@@ -39,7 +39,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^3.4.2
   flutter_cache_manager: ^3.4.2
-  just_audio: ^0.10.5
+  # Local fork of just_audio 0.10.6. The Android implementation installs a
+  # music-safe silence detector; see third_party/just_audio/BSTREAM.md.
+  just_audio:
+    path: third_party/just_audio
   path_provider: ^2.1.5
   path: ^1.9.1
   sqflite: ^2.4.3

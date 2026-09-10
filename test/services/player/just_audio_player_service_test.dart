@@ -443,6 +443,750 @@ void main() {
 
   group('dual-deck crossfade', () {
     test(
+      'skip silence stays synchronized across an active crossfade',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.service.configureSkipSilence(enabled: true);
+          expect(fixture.primary.skipSilenceCalls, [true]);
+
+          await fixture.playAndPrepare(masterVolume: 0.72);
+          expect(fixture.standby.skipSilenceCalls.last, isTrue);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await _waitUntil(
+            () => fixture.standby.volumeCalls.any((volume) => volume > 0),
+            attempts: 500,
+          );
+
+          await fixture.service.configureSkipSilence(enabled: false);
+          expect(
+            fixture.primary.skipSilenceCalls.last,
+            isTrue,
+            reason: 'AudioSink changes are deferred while both decks play.',
+          );
+          expect(fixture.standby.skipSilenceCalls.last, isTrue);
+
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          await _waitUntil(
+            () =>
+                fixture.primary.skipSilenceCalls.last == false &&
+                fixture.standby.skipSilenceCalls.last == false,
+          );
+
+          expect(fixture.service.skipSilenceEnabled, isFalse);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+          expect(fixture.primary.seekCalls, 0);
+          expect(fixture.standby.seekCalls, 0);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test('a transient deck failure is retried before crossfade', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.playAndPrepare(masterVolume: 0.72);
+        fixture.standby.skipSilenceFailuresRemaining = 1;
+
+        await fixture.service.configureSkipSilence(enabled: true);
+
+        expect(fixture.primary.appliedSkipSilenceEnabled, isTrue);
+        expect(fixture.standby.appliedSkipSilenceEnabled, isTrue);
+        expect(
+          fixture.standby.skipSilenceCalls.where((enabled) => enabled),
+          hasLength(2),
+        );
+
+        fixture.primary.emitPosition(const Duration(milliseconds: 400));
+        await _waitUntil(
+          () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+          attempts: 700,
+        );
+        expect(fixture.service.crossfadeEnabled, isTrue);
+        expect(fixture.primary.seekCalls, 0);
+        expect(fixture.standby.seekCalls, 0);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    test(
+      'a persistent deck failure discards only standby and retries next time',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.72);
+          fixture.standby.skipSilenceFailuresRemaining = 2;
+
+          await fixture.service.configureSkipSilence(enabled: true);
+
+          expect(fixture.primary.appliedSkipSilenceEnabled, isTrue);
+          expect(fixture.standby.appliedSkipSilenceEnabled, isFalse);
+          expect(fixture.standby.disposeCalls, 1);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+          expect(
+            fixture.service.currentSnapshot.queueEntryId,
+            'remote:current',
+          );
+          expect(fixture.primary.seekCalls, 0);
+
+          await fixture.service.prepareCrossfade(
+            RemoteCrossfadePlaybackSource(_remoteSource('next')),
+          );
+          final replacement = fixture.factoryPlayers.single;
+          expect(replacement.appliedSkipSilenceEnabled, isTrue);
+
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(replacement.playCalls, 1);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test('crossfade waits for an in-flight skip silence write', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.playAndPrepare(masterVolume: 0.72);
+        fixture.primary.blockNextSkipSilence = true;
+
+        final configuration = fixture.service.configureSkipSilence(
+          enabled: true,
+        );
+        await fixture.primary.skipSilenceWriteStarted.future;
+        fixture.primary.emitPosition(const Duration(milliseconds: 400));
+        await _drainEvents();
+
+        expect(fixture.standby.playCalls, 0);
+        expect(
+          fixture.standby.volumeCalls.where((volume) => volume > 0),
+          isEmpty,
+        );
+
+        fixture.primary.releaseSkipSilenceWrite.complete();
+        await configuration;
+        await _waitUntil(
+          () => fixture.standby.volumeCalls.any((volume) => volume > 0),
+          attempts: 500,
+        );
+        expect(fixture.service.crossfadeEnabled, isTrue);
+      } finally {
+        if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+          fixture.primary.releaseSkipSilenceWrite.complete();
+        }
+        await fixture.dispose();
+      }
+    });
+
+    test(
+      'a waiting crossfade resumes after applying the newest setting',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.72);
+          fixture.primary.blockNextSkipSilence = true;
+
+          final obsolete = fixture.service.configureSkipSilence(enabled: true);
+          await fixture.primary.skipSilenceWriteStarted.future;
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await _drainEvents();
+
+          await fixture.service.configureSkipSilence(enabled: false);
+          fixture.primary.emitCompleted();
+          await _drainEvents();
+          expect(fixture.standby.playCalls, 0);
+
+          fixture.primary.releaseSkipSilenceWrite.complete();
+          await obsolete;
+          await _waitUntil(
+            () =>
+                fixture.primary.skipSilenceCalls.last == false &&
+                fixture.standby.skipSilenceCalls.last == false,
+          );
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(fixture.standby.playCalls, 1);
+          expect(fixture.service.skipSilenceEnabled, isFalse);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+            fixture.primary.releaseSkipSilenceWrite.complete();
+          }
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a setting superseding the recovery flush still resumes crossfade',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        final flushStarted = Completer<void>();
+        final releaseFlush = Completer<void>();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.72);
+          fixture.primary.blockNextSkipSilence = true;
+
+          final first = fixture.service.configureSkipSilence(enabled: true);
+          await fixture.primary.skipSilenceWriteStarted.future;
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await fixture.service.configureSkipSilence(enabled: false);
+          fixture.primary.emitCompleted();
+          fixture.primary.queueSkipSilenceWriteBlock(
+            started: flushStarted,
+            release: releaseFlush,
+          );
+          fixture.primary.releaseSkipSilenceWrite.complete();
+
+          await flushStarted.future;
+          final latest = fixture.service.configureSkipSilence(enabled: true);
+          releaseFlush.complete();
+          await Future.wait([first, latest]);
+
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(fixture.service.skipSilenceEnabled, isTrue);
+          expect(fixture.primary.skipSilenceCalls.last, isTrue);
+          expect(fixture.standby.skipSilenceCalls.last, isTrue);
+          expect(fixture.standby.playCalls, 1);
+        } finally {
+          if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+            fixture.primary.releaseSkipSilenceWrite.complete();
+          }
+          if (!releaseFlush.isCompleted) releaseFlush.complete();
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a stale failed silence write cannot discard the prepared deck',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.72);
+          fixture.primary.blockNextSkipSilence = true;
+          fixture.standby.skipSilenceFailuresRemaining = 2;
+
+          final obsolete = fixture.service.configureSkipSilence(enabled: true);
+          await fixture.primary.skipSilenceWriteStarted.future;
+          final latest = fixture.service.configureSkipSilence(enabled: false);
+          fixture.primary.releaseSkipSilenceWrite.complete();
+          await Future.wait([obsolete, latest]);
+
+          expect(fixture.service.skipSilenceEnabled, isFalse);
+          expect(fixture.primary.appliedSkipSilenceEnabled, isFalse);
+          expect(fixture.standby.appliedSkipSilenceEnabled, isFalse);
+          expect(
+            fixture.standby.disposeCalls,
+            0,
+            reason: 'Only the newest setting may invalidate a standby deck.',
+          );
+
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+            fixture.primary.releaseSkipSilenceWrite.complete();
+          }
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a hung silence write quarantines crossfade but not player controls',
+      () async {
+        final fixture = await _CrossfadeFixture.create(
+          skipSilenceWriteTimeout: const Duration(milliseconds: 40),
+        );
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.72);
+          fixture.primary.blockNextSkipSilence = true;
+
+          final configuration = fixture.service.configureSkipSilence(
+            enabled: true,
+          );
+          await fixture.primary.skipSilenceWriteStarted.future;
+          await configuration.timeout(const Duration(seconds: 1));
+
+          expect(fixture.service.skipSilenceEnabled, isTrue);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+          expect(fixture.standby.disposeCalls, 1);
+          expect(fixture.primary.skipSilenceCalls, [false, true]);
+          await fixture.service
+              .setVolume(0.63)
+              .timeout(const Duration(seconds: 1));
+
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await _drainEvents();
+          expect(fixture.standby.playCalls, 0);
+
+          fixture.primary.releaseSkipSilenceWrite.complete();
+          await _waitUntil(() => fixture.primary.skipSilenceCalls.length >= 4);
+          expect(
+            fixture.primary.skipSilenceCalls,
+            containsAllInOrder([true, false, true]),
+          );
+          await fixture.service.prepareCrossfade(
+            RemoteCrossfadePlaybackSource(_remoteSource('next')),
+          );
+          final replacement = fixture.factoryPlayers.single;
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(replacement.playCalls, 1);
+        } finally {
+          if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+            fixture.primary.releaseSkipSilenceWrite.complete();
+          }
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a late native rollback is force-resynchronized after settling',
+      () async {
+        final fixture = await _CrossfadeFixture.create(
+          skipSilenceWriteTimeout: const Duration(milliseconds: 40),
+        );
+        try {
+          await fixture.playCurrent(masterVolume: 0.72);
+          fixture.primary.blockNextSkipSilence = true;
+          fixture.primary.skipSilenceFailuresRemaining = 1;
+
+          final configuration = fixture.service.configureSkipSilence(
+            enabled: true,
+          );
+          await fixture.primary.skipSilenceWriteStarted.future;
+          await configuration.timeout(const Duration(seconds: 1));
+
+          expect(fixture.service.skipSilenceEnabled, isTrue);
+          expect(fixture.primary.appliedSkipSilenceEnabled, isTrue);
+          expect(fixture.primary.skipSilenceCalls, [true]);
+
+          fixture.primary.releaseSkipSilenceWrite.complete();
+          await _waitUntil(
+            () =>
+                fixture.primary.skipSilenceCalls.length >= 3 &&
+                fixture.primary.appliedSkipSilenceEnabled,
+          );
+          expect(
+            fixture.primary.skipSilenceCalls,
+            containsAllInOrder([true, false, true]),
+          );
+          expect(fixture.standby.skipSilenceCalls, isEmpty);
+        } finally {
+          if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+            fixture.primary.releaseSkipSilenceWrite.complete();
+          }
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test('completed is restored when crossfade startup is cancelled', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.playAndPrepare(
+          masterVolume: 0.72,
+          crossfadeDuration: const Duration(seconds: 5),
+          trackDuration: const Duration(seconds: 10),
+        );
+        fixture.primary.blockNextSkipSilence = true;
+        final configuration = fixture.service.configureSkipSilence(
+          enabled: true,
+        );
+        await fixture.primary.skipSilenceWriteStarted.future;
+
+        fixture.primary.emitPosition(const Duration(seconds: 5));
+        fixture.primary.emitCompleted();
+        final disable = fixture.service.configureCrossfade(
+          enabled: false,
+          duration: const Duration(seconds: 5),
+        );
+        fixture.primary.releaseSkipSilenceWrite.complete();
+        await Future.wait([configuration, disable]);
+        await _drainEvents();
+
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.completed);
+        expect(
+          fixture.service.currentSnapshot.position,
+          const Duration(seconds: 10),
+        );
+        expect(fixture.standby.playCalls, 0);
+        expect(fixture.primary.seekCalls, 0);
+      } finally {
+        if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+          fixture.primary.releaseSkipSilenceWrite.complete();
+        }
+        await fixture.dispose();
+      }
+    });
+
+    test('an immediate promotion failure restores the outgoing deck', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.service.configureSkipSilence(enabled: true);
+        await fixture.playAndPrepare(
+          masterVolume: 0.72,
+          crossfadeDuration: const Duration(seconds: 5),
+          trackDuration: const Duration(seconds: 10),
+        );
+
+        fixture.primary.emitPosition(const Duration(seconds: 5));
+        await _waitUntil(
+          () => fixture.standby.volumeCalls.any((volume) => volume > 0),
+          attempts: 500,
+        );
+        fixture.primary.failNextVolumeWrite = true;
+        fixture.primary.emitCompleted();
+
+        await _waitUntil(
+          () =>
+              fixture.service.currentSnapshot.status ==
+                  PlayerStatus.completed &&
+              fixture.standby.disposeCalls == 1,
+          attempts: 500,
+        );
+        expect(fixture.primary.volumeCalls.last, closeTo(0.72, 0.001));
+        expect(fixture.service.crossfadeEnabled, isTrue);
+        expect(fixture.service.currentSnapshot.queueEntryId, 'remote:current');
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    test('a late play failure follows the deck after promotion', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.service.configureSkipSilence(enabled: true);
+        await fixture.playAndPrepare(
+          masterVolume: 0.72,
+          crossfadeDuration: const Duration(seconds: 5),
+          trackDuration: const Duration(seconds: 10),
+        );
+        fixture.standby.blockNextPlay = true;
+        fixture.standby.failBlockedPlay = true;
+
+        fixture.primary.emitPosition(const Duration(seconds: 5));
+        await fixture.standby.playStarted.future;
+        fixture.primary.emitCompleted();
+        await _waitUntil(
+          () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+          attempts: 500,
+        );
+
+        fixture.standby.releasePlay.complete();
+        await _waitUntil(
+          () => fixture.service.currentSnapshot.status == PlayerStatus.failed,
+          attempts: 500,
+        );
+        expect(fixture.service.currentSnapshot.queueEntryId, 'remote:next');
+        expect(fixture.service.crossfadeEnabled, isTrue);
+      } finally {
+        if (!fixture.standby.releasePlay.isCompleted) {
+          fixture.standby.releasePlay.complete();
+        }
+        await fixture.dispose();
+      }
+    });
+
+    test(
+      'a late play failure cannot fail a newer source on the same deck',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.service.configureSkipSilence(enabled: true);
+          await fixture.playAndPrepare(
+            masterVolume: 0.72,
+            crossfadeDuration: const Duration(seconds: 5),
+            trackDuration: const Duration(seconds: 10),
+          );
+          fixture.standby.blockNextPlay = true;
+          fixture.standby.failBlockedPlay = true;
+
+          fixture.primary.emitPosition(const Duration(seconds: 5));
+          await fixture.standby.playStarted.future;
+          fixture.primary.emitCompleted();
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 500,
+          );
+
+          await fixture.service.playRemoteSource(_remoteSource('replacement'));
+          expect(
+            fixture.service.currentSnapshot.queueEntryId,
+            'remote:replacement',
+          );
+          fixture.standby.releasePlay.complete();
+          await _drainEvents();
+
+          expect(
+            fixture.service.currentSnapshot.queueEntryId,
+            'remote:replacement',
+          );
+          expect(
+            fixture.service.currentSnapshot.status,
+            isNot(PlayerStatus.failed),
+          );
+        } finally {
+          if (!fixture.standby.releasePlay.isCompleted) {
+            fixture.standby.releasePlay.complete();
+          }
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a source advancing during diagnostics rejects the older play failure',
+      () async {
+        final diagnosticStarted = Completer<void>();
+        final releaseDiagnostic = Completer<void>();
+        final fixture = await _CrossfadeFixture.create(
+          remoteDiagnosticProbe: (_) async {
+            if (!diagnosticStarted.isCompleted) diagnosticStarted.complete();
+            await releaseDiagnostic.future;
+            return 'delayed diagnostic';
+          },
+        );
+        try {
+          final next = _remoteSource('next');
+          final third = _remoteSource('third');
+
+          await fixture.service.configureSkipSilence(enabled: true);
+          await fixture.service.playRemoteSource(_remoteSource('current'));
+          await fixture.service.updateRemoteQueue([next, third]);
+          await fixture.service.setVolume(0.72);
+          await fixture.service.configureCrossfade(
+            enabled: true,
+            duration: const Duration(seconds: 5),
+          );
+          fixture.primary.emitDuration(const Duration(seconds: 10));
+          await fixture.service.prepareCrossfade(
+            RemoteCrossfadePlaybackSource(next),
+          );
+          fixture.standby.blockNextPlay = true;
+          fixture.standby.blockedPlayFailure = StateError(
+            'Source error: decoder failed',
+          );
+
+          fixture.primary.emitPosition(const Duration(seconds: 5));
+          await fixture.standby.playStarted.future;
+          fixture.primary.emitCompleted();
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 500,
+          );
+
+          fixture.standby.releasePlay.complete();
+          await diagnosticStarted.future.timeout(const Duration(seconds: 2));
+          fixture.standby.emitSequenceState(currentIndex: 2);
+          await _waitUntil(
+            () =>
+                fixture.service.currentSnapshot.queueEntryId == 'remote:third',
+          );
+          releaseDiagnostic.complete();
+          await _drainEvents();
+
+          expect(fixture.service.currentSnapshot.queueEntryId, 'remote:third');
+          expect(
+            fixture.service.currentSnapshot.status,
+            isNot(PlayerStatus.failed),
+          );
+        } finally {
+          if (!fixture.standby.releasePlay.isCompleted) {
+            fixture.standby.releasePlay.complete();
+          }
+          if (!releaseDiagnostic.isCompleted) releaseDiagnostic.complete();
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'native advance wins safely while crossfade awaits a silence write',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(masterVolume: 0.72);
+          fixture.primary.blockNextSkipSilence = true;
+          final configuration = fixture.service.configureSkipSilence(
+            enabled: true,
+          );
+          await fixture.primary.skipSilenceWriteStarted.future;
+
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          fixture.primary.emitSequenceState(currentIndex: 1);
+          fixture.primary.releaseSkipSilenceWrite.complete();
+          await configuration;
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+          );
+          await _drainEvents();
+
+          expect(fixture.standby.playCalls, 0);
+          expect(fixture.primary.seekCalls, 0);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+            fixture.primary.releaseSkipSilenceWrite.complete();
+          }
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'completed outgoing shortens a crossfade waiting on a silence write',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(
+            masterVolume: 0.72,
+            crossfadeDuration: const Duration(seconds: 5),
+            trackDuration: const Duration(seconds: 10),
+          );
+          fixture.primary.blockNextSkipSilence = true;
+          final configuration = fixture.service.configureSkipSilence(
+            enabled: true,
+          );
+          await fixture.primary.skipSilenceWriteStarted.future;
+
+          fixture.primary.emitPosition(const Duration(seconds: 5));
+          fixture.primary.emitCompleted();
+          fixture.primary.releaseSkipSilenceWrite.complete();
+          await configuration;
+
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 500,
+          );
+          expect(fixture.standby.playCalls, 1);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          if (!fixture.primary.releaseSkipSilenceWrite.isCompleted) {
+            fixture.primary.releaseSkipSilenceWrite.complete();
+          }
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'skip silence position leap cannot miss the crossfade handoff',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.service.configureSkipSilence(enabled: true);
+          await fixture.playAndPrepare(masterVolume: 0.72);
+
+          // Media3 reports skipped frames on the source timeline, so a long
+          // silent tail can jump over both the configured window and the normal
+          // 350 ms late-start safety gate in a single position event.
+          fixture.primary.emitPosition(const Duration(milliseconds: 800));
+
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+          expect(fixture.standby.playCalls, 1);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+          expect(fixture.primary.seekCalls, 0);
+          expect(fixture.standby.seekCalls, 0);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a skipped silent tail accelerates an active long crossfade',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.service.configureSkipSilence(enabled: true);
+          await fixture.playAndPrepare(
+            masterVolume: 0.72,
+            crossfadeDuration: const Duration(seconds: 5),
+            trackDuration: const Duration(seconds: 10),
+          );
+
+          fixture.primary.emitPosition(const Duration(seconds: 5));
+          await _waitUntil(
+            () => fixture.standby.volumeCalls.any((volume) => volume > 0),
+            attempts: 500,
+          );
+          fixture.primary.emitCompleted();
+
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 500,
+          );
+          expect(fixture.standby.playCalls, 1);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a native queue advance accelerates an active long crossfade',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.service.configureSkipSilence(enabled: true);
+          await fixture.playAndPrepare(
+            masterVolume: 0.72,
+            crossfadeDuration: const Duration(seconds: 5),
+            trackDuration: const Duration(seconds: 10),
+          );
+
+          fixture.primary.emitPosition(const Duration(seconds: 5));
+          await _waitUntil(
+            () => fixture.standby.volumeCalls.any((volume) => volume > 0),
+            attempts: 500,
+          );
+          fixture.primary.emitSequenceState(currentIndex: 1);
+
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 500,
+          );
+          expect(fixture.primary.volumeCalls.last, 0);
+          expect(fixture.standby.playCalls, 1);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
       'promotes the prepared deck without seeking or reopening it',
       () async {
         final fixture = await _CrossfadeFixture.create();
@@ -1093,7 +1837,10 @@ class _CrossfadeFixture {
   final List<_BlockingAudioPlayer> factoryPlayers;
   final JustAudioPlayerService service;
 
-  static Future<_CrossfadeFixture> create() async {
+  static Future<_CrossfadeFixture> create({
+    Duration skipSilenceWriteTimeout = const Duration(seconds: 2),
+    JustAudioRemoteDiagnosticProbe? remoteDiagnosticProbe,
+  }) async {
     final directory = await Directory.systemTemp.createTemp(
       'bstream_just_audio_crossfade_',
     );
@@ -1106,6 +1853,9 @@ class _CrossfadeFixture {
     final service = JustAudioPlayerService(
       audioPlayer: primary,
       crossfadeAudioPlayer: standby,
+      supportsSkipSilence: true,
+      skipSilenceWriteTimeout: skipSilenceWriteTimeout,
+      remoteDiagnosticProbe: remoteDiagnosticProbe,
       crossfadePlayerFactory: () {
         final player = _BlockingAudioPlayer();
         factoryPlayers.add(player);
@@ -1124,20 +1874,32 @@ class _CrossfadeFixture {
     );
   }
 
-  Future<void> playCurrent({required double masterVolume}) async {
+  Future<void> playCurrent({
+    required double masterVolume,
+    Duration crossfadeDuration = const Duration(milliseconds: 400),
+    Duration trackDuration = const Duration(milliseconds: 800),
+  }) async {
     await service.playRemoteSource(_remoteSource('current'));
     await service.updateRemoteQueue([_remoteSource('next')]);
     await service.setVolume(masterVolume);
     await service.configureCrossfade(
       enabled: true,
-      duration: const Duration(milliseconds: 400),
+      duration: crossfadeDuration,
     );
-    primary.emitDuration(const Duration(milliseconds: 800));
+    primary.emitDuration(trackDuration);
     await _drainEvents();
   }
 
-  Future<void> playAndPrepare({required double masterVolume}) async {
-    await playCurrent(masterVolume: masterVolume);
+  Future<void> playAndPrepare({
+    required double masterVolume,
+    Duration crossfadeDuration = const Duration(milliseconds: 400),
+    Duration trackDuration = const Duration(milliseconds: 800),
+  }) async {
+    await playCurrent(
+      masterVolume: masterVolume,
+      crossfadeDuration: crossfadeDuration,
+      trackDuration: trackDuration,
+    );
     await service.prepareCrossfade(
       RemoteCrossfadePlaybackSource(_remoteSource('next')),
     );
@@ -1147,6 +1909,7 @@ class _CrossfadeFixture {
     if (!primary.releaseMove.isCompleted) primary.releaseMove.complete();
     if (!standby.releaseMove.isCompleted) standby.releaseMove.complete();
     for (final backend in [primary, standby, ...factoryPlayers]) {
+      if (!backend.releasePlay.isCompleted) backend.releasePlay.complete();
       for (final call in backend.sourceLoadCalls) {
         if (!call.completer.isCompleted) call.completer.complete();
       }
@@ -1182,15 +1945,23 @@ class _BlockingAudioPlayer extends AudioPlayer {
   final List<AudioSource> _sources = [];
   final List<_SourceLoadCall> sourceLoadCalls = [];
   final List<double> volumeCalls = [];
+  final List<bool> skipSilenceCalls = [];
+  bool appliedSkipSilenceEnabled = false;
 
   final Completer<void> moveStarted = Completer<void>();
   final Completer<void> releaseMove = Completer<void>();
   bool blockMoves = false;
   bool blockNextSourceLoad = false;
   bool blockNextLoopMode = false;
+  bool blockNextSkipSilence = false;
+  bool blockNextPlay = false;
+  bool failBlockedPlay = false;
+  Object? blockedPlayFailure;
+  int skipSilenceFailuresRemaining = 0;
   bool blockNextIndexedSeekAfterMutation = false;
   bool holdNextIndexedSeekInBuffering = false;
   bool failNextSeekAfterMutation = false;
+  bool failNextVolumeWrite = false;
   PlayerException? failNextSourceLoad;
   Duration? nextSourceLoadDuration;
   bool _playing = false;
@@ -1212,6 +1983,12 @@ class _BlockingAudioPlayer extends AudioPlayer {
   final Completer<void> releaseIndexedSeekMutation = Completer<void>();
   final Completer<void> loopModeWriteStarted = Completer<void>();
   final Completer<void> releaseLoopModeWrite = Completer<void>();
+  final Completer<void> skipSilenceWriteStarted = Completer<void>();
+  final Completer<void> releaseSkipSilenceWrite = Completer<void>();
+  Completer<void>? _queuedSkipSilenceWriteStarted;
+  Completer<void>? _queuedSkipSilenceWriteRelease;
+  final Completer<void> playStarted = Completer<void>();
+  final Completer<void> releasePlay = Completer<void>();
   void Function(Duration position)? onUnindexedSeek;
   void Function(double volume)? onSetVolume;
 
@@ -1227,6 +2004,49 @@ class _BlockingAudioPlayer extends AudioPlayer {
 
   @override
   Stream<double> get volumeStream => _volumes.stream;
+
+  @override
+  Future<void> setSkipSilenceEnabled(bool enabled) async {
+    skipSilenceCalls.add(enabled);
+    final previous = appliedSkipSilenceEnabled;
+    // Match just_audio's public setter: its Dart-side value changes before the
+    // Android method-channel Future completes and rolls back if that call
+    // eventually fails.
+    appliedSkipSilenceEnabled = enabled;
+    try {
+      final queuedRelease = _queuedSkipSilenceWriteRelease;
+      final queuedStarted = _queuedSkipSilenceWriteStarted;
+      if (queuedRelease != null) {
+        _queuedSkipSilenceWriteRelease = null;
+        _queuedSkipSilenceWriteStarted = null;
+        if (queuedStarted != null && !queuedStarted.isCompleted) {
+          queuedStarted.complete();
+        }
+        await queuedRelease.future;
+      } else if (blockNextSkipSilence) {
+        blockNextSkipSilence = false;
+        if (!skipSilenceWriteStarted.isCompleted) {
+          skipSilenceWriteStarted.complete();
+        }
+        await releaseSkipSilenceWrite.future;
+      }
+      if (skipSilenceFailuresRemaining > 0) {
+        skipSilenceFailuresRemaining--;
+        throw StateError('skip silence setter failed');
+      }
+    } catch (_) {
+      appliedSkipSilenceEnabled = previous;
+      rethrow;
+    }
+  }
+
+  void queueSkipSilenceWriteBlock({
+    required Completer<void> started,
+    required Completer<void> release,
+  }) {
+    _queuedSkipSilenceWriteStarted = started;
+    _queuedSkipSilenceWriteRelease = release;
+  }
 
   @override
   Stream<PlayerState> get playerStateStream => _states.stream;
@@ -1369,6 +2189,11 @@ class _BlockingAudioPlayer extends AudioPlayer {
     _states.add(PlayerState(_playing, _processingState));
   }
 
+  void emitCompleted() {
+    _processingState = ProcessingState.completed;
+    _states.add(PlayerState(_playing, _processingState));
+  }
+
   void emitSequenceState({int? currentIndex}) {
     if (currentIndex != null) {
       _currentIndex = currentIndex;
@@ -1473,6 +2298,19 @@ class _BlockingAudioPlayer extends AudioPlayer {
     playCalls++;
     _playing = true;
     emitReady();
+    if (blockNextPlay) {
+      blockNextPlay = false;
+      if (!playStarted.isCompleted) playStarted.complete();
+      await releasePlay.future;
+      final failure = blockedPlayFailure;
+      blockedPlayFailure = null;
+      if (failure != null) {
+        throw failure;
+      }
+      if (failBlockedPlay) {
+        throw StateError('delayed play failed');
+      }
+    }
   }
 
   @override
@@ -1494,6 +2332,10 @@ class _BlockingAudioPlayer extends AudioPlayer {
   Future<void> setVolume(double volume) async {
     volumeCalls.add(volume);
     onSetVolume?.call(volume);
+    if (failNextVolumeWrite) {
+      failNextVolumeWrite = false;
+      throw StateError('volume write failed');
+    }
     _volumes.add(volume);
   }
 
@@ -1522,6 +2364,9 @@ class _BlockingAudioPlayer extends AudioPlayer {
     }
     if (!releaseLoopModeWrite.isCompleted) {
       releaseLoopModeWrite.complete();
+    }
+    if (!releaseSkipSilenceWrite.isCompleted) {
+      releaseSkipSilenceWrite.complete();
     }
     // AudioPlayer derives internal subjects from these streams. End them
     // before the base class closes those subjects.

@@ -158,6 +158,18 @@ abstract interface class CrossfadeCapablePlayer {
   Future<void> prepareCrossfade(CrossfadePlaybackSource? source);
 }
 
+/// Optional native capability that shortens decoded silent audio without
+/// seeking or replacing the current source.
+///
+/// Implementations with two physical playback decks must keep both decks on
+/// the same value so a crossfade promotion cannot change this setting.
+abstract interface class SkipSilenceCapablePlayer {
+  bool get supportsSkipSilence;
+  bool get skipSilenceEnabled;
+
+  Future<void> configureSkipSilence({required bool enabled});
+}
+
 /// Optional capability implemented by Android's native player. It keeps
 /// prepared remote sources inside ExoPlayer so track boundaries do not depend
 /// on a Dart completion callback.

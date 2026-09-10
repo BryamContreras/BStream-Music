@@ -199,6 +199,22 @@ void main() {
     );
   });
 
+  test('skip silence labels are localized', () {
+    const spanish = AppStrings(AppLanguage.spanish);
+    const english = AppStrings(AppLanguage.english);
+
+    expect(spanish.skipSilence, 'Saltar silencios');
+    expect(
+      spanish.skipSilenceSummary,
+      'Acorta automáticamente los silencios detectados para que las canciones comiencen y enlacen sin esperas.',
+    );
+    expect(english.skipSilence, 'Skip silence');
+    expect(
+      english.skipSilenceSummary,
+      'Automatically shortens detected silence so songs start and transition without waiting.',
+    );
+  });
+
   test('local music filter labels are localized', () {
     const spanish = AppStrings(AppLanguage.spanish);
     const english = AppStrings(AppLanguage.english);

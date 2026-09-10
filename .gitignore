@@ -33,6 +33,7 @@ migrate_working_dir/
 /build/
 /coverage/
 /dist/
+/third_party/just_audio/pubspec.lock
 **/__pycache__/
 *.py[cod]
 

@@ -966,6 +966,11 @@ class AppStrings {
   );
   String get crossfadeDuration =>
       choose('Duración del crossfade', 'Crossfade duration');
+  String get skipSilence => choose('Saltar silencios', 'Skip silence');
+  String get skipSilenceSummary => choose(
+    'Acorta automáticamente los silencios detectados para que las canciones comiencen y enlacen sin esperas.',
+    'Automatically shortens detected silence so songs start and transition without waiting.',
+  );
   String secondsShort(int seconds) => '$seconds s';
   String get customDuration => choose('Personalizar', 'Custom');
   String get apply => choose('Aplicar', 'Apply');

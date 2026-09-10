@@ -27,4 +27,16 @@ void main() {
     expect(AppPlatform.isMobileTargetPlatform(TargetPlatform.iOS), isTrue);
     expect(AppPlatform.isMobileTargetPlatform(TargetPlatform.macOS), isFalse);
   });
+
+  test('native silence skipping is advertised only on Android', () {
+    expect(AppPlatform.supportsSkipSilenceOn(AppPlatformType.android), isTrue);
+    expect(AppPlatform.supportsSkipSilenceOn(AppPlatformType.ios), isFalse);
+    expect(AppPlatform.supportsSkipSilenceOn(AppPlatformType.windows), isFalse);
+    expect(AppPlatform.supportsSkipSilenceOn(AppPlatformType.linux), isFalse);
+    expect(AppPlatform.supportsSkipSilenceOn(AppPlatformType.macos), isFalse);
+    expect(
+      AppPlatform.supportsSkipSilenceOn(AppPlatformType.unsupported),
+      isFalse,
+    );
+  });
 }

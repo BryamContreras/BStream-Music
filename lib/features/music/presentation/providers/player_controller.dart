@@ -54,6 +54,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   final RemotePrefetchCoordinator _remotePrefetch = RemotePrefetchCoordinator();
 
   Future<void> _crossfadeConfigurationTail = Future<void>.value();
+  Future<void> _skipSilenceConfigurationTail = Future<void>.value();
   final _CrossfadePreparationCoordinator _crossfadePreparation =
       _CrossfadePreparationCoordinator();
   Future<void>? _nextNavigationInFlight;
@@ -88,6 +89,17 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
             prepareWhenEnabled:
                 next.enabled && (previous == null || !previous.enabled),
           );
+        }
+      },
+      fireImmediately: true,
+    );
+    ref.listen<bool?>(
+      settingsControllerProvider.select(
+        (settings) => settings.asData?.value.skipSilenceEnabled,
+      ),
+      (previous, next) {
+        if (next != null && next != previous) {
+          _scheduleSkipSilenceConfiguration(next);
         }
       },
       fireImmediately: true,
@@ -380,6 +392,31 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       (_) {},
       onError: (Object error, StackTrace stackTrace) {
         debugPrint('Crossfade configuration failed: $error\n$stackTrace');
+      },
+    );
+  }
+
+  void _scheduleSkipSilenceConfiguration(bool enabled) {
+    final previous = _skipSilenceConfigurationTail;
+    _skipSilenceConfigurationTail = () async {
+      await previous;
+      if (_disposed) {
+        return;
+      }
+      final service = ref.read(playerServiceProvider);
+      if (service is! SkipSilenceCapablePlayer) {
+        return;
+      }
+      final skipSilenceService = service as SkipSilenceCapablePlayer;
+      if (!skipSilenceService.supportsSkipSilence) {
+        return;
+      }
+      await skipSilenceService.configureSkipSilence(enabled: enabled);
+    }();
+    _skipSilenceConfigurationTail = _skipSilenceConfigurationTail.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('Skip silence configuration failed: $error\n$stackTrace');
       },
     );
   }

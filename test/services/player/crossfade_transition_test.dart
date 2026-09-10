@@ -92,6 +92,24 @@ void main() {
       expect(decide(playing: false), isNull);
       expect(decide(position: const Duration(milliseconds: 99700)), isNull);
     });
+
+    test('recovers a handoff when silence skipping leaps past the gate', () {
+      final recovered = crossfadeStartDuration(
+        enabled: true,
+        disposed: false,
+        overlapActive: false,
+        promotionInProgress: false,
+        sourcePrepared: true,
+        standbyReady: true,
+        playing: true,
+        trackDuration: const Duration(seconds: 100),
+        position: const Duration(seconds: 100),
+        configuredDuration: const Duration(seconds: 5),
+        allowLateStart: true,
+      );
+
+      expect(recovered, const Duration(milliseconds: 350));
+    });
   });
 
   group('crossfadeGains', () {

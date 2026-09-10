@@ -465,6 +465,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     final showSupportedLinks =
         AppPlatform.isAndroid ||
         Theme.of(context).platform == TargetPlatform.android;
+    final showSkipSilence = ref.watch(skipSilenceSupportedProvider);
     return [
       SliverPadding(
         padding: EdgeInsets.fromLTRB(
@@ -550,6 +551,17 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                       .read(settingsControllerProvider.notifier)
                       .setCrossfadeDuration,
                 ),
+                if (showSkipSilence) ...[
+                  const SizedBox(height: appCardGap),
+                  _SkipSilenceSettings(
+                    key: const ValueKey('settings-inline-skip-silence'),
+                    enabled: state.skipSilenceEnabled,
+                    strings: strings,
+                    onEnabledChanged: ref
+                        .read(settingsControllerProvider.notifier)
+                        .setSkipSilenceEnabled,
+                  ),
+                ],
               ],
             ),
             _SettingsGroup(
@@ -3503,6 +3515,53 @@ class _CrossfadeSettings extends StatelessWidget {
                     ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SkipSilenceSettings extends StatelessWidget {
+  const _SkipSilenceSettings({
+    required this.enabled,
+    required this.strings,
+    required this.onEnabledChanged,
+    super.key,
+  });
+
+  final bool enabled;
+  final AppStrings strings;
+  final ValueChanged<bool> onEnabledChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final desktopLayout =
+        AppPlatform.isDesktop &&
+        Theme.of(context).platform != TargetPlatform.android;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: desktopLayout ? 760 : 520),
+      child: Material(
+        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(appCardRadius),
+          side: BorderSide(
+            color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: SwitchListTile.adaptive(
+          key: const ValueKey('settings-skip-silence-switch'),
+          value: enabled,
+          onChanged: onEnabledChanged,
+          secondary: const Icon(Icons.fast_forward_rounded),
+          title: Text(
+            strings.skipSilence,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Text(
+            strings.skipSilenceSummary,
+            style: appListCardSubtitleStyle(context),
+          ),
         ),
       ),
     );

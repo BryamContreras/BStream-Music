@@ -92,7 +92,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run native crossfade smoke in an Android emulator
+      - name: Run native playback smokes in an Android emulator
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 35
@@ -103,9 +103,14 @@ jobs:
           emulator-options: >-
             -no-snapshot-save -no-window -gpu swiftshader_indirect
             -noaudio -no-boot-anim -camera-back none
-          script: >-
-            flutter drive
-            --driver=test_driver/integration_test.dart
-            --target=integration_test/crossfade_native_test.dart
-            -d emulator-5554
-            --no-dds
+          script: |
+            flutter drive \
+              --driver=test_driver/integration_test.dart \
+              --target=integration_test/crossfade_native_test.dart \
+              -d emulator-5554 \
+              --no-dds
+            flutter drive \
+              --driver=test_driver/integration_test.dart \
+              --target=integration_test/skip_silence_native_test.dart \
+              -d emulator-5554 \
+              --no-dds
