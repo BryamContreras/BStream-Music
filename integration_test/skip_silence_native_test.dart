@@ -278,6 +278,130 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
+
+  testWidgets(
+    'Android publishes accelerated silence progress again after a backward seek',
+    (tester) async {
+      if (!Platform.isAndroid) {
+        return;
+      }
+
+      final longGapBytes = _stereoWave(const [
+        _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
+        _WaveSegment.silence(Duration(seconds: 60)),
+        _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
+      ]);
+      final server = await _ThrottledWaveServer.start({
+        '/clock-sync-long-gap.wav': longGapBytes,
+      });
+      final service = JustAudioPlayerService();
+      final snapshots = <PlayerSnapshot>[];
+      final subscription = service.snapshotStream.listen(snapshots.add);
+      final track = TrackInfo(
+        id: 'clock-sync-long-gap',
+        title: 'clock-sync-long-gap',
+        artist: 'BStream clock integration test',
+        url: server.uriFor('/clock-sync-long-gap.wav').toString(),
+        streamUrl: server.uriFor('/clock-sync-long-gap.wav').toString(),
+        streamExtension: 'wav',
+        streamMimeType: 'audio/wav',
+        duration: const Duration(milliseconds: 60500),
+      );
+      try {
+        await service.setVolume(0.01);
+        await service.configureSkipSilence(enabled: true);
+        await service.playRemote(track);
+        await _waitUntil(
+          () => service.currentSnapshot.status == PlayerStatus.playing,
+          timeout: const Duration(seconds: 12),
+          diagnostic: () => service.currentSnapshot.toString(),
+        );
+
+        Future<void> expectAcceleratedProgress(String phase) async {
+          final start = service.currentSnapshot.position;
+          final phaseWatch = Stopwatch()..start();
+          final observations = <({Duration wall, Duration position})>[
+            (wall: Duration.zero, position: start),
+          ];
+          final phaseSubscription = service.snapshotStream.listen((snapshot) {
+            if (snapshot.status == PlayerStatus.playing) {
+              observations.add((
+                wall: phaseWatch.elapsed,
+                position: snapshot.position,
+              ));
+            }
+          });
+          try {
+            await _waitUntil(
+              () =>
+                  service.currentSnapshot.position - start >=
+                  const Duration(seconds: 8),
+              timeout: const Duration(seconds: 6),
+              diagnostic: () => '$phase: ${service.currentSnapshot}',
+            );
+
+            var acceleratedUpdates = 0;
+            var previous = observations.first;
+            for (final observation in observations.skip(1)) {
+              final sourceDelta = observation.position - previous.position;
+              if (sourceDelta <= Duration.zero) {
+                continue;
+              }
+              final wallDelta = observation.wall - previous.wall;
+              if (sourceDelta - wallDelta >=
+                  const Duration(milliseconds: 150)) {
+                acceleratedUpdates++;
+              }
+              previous = observation;
+            }
+            expect(
+              acceleratedUpdates,
+              greaterThanOrEqualTo(2),
+              reason:
+                  '$phase must publish multiple accelerated clock updates, '
+                  'not one delayed discontinuity. Observations: $observations',
+            );
+            expect(
+              service.currentSnapshot.status,
+              PlayerStatus.playing,
+              reason:
+                  '$phase must be measured before the synthetic track ends.',
+            );
+          } finally {
+            await phaseSubscription.cancel();
+          }
+        }
+
+        await expectAcceleratedProgress('initial scan');
+        final snapshotsBeforeSeek = snapshots.length;
+        await service.seek(const Duration(milliseconds: 250));
+        expect(
+          snapshots
+              .skip(snapshotsBeforeSeek)
+              .any(
+                (snapshot) =>
+                    snapshot.position >= const Duration(milliseconds: 200) &&
+                    snapshot.position <= const Duration(milliseconds: 1500),
+              ),
+          isTrue,
+          reason:
+              'The backward seek target must be published before rescanning.',
+        );
+        await expectAcceleratedProgress('scan after backward seek');
+
+        expect(
+          snapshots.where((snapshot) => snapshot.status == PlayerStatus.failed),
+          isEmpty,
+          reason: 'Clock synchronization must not introduce playback errors.',
+        );
+      } finally {
+        await subscription.cancel();
+        await service.dispose();
+        await server.close();
+      }
+    },
+    timeout: const Timeout(Duration(seconds: 45)),
+  );
 }
 
 void _expectLongSilenceShortened({

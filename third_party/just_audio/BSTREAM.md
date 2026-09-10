@@ -28,6 +28,9 @@ RMS would classify as silence without reducing the detector to the old peak
 threshold. PCM through the most recent hard-veto evidence is also a protected
 lookbehind prefix: a later silent candidate may consume only the suffix after
 that boundary, so a short peak cannot be removed retroactively.
+The peak veto is maintained as a rolling count, so evaluating it stays O(1)
+per analysis hop even while a device scans several minutes of silence faster
+than real time.
 
 The processor drops decoded PCM instead of seeking. Its skipped-frame counter
 feeds Media3's `AudioProcessorChain`, preserving the original media timeline
@@ -36,6 +39,15 @@ pause while removing an interval only after it crosses that limit causally
 requires 4.5 seconds of lookahead, BStream's Android load control preloads 5
 seconds both initially and after a rebuffer. This playback prebuffer is
 independent of the 3 MiB InnerTube URL-validity probe/offset.
+
+While the detector continuously removes a long interval, Media3 coalesces its
+silence discontinuity notifications until skipping pauses. The Android bridge
+therefore samples the authoritative native media clock every 200 ms while the
+option is enabled and publishes only after it runs at least 200 ms ahead of
+Dart's real-time extrapolation. Long skips and repeated backward seeks remain
+visually synchronized. Ordinary buffered-position notifications retain their
+500 ms rate limit, so the faster clock sampling does not increase bridge events
+when no silence is being removed.
 
 The customization is isolated in
 `BStreamSilenceSkippingProfile.java` and

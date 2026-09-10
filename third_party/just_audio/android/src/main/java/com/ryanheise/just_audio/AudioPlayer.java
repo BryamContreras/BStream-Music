@@ -77,6 +77,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     static final String TAG = "AudioPlayer";
 
+    private static final long BUFFER_POSITION_BROADCAST_INTERVAL_MS = 500L;
+    private static final long SKIPPED_POSITION_POLL_INTERVAL_MS = 200L;
+    private static final long SKIPPED_POSITION_DRIFT_THRESHOLD_MS = 200L;
+
     private static Random random = new Random();
 
     private final Context context;
@@ -113,6 +117,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private String errorMessage;
     private Integer currentIndex;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private boolean skipSilenceEnabled;
+    private long lastBufferPositionBroadcastTime;
     private final Runnable bufferWatcher = new Runnable() {
         @Override
         public void run() {
@@ -120,10 +126,21 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 return;
             }
 
+            boolean skippedPositionChanged = synchronizeSkippedPositionIfNeeded();
+            long now = System.currentTimeMillis();
             long newBufferedPosition = player.getBufferedPosition();
-            if (newBufferedPosition != bufferedPosition) {
-                // This method updates bufferedPosition.
+            boolean bufferBroadcastDue = newBufferedPosition != bufferedPosition
+                && (lastBufferPositionBroadcastTime == 0L
+                    || now < lastBufferPositionBroadcastTime
+                    || now - lastBufferPositionBroadcastTime
+                        >= BUFFER_POSITION_BROADCAST_INTERVAL_MS);
+            if (bufferBroadcastDue || skippedPositionChanged) {
+                // createPlaybackEvent updates bufferedPosition and carries the freshly
+                // synchronized source clock while silence is consumed faster than wall time.
                 broadcastImmediatePlaybackEvent();
+                if (bufferBroadcastDue) {
+                    lastBufferPositionBroadcastTime = now;
+                }
             }
             switch (player.getPlaybackState()) {
             case Player.STATE_BUFFERING:
@@ -131,7 +148,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 break;
             case Player.STATE_READY:
                 if (player.getPlayWhenReady()) {
-                    handler.postDelayed(this, 500);
+                    handler.postDelayed(
+                        this,
+                        skipSilenceEnabled
+                            ? SKIPPED_POSITION_POLL_INTERVAL_MS
+                            : BUFFER_POSITION_BROADCAST_INTERVAL_MS);
                 } else {
                     handler.postDelayed(this, 1000);
                 }
@@ -290,6 +311,34 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         updateTime = System.currentTimeMillis();
     }
 
+    /**
+     * Keeps Flutter's extrapolated clock aligned while silence is removed continuously.
+     *
+     * <p>Media3 coalesces silence discontinuities until skipping pauses. A long empty interval
+     * can therefore advance the native media clock by minutes before Dart receives a position
+     * event. Polling only while the option is enabled, and publishing only after measurable
+     * drift, avoids extra bridge traffic during ordinary playback.</p>
+     */
+    private boolean synchronizeSkippedPositionIfNeeded() {
+        if (!skipSilenceEnabled
+                || player == null
+                || !player.getPlayWhenReady()
+                || processingState != ProcessingState.ready) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        long elapsed = Math.max(0L, now - updateTime);
+        long expectedPosition = updatePosition + Math.round(
+            (double) elapsed * player.getPlaybackParameters().speed);
+        long nativePosition = getCurrentPosition();
+        if (nativePosition - expectedPosition < SKIPPED_POSITION_DRIFT_THRESHOLD_MS) {
+            return false;
+        }
+        updatePosition = nativePosition;
+        updateTime = now;
+        return true;
+    }
+
     @Override
     public void onPositionDiscontinuity(PositionInfo oldPosition, PositionInfo newPosition, int reason) {
         updatePosition();
@@ -345,6 +394,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             if (player.getPlayWhenReady())
                 updatePosition();
             processingState = ProcessingState.ready;
+            if (player.getPlayWhenReady())
+                startWatchingBuffer();
             errorCode = null;
             errorMessage = null;
             broadcastImmediatePlaybackEvent();
@@ -994,6 +1045,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         playResult = result;
         player.setPlayWhenReady(true);
         updatePosition();
+        startWatchingBuffer();
         if (processingState == ProcessingState.completed && playResult != null) {
             playResult.success(new HashMap<String, Object>());
             playResult = null;
@@ -1033,6 +1085,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     public void setSkipSilenceEnabled(final boolean enabled) {
         player.setSkipSilenceEnabled(enabled);
+        skipSilenceEnabled = enabled;
+        updatePosition();
+        enqueuePlaybackEvent();
+        startWatchingBuffer();
     }
 
     public void setLoopMode(final int mode) {

@@ -149,6 +149,7 @@ final class BStreamSilenceSkippingAudioProcessor implements AudioProcessor {
         private int framePowerRingIndex;
         private int framePowerRingSize;
         private long framePowerSum;
+        private int guardedFrameCount;
         private long analyzedFrameCount;
         private long lastProtectedEvidenceFrame;
 
@@ -242,6 +243,7 @@ final class BStreamSilenceSkippingAudioProcessor implements AudioProcessor {
             framePowerRingIndex = 0;
             framePowerRingSize = 0;
             framePowerSum = 0;
+            guardedFrameCount = 0;
             analyzedFrameCount = 0;
             lastProtectedEvidenceFrame = 0;
             windowPowerRingIndex = 0;
@@ -359,6 +361,7 @@ final class BStreamSilenceSkippingAudioProcessor implements AudioProcessor {
             framePowerRingIndex = 0;
             framePowerRingSize = 0;
             framePowerSum = 0;
+            guardedFrameCount = 0;
             analyzedFrameCount = 0;
             lastProtectedEvidenceFrame = 0;
             windowPowerRing = new double[0];
@@ -393,11 +396,21 @@ final class BStreamSilenceSkippingAudioProcessor implements AudioProcessor {
             if (framePowerRingSize < analysisWindowFrames) {
                 framePowerRing[framePowerRingIndex] = framePower;
                 framePowerSum += framePower;
+                if (framePower > MUSICAL_PEAK_GUARD_POWER) {
+                    guardedFrameCount++;
+                }
                 framePowerRingSize++;
             } else {
-                framePowerSum -= framePowerRing[framePowerRingIndex];
+                long previousPower = framePowerRing[framePowerRingIndex];
+                framePowerSum -= previousPower;
+                if (previousPower > MUSICAL_PEAK_GUARD_POWER) {
+                    guardedFrameCount--;
+                }
                 framePowerRing[framePowerRingIndex] = framePower;
                 framePowerSum += framePower;
+                if (framePower > MUSICAL_PEAK_GUARD_POWER) {
+                    guardedFrameCount++;
+                }
             }
             framePowerRingIndex = (framePowerRingIndex + 1) % analysisWindowFrames;
             analyzedFrameCount++;
@@ -411,7 +424,7 @@ final class BStreamSilenceSkippingAudioProcessor implements AudioProcessor {
             }
 
             double windowPower = (double) framePowerSum / analysisWindowFrames;
-            boolean hasMusicalPeak = maximumPowerInAnalysisWindow() > MUSICAL_PEAK_GUARD_POWER;
+            boolean hasMusicalPeak = guardedFrameCount > 0;
             if (windowPowerRingSize < smoothingWindowCount) {
                 windowPowerRing[windowPowerRingIndex] = windowPower;
                 windowPowerSum += windowPower;
@@ -438,14 +451,6 @@ final class BStreamSilenceSkippingAudioProcessor implements AudioProcessor {
                 return ENVELOPE_SILENT;
             }
             return ENVELOPE_HYSTERESIS;
-        }
-
-        private long maximumPowerInAnalysisWindow() {
-            long maximum = 0;
-            for (int index = 0; index < framePowerRingSize; index++) {
-                maximum = Math.max(maximum, framePowerRing[index]);
-            }
-            return maximum;
         }
 
         private int protectedPrefixThroughLatestEvidence() {
