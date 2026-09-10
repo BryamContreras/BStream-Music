@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
+import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/player/just_audio_player_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -205,6 +207,77 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 1)),
   );
+
+  testWidgets(
+    'Android silence skipping remains music-safe over a slow streaming CDN',
+    (tester) async {
+      if (!Platform.isAndroid) {
+        return;
+      }
+
+      final musicalPauseBytes = _stereoWave(const [
+        _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
+        _WaveSegment.silence(Duration(seconds: 4)),
+        _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
+      ]);
+      final longGapBytes = _stereoWave(const [
+        _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
+        _WaveSegment.silence(Duration(seconds: 10)),
+        _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
+      ]);
+      final server = await _ThrottledWaveServer.start({
+        '/four-second-pause.wav': musicalPauseBytes,
+        '/long-empty-gap.wav': longGapBytes,
+      });
+      try {
+        final pauseBaseline = await _measureRemotePlayback(
+          server.uriFor('/four-second-pause.wav'),
+          id: 'slow-four-second-pause',
+          duration: const Duration(milliseconds: 4500),
+          skipSilenceEnabled: false,
+        );
+        final pauseEnabled = await _measureRemotePlayback(
+          server.uriFor('/four-second-pause.wav'),
+          id: 'slow-four-second-pause',
+          duration: const Duration(milliseconds: 4500),
+          skipSilenceEnabled: true,
+        );
+        _expectPreserved(
+          baseline: pauseBaseline,
+          enabled: pauseEnabled,
+          reason:
+              'A slow CDN must not turn a four-second musical pause into '
+              'skippable silence.',
+        );
+
+        final gapBaseline = await _measureRemotePlayback(
+          server.uriFor('/long-empty-gap.wav'),
+          id: 'slow-long-empty-gap',
+          duration: const Duration(milliseconds: 10500),
+          skipSilenceEnabled: false,
+        );
+        final gapEnabled = await _measureRemotePlayback(
+          server.uriFor('/long-empty-gap.wav'),
+          id: 'slow-long-empty-gap',
+          duration: const Duration(milliseconds: 10500),
+          skipSilenceEnabled: true,
+        );
+        _expectLongSilenceShortened(
+          baseline: gapBaseline,
+          enabled: gapEnabled,
+          location: 'inside a slowly streamed track',
+        );
+        expect(
+          server.completedResponses,
+          greaterThanOrEqualTo(4),
+          reason: 'Every remote playback must consume a valid HTTP response.',
+        );
+      } finally {
+        await server.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 }
 
 void _expectLongSilenceShortened({
@@ -214,17 +287,19 @@ void _expectLongSilenceShortened({
 }) {
   expect(
     enabled.inMilliseconds,
-    greaterThanOrEqualTo((baseline.inMilliseconds * 0.45).round()),
-    reason: 'Silence $location must retain a substantial natural margin.',
+    greaterThanOrEqualTo(600),
+    reason:
+        'Silence $location must retain the configured margins around audible '
+        'content.',
   );
   expect(
     enabled.inMilliseconds,
-    lessThanOrEqualTo((baseline.inMilliseconds * 0.82).round()),
+    lessThanOrEqualTo((baseline.inMilliseconds * 0.40).round()),
     reason: 'Genuinely long empty silence $location should be shortened.',
   );
   expect(
     baseline - enabled,
-    greaterThanOrEqualTo(const Duration(milliseconds: 900)),
+    greaterThanOrEqualTo(const Duration(seconds: 2)),
     reason: 'The native processor must measurably remove silence $location.',
   );
 }
@@ -309,6 +384,78 @@ Future<Duration> _measurePlayback(
       snapshots.where((snapshot) => snapshot.status == PlayerStatus.failed),
       isEmpty,
       reason: 'Native playback emitted a failure state.',
+    );
+    return watch.elapsed;
+  } finally {
+    await subscription.cancel();
+    await service.dispose();
+  }
+}
+
+Future<Duration> _measureRemotePlayback(
+  Uri uri, {
+  required String id,
+  required Duration duration,
+  required bool skipSilenceEnabled,
+}) async {
+  final service = JustAudioPlayerService();
+  final snapshots = <PlayerSnapshot>[];
+  final subscription = service.snapshotStream.listen(snapshots.add);
+  final track = TrackInfo(
+    id: id,
+    title: id,
+    artist: 'BStream slow CDN integration test',
+    url: uri.toString(),
+    streamUrl: uri.toString(),
+    streamExtension: 'wav',
+    streamMimeType: 'audio/wav',
+    duration: duration,
+  );
+  try {
+    await service.setVolume(0.01);
+    await service.configureSkipSilence(enabled: skipSilenceEnabled);
+    await service.playRemote(track);
+    await _waitUntil(
+      () => service.currentSnapshot.status == PlayerStatus.playing,
+      timeout: const Duration(seconds: 12),
+      diagnostic: () => service.currentSnapshot.toString(),
+    );
+
+    final watch = Stopwatch()..start();
+    await _waitUntil(
+      () => service.currentSnapshot.status == PlayerStatus.completed,
+      timeout: duration + const Duration(seconds: 15),
+      diagnostic: () => service.currentSnapshot.toString(),
+    );
+    watch.stop();
+    // ignore: avoid_print
+    print(
+      'slow-stream skip-silence $id: enabled=$skipSilenceEnabled, '
+      'elapsed=${watch.elapsed}, snapshot=${service.currentSnapshot}',
+    );
+
+    var lastPosition = Duration.zero;
+    for (final snapshot in snapshots.where(
+      (snapshot) => snapshot.trackId == id,
+    )) {
+      expect(
+        snapshot.position + const Duration(milliseconds: 150),
+        greaterThanOrEqualTo(lastPosition),
+        reason: 'A slow response must not make the media timeline jump back.',
+      );
+      if (snapshot.position > lastPosition) {
+        lastPosition = snapshot.position;
+      }
+    }
+    expect(
+      lastPosition + const Duration(milliseconds: 150),
+      greaterThanOrEqualTo(duration),
+      reason: 'Skipping must keep the original remote media timeline.',
+    );
+    expect(
+      snapshots.where((snapshot) => snapshot.status == PlayerStatus.failed),
+      isEmpty,
+      reason: 'Slow streaming must not emit a playback failure.',
     );
     return watch.elapsed;
   } finally {
@@ -495,6 +642,129 @@ Uint8List _stereoWave(List<_WaveSegment> segments) {
     }
   }
   return bytes;
+}
+
+final class _ThrottledWaveServer {
+  _ThrottledWaveServer._(this._server, this._tracks) {
+    _subscription = _server.listen(_handleRequest);
+  }
+
+  static Future<_ThrottledWaveServer> start(
+    Map<String, Uint8List> tracks,
+  ) async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    return _ThrottledWaveServer._(server, tracks);
+  }
+
+  static const _chunkBytes = 4096;
+  static const _jitter = <Duration>[
+    Duration(milliseconds: 35),
+    Duration(milliseconds: 80),
+    Duration(milliseconds: 45),
+    Duration(milliseconds: 110),
+    Duration(milliseconds: 55),
+  ];
+
+  final HttpServer _server;
+  final Map<String, Uint8List> _tracks;
+  late final StreamSubscription<HttpRequest> _subscription;
+  int completedResponses = 0;
+
+  Uri uriFor(String path) => Uri(
+    scheme: 'http',
+    host: InternetAddress.loopbackIPv4.address,
+    port: _server.port,
+    path: path,
+  );
+
+  Future<void> close() async {
+    await _subscription.cancel();
+    await _server.close(force: true);
+  }
+
+  Future<void> _handleRequest(HttpRequest request) async {
+    final bytes = _tracks[request.uri.path];
+    if (bytes == null) {
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      return;
+    }
+
+    final range = _parseRange(request.headers.value(HttpHeaders.rangeHeader));
+    if (range != null && range.start >= bytes.length) {
+      request.response
+        ..statusCode = HttpStatus.requestedRangeNotSatisfiable
+        ..headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes */${bytes.length}',
+        );
+      await request.response.close();
+      return;
+    }
+
+    final start = range?.start ?? 0;
+    final endInclusive = math.min(
+      range?.endInclusive ?? bytes.length - 1,
+      bytes.length - 1,
+    );
+    final response = request.response;
+    response
+      ..bufferOutput = false
+      ..headers.contentType = ContentType('audio', 'wav')
+      ..headers.set(HttpHeaders.acceptRangesHeader, 'bytes')
+      ..contentLength = endInclusive - start + 1;
+    if (range != null) {
+      response
+        ..statusCode = HttpStatus.partialContent
+        ..headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes $start-$endInclusive/${bytes.length}',
+        );
+    }
+    if (request.method == 'HEAD') {
+      await response.close();
+      completedResponses++;
+      return;
+    }
+
+    var offset = start;
+    var chunkIndex = 0;
+    try {
+      while (offset <= endInclusive) {
+        final next = math.min(offset + _chunkBytes, endInclusive + 1);
+        response.add(Uint8List.sublistView(bytes, offset, next));
+        await response.flush();
+        offset = next;
+        if (offset <= endInclusive) {
+          await Future<void>.delayed(_jitter[chunkIndex % _jitter.length]);
+          chunkIndex++;
+        }
+      }
+      await response.close();
+      completedResponses++;
+    } on HttpException {
+      // ExoPlayer may close a range as soon as it has enough buffered data.
+    } on SocketException {
+      // The server is intentionally force-closed during test teardown.
+    }
+  }
+
+  _ByteRange? _parseRange(String? value) {
+    if (value == null) return null;
+    final match = RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(value.trim());
+    if (match == null) return null;
+    final start = int.tryParse(match.group(1)!);
+    if (start == null) return null;
+    final rawEnd = match.group(2)!;
+    return _ByteRange(start, rawEnd.isEmpty ? null : int.tryParse(rawEnd));
+  }
+}
+
+final class _ByteRange {
+  const _ByteRange(this.start, this.endInclusive);
+
+  final int start;
+  final int? endInclusive;
 }
 
 final class _WaveSegment {

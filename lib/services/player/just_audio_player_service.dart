@@ -28,6 +28,23 @@ class JustAudioPlayerService
         SkipSilenceCapablePlayer {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
   static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
+  static const _androidAudioLoadConfiguration = AudioLoadConfiguration(
+    androidLoadControl: AndroidLoadControl(
+      // Keep enough encoded audio ahead for the native PCM detector to scan a
+      // long silent section without immediately catching up with a slow CDN.
+      // This is independent from InnerTube's 3 MiB URL-validity probe.
+      minBufferDuration: Duration(seconds: 6),
+      maxBufferDuration: Duration(seconds: 24),
+      // The RMS processor needs 4.5 seconds of causal lookahead to preserve a
+      // musical pause bit-for-bit while still removing an actually long gap
+      // down to its 150/250 ms margins. Starting with less can starve
+      // AudioTrack when a CDN delivers close to real time.
+      bufferForPlaybackDuration: Duration(seconds: 5),
+      bufferForPlaybackAfterRebufferDuration: Duration(seconds: 5),
+      prioritizeTimeOverSizeThresholds: true,
+      backBufferDuration: Duration(seconds: 1),
+    ),
+  );
 
   JustAudioPlayerService({
     NotificationArtworkService? notificationArtworkService,
@@ -333,32 +350,14 @@ class JustAudioPlayerService
     // overrides that header in just_audio and can invalidate signed YouTube
     // media URLs on Android.
     useProxyForRequestHeaders: false,
-    audioLoadConfiguration: const AudioLoadConfiguration(
-      androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 2),
-        maxBufferDuration: Duration(seconds: 8),
-        bufferForPlaybackDuration: Duration(milliseconds: 250),
-        bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 750),
-        prioritizeTimeOverSizeThresholds: true,
-        backBufferDuration: Duration(seconds: 1),
-      ),
-    ),
+    audioLoadConfiguration: _androidAudioLoadConfiguration,
   );
 
   static AudioPlayer _createCrossfadeAudioPlayer() => AudioPlayer(
     // Either deck can become authoritative after a crossfade. Keep audio
     // session activation and interruption handling enabled on both roles.
     useProxyForRequestHeaders: false,
-    audioLoadConfiguration: const AudioLoadConfiguration(
-      androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 2),
-        maxBufferDuration: Duration(seconds: 8),
-        bufferForPlaybackDuration: Duration(milliseconds: 250),
-        bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 750),
-        prioritizeTimeOverSizeThresholds: true,
-        backBufferDuration: Duration(seconds: 1),
-      ),
-    ),
+    audioLoadConfiguration: _androidAudioLoadConfiguration,
   );
 
   late AudioPlayer _player;

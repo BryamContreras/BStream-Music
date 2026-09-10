@@ -1,21 +1,40 @@
 package com.ryanheise.just_audio;
 
-/** Music-safe silence skipping parameters used by BStream on Android. */
+/** Music-safe RMS silence skipping parameters used by BStream on Android. */
 final class BStreamSilenceSkippingProfile {
-    /** Musical pauses of four seconds or less must remain untouched. */
-    static final long MINIMUM_SILENCE_DURATION_US = 4_500_000L;
+    static final long ANALYSIS_WINDOW_US = 100_000L;
+    static final long ANALYSIS_HOP_US = 25_000L;
+    static final long RMS_SMOOTHING_US = 250_000L;
 
-    /** Keep a substantial part of longer silence instead of cutting to an edge. */
-    static final float SILENCE_RETENTION_RATIO = 0.40f;
+    static final double ENTER_SILENCE_DBFS = -52.0;
+    static final double EXIT_SILENCE_DBFS = -46.0;
+    static final int REQUIRED_SILENT_WINDOW_PERCENTAGE = 90;
 
-    /** Long gaps retain up to six seconds, providing a natural audible margin. */
-    static final long MAX_SILENCE_TO_KEEP_DURATION_US = 6_000_000L;
+    /**
+     * Independent music guard inherited from the previous detector. A 100 ms
+     * window containing a PCM16 peak above this value cannot vote as silence,
+     * even when its RMS is below the entry threshold.
+     */
+    static final short MUSICAL_PEAK_GUARD_LEVEL = 64;
 
-    /** Fade retained near-silence to no less than 20% before restoring it. */
-    static final int MIN_VOLUME_TO_KEEP_PERCENTAGE = 20;
+    /** Only stream edges may use the shorter threshold. */
+    static final long EDGE_MINIMUM_SILENCE_DURATION_US = 1_800_000L;
 
-    /** Approximately -54 dBFS for signed 16-bit PCM. */
-    static final short SILENCE_THRESHOLD_LEVEL = 64;
+    /** Internal musical pauses shorter than this are always emitted unchanged. */
+    static final long INTERNAL_MINIMUM_SILENCE_DURATION_US = 4_500_000L;
+
+    static final long LEADING_SILENCE_TO_KEEP_US = 150_000L;
+    static final long TRAILING_SILENCE_TO_KEEP_US = 250_000L;
+
+    /**
+     * Entry guard, not extra padding: at least one uninterrupted block this long
+     * must remain below the entry threshold before a candidate can be removed.
+     * The normal minimum duration still includes this interval.
+     */
+    static final long FADE_PROTECTION_DURATION_US = 800_000L;
+
+    /** Sample-domain fade at each side of a removed interval. */
+    static final long SPLICE_FADE_DURATION_US = 20_000L;
 
     private BStreamSilenceSkippingProfile() {}
 

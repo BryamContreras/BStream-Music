@@ -149,6 +149,14 @@ five-video/two-round run was:
 `visionOS01` is also intentionally fallback-only. Network/IP behavior changes,
 so rerun the tool whenever profiles or versions are updated.
 
+The 3 MiB value is an offset, not a playback buffer or a mandatory 3 MiB
+download. A normal GoogleVideo `206 Partial Content` response is accepted as
+soon as one byte arrives at that offset, and the disposable validation
+connection is then closed. Only an origin that elects to ignore `Range` and
+returns `200 OK` has to be consumed from byte zero through the requested
+offset. Silence detection runs later on decoded PCM and is therefore unable to
+mistake a CDN stall or rebuffer for silent audio.
+
 The complete Flutter matrix forces each selected profile independently through
 bootstrap, EJS/PO when applicable, player parsing, and the deep CDN probe:
 

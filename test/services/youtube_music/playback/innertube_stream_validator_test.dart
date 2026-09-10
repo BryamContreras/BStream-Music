@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:bstream_music/services/youtube_music/playback/innertube_stream_validator.dart';
@@ -61,6 +62,55 @@ void main() {
     expect(probe.statusCode, HttpStatus.partialContent);
     expect(probe.probedOffset, 3 * 1024 * 1024);
   });
+
+  test(
+    'a deep 206 probe completes on its first byte from a slow CDN',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final releaseResponse = Completer<void>();
+      addTearDown(() async {
+        if (!releaseResponse.isCompleted) {
+          releaseResponse.complete();
+        }
+        await server.close(force: true);
+      });
+      server.listen((request) async {
+        final response = request.response;
+        response
+          ..statusCode = HttpStatus.partialContent
+          ..bufferOutput = false
+          ..headers.contentType = ContentType('audio', 'mp4')
+          ..headers.set(
+            HttpHeaders.contentRangeHeader,
+            'bytes 3145728-3178495/5242880',
+          )
+          ..add(const <int>[1]);
+        await response.flush();
+        await releaseResponse.future;
+        try {
+          await response.close();
+        } on HttpException {
+          // The validator intentionally cancels after proving the first byte.
+        } on SocketException {
+          // Closing the disposable probe can also reset the local socket.
+        }
+      });
+
+      final probe =
+          await IoInnerTubeStreamValidator(
+            timeout: const Duration(seconds: 2),
+          ).validate(
+            Uri.parse('http://127.0.0.1:${server.port}/slow-audio'),
+            headers: const {},
+            contentLength: 5 * 1024 * 1024,
+          );
+
+      expect(probe.statusCode, HttpStatus.partialContent);
+      expect(probe.probedOffset, 3 * 1024 * 1024);
+      expect(probe.receivedBytes, 1);
+      releaseResponse.complete();
+    },
+  );
 
   test(
     'reprobes the last byte when an unknown short stream returns 416',

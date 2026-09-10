@@ -39,6 +39,74 @@ import 'track_change_transition.dart';
 import 'uniform_playback_slider_track_shape.dart';
 import 'wavy_playback_seek_bar.dart';
 
+@visibleForTesting
+const expandedArtworkHeroEdgeFadeGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [
+    Colors.white,
+    Colors.white,
+    Color(0xF2FFFFFF),
+    Color(0xD9FFFFFF),
+    Color(0xA6FFFFFF),
+    Color(0x66FFFFFF),
+    Color(0x26FFFFFF),
+    Colors.transparent,
+  ],
+  // Keep the lower half of the cover readable, then use the existing long
+  // blurred tail to merge it into the player rather than exposing an edge.
+  stops: [0, 0.66, 0.72, 0.78, 0.84, 0.90, 0.96, 1],
+);
+
+@visibleForTesting
+const expandedArtworkHeroBlurFadeGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [
+    Colors.white,
+    Colors.white,
+    Color(0xE6FFFFFF),
+    Color(0x99FFFFFF),
+    Colors.transparent,
+  ],
+  stops: [0, 0.70, 0.79, 0.91, 1],
+);
+
+@visibleForTesting
+const expandedArtworkHeroFocusFadeGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [
+    Color(0x55FFFFFF),
+    Color(0xD9FFFFFF),
+    Colors.white,
+    Colors.white,
+    Color(0xD9FFFFFF),
+    Color(0x66FFFFFF),
+    Colors.transparent,
+  ],
+  stops: [0, 0.08, 0.16, 0.68, 0.78, 0.90, 1],
+);
+
+@visibleForTesting
+const expandedArtworkBoundedEdgeFadeGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [Colors.white, Colors.white, Colors.transparent],
+  stops: [0, 0.84, 1],
+);
+
+@visibleForTesting
+const expandedArtworkBoundedFocusFadeGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [Colors.white, Colors.white, Color(0xB3FFFFFF), Colors.transparent],
+  stops: [0, 0.68, 0.84, 1],
+);
+
+@visibleForTesting
+const expandedArtworkBoundedToneFadeStops = <double>[0, 0.74, 1];
+
 class PlayerPanel extends ConsumerStatefulWidget {
   const PlayerPanel({
     this.onOpenSearch,
@@ -2701,21 +2769,7 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
         child: ShaderMask(
           key: const ValueKey('player-expanded-artwork-edge-fade'),
           blendMode: BlendMode.dstIn,
-          shaderCallback: (bounds) => const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.white,
-              Colors.white,
-              Color(0xF2FFFFFF),
-              Color(0xD9FFFFFF),
-              Color(0xA6FFFFFF),
-              Color(0x66FFFFFF),
-              Color(0x26FFFFFF),
-              Colors.transparent,
-            ],
-            stops: [0, 0.52, 0.60, 0.68, 0.77, 0.86, 0.94, 1],
-          ).createShader(bounds),
+          shaderCallback: expandedArtworkHeroEdgeFadeGradient.createShader,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -2803,18 +2857,7 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
             ShaderMask(
               key: const ValueKey('player-expanded-artwork-blur'),
               blendMode: BlendMode.dstIn,
-              shaderCallback: (bounds) => const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.white,
-                  Colors.white,
-                  Color(0xE6FFFFFF),
-                  Color(0x99FFFFFF),
-                  Colors.transparent,
-                ],
-                stops: [0, 0.58, 0.72, 0.88, 1],
-              ).createShader(bounds),
+              shaderCallback: expandedArtworkHeroBlurFadeGradient.createShader,
               child: ClipRect(
                 child: ImageFiltered(
                   imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
@@ -2844,20 +2887,8 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
               child: ShaderMask(
                 key: const ValueKey('player-expanded-artwork-focus-fade'),
                 blendMode: BlendMode.dstIn,
-                shaderCallback: (bounds) => const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0x55FFFFFF),
-                    Color(0xD9FFFFFF),
-                    Colors.white,
-                    Colors.white,
-                    Color(0xD9FFFFFF),
-                    Color(0x66FFFFFF),
-                    Colors.transparent,
-                  ],
-                  stops: [0, 0.08, 0.16, 0.52, 0.68, 0.84, 1],
-                ).createShader(bounds),
+                shaderCallback:
+                    expandedArtworkHeroFocusFadeGradient.createShader,
                 child: ColoredBox(
                   color: colors.surfaceContainerHighest,
                   child: SourceImage(
@@ -3234,12 +3265,7 @@ class _ExpandedPlayerArtworkVisual extends StatelessWidget {
       child: ShaderMask(
         key: const ValueKey('player-expanded-artwork-edge-fade'),
         blendMode: BlendMode.dstIn,
-        shaderCallback: (bounds) => const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.white, Colors.white, Colors.transparent],
-          stops: [0, 0.78, 1],
-        ).createShader(bounds),
+        shaderCallback: expandedArtworkBoundedEdgeFadeGradient.createShader,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -3260,17 +3286,8 @@ class _ExpandedPlayerArtworkVisual extends StatelessWidget {
             ShaderMask(
               key: const ValueKey('player-expanded-artwork-focus-fade'),
               blendMode: BlendMode.dstIn,
-              shaderCallback: (bounds) => const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.white,
-                  Colors.white,
-                  Color(0xB3FFFFFF),
-                  Colors.transparent,
-                ],
-                stops: [0, 0.58, 0.73, 0.91],
-              ).createShader(bounds),
+              shaderCallback:
+                  expandedArtworkBoundedFocusFadeGradient.createShader,
               child: cover(
                 key: const ValueKey('player-expanded-artwork-focused-image'),
               ),
@@ -3282,7 +3299,7 @@ class _ExpandedPlayerArtworkVisual extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [Colors.transparent, Colors.transparent, fadeColor],
-                  stops: const [0, 0.64, 1],
+                  stops: expandedArtworkBoundedToneFadeStops,
                 ),
               ),
             ),

@@ -74,7 +74,7 @@ jobs:
         working-directory: android
         run: |
           gradle --version
-          gradle :app:testDebugUnitTest --no-daemon
+          gradle :app:testDebugUnitTest :just_audio:testDebugUnitTest --no-daemon
 
       - name: Enforce self-contained media resolver
         shell: bash
