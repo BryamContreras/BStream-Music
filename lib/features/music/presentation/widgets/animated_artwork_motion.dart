@@ -32,13 +32,13 @@ class AnimatedArtworkMotion extends StatefulWidget {
   static const defaultZoomDuration = Duration(seconds: 28);
   static const defaultPanDuration = Duration(seconds: 31);
   static const defaultDepthDuration = Duration(seconds: 35);
-  static const maxHorizontalPan = 7.0;
-  static const maxVerticalPan = 4.0;
-  static const maxTiltXDegrees = 0.3;
-  static const maxTiltYDegrees = 0.4;
-  static const maxTiltZDegrees = 0.12;
-  static const perspectiveDepth = 0.00085;
-  static const zoomAmount = 0.046;
+  static const maxHorizontalPan = 8.0;
+  static const maxVerticalPan = 4.5;
+  static const maxTiltXDegrees = 0.34;
+  static const maxTiltYDegrees = 0.45;
+  static const maxTiltZDegrees = 0.135;
+  static const perspectiveDepth = 0.00095;
+  static const zoomAmount = 0.052;
 
   final Widget child;
   final bool enabled;
@@ -277,9 +277,9 @@ class _ArtworkMotionFrame {
     final panPhase = pan * math.pi * 2;
     final depthPhase = depth * math.pi * 2;
 
-    // A smooth push-in starts and ends at exactly 1.0. Its 4.6% amplitude is
-    // kept from the previous treatment; only the independently timed pan and
-    // depth movement become more legible.
+    // A smooth push-in starts and ends at exactly 1.0. The restrained 5.2%
+    // amplitude makes the cover breathe a little more without changing the
+    // independently timed pace of its pan and depth loops.
     final zoomEnvelope = (1 - math.cos(zoomPhase)) / 2;
     final designedScale =
         1 + (AnimatedArtworkMotion.zoomAmount * zoomEnvelope * intensity);
@@ -315,7 +315,7 @@ class _ArtworkMotionFrame {
         intensity;
 
     // Fade the matrix perspective smoothly to identity at the loop seam. It
-    // reaches 0.00085 for most of the visible depth movement.
+    // reaches 0.00095 for most of the visible depth movement.
     final depthEnvelope = (1 - math.cos(depthPhase)) / 2;
     final perspectivePresence = 1 - math.pow(1 - depthEnvelope, 4).toDouble();
     final perspective =

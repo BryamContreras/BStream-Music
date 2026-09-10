@@ -268,6 +268,7 @@ void main() {
         expect(heroRect.left, closeTo(0, 0.1));
         expect(heroRect.right, closeTo(390, 0.1));
         expect(heroRect.top, lessThan(0));
+        expect(heroRect.bottom, closeTo(555.75, 0.1));
         expect(heroRect.bottom, greaterThan(classicArtworkRect.bottom));
         expect(heroRect.top, lessThan(foregroundRect.bottom));
         expect(heroRect.bottom, greaterThan(foregroundRect.top));
@@ -349,6 +350,7 @@ void main() {
         expect(heroRect.left, closeTo(0, 0.1));
         expect(heroRect.right, closeTo(320, 0.1));
         expect(heroRect.top, lessThan(0));
+        expect(heroRect.bottom, closeTo(466.4, 0.1));
         expect(
           heroRect.bottom,
           greaterThan(tester.getRect(largeArtwork).bottom),

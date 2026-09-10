@@ -11,13 +11,13 @@ void main() {
     expect(motion.zoomDuration, const Duration(seconds: 28));
     expect(motion.panDuration, const Duration(seconds: 31));
     expect(motion.depthDuration, const Duration(seconds: 35));
-    expect(AnimatedArtworkMotion.maxHorizontalPan, 7.0);
-    expect(AnimatedArtworkMotion.maxVerticalPan, 4.0);
-    expect(AnimatedArtworkMotion.maxTiltXDegrees, 0.3);
-    expect(AnimatedArtworkMotion.maxTiltYDegrees, 0.4);
-    expect(AnimatedArtworkMotion.maxTiltZDegrees, 0.12);
-    expect(AnimatedArtworkMotion.perspectiveDepth, 0.00085);
-    expect(AnimatedArtworkMotion.zoomAmount, 0.046);
+    expect(AnimatedArtworkMotion.maxHorizontalPan, 8.0);
+    expect(AnimatedArtworkMotion.maxVerticalPan, 4.5);
+    expect(AnimatedArtworkMotion.maxTiltXDegrees, 0.34);
+    expect(AnimatedArtworkMotion.maxTiltYDegrees, 0.45);
+    expect(AnimatedArtworkMotion.maxTiltZDegrees, 0.135);
+    expect(AnimatedArtworkMotion.perspectiveDepth, 0.00095);
+    expect(AnimatedArtworkMotion.zoomAmount, 0.052);
   });
 
   testWidgets('uses restrained pixel pan, zoom, and perspective depth', (
@@ -39,11 +39,11 @@ void main() {
 
     final translation = _translationOffset(tester);
     final transform = _transform(tester);
-    expect(translation.dx.abs(), inInclusiveRange(6.0, 7.0));
-    expect(translation.dy.abs(), inInclusiveRange(2.0, 3.0));
-    expect(_combinedScale(tester), greaterThan(1.035));
-    expect(transform.transform.entry(3, 2), inInclusiveRange(0.0005, 0.0007));
-    expect(transform.transform.entry(0, 2).abs(), greaterThan(0.004));
+    expect(translation.dx.abs(), inInclusiveRange(6.8, 8.0));
+    expect(translation.dy.abs(), inInclusiveRange(2.2, 3.4));
+    expect(_combinedScale(tester), greaterThan(1.04));
+    expect(transform.transform.entry(3, 2), inInclusiveRange(0.00056, 0.00078));
+    expect(transform.transform.entry(0, 2).abs(), greaterThan(0.0043));
     expect(find.byKey(const ValueKey('artwork')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -64,9 +64,9 @@ void main() {
     await tester.pump(const Duration(seconds: 4));
 
     final midpointTransform = _transform(tester).transform;
-    expect(_combinedScale(tester), inInclusiveRange(1.04, 1.05));
+    expect(_combinedScale(tester), inInclusiveRange(1.05, 1.06));
     expect(_translationOffset(tester).distance, lessThan(0.000001));
-    expect(midpointTransform.entry(3, 2), closeTo(0.00085, 0.000001));
+    expect(midpointTransform.entry(3, 2), closeTo(0.00095, 0.000001));
 
     await tester.pump(const Duration(seconds: 4));
 
@@ -142,22 +142,22 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     var translation = _translationOffset(tester);
     var rotation = _rotationDegrees(_transform(tester).transform);
-    expect(translation.dx.abs(), inInclusiveRange(4.6, 5.0));
-    expect(translation.dy.abs(), inInclusiveRange(3.75, 4.0));
-    expect(rotation.x.abs(), lessThanOrEqualTo(0.3));
-    expect(rotation.y.abs(), inInclusiveRange(0.375, 0.4));
-    expect(rotation.z.abs(), lessThanOrEqualTo(0.12));
+    expect(translation.dx.abs(), inInclusiveRange(5.25, 5.7));
+    expect(translation.dy.abs(), inInclusiveRange(4.2, 4.5));
+    expect(rotation.x.abs(), lessThanOrEqualTo(0.34));
+    expect(rotation.y.abs(), inInclusiveRange(0.42, 0.45));
+    expect(rotation.z.abs(), lessThanOrEqualTo(0.135));
 
     // At one quarter the horizontal pan, X rotation, and tiny Z rotation peak.
     await tester.pump(const Duration(seconds: 1));
     translation = _translationOffset(tester);
     rotation = _rotationDegrees(_transform(tester).transform);
-    expect(translation.dx.abs(), inInclusiveRange(6.58, 7.0));
+    expect(translation.dx.abs(), inInclusiveRange(7.5, 8.0));
     expect(translation.dy.abs(), lessThan(0.000001));
-    expect(rotation.x.abs(), inInclusiveRange(0.282, 0.3));
+    expect(rotation.x.abs(), inInclusiveRange(0.319, 0.34));
     expect(rotation.y.abs(), lessThan(0.000001));
-    expect(rotation.z.abs(), inInclusiveRange(0.112, 0.12));
-    expect(_coverageScale(tester), greaterThan(1.08));
+    expect(rotation.z.abs(), inInclusiveRange(0.126, 0.135));
+    expect(_coverageScale(tester), greaterThan(1.1));
     expect(
       _combinedScale(tester),
       greaterThanOrEqualTo(1 + (2 * translation.dx.abs() / 120)),

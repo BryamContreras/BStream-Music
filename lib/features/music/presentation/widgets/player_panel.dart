@@ -1073,7 +1073,10 @@ double _expandedArtworkHeroTop(double width) {
 double _expandedArtworkHeroHeight(BoxConstraints constraints) {
   final width = constraints.maxWidth;
   final upwardBleed = -_expandedArtworkHeroTop(width);
-  final blurredTail = (width * 0.42).clamp(144.0, 176.0).toDouble();
+  // Let the blurred image continue slightly past the title region before it
+  // disappears into the player background. The focused square and foreground
+  // layout stay fixed; only this soft lower tail gains height.
+  final blurredTail = (width * 0.48).clamp(164.0, 196.0).toDouble();
   return math.min(width + blurredTail, constraints.maxHeight + upwardBleed);
 }
 
