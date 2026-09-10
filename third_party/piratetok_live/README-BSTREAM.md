@@ -9,6 +9,14 @@ behavior during a dependency upgrade. BStream's changes are intentionally
 small and covered by its LIVE adapter and protocol tests:
 
 - report `connected` only after the WebSocket upgrade succeeds;
+- obtain `ttwid` through TikTok's registration route with creator/LIVE-page
+  fallbacks instead of relying on the homepage to issue it;
+- keep one browser identity and reuse its cookie for a session, refreshing both
+  only when TikTok explicitly rejects the device credential;
+- resolve rooms through the user API plus creator-page and `check_alive`
+  fallbacks, so stale room IDs and status-enum changes are handled separately;
+- fail over between TikTok's global, US, and EU WebSocket hosts only when the
+  pre-upgrade transport fails;
 - decode `WebcastChatMessage.user_identity` so moderator-only commands work;
 - cancel HTTP setup, WebSocket listeners, and retry delays when a session is
   replaced or stopped;

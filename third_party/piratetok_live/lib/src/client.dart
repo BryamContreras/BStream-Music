@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'auth/ttwid.dart';
 import 'cancellation.dart';
@@ -7,8 +8,54 @@ import 'connection/wss.dart';
 import 'errors.dart';
 import 'events/types.dart';
 import 'http/api.dart';
+import 'http/ua.dart';
 
 const _defaultCdn = 'webcast-ws.tiktok.com';
+const _usCdn = 'webcast-ws.us.tiktok.com';
+const _euCdn = 'webcast-ws.eu.tiktok.com';
+const _europeanRegions = <String>{
+  'AT',
+  'BE',
+  'BG',
+  'CH',
+  'CY',
+  'CZ',
+  'DE',
+  'DK',
+  'EE',
+  'ES',
+  'FI',
+  'FR',
+  'GB',
+  'GR',
+  'HR',
+  'HU',
+  'IE',
+  'IS',
+  'IT',
+  'LI',
+  'LT',
+  'LU',
+  'LV',
+  'MT',
+  'NL',
+  'NO',
+  'PL',
+  'PT',
+  'RO',
+  'SE',
+  'SI',
+  'SK',
+};
+
+/// Ordered TikTok WebSocket hosts used for pre-upgrade transport failover.
+List<String> tiktokCdnCandidates(String preferred, {String? region}) {
+  final normalizedRegion = region?.trim().toUpperCase() ?? '';
+  final regional = _europeanRegions.contains(normalizedRegion)
+      ? _euCdn
+      : _usCdn;
+  return List.unmodifiable({preferred, regional, _defaultCdn, _usCdn, _euCdn});
+}
 
 /// Stops repeated DEVICE_BLOCKED responses from becoming an infinite,
 /// battery-draining reconnect loop.
@@ -97,8 +144,8 @@ class TikTokLiveClient {
 
   /// Override the user agent for all requests (HTTP + WSS).
   ///
-  /// When not set, a random UA from the built-in pool is picked on each
-  /// reconnect attempt. This is recommended for reducing DEVICE_BLOCKED risk.
+  /// When not set, one UA from the built-in pool is kept for the complete
+  /// session and rotated together with `ttwid` only after credential rejection.
   TikTokLiveClient userAgent(String ua) {
     _userAgent = ua;
     return this;
@@ -179,64 +226,99 @@ class TikTokLiveClient {
       maxRetries: _maxRetries,
     );
     try {
-      var room = await _checkOnline(cancellationToken);
+      var sessionUserAgent = _userAgent ?? randomUa();
+      final sessionLanguage = _language ?? systemLanguage();
+      final sessionRegion = _region ?? systemRegion();
+      var room = await _checkOnline(
+        cancellationToken,
+        userAgent: sessionUserAgent,
+        language: sessionLanguage,
+        region: sessionRegion,
+      );
       lastRoom = room;
+      String? sessionTtwid = room.ttwid;
       var attempt = 0;
       while (!cancellationToken.isCancelled) {
-        final ttwid = await fetchTtwid(
+        // Keep the same UA + cookie pair for the full session. TikTok binds the
+        // anonymous device cookie to that browser identity; rotating one side
+        // on every retry creates intermittent handshake rejection.
+        final attemptUserAgent = sessionUserAgent;
+        final ttwid = sessionTtwid ??= await fetchTtwid(
           timeout: _timeout,
           proxy: _proxy,
-          userAgent: _userAgent,
+          userAgent: attemptUserAgent,
+          username: _username,
+          language: sessionLanguage,
+          region: sessionRegion,
           cancellationToken: cancellationToken,
         );
         if (cancellationToken.isCancelled) break;
-        final wssUrl = buildWssUrl(
-          _cdnHost,
-          room.roomId,
-          language: _language,
-          region: _region,
-        );
 
-        var isDeviceBlocked = false;
+        var credentialRejected = false;
         var receivedTraffic = false;
-        try {
-          await connectWss(
-            wssUrl: wssUrl,
-            ttwid: ttwid,
-            roomId: room.roomId,
-            onEvent: (event) {
-              receivedTraffic = true;
-              _emit(event);
-            },
-            onTraffic: () => receivedTraffic = true,
-            onError: (e) => _emit(TikTokEvent('error', {'error': '$e'})),
-            cancellationToken: cancellationToken,
-            onConnected: () {
-              final data = {'room_id': room.roomId};
-              _emit(TikTokEvent(EventType.connected, data, room.roomId));
-              _emit(
-                TikTokEvent(EventType.websocketConnected, data, room.roomId),
-              );
-            },
-            connectTimeout: _timeout,
-            staleTimeout: _staleTimeout,
-            proxy: _proxy,
-            userAgent: _userAgent,
-            cookies: _cookies,
-            language: _language,
-            region: _region,
-            decodedMethods: _decodedMethods,
-            chatMessageFilter: _chatMessageFilter,
+        final cdnHosts = tiktokCdnCandidates(_cdnHost, region: sessionRegion);
+        for (var cdnIndex = 0; cdnIndex < cdnHosts.length; cdnIndex++) {
+          if (cancellationToken.isCancelled) break;
+          final wssUrl = buildWssUrl(
+            cdnHosts[cdnIndex],
+            room.roomId,
+            language: sessionLanguage,
+            region: sessionRegion,
           );
-          deviceBlockCircuit.reset();
-        } on DeviceBlockedError {
-          isDeviceBlocked = true;
-          if (!deviceBlockCircuit.registerFailure()) {
-            rethrow;
+
+          try {
+            await connectWss(
+              wssUrl: wssUrl,
+              ttwid: ttwid,
+              roomId: room.roomId,
+              onEvent: (event) {
+                receivedTraffic = true;
+                _emit(event);
+              },
+              onTraffic: () => receivedTraffic = true,
+              onError: (e) => _emit(TikTokEvent('error', {'error': '$e'})),
+              cancellationToken: cancellationToken,
+              onConnected: () {
+                deviceBlockCircuit.reset();
+                final data = {'room_id': room.roomId};
+                _emit(TikTokEvent(EventType.connected, data, room.roomId));
+                _emit(
+                  TikTokEvent(EventType.websocketConnected, data, room.roomId),
+                );
+              },
+              connectTimeout: _timeout,
+              staleTimeout: _staleTimeout,
+              proxy: _proxy,
+              userAgent: attemptUserAgent,
+              cookies: _cookies,
+              language: sessionLanguage,
+              region: sessionRegion,
+              decodedMethods: _decodedMethods,
+              chatMessageFilter: _chatMessageFilter,
+            );
+            break;
+          } on DeviceBlockedError {
+            credentialRejected = true;
+            if (!deviceBlockCircuit.registerFailure()) rethrow;
+            break;
+          } on InvalidTtwidError {
+            credentialRejected = true;
+            if (!deviceBlockCircuit.registerFailure()) rethrow;
+            break;
+          } on TimeoutException {
+            if (cdnIndex == cdnHosts.length - 1) rethrow;
+          } on SocketException {
+            if (cdnIndex == cdnHosts.length - 1) rethrow;
+          } on HandshakeException {
+            if (cdnIndex == cdnHosts.length - 1) rethrow;
           }
         }
 
         if (cancellationToken.isCancelled) break;
+        if (credentialRejected) {
+          sessionTtwid = null;
+          if (_userAgent == null) sessionUserAgent = randomUa();
+        }
 
         // A successful upgrade alone does not prove that the room is still
         // producing webcast data. Reset backoff only after decoded traffic;
@@ -245,13 +327,19 @@ class TikTokLiveClient {
         if (receivedTraffic) attempt = 0;
         attempt++;
         if (attempt > _maxRetries) {
-          room = await _checkOnline(cancellationToken);
+          room = await _checkOnline(
+            cancellationToken,
+            userAgent: sessionUserAgent,
+            language: sessionLanguage,
+            region: sessionRegion,
+          );
           lastRoom = room;
+          sessionTtwid = room.ttwid ?? sessionTtwid;
           if (cancellationToken.isCancelled) break;
           attempt = 0;
         }
 
-        final delay = isDeviceBlocked
+        final delay = credentialRejected
             ? 2
             : _backoffSeconds(attempt).clamp(2, 30);
         _emit(
@@ -284,16 +372,20 @@ class TikTokLiveClient {
     _stop?.cancel();
   }
 
-  Future<RoomIdResult> _checkOnline(CancellationToken cancellationToken) =>
-      checkOnline(
-        _username,
-        timeout: _timeout,
-        proxy: _proxy,
-        userAgent: _userAgent,
-        language: _language,
-        region: _region,
-        cancellationToken: cancellationToken,
-      );
+  Future<RoomIdResult> _checkOnline(
+    CancellationToken cancellationToken, {
+    String? userAgent,
+    String? language,
+    String? region,
+  }) => checkOnline(
+    _username,
+    timeout: _timeout,
+    proxy: _proxy,
+    userAgent: userAgent ?? _userAgent,
+    language: language ?? _language,
+    region: region ?? _region,
+    cancellationToken: cancellationToken,
+  );
 
   Future<bool> _waitOrStop(
     Duration delay,

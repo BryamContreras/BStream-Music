@@ -1,6 +1,6 @@
 name: piratetok_live
 description: Audited BStream fork of piratetok_live for direct TikTok LIVE WSS.
-version: 0.1.5+1
+version: 0.1.5+2
 publish_to: none
 repository: https://github.com/PirateTok/live-dart
 

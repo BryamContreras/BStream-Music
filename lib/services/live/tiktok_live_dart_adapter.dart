@@ -45,6 +45,7 @@ class TikTokLiveDartAdapter {
     TikTokLiveDartClientFactory? clientFactory,
     this.restartDelay = const Duration(seconds: 2),
     this.maxSessionRestarts = 3,
+    this.offlineConfirmations = 2,
   }) : _clientFactory = clientFactory ?? PirateTokLiveDartClient.new {
     if (maxSessionRestarts < 0) {
       throw ArgumentError.value(
@@ -58,6 +59,13 @@ class TikTokLiveDartAdapter {
         restartDelay,
         'restartDelay',
         'No puede ser negativo.',
+      );
+    }
+    if (offlineConfirmations < 1) {
+      throw ArgumentError.value(
+        offlineConfirmations,
+        'offlineConfirmations',
+        'Debe ser al menos 1.',
       );
     }
   }
@@ -89,6 +97,7 @@ class TikTokLiveDartAdapter {
   final TikTokLiveDartClientFactory _clientFactory;
   final Duration restartDelay;
   final int maxSessionRestarts;
+  final int offlineConfirmations;
   final _events = StreamController<TikTokLiveEvent>.broadcast();
 
   TikTokLiveDartClient? _client;
@@ -196,6 +205,7 @@ class TikTokLiveDartAdapter {
 
   Future<void> _run(String user, int generation) async {
     Object? lastError;
+    var offlineResults = 0;
 
     for (var restart = 0; restart <= maxSessionRestarts; restart++) {
       if (!_accepts(generation)) {
@@ -224,6 +234,7 @@ class TikTokLiveDartAdapter {
             return;
           }
           websocketConfirmed = true;
+          offlineResults = 0;
           final eventRoomId = event.roomId.trim();
           if (eventRoomId.isNotEmpty) {
             roomId = eventRoomId;
@@ -353,8 +364,13 @@ class TikTokLiveDartAdapter {
         if (!_accepts(generation)) {
           return;
         }
-        _finishAsUnavailable(user, generation, error.toString());
-        return;
+        lastError = error;
+        offlineResults++;
+        if (offlineResults >= offlineConfirmations ||
+            restart == maxSessionRestarts) {
+          _finishAsUnavailable(user, generation, error.toString());
+          return;
+        }
       } on Object catch (error) {
         lastError = error;
       } finally {

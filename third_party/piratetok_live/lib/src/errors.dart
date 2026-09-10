@@ -34,6 +34,11 @@ class DeviceBlockedError extends PirateTokError {
     : super('device blocked — ttwid was flagged, fetch a fresh one');
 }
 
+class InvalidTtwidError extends PirateTokError {
+  const InvalidTtwidError()
+    : super('TikTok rejected the anonymous device cookie');
+}
+
 class AgeRestrictedError extends PirateTokError {
   const AgeRestrictedError()
     : super(

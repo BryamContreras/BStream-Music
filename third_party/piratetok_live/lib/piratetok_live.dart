@@ -1,7 +1,7 @@
 /// PirateTok Live — TikTok Live connector via WSS.
 ///
-/// Zero signer dependency. Only needs a ttwid cookie (unauthenticated GET
-/// to tiktok.com). Connects directly to TikTok's WebSocket, no proxy servers.
+/// Zero signer dependency. Obtains TikTok's anonymous `ttwid` device cookie
+/// directly and connects to TikTok's WebSocket without a relay server.
 library;
 
 export 'src/client.dart' show TikTokLiveClient;

@@ -13,6 +13,26 @@ const _webSocketGuid = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const _maximumUpgradeHeaderBytes = 64 * 1024;
 const _maximumFramePayloadBytes = 16 * 1024 * 1024;
 
+Object classifyTikTokWebSocketUpgradeFailure(
+  String statusLine,
+  Map<String, String> responseHeaders, {
+  String rawHeaders = '',
+}) {
+  final handshakeStatus = responseHeaders['handshake-status'] ?? '';
+  final handshakeMessage = responseHeaders['handshake-msg'] ?? '';
+  if (rawHeaders.contains('DEVICE_BLOCKED') || statusLine.contains('415')) {
+    return const DeviceBlockedError();
+  }
+  if (handshakeStatus == '417' ||
+      handshakeMessage.toLowerCase().contains('cookie')) {
+    return const InvalidTtwidError();
+  }
+  final detail = handshakeStatus.isEmpty
+      ? ''
+      : ' (TikTok handshake $handshakeStatus)';
+  return SocketException('ws upgrade rejected: $statusLine$detail');
+}
+
 /// Raw WebSocket client — bypasses dart:io's WebSocket for full frame control.
 ///
 /// Implements RFC 6455 framing: masking, Ping/Pong, fragmentation, Close
@@ -116,22 +136,6 @@ class RawWebSocket {
 
           upgrading = false;
           final statusLine = str.substring(0, str.indexOf('\r\n'));
-
-          if (!RegExp(r'^HTTP/1\.[01] 101(?: |$)').hasMatch(statusLine)) {
-            socket.destroy();
-            if (str.contains('DEVICE_BLOCKED') || statusLine.contains('415')) {
-              ready.completeError(const DeviceBlockedError());
-            } else {
-              ready.completeError(
-                SocketException('ws upgrade rejected: $statusLine'),
-              );
-            }
-            return;
-          }
-
-          final expectedAccept = base64Encode(
-            sha1.convert(utf8.encode('$wsKey$_webSocketGuid')).bytes,
-          );
           final responseHeaders = <String, String>{};
           for (final line in str.substring(0, idx).split('\r\n').skip(1)) {
             final separator = line.indexOf(':');
@@ -144,6 +148,22 @@ class RawWebSocket {
                   .trim();
             }
           }
+
+          if (!RegExp(r'^HTTP/1\.[01] 101(?: |$)').hasMatch(statusLine)) {
+            socket.destroy();
+            ready.completeError(
+              classifyTikTokWebSocketUpgradeFailure(
+                statusLine,
+                responseHeaders,
+                rawHeaders: str,
+              ),
+            );
+            return;
+          }
+
+          final expectedAccept = base64Encode(
+            sha1.convert(utf8.encode('$wsKey$_webSocketGuid')).bytes,
+          );
           if (responseHeaders['sec-websocket-accept'] != expectedAccept) {
             socket.destroy();
             ready.completeError(

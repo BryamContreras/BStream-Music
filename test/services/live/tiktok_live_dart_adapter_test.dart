@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/live/tiktok_live_dart_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:piratetok_live/piratetok_live.dart';
 
 void main() {
   group('parseTikTokLiveCommand', () {
@@ -292,6 +293,32 @@ void main() {
       await subscription.cancel();
       await adapter.dispose();
     });
+
+    test(
+      'confirms a transient offline result before ending the session',
+      () async {
+        await adapter.connect('creator');
+        clients.single.failConnect(HostNotOnlineError('creator'));
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+
+        expect(clients, hasLength(2));
+        expect(
+          events.where((event) => event.status == TikTokLiveStatus.liveEnded),
+          isEmpty,
+        );
+
+        clients.last.failConnect(HostNotOnlineError('creator'));
+        await _flushEvents();
+
+        expect(adapter.isRunning, isFalse);
+        expect(
+          events
+              .lastWhere((event) => event.status == TikTokLiveStatus.liveEnded)
+              .message,
+          contains('No encontré un LIVE activo'),
+        );
+      },
+    );
 
     test(
       'does not claim connected until a real traffic event arrives',
@@ -627,6 +654,12 @@ class _FakeTikTokLiveDartClient implements TikTokLiveDartClient {
   void completeConnect(String roomId) {
     if (!_connectCompleter.isCompleted) {
       _connectCompleter.complete(roomId);
+    }
+  }
+
+  void failConnect(Object error) {
+    if (!_connectCompleter.isCompleted) {
+      _connectCompleter.completeError(error, StackTrace.current);
     }
   }
 
