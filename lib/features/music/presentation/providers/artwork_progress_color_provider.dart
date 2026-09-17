@@ -203,7 +203,10 @@ class ArtworkProgressColorService {
     }
     final file = imageFileFromSource(source);
     if (file != null && file.existsSync()) {
-      return FileImage(file);
+      // Color extraction only samples a 24 px image. Bound local artwork at
+      // decode time too, otherwise a multi-megapixel downloaded cover can be
+      // decoded in full just as the player starts its track transition.
+      return ResizeImage(FileImage(file), width: 32);
     }
     return null;
   }

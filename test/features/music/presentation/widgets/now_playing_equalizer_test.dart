@@ -117,4 +117,100 @@ void main() {
     expect(find.bySemanticsLabel('Reproducción pausada'), findsOneWidget);
     semantics.dispose();
   });
+
+  testWidgets('does not tick with reduced motion and resumes when allowed', (
+    tester,
+  ) async {
+    var reduceMotion = true;
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(disableAnimations: reduceMotion),
+              child: const Center(child: NowPlayingEqualizer(isPlaying: true)),
+            );
+          },
+        ),
+      ),
+    );
+
+    expect(await _countPainterTicks(tester), 0);
+
+    update(() => reduceMotion = false);
+    await tester.pump();
+    expect(await _countPainterTicks(tester), greaterThan(0));
+  });
+
+  testWidgets('does not tick outside TickerMode and resumes when enabled', (
+    tester,
+  ) async {
+    var tickerEnabled = false;
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return TickerMode(
+              enabled: tickerEnabled,
+              child: const Center(child: NowPlayingEqualizer(isPlaying: true)),
+            );
+          },
+        ),
+      ),
+    );
+
+    expect(await _countPainterTicks(tester), 0);
+
+    update(() => tickerEnabled = true);
+    await tester.pump();
+    expect(await _countPainterTicks(tester), greaterThan(0));
+
+    update(() => tickerEnabled = false);
+    await tester.pump();
+    expect(await _countPainterTicks(tester), 0);
+  });
+
+  testWidgets('stops while the application is not active and resumes', (
+    tester,
+  ) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Center(child: NowPlayingEqualizer(isPlaying: true)),
+      ),
+    );
+    expect(await _countPainterTicks(tester), greaterThan(0));
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    expect(await _countPainterTicks(tester), 0);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(await _countPainterTicks(tester), greaterThan(0));
+  });
+}
+
+Future<int> _countPainterTicks(WidgetTester tester) async {
+  final paintFinder = find.descendant(
+    of: find.byType(NowPlayingEqualizer),
+    matching: find.byType(CustomPaint),
+  );
+  final painter = tester.widget<CustomPaint>(paintFinder).painter!;
+  var ticks = 0;
+  void countTick() => ticks++;
+  painter.addListener(countTick);
+  await tester.pump(const Duration(milliseconds: 400));
+  painter.removeListener(countTick);
+  return ticks;
 }

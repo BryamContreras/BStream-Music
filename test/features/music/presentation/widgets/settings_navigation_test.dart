@@ -696,6 +696,10 @@ void main() {
       find.byKey(const ValueKey('settings-player-style-option-apple-music')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('settings-player-style-option-classic-vinyl')),
+      findsOneWidget,
+    );
     await tester.tap(
       find.byKey(const ValueKey('settings-player-style-option-apple-music')),
     );
@@ -705,6 +709,21 @@ void main() {
       find.descendant(
         of: playerStyleSelector,
         matching: find.text('Apple Music Style'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(playerStyleSelector);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('settings-player-style-option-classic-vinyl')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: playerStyleSelector,
+        matching: find.text('Vinilo Clásico'),
       ),
       findsOneWidget,
     );
@@ -1592,6 +1611,110 @@ void main() {
     expect(navigationController.canPop, isTrue);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('sleep timer updates stay scoped to the inline timer card', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(760, 1600));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+
+    final languageCard = find.byKey(const ValueKey('settings-card-language'));
+    final crossfadeCard = find.byKey(
+      const ValueKey('settings-inline-crossfade'),
+    );
+    final timerCard = find.byKey(const ValueKey('settings-inline-timer'));
+    final languageBefore = tester.widget<Widget>(languageCard);
+    final crossfadeBefore = tester.widget<Widget>(crossfadeCard);
+    final container = ProviderScope.containerOf(tester.element(timerCard));
+
+    container
+        .read(sleepTimerControllerProvider.notifier)
+        .start(const Duration(minutes: 3));
+    await tester.pump();
+
+    expect(
+      identical(tester.widget<Widget>(languageCard), languageBefore),
+      isTrue,
+    );
+    expect(
+      identical(tester.widget<Widget>(crossfadeCard), crossfadeBefore),
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.descendant(
+              of: timerCard,
+              matching: find.byType(SwitchListTile),
+            ),
+          )
+          .value,
+      isTrue,
+    );
+
+    final languageAfterStart = tester.widget<Widget>(languageCard);
+    final crossfadeAfterStart = tester.widget<Widget>(crossfadeCard);
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(
+      identical(tester.widget<Widget>(languageCard), languageAfterStart),
+      isTrue,
+      reason: 'the one-second timer tick must not rebuild Settings root',
+    );
+    expect(
+      identical(tester.widget<Widget>(crossfadeCard), crossfadeAfterStart),
+      isTrue,
+    );
+    expect(
+      container.read(sleepTimerControllerProvider).remaining,
+      lessThan(const Duration(minutes: 3)),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('CSV progress does not rebuild the Settings root', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(760, 1600));
+    final navigationController = SettingsNavigationController();
+    final transferController = _PublishingCsvTransferController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        overrides: [
+          libraryCsvTransferControllerProvider.overrideWith(
+            () => transferController,
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final languageCard = find.byKey(const ValueKey('settings-card-language'));
+    final languageBefore = tester.widget<Widget>(languageCard);
+    final container = ProviderScope.containerOf(tester.element(languageCard));
+    container.read(libraryCsvTransferControllerProvider);
+
+    transferController.publishImportProgress(1);
+    await tester.pump();
+    transferController.publishImportProgress(2);
+    await tester.pump();
+
+    expect(
+      identical(tester.widget<Widget>(languageCard), languageBefore),
+      isTrue,
+      reason: 'detailed CSV progress belongs to its dialog, not Settings root',
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -2633,5 +2756,16 @@ class _ImmediateCsvTransferController extends LibraryCsvTransferController {
       result: result,
     );
     return result;
+  }
+}
+
+class _PublishingCsvTransferController extends LibraryCsvTransferController {
+  void publishImportProgress(int marker) {
+    state = LibraryCsvTransferState(
+      phase: LibraryCsvTransferPhase.importing,
+      // A distinct object guarantees a provider notification while isBusy
+      // remains true across progress frames.
+      error: marker,
+    );
   }
 }

@@ -322,6 +322,62 @@ void main() {
     expect(taps, 1);
   });
 
+  testWidgets('flat mode keeps pan and zoom without a perspective layer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const _TestHost(
+        child: AnimatedArtworkMotion(
+          identity: 'full-bleed-cover',
+          depthEnabled: false,
+          child: ColoredBox(key: ValueKey('artwork'), color: Colors.blue),
+        ),
+      ),
+    );
+
+    expect(
+      find.byKey(const ValueKey('animated-artwork-flat-transform')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('animated-artwork-depth-transform')),
+      findsNothing,
+    );
+
+    await tester.pump(const Duration(seconds: 6));
+
+    final flat = tester.widget<Transform>(
+      find.byKey(const ValueKey('animated-artwork-flat-transform')),
+    );
+    expect(flat.transform.entry(0, 3).abs(), greaterThan(6.8));
+    expect(flat.transform.entry(1, 3).abs(), greaterThan(2.2));
+    expect(flat.transform.getMaxScaleOnAxis(), greaterThan(1.04));
+    expect(flat.transform.entry(3, 2), 0);
+    expect(flat.transformHitTests, isFalse);
+    expect(find.byKey(const ValueKey('artwork')), findsOneWidget);
+  });
+
+  testWidgets('does not add an anti-aliased clip to a full-bleed surface', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const _TestHost(
+        child: AnimatedArtworkMotion(
+          borderRadius: BorderRadius.zero,
+          child: ColoredBox(color: Colors.blue),
+        ),
+      ),
+    );
+
+    expect(
+      find.descendant(
+        of: find.byType(AnimatedArtworkMotion),
+        matching: find.byType(ClipRRect),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('does not rebuild artwork on animation ticks', (tester) async {
     var artworkBuilds = 0;
     await tester.pumpWidget(

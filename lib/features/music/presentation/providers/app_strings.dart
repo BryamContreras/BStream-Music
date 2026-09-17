@@ -821,6 +821,8 @@ class AppStrings {
   String get playerStyle => choose('Estilo', 'Style');
   String get playerStyleBStreamMusic => 'BStream Music';
   String get playerStyleAppleMusic => 'Apple Music Style';
+  String get playerStyleClassicVinyl =>
+      choose('Vinilo Clásico', 'Classic Vinyl');
   String get animatedArtwork => choose('Portadas animadas', 'Animated artwork');
   String get animatedArtworkDescription => choose(
     'Añade movimiento, profundidad y zoom sutiles a la portada del reproductor.',
@@ -1139,6 +1141,7 @@ class AppStrings {
   String playerStyleLabel(PlayerStyle style) => switch (style) {
     PlayerStyle.bstreamMusic => playerStyleBStreamMusic,
     PlayerStyle.appleMusic => playerStyleAppleMusic,
+    PlayerStyle.classicVinyl => playerStyleClassicVinyl,
   };
   String playerArtworkStyleLabel(PlayerArtworkStyle style) => switch (style) {
     PlayerArtworkStyle.classic => playerArtworkStyleClassic,

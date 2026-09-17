@@ -694,6 +694,29 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('does not add an anti-aliased clip to a full-bleed field', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const _TestHost(
+        child: AnimatedArtworkParticles(
+          color: Colors.blue,
+          identity: 'full-bleed-field',
+          isPlaying: false,
+        ),
+      ),
+    );
+
+    final paint = find.byKey(
+      const ValueKey('animated-artwork-particles-paint'),
+    );
+    expect(paint, findsOneWidget);
+    expect(
+      find.ancestor(of: paint, matching: find.byType(ClipRRect)),
+      findsNothing,
+    );
+  });
 }
 
 const _trajectoryCanvasSize = Size(320, 480);

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'lyrics_page.dart';
+import 'playback_dark_theme.dart';
 import 'playback_page_transition.dart';
 
 const lyricsPageRouteName = '/lyrics';
@@ -27,11 +28,18 @@ class _LyricsPageRoute extends PageRouteBuilder<void> {
             : playbackPageReverseTransitionDuration,
         maintainState: true,
         allowSnapshotting: true,
-        pageBuilder: (context, animation, secondaryAnimation) => Semantics(
-          scopesRoute: true,
-          explicitChildNodes: true,
-          child: const LyricsPage(),
-        ),
+        pageBuilder: (context, animation, secondaryAnimation) {
+          final inheritedTheme = Theme.of(context);
+          return Theme(
+            key: const ValueKey('lyrics-always-dark-theme'),
+            data: alwaysDarkPlaybackTheme(inheritedTheme),
+            child: Semantics(
+              scopesRoute: true,
+              explicitChildNodes: true,
+              child: const LyricsPage(),
+            ),
+          );
+        },
         transitionsBuilder: _buildLyricsTransition,
       );
 

@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../providers/lyrics_animation_style.dart';
 
-const _kLyricsSmoothDuration = Duration(milliseconds: 520);
-const _kLyricsSlideDuration = Duration(milliseconds: 460);
-const _kLyricsHighlightDuration = Duration(milliseconds: 500);
+// Keep lyric changes long enough to read as one continuous movement, while
+// finishing quickly enough that a short line does not lag behind playback.
+const _kLyricsSmoothDuration = Duration(milliseconds: 580);
+const _kLyricsSlideDuration = Duration(milliseconds: 550);
+const _kLyricsHighlightDuration = Duration(milliseconds: 570);
+const _kLyricsExitDuration = Duration(milliseconds: 460);
 
 const _kLyricsSmoothInactiveScale = 0.98;
 const _kLyricsSmoothInactiveOpacity = 0.62;
@@ -39,9 +42,11 @@ class LyricsAnimationTransition extends StatefulWidget {
 }
 
 class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _controller;
+  late final AnimationController _slideController;
   late Animation<double> _animation;
+  bool _disableAnimations = false;
 
   @override
   void initState() {
@@ -49,6 +54,12 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
     _controller = AnimationController(
       vsync: this,
       duration: _durationFor(widget.style),
+      reverseDuration: _kLyricsExitDuration,
+    );
+    _slideController = AnimationController(
+      vsync: this,
+      duration: _kLyricsSlideDuration,
+      value: 1,
     );
     _animation = _buildTween(widget.style);
     if (widget.active) {
@@ -57,26 +68,76 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    if (_disableAnimations == disableAnimations) {
+      return;
+    }
+    _disableAnimations = disableAnimations;
+    _controller.stop();
+    _slideController.stop();
+    _controller.value = widget.active ? 1 : 0;
+    _slideController.value = 1;
+  }
+
+  @override
   void didUpdateWidget(covariant LyricsAnimationTransition oldWidget) {
     super.didUpdateWidget(oldWidget);
     final styleChanged = oldWidget.style != widget.style;
+    final wasPartiallyVisible = _controller.value > 0;
     if (styleChanged) {
       _controller.duration = _durationFor(widget.style);
+      _controller.reverseDuration = _kLyricsExitDuration;
       _animation = _buildTween(widget.style);
+    }
+    if (_disableAnimations) {
+      _controller.stop();
+      _slideController.stop();
+      _controller.value = widget.active ? 1 : 0;
+      _slideController.value = 1;
+      return;
     }
     if (widget.active != oldWidget.active || styleChanged) {
       _controller.stop();
       if (widget.active) {
-        _controller.forward(from: 0);
-      } else {
+        if (styleChanged) {
+          _controller.forward(from: 0);
+        } else {
+          // Preserve the current value when playback quickly crosses a line
+          // boundary in either direction. Retargeting the animation avoids a
+          // visible opacity/scale snap during seeks and short lyric lines.
+          _controller.forward();
+        }
+      } else if (styleChanged) {
         _controller.value = 0;
+      } else {
+        _controller.reverse();
       }
+    }
+    if (widget.style == LyricsAnimationStyle.slide) {
+      if (widget.active && (!oldWidget.active || styleChanged)) {
+        if (wasPartiallyVisible && !styleChanged) {
+          _slideController.forward();
+        } else {
+          _slideController.forward(from: 0);
+        }
+      } else if (!widget.active) {
+        // If a short line deactivates before finishing its entrance, keep
+        // moving toward the resting position instead of snapping to it.
+        _slideController.forward();
+      }
+    } else {
+      _slideController
+        ..stop()
+        ..value = 1;
     }
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _slideController.dispose();
     super.dispose();
   }
 
@@ -92,9 +153,11 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
     return CurvedAnimation(
       parent: _controller,
       curve: switch (style) {
-        LyricsAnimationStyle.highlight => Curves.easeOutBack,
+        // Avoid the overshoot from easeOutBack: it made the highlight land
+        // with a small visual bump when two short lines changed quickly.
         _ => Curves.easeOutCubic,
       },
+      reverseCurve: Curves.easeInOutCubic,
     );
   }
 
@@ -106,7 +169,7 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
     final alignment = widget.alignment;
     final accent = widget.accent;
     return AnimatedBuilder(
-      animation: _animation,
+      animation: Listenable.merge([_animation, _slideController]),
       builder: (context, child) {
         final value = _animation.value;
         return switch (widget.style) {
@@ -123,7 +186,7 @@ class _LyricsAnimationTransitionState extends State<LyricsAnimationTransition>
             child: Transform.translate(
               offset: Offset(
                 0,
-                widget.active ? _kLyricsSlideOffsetPx * (1 - value) : 0,
+                _kLyricsSlideOffsetPx * (1 - _slideController.value),
               ),
               child: child,
             ),
@@ -190,7 +253,6 @@ class LyricsAnimationPreviewTransition extends StatelessWidget {
       tween: Tween(begin: 0, end: 1),
       duration: _kDurationForPreview(style),
       curve: switch (style) {
-        LyricsAnimationStyle.highlight => Curves.easeOutBack,
         _ => Curves.easeOutCubic,
       },
       builder: (context, value, child) {

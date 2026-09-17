@@ -108,13 +108,13 @@ void main() {
 
   test('startup restores and persists the full player style', () async {
     SharedPreferences.setMockInitialValues({
-      'settings.playerStyle': 'appleMusic',
+      'settings.playerStyle': 'classicVinyl',
     });
     final container = ProviderContainer();
     addTearDown(container.dispose);
 
     final settings = await container.read(settingsControllerProvider.future);
-    expect(settings.playerStyle, PlayerStyle.appleMusic);
+    expect(settings.playerStyle, PlayerStyle.classicVinyl);
 
     await container
         .read(settingsControllerProvider.notifier)

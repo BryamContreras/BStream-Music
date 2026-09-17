@@ -27,10 +27,12 @@ import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
 import 'animated_artwork_motion.dart';
 import 'animated_artwork_particles.dart';
+import 'classic_vinyl_deck.dart';
 import 'favorite_star_badge.dart';
 import 'glass_popup_menu_button.dart';
 import 'lyrics_page_route.dart';
 import 'now_playing_equalizer.dart';
+import 'playback_dark_theme.dart';
 import 'playback_gradient_background.dart';
 import 'playlist_artwork.dart';
 import 'playlist_picker_dialog.dart';
@@ -38,6 +40,8 @@ import 'source_image.dart';
 import 'track_change_transition.dart';
 import 'uniform_playback_slider_track_shape.dart';
 import 'wavy_playback_seek_bar.dart';
+
+part 'classic_vinyl_player_layout.dart';
 
 @visibleForTesting
 const expandedArtworkHeroEdgeFadeGradient = LinearGradient(
@@ -106,6 +110,20 @@ const expandedArtworkBoundedFocusFadeGradient = LinearGradient(
 
 @visibleForTesting
 const expandedArtworkBoundedToneFadeStops = <double>[0, 0.74, 1];
+
+class _PlayerSurroundingTheme extends InheritedWidget {
+  const _PlayerSurroundingTheme({required this.data, required super.child});
+
+  final ThemeData data;
+
+  static ThemeData? maybeOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<_PlayerSurroundingTheme>()
+      ?.data;
+
+  @override
+  bool updateShouldNotify(_PlayerSurroundingTheme oldWidget) =>
+      data != oldWidget.data;
+}
 
 class PlayerPanel extends ConsumerStatefulWidget {
   const PlayerPanel({
@@ -334,502 +352,583 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           });
         }
 
+        final surroundingTheme = Theme.of(context);
+        final playerTheme = alwaysDarkPlaybackTheme(surroundingTheme);
+
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
               key: const ValueKey('desktop-player-surface'),
-              child: widget.style == PlayerStyle.appleMusic
-                  ? _AppleMusicPlayerLayout(
-                      snapshot: snapshot,
-                      artworkSource: artworkSource,
-                      artworkFallbackSource: artworkFallbackSource,
-                      artworkParticleColor: artworkParticleColor,
-                      visualIdentity: visualIdentity,
-                      trackTransitionsEnabled: widget.trackTransitionsEnabled,
-                      artworkStyle: widget.artworkStyle,
-                      animatedArtworkEnabled: widget.animatedArtworkEnabled,
-                      drawBackground: widget.drawBackground,
-                      hasTrack: hasTrack,
-                      isFavorite: isFavorite,
-                      savedTrackId: savedTrackId,
-                      hasError: presentation.hasError,
-                      errorText: presentation.errorText,
-                      queueVisible: showSideQueue,
-                      onToggleQueue: toggleQueue,
-                      onCollapse: widget.onCollapse,
-                      onOpenLyrics: _openLyrics,
-                      onOpenSearch: widget.onOpenSearch,
-                      onOpenArtist: onOpenArtist,
-                      onOpenAlbum: onOpenAlbum,
-                      strings: strings,
-                    )
-                  : Stack(
-                      children: [
-                        if (widget.drawBackground) ...[
-                          _BlurredPlayerBackground(
-                            url: artworkSource,
-                            fallbackUrl: artworkFallbackSource,
-                          ),
-                          Positioned.fill(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: playerPlaybackOverlayColors(context),
-                                  stops: const [0, 0.38, 0.72, 1],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                        if (useExpandedArtworkHero)
-                          Positioned(
-                            top: _expandedArtworkHeroTop(outer.maxWidth),
-                            left: 0,
-                            right: 0,
-                            height: _expandedArtworkHeroHeight(outer),
-                            child: _ExpandedArtworkHero(
-                              url: artworkSource,
-                              fallbackUrl: artworkFallbackSource,
-                              particleColor: artworkParticleColor,
-                              identity: visualIdentity,
-                              isPlaying:
-                                  snapshot.status == PlayerStatus.playing,
-                              trackTransitionsEnabled:
-                                  widget.trackTransitionsEnabled,
-                              animatedArtworkEnabled:
-                                  widget.animatedArtworkEnabled,
-                            ),
-                          ),
-                        Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            horizontalContentPadding,
-                            lerpDouble(
-                              regularTopPadding,
-                              8,
-                              heightCompactness,
-                            )!,
-                            horizontalContentPadding,
-                            lerpDouble(
-                              regularBottomPadding,
-                              8,
-                              heightCompactness,
-                            )!,
-                          ),
-                          child: Column(
+              child: _PlayerSurroundingTheme(
+                data: surroundingTheme,
+                child: Theme(
+                  key: const ValueKey('player-always-dark-theme'),
+                  data: playerTheme,
+                  child: Builder(
+                    builder: (context) =>
+                        widget.style == PlayerStyle.classicVinyl
+                        ? _ClassicVinylPlayerLayout(
+                            snapshot: snapshot,
+                            artworkSource: artworkSource,
+                            artworkFallbackSource: artworkFallbackSource,
+                            visualIdentity: visualIdentity,
+                            trackTransitionsEnabled:
+                                widget.trackTransitionsEnabled,
+                            artworkStyle: widget.artworkStyle,
+                            animatedArtworkEnabled:
+                                widget.animatedArtworkEnabled,
+                            drawBackground: widget.drawBackground,
+                            hasTrack: hasTrack,
+                            isFavorite: isFavorite,
+                            savedTrackId: savedTrackId,
+                            hasError: presentation.hasError,
+                            errorText: presentation.errorText,
+                            queueVisible: showSideQueue,
+                            onToggleQueue: toggleQueue,
+                            onCollapse: widget.onCollapse,
+                            onOpenLyrics: _openLyrics,
+                            onOpenSearch: widget.onOpenSearch,
+                            onOpenArtist: onOpenArtist,
+                            onOpenAlbum: onOpenAlbum,
+                            strings: strings,
+                          )
+                        : widget.style == PlayerStyle.appleMusic
+                        ? _AppleMusicPlayerLayout(
+                            snapshot: snapshot,
+                            artworkSource: artworkSource,
+                            artworkFallbackSource: artworkFallbackSource,
+                            artworkParticleColor: artworkParticleColor,
+                            visualIdentity: visualIdentity,
+                            trackTransitionsEnabled:
+                                widget.trackTransitionsEnabled,
+                            artworkStyle: widget.artworkStyle,
+                            animatedArtworkEnabled:
+                                widget.animatedArtworkEnabled,
+                            drawBackground: widget.drawBackground,
+                            hasTrack: hasTrack,
+                            isFavorite: isFavorite,
+                            savedTrackId: savedTrackId,
+                            hasError: presentation.hasError,
+                            errorText: presentation.errorText,
+                            queueVisible: showSideQueue,
+                            onToggleQueue: toggleQueue,
+                            onCollapse: widget.onCollapse,
+                            onOpenLyrics: _openLyrics,
+                            onOpenSearch: widget.onOpenSearch,
+                            onOpenArtist: onOpenArtist,
+                            onOpenAlbum: onOpenAlbum,
+                            strings: strings,
+                          )
+                        : Stack(
                             children: [
-                              if (!mobileLandscape)
-                                _PlayerHeader(
-                                  snapshot: snapshot,
-                                  trackTransitionsEnabled:
-                                      widget.trackTransitionsEnabled,
-                                  isFavorite: isFavorite,
-                                  savedTrackId: savedTrackId,
-                                  onOpenSearch: widget.onOpenSearch,
-                                  queueVisible: showSideQueue,
-                                  onToggleQueue: toggleQueue,
-                                  onOpenArtist: onOpenArtist,
-                                  onOpenAlbum: onOpenAlbum,
-                                  strings: strings,
+                              if (widget.drawBackground) ...[
+                                _BlurredPlayerBackground(
+                                  url: artworkSource,
+                                  fallbackUrl: artworkFallbackSource,
                                 ),
-                              Expanded(
-                                child: LayoutBuilder(
-                                  key: const ValueKey('player-content-layout'),
-                                  builder: (context, constraints) {
-                                    final verticalCompactness = mobileLandscape
-                                        ? 1.0
-                                        : AppPlatform.isDesktop
-                                        ? ((620.0 - constraints.maxHeight) /
-                                                  140.0)
-                                              .clamp(0.0, 1.0)
-                                        : 0.0;
-                                    final landscapeGap = mobileLandscape
-                                        ? lerpDouble(
-                                            12,
-                                            20,
-                                            ((constraints.maxWidth - 540.0) /
-                                                    280.0)
-                                                .clamp(0.0, 1.0),
-                                          )!
-                                        : 0.0;
-                                    final landscapeAvailableWidth = math.max(
-                                      0.0,
-                                      constraints.maxWidth - landscapeGap,
-                                    );
-                                    final landscapeArtworkFraction =
-                                        constraints.maxWidth < 700
-                                        ? 0.438
-                                        : 0.46;
-                                    final landscapeArtworkPaneWidth =
-                                        mobileLandscape
-                                        ? landscapeAvailableWidth *
-                                              landscapeArtworkFraction
-                                        : 0.0;
-                                    final landscapeControlsWidth =
-                                        mobileLandscape
-                                        ? math.max(
-                                            0.0,
-                                            landscapeAvailableWidth -
-                                                landscapeArtworkPaneWidth,
-                                          )
-                                        : 0.0;
-                                    // Give the timeline and controls the newly
-                                    // reclaimed width without also enlarging
-                                    // the already-approved mobile artwork.
-                                    final artworkWidthReduction =
-                                        mobile && !mobileLandscape
-                                        ? math.max(
-                                            0.0,
-                                            (20.0 - horizontalContentPadding) *
-                                                2,
-                                          )
-                                        : 0.0;
-                                    final artworkConstraints = mobile
-                                        ? constraints.copyWith(
-                                            maxWidth: math.max(
-                                              0.0,
-                                              constraints.maxWidth -
-                                                  artworkWidthReduction,
-                                            ),
-                                          )
-                                        : constraints;
-                                    final landscapeExpandedScale =
-                                        mobileLandscape &&
-                                            widget.artworkStyle ==
-                                                PlayerArtworkStyle.expanded &&
-                                            artworkSource?.trim().isNotEmpty ==
-                                                true
-                                        ? 1.08
-                                        : 1.0;
-                                    final landscapeVisualArtworkExtent =
-                                        mobileLandscape
-                                        ? math.min(
-                                            landscapeArtworkPaneWidth,
-                                            constraints.maxHeight,
-                                          )
-                                        : 0.0;
-                                    final regularArtworkExtent = mobileLandscape
-                                        ? landscapeVisualArtworkExtent /
-                                              landscapeExpandedScale
-                                        : _artworkExtent(
-                                            artworkConstraints,
-                                            stackedDesktop: stackedDesktop,
-                                            wide: wide,
-                                            mobile: mobile,
-                                            compactness: verticalCompactness,
-                                            mobileFrameCompactness:
-                                                mobileFrameCompactness,
-                                          );
-                                    // Short Android frames keep the regular artwork
-                                    // size. Their vertical budget is recovered from
-                                    // the surrounding gaps instead of shrinking the
-                                    // cover, with scrolling retained only as a
-                                    // fallback for exceptional content.
-                                    final artworkExtent = regularArtworkExtent;
-                                    // A short, narrow phone can make the cover
-                                    // width-bound before the frame-height factor is
-                                    // large enough to shrink its halo. Once the
-                                    // mobile layout has entered its compact range,
-                                    // include that measured cover reduction so the
-                                    // shadow follows the artwork proportionally.
-                                    // Roomy mobile frames retain the original
-                                    // shadow values exactly.
-                                    final mobileArtworkShadowActivation = mobile
-                                        ? (mobileFrameCompactness /
-                                                  _mobileArtworkShadowActivationRange)
-                                              .clamp(0.0, 1.0)
-                                        : 0.0;
-                                    final mobileArtworkShadowCompactness =
-                                        ((_mobileArtworkExtentCeiling -
-                                                    artworkExtent) /
-                                                _mobileArtworkShadowCompressionRange)
-                                            .clamp(0.0, 1.0) *
-                                        mobileArtworkShadowActivation;
-                                    final artworkShadowCompactness = math.max(
-                                      verticalCompactness,
-                                      math.max(
-                                        mobileFrameCompactness,
-                                        mobileArtworkShadowCompactness,
-                                      ),
-                                    );
-                                    final maxContentWidth = mobileLandscape
-                                        ? landscapeControlsWidth
-                                        : stackedDesktop
-                                        ? showSideQueue
-                                              ? constraints.maxWidth
-                                              : math
-                                                    .min(
-                                                      constraints.maxWidth *
-                                                          0.84,
-                                                      1040.0,
-                                                    )
-                                                    .clamp(700.0, 1040.0)
-                                                    .toDouble()
-                                        : 520.0;
-                                    final artworkCanvasWidth = mobileLandscape
-                                        ? landscapeArtworkPaneWidth
-                                        : math.min(
-                                            constraints.maxWidth,
-                                            maxContentWidth,
-                                          );
-                                    final artworkHorizontalClearance = math.max(
-                                      0.0,
-                                      (artworkCanvasWidth - artworkExtent) / 2,
-                                    );
-                                    final expandedArtworkTargetWidth =
-                                        fullBleedArtwork
-                                        ? constraints.maxWidth +
-                                              (horizontalContentPadding * 2)
-                                        : mobileLandscape
-                                        ? landscapeVisualArtworkExtent
-                                        : math.min(
-                                            artworkCanvasWidth,
-                                            artworkExtent * 1.18,
-                                          );
-                                    final artwork = Center(
-                                      child: useExpandedArtworkHero
-                                          ? _ExpandedArtworkPlaceholder(
-                                              maxExtent: artworkExtent,
-                                              isFavorite: mobileLandscape
-                                                  ? false
-                                                  : isFavorite,
-                                            )
-                                          : _LargeArtwork(
-                                              url: artworkSource,
-                                              fallbackUrl:
-                                                  artworkFallbackSource,
-                                              particleColor:
-                                                  artworkParticleColor,
-                                              identity: visualIdentity,
-                                              isPlaying:
-                                                  snapshot.status ==
-                                                  PlayerStatus.playing,
-                                              trackTransitionsEnabled: widget
-                                                  .trackTransitionsEnabled,
-                                              artworkStyle: widget.artworkStyle,
-                                              expandedTargetWidth:
-                                                  expandedArtworkTargetWidth,
-                                              fullBleedExpanded:
-                                                  fullBleedArtwork,
-                                              animatedArtworkEnabled:
-                                                  widget.animatedArtworkEnabled,
-                                              maxExtent: artworkExtent,
-                                              isFavorite: mobileLandscape
-                                                  ? false
-                                                  : isFavorite,
-                                              shadowCompactness:
-                                                  artworkShadowCompactness,
-                                              shadowHorizontalClearance:
-                                                  artworkHorizontalClearance,
-                                            ),
-                                    );
-                                    final gap = mobile
-                                        ? lerpDouble(
-                                            22,
-                                            8,
-                                            mobileFrameCompactness,
-                                          )!
-                                        : lerpDouble(
-                                            26,
-                                            12,
-                                            verticalCompactness,
-                                          )!;
-                                    final controlSpacingCompactness = mobile
-                                        ? mobileFrameCompactness
-                                        : verticalCompactness;
-                                    final controls = _PlayerControls(
-                                      snapshot: snapshot,
-                                      trackTransitionsEnabled:
-                                          widget.trackTransitionsEnabled,
-                                      hasTrack: hasTrack,
-                                      isFavorite: isFavorite,
-                                      savedTrackId: savedTrackId,
-                                      hasError: presentation.hasError,
-                                      errorText: presentation.errorText,
-                                      compact:
-                                          mobileLandscape ||
-                                          !wide ||
-                                          stackedDesktop,
-                                      compactness: verticalCompactness,
-                                      spacingCompactness:
-                                          controlSpacingCompactness,
-                                      landscape: mobileLandscape,
-                                      maxWidth: stackedDesktop
-                                          ? maxContentWidth
-                                          : mobileLandscape
-                                          ? landscapeControlsWidth
-                                          : 520.0,
-                                      onOpenLyrics: _openLyrics,
-                                      onOpenArtist: onOpenArtist,
-                                      strings: strings,
-                                    );
-
-                                    if (mobileLandscape) {
-                                      final effectiveTextScale =
-                                          MediaQuery.textScalerOf(
-                                            context,
-                                          ).scale(16) /
-                                          16;
-                                      final scrollControls =
-                                          effectiveTextScale > 1.8 ||
-                                          (effectiveTextScale > 1.1 &&
-                                              constraints.maxHeight < 300) ||
-                                          constraints.maxHeight < 220 ||
-                                          presentation.hasError;
-                                      final controlsPane = scrollControls
-                                          ? SingleChildScrollView(
-                                              key: const ValueKey(
-                                                'bstream-player-controls-scroll',
-                                              ),
-                                              clipBehavior: Clip.hardEdge,
-                                              child: ConstrainedBox(
-                                                constraints: BoxConstraints(
-                                                  minHeight:
-                                                      constraints.maxHeight,
-                                                ),
-                                                child: Align(
-                                                  alignment: Alignment.center,
-                                                  child: controls,
-                                                ),
-                                              ),
-                                            )
-                                          : Align(
-                                              alignment: Alignment.center,
-                                              child: controls,
-                                            );
-                                      return Row(
-                                        key: const ValueKey(
-                                          'bstream-player-adaptive-landscape',
+                                Positioned.fill(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: playerPlaybackOverlayColors(
+                                          context,
                                         ),
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        children: [
-                                          SizedBox(
-                                            width: landscapeArtworkPaneWidth,
-                                            child: ClipRect(
+                                        stops: const [0, 0.38, 0.72, 1],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              if (useExpandedArtworkHero)
+                                Positioned(
+                                  top: _expandedArtworkHeroTop(outer.maxWidth),
+                                  left: 0,
+                                  right: 0,
+                                  height: _expandedArtworkHeroHeight(outer),
+                                  child: _ExpandedArtworkHero(
+                                    url: artworkSource,
+                                    fallbackUrl: artworkFallbackSource,
+                                    particleColor: artworkParticleColor,
+                                    identity: visualIdentity,
+                                    isPlaying:
+                                        snapshot.status == PlayerStatus.playing,
+                                    trackTransitionsEnabled:
+                                        widget.trackTransitionsEnabled,
+                                    animatedArtworkEnabled:
+                                        widget.animatedArtworkEnabled,
+                                  ),
+                                ),
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  horizontalContentPadding,
+                                  lerpDouble(
+                                    regularTopPadding,
+                                    8,
+                                    heightCompactness,
+                                  )!,
+                                  horizontalContentPadding,
+                                  lerpDouble(
+                                    regularBottomPadding,
+                                    8,
+                                    heightCompactness,
+                                  )!,
+                                ),
+                                child: Column(
+                                  children: [
+                                    if (!mobileLandscape)
+                                      _PlayerHeader(
+                                        snapshot: snapshot,
+                                        trackTransitionsEnabled:
+                                            widget.trackTransitionsEnabled,
+                                        isFavorite: isFavorite,
+                                        savedTrackId: savedTrackId,
+                                        onOpenSearch: widget.onOpenSearch,
+                                        queueVisible: showSideQueue,
+                                        onToggleQueue: toggleQueue,
+                                        onOpenArtist: onOpenArtist,
+                                        onOpenAlbum: onOpenAlbum,
+                                        strings: strings,
+                                      ),
+                                    Expanded(
+                                      child: LayoutBuilder(
+                                        key: const ValueKey(
+                                          'player-content-layout',
+                                        ),
+                                        builder: (context, constraints) {
+                                          final verticalCompactness =
+                                              mobileLandscape
+                                              ? 1.0
+                                              : AppPlatform.isDesktop
+                                              ? ((620.0 -
+                                                            constraints
+                                                                .maxHeight) /
+                                                        140.0)
+                                                    .clamp(0.0, 1.0)
+                                              : 0.0;
+                                          final landscapeGap = mobileLandscape
+                                              ? lerpDouble(
+                                                  12,
+                                                  20,
+                                                  ((constraints.maxWidth -
+                                                              540.0) /
+                                                          280.0)
+                                                      .clamp(0.0, 1.0),
+                                                )!
+                                              : 0.0;
+                                          final landscapeAvailableWidth = math
+                                              .max(
+                                                0.0,
+                                                constraints.maxWidth -
+                                                    landscapeGap,
+                                              );
+                                          final landscapeArtworkFraction =
+                                              constraints.maxWidth < 700
+                                              ? 0.438
+                                              : 0.46;
+                                          final landscapeArtworkPaneWidth =
+                                              mobileLandscape
+                                              ? landscapeAvailableWidth *
+                                                    landscapeArtworkFraction
+                                              : 0.0;
+                                          final landscapeControlsWidth =
+                                              mobileLandscape
+                                              ? math.max(
+                                                  0.0,
+                                                  landscapeAvailableWidth -
+                                                      landscapeArtworkPaneWidth,
+                                                )
+                                              : 0.0;
+                                          // Give the timeline and controls the newly
+                                          // reclaimed width without also enlarging
+                                          // the already-approved mobile artwork.
+                                          final artworkWidthReduction =
+                                              mobile && !mobileLandscape
+                                              ? math.max(
+                                                  0.0,
+                                                  (20.0 - horizontalContentPadding) *
+                                                      2,
+                                                )
+                                              : 0.0;
+                                          final artworkConstraints = mobile
+                                              ? constraints.copyWith(
+                                                  maxWidth: math.max(
+                                                    0.0,
+                                                    constraints.maxWidth -
+                                                        artworkWidthReduction,
+                                                  ),
+                                                )
+                                              : constraints;
+                                          final landscapeExpandedScale =
+                                              mobileLandscape &&
+                                                  widget.artworkStyle ==
+                                                      PlayerArtworkStyle
+                                                          .expanded &&
+                                                  artworkSource
+                                                          ?.trim()
+                                                          .isNotEmpty ==
+                                                      true
+                                              ? 1.08
+                                              : 1.0;
+                                          final landscapeVisualArtworkExtent =
+                                              mobileLandscape
+                                              ? math.min(
+                                                  landscapeArtworkPaneWidth,
+                                                  constraints.maxHeight,
+                                                )
+                                              : 0.0;
+                                          final regularArtworkExtent =
+                                              mobileLandscape
+                                              ? landscapeVisualArtworkExtent /
+                                                    landscapeExpandedScale
+                                              : _artworkExtent(
+                                                  artworkConstraints,
+                                                  stackedDesktop:
+                                                      stackedDesktop,
+                                                  wide: wide,
+                                                  mobile: mobile,
+                                                  compactness:
+                                                      verticalCompactness,
+                                                  mobileFrameCompactness:
+                                                      mobileFrameCompactness,
+                                                );
+                                          // Short Android frames keep the regular artwork
+                                          // size. Their vertical budget is recovered from
+                                          // the surrounding gaps instead of shrinking the
+                                          // cover, with scrolling retained only as a
+                                          // fallback for exceptional content.
+                                          final artworkExtent =
+                                              regularArtworkExtent;
+                                          // A short, narrow phone can make the cover
+                                          // width-bound before the frame-height factor is
+                                          // large enough to shrink its halo. Once the
+                                          // mobile layout has entered its compact range,
+                                          // include that measured cover reduction so the
+                                          // shadow follows the artwork proportionally.
+                                          // Roomy mobile frames retain the original
+                                          // shadow values exactly.
+                                          final mobileArtworkShadowActivation =
+                                              mobile
+                                              ? (mobileFrameCompactness /
+                                                        _mobileArtworkShadowActivationRange)
+                                                    .clamp(0.0, 1.0)
+                                              : 0.0;
+                                          final mobileArtworkShadowCompactness =
+                                              ((_mobileArtworkExtentCeiling -
+                                                          artworkExtent) /
+                                                      _mobileArtworkShadowCompressionRange)
+                                                  .clamp(0.0, 1.0) *
+                                              mobileArtworkShadowActivation;
+                                          final artworkShadowCompactness = math
+                                              .max(
+                                                verticalCompactness,
+                                                math.max(
+                                                  mobileFrameCompactness,
+                                                  mobileArtworkShadowCompactness,
+                                                ),
+                                              );
+                                          final maxContentWidth =
+                                              mobileLandscape
+                                              ? landscapeControlsWidth
+                                              : stackedDesktop
+                                              ? showSideQueue
+                                                    ? constraints.maxWidth
+                                                    : math
+                                                          .min(
+                                                            constraints
+                                                                    .maxWidth *
+                                                                0.84,
+                                                            1040.0,
+                                                          )
+                                                          .clamp(700.0, 1040.0)
+                                                          .toDouble()
+                                              : 520.0;
+                                          final artworkCanvasWidth =
+                                              mobileLandscape
+                                              ? landscapeArtworkPaneWidth
+                                              : math.min(
+                                                  constraints.maxWidth,
+                                                  maxContentWidth,
+                                                );
+                                          final artworkHorizontalClearance =
+                                              math.max(
+                                                0.0,
+                                                (artworkCanvasWidth -
+                                                        artworkExtent) /
+                                                    2,
+                                              );
+                                          final expandedArtworkTargetWidth =
+                                              fullBleedArtwork
+                                              ? constraints.maxWidth +
+                                                    (horizontalContentPadding *
+                                                        2)
+                                              : mobileLandscape
+                                              ? landscapeVisualArtworkExtent
+                                              : math.min(
+                                                  artworkCanvasWidth,
+                                                  artworkExtent * 1.18,
+                                                );
+                                          final artwork = Center(
+                                            child: useExpandedArtworkHero
+                                                ? _ExpandedArtworkPlaceholder(
+                                                    maxExtent: artworkExtent,
+                                                    isFavorite: mobileLandscape
+                                                        ? false
+                                                        : isFavorite,
+                                                  )
+                                                : _LargeArtwork(
+                                                    url: artworkSource,
+                                                    fallbackUrl:
+                                                        artworkFallbackSource,
+                                                    particleColor:
+                                                        artworkParticleColor,
+                                                    identity: visualIdentity,
+                                                    isPlaying:
+                                                        snapshot.status ==
+                                                        PlayerStatus.playing,
+                                                    trackTransitionsEnabled: widget
+                                                        .trackTransitionsEnabled,
+                                                    artworkStyle:
+                                                        widget.artworkStyle,
+                                                    expandedTargetWidth:
+                                                        expandedArtworkTargetWidth,
+                                                    fullBleedExpanded:
+                                                        fullBleedArtwork,
+                                                    animatedArtworkEnabled: widget
+                                                        .animatedArtworkEnabled,
+                                                    maxExtent: artworkExtent,
+                                                    isFavorite: mobileLandscape
+                                                        ? false
+                                                        : isFavorite,
+                                                    shadowCompactness:
+                                                        artworkShadowCompactness,
+                                                    shadowHorizontalClearance:
+                                                        artworkHorizontalClearance,
+                                                  ),
+                                          );
+                                          final gap = mobile
+                                              ? lerpDouble(
+                                                  22,
+                                                  8,
+                                                  mobileFrameCompactness,
+                                                )!
+                                              : lerpDouble(
+                                                  26,
+                                                  12,
+                                                  verticalCompactness,
+                                                )!;
+                                          final controlSpacingCompactness =
+                                              mobile
+                                              ? mobileFrameCompactness
+                                              : verticalCompactness;
+                                          final controls = _PlayerControls(
+                                            snapshot: snapshot,
+                                            trackTransitionsEnabled:
+                                                widget.trackTransitionsEnabled,
+                                            hasTrack: hasTrack,
+                                            isFavorite: isFavorite,
+                                            savedTrackId: savedTrackId,
+                                            hasError: presentation.hasError,
+                                            errorText: presentation.errorText,
+                                            compact:
+                                                mobileLandscape ||
+                                                !wide ||
+                                                stackedDesktop,
+                                            compactness: verticalCompactness,
+                                            spacingCompactness:
+                                                controlSpacingCompactness,
+                                            landscape: mobileLandscape,
+                                            maxWidth: stackedDesktop
+                                                ? maxContentWidth
+                                                : mobileLandscape
+                                                ? landscapeControlsWidth
+                                                : 520.0,
+                                            onOpenLyrics: _openLyrics,
+                                            onOpenArtist: onOpenArtist,
+                                            strings: strings,
+                                          );
+
+                                          if (mobileLandscape) {
+                                            final effectiveTextScale =
+                                                MediaQuery.textScalerOf(
+                                                  context,
+                                                ).scale(16) /
+                                                16;
+                                            final scrollControls =
+                                                effectiveTextScale > 1.8 ||
+                                                (effectiveTextScale > 1.1 &&
+                                                    constraints.maxHeight <
+                                                        300) ||
+                                                constraints.maxHeight < 220 ||
+                                                presentation.hasError;
+                                            final controlsPane = scrollControls
+                                                ? SingleChildScrollView(
+                                                    key: const ValueKey(
+                                                      'bstream-player-controls-scroll',
+                                                    ),
+                                                    clipBehavior: Clip.hardEdge,
+                                                    child: ConstrainedBox(
+                                                      constraints:
+                                                          BoxConstraints(
+                                                            minHeight:
+                                                                constraints
+                                                                    .maxHeight,
+                                                          ),
+                                                      child: Align(
+                                                        alignment:
+                                                            Alignment.center,
+                                                        child: controls,
+                                                      ),
+                                                    ),
+                                                  )
+                                                : Align(
+                                                    alignment: Alignment.center,
+                                                    child: controls,
+                                                  );
+                                            return Row(
                                               key: const ValueKey(
-                                                'bstream-player-landscape-artwork-pane',
+                                                'bstream-player-adaptive-landscape',
                                               ),
-                                              child: Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  artwork,
-                                                  Align(
-                                                    alignment:
-                                                        Alignment.topCenter,
-                                                    child: DecoratedBox(
-                                                      decoration:
-                                                          const BoxDecoration(
-                                                            gradient: LinearGradient(
-                                                              begin: Alignment
-                                                                  .topCenter,
-                                                              end: Alignment
-                                                                  .bottomCenter,
-                                                              colors: [
-                                                                Color(
-                                                                  0xA6000000,
-                                                                ),
-                                                                Color(
-                                                                  0x52000000,
-                                                                ),
-                                                                Colors
-                                                                    .transparent,
-                                                              ],
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.stretch,
+                                              children: [
+                                                SizedBox(
+                                                  width:
+                                                      landscapeArtworkPaneWidth,
+                                                  child: ClipRect(
+                                                    key: const ValueKey(
+                                                      'bstream-player-landscape-artwork-pane',
+                                                    ),
+                                                    child: Stack(
+                                                      fit: StackFit.expand,
+                                                      children: [
+                                                        artwork,
+                                                        Align(
+                                                          alignment: Alignment
+                                                              .topCenter,
+                                                          child: DecoratedBox(
+                                                            decoration: const BoxDecoration(
+                                                              gradient: LinearGradient(
+                                                                begin: Alignment
+                                                                    .topCenter,
+                                                                end: Alignment
+                                                                    .bottomCenter,
+                                                                colors: [
+                                                                  Color(
+                                                                    0xA6000000,
+                                                                  ),
+                                                                  Color(
+                                                                    0x52000000,
+                                                                  ),
+                                                                  Colors
+                                                                      .transparent,
+                                                                ],
+                                                              ),
+                                                            ),
+                                                            child: Padding(
+                                                              padding:
+                                                                  const EdgeInsets.only(
+                                                                    bottom: 14,
+                                                                  ),
+                                                              child: _PlayerHeader(
+                                                                snapshot:
+                                                                    snapshot,
+                                                                compactLandscape:
+                                                                    true,
+                                                                foregroundColor:
+                                                                    Colors
+                                                                        .white,
+                                                                trackTransitionsEnabled:
+                                                                    widget
+                                                                        .trackTransitionsEnabled,
+                                                                isFavorite:
+                                                                    isFavorite,
+                                                                savedTrackId:
+                                                                    savedTrackId,
+                                                                onOpenSearch: widget
+                                                                    .onOpenSearch,
+                                                                queueVisible:
+                                                                    showSideQueue,
+                                                                onToggleQueue:
+                                                                    toggleQueue,
+                                                                onOpenArtist:
+                                                                    onOpenArtist,
+                                                                onOpenAlbum:
+                                                                    onOpenAlbum,
+                                                                strings:
+                                                                    strings,
+                                                              ),
                                                             ),
                                                           ),
-                                                      child: Padding(
-                                                        padding:
-                                                            const EdgeInsets.only(
-                                                              bottom: 14,
-                                                            ),
-                                                        child: _PlayerHeader(
-                                                          snapshot: snapshot,
-                                                          compactLandscape:
-                                                              true,
-                                                          foregroundColor:
-                                                              Colors.white,
-                                                          trackTransitionsEnabled:
-                                                              widget
-                                                                  .trackTransitionsEnabled,
-                                                          isFavorite:
-                                                              isFavorite,
-                                                          savedTrackId:
-                                                              savedTrackId,
-                                                          onOpenSearch: widget
-                                                              .onOpenSearch,
-                                                          queueVisible:
-                                                              showSideQueue,
-                                                          onToggleQueue:
-                                                              toggleQueue,
-                                                          onOpenArtist:
-                                                              onOpenArtist,
-                                                          onOpenAlbum:
-                                                              onOpenAlbum,
-                                                          strings: strings,
                                                         ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                                SizedBox(width: landscapeGap),
+                                                Expanded(
+                                                  key: const ValueKey(
+                                                    'bstream-player-landscape-controls-pane',
+                                                  ),
+                                                  child: controlsPane,
+                                                ),
+                                              ],
+                                            );
+                                          }
+
+                                          final contentScroll =
+                                              SingleChildScrollView(
+                                                key: const ValueKey(
+                                                  'player-content-scroll',
+                                                ),
+                                                clipBehavior: Clip.hardEdge,
+                                                child: ConstrainedBox(
+                                                  constraints: BoxConstraints(
+                                                    minHeight:
+                                                        constraints.maxHeight,
+                                                  ),
+                                                  child: Align(
+                                                    alignment: mobile
+                                                        ? Alignment.bottomCenter
+                                                        : Alignment.center,
+                                                    child: ConstrainedBox(
+                                                      constraints:
+                                                          BoxConstraints(
+                                                            maxWidth:
+                                                                maxContentWidth,
+                                                          ),
+                                                      child: Column(
+                                                        mainAxisSize:
+                                                            MainAxisSize.min,
+                                                        children: [
+                                                          artwork,
+                                                          SizedBox(
+                                                            key: const ValueKey(
+                                                              'player-artwork-title-gap',
+                                                            ),
+                                                            height: gap,
+                                                          ),
+                                                          controls,
+                                                        ],
                                                       ),
                                                     ),
                                                   ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                          SizedBox(width: landscapeGap),
-                                          Expanded(
-                                            key: const ValueKey(
-                                              'bstream-player-landscape-controls-pane',
-                                            ),
-                                            child: controlsPane,
-                                          ),
-                                        ],
-                                      );
-                                    }
-
-                                    final contentScroll = SingleChildScrollView(
-                                      key: const ValueKey(
-                                        'player-content-scroll',
-                                      ),
-                                      clipBehavior: Clip.hardEdge,
-                                      child: ConstrainedBox(
-                                        constraints: BoxConstraints(
-                                          minHeight: constraints.maxHeight,
-                                        ),
-                                        child: Align(
-                                          alignment: mobile
-                                              ? Alignment.bottomCenter
-                                              : Alignment.center,
-                                          child: ConstrainedBox(
-                                            constraints: BoxConstraints(
-                                              maxWidth: maxContentWidth,
-                                            ),
-                                            child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                artwork,
-                                                SizedBox(
-                                                  key: const ValueKey(
-                                                    'player-artwork-title-gap',
-                                                  ),
-                                                  height: gap,
                                                 ),
-                                                controls,
-                                              ],
-                                            ),
-                                          ),
-                                        ),
+                                              );
+                                          return contentScroll;
+                                        },
                                       ),
-                                    );
-                                    return contentScroll;
-                                  },
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                      ],
-                    ),
+                  ),
+                ),
+              ),
             ),
             AnimatedSwitcher(
               key: const ValueKey('desktop-playback-queue-switcher'),
@@ -2007,10 +2106,21 @@ class _AppleVolumeRow extends ConsumerWidget {
 }
 
 class _AppleMusicTimeline extends ConsumerStatefulWidget {
-  const _AppleMusicTimeline({required this.strings, this.compact = false});
+  const _AppleMusicTimeline({
+    required this.strings,
+    this.compact = false,
+    this.trackHeight = appleMusicSliderTrackHeight,
+    this.sliderHeight,
+    this.activeTrackColor,
+    this.sliderKey = const ValueKey('apple-player-linear-seek'),
+  });
 
   final AppStrings strings;
   final bool compact;
+  final double trackHeight;
+  final double? sliderHeight;
+  final Color? activeTrackColor;
+  final Key sliderKey;
 
   @override
   ConsumerState<_AppleMusicTimeline> createState() =>
@@ -2053,6 +2163,7 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
     final canSeek = durationMilliseconds > 0;
     final foreground = AppColors.playbackControlForegroundFor(context);
     final secondary = AppColors.playbackSecondaryControlForegroundFor(context);
+    final activeTrackColor = widget.activeTrackColor;
     final labelStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
       color: secondary,
       fontWeight: FontWeight.w700,
@@ -2092,14 +2203,17 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
               : null,
           child: ExcludeSemantics(
             child: SizedBox(
-              height: widget.compact ? 16 : 24,
+              height: widget.sliderHeight ?? (widget.compact ? 16 : 24),
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
-                  trackHeight: appleMusicSliderTrackHeight,
+                  trackHeight: widget.trackHeight,
                   trackShape: const UniformPlaybackSliderTrackShape(),
-                  activeTrackColor: foreground.withValues(alpha: 0.88),
+                  activeTrackColor:
+                      activeTrackColor ?? foreground.withValues(alpha: 0.88),
                   inactiveTrackColor: foreground.withValues(alpha: 0.28),
-                  disabledActiveTrackColor: foreground.withValues(alpha: 0.3),
+                  disabledActiveTrackColor:
+                      activeTrackColor?.withValues(alpha: 0.38) ??
+                      foreground.withValues(alpha: 0.3),
                   disabledInactiveTrackColor: foreground.withValues(
                     alpha: 0.18,
                   ),
@@ -2107,7 +2221,7 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
                   overlayShape: SliderComponentShape.noOverlay,
                 ),
                 child: Slider(
-                  key: const ValueKey('apple-player-linear-seek'),
+                  key: widget.sliderKey,
                   min: 0,
                   max: math.max(1, durationMilliseconds).toDouble(),
                   value: canSeek ? shownMilliseconds : 0.0,
@@ -2769,48 +2883,48 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
       key: const ValueKey('player-artwork-surface'),
       child: RepaintBoundary(
         key: const ValueKey('player-expanded-artwork'),
-        child: ShaderMask(
-          key: const ValueKey('player-expanded-artwork-edge-fade'),
-          blendMode: BlendMode.dstIn,
-          shaderCallback: expandedArtworkHeroEdgeFadeGradient.createShader,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              AnimatedArtworkMotion(
-                enabled: animatedArtworkEnabled,
-                isPlaying: isPlaying,
+        // Keep the expensive edge mask inside the retained artwork layer.
+        // Masking the whole animated Stack forced the GPU to recompose a
+        // screen-sized saveLayer whenever either the cover or a particle
+        // moved, even though the underlying imagery itself was unchanged.
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _ExpandedArtworkHeroImagery(
+              source: source,
+              fallbackSource: fallbackSource,
+              identity: identity,
+              isPlaying: isPlaying,
+              animatedArtworkEnabled: animatedArtworkEnabled,
+            ),
+            if (animatedArtworkEnabled && particleColor != null)
+              AnimatedArtworkParticles(
+                color: particleColor!,
                 identity: identity,
+                isPlaying: isPlaying,
                 borderRadius: BorderRadius.zero,
-                child: _ExpandedArtworkHeroImagery(
-                  source: source,
-                  fallbackSource: fallbackSource,
+                particleCount: AnimatedArtworkParticles.expandedParticleCount,
+                // Match the first fully-opaque stop of the artwork mask, but
+                // fade motes in their tiny painter instead of a full-screen
+                // offscreen layer.
+                bottomFadeStart: 0.66,
+              ),
+            DecoratedBox(
+              key: const ValueKey('player-expanded-artwork-header-scrim'),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    headerScrim,
+                    softenedHeaderScrim,
+                    Colors.transparent,
+                  ],
+                  stops: const [0, 0.14, 0.32],
                 ),
               ),
-              if (animatedArtworkEnabled && particleColor != null)
-                AnimatedArtworkParticles(
-                  color: particleColor!,
-                  identity: identity,
-                  isPlaying: isPlaying,
-                  borderRadius: BorderRadius.zero,
-                  particleCount: AnimatedArtworkParticles.expandedParticleCount,
-                ),
-              DecoratedBox(
-                key: const ValueKey('player-expanded-artwork-header-scrim'),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      headerScrim,
-                      softenedHeaderScrim,
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 0.14, 0.32],
-                  ),
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -2821,10 +2935,16 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
   const _ExpandedArtworkHeroImagery({
     required this.source,
     required this.fallbackSource,
+    required this.identity,
+    required this.isPlaying,
+    required this.animatedArtworkEnabled,
   });
 
   final String source;
   final String? fallbackSource;
+  final String identity;
+  final bool isPlaying;
+  final bool animatedArtworkEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -2857,25 +2977,35 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
           fit: StackFit.expand,
           clipBehavior: Clip.hardEdge,
           children: [
-            ShaderMask(
-              key: const ValueKey('player-expanded-artwork-blur'),
-              blendMode: BlendMode.dstIn,
-              shaderCallback: expandedArtworkHeroBlurFadeGradient.createShader,
-              child: ClipRect(
-                child: ImageFiltered(
-                  imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                  child: Transform.scale(
-                    scale: 1.16,
-                    child: ColoredBox(
-                      color: colors.surfaceContainerHighest,
-                      child: SourceImage(
-                        key: const ValueKey(
-                          'player-expanded-artwork-blurred-image',
+            RepaintBoundary(
+              key: const ValueKey('player-expanded-artwork-static-backdrop'),
+              child: ShaderMask(
+                key: const ValueKey('player-expanded-artwork-edge-fade'),
+                blendMode: BlendMode.dstIn,
+                shaderCallback:
+                    expandedArtworkHeroEdgeFadeGradient.createShader,
+                child: ShaderMask(
+                  key: const ValueKey('player-expanded-artwork-blur'),
+                  blendMode: BlendMode.dstIn,
+                  shaderCallback:
+                      expandedArtworkHeroBlurFadeGradient.createShader,
+                  child: ClipRect(
+                    child: ImageFiltered(
+                      imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                      child: Transform.scale(
+                        scale: 1.16,
+                        child: ColoredBox(
+                          color: colors.surfaceContainerHighest,
+                          child: SourceImage(
+                            key: const ValueKey(
+                              'player-expanded-artwork-blurred-image',
+                            ),
+                            source: source,
+                            fallbackSource: fallbackSource,
+                            fit: BoxFit.cover,
+                            fallback: fallback(),
+                          ),
                         ),
-                        source: source,
-                        fallbackSource: fallbackSource,
-                        fit: BoxFit.cover,
-                        fallback: fallback(),
                       ),
                     ),
                   ),
@@ -2887,21 +3017,51 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
               left: -focusedOverscan,
               right: -focusedOverscan,
               height: focusedExtent,
-              child: ShaderMask(
-                key: const ValueKey('player-expanded-artwork-focus-fade'),
-                blendMode: BlendMode.dstIn,
-                shaderCallback:
-                    expandedArtworkHeroFocusFadeGradient.createShader,
-                child: ColoredBox(
-                  color: colors.surfaceContainerHighest,
-                  child: SourceImage(
-                    key: const ValueKey(
-                      'player-expanded-artwork-focused-image',
+              child: AnimatedArtworkMotion(
+                enabled: animatedArtworkEnabled,
+                isPlaying: isPlaying,
+                identity: identity,
+                borderRadius: BorderRadius.zero,
+                // Perspective over a screen-sized blurred saveLayer made the
+                // raster thread redraw several million filtered pixels each
+                // tick. The sharp square keeps the same pan and breathing
+                // zoom as before, while its static blurred continuation stays
+                // retained behind it.
+                depthEnabled: false,
+                child: ShaderMask(
+                  key: const ValueKey(
+                    'player-expanded-artwork-focused-edge-fade',
+                  ),
+                  blendMode: BlendMode.dstIn,
+                  // The focus layer starts at y=0. Give it the hero's shader
+                  // height so this retained mask matches the former outer
+                  // full-height edge fade at the neutral pose.
+                  shaderCallback: (bounds) =>
+                      expandedArtworkHeroEdgeFadeGradient.createShader(
+                        Rect.fromLTWH(
+                          bounds.left,
+                          bounds.top,
+                          bounds.width,
+                          constraints.maxHeight,
+                        ),
+                      ),
+                  child: ShaderMask(
+                    key: const ValueKey('player-expanded-artwork-focus-fade'),
+                    blendMode: BlendMode.dstIn,
+                    shaderCallback:
+                        expandedArtworkHeroFocusFadeGradient.createShader,
+                    child: ColoredBox(
+                      color: colors.surfaceContainerHighest,
+                      child: SourceImage(
+                        key: const ValueKey(
+                          'player-expanded-artwork-focused-image',
+                        ),
+                        source: source,
+                        fallbackSource: fallbackSource,
+                        fit: BoxFit.cover,
+                        fallback: fallback(),
+                      ),
                     ),
-                    source: source,
-                    fallbackSource: fallbackSource,
-                    fit: BoxFit.cover,
-                    fallback: fallback(),
                   ),
                 ),
               ),
@@ -4505,10 +4665,11 @@ class _VolumeButtonState extends ConsumerState<_VolumeButton> {
 
   @override
   Widget build(BuildContext context) {
+    final surroundingTheme = _PlayerSurroundingTheme.maybeOf(context);
     return OverlayPortal(
       controller: _overlayController,
       overlayChildBuilder: (context) {
-        return Stack(
+        final popover = Stack(
           children: [
             Positioned.fill(
               child: GestureDetector(
@@ -4532,6 +4693,10 @@ class _VolumeButtonState extends ConsumerState<_VolumeButton> {
             ),
           ],
         );
+        if (surroundingTheme == null) {
+          return popover;
+        }
+        return Theme(data: surroundingTheme, child: popover);
       },
       child: CompositedTransformTarget(
         link: _layerLink,
@@ -4567,10 +4732,11 @@ class _VolumePopover extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final snapshot =
-        ref.watch(playerControllerProvider).value ??
-        const PlayerSnapshot(status: PlayerStatus.idle);
-    final volume = snapshot.volume.clamp(0.0, 1.0).toDouble();
+    final volume = ref.watch(
+      playerControllerProvider.select(
+        (player) => (player.value?.volume ?? 1).clamp(0.0, 1.0).toDouble(),
+      ),
+    );
     final surfaceMode = AppColors.surfaceBackgroundModeFor(context);
     final liquidGlass = surfaceMode.isLiquidGlass;
     final menuBackground = AppColors.menuBackgroundFor(context);
@@ -4824,7 +4990,6 @@ class _PlayerMenu extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final menuIconColor = AppColors.menuIconFor(context);
     final playbackIconColor =
         triggerIconColor ?? AppColors.playbackControlForegroundFor(context);
     final sourceUrl = snapshot.sourceUrl;
@@ -4844,156 +5009,97 @@ class _PlayerMenu extends ConsumerWidget {
         : null;
     final shareService = ref.read(trackShareServiceProvider);
     final canShare = shareTrack != null && shareService.canShare(shareTrack);
-    final appleIcon = DecoratedBox(
-      key: const ValueKey('apple-player-menu-surface'),
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: playbackIconColor.withValues(alpha: 0.12),
-        border: Border.all(color: playbackIconColor.withValues(alpha: 0.08)),
-      ),
-      child: const SizedBox.square(
-        dimension: 40,
-        child: Center(child: Icon(Icons.more_horiz_rounded, size: 22)),
-      ),
-    );
-    final button = GlassPopupMenuButton<String>(
-      key: const ValueKey('player-menu-control'),
-      enabled: snapshot.trackId != null,
-      tooltip: strings.moreOptions,
-      position: PopupMenuPosition.under,
-      padding: EdgeInsets.zero,
-      // PopupMenuButton.constraints sizes the popup route, not its trigger.
-      // Keep Apple's 48 px touch target on the button style so the menu can
-      // retain its intrinsic width and show every action instead of being
-      // clipped down to the first (Share) icon.
-      style: appleStyle
-          ? IconButton.styleFrom(
-              fixedSize: const Size.square(48),
-              padding: EdgeInsets.zero,
-            )
-          : null,
-      iconColor: playbackIconColor,
-      icon: appleStyle
-          ? appleIcon
-          : const Icon(Icons.more_vert_rounded, size: 34),
-      onSelected: (value) {
-        switch (value) {
-          case 'share':
-            if (shareTrack != null) {
+    Widget buildButton(BuildContext actionContext) {
+      final menuIconColor = AppColors.menuIconFor(actionContext);
+      final appleIcon = DecoratedBox(
+        key: const ValueKey('apple-player-menu-surface'),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: playbackIconColor.withValues(alpha: 0.12),
+          border: Border.all(color: playbackIconColor.withValues(alpha: 0.08)),
+        ),
+        child: const SizedBox.square(
+          dimension: 40,
+          child: Center(child: Icon(Icons.more_horiz_rounded, size: 22)),
+        ),
+      );
+      return GlassPopupMenuButton<String>(
+        key: const ValueKey('player-menu-control'),
+        enabled: snapshot.trackId != null,
+        tooltip: strings.moreOptions,
+        position: PopupMenuPosition.under,
+        padding: EdgeInsets.zero,
+        // PopupMenuButton.constraints sizes the popup route, not its trigger.
+        // Keep Apple's 48 px touch target on the button style so the menu can
+        // retain its intrinsic width and show every action instead of being
+        // clipped down to the first (Share) icon.
+        style: appleStyle
+            ? IconButton.styleFrom(
+                fixedSize: const Size.square(48),
+                padding: EdgeInsets.zero,
+              )
+            : null,
+        iconColor: playbackIconColor,
+        icon: appleStyle
+            ? appleIcon
+            : const Icon(Icons.more_vert_rounded, size: 34),
+        onSelected: (value) {
+          switch (value) {
+            case 'share':
+              if (shareTrack != null) {
+                unawaited(
+                  _shareTrack(
+                    context: actionContext,
+                    ref: ref,
+                    track: shareTrack,
+                    strings: strings,
+                  ),
+                );
+              }
+              return;
+            case 'download':
+              unawaited(_downloadCurrent(actionContext, ref));
+              return;
+            case 'playlist':
+              unawaited(_showPlaylistPicker(actionContext, ref));
+              return;
+            case 'favorite':
               unawaited(
-                _shareTrack(
-                  context: context,
+                _toggleFavoriteForSnapshot(
+                  context: actionContext,
                   ref: ref,
-                  track: shareTrack,
+                  snapshot: snapshot,
+                  isFavorite: isFavorite,
+                  savedTrackId: savedTrackId,
                   strings: strings,
                 ),
               );
-            }
-            return;
-          case 'download':
-            unawaited(_downloadCurrent(context, ref));
-            return;
-          case 'playlist':
-            unawaited(_showPlaylistPicker(context, ref));
-            return;
-          case 'favorite':
-            unawaited(
-              _toggleFavoriteForSnapshot(
-                context: context,
-                ref: ref,
-                snapshot: snapshot,
-                isFavorite: isFavorite,
-                savedTrackId: savedTrackId,
-                strings: strings,
-              ),
-            );
-            return;
-          case 'artist':
-            onOpenArtist?.call();
-            return;
-          case 'album':
-            onOpenAlbum?.call();
-            return;
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          key: const ValueKey('player-menu-share'),
-          value: 'share',
-          enabled: canShare,
-          child: Row(
-            children: [
-              Icon(
-                Icons.share_rounded,
-                color: canShare
-                    ? menuIconColor
-                    : menuIconColor.withValues(alpha: 0.38),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  strings.shareSong,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (onOpenArtist != null)
+              return;
+            case 'artist':
+              onOpenArtist?.call();
+              return;
+            case 'album':
+              onOpenAlbum?.call();
+              return;
+          }
+        },
+        itemBuilder: (context) => [
           PopupMenuItem(
-            key: const ValueKey('player-menu-go-to-artist'),
-            value: 'artist',
-            child: Row(
-              children: [
-                Icon(Icons.person_search_rounded, color: menuIconColor),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    strings.goToArtist,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        if (onOpenAlbum != null)
-          PopupMenuItem(
-            key: const ValueKey('player-menu-go-to-album'),
-            value: 'album',
-            child: Row(
-              children: [
-                Icon(Icons.album_rounded, color: menuIconColor),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    strings.goToAlbum,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        if (snapshot.isRemote && snapshot.sourceUrl != null)
-          PopupMenuItem(
-            key: const ValueKey('player-menu-download'),
-            value: 'download',
+            key: const ValueKey('player-menu-share'),
+            value: 'share',
+            enabled: canShare,
             child: Row(
               children: [
                 Icon(
-                  canCancelDownload
-                      ? Icons.close_rounded
-                      : Icons.download_rounded,
-                  color: menuIconColor,
+                  Icons.share_rounded,
+                  color: canShare
+                      ? menuIconColor
+                      : menuIconColor.withValues(alpha: 0.38),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    canCancelDownload
-                        ? strings.cancelDownload
-                        : strings.download,
+                    strings.shareSong,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -5001,53 +5107,120 @@ class _PlayerMenu extends ConsumerWidget {
               ],
             ),
           ),
-        PopupMenuItem(
-          value: 'playlist',
-          child: Row(
-            children: [
-              Icon(Icons.playlist_add_rounded, color: menuIconColor),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  strings.addToPlaylist,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          if (onOpenArtist != null)
+            PopupMenuItem(
+              key: const ValueKey('player-menu-go-to-artist'),
+              value: 'artist',
+              child: Row(
+                children: [
+                  Icon(Icons.person_search_rounded, color: menuIconColor),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      strings.goToArtist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (onOpenAlbum != null)
+            PopupMenuItem(
+              key: const ValueKey('player-menu-go-to-album'),
+              value: 'album',
+              child: Row(
+                children: [
+                  Icon(Icons.album_rounded, color: menuIconColor),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      strings.goToAlbum,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (snapshot.isRemote && snapshot.sourceUrl != null)
+            PopupMenuItem(
+              key: const ValueKey('player-menu-download'),
+              value: 'download',
+              child: Row(
+                children: [
+                  Icon(
+                    canCancelDownload
+                        ? Icons.close_rounded
+                        : Icons.download_rounded,
+                    color: menuIconColor,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      canCancelDownload
+                          ? strings.cancelDownload
+                          : strings.download,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          PopupMenuItem(
+            value: 'playlist',
+            child: Row(
+              children: [
+                Icon(Icons.playlist_add_rounded, color: menuIconColor),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    strings.addToPlaylist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        PopupMenuItem(
-          value: 'favorite',
-          child: Row(
-            children: [
-              Icon(
-                isFavorite
-                    ? Icons.favorite_rounded
-                    : Icons.favorite_border_rounded,
-                color: isFavorite
-                    ? Theme.of(context).colorScheme.primary
-                    : menuIconColor,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
+          PopupMenuItem(
+            value: 'favorite',
+            child: Row(
+              children: [
+                Icon(
                   isFavorite
-                      ? strings.removeFromFavorites
-                      : strings.addToFavorites,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  color: isFavorite
+                      ? Theme.of(context).colorScheme.primary
+                      : menuIconColor,
                 ),
-              ),
-            ],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    isFavorite
+                        ? strings.removeFromFavorites
+                        : strings.addToFavorites,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
-    );
-    if (!appleStyle) {
-      return button;
+        ],
+      );
     }
-    return button;
+
+    final surroundingTheme = _PlayerSurroundingTheme.maybeOf(context);
+    if (surroundingTheme == null) {
+      return buildButton(context);
+    }
+    return Theme(
+      data: surroundingTheme,
+      child: Builder(builder: buildButton),
+    );
   }
 
   Future<void> _downloadCurrent(BuildContext context, WidgetRef ref) async {

@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.2.8+128 — 2026-09-17
+
+### Added
+
+- Added the Classic Vinyl full-player style with a rotating record, animated
+  tonearm, responsive control spacing, and portrait/landscape adaptation.
+- Added conservative Android silence skipping for streamed and downloaded
+  tracks. RMS hysteresis, musical-peak protection, preserved margins, and
+  separate edge/internal thresholds avoid cutting quiet passages, reverb, and
+  intentional short pauses while remaining compatible with crossfade.
+- Added mobile mini-player navigation gestures: swipe left for Next and right
+  for Previous. The content follows the finger with bounded resistance, short
+  drags settle without navigating, and screen readers expose equivalent
+  actions.
+- Added a timed wave indicator for instrumental gaps in synchronized lyrics.
+  It fills until the next lyric and stops ticking while paused or when reduced
+  motion is enabled.
+
+### Changed
+
+- Completed responsive horizontal layouts for the full-player styles, with a
+  large artwork area on the left and metadata, timeline, and controls using the
+  available space on the right across compact and large phones.
+- The full player and Lyrics now keep the same dark playback presentation when
+  the application theme is Light. Browsing, queues, popup menus, and settings
+  continue to follow the selected application theme.
+- Retuned lyric line changes and automatic recentering for quicker but smoother
+  movement without opacity, scale, or scroll snaps during short lines and
+  seeks.
+- Refined Expanded artwork to preserve more of the lower cover before it blends
+  into the background, and made animated-cover motion slightly more visible
+  without changing the particle treatment.
+- Reduced unnecessary rebuilds, filtered layers, and competing animation work
+  across playback, lyrics, navigation, library cards, marquees, equalizers,
+  progress bars, and wave controls for steadier frame delivery.
+- Hardened TikTok LIVE connection bootstrap with alternate page discovery,
+  coherent signing fallbacks, retry classification, bounded backoff, and stale
+  attempt isolation so active rooms reconnect more reliably.
+
+### Fixed
+
+- Kept Android playback position synchronized after silence is shortened,
+  including after backward seeks and for both streamed and downloaded tracks.
+
 ## 1.2.7+127 — 2026-09-08
 
 ### Added

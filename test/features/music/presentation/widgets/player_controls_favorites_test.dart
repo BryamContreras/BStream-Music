@@ -37,7 +37,13 @@ void main() {
     volume: 0.72,
   );
 
-  for (final style in PlayerStyle.values) {
+  // Artwork presentation modes belong to the two cover-based layouts. The
+  // Classic Vinyl layout renders the cover as the record label and has its
+  // own responsive/animation contract below.
+  for (final style in const [
+    PlayerStyle.bstreamMusic,
+    PlayerStyle.appleMusic,
+  ]) {
     testWidgets(
       '${style.name} applies the animated artwork preference to the large cover',
       (tester) async {
@@ -232,6 +238,31 @@ void main() {
             matching: find.byType(AnimatedArtworkMotion),
           ),
           findsOneWidget,
+        );
+        final expandedMotion = tester.widget<AnimatedArtworkMotion>(
+          find.descendant(
+            of: hero,
+            matching: find.byType(AnimatedArtworkMotion),
+          ),
+        );
+        expect(expandedMotion.depthEnabled, isFalse);
+        expect(
+          find.descendant(
+            of: find.byType(AnimatedArtworkMotion),
+            matching: find.byKey(
+              const ValueKey('player-expanded-artwork-focused-image'),
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byType(AnimatedArtworkMotion),
+            matching: find.byKey(
+              const ValueKey('player-expanded-artwork-blurred-image'),
+            ),
+          ),
+          findsNothing,
         );
         expect(
           find.descendant(
@@ -829,6 +860,461 @@ void main() {
     });
   }
 
+  testWidgets(
+    'Classic Vinyl renders its turntable and fills the portrait controls area',
+    (tester) async {
+      const viewport = Size(390, 820);
+      const systemBottomInset = 24.0;
+      const layoutBottomPadding = 12.0;
+      _configureView(tester, viewport, bottomPadding: systemBottomInset);
+      final controller = _TestPlayerController(
+        snapshot.copyWith(
+          status: PlayerStatus.playing,
+          position: const Duration(minutes: 1),
+        ),
+      );
+      final trackWithArtwork = LocalTrack(
+        id: trackId,
+        title: 'Cancion de prueba',
+        artist: 'BStream Music',
+        filePath: '/tmp/player-controls-track.m4a',
+        thumbnailPath: '/tmp/classic-vinyl-cover.jpg',
+        addedAt: DateTime(2026),
+      );
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: controller.snapshot,
+          playerController: controller,
+          localTrack: trackWithArtwork,
+          playlists: _TestPlaylistsController(),
+          style: PlayerStyle.classicVinyl,
+          artworkStyle: PlayerArtworkStyle.expanded,
+          animatedArtworkEnabled: true,
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('classic-vinyl-player-layout')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('classic-vinyl-player-stack')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('classic-vinyl-deck')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('classic-vinyl-deck-surface')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('classic-vinyl-record')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('classic-vinyl-tonearm')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('classic-vinyl-player-timeline')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('classic-vinyl-player-utility-row')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('player-large-artwork')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('animated-artwork-particles')),
+        findsNothing,
+      );
+
+      final deck = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-deck-slot')),
+      );
+      final controls = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-controls')),
+      );
+      final usableBottom =
+          viewport.height - systemBottomInset - layoutBottomPadding;
+      final deckControlsGap = controls.top - deck.bottom;
+      final remainingControlsHeight = usableBottom - controls.top;
+      expect(deck.width / viewport.width, greaterThanOrEqualTo(0.98));
+      expect(deckControlsGap, inInclusiveRange(30.0, 43.0));
+      expect(controls.height, closeTo(remainingControlsHeight, 1));
+      expect(controls.bottom, closeTo(usableBottom, 1));
+
+      final metadata = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-metadata')),
+      );
+      final timeline = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-timeline')),
+      );
+      final vinylSeek = find.byKey(
+        const ValueKey('classic-vinyl-player-linear-seek'),
+      );
+      expect(vinylSeek, findsOneWidget);
+      expect(tester.getSize(vinylSeek).height, 18);
+      final vinylSeekThemeFinder = find.ancestor(
+        of: vinylSeek,
+        matching: find.byType(SliderTheme),
+      );
+      expect(vinylSeekThemeFinder, findsOneWidget);
+      final vinylSeekTheme = tester
+          .widget<SliderTheme>(vinylSeekThemeFinder)
+          .data;
+      expect(vinylSeekTheme.trackHeight, 4);
+      expect(
+        vinylSeekTheme.activeTrackColor,
+        AppColors.downloadAccentFor(tester.element(vinylSeek)),
+      );
+      expect(vinylSeekTheme.thumbShape, same(SliderComponentShape.noThumb));
+      expect(vinylSeekTheme.overlayShape, same(SliderComponentShape.noOverlay));
+      final roomyTransport = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-transport')),
+      );
+      final utilityRow = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-utility-row')),
+      );
+      final sectionGaps = <double>[
+        timeline.top - metadata.bottom,
+        roomyTransport.top - timeline.bottom,
+        utilityRow.top - roomyTransport.bottom,
+      ];
+      for (final gap in sectionGaps) {
+        expect(gap, greaterThanOrEqualTo(18));
+      }
+      final sortedSectionGaps = [...sectionGaps]..sort();
+      expect(
+        sortedSectionGaps.last - sortedSectionGaps.first,
+        lessThanOrEqualTo(1),
+      );
+      expect(metadata.top, closeTo(controls.top, 1));
+      expect(utilityRow.bottom, closeTo(controls.bottom, 1));
+
+      expect(roomyTransport.left, closeTo(controls.left, 1));
+      expect(roomyTransport.right, closeTo(controls.right, 1));
+      expect(roomyTransport.width / controls.width, greaterThanOrEqualTo(0.98));
+      expect(utilityRow.left, closeTo(controls.left, 1));
+      expect(utilityRow.right, closeTo(controls.right, 1));
+      expect(utilityRow.width / controls.width, greaterThanOrEqualTo(0.98));
+
+      final utilityButtonRects = [
+        for (final key in const [
+          'player-shuffle-control',
+          'player-lyrics-control',
+          'player-repeat-control',
+          'player-volume-control',
+          'player-queue-toggle',
+        ])
+          tester.getRect(find.byKey(ValueKey(key))),
+      ];
+      expect(utilityButtonRects.first.left, closeTo(utilityRow.left, 1));
+      expect(utilityButtonRects.last.right, closeTo(utilityRow.right, 1));
+      final utilityCenterSteps = <double>[
+        for (var index = 1; index < utilityButtonRects.length; index += 1)
+          utilityButtonRects[index].center.dx -
+              utilityButtonRects[index - 1].center.dx,
+      ]..sort();
+      expect(
+        utilityCenterSteps.last - utilityCenterSteps.first,
+        lessThanOrEqualTo(1),
+      );
+
+      final transport = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-transport')),
+      );
+      final previous = tester.getRect(
+        find.byKey(const ValueKey('player-previous-control')),
+      );
+      final primary = tester.getRect(
+        find.byKey(const ValueKey('player-primary-control')),
+      );
+      final next = tester.getRect(
+        find.byKey(const ValueKey('player-next-control')),
+      );
+      expect(previous.center.dy, closeTo(primary.center.dy, 0.1));
+      expect(primary.center.dy, closeTo(next.center.dy, 0.1));
+      expect(primary.center.dx, closeTo(transport.center.dx, 0.1));
+      expect(previous.size.aspectRatio, closeTo(1, 0.001));
+      expect(primary.size.aspectRatio, closeTo(1, 0.001));
+      expect(next.size.aspectRatio, closeTo(1, 0.001));
+      expect(previous.width, closeTo(next.width, 0.001));
+      expect(previous.width, inInclusiveRange(74, 76));
+      expect(primary.width, inInclusiveRange(89, 91));
+      expect(primary.width / previous.width, inInclusiveRange(1.15, 1.25));
+      final expectedTransportGap = (transport.width * 0.04).clamp(12.0, 34.0);
+      expect(primary.left - previous.right, closeTo(expectedTransportGap, 0.1));
+      expect(next.left - primary.right, closeTo(expectedTransportGap, 0.1));
+      expect(
+        previous.left - transport.left,
+        closeTo(transport.right - next.right, 0.1),
+      );
+      _expectTransparentPrimaryControl(tester, mobile: true);
+      for (final finder in [
+        find.descendant(
+          of: find.byKey(const ValueKey('player-previous-control')),
+          matching: find.byType(IconButton),
+        ),
+        find.descendant(
+          of: find.byKey(const ValueKey('player-next-control')),
+          matching: find.byType(IconButton),
+        ),
+      ]) {
+        expect(tester.widget<IconButton>(finder).style, isNull);
+      }
+      expect(tester.takeException(), isNull);
+
+      final rotation = find.byKey(
+        const ValueKey('classic-vinyl-record-rotation'),
+      );
+      final initialTurns = tester
+          .widget<RotationTransition>(rotation)
+          .turns
+          .value;
+      await tester.pump(const Duration(milliseconds: 540));
+      final playingTurns = tester
+          .widget<RotationTransition>(rotation)
+          .turns
+          .value;
+      expect(playingTurns, greaterThan(initialTurns));
+
+      controller.emit(
+        controller.snapshot.copyWith(status: PlayerStatus.paused),
+      );
+      await tester.pump();
+      final pausedTurns = tester
+          .widget<RotationTransition>(rotation)
+          .turns
+          .value;
+      await tester.pump(const Duration(milliseconds: 540));
+      expect(
+        tester.widget<RotationTransition>(rotation).turns.value,
+        closeTo(pausedTurns, 0.000001),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Classic Vinyl adapts to compact mobile landscape', (
+    tester,
+  ) async {
+    const viewport = Size(568, 320);
+    _configureView(tester, viewport, bottomPadding: 24);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot.copyWith(position: const Duration(seconds: 45)),
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        style: PlayerStyle.classicVinyl,
+      ),
+    );
+    await tester.pump();
+
+    final layout = find.byKey(
+      const ValueKey('classic-vinyl-player-two-column'),
+    );
+    expect(layout, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('classic-vinyl-player-controls-scroll')),
+      findsOneWidget,
+    );
+    for (final key in const [
+      'classic-vinyl-player-deck-slot',
+      'classic-vinyl-player-metadata',
+      'classic-vinyl-player-timeline',
+      'classic-vinyl-player-transport',
+    ]) {
+      final rect = tester.getRect(find.byKey(ValueKey(key)));
+      expect(rect.left, greaterThanOrEqualTo(-0.1), reason: key);
+      expect(rect.top, greaterThanOrEqualTo(-0.1), reason: key);
+      expect(rect.right, lessThanOrEqualTo(viewport.width + 0.1), reason: key);
+      expect(
+        rect.bottom,
+        lessThanOrEqualTo(viewport.height - 24 + 0.1),
+        reason: key,
+      );
+    }
+    final controls = tester.getRect(
+      find.byKey(const ValueKey('classic-vinyl-player-controls')),
+    );
+    final transport = tester.getRect(
+      find.byKey(const ValueKey('classic-vinyl-player-transport')),
+    );
+    final utilities = tester.getRect(
+      find.byKey(const ValueKey('classic-vinyl-player-utility-row')),
+    );
+    expect(transport.left, closeTo(controls.left, 1));
+    expect(transport.right, closeTo(controls.right, 1));
+    expect(utilities.left, closeTo(controls.left, 1));
+    expect(utilities.right, closeTo(controls.right, 1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Classic Vinyl fits compact and large portrait phones', (
+    tester,
+  ) async {
+    const viewports = [
+      Size(320, 568),
+      Size(430, 688),
+      Size(360, 800),
+      Size(430, 932),
+    ];
+    _configureView(tester, viewports.first, bottomPadding: 24);
+
+    for (final viewport in viewports) {
+      tester.view.physicalSize = viewport;
+      await tester.pumpWidget(
+        _playerHarness(
+          key: ValueKey('classic-vinyl-${viewport.width}x${viewport.height}'),
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          style: PlayerStyle.classicVinyl,
+          artworkStyle: PlayerArtworkStyle.expanded,
+        ),
+      );
+      await tester.pump();
+
+      final deck = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-deck-slot')),
+      );
+      final controls = tester.getRect(
+        find.byKey(const ValueKey('classic-vinyl-player-controls')),
+      );
+      expect(deck.width, greaterThanOrEqualTo(210), reason: '$viewport deck');
+      if (viewport.height >= 700) {
+        expect(
+          deck.width,
+          greaterThanOrEqualTo(viewport.width * 0.98),
+          reason: '$viewport expanded deck',
+        );
+        expect(
+          viewport.height - 24 - controls.bottom,
+          lessThanOrEqualTo(16),
+          reason: '$viewport bottom usage',
+        );
+      }
+      expect(deck.height, greaterThanOrEqualTo(210), reason: '$viewport deck');
+      expect(deck.left, greaterThanOrEqualTo(-0.1), reason: '$viewport deck');
+      expect(deck.right, lessThanOrEqualTo(viewport.width + 0.1));
+      expect(controls.left, greaterThanOrEqualTo(-0.1));
+      expect(controls.right, lessThanOrEqualTo(viewport.width + 0.1));
+      expect(controls.top, greaterThanOrEqualTo(0));
+      expect(
+        controls.bottom,
+        lessThanOrEqualTo(viewport.height - 24 + 0.1),
+        reason: '$viewport controls',
+      );
+      expect(tester.takeException(), isNull, reason: '$viewport');
+    }
+  });
+
+  testWidgets(
+    'Classic Vinyl scrolls instead of using roomy controls when less than 285dp remain',
+    (tester) async {
+      const viewport = Size(600, 700);
+      _configureView(tester, viewport, bottomPadding: 24);
+
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          style: PlayerStyle.classicVinyl,
+          artworkStyle: PlayerArtworkStyle.expanded,
+        ),
+      );
+      await tester.pump();
+
+      final controls = tester.widget<Column>(
+        find.byKey(const ValueKey('classic-vinyl-player-controls')),
+      );
+      expect(controls.mainAxisSize, MainAxisSize.min);
+
+      final scrollable = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(const ValueKey('classic-vinyl-player-stack')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(scrollable.position.maxScrollExtent, greaterThan(0));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Classic Vinyl disables roomy controls for enlarged system text',
+    (tester) async {
+      const viewport = Size(390, 820);
+      const textScales = [1.3, 1.5];
+      _configureView(
+        tester,
+        viewport,
+        bottomPadding: 24,
+        textScaleFactor: textScales.first,
+      );
+
+      for (final textScale in textScales) {
+        tester.platformDispatcher.textScaleFactorTestValue = textScale;
+        await tester.pumpWidget(
+          _playerHarness(
+            key: ValueKey('classic-vinyl-text-scale-$textScale'),
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: localTrack,
+            playlists: _TestPlaylistsController(),
+            style: PlayerStyle.classicVinyl,
+            artworkStyle: PlayerArtworkStyle.expanded,
+          ),
+        );
+        await tester.pump();
+
+        final controls = tester.widget<Column>(
+          find.byKey(const ValueKey('classic-vinyl-player-controls')),
+        );
+        expect(
+          controls.mainAxisSize,
+          MainAxisSize.min,
+          reason: 'text scale $textScale',
+        );
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'text scale $textScale before scrolling',
+        );
+
+        final utility = find.byKey(
+          const ValueKey('classic-vinyl-player-utility-row'),
+        );
+        await tester.ensureVisible(utility);
+        await tester.pump();
+        final utilityRect = tester.getRect(utility);
+        expect(
+          utilityRect.top,
+          greaterThanOrEqualTo(-0.1),
+          reason: 'text scale $textScale utility top',
+        );
+        expect(
+          utilityRect.bottom,
+          lessThanOrEqualTo(viewport.height - 24 + 0.1),
+          reason: 'text scale $textScale utility bottom',
+        );
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'text scale $textScale after scrolling',
+        );
+      }
+    },
+  );
+
   testWidgets('BStream landscape header stays legible in a light theme', (
     tester,
   ) async {
@@ -872,6 +1358,270 @@ void main() {
     );
     expect(queueButton.style?.foregroundColor?.resolve({}), Colors.white);
     expect(menuButton.iconColor, Colors.white);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'the full player stays dark in a light app theme for every style',
+    (tester) async {
+      _configureView(tester, const Size(390, 820));
+
+      for (final style in PlayerStyle.values) {
+        await tester.pumpWidget(
+          _playerHarness(
+            key: ValueKey('light-app-dark-player-${style.name}'),
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: localTrack,
+            playlists: _TestPlaylistsController(),
+            style: style,
+            brightness: Brightness.light,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        final playerContent = switch (style) {
+          PlayerStyle.bstreamMusic => find.byKey(
+            const ValueKey('player-content-layout'),
+          ),
+          PlayerStyle.appleMusic => find.byKey(
+            const ValueKey('apple-player-layout'),
+          ),
+          PlayerStyle.classicVinyl => find.byKey(
+            const ValueKey('classic-vinyl-player-layout'),
+          ),
+        };
+        expect(playerContent, findsOneWidget, reason: '$style player content');
+
+        final playerTheme = Theme.of(tester.element(playerContent));
+        expect(
+          playerTheme.brightness,
+          Brightness.dark,
+          reason: '$style must ignore the surrounding light brightness',
+        );
+        expect(playerTheme.colorScheme.brightness, Brightness.dark);
+
+        final appTheme = Theme.of(tester.element(find.byType(Scaffold).first));
+        expect(
+          appTheme.brightness,
+          Brightness.light,
+          reason: 'the app outside $style must remain light',
+        );
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
+  testWidgets('player overflow menus retain the light app theme', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+
+    for (final style in PlayerStyle.values) {
+      await tester.pumpWidget(
+        _playerHarness(
+          key: ValueKey('light-player-menu-${style.name}'),
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          style: style,
+          brightness: Brightness.light,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('player-menu-control')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final menuAction = find.byKey(const ValueKey('player-menu-share'));
+      expect(menuAction, findsOneWidget, reason: '$style overflow menu');
+      expect(
+        Theme.of(tester.element(menuAction)).brightness,
+        Brightness.light,
+        reason: '$style popup route must use the surrounding app theme',
+      );
+      expect(
+        Theme.of(
+          tester.element(find.byKey(const ValueKey('player-track-title'))),
+        ).brightness,
+        Brightness.dark,
+        reason: '$style player must remain dark behind its light menu',
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    }
+  });
+
+  testWidgets('player volume popover retains the light app theme', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        brightness: Brightness.light,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('player-volume-control')));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final popover = find.byKey(const ValueKey('volume-popover'));
+    expect(popover, findsOneWidget);
+    expect(
+      Theme.of(tester.element(popover)).brightness,
+      Brightness.light,
+      reason: 'only the player surface should override the app brightness',
+    );
+    expect(
+      Theme.of(
+        tester.element(find.byKey(const ValueKey('player-track-title'))),
+      ).brightness,
+      Brightness.dark,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('position-only updates do not rebuild the open volume popover', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+    final controller = _TestPlayerController(snapshot);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playerController: controller,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.byKey(const ValueKey('player-volume-control')));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final popover = find.byKey(const ValueKey('volume-popover'));
+    final initialSurface = tester.widget<Container>(popover);
+
+    controller.emit(
+      snapshot.copyWith(position: const Duration(minutes: 1, seconds: 12)),
+    );
+    await tester.pump();
+
+    expect(
+      identical(tester.widget<Container>(popover), initialSurface),
+      isTrue,
+      reason: 'playback position must not invalidate volume-only UI',
+    );
+
+    controller.emit(
+      snapshot.copyWith(
+        position: const Duration(minutes: 1, seconds: 13),
+        volume: 0.41,
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      identical(tester.widget<Container>(popover), initialSurface),
+      isFalse,
+      reason: 'an actual volume change must still refresh the popover',
+    );
+    expect(find.text('41%'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile playback queue retains the light app theme', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        style: PlayerStyle.classicVinyl,
+        brightness: Brightness.light,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    expect(
+      Theme.of(
+        tester.element(
+          find.byKey(const ValueKey('classic-vinyl-player-layout')),
+        ),
+      ).brightness,
+      Brightness.dark,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    final queueTitle = find.textContaining('Cola de');
+    expect(queueTitle, findsOneWidget);
+    expect(
+      Theme.of(tester.element(queueTitle)).brightness,
+      Brightness.light,
+      reason: 'the queue route is outside the player-only dark theme',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop playback queue rail retains the light app theme', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(1280, 720));
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.windows,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        style: PlayerStyle.appleMusic,
+        brightness: Brightness.light,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    expect(
+      Theme.of(
+        tester.element(find.byKey(const ValueKey('apple-player-layout'))),
+      ).brightness,
+      Brightness.dark,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump();
+
+    final queueRail = find.byKey(const ValueKey('desktop-playback-queue-rail'));
+    expect(queueRail, findsOneWidget);
+    expect(
+      Theme.of(tester.element(queueRail)).brightness,
+      Brightness.light,
+      reason: 'the desktop rail is a sibling of the dark player surface',
+    );
     expect(tester.takeException(), isNull);
   });
 

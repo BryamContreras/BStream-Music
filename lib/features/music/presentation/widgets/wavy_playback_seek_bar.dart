@@ -31,42 +31,8 @@ class WavyPlaybackSeekBar extends StatefulWidget {
   State<WavyPlaybackSeekBar> createState() => _WavyPlaybackSeekBarState();
 }
 
-class _WavyPlaybackSeekBarState extends State<WavyPlaybackSeekBar>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _wavePhase;
+class _WavyPlaybackSeekBarState extends State<WavyPlaybackSeekBar> {
   double? _dragFraction;
-
-  @override
-  void initState() {
-    super.initState();
-    _wavePhase = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2800),
-    );
-    _syncAnimation();
-  }
-
-  @override
-  void didUpdateWidget(covariant WavyPlaybackSeekBar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.isPlaying != widget.isPlaying) {
-      _syncAnimation();
-    }
-  }
-
-  @override
-  void dispose() {
-    _wavePhase.dispose();
-    super.dispose();
-  }
-
-  void _syncAnimation() {
-    if (widget.isPlaying) {
-      _wavePhase.repeat();
-    } else {
-      _wavePhase.stop();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -160,24 +126,13 @@ class _WavyPlaybackSeekBarState extends State<WavyPlaybackSeekBar>
               }
             },
             onHorizontalDragCancel: () => setState(() => _dragFraction = null),
-            child: SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: TweenAnimationBuilder<Color?>(
-                key: widget.colorAnimationKey,
-                tween: ColorTween(end: widget.waveColor),
-                duration: const Duration(milliseconds: 420),
-                curve: Curves.easeOutCubic,
-                builder: (context, color, _) => CustomPaint(
-                  painter: _WavyPlaybackSeekBarPainter(
-                    fraction: fraction,
-                    phase: _wavePhase,
-                    enabled: totalMs > 0,
-                    waveColor: color ?? AppColors.downloadAccentFor(context),
-                    isDark: Theme.of(context).brightness == Brightness.dark,
-                  ),
-                ),
-              ),
+            child: WavyPlaybackProgressLine(
+              value: fraction,
+              isPlaying: widget.isPlaying,
+              waveColor: widget.waveColor,
+              enabled: canSeek,
+              showThumb: true,
+              colorAnimationKey: widget.colorAnimationKey,
             ),
           ),
         );
@@ -186,24 +141,195 @@ class _WavyPlaybackSeekBarState extends State<WavyPlaybackSeekBar>
   }
 }
 
-class _WavyPlaybackSeekBarPainter extends CustomPainter {
-  _WavyPlaybackSeekBarPainter({
+/// Paint-only form of the player's animated wave.
+///
+/// Unlike [WavyPlaybackSeekBar], this widget has no gestures and does not
+/// expose slider semantics. It can therefore be reused as a passive playback
+/// indicator without coupling its host to seeking controls.
+class WavyPlaybackProgressLine extends StatefulWidget {
+  const WavyPlaybackProgressLine({
+    required this.value,
+    required this.isPlaying,
+    required this.waveColor,
+    this.surfaceBrightness,
+    this.showThumb = false,
+    this.height = 48,
+    this.waveAmplitude = 15.5,
+    this.enabled = true,
+    this.colorAnimationKey,
+    super.key,
+  });
+
+  final double value;
+  final bool isPlaying;
+  final Color waveColor;
+  final Brightness? surfaceBrightness;
+  final bool showThumb;
+  final double height;
+  final double waveAmplitude;
+  final bool enabled;
+  final Key? colorAnimationKey;
+
+  @override
+  State<WavyPlaybackProgressLine> createState() =>
+      _WavyPlaybackProgressLineState();
+}
+
+class _WavyPlaybackProgressLineState extends State<WavyPlaybackProgressLine>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _wavePhase;
+  bool _disableAnimations = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _wavePhase = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2800),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    if (_disableAnimations != disableAnimations) {
+      _disableAnimations = disableAnimations;
+    }
+    _syncAnimation();
+  }
+
+  @override
+  void didUpdateWidget(covariant WavyPlaybackProgressLine oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isPlaying != widget.isPlaying ||
+        oldWidget.enabled != widget.enabled) {
+      _syncAnimation();
+    }
+  }
+
+  @override
+  void dispose() {
+    _wavePhase.dispose();
+    super.dispose();
+  }
+
+  void _syncAnimation() {
+    if (widget.isPlaying && widget.enabled && !_disableAnimations) {
+      if (!_wavePhase.isAnimating) {
+        _wavePhase.repeat();
+      }
+    } else {
+      _wavePhase.stop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final height = math.max(0.0, widget.height).toDouble();
+    final availableWaveHeight = math.max(
+      0.0,
+      (height / 2) - _WavyPlaybackTrackPainter.trackHalfHeight - 1,
+    );
+    final waveAmplitude = widget.waveAmplitude
+        .clamp(0.0, availableWaveHeight)
+        .toDouble();
+    final brightness = widget.surfaceBrightness ?? Theme.of(context).brightness;
+    final fraction = widget.enabled
+        ? widget.value.clamp(0.0, 1.0).toDouble()
+        : 0.0;
+
+    return RepaintBoundary(
+      child: SizedBox(
+        width: double.infinity,
+        height: height,
+        child: TweenAnimationBuilder<Color?>(
+          key: widget.colorAnimationKey,
+          tween: ColorTween(end: widget.waveColor),
+          duration: _disableAnimations
+              ? Duration.zero
+              : const Duration(milliseconds: 420),
+          curve: Curves.easeOutCubic,
+          builder: (context, color, _) => CustomPaint(
+            painter: _WavyPlaybackTrackPainter(
+              fraction: fraction,
+              phase: _wavePhase,
+              enabled: widget.enabled,
+              waveColor: color ?? AppColors.downloadAccentFor(context),
+              isDark: brightness == Brightness.dark,
+              showThumb: widget.showThumb,
+              maxWaveHeight: waveAmplitude,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WavyPlaybackTrackPainter extends CustomPainter {
+  _WavyPlaybackTrackPainter({
     required this.fraction,
     required this.phase,
     required this.enabled,
     required this.waveColor,
     required this.isDark,
-  }) : super(repaint: phase);
+    required this.showThumb,
+    required this.maxWaveHeight,
+  }) : _inactivePaint = (Paint()
+         ..color = enabled
+             ? (isDark ? const Color(0x66E7ECE8) : const Color(0x665E6A62))
+             : (isDark ? const Color(0x526B756E) : const Color(0x523B463F))
+         ..strokeWidth = trackHalfHeight * 2
+         ..strokeCap = StrokeCap.round
+         ..style = PaintingStyle.stroke),
+       _activeBasePaint = (Paint()
+         ..color = waveColor.withAlpha(220)
+         ..strokeWidth = trackHalfHeight * 2
+         ..strokeCap = StrokeCap.round
+         ..style = PaintingStyle.stroke),
+       _backPaint = (Paint()
+         ..color = waveColor.withAlpha(188)
+         ..style = PaintingStyle.fill),
+       _frontPaint = (Paint()
+         ..color = waveColor.withAlpha(220)
+         ..style = PaintingStyle.fill),
+       _activeStartPaint = Paint()..color = waveColor.withAlpha(225),
+       _thumbShadowPaint = Paint()
+         ..color = Colors.black.withValues(alpha: isDark ? 0.15 : 0.1),
+       _thumbFillPaint = Paint()
+         ..color = enabled
+             ? Color.lerp(
+                 waveColor,
+                 isDark ? Colors.white : Colors.black,
+                 0.18,
+               )!.withAlpha(236)
+             : (isDark ? const Color(0xFF747D76) : const Color(0xFF9AA59D)),
+       _thumbStrokePaint = (Paint()
+         ..color = isDark ? const Color(0x704A544C) : const Color(0x705B665E)
+         ..strokeWidth = 1
+         ..style = PaintingStyle.stroke),
+       super(repaint: phase);
 
-  static const _trackHalfHeight = 3.0;
+  static const trackHalfHeight = 3.0;
   static const _thumbOuterRadius = 12.5;
-  static const _maxWaveHeight = 15.5;
+  static const _maximumWaveSamples = 180;
 
   final double fraction;
   final Animation<double> phase;
   final bool enabled;
   final Color waveColor;
   final bool isDark;
+  final bool showThumb;
+  final double maxWaveHeight;
+  final Paint _inactivePaint;
+  final Paint _activeBasePaint;
+  final Paint _backPaint;
+  final Paint _frontPaint;
+  final Paint _activeStartPaint;
+  final Paint _thumbShadowPaint;
+  final Paint _thumbFillPaint;
+  final Paint _thumbStrokePaint;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -212,38 +338,25 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
     final trackEnd = size.width - _wavyPlaybackTrackInset;
     final trackWidth = math.max(0.0, trackEnd - trackStart);
     final activeEnd = trackStart + (trackWidth * fraction.clamp(0.0, 1.0));
-    final inactivePaint = Paint()
-      ..color = enabled
-          ? (isDark ? const Color(0x66E7ECE8) : const Color(0x665E6A62))
-          : (isDark ? const Color(0x526B756E) : const Color(0x523B463F))
-      ..strokeWidth = _trackHalfHeight * 2
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-
     canvas.drawLine(
       Offset(trackStart, centerY),
       Offset(trackEnd, centerY),
-      inactivePaint,
+      _inactivePaint,
     );
 
     final activeLength = activeEnd - trackStart;
     if (activeLength > 0.5) {
-      final waveBaseY = centerY - _trackHalfHeight;
+      final waveBaseY = centerY - trackHalfHeight;
       final earlyProgress = (fraction / 0.5).clamp(0.0, 1.0);
       final easedProgress =
           earlyProgress * earlyProgress * (3 - (2 * earlyProgress));
       final progressHeightScale = 0.78 + (0.22 * easedProgress);
       final heightScale =
           (activeLength / 90).clamp(0.0, 1.0) * progressHeightScale;
-      final activeBasePaint = Paint()
-        ..color = waveColor.withAlpha(220)
-        ..strokeWidth = _trackHalfHeight * 2
-        ..strokeCap = StrokeCap.round
-        ..style = PaintingStyle.stroke;
       canvas.drawLine(
         Offset(trackStart, centerY),
         Offset(activeEnd, centerY),
-        activeBasePaint,
+        _activeBasePaint,
       );
 
       ({
@@ -300,9 +413,25 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
         crests,
       ) {
         final path = Path()..moveTo(trackStart, waveBaseY);
-        for (var x = trackStart; x <= activeEnd; x += 1.5) {
+        final crestVisibilities = <double>[
+          for (final crest in crests)
+            () {
+              final rawVisibility = math.min(
+                ((crest.center - trackStart) / crest.radius).clamp(0.0, 1.0),
+                ((activeEnd - crest.center) / crest.radius).clamp(0.0, 1.0),
+              );
+              return rawVisibility * rawVisibility * (3 - (2 * rawVisibility));
+            }(),
+        ];
+        final sampleStep = math.max(1.5, activeLength / _maximumWaveSamples);
+        for (var x = trackStart; x <= activeEnd; x += sampleStep) {
           var combinedHeight = 0.0;
-          for (final crest in crests) {
+          final edgeDistance = math.min(x - trackStart, activeEnd - x);
+          final edgeProgress = (edgeDistance / 24).clamp(0.0, 1.0);
+          final edgeVisibility =
+              edgeProgress * edgeProgress * (3 - (2 * edgeProgress));
+          for (var index = 0; index < crests.length; index += 1) {
+            final crest = crests[index];
             final normalized = (x - crest.center) / crest.radius;
             if (normalized <= -1 || normalized >= 1) {
               continue;
@@ -311,23 +440,13 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
             final profile = math
                 .pow(math.sin(math.pi * localProgress), crest.shape)
                 .toDouble();
-            final rawVisibility = math.min(
-              ((crest.center - trackStart) / crest.radius).clamp(0.0, 1.0),
-              ((activeEnd - crest.center) / crest.radius).clamp(0.0, 1.0),
-            );
-            final crestVisibility =
-                rawVisibility * rawVisibility * (3 - (2 * rawVisibility));
-            final edgeDistance = math.min(x - trackStart, activeEnd - x);
-            final edgeProgress = (edgeDistance / 24).clamp(0.0, 1.0);
-            final edgeVisibility =
-                edgeProgress * edgeProgress * (3 - (2 * edgeProgress));
             final asymmetricProfile =
                 profile * (1 + (crest.skew * (localProgress - 0.5)));
             final crestHeight =
-                _maxWaveHeight *
+                maxWaveHeight *
                 crest.heightFactor *
                 heightScale *
-                crestVisibility *
+                crestVisibilities[index] *
                 edgeVisibility *
                 asymmetricProfile;
             combinedHeight = math.max(combinedHeight, crestHeight);
@@ -361,10 +480,7 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
           shape: 1.55,
         ),
       ]);
-      final backPaint = Paint()
-        ..color = waveColor.withAlpha(188)
-        ..style = PaintingStyle.fill;
-      canvas.drawPath(backWave, backPaint);
+      canvas.drawPath(backWave, _backPaint);
 
       final frontWave = waveLayerPath([
         movingCrest(
@@ -388,54 +504,35 @@ class _WavyPlaybackSeekBarPainter extends CustomPainter {
           shape: 1.8,
         ),
       ]);
-      final frontPaint = Paint()
-        ..color = waveColor.withAlpha(220)
-        ..style = PaintingStyle.fill;
-      canvas.drawPath(frontWave, frontPaint);
+      canvas.drawPath(frontWave, _frontPaint);
       canvas.drawCircle(
         Offset(trackStart, centerY),
-        _trackHalfHeight,
-        Paint()..color = waveColor.withAlpha(225),
+        trackHalfHeight,
+        _activeStartPaint,
       );
     }
 
-    final thumbInset = math.min(_thumbOuterRadius, size.width / 2);
-    final thumbCenter = Offset(
-      activeEnd.clamp(thumbInset, size.width - thumbInset).toDouble(),
-      centerY,
-    );
-    canvas.drawCircle(
-      thumbCenter,
-      _thumbOuterRadius,
-      Paint()..color = Colors.black.withValues(alpha: isDark ? 0.15 : 0.1),
-    );
-    canvas.drawCircle(
-      thumbCenter,
-      10.5,
-      Paint()
-        ..color = enabled
-            ? Color.lerp(
-                waveColor,
-                isDark ? Colors.white : Colors.black,
-                0.18,
-              )!.withAlpha(236)
-            : (isDark ? const Color(0xFF747D76) : const Color(0xFF9AA59D)),
-    );
-    canvas.drawCircle(
-      thumbCenter,
-      10.5,
-      Paint()
-        ..color = isDark ? const Color(0x704A544C) : const Color(0x705B665E)
-        ..strokeWidth = 1
-        ..style = PaintingStyle.stroke,
-    );
+    if (showThumb) {
+      final outerRadius = math.min(_thumbOuterRadius, size.height / 2);
+      final innerRadius = math.max(0.0, outerRadius - 2);
+      final thumbInset = math.min(outerRadius, size.width / 2);
+      final thumbCenter = Offset(
+        activeEnd.clamp(thumbInset, size.width - thumbInset).toDouble(),
+        centerY,
+      );
+      canvas.drawCircle(thumbCenter, outerRadius, _thumbShadowPaint);
+      canvas.drawCircle(thumbCenter, innerRadius, _thumbFillPaint);
+      canvas.drawCircle(thumbCenter, innerRadius, _thumbStrokePaint);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _WavyPlaybackSeekBarPainter oldDelegate) {
+  bool shouldRepaint(covariant _WavyPlaybackTrackPainter oldDelegate) {
     return fraction != oldDelegate.fraction ||
         enabled != oldDelegate.enabled ||
         waveColor != oldDelegate.waveColor ||
-        isDark != oldDelegate.isDark;
+        isDark != oldDelegate.isDark ||
+        showThumb != oldDelegate.showThumb ||
+        maxWaveHeight != oldDelegate.maxWaveHeight;
   }
 }

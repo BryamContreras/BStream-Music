@@ -97,17 +97,32 @@ class _HoverEqualizerArtworkState extends State<HoverEqualizerArtwork> {
 }
 
 class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _controller;
+  bool _reducedMotion = false;
+  bool _tickerEnabled = true;
+  bool _appIsActive = true;
+  bool _animationAllowed = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    _appIsActive =
+        lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 24),
       value: 0.18,
     );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    _tickerEnabled = TickerMode.valuesOf(context).enabled;
     _syncAnimation();
   }
 
@@ -121,13 +136,29 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _appIsActive = state == AppLifecycleState.resumed;
+      _syncAnimation();
+    });
+  }
+
   void _syncAnimation() {
-    if (widget.isPlaying) {
-      _controller.repeat();
+    _animationAllowed =
+        widget.isPlaying && !_reducedMotion && _tickerEnabled && _appIsActive;
+    if (_animationAllowed) {
+      if (!_controller.isAnimating) {
+        _controller.repeat();
+      }
     } else {
       _controller.stop();
     }
@@ -145,7 +176,7 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
           child: CustomPaint(
             painter: _NowPlayingEqualizerPainter(
               phase: _controller,
-              isPlaying: widget.isPlaying,
+              isPlaying: _animationAllowed,
               indicatorColor: indicatorColor,
             ),
           ),

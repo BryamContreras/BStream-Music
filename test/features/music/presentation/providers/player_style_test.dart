@@ -5,8 +5,10 @@ void main() {
   test('player style codes are stable and decode defensively', () {
     expect(PlayerStyle.bstreamMusic.code, 'bstreamMusic');
     expect(PlayerStyle.appleMusic.code, 'appleMusic');
+    expect(PlayerStyle.classicVinyl.code, 'classicVinyl');
     expect(PlayerStyle.fromCode('bstreamMusic'), PlayerStyle.bstreamMusic);
     expect(PlayerStyle.fromCode('appleMusic'), PlayerStyle.appleMusic);
+    expect(PlayerStyle.fromCode('classicVinyl'), PlayerStyle.classicVinyl);
     expect(PlayerStyle.fromCode(null), defaultPlayerStyle);
     expect(PlayerStyle.fromCode('futureStyle'), defaultPlayerStyle);
     expect(defaultPlayerStyle, PlayerStyle.bstreamMusic);

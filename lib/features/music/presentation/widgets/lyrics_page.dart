@@ -23,6 +23,7 @@ import 'playback_gradient_background.dart';
 import 'playback_progress_line.dart';
 import 'source_image.dart';
 import 'uniform_playback_slider_track_shape.dart';
+import 'wavy_playback_seek_bar.dart';
 
 bool _usesMobileLyricsLayout(BuildContext context) =>
     switch (Theme.of(context).platform) {
@@ -102,10 +103,16 @@ class LyricsPage extends ConsumerStatefulWidget {
   const LyricsPage({
     super.key,
     this.presentationChrome = const LyricsPresentationChrome(),
+    this.monotonicClock,
   });
 
   @visibleForTesting
   final LyricsPresentationChrome presentationChrome;
+
+  /// Test seam for advancing the lyric boundary clock without wall-clock
+  /// sleeps. Production uses a private [Stopwatch] owned by the timeline.
+  @visibleForTesting
+  final Duration Function()? monotonicClock;
 
   @override
   ConsumerState<LyricsPage> createState() => _LyricsPageState();
@@ -636,6 +643,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
         sourceFooter: sourceFooter,
         lyricsCentered: lyricsCentered,
         animationStyle: lyricsAnimationStyle,
+        monotonicClock: widget.monotonicClock,
       );
     }
 
@@ -1838,6 +1846,7 @@ class _SyncedLyricsTimeline extends ConsumerStatefulWidget {
     required this.sourceFooter,
     required this.lyricsCentered,
     required this.animationStyle,
+    this.monotonicClock,
   });
 
   final List<LyricLine> lines;
@@ -1846,25 +1855,174 @@ class _SyncedLyricsTimeline extends ConsumerStatefulWidget {
   final String sourceFooter;
   final bool lyricsCentered;
   final LyricsAnimationStyle animationStyle;
+  final Duration Function()? monotonicClock;
 
   @override
   ConsumerState<_SyncedLyricsTimeline> createState() =>
       _SyncedLyricsTimelineState();
 }
 
+const _minimumInferredInstrumentalIntro = Duration(seconds: 4);
+const _minimumUnmarkedLyricGap = Duration(seconds: 12);
+const _minimumInferredInstrumentalGap = Duration(seconds: 4);
+const _instrumentalLyricsLineExtent = 72.0;
+
+class _LyricsTimelineEntry {
+  _LyricsTimelineEntry.lyric({
+    required LyricLine line,
+    required this.sourceIndex,
+  }) : timestamp = line.timestamp,
+       line = line,
+       instrumentalEnd = null,
+       inferred = false;
+
+  const _LyricsTimelineEntry.instrumental({
+    required this.timestamp,
+    required this.instrumentalEnd,
+    required this.sourceIndex,
+    this.inferred = false,
+  }) : line = null;
+
+  final Duration timestamp;
+  final Duration? instrumentalEnd;
+  final LyricLine? line;
+  final int sourceIndex;
+  final bool inferred;
+
+  bool get isInstrumental => line == null;
+}
+
+List<_LyricsTimelineEntry> _buildLyricsTimelineEntries(
+  List<LyricLine> lines,
+  Duration offset,
+) {
+  if (lines.isEmpty) {
+    return const [];
+  }
+
+  final entries = <_LyricsTimelineEntry>[];
+  var index = 0;
+  while (index < lines.length) {
+    final line = lines[index];
+    if (line.text.trim().isNotEmpty) {
+      final introDuration = line.timestamp - offset;
+      if (entries.isEmpty &&
+          introDuration >= _minimumInferredInstrumentalIntro) {
+        entries.add(
+          _LyricsTimelineEntry.instrumental(
+            // Entries normally live in lyric time (playback + offset). Give a
+            // synthetic intro the lyric-time equivalent of playback zero so
+            // both its progress and tap target remain correct for any offset.
+            timestamp: offset,
+            instrumentalEnd: line.timestamp,
+            sourceIndex: -1,
+            inferred: true,
+          ),
+        );
+      }
+      entries.add(_LyricsTimelineEntry.lyric(line: line, sourceIndex: index));
+      final nextIndex = index + 1;
+      if (nextIndex < lines.length && lines[nextIndex].text.trim().isNotEmpty) {
+        final inferredStart = _inferredInstrumentalStart(
+          line,
+          lines[nextIndex],
+        );
+        if (inferredStart != null) {
+          entries.add(
+            _LyricsTimelineEntry.instrumental(
+              timestamp: inferredStart,
+              instrumentalEnd: lines[nextIndex].timestamp,
+              sourceIndex: index,
+              inferred: true,
+            ),
+          );
+        }
+      }
+      index += 1;
+      continue;
+    }
+
+    // Timed empty LRC rows explicitly mark the point where vocals stop.
+    // Collapse consecutive markers so the instrumental animation remains a
+    // single continuous row instead of restarting at every empty timestamp.
+    final firstBlankIndex = index;
+    final start = line.timestamp;
+    do {
+      index += 1;
+    } while (index < lines.length && lines[index].text.trim().isEmpty);
+    final end = index < lines.length ? lines[index].timestamp : null;
+    if (end == null || end > start) {
+      entries.add(
+        _LyricsTimelineEntry.instrumental(
+          timestamp: start,
+          instrumentalEnd: end,
+          sourceIndex: firstBlankIndex,
+        ),
+      );
+    }
+  }
+  return List.unmodifiable(entries);
+}
+
+Duration? _inferredInstrumentalStart(LyricLine current, LyricLine next) {
+  final distance = next.timestamp - current.timestamp;
+  if (distance < _minimumUnmarkedLyricGap) {
+    return null;
+  }
+
+  // Some providers omit the timed empty row used for instrumental sections.
+  // Keep a generous, text-aware window for the sung line before inferring a
+  // break, so sustained words and ordinary compositional pauses stay intact.
+  final characterCount = current.text.runes.length;
+  final holdMilliseconds = (5600 + (characterCount * 55)).clamp(6500, 8500);
+  final start = current.timestamp + Duration(milliseconds: holdMilliseconds);
+  if (next.timestamp - start < _minimumInferredInstrumentalGap) {
+    return null;
+  }
+  return start;
+}
+
+typedef _LyricsPlaybackClockSample = ({
+  Duration position,
+  PlayerStatus status,
+  String? identity,
+});
+
+String? _lyricsPlaybackIdentity(PlayerSnapshot snapshot) {
+  final stableIdentity =
+      snapshot.queueEntryId ?? snapshot.trackId ?? snapshot.sourceUrl;
+  if (stableIdentity != null && stableIdentity.trim().isNotEmpty) {
+    return stableIdentity;
+  }
+  final title = snapshot.title?.trim();
+  if (title == null || title.isEmpty) {
+    return null;
+  }
+  return '$title\u0000${snapshot.artist?.trim() ?? ''}';
+}
+
 class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   late int _activeIndex;
+  late List<_LyricsTimelineEntry> _entries;
   final ScrollController _scrollController = ScrollController();
-  ProviderSubscription<Duration>? _positionSubscription;
+  ProviderSubscription<_LyricsPlaybackClockSample?>? _playbackSubscription;
+  Stopwatch? _ownedMonotonicClock;
+  late final Duration Function() _monotonicNow;
+  _LyricsPlaybackClockSample? _playbackSample;
+  Duration _playbackAnchor = Duration.zero;
+  Duration _monotonicAnchor = Duration.zero;
+  Timer? _lineBoundaryTimer;
+  int _lineBoundaryGeneration = 0;
   Timer? _resumeAutoScrollTimer;
   bool _autoScrollSuspended = false;
+  bool _tickerModeEnabled = true;
   double? _activeScaledFontSize;
   double? _layoutWidth;
   double? _viewportHeight;
   List<double> _lineExtents = const [];
   List<double> _lineOffsets = const [0];
   double _linesStartOffset = 0;
-  List<LyricLine>? _measuredLines;
+  List<_LyricsTimelineEntry>? _measuredEntries;
   List<String>? _measuredRomanizedLines;
   double? _measuredContentWidth;
   double? _measuredActiveFontSize;
@@ -1875,13 +2033,42 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   @override
   void initState() {
     super.initState();
-    _activeIndex = _activeLineIndex(
-      widget.lines,
-      ref.read(currentPlaybackPositionProvider) + widget.offset,
+    final injectedClock = widget.monotonicClock;
+    if (injectedClock == null) {
+      final clock = Stopwatch()..start();
+      _ownedMonotonicClock = clock;
+      _monotonicNow = () => clock.elapsed;
+    } else {
+      _monotonicNow = injectedClock;
+    }
+    _entries = _buildLyricsTimelineEntries(widget.lines, widget.offset);
+    final initialSnapshot = ref.read(playerControllerProvider).value;
+    final initialPosition =
+        initialSnapshot?.position ??
+        ref.read(currentPlaybackPositionProvider) ??
+        Duration.zero;
+    _activeIndex = _activeTimelineEntryIndex(
+      _entries,
+      initialPosition + widget.offset,
     );
-    _positionSubscription = ref.listenManual<Duration>(
-      currentPlaybackPositionProvider,
-      (_, position) => _updateActiveLine(position),
+    _playbackSubscription = ref.listenManual<_LyricsPlaybackClockSample?>(
+      playerControllerProvider.select((player) {
+        final snapshot = player.value;
+        if (snapshot == null) {
+          return null;
+        }
+        return (
+          position: snapshot.position,
+          status: snapshot.status,
+          identity: _lyricsPlaybackIdentity(snapshot),
+        );
+      }),
+      (_, sample) {
+        if (sample != null) {
+          _acceptPlaybackSample(sample);
+        }
+      },
+      fireImmediately: true,
     );
     _scheduleAutoScroll();
   }
@@ -1890,10 +2077,16 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   void didUpdateWidget(covariant _SyncedLyricsTimeline oldWidget) {
     super.didUpdateWidget(oldWidget);
     final linesChanged = !identical(oldWidget.lines, widget.lines);
-    if (linesChanged || oldWidget.offset != widget.offset) {
-      _updateActiveLine(ref.read(currentPlaybackPositionProvider));
+    final offsetChanged = oldWidget.offset != widget.offset;
+    if (linesChanged || offsetChanged) {
+      _entries = _buildLyricsTimelineEntries(widget.lines, widget.offset);
+    }
+    if (linesChanged || offsetChanged) {
+      _updateActiveLine(_estimatedPlaybackPosition(), notify: false);
+      _scheduleNextLineBoundary();
     }
     if (linesChanged ||
+        offsetChanged ||
         !identical(oldWidget.romanizedLines, widget.romanizedLines)) {
       _invalidateLineMetrics();
       _scheduleAutoScroll();
@@ -1903,6 +2096,17 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final tickerModeEnabled = TickerMode.valuesOf(context).enabled;
+    if (_tickerModeEnabled != tickerModeEnabled) {
+      _tickerModeEnabled = tickerModeEnabled;
+      if (tickerModeEnabled) {
+        _updateActiveLine(_estimatedPlaybackPosition(), notify: false);
+        _scheduleNextLineBoundary();
+        _scheduleAutoScroll();
+      } else {
+        _cancelLineBoundaryTimer();
+      }
+    }
     final nextActiveScaledFontSize = MediaQuery.textScalerOf(
       context,
     ).scale(_lyricsTypographyFor(context).active);
@@ -1916,21 +2120,91 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
 
   @override
   void dispose() {
-    _positionSubscription?.close();
+    _playbackSubscription?.close();
+    _cancelLineBoundaryTimer();
     _resumeAutoScrollTimer?.cancel();
+    _ownedMonotonicClock?.stop();
     _scrollController.dispose();
     super.dispose();
   }
 
-  void _updateActiveLine(Duration position) {
-    final next = _activeLineIndex(widget.lines, position + widget.offset);
+  void _acceptPlaybackSample(_LyricsPlaybackClockSample sample) {
+    _playbackSample = sample;
+    _playbackAnchor = sample.position;
+    _monotonicAnchor = _monotonicNow();
+    _updateActiveLine(sample.position, notify: _tickerModeEnabled);
+    _scheduleNextLineBoundary();
+  }
+
+  Duration _estimatedPlaybackPosition() {
+    final sample = _playbackSample;
+    if (sample == null || sample.status != PlayerStatus.playing) {
+      return _playbackAnchor;
+    }
+    final elapsed = _monotonicNow() - _monotonicAnchor;
+    return elapsed.isNegative ? _playbackAnchor : _playbackAnchor + elapsed;
+  }
+
+  bool _updateActiveLine(Duration position, {bool notify = true}) {
+    final next = _activeTimelineEntryIndex(_entries, position + widget.offset);
     if (next == _activeIndex || !mounted) {
+      return false;
+    }
+    if (notify) {
+      setState(() {
+        _activeIndex = next;
+      });
+    } else {
+      _activeIndex = next;
+    }
+    if (_tickerModeEnabled) {
+      _scheduleAutoScroll();
+    }
+    return true;
+  }
+
+  void _cancelLineBoundaryTimer() {
+    _lineBoundaryGeneration += 1;
+    _lineBoundaryTimer?.cancel();
+    _lineBoundaryTimer = null;
+  }
+
+  void _scheduleNextLineBoundary() {
+    _cancelLineBoundaryTimer();
+    final sample = _playbackSample;
+    if (!mounted ||
+        !_tickerModeEnabled ||
+        sample == null ||
+        sample.status != PlayerStatus.playing ||
+        _entries.isEmpty) {
       return;
     }
-    setState(() {
-      _activeIndex = next;
-    });
-    _scheduleAutoScroll();
+
+    final position = _estimatedPlaybackPosition();
+    _updateActiveLine(position);
+    final nextIndex = _activeIndex + 1;
+    if (nextIndex < 0 || nextIndex >= _entries.length) {
+      return;
+    }
+    final delay = _entries[nextIndex].timestamp - (position + widget.offset);
+    final generation = _lineBoundaryGeneration;
+    _lineBoundaryTimer = Timer(
+      delay > Duration.zero ? delay : const Duration(milliseconds: 1),
+      () {
+        if (!mounted ||
+            generation != _lineBoundaryGeneration ||
+            !_tickerModeEnabled ||
+            _playbackSample?.status != PlayerStatus.playing) {
+          return;
+        }
+        _lineBoundaryTimer = null;
+        // The monotonic sample decides whether the boundary was truly
+        // reached. This protects against an early platform timer and keeps
+        // fake-time pumpAndSettle calls from advancing real playback.
+        _updateActiveLine(_estimatedPlaybackPosition());
+        _scheduleNextLineBoundary();
+      },
+    );
   }
 
   void _scheduleAutoScroll() {
@@ -1964,13 +2238,13 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
         return;
       }
       final duration = Duration(
-        milliseconds: (190 + (distance * 0.32)).round().clamp(220, 380).toInt(),
+        milliseconds: (340 + (distance * 0.34)).round().clamp(395, 650).toInt(),
       );
       unawaited(
         _scrollController.animateTo(
           target,
           duration: duration,
-          curve: Curves.easeOutCubic,
+          curve: Curves.easeInOutCubic,
         ),
       );
     });
@@ -2008,7 +2282,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   }
 
   void _invalidateLineMetrics() {
-    _measuredLines = null;
+    _measuredEntries = null;
     _measuredRomanizedLines = null;
     _measuredContentWidth = null;
     _measuredActiveFontSize = null;
@@ -2025,7 +2299,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     required Locale? locale,
   }) {
     final metricsAreCurrent =
-        identical(_measuredLines, widget.lines) &&
+        identical(_measuredEntries, _entries) &&
         identical(_measuredRomanizedLines, widget.romanizedLines) &&
         _measuredContentWidth != null &&
         (_measuredContentWidth! - contentWidth).abs() < 0.5 &&
@@ -2038,20 +2312,22 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     }
 
     final extents = <double>[
-      for (var index = 0; index < widget.lines.length; index++)
-        _measureLyricLineExtent(
-          originalText: widget.lines[index].text,
-          romanizedText:
-              widget.romanizedLines != null &&
-                  index < widget.romanizedLines!.length
-              ? widget.romanizedLines![index]
-              : null,
-          contentWidth: contentWidth,
-          activeFontSize: activeFontSize,
-          textScaler: textScaler,
-          textDirection: textDirection,
-          locale: locale,
-        ),
+      for (final entry in _entries)
+        entry.isInstrumental
+            ? _instrumentalLyricsLineExtent
+            : _measureLyricLineExtent(
+                originalText: entry.line!.text,
+                romanizedText:
+                    widget.romanizedLines != null &&
+                        entry.sourceIndex < widget.romanizedLines!.length
+                    ? widget.romanizedLines![entry.sourceIndex]
+                    : null,
+                contentWidth: contentWidth,
+                activeFontSize: activeFontSize,
+                textScaler: textScaler,
+                textDirection: textDirection,
+                locale: locale,
+              ),
     ];
     final offsets = List<double>.filled(extents.length + 1, 0);
     for (var index = 0; index < extents.length; index++) {
@@ -2060,7 +2336,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
 
     _lineExtents = List<double>.unmodifiable(extents);
     _lineOffsets = List<double>.unmodifiable(offsets);
-    _measuredLines = widget.lines;
+    _measuredEntries = _entries;
     _measuredRomanizedLines = widget.romanizedLines;
     _measuredContentWidth = contentWidth;
     _measuredActiveFontSize = activeFontSize;
@@ -2160,33 +2436,64 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
                 padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
                 sliver: SliverVariedExtentList.builder(
                   key: const ValueKey('synced-lyrics-virtual-list'),
-                  itemCount: widget.lines.length,
+                  itemCount: _entries.length,
                   itemExtentBuilder: (index, _) => _lineExtents[index],
                   addAutomaticKeepAlives: false,
                   addRepaintBoundaries: true,
                   addSemanticIndexes: false,
-                  itemBuilder: (context, index) => _LyricLineTile(
-                    key: ValueKey('lyrics-line-tile-$index'),
-                    contentKey: index == _activeIndex
-                        ? const ValueKey('active-lyric-line')
-                        : ValueKey('lyric-line-$index'),
-                    originalText: widget.lines[index].text,
-                    romanizedText:
-                        widget.romanizedLines != null &&
-                            index < widget.romanizedLines!.length
-                        ? widget.romanizedLines![index]
-                        : null,
-                    romanizationKey: ValueKey(
-                      'lyrics-line-romanization-$index',
-                    ),
-                    active: index == _activeIndex,
-                    passed: index < _activeIndex,
-                    lyricsCentered: widget.lyricsCentered,
-                    animationStyle: widget.animationStyle,
-                    activeFontSize: typography.active,
-                    inactiveFontSize: typography.inactive,
-                    onTap: () => _seekToLine(widget.lines[index]),
-                  ),
+                  itemBuilder: (context, index) {
+                    final entry = _entries[index];
+                    final active = index == _activeIndex;
+                    final passed = index < _activeIndex;
+                    if (entry.isInstrumental) {
+                      final sourceKey = entry.sourceIndex < 0
+                          ? 'intro'
+                          : entry.inferred
+                          ? 'inferred-${entry.sourceIndex}'
+                          : '${entry.sourceIndex}';
+                      return _InstrumentalLyricsTile(
+                        key: ValueKey('lyrics-instrumental-tile-$sourceKey'),
+                        progressKey: active
+                            ? const ValueKey(
+                                'active-lyrics-instrumental-progress',
+                              )
+                            : ValueKey(
+                                'lyrics-instrumental-progress-$sourceKey',
+                              ),
+                        start: entry.timestamp,
+                        end: entry.instrumentalEnd,
+                        offset: widget.offset,
+                        active: active,
+                        passed: passed,
+                        lyricsCentered: widget.lyricsCentered,
+                        onTap: () => _seekToTimestamp(entry.timestamp),
+                      );
+                    }
+                    final line = entry.line!;
+                    final sourceIndex = entry.sourceIndex;
+                    return _LyricLineTile(
+                      key: ValueKey('lyrics-line-tile-$sourceIndex'),
+                      contentKey: active
+                          ? const ValueKey('active-lyric-line')
+                          : ValueKey('lyric-line-$sourceIndex'),
+                      originalText: line.text,
+                      romanizedText:
+                          widget.romanizedLines != null &&
+                              sourceIndex < widget.romanizedLines!.length
+                          ? widget.romanizedLines![sourceIndex]
+                          : null,
+                      romanizationKey: ValueKey(
+                        'lyrics-line-romanization-$sourceIndex',
+                      ),
+                      active: active,
+                      passed: passed,
+                      lyricsCentered: widget.lyricsCentered,
+                      animationStyle: widget.animationStyle,
+                      activeFontSize: typography.active,
+                      inactiveFontSize: typography.inactive,
+                      onTap: () => _seekToTimestamp(line.timestamp),
+                    );
+                  },
                 ),
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 20)),
@@ -2215,14 +2522,122 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     );
   }
 
-  void _seekToLine(LyricLine line) {
-    final targetMilliseconds = (line.timestamp - widget.offset).inMilliseconds
+  void _seekToTimestamp(Duration timestamp) {
+    final targetMilliseconds = (timestamp - widget.offset).inMilliseconds
         .clamp(0, 1 << 31)
         .toInt();
-    unawaited(
-      ref
-          .read(playerControllerProvider.notifier)
-          .seek(Duration(milliseconds: targetMilliseconds)),
+    final target = Duration(milliseconds: targetMilliseconds);
+    unawaited(ref.read(playerControllerProvider.notifier).seek(target));
+  }
+}
+
+class _InstrumentalLyricsTile extends ConsumerWidget {
+  const _InstrumentalLyricsTile({
+    required this.progressKey,
+    required this.start,
+    required this.end,
+    required this.offset,
+    required this.active,
+    required this.passed,
+    required this.lyricsCentered,
+    required this.onTap,
+    super.key,
+  });
+
+  final Key progressKey;
+  final Duration start;
+  final Duration? end;
+  final Duration offset;
+  final bool active;
+  final bool passed;
+  final bool lyricsCentered;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final playback = ref.watch(
+      playerControllerProvider.select((player) {
+        final snapshot = player.value;
+        return (
+          position: snapshot?.position ?? Duration.zero,
+          duration: snapshot?.duration,
+          isPlaying: snapshot?.status == PlayerStatus.playing,
+        );
+      }),
+    );
+    final effectivePosition = playback.position + offset;
+    final effectiveEnd =
+        end ?? (playback.duration == null ? null : playback.duration! + offset);
+    final totalMilliseconds = effectiveEnd == null
+        ? 0
+        : (effectiveEnd - start).inMilliseconds;
+    final elapsedMilliseconds = (effectivePosition - start).inMilliseconds;
+    final enabled = totalMilliseconds > 0;
+    final progress = enabled
+        ? (elapsedMilliseconds / totalMilliseconds).clamp(0.0, 1.0).toDouble()
+        : 0.0;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final accent = AppColors.downloadAccentFor(context);
+    final strings = ref.watch(appStringsProvider);
+    final opacity = active ? 1.0 : (passed ? 0.48 : 0.28);
+    final alignment = lyricsCentered
+        ? Alignment.center
+        : AlignmentDirectional.centerStart;
+
+    return Semantics(
+      label: strings.choose('Interludio instrumental', 'Instrumental break'),
+      value: enabled ? '${(progress * 100).round()}%' : null,
+      selected: active,
+      button: true,
+      onTap: onTap,
+      excludeSemantics: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          child: Align(
+            alignment: alignment,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final width = (constraints.maxWidth * 0.64)
+                    .clamp(
+                      math.min(148.0, constraints.maxWidth),
+                      math.min(340.0, constraints.maxWidth),
+                    )
+                    .toDouble();
+                return AnimatedOpacity(
+                  duration: reduceMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 560),
+                  curve: Curves.easeInOutCubic,
+                  opacity: opacity,
+                  child: SizedBox(
+                    width: width,
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(end: progress),
+                      duration: reduceMotion || !active
+                          ? Duration.zero
+                          : const Duration(milliseconds: 540),
+                      curve: Curves.linear,
+                      builder: (context, value, _) => WavyPlaybackProgressLine(
+                        key: progressKey,
+                        value: value,
+                        isPlaying: active && playback.isPlaying && progress < 1,
+                        waveColor: accent,
+                        surfaceBrightness: Brightness.dark,
+                        height: 48,
+                        waveAmplitude: 12,
+                        enabled: enabled,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2296,7 +2711,7 @@ class _LyricLineTile extends StatelessWidget {
     final showRomanization = trimmedRomanization != null;
     final animationDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : const Duration(milliseconds: 240);
+        : const Duration(milliseconds: 520);
     final lineText = Padding(
       key: contentKey,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
@@ -2311,7 +2726,7 @@ class _LyricLineTile extends StatelessWidget {
             SizedBox(height: active ? 5 : 4),
             AnimatedDefaultTextStyle(
               duration: animationDuration,
-              curve: Curves.easeOutCubic,
+              curve: Curves.easeInOutCubic,
               style: TextStyle(
                 color: Colors.white.withValues(
                   alpha: active ? 0.72 : (passed ? 0.55 : 0.48),
@@ -2335,7 +2750,7 @@ class _LyricLineTile extends StatelessWidget {
     );
     final styledLine = AnimatedDefaultTextStyle(
       duration: animationDuration,
-      curve: Curves.easeOutCubic,
+      curve: Curves.easeInOutCubic,
       style: textStyle,
       child: lineText,
     );
@@ -2958,14 +3373,17 @@ String? _displayedRomanization(String originalText, String? romanizedText) {
   return trimmed;
 }
 
-int _activeLineIndex(List<LyricLine> lines, Duration effectivePosition) {
+int _activeTimelineEntryIndex(
+  List<_LyricsTimelineEntry> entries,
+  Duration effectivePosition,
+) {
   var low = 0;
-  var high = lines.length - 1;
+  var high = entries.length - 1;
   var result = -1;
   final target = effectivePosition.inMilliseconds;
   while (low <= high) {
     final middle = low + ((high - low) >> 1);
-    if (lines[middle].timestamp.inMilliseconds <= target) {
+    if (entries[middle].timestamp.inMilliseconds <= target) {
       result = middle;
       low = middle + 1;
     } else {

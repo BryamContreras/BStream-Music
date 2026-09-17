@@ -58,4 +58,124 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('stays at rest when reduced motion is requested', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(size: Size(800, 600), disableAnimations: true),
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 120,
+              child: MarqueeText(
+                'A very long playlist title',
+                pause: Duration(milliseconds: 1),
+                travel: Duration(seconds: 1),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(_marqueeTranslation(tester), 0);
+    expect(tester.hasRunningAnimations, isFalse);
+  });
+
+  testWidgets('stops outside TickerMode and resumes from the start', (
+    tester,
+  ) async {
+    var tickerEnabled = false;
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return Align(
+              alignment: Alignment.topLeft,
+              child: TickerMode(
+                enabled: tickerEnabled,
+                child: const SizedBox(
+                  width: 120,
+                  child: MarqueeText(
+                    'A very long playlist title',
+                    pause: Duration(milliseconds: 1),
+                    travel: Duration(seconds: 1),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(_marqueeTranslation(tester), 0);
+
+    update(() => tickerEnabled = true);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 2));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(_marqueeTranslation(tester), lessThan(0));
+
+    update(() => tickerEnabled = false);
+    await tester.pump();
+    expect(_marqueeTranslation(tester), 0);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(_marqueeTranslation(tester), 0);
+  });
+
+  testWidgets('stops while the application is not active and resumes', (
+    tester,
+  ) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 120,
+            child: MarqueeText(
+              'A very long playlist title',
+              pause: Duration(milliseconds: 1),
+              travel: Duration(seconds: 1),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 2));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(_marqueeTranslation(tester), lessThan(0));
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    expect(_marqueeTranslation(tester), 0);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(_marqueeTranslation(tester), 0);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 2));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(_marqueeTranslation(tester), lessThan(0));
+  });
+}
+
+double _marqueeTranslation(WidgetTester tester) {
+  final transform = find.descendant(
+    of: find.byKey(const ValueKey('marquee-text-animation')),
+    matching: find.byType(Transform),
+  );
+  return tester.widget<Transform>(transform).transform.getTranslation().x;
 }

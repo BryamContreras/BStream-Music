@@ -194,15 +194,24 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsControllerProvider);
-    final csvTransfer = ref.watch(libraryCsvTransferControllerProvider);
+    // Import progress can publish several updates per second. The storage
+    // page only needs to know when actions must be disabled; the progress
+    // dialog owns the detailed subscription below. Selecting this single bit
+    // keeps the complete Settings navigator out of those progress frames.
+    final csvTransferBusy = _route == _SettingsRoute.storage
+        ? ref.watch(
+            libraryCsvTransferControllerProvider.select(
+              (transfer) => transfer.isBusy,
+            ),
+          )
+        : false;
     final supportsTikTokLive =
         AppPlatform.supportsTikTokLive ||
         AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
-    final tiktokLive = supportsTikTokLive
+    final tiktokLive = supportsTikTokLive && _route == _SettingsRoute.live
         ? ref.watch(tiktokLiveControllerProvider)
         : null;
     final strings = ref.watch(appStringsProvider);
-    final sleepTimer = ref.watch(sleepTimerControllerProvider);
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final transitionDuration = disableAnimations
         ? Duration.zero
@@ -271,9 +280,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
             ? const SizedBox.shrink()
             : _buildRoute(
                 state: state,
-                sleepTimer: sleepTimer,
                 tiktokLive: tiktokLive,
-                csvTransfer: csvTransfer,
+                csvTransferBusy: csvTransferBusy,
                 strings: strings,
               );
         return AnimatedSwitcher(
@@ -287,18 +295,19 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
             alignment: Alignment.topLeft,
             children: <Widget>[...previousChildren, ?currentChild],
           ),
-          child: KeyedSubtree(
+          child: RepaintBoundary(
             key: ValueKey('settings-detail-${_route.name}'),
-            child: routeFrame(
-              routeBody,
-              rootSlivers: rootSelected
-                  ? _buildRootSlivers(
-                      state: state,
-                      sleepTimer: sleepTimer,
-                      tiktokLive: tiktokLive,
-                      strings: strings,
-                    )
-                  : null,
+            child: KeyedSubtree(
+              child: routeFrame(
+                routeBody,
+                rootSlivers: rootSelected
+                    ? _buildRootSlivers(
+                        state: state,
+                        supportsTikTokLive: supportsTikTokLive,
+                        strings: strings,
+                      )
+                    : null,
+              ),
             ),
           ),
         );
@@ -348,9 +357,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
 
   Widget _buildRoute({
     required SettingsState state,
-    required SleepTimerState sleepTimer,
     required AsyncValue<TikTokLiveState>? tiktokLive,
-    required LibraryCsvTransferState csvTransfer,
+    required bool csvTransferBusy,
     required AppStrings strings,
   }) {
     final content = switch (_route) {
@@ -412,7 +420,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
             Theme.of(context).platform != TargetPlatform.android,
         downloadPathController: _downloadPathController,
         downloadPathFocusNode: _downloadPathFocusNode,
-        busy: _backupBusy || csvTransfer.isBusy,
+        busy: _backupBusy || csvTransferBusy,
         onBrowse: _pickDownloadDirectory,
         onImportBackup: _importBackup,
         onImportCsv: _importCsv,
@@ -457,11 +465,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
 
   List<Widget> _buildRootSlivers({
     required SettingsState state,
-    required SleepTimerState sleepTimer,
-    required AsyncValue<TikTokLiveState>? tiktokLive,
+    required bool supportsTikTokLive,
     required AppStrings strings,
   }) {
-    final liveState = tiktokLive?.value;
     final showSupportedLinks =
         AppPlatform.isAndroid ||
         Theme.of(context).platform == TargetPlatform.android;
@@ -525,17 +531,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               children: [
                 KeyedSubtree(
                   key: const ValueKey('settings-inline-timer'),
-                  child: _SleepTimerSettings(
-                    state: sleepTimer,
+                  child: _SleepTimerSettingsScope(
                     strings: strings,
-                    onEnabledChanged: ref
-                        .read(sleepTimerControllerProvider.notifier)
-                        .setEnabled,
-                    onDurationSelected: ref
-                        .read(sleepTimerControllerProvider.notifier)
-                        .selectDuration,
-                    onCustomDuration: () =>
-                        _chooseSleepTimerDuration(sleepTimer),
+                    onCustomDuration: _chooseSleepTimerDuration,
                   ),
                 ),
                 const SizedBox(height: appCardGap),
@@ -635,45 +633,54 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                 ),
               ],
             ),
-            if (showSupportedLinks || tiktokLive != null)
-              _SettingsGroup(
-                title: strings.integrations,
-                children: [
-                  if (showSupportedLinks)
-                    _SettingsEntryCard(
-                      key: const ValueKey('settings-card-supported-links'),
-                      icon: Icons.link_rounded,
-                      title: strings.supportedLinks,
-                      subtitle: strings.supportedLinksSummary,
-                      onTap: _openSupportedLinksSettings,
-                    ),
-                  if (showSupportedLinks && tiktokLive != null)
-                    const SizedBox(height: appCardGap),
-                  if (tiktokLive != null) ...[
-                    _SettingsEntryCard(
-                      key: const ValueKey('settings-card-live'),
-                      icon: Icons.live_tv_rounded,
-                      title: strings.liveConnection,
-                      subtitle:
-                          liveState?.message ?? strings.liveConnectionSummary,
-                      status: switch (liveState?.status) {
-                        TikTokLiveStatus.connected => true,
-                        TikTokLiveStatus.error ||
-                        TikTokLiveStatus.liveEnded => false,
-                        _ => null,
-                      },
-                      onTap: () => _openRoute(_SettingsRoute.live),
-                    ),
-                    const SizedBox(height: appCardGap),
-                    _LiveRequestStorageCard(
-                      state: liveState,
-                      strings: strings,
-                      onChanged: (value) => ref
-                          .read(tiktokLiveControllerProvider.notifier)
-                          .setSaveRequestsToLibrary(value),
-                    ),
-                  ],
-                ],
+            if (showSupportedLinks || supportsTikTokLive)
+              Consumer(
+                builder: (context, scopedRef, _) {
+                  final tiktokLive = supportsTikTokLive
+                      ? scopedRef.watch(tiktokLiveControllerProvider)
+                      : null;
+                  final liveState = tiktokLive?.value;
+                  return _SettingsGroup(
+                    title: strings.integrations,
+                    children: [
+                      if (showSupportedLinks)
+                        _SettingsEntryCard(
+                          key: const ValueKey('settings-card-supported-links'),
+                          icon: Icons.link_rounded,
+                          title: strings.supportedLinks,
+                          subtitle: strings.supportedLinksSummary,
+                          onTap: _openSupportedLinksSettings,
+                        ),
+                      if (showSupportedLinks && tiktokLive != null)
+                        const SizedBox(height: appCardGap),
+                      if (tiktokLive != null) ...[
+                        _SettingsEntryCard(
+                          key: const ValueKey('settings-card-live'),
+                          icon: Icons.live_tv_rounded,
+                          title: strings.liveConnection,
+                          subtitle:
+                              liveState?.message ??
+                              strings.liveConnectionSummary,
+                          status: switch (liveState?.status) {
+                            TikTokLiveStatus.connected => true,
+                            TikTokLiveStatus.error ||
+                            TikTokLiveStatus.liveEnded => false,
+                            _ => null,
+                          },
+                          onTap: () => _openRoute(_SettingsRoute.live),
+                        ),
+                        const SizedBox(height: appCardGap),
+                        _LiveRequestStorageCard(
+                          state: liveState,
+                          strings: strings,
+                          onChanged: (value) => scopedRef
+                              .read(tiktokLiveControllerProvider.notifier)
+                              .setSaveRequestsToLibrary(value),
+                        ),
+                      ],
+                    ],
+                  );
+                },
               ),
             _SettingsGroup(
               title: strings.applicationInformation,
@@ -1787,8 +1794,8 @@ class _AboutApplicationSettings extends StatelessWidget {
             "What's new in ${AppConstants.appVersion}",
           ),
           subtitle: strings.choose(
-            'Búsqueda, portadas, permisos LIVE y Overlay local para Windows',
-            'Search, artwork, LIVE permissions, and local overlay for Windows',
+            'Vinilo Clásico, Saltar silencios, letras fluidas y gestos',
+            'Classic Vinyl, smoother lyrics, silence skipping, and gestures',
           ),
           onTap: () => _showWhatsNew(context),
         ),
@@ -1815,20 +1822,22 @@ class _AboutApplicationSettings extends StatelessWidget {
   Future<void> _showWhatsNew(BuildContext context) async {
     final highlights = strings.isEnglish
         ? const <String>[
-            'Search now includes a responsive discovery grid with YouTube Music moods and genres plus offline-safe fallback categories.',
-            'Fixed delays when loading song and video artwork, including during playback and offline use of downloaded songs.',
-            'The new Expanded artwork style is now available, extending and blurring the cover in both player layouts.',
-            'Improved animated artwork with more natural, varied, and fluid particle motion.',
-            'Expanded the permission filters for LIVE connection commands, including the Followers option.',
-            'Local LIVE overlay is now available on Windows through a TikTok LIVE Studio-compatible local domain, with the BStream logo beside the current song title and the LIVE queue.',
+            'Added the Classic Vinyl player with a rotating record and animated tonearm. BStream Music, Apple Music Style, and Classic Vinyl now use responsive landscape layouts.',
+            'Android can now conservatively shorten confirmed prolonged silence in streaming and downloaded songs without disrupting crossfade or quiet musical passages.',
+            'Swipe the mobile mini player left for the next song or right for the previous one, with subtle resisted movement and protection against accidental changes.',
+            'Lyrics now change and scroll more fluidly, show a filling wave during instrumental passages, and retain a dark playback presentation together with the full player when the app theme is Light.',
+            'Expanded artwork now reveals more of the lower cover, while animated artwork motion is slightly more visible without changing its particles.',
+            'Rendering and transitions throughout the app were refined for steadier motion at 60 Hz or the display refresh rate when hardware permits.',
+            'TikTok LIVE connection bootstrap, fallbacks, and bounded retries are now more resilient to transient upstream changes.',
           ]
         : const <String>[
-            'Búsqueda ahora incluye una cuadrícula adaptable de estados de ánimo y géneros de YouTube Music, con categorías de respaldo disponibles sin conexión.',
-            'Se solucionaron los retrasos al cargar las portadas de canciones y videos, incluso durante la reproducción y al usar descargas sin conexión.',
-            'Ya está disponible el nuevo estilo de portadas Expandido, que extiende y difumina la imagen en ambos estilos de reproductor.',
-            'Se mejoraron las portadas animadas con partículas más naturales, variadas y fluidas.',
-            'Se ampliaron los filtros de permisos para los comandos de la conexión LIVE, incluida la opción Seguidores.',
-            'Overlay LIVE local ya está disponible en Windows mediante un dominio local compatible con TikTok LIVE Studio, con el logo de BStream junto al título de la canción actual y la cola LIVE.',
+            'Se agregó el reproductor Vinilo Clásico con disco giratorio y aguja animada. BStream Music, Apple Music y Vinilo Clásico ahora usan diseños horizontales adaptables.',
+            'Android ahora puede acortar de forma conservadora los silencios prolongados confirmados en canciones en streaming y descargadas, sin afectar el crossfade ni los pasajes musicales suaves.',
+            'Desliza el mini reproductor móvil hacia la izquierda para avanzar o hacia la derecha para volver, con movimiento sutil y protección contra cambios accidentales.',
+            'Las letras ahora cambian y se desplazan con mayor fluidez, muestran una onda que se rellena durante los instrumentales y conservan junto al reproductor su presentación oscura cuando la aplicación usa el tema claro.',
+            'La portada Expandida ahora deja ver una mayor parte de su zona inferior y el movimiento de las portadas animadas se percibe un poco más, sin modificar las partículas.',
+            'Se refinaron el renderizado y las transiciones de toda la aplicación para mantener mayor fluidez a 60 Hz o a la frecuencia de la pantalla cuando el dispositivo lo permite.',
+            'Se reforzaron el inicio de conexión, los fallbacks y los reintentos limitados de TikTok LIVE ante cambios temporales del servicio.',
           ];
     await showAppDialog<void>(
       context: context,
@@ -2054,6 +2063,14 @@ class _PlayerStyleSelectorDialog extends StatelessWidget {
               icon: Icons.music_note_rounded,
               label: strings.playerStyleAppleMusic,
               onTap: () => Navigator.of(context).pop(PlayerStyle.appleMusic),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey('settings-player-style-option-classic-vinyl'),
+              selected: style == PlayerStyle.classicVinyl,
+              icon: Icons.album_rounded,
+              label: strings.playerStyleClassicVinyl,
+              onTap: () => Navigator.of(context).pop(PlayerStyle.classicVinyl),
             ),
           ],
         ),
@@ -2560,6 +2577,7 @@ class _AppearanceSettings extends StatelessWidget {
             icon: switch (playerStyle) {
               PlayerStyle.bstreamMusic => Icons.graphic_eq_rounded,
               PlayerStyle.appleMusic => Icons.music_note_rounded,
+              PlayerStyle.classicVinyl => Icons.album_rounded,
             },
             title: strings.playerStyle,
             subtitle: strings.playerStyleLabel(playerStyle),
@@ -3324,6 +3342,29 @@ class _SleepTimerDurationDialogState extends State<_SleepTimerDurationDialog> {
           child: Text(strings.startTimer),
         ),
       ],
+    );
+  }
+}
+
+class _SleepTimerSettingsScope extends ConsumerWidget {
+  const _SleepTimerSettingsScope({
+    required this.strings,
+    required this.onCustomDuration,
+  });
+
+  final AppStrings strings;
+  final ValueChanged<SleepTimerState> onCustomDuration;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(sleepTimerControllerProvider);
+    final controller = ref.read(sleepTimerControllerProvider.notifier);
+    return _SleepTimerSettings(
+      state: state,
+      strings: strings,
+      onEnabledChanged: controller.setEnabled,
+      onDurationSelected: controller.selectDuration,
+      onCustomDuration: () => onCustomDuration(state),
     );
   }
 }

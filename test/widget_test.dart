@@ -6259,33 +6259,31 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('Búsqueda ahora incluye una cuadrícula adaptable'),
+      find.textContaining('Se agregó el reproductor Vinilo Clásico'),
       findsOneWidget,
     );
     expect(
-      find.textContaining(
-        'Se solucionaron los retrasos al cargar las portadas',
-      ),
+      find.textContaining('acortar de forma conservadora los silencios'),
       findsOneWidget,
     );
     expect(
-      find.text(
-        'Ya está disponible el nuevo estilo de portadas Expandido, que extiende y difumina la imagen en ambos estilos de reproductor.',
-      ),
+      find.textContaining('Desliza el mini reproductor móvil'),
       findsOneWidget,
     );
     expect(
-      find.text(
-        'Se mejoraron las portadas animadas con partículas más naturales, variadas y fluidas.',
-      ),
+      find.textContaining('Las letras ahora cambian y se desplazan'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('Se ampliaron los filtros de permisos'),
+      find.textContaining('La portada Expandida ahora deja ver'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('Overlay LIVE local ya está disponible en Windows'),
+      find.textContaining('Se refinaron el renderizado y las transiciones'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Se reforzaron el inicio de conexión'),
       findsOneWidget,
     );
     await tester.tap(
@@ -7795,10 +7793,7 @@ void main() {
       lyricsButton.style?.foregroundColor?.resolve(<WidgetState>{}),
       AppColors.playbackControlForegroundFor(playerContext),
     );
-    expect(
-      lyricsButton.style?.foregroundColor?.resolve(<WidgetState>{}),
-      isNot(playerTheme.colorScheme.onSurface),
-    );
+    expect(playerTheme.brightness, Brightness.dark);
     expect(
       tester.getCenter(lyricsControl).dx,
       lessThan(
@@ -8013,8 +8008,17 @@ void main() {
   testWidgets('lyrics control opens the synchronized lyrics page', (
     tester,
   ) async {
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+        themeMode: AppThemeMode.light,
+        accent: AppAccent.blue,
+      ),
+    );
     await tester.pumpWidget(
       _testApp(
+        settingsController: settingsController,
         playerService: _FakePlayerService(
           snapshot: const PlayerSnapshot(
             status: PlayerStatus.playing,
@@ -8074,6 +8078,14 @@ void main() {
     }
 
     expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('lyrics-always-dark-theme')),
+      findsOneWidget,
+    );
+    final lyricsTheme = Theme.of(
+      tester.element(find.byKey(const ValueKey('synced-lyrics-scroll'))),
+    );
+    expect(lyricsTheme.brightness, Brightness.dark);
     expect(find.text('Linea activa'), findsOneWidget);
     expect(
       find.descendant(
@@ -8101,7 +8113,17 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 220));
     expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('lyrics-always-dark-theme')),
+      findsNothing,
+    );
     expect(find.byKey(const ValueKey('player-lyrics-control')), findsOneWidget);
+    expect(
+      Theme.of(
+        tester.element(find.byKey(const ValueKey('home-view'))),
+      ).brightness,
+      Brightness.light,
+    );
     expect(
       identical(
         retainedPlayerElement,

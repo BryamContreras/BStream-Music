@@ -23,6 +23,7 @@ class AnimatedArtworkMotion extends StatefulWidget {
     this.isPlaying = true,
     this.identity,
     this.borderRadius = BorderRadius.zero,
+    this.depthEnabled = true,
     this.zoomDuration = defaultZoomDuration,
     this.panDuration = defaultPanDuration,
     this.depthDuration = defaultDepthDuration,
@@ -45,6 +46,13 @@ class AnimatedArtworkMotion extends StatefulWidget {
   final bool isPlaying;
   final String? identity;
   final BorderRadiusGeometry borderRadius;
+
+  /// Whether the very small 3D tilt/perspective loop is rendered.
+  ///
+  /// Full-bleed artwork can disable this while retaining the same pan and
+  /// breathing zoom. A changing perspective prevents large filtered layers
+  /// from being composited as cheaply as an ordinary 2D transform.
+  final bool depthEnabled;
   final Duration zoomDuration;
   final Duration panDuration;
   final Duration depthDuration;
@@ -68,6 +76,12 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
     _zoomController,
     _panController,
     _depthController,
+  ];
+
+  List<AnimationController> get _motionControllers => [
+    _zoomController,
+    _panController,
+    if (widget.depthEnabled) _depthController,
   ];
 
   @override
@@ -121,6 +135,10 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
       assert(widget.depthDuration > Duration.zero);
       _depthController.duration = widget.depthDuration;
     }
+    if (oldWidget.depthEnabled && !widget.depthEnabled) {
+      _depthController.stop();
+      _depthController.value = 0;
+    }
     _synchronizeMotion(restart: oldWidget.identity != widget.identity);
   }
 
@@ -152,12 +170,12 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
       }
     }
     if (!widget.isPlaying) {
-      for (final controller in _controllers) {
+      for (final controller in _motionControllers) {
         controller.stop();
       }
       return;
     }
-    for (final controller in _controllers) {
+    for (final controller in _motionControllers) {
       if (!controller.isAnimating) {
         controller.repeat();
       }
@@ -176,64 +194,89 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
   @override
   Widget build(BuildContext context) {
     final variant = _ArtworkMotionVariant.fromIdentity(widget.identity);
+    final motion = LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportSize =
+            constraints.hasBoundedWidth && constraints.hasBoundedHeight
+            ? constraints.biggest
+            : null;
+        return RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: _motion,
+            // The image is retained as its own layer. Only the inexpensive
+            // transforms above it change on animation ticks.
+            child: RepaintBoundary(child: widget.child),
+            builder: (context, child) {
+              final frame = _motionAllowed
+                  ? _ArtworkMotionFrame.at(
+                      zoomProgress: _zoomController.value,
+                      panProgress: _panController.value,
+                      depthProgress: widget.depthEnabled
+                          ? _depthController.value
+                          : 0,
+                      variant: variant,
+                      viewportSize: viewportSize,
+                    )
+                  : _ArtworkMotionFrame.neutral;
+              if (!widget.depthEnabled) {
+                final scale = frame.coverageScale * frame.zoomScale;
+                return Transform(
+                  key: const ValueKey('animated-artwork-flat-transform'),
+                  alignment: Alignment.center,
+                  transform: Matrix4.identity()
+                    ..translateByDouble(
+                      frame.translation.dx,
+                      frame.translation.dy,
+                      0,
+                      1,
+                    )
+                    ..scaleByDouble(scale, scale, 1, 1),
+                  transformHitTests: false,
+                  child: child,
+                );
+              }
+              return Transform(
+                key: const ValueKey('animated-artwork-translation'),
+                transform: Matrix4.translationValues(
+                  frame.translation.dx,
+                  frame.translation.dy,
+                  0,
+                ),
+                transformHitTests: false,
+                child: Transform(
+                  key: const ValueKey('animated-artwork-depth-transform'),
+                  alignment: Alignment.center,
+                  transform: frame.depthTransform,
+                  transformHitTests: false,
+                  child: Transform.scale(
+                    key: const ValueKey('animated-artwork-coverage-scale'),
+                    alignment: Alignment.center,
+                    scale: frame.coverageScale,
+                    transformHitTests: false,
+                    child: Transform.scale(
+                      key: const ValueKey('animated-artwork-zoom-scale'),
+                      alignment: Alignment.center,
+                      scale: frame.zoomScale,
+                      transformHitTests: false,
+                      child: child,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+    // A zero-radius full-bleed surface is already clipped by its viewport.
+    // Avoid adding a screen-sized anti-aliased clip layer on every frame.
+    if (widget.borderRadius == BorderRadius.zero) {
+      return motion;
+    }
     return ClipRRect(
       borderRadius: widget.borderRadius,
       clipBehavior: Clip.antiAlias,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final viewportSize =
-              constraints.hasBoundedWidth && constraints.hasBoundedHeight
-              ? constraints.biggest
-              : null;
-          return RepaintBoundary(
-            child: AnimatedBuilder(
-              animation: _motion,
-              // The image is retained as its own layer. Only the inexpensive
-              // transforms above it change on animation ticks.
-              child: RepaintBoundary(child: widget.child),
-              builder: (context, child) {
-                final frame = _motionAllowed
-                    ? _ArtworkMotionFrame.at(
-                        zoomProgress: _zoomController.value,
-                        panProgress: _panController.value,
-                        depthProgress: _depthController.value,
-                        variant: variant,
-                        viewportSize: viewportSize,
-                      )
-                    : _ArtworkMotionFrame.neutral;
-                return Transform(
-                  key: const ValueKey('animated-artwork-translation'),
-                  transform: Matrix4.translationValues(
-                    frame.translation.dx,
-                    frame.translation.dy,
-                    0,
-                  ),
-                  transformHitTests: false,
-                  child: Transform(
-                    key: const ValueKey('animated-artwork-depth-transform'),
-                    alignment: Alignment.center,
-                    transform: frame.depthTransform,
-                    transformHitTests: false,
-                    child: Transform.scale(
-                      key: const ValueKey('animated-artwork-coverage-scale'),
-                      alignment: Alignment.center,
-                      scale: frame.coverageScale,
-                      transformHitTests: false,
-                      child: Transform.scale(
-                        key: const ValueKey('animated-artwork-zoom-scale'),
-                        alignment: Alignment.center,
-                        scale: frame.zoomScale,
-                        transformHitTests: false,
-                        child: child,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          );
-        },
-      ),
+      child: motion,
     );
   }
 }

@@ -153,30 +153,33 @@ class _AnimatedArtworkParticlesState extends State<AnimatedArtworkParticles>
       return const SizedBox.shrink();
     }
 
+    final field = RepaintBoundary(
+      key: const ValueKey('animated-artwork-particles-boundary'),
+      child: CustomPaint(
+        key: const ValueKey('animated-artwork-particles-paint'),
+        painter: ArtworkParticlePainter(
+          progress: _controller,
+          identity: widget.identity,
+          color: widget.color,
+          brightness: Theme.of(context).brightness,
+          particleCount: widget.particleCount,
+          particleSpecs: _particleSpecs,
+          bottomFadeStart: widget.bottomFadeStart,
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
+    final clippedField = widget.borderRadius == BorderRadius.zero
+        ? field
+        : ClipRRect(
+            borderRadius: widget.borderRadius,
+            clipBehavior: Clip.antiAlias,
+            child: field,
+          );
+
     return IgnorePointer(
       key: const ValueKey('animated-artwork-particles'),
-      child: ExcludeSemantics(
-        child: ClipRRect(
-          borderRadius: widget.borderRadius,
-          clipBehavior: Clip.antiAlias,
-          child: RepaintBoundary(
-            key: const ValueKey('animated-artwork-particles-boundary'),
-            child: CustomPaint(
-              key: const ValueKey('animated-artwork-particles-paint'),
-              painter: ArtworkParticlePainter(
-                progress: _controller,
-                identity: widget.identity,
-                color: widget.color,
-                brightness: Theme.of(context).brightness,
-                particleCount: widget.particleCount,
-                particleSpecs: _particleSpecs,
-                bottomFadeStart: widget.bottomFadeStart,
-              ),
-              child: const SizedBox.expand(),
-            ),
-          ),
-        ),
-      ),
+      child: ExcludeSemantics(child: clippedField),
     );
   }
 }

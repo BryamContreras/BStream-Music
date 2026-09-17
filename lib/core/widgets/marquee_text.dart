@@ -44,6 +44,8 @@ class _MarqueeTextState extends State<MarqueeText>
   bool _visibilityCheckPending = false;
   bool _viewportVisible = true;
   bool _appActive = true;
+  bool _tickerEnabled = true;
+  bool _reducedMotion = false;
 
   Duration get _cycleDuration =>
       widget.pause + widget.travel + widget.pause + widget.travel;
@@ -56,6 +58,9 @@ class _MarqueeTextState extends State<MarqueeText>
     // dispose after the element tree has already been deactivated.
     _controller = AnimationController(vsync: this, duration: _cycleDuration);
     WidgetsBinding.instance.addObserver(this);
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    _appActive =
+        lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
   }
 
   @override
@@ -67,6 +72,9 @@ class _MarqueeTextState extends State<MarqueeText>
       _scrollNotificationObserver = observer;
       observer?.addListener(_handleScrollNotification);
     }
+    _tickerEnabled = TickerMode.valuesOf(context).enabled;
+    _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    _updateAnimationAvailability();
     _scheduleVisibilityCheck();
   }
 
@@ -225,7 +233,12 @@ class _MarqueeTextState extends State<MarqueeText>
   }
 
   bool get _animationEnabled =>
-      mounted && _overflow > 0 && _viewportVisible && _appActive;
+      mounted &&
+      _overflow > 0 &&
+      _viewportVisible &&
+      _appActive &&
+      _tickerEnabled &&
+      !_reducedMotion;
 
   void _handleScrollNotification(ScrollNotification notification) {
     _scheduleVisibilityCheck();
@@ -259,6 +272,9 @@ class _MarqueeTextState extends State<MarqueeText>
       _startTimer?.cancel();
       _startTimer = null;
       _controller.stop();
+      if (_controller.value != 0) {
+        _controller.value = 0;
+      }
       return;
     }
     if (!_controller.isAnimating && _startTimer == null) {
@@ -274,7 +290,7 @@ class _MarqueeTextState extends State<MarqueeText>
       if (!mounted || !_animationEnabled) return;
       _controller
         ..duration = _cycleDuration
-        ..forward(from: 0).whenComplete(() {
+        ..forward(from: 0).whenCompleteOrCancel(() {
           if (mounted && _animationEnabled) _queueCycleStart();
         });
     });

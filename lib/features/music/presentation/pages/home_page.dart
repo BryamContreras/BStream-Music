@@ -1366,9 +1366,12 @@ class _HomePageState extends ConsumerState<HomePage> {
                     duration: playerTransitionDuration,
                     reverseDuration: playerReverseTransitionDuration,
                     animateInitialEntry: false,
+                    // The browsing background below this layer already fills
+                    // the shell. Keep only the transition marker here: a
+                    // second identical gradient forced an unnecessary
+                    // full-screen paint during every player entrance.
                     child: const SizedBox.expand(
                       key: ValueKey('shell-background-player'),
-                      child: PlayerPlaybackGradientBackground(),
                     ),
                   ),
                   SafeArea(
@@ -2844,7 +2847,9 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             child: PlayerPanel(
               onOpenSearch: widget.onOpenSearch,
               onCollapse: widget.onCollapsePlayer,
-              drawBackground: false,
+              // Keep the dark artwork backdrop scoped to the player. The
+              // navigation and queue remain on the surrounding app theme.
+              drawBackground: true,
               style: widget.playerStyle,
               artworkStyle: widget.playerArtworkStyle,
               animatedArtworkEnabled: widget.animatedArtworkEnabled,

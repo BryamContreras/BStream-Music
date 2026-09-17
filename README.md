@@ -2,7 +2,7 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, iOS, Windows, Linux, and macOS.
 
-Current version: **1.2.7+127**.
+Current version: **1.2.8+128**.
 
 > The repository does not store media content. YouTube search, playback, and
 > downloads use BStream's self-contained Dart InnerTube pipeline. Supported
@@ -11,20 +11,24 @@ Current version: **1.2.7+127**.
 
 <img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
 
-## What's new in 1.2.7
+## What's new in 1.2.8
 
-- Added a responsive category grid to empty Search, backed by localized YouTube
-  Music moods and genres with offline-safe fallback cards.
-- Fixed delays when loading song and video artwork, including during playback
-  and offline use of downloaded songs.
-- Added the Expanded artwork style, which extends and blurs the cover in both
-  player layouts.
-- Improved animated artwork with more natural, varied, and fluid particle
-  motion.
-- Expanded the permission filters for LIVE connection commands, including the
-  Followers option.
-- Added Local LIVE overlay on Windows to display the current song and LIVE
-  queue in TikTok LIVE Studio through a transparent loopback-only web source.
+- Added the Classic Vinyl player with a rotating record and animated tonearm,
+  and completed responsive landscape layouts across the player styles.
+- Added conservative Android silence skipping for streaming and downloaded
+  songs. It protects musical pauses and remains coordinated with crossfade.
+- Added mobile mini-player gestures: swipe left for the next song or right for
+  the previous one, with subtle resisted motion and an accidental-swipe guard.
+- Improved synchronized lyrics with smoother line and scroll transitions plus
+  a filling wave indicator during instrumental passages.
+- The full player and Lyrics now retain their dark playback presentation even
+  when the rest of the app uses the Light theme.
+- Refined Expanded artwork so more of the lower cover remains visible, while
+  animated covers move a little more clearly without changing their particles.
+- Improved animation and rendering paths throughout the app for steadier
+  motion, targeting 60 Hz or the display refresh rate when hardware permits.
+- Hardened TikTok LIVE connection bootstrap, fallbacks, and bounded retries so
+  active rooms recover more reliably from transient upstream changes.
 
 ## Main features
 
@@ -99,9 +103,17 @@ Current version: **1.2.7+127**.
 - Lyrics offer three persistent animation styles (Smooth by default),
   Normal/Centered alignment, optional per-script romanization, and a live
   preview in Appearance settings.
+- Appearance offers BStream Music, Apple Music Style, and Classic Vinyl full
+  players. Their controls and artwork adapt to portrait, compact landscape,
+  large phones, and desktop windows.
 - Crossfade uses coordinated playback decks and supports every whole-second
   duration from 1 through 15 seconds on Android and desktop.
+- Android can conservatively shorten confirmed prolonged silence in streaming
+  or downloaded songs without disabling crossfade or treating quiet music as
+  empty audio.
 - Playback queue synchronized with playlists and the library.
+- On mobile, swipe the mini player left for Next or right for Previous; short
+  drags return to place without changing the song.
 - Queue side panel on Windows and a dedicated queue view on Android.
 - Change tracks directly from the queue and reorder them with a long press.
 - Android keeps a rolling native queue for remote playback, with up to three
@@ -124,7 +136,8 @@ Current version: **1.2.7+127**.
   editable text field such as Search currently has focus.
 - Synchronized lyrics powered by LRCLIB, with plain-lyrics fallback, automatic
   scrolling, tap-to-seek, and a manual timing offset from `-10` to `+10` seconds
-  in `0.50`-second steps.
+  in `0.50`-second steps. Timed instrumental passages use a filling wave line
+  before the next lyric.
 - Sleep timer with quick durations and a custom duration.
 - Native system media integration: Android media notifications, iOS and macOS
   Now Playing, Windows SMTC, and Linux MPRIS.
@@ -139,7 +152,9 @@ Current version: **1.2.7+127**.
 
 - Responsive mobile and desktop layouts with bounded artwork decoding,
   lazy library lists, 48 dp touch targets, and large-text adaptation.
-- System, Light, and Dark themes with eighteen persistent accent palettes.
+- System, Light, and Dark themes with eighteen persistent accent palettes. The
+  full player and Lyrics use a consistent dark playback surface while browsing,
+  queues, menus, and settings retain the selected application theme.
 - Navigation remembers only the two most recent views.
 - Returning from the player restores the previously opened playlist or section.
 - Home displays up to 10 recently played items and 10 playlists. Recent items

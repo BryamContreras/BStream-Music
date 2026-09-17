@@ -245,6 +245,46 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('unrelated LIVE updates stay out of the Library tree', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    tester.view
+      ..devicePixelRatio = 1
+      ..physicalSize = const Size(430, 800);
+    final liveController = _IdleTikTokLiveController();
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      _libraryHarness(liveControllerBuilder: () => liveController),
+    );
+    await tester.pumpAndSettle();
+
+    final downloadsEntry = find.byKey(
+      const ValueKey('library-downloads-entry'),
+    );
+    final liveEntry = find.byKey(const ValueKey('library-live-entry'));
+    final downloadsBefore = tester.widget<Widget>(downloadsEntry);
+    final liveBefore = tester.widget<Widget>(liveEntry);
+
+    liveController.publishMessage('A chat command changed the status text.');
+    await tester.pump();
+
+    expect(tester.widget<Widget>(downloadsEntry), same(downloadsBefore));
+    expect(
+      tester.widget<Widget>(liveEntry),
+      same(liveBefore),
+      reason: 'the queue card only depends on the queue itself',
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('Android LIVE remote item remains playable without a download', (
     tester,
   ) async {
@@ -358,6 +398,10 @@ void main() {
         tester.widget<AnimatedSwitcher>(switcher).duration,
         const Duration(milliseconds: 260),
       );
+      expect(
+        tester.widget(find.byKey(const ValueKey('root'))),
+        isA<RepaintBoundary>(),
+      );
 
       final liveEntry = find.byKey(const ValueKey('library-live-entry'));
       await tester.scrollUntilVisible(
@@ -385,6 +429,10 @@ void main() {
 
       expect(routeTransition('root').position.value.dx, lessThan(0));
       expect(routeTransition('live').position.value.dx, greaterThan(0));
+      expect(
+        tester.widget(find.byKey(const ValueKey('live'))),
+        isA<RepaintBoundary>(),
+      );
       expect(find.byKey(const ValueKey('library-tab-title')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('library-detail-header')),
@@ -430,7 +478,10 @@ void main() {
   );
 }
 
-Widget _libraryHarness({bool disableAnimations = false}) {
+Widget _libraryHarness({
+  bool disableAnimations = false,
+  TikTokLiveController Function()? liveControllerBuilder,
+}) {
   return ProviderScope(
     overrides: [
       libraryTracksProvider.overrideWith((ref) async => const <LocalTrack>[]),
@@ -438,7 +489,9 @@ Widget _libraryHarness({bool disableAnimations = false}) {
       catalogPlaylistsProvider.overrideWith(
         (ref) async => const <CatalogPlaylist>[],
       ),
-      tiktokLiveControllerProvider.overrideWith(_IdleTikTokLiveController.new),
+      tiktokLiveControllerProvider.overrideWith(
+        liveControllerBuilder ?? _IdleTikTokLiveController.new,
+      ),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),
@@ -493,6 +546,10 @@ class _IdleTikTokLiveController extends TikTokLiveController {
     status: TikTokLiveStatus.idle,
     message: 'Listo para conectar.',
   );
+
+  void publishMessage(String message) {
+    state = AsyncData(state.requireValue.copyWith(message: message));
+  }
 }
 
 class _RemoteQueueTikTokLiveController extends TikTokLiveController {

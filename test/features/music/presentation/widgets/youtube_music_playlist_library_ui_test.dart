@@ -643,6 +643,73 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('catalog cards ignore position-only playback updates', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final playlists = _RecordingPlaylistsController(playlist: fixture.playlist);
+    const initialSnapshot = PlayerSnapshot(
+      status: PlayerStatus.playing,
+      trackId: 'duplicate-video',
+      title: 'Canción repetida',
+      artist: 'Artista remoto',
+      position: Duration(seconds: 12),
+      duration: Duration(minutes: 3, seconds: 7),
+    );
+    final player = _MutablePlayerController(initialSnapshot);
+
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: playlists,
+        playerController: player,
+      ),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+
+    final playButton = find.byKey(
+      const ValueKey('library-catalog-play-occurrence-a'),
+    );
+    final initialButton = tester.widget<Widget>(playButton);
+
+    player.emit(
+      initialSnapshot.copyWith(position: const Duration(seconds: 13)),
+    );
+    await tester.pump();
+
+    expect(
+      identical(tester.widget<Widget>(playButton), initialButton),
+      isTrue,
+      reason: 'a playback clock tick must not rebuild catalog cards',
+    );
+
+    player.emit(
+      initialSnapshot.copyWith(
+        status: PlayerStatus.paused,
+        position: const Duration(seconds: 14),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      identical(tester.widget<Widget>(playButton), initialButton),
+      isFalse,
+      reason: 'a play/pause change must still refresh the card control',
+    );
+    expect(
+      find.descendant(
+        of: playButton,
+        matching: find.byIcon(Icons.play_arrow_rounded),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _openDeleteDialog(WidgetTester tester, String playlistId) async {
@@ -694,6 +761,7 @@ Widget _libraryHarness({
   YouTubeMusicPlaylistShareService? playlistShareService,
   YouTubeMusicMakePlaylistUnlistedForSharing? makeUnlisted,
   DownloadController? downloads,
+  PlayerController? playerController,
 }) {
   return ProviderScope(
     overrides: [
@@ -706,7 +774,9 @@ Widget _libraryHarness({
         (ref, playlistId) async =>
             playlistId == fixture.playlist.id ? fixture.catalog : null,
       ),
-      playerControllerProvider.overrideWith(_IdlePlayerController.new),
+      playerControllerProvider.overrideWith(
+        () => playerController ?? _IdlePlayerController(),
+      ),
       if (downloads != null)
         downloadControllerProvider.overrideWith(() => downloads),
       youtubeMusicShareablePlaylistBindingDetailsProvider.overrideWith(
@@ -788,6 +858,19 @@ class _IdlePlayerController extends PlayerController {
   @override
   Future<PlayerSnapshot> build() async =>
       const PlayerSnapshot(status: PlayerStatus.idle);
+}
+
+class _MutablePlayerController extends PlayerController {
+  _MutablePlayerController(this.snapshot);
+
+  final PlayerSnapshot snapshot;
+
+  @override
+  Future<PlayerSnapshot> build() async => snapshot;
+
+  void emit(PlayerSnapshot nextSnapshot) {
+    state = AsyncData(nextSnapshot);
+  }
 }
 
 class _AuthenticatedYouTubeMusicAuthController

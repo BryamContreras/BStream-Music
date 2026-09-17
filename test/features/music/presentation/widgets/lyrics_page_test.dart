@@ -42,6 +42,16 @@ void main() {
       LyricLine(timestamp: Duration(seconds: 4), text: 'Third line'),
     ],
   );
+  const instrumentalBreakDocument = LyricsDocument(
+    provider: 'Test provider',
+    trackName: 'Test song',
+    artistName: 'Test artist',
+    lines: [
+      LyricLine(timestamp: Duration.zero, text: 'Verse'),
+      LyricLine(timestamp: Duration(seconds: 5), text: ''),
+      LyricLine(timestamp: Duration(seconds: 13), text: 'Chorus'),
+    ],
+  );
   const plainDocument = LyricsDocument(
     provider: 'LRCLIB',
     trackName: 'Test song',
@@ -165,6 +175,180 @@ void main() {
     expect(decoration.boxShadow?.single.color, accent.withValues(alpha: 0.16));
   });
 
+  testWidgets('smooth lyrics fade out without snapping to the dimmed state', (
+    tester,
+  ) async {
+    const transitionKey = ValueKey('smooth-exit-transition');
+
+    Widget transition({required bool active}) {
+      return MaterialApp(
+        home: Scaffold(
+          body: LyricsAnimationTransition(
+            key: transitionKey,
+            style: LyricsAnimationStyle.smooth,
+            active: active,
+            accent: Colors.cyan,
+            child: const Text('Outgoing line'),
+          ),
+        ),
+      );
+    }
+
+    double opacity() => tester
+        .widget<Opacity>(
+          find.descendant(
+            of: find.byKey(transitionKey),
+            matching: find.byType(Opacity),
+          ),
+        )
+        .opacity;
+    double scale() => tester
+        .widget<Transform>(
+          find.descendant(
+            of: find.byKey(transitionKey),
+            matching: find.byType(Transform),
+          ),
+        )
+        .transform
+        .entry(0, 0);
+
+    await tester.pumpWidget(transition(active: true));
+    expect(opacity(), closeTo(1, 0.001));
+
+    await tester.pumpWidget(transition(active: false));
+    await tester.pump();
+
+    expect(
+      opacity(),
+      closeTo(1, 0.001),
+      reason: 'Deactivation must reverse from the current value, not reset.',
+    );
+
+    await tester.pump(const Duration(milliseconds: 310));
+    final halfwayOpacity = opacity();
+    expect(halfwayOpacity, greaterThan(0.62));
+    expect(halfwayOpacity, lessThan(1));
+
+    await tester.pump(const Duration(milliseconds: 310));
+    expect(opacity(), closeTo(0.62, 0.001));
+    expect(scale(), closeTo(0.98, 0.001));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'reduced motion does not schedule transition frames when active changes',
+    (tester) async {
+      const transitionKey = ValueKey('reduced-motion-transition');
+
+      Widget transition({required bool active}) {
+        return MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Material(
+              child: LyricsAnimationTransition(
+                key: transitionKey,
+                style: LyricsAnimationStyle.slide,
+                active: active,
+                accent: Colors.cyan,
+                child: const Text('Reduced motion line'),
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(transition(active: false));
+      expect(
+        find.descendant(
+          of: find.byKey(transitionKey),
+          matching: find.byType(AnimatedBuilder),
+        ),
+        findsNothing,
+      );
+      expect(tester.binding.hasScheduledFrame, isFalse);
+
+      await tester.pumpWidget(transition(active: true));
+      await tester.pump();
+
+      expect(find.text('Reduced motion line'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(transitionKey),
+          matching: find.byType(AnimatedBuilder),
+        ),
+        findsNothing,
+      );
+      expect(tester.binding.hasScheduledFrame, isFalse);
+
+      await tester.pumpWidget(transition(active: false));
+      await tester.pump();
+      expect(tester.binding.hasScheduledFrame, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('slide deactivation mid entrance keeps moving smoothly to rest', (
+    tester,
+  ) async {
+    const transitionKey = ValueKey('mid-entrance-slide-transition');
+
+    Widget transition({required bool active}) {
+      return MaterialApp(
+        home: Scaffold(
+          body: LyricsAnimationTransition(
+            key: transitionKey,
+            style: LyricsAnimationStyle.slide,
+            active: active,
+            accent: Colors.cyan,
+            child: const Text('Short-lived line'),
+          ),
+        ),
+      );
+    }
+
+    double slideOffset() => tester
+        .widget<Transform>(
+          find.descendant(
+            of: find.byKey(transitionKey),
+            matching: find.byType(Transform),
+          ),
+        )
+        .transform
+        .getTranslation()
+        .y;
+
+    await tester.pumpWidget(transition(active: false));
+    expect(slideOffset(), closeTo(0, 0.01));
+
+    await tester.pumpWidget(transition(active: true));
+    await tester.pump();
+    expect(slideOffset(), closeTo(34, 0.01));
+
+    await tester.pump(const Duration(milliseconds: 180));
+    final midEntranceOffset = slideOffset();
+    expect(midEntranceOffset, greaterThan(0));
+    expect(midEntranceOffset, lessThan(34));
+
+    await tester.pumpWidget(transition(active: false));
+    await tester.pump();
+    expect(
+      slideOffset(),
+      closeTo(midEntranceOffset, 0.01),
+      reason: 'Deactivation must not snap a partially entered line to zero.',
+    );
+
+    await tester.pump(const Duration(milliseconds: 180));
+    final continuingOffset = slideOffset();
+    expect(continuingOffset, greaterThan(0));
+    expect(continuingOffset, lessThan(midEntranceOffset));
+
+    await tester.pump(const Duration(milliseconds: 620));
+    expect(slideOffset(), closeTo(0, 0.01));
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('synced lyrics follow the current playback position', (
     tester,
   ) async {
@@ -197,6 +381,480 @@ void main() {
 
     expect(_activeLine('Third line'), findsOneWidget);
     expect(_activeLine('First line'), findsNothing);
+  });
+
+  testWidgets(
+    'playing lyrics cross a line boundary between backend snapshots',
+    (tester) async {
+      const boundaryDocument = LyricsDocument(
+        provider: 'Test provider',
+        trackName: 'Test song',
+        artistName: 'Test artist',
+        lines: [
+          LyricLine(timestamp: Duration.zero, text: 'Before boundary'),
+          LyricLine(timestamp: Duration(seconds: 3), text: 'After boundary'),
+        ],
+      );
+      final clock = _MutableLyricsMonotonicClock();
+      final player = _FakePlayerService(
+        lookupSnapshot.copyWith(position: const Duration(seconds: 1)),
+      );
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(boundaryDocument),
+        monotonicClock: clock.now,
+      );
+
+      expect(_activeLine('Before boundary'), findsOneWidget);
+
+      clock.advance(const Duration(milliseconds: 1900));
+      await tester.pump(const Duration(milliseconds: 1900));
+      expect(_activeLine('Before boundary'), findsOneWidget);
+
+      clock.advance(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(_activeLine('After boundary'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('paused lyrics do not advance and resume from their anchor', (
+    tester,
+  ) async {
+    const boundaryDocument = LyricsDocument(
+      provider: 'Test provider',
+      trackName: 'Test song',
+      artistName: 'Test artist',
+      lines: [
+        LyricLine(timestamp: Duration.zero, text: 'Paused line'),
+        LyricLine(timestamp: Duration(seconds: 3), text: 'Resumed line'),
+      ],
+    );
+    final clock = _MutableLyricsMonotonicClock();
+    final playing = lookupSnapshot.copyWith(
+      position: const Duration(seconds: 1),
+    );
+    final player = _FakePlayerService(playing);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(boundaryDocument),
+      monotonicClock: clock.now,
+    );
+
+    player.emit(playing.copyWith(status: PlayerStatus.paused));
+    await tester.pump();
+    clock.advance(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 3));
+    expect(_activeLine('Paused line'), findsOneWidget);
+
+    player.emit(playing);
+    await tester.pump();
+    clock.advance(const Duration(milliseconds: 1900));
+    await tester.pump(const Duration(milliseconds: 1900));
+    expect(_activeLine('Paused line'), findsOneWidget);
+
+    clock.advance(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(_activeLine('Resumed line'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a backward seek cancels and reprograms the lyric boundary', (
+    tester,
+  ) async {
+    const seekDocument = LyricsDocument(
+      provider: 'Test provider',
+      trackName: 'Test song',
+      artistName: 'Test artist',
+      lines: [
+        LyricLine(timestamp: Duration.zero, text: 'Seek first'),
+        LyricLine(timestamp: Duration(seconds: 3), text: 'Seek second'),
+        LyricLine(timestamp: Duration(seconds: 5), text: 'Seek third'),
+      ],
+    );
+    final clock = _MutableLyricsMonotonicClock();
+    final initial = lookupSnapshot.copyWith(
+      position: const Duration(seconds: 1),
+    );
+    final player = _FakePlayerService(initial);
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(seekDocument),
+      monotonicClock: clock.now,
+    );
+
+    player.emit(initial.copyWith(position: const Duration(seconds: 4)));
+    await tester.pump();
+    expect(_activeLine('Seek second'), findsOneWidget);
+
+    player.emit(initial);
+    await tester.pump();
+    expect(_activeLine('Seek first'), findsOneWidget);
+
+    clock.advance(const Duration(milliseconds: 1900));
+    await tester.pump(const Duration(milliseconds: 1900));
+    expect(_activeLine('Seek first'), findsOneWidget);
+
+    clock.advance(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(_activeLine('Seek second'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'explicit empty synced line shows continuous instrumental progress',
+    (tester) async {
+      const document = LyricsDocument(
+        provider: 'Test provider',
+        trackName: 'Test song',
+        artistName: 'Test artist',
+        lines: [
+          LyricLine(timestamp: Duration.zero, text: 'Verse'),
+          LyricLine(timestamp: Duration(seconds: 5), text: ''),
+          LyricLine(timestamp: Duration(seconds: 13), text: 'Chorus'),
+        ],
+      );
+      final beforeBreak = lookupSnapshot.copyWith(
+        position: const Duration(seconds: 4),
+        duration: const Duration(seconds: 30),
+      );
+      final player = _FakePlayerService(beforeBreak);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(document),
+      );
+
+      expect(_activeLine('Verse'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('active-lyrics-instrumental-progress')),
+        findsNothing,
+      );
+
+      player.emit(beforeBreak.copyWith(position: const Duration(seconds: 9)));
+      await tester.pump();
+      // The indicator owns a repeating wave while playback is active. Advance
+      // only its finite value tween instead of waiting for all tickers.
+      await tester.pump(const Duration(milliseconds: 600));
+
+      final progress = find.byKey(
+        const ValueKey('active-lyrics-instrumental-progress'),
+      );
+      expect(progress, findsOneWidget);
+      expect(find.byKey(const ValueKey('active-lyric-line')), findsNothing);
+      final wave = tester.widget<WavyPlaybackProgressLine>(progress);
+      expect(wave.value, closeTo(0.5, 0.01));
+      expect(wave.isPlaying, isTrue);
+      expect(wave.enabled, isTrue);
+
+      player.emit(beforeBreak.copyWith(position: const Duration(seconds: 13)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 800));
+
+      expect(_activeLine('Chorus'), findsOneWidget);
+      expect(progress, findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final scenario in const [
+    (label: 'positive', offset: Duration(milliseconds: 500)),
+    (label: 'negative', offset: Duration(milliseconds: -500)),
+  ]) {
+    testWidgets(
+      'synthetic intro with ${scenario.label} offset starts at zero and seeks zero',
+      (tester) async {
+        const document = LyricsDocument(
+          provider: 'Test provider',
+          trackName: 'Test song',
+          artistName: 'Test artist',
+          lines: [
+            LyricLine(timestamp: Duration(seconds: 8), text: 'Opening lyric'),
+          ],
+        );
+        final player = _FakePlayerService(
+          lookupSnapshot.copyWith(
+            status: PlayerStatus.paused,
+            position: Duration.zero,
+            duration: const Duration(seconds: 30),
+          ),
+        );
+        final container = await _pumpLyricsPage(
+          tester,
+          player: player,
+          lyrics: _FakeLyricsService(document),
+        );
+
+        container
+            .read(lyricsOffsetControllerProvider.notifier)
+            .setOffset(scenario.offset);
+        await _settleLyricsAnimations(tester);
+
+        expect(container.read(lyricsOffsetControllerProvider), scenario.offset);
+        final tile = find.byKey(
+          const ValueKey('lyrics-instrumental-tile-intro'),
+        );
+        final progress = find.byKey(
+          const ValueKey('active-lyrics-instrumental-progress'),
+        );
+        expect(tile, findsOneWidget);
+        expect(progress, findsOneWidget);
+        expect(find.byKey(const ValueKey('active-lyric-line')), findsNothing);
+        expect(
+          tester.widget<WavyPlaybackProgressLine>(progress).value,
+          closeTo(0, 0.001),
+        );
+
+        await tester.tap(tile);
+        await tester.pump();
+
+        expect(player.seekPositions, [Duration.zero]);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'long unmarked gap starts an inferred wave only after the lyric hold',
+    (tester) async {
+      const document = LyricsDocument(
+        provider: 'Test provider',
+        trackName: 'Test song',
+        artistName: 'Test artist',
+        lines: [
+          LyricLine(timestamp: Duration.zero, text: 'A'),
+          LyricLine(timestamp: Duration(seconds: 12), text: 'Chorus'),
+        ],
+      );
+      final beforeHold = lookupSnapshot.copyWith(
+        status: PlayerStatus.paused,
+        position: const Duration(milliseconds: 6400),
+        duration: const Duration(seconds: 30),
+      );
+      final player = _FakePlayerService(beforeHold);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(document),
+      );
+
+      expect(_activeLine('A'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('lyrics-instrumental-tile-inferred-0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('active-lyrics-instrumental-progress')),
+        findsNothing,
+      );
+
+      player.emit(beforeHold.copyWith(position: const Duration(seconds: 7)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      final progress = find.byKey(
+        const ValueKey('active-lyrics-instrumental-progress'),
+      );
+      expect(progress, findsOneWidget);
+      expect(find.byKey(const ValueKey('active-lyric-line')), findsNothing);
+      expect(
+        tester.widget<WavyPlaybackProgressLine>(progress).value,
+        closeTo(0.5 / 5.5, 0.01),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('short unmarked lyric gap does not infer an instrumental wave', (
+    tester,
+  ) async {
+    const document = LyricsDocument(
+      provider: 'Test provider',
+      trackName: 'Test song',
+      artistName: 'Test artist',
+      lines: [
+        LyricLine(timestamp: Duration.zero, text: 'A'),
+        LyricLine(timestamp: Duration(milliseconds: 11999), text: 'Chorus'),
+      ],
+    );
+    final player = _FakePlayerService(
+      lookupSnapshot.copyWith(
+        status: PlayerStatus.paused,
+        position: const Duration(seconds: 7),
+        duration: const Duration(seconds: 30),
+      ),
+    );
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(document),
+    );
+
+    expect(_activeLine('A'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('lyrics-instrumental-tile-inferred-0')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('active-lyrics-instrumental-progress')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'passed instrumental wave reaches one immediately as chorus activates',
+    (tester) async {
+      final duringBreak = lookupSnapshot.copyWith(
+        status: PlayerStatus.paused,
+        position: const Duration(seconds: 9),
+        duration: const Duration(seconds: 30),
+      );
+      final player = _FakePlayerService(duringBreak);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(instrumentalBreakDocument),
+      );
+
+      expect(
+        tester
+            .widget<WavyPlaybackProgressLine>(
+              find.byKey(const ValueKey('active-lyrics-instrumental-progress')),
+            )
+            .value,
+        closeTo(0.5, 0.01),
+      );
+
+      player.emit(duringBreak.copyWith(position: const Duration(seconds: 13)));
+      await tester.pump();
+
+      expect(_activeLine('Chorus'), findsOneWidget);
+      final passedProgress = find.byKey(
+        const ValueKey('lyrics-instrumental-progress-1'),
+      );
+      expect(passedProgress, findsOneWidget);
+      expect(
+        tester.widget<WavyPlaybackProgressLine>(passedProgress).value,
+        closeTo(1, 0.001),
+      );
+
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(tester.binding.hasScheduledFrame, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'consecutive empty synced lines keep one instrumental progress state',
+    (tester) async {
+      const document = LyricsDocument(
+        provider: 'Test provider',
+        trackName: 'Test song',
+        artistName: 'Test artist',
+        lines: [
+          LyricLine(timestamp: Duration.zero, text: 'Verse'),
+          LyricLine(timestamp: Duration(seconds: 5), text: ''),
+          LyricLine(timestamp: Duration(seconds: 7), text: '   '),
+          LyricLine(timestamp: Duration(seconds: 13), text: 'Chorus'),
+        ],
+      );
+      final duringBreak = lookupSnapshot.copyWith(
+        status: PlayerStatus.paused,
+        position: const Duration(seconds: 6),
+        duration: const Duration(seconds: 30),
+      );
+      final player = _FakePlayerService(duringBreak);
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(document),
+      );
+
+      final progress = find.byKey(
+        const ValueKey('active-lyrics-instrumental-progress'),
+      );
+      expect(progress, findsOneWidget);
+      expect(find.byType(WavyPlaybackProgressLine), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('lyrics-instrumental-tile-2')),
+        findsNothing,
+      );
+      final retainedElement = tester.element(progress);
+      final retainedState = tester.state(progress);
+
+      player.emit(duringBreak.copyWith(position: const Duration(seconds: 8)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      expect(progress, findsOneWidget);
+      expect(tester.element(progress), same(retainedElement));
+      expect(tester.state(progress), same(retainedState));
+      expect(
+        tester.widget<WavyPlaybackProgressLine>(progress).value,
+        closeTo(0.375, 0.01),
+      );
+      expect(
+        tester.widget<WavyPlaybackProgressLine>(progress).isPlaying,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('paused instrumental progress leaves no live ticker', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(
+      lookupSnapshot.copyWith(
+        status: PlayerStatus.paused,
+        position: const Duration(seconds: 9),
+      ),
+    );
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(instrumentalBreakDocument),
+    );
+
+    final progress = find.byKey(
+      const ValueKey('active-lyrics-instrumental-progress'),
+    );
+    expect(progress, findsOneWidget);
+    expect(
+      tester.widget<WavyPlaybackProgressLine>(progress).isPlaying,
+      isFalse,
+    );
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('reduced-motion instrumental progress leaves no live ticker', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(
+      lookupSnapshot.copyWith(position: const Duration(seconds: 9)),
+    );
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(instrumentalBreakDocument),
+      disableAnimations: true,
+    );
+
+    final progress = find.byKey(
+      const ValueKey('active-lyrics-instrumental-progress'),
+    );
+    expect(progress, findsOneWidget);
+    expect(
+      tester.widget<WavyPlaybackProgressLine>(progress).value,
+      closeTo(0.5, 0.01),
+    );
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -393,7 +1051,7 @@ void main() {
     tester.view.physicalSize = const Size(360, 600);
     await tester.pump();
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(milliseconds: 800));
 
     expect(_activeLine('Height resize lyric 100'), findsOneWidget);
     expect(alignmentError(), lessThan(2));
@@ -471,7 +1129,7 @@ void main() {
     expect(container.read(appStringsProvider).appLanguage, AppLanguage.spanish);
     await tester.pump();
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(milliseconds: 800));
 
     final updatedScrollOffset = tester
         .state<ScrollableState>(scrollable)
@@ -3288,6 +3946,7 @@ Future<ProviderContainer> _pumpLyricsPage(
   double textScale = 1,
   bool deriveAppStringsFromSettings = false,
   PlayerStyle playerStyle = defaultPlayerStyle,
+  Duration Function()? monotonicClock,
 }) async {
   final settingsController = _FakeLyricsSettingsController(
     lyricsTextAlignment,
@@ -3339,12 +3998,26 @@ Future<ProviderContainer> _pumpLyricsPage(
           ),
           child: child!,
         ),
-        home: LyricsPage(presentationChrome: presentationChrome),
+        home: LyricsPage(
+          presentationChrome: presentationChrome,
+          monotonicClock: monotonicClock,
+        ),
       ),
     ),
   );
   await _settleLyricsAnimations(tester);
   return container;
+}
+
+class _MutableLyricsMonotonicClock {
+  Duration _elapsed = Duration.zero;
+
+  Duration now() => _elapsed;
+
+  void advance(Duration amount) {
+    assert(!amount.isNegative);
+    _elapsed += amount;
+  }
 }
 
 class _FakeArtworkProgressColorService extends ArtworkProgressColorService {

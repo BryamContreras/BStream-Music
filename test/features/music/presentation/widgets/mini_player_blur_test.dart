@@ -148,6 +148,125 @@ void main() {
     },
   );
 
+  testWidgets('mobile mini-player swipes between adjacent tracks', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 200));
+    final controller = _TestPlayerController();
+    var openCalls = 0;
+
+    await tester.pumpWidget(
+      _miniPlayerHarness(
+        playerController: controller,
+        onOpenPlayer: () => openCalls++,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final swipeRegion = find.byKey(const ValueKey('mini-player-swipe-region'));
+    expect(swipeRegion, findsOneWidget);
+
+    await tester.drag(swipeRegion, const Offset(-120, 0));
+    await tester.pump();
+    expect(controller.nextCalls, 1);
+    expect(controller.previousCalls, 0);
+    expect(openCalls, 0);
+
+    await tester.pump(miniPlayerSwipeSettleDuration);
+    await tester.drag(swipeRegion, const Offset(120, 0));
+    await tester.pump();
+    expect(controller.nextCalls, 1);
+    expect(controller.previousCalls, 1);
+    expect(openCalls, 0);
+  });
+
+  testWidgets(
+    'short mobile mini-player drag follows with resistance and settles',
+    (tester) async {
+      _configureView(tester, const Size(360, 200));
+      final controller = _TestPlayerController();
+
+      await tester.pumpWidget(_miniPlayerHarness(playerController: controller));
+      await tester.pump();
+      await tester.pump();
+
+      final swipeRegion = find.byKey(
+        const ValueKey('mini-player-swipe-region'),
+      );
+      final surface = find.byKey(const ValueKey('mini-player-surface'));
+      final restingX = tester.getTopLeft(surface).dx;
+      final gesture = await tester.startGesture(tester.getCenter(swipeRegion));
+      await gesture.moveBy(const Offset(-30, 0));
+      await tester.pump();
+
+      final draggedX = tester.getTopLeft(surface).dx;
+      expect(draggedX, lessThan(restingX));
+      expect(restingX - draggedX, lessThan(30));
+
+      // Let the velocity sample expire so this remains an intentionally short
+      // drag rather than a fling.
+      await tester.pump(const Duration(milliseconds: 400));
+      await gesture.up();
+      await tester.pump();
+      expect(controller.nextCalls, 0);
+      expect(controller.previousCalls, 0);
+
+      await tester.pump(const Duration(milliseconds: 95));
+      final settlingX = tester.getTopLeft(surface).dx;
+      expect(settlingX, greaterThan(draggedX));
+      expect(settlingX, lessThanOrEqualTo(restingX));
+      await tester.pump(const Duration(milliseconds: 110));
+      expect(tester.getTopLeft(surface).dx, closeTo(restingX, 0.1));
+    },
+  );
+
+  testWidgets('mobile mini-player tap still opens instead of navigating', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 200));
+    final controller = _TestPlayerController();
+    var openCalls = 0;
+
+    await tester.pumpWidget(
+      _miniPlayerHarness(
+        playerController: controller,
+        onOpenPlayer: () => openCalls++,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('mini-player-metadata')));
+    await tester.pump();
+    expect(openCalls, 1);
+    expect(controller.nextCalls, 0);
+    expect(controller.previousCalls, 0);
+  });
+
+  testWidgets('mini-player swipe is disabled without an active track', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(360, 200));
+    final controller = _TestPlayerController(withTrack: false);
+
+    await tester.pumpWidget(_miniPlayerHarness(playerController: controller));
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('mini-player-swipe-region')),
+      findsNothing,
+    );
+    await tester.drag(
+      find.byKey(const ValueKey('mini-player-surface')),
+      const Offset(-120, 0),
+    );
+    await tester.pump();
+    expect(controller.nextCalls, 0);
+    expect(controller.previousCalls, 0);
+  });
+
   testWidgets('mini-player track transition honors reduced motion', (
     tester,
   ) async {
@@ -270,11 +389,11 @@ void main() {
     final container = tester.widget<Container>(
       find.byKey(const ValueKey('mini-player-container')),
     );
-    expect(container.clipBehavior, Clip.antiAliasWithSaveLayer);
+    expect(container.clipBehavior, Clip.antiAlias);
     final artworkClip = tester.widget<ClipRRect>(
       find.byKey(const ValueKey('mini-player-artwork-rounded-rect')),
     );
-    expect(artworkClip.clipBehavior, Clip.antiAliasWithSaveLayer);
+    expect(artworkClip.clipBehavior, Clip.antiAlias);
     expect(
       tester.getSize(find.byKey(const ValueKey('mini-player-artwork'))),
       const Size.square(44),
@@ -561,7 +680,7 @@ void main() {
     final surface = find.byKey(const ValueKey('mini-player-surface'));
 
     expect(container.margin, const EdgeInsets.fromLTRB(8, 5, 8, 8));
-    expect(container.clipBehavior, Clip.antiAliasWithSaveLayer);
+    expect(container.clipBehavior, Clip.antiAlias);
     expect(decoration.borderRadius, BorderRadius.circular(28));
     expect(decoration.boxShadow, isNotEmpty);
     expect(foregroundDecoration.borderRadius, BorderRadius.circular(28));
@@ -598,7 +717,7 @@ void main() {
     final artworkClip = tester.widget<ClipOval>(
       find.byKey(const ValueKey('mini-player-artwork-circle')),
     );
-    expect(artworkClip.clipBehavior, Clip.antiAliasWithSaveLayer);
+    expect(artworkClip.clipBehavior, Clip.antiAlias);
     final artwork = tester.widget<ProportionalArtwork>(
       find.descendant(
         of: find.byKey(const ValueKey('mini-player-artwork')),
@@ -790,7 +909,7 @@ void main() {
         );
         final container = tester.widget<Container>(containerFinder);
         final decoration = container.decoration! as BoxDecoration;
-        expect(container.clipBehavior, Clip.antiAliasWithSaveLayer);
+        expect(container.clipBehavior, Clip.antiAlias);
         expect(
           decoration.borderRadius,
           const BorderRadius.vertical(top: Radius.circular(10)),
@@ -1243,6 +1362,7 @@ Widget _miniPlayerHarness({
   MiniPlayerBackgroundMode backgroundMode = MiniPlayerBackgroundMode.artwork,
   double? constrainedHeight,
   _TestPlayerController? playerController,
+  VoidCallback? onOpenPlayer,
   List<LocalTrack> localTracks = const <LocalTrack>[],
   bool disableAnimations = false,
 }) {
@@ -1273,7 +1393,11 @@ Widget _miniPlayerHarness({
           alignment: Alignment.topCenter,
           child: SizedBox(
             height: constrainedHeight,
-            child: MiniPlayer(mode: mode, backgroundMode: backgroundMode),
+            child: MiniPlayer(
+              mode: mode,
+              backgroundMode: backgroundMode,
+              onOpenPlayer: onOpenPlayer,
+            ),
           ),
         ),
       ),

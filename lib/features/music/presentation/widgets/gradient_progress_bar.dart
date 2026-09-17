@@ -33,6 +33,11 @@ class _GradientProgressBarState extends State<GradientProgressBar>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     _syncAnimation();
   }
 
@@ -50,32 +55,52 @@ class _GradientProgressBarState extends State<GradientProgressBar>
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(999),
-      child: SizedBox(
-        height: widget.height,
-        child: widget.indeterminate
-            ? _IndeterminateTrack(
-                animation: _controller,
-                backgroundColor: widget.backgroundColor,
-                colors: widget.colors,
-              )
-            : _DeterminateTrack(
-                value: widget.value,
-                backgroundColor: widget.backgroundColor,
-                colors: widget.colors,
-              ),
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+
+    return RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: SizedBox(
+          height: widget.height,
+          child: widget.indeterminate
+              ? _IndeterminateTrack(
+                  animation: _controller,
+                  backgroundColor: widget.backgroundColor,
+                  colors: widget.colors,
+                )
+              : _DeterminateTrack(
+                  value: widget.value,
+                  backgroundColor: widget.backgroundColor,
+                  colors: widget.colors,
+                  disableAnimations: disableAnimations,
+                ),
+        ),
       ),
     );
   }
 
   void _syncAnimation() {
-    if (widget.indeterminate) {
+    if (!widget.indeterminate) {
+      _controller.stop();
+      return;
+    }
+
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disableAnimations) {
+      _controller.stop();
+      _controller.value = 0.5;
+      return;
+    }
+
+    if (TickerMode.valuesOf(context).enabled) {
       if (!_controller.isAnimating) {
         _controller.repeat();
       }
       return;
     }
+
     _controller.stop();
   }
 }
@@ -85,11 +110,13 @@ class _DeterminateTrack extends StatelessWidget {
     required this.value,
     required this.backgroundColor,
     required this.colors,
+    required this.disableAnimations,
   });
 
   final double? value;
   final Color backgroundColor;
   final List<Color> colors;
+  final bool disableAnimations;
 
   @override
   Widget build(BuildContext context) {
@@ -101,12 +128,16 @@ class _DeterminateTrack extends StatelessWidget {
         Positioned.fill(
           child: TweenAnimationBuilder<double>(
             tween: Tween<double>(end: progress),
-            duration: const Duration(milliseconds: 220),
+            duration: disableAnimations
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
             builder: (context, animatedProgress, child) {
-              return FractionallySizedBox(
+              return Transform.scale(
                 alignment: Alignment.centerLeft,
-                widthFactor: animatedProgress,
+                scaleX: animatedProgress,
+                scaleY: 1,
+                transformHitTests: false,
                 child: child,
               );
             },
@@ -140,27 +171,33 @@ class _IndeterminateTrack extends StatelessWidget {
         final width = constraints.maxWidth;
         final segmentWidth = width * 0.34;
 
-        return AnimatedBuilder(
-          animation: animation,
-          builder: (context, child) {
-            final left =
-                (width + segmentWidth) * animation.value - segmentWidth;
-            return Stack(
-              children: [
-                Positioned.fill(child: ColoredBox(color: backgroundColor)),
-                Positioned(
-                  left: left,
-                  width: segmentWidth,
-                  top: 0,
-                  bottom: 0,
-                  child: child!,
+        return Stack(
+          children: [
+            Positioned.fill(child: ColoredBox(color: backgroundColor)),
+            Positioned(
+              left: 0,
+              width: segmentWidth,
+              top: 0,
+              bottom: 0,
+              child: AnimatedBuilder(
+                animation: animation,
+                builder: (context, child) {
+                  final offset =
+                      (width + segmentWidth) * animation.value - segmentWidth;
+                  return Transform.translate(
+                    offset: Offset(offset, 0),
+                    transformHitTests: false,
+                    child: child,
+                  );
+                },
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: colors),
+                  ),
                 ),
-              ],
-            );
-          },
-          child: DecoratedBox(
-            decoration: BoxDecoration(gradient: LinearGradient(colors: colors)),
-          ),
+              ),
+            ),
+          ],
         );
       },
     );

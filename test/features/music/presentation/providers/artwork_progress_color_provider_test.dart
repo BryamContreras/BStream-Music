@@ -82,6 +82,54 @@ void main() {
       );
     });
 
+    test('decodes local artwork through the bounded 32 px cache key', () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'bstream-artwork-progress-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final artwork = await _writeSolidPng(
+        directory,
+        'large-local-artwork.png',
+        Colors.deepPurple,
+        dimension: 256,
+      );
+      final imageCache = PaintingBinding.instance.imageCache;
+      imageCache
+        ..clear()
+        ..clearLiveImages();
+      addTearDown(() {
+        imageCache
+          ..clear()
+          ..clearLiveImages();
+      });
+      final configuration = const ImageConfiguration(size: Size.square(32));
+      final resizedKey = await ResizeImage(
+        FileImage(artwork),
+        width: 32,
+      ).obtainKey(configuration);
+      final fullSizeKey = await FileImage(artwork).obtainKey(configuration);
+      final service = ArtworkProgressColorService();
+      addTearDown(service.dispose);
+
+      expect(
+        await service.resolve(artwork.path),
+        isNot(ArtworkProgressColor.fallback),
+      );
+
+      final resizedStatus = imageCache.statusForKey(resizedKey);
+      expect(
+        resizedStatus.pending || resizedStatus.live || resizedStatus.keepAlive,
+        isTrue,
+      );
+      final fullSizeStatus = imageCache.statusForKey(fullSizeKey);
+      expect(
+        fullSizeStatus.pending ||
+            fullSizeStatus.live ||
+            fullSizeStatus.keepAlive,
+        isFalse,
+      );
+    });
+
     testWidgets(
       'keeps a shared lookup alive until its final lease is released',
       (tester) async {
@@ -150,16 +198,17 @@ void main() {
 Future<File> _writeSolidPng(
   Directory directory,
   String name,
-  Color color,
-) async {
+  Color color, {
+  int dimension = 4,
+}) async {
   final recorder = ui.PictureRecorder();
   final canvas = ui.Canvas(recorder);
   canvas.drawRect(
-    const ui.Rect.fromLTWH(0, 0, 4, 4),
+    ui.Rect.fromLTWH(0, 0, dimension.toDouble(), dimension.toDouble()),
     ui.Paint()..color = color,
   );
   final picture = recorder.endRecording();
-  final image = await picture.toImage(4, 4);
+  final image = await picture.toImage(dimension, dimension);
   picture.dispose();
   final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
   image.dispose();
