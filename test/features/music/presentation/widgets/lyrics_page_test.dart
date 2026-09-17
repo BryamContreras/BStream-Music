@@ -881,6 +881,10 @@ void main() {
       final player = _FakePlayerService(
         lookupSnapshot.copyWith(duration: const Duration(minutes: 4)),
       );
+      // This test verifies virtualization and a distant seek, not autonomous
+      // lyric-clock progression. Keep the injected clock fixed so a heavily
+      // loaded coverage run cannot advance beyond line 210 while frames settle.
+      final clock = _MutableLyricsMonotonicClock();
       await _pumpLyricsPage(
         tester,
         player: player,
@@ -895,6 +899,7 @@ void main() {
         lyricsRomanizationEnabled: true,
         lyricsRomanizationService: _FakeLyricsRomanizationService(),
         platform: TargetPlatform.android,
+        monotonicClock: clock.now,
       );
 
       expect(
