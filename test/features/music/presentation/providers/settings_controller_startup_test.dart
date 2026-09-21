@@ -68,6 +68,89 @@ void main() {
     }
   });
 
+  test(
+    'iOS ignores an unusable Downloads location and initializes in Documents',
+    () async {
+      final downloadsPath = p.join(sandbox.path, 'Downloads');
+      var downloadsDirectoryRequests = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(pathProviderChannel, (call) async {
+            switch (call.method) {
+              case 'getDownloadsDirectory':
+                downloadsDirectoryRequests += 1;
+                return downloadsPath;
+              case 'getApplicationDocumentsDirectory':
+                return documentsPath;
+              default:
+                return null;
+            }
+          });
+      SharedPreferences.setMockInitialValues({});
+      final container = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final settings = await container.read(settingsControllerProvider.future);
+      final expectedRoot = p.normalize(p.join(documentsPath, 'BStream-Music'));
+      final preferences = await SharedPreferences.getInstance();
+
+      expect(downloadsDirectoryRequests, 0);
+      expect(settings.downloadDirectory, expectedRoot);
+      expect(preferences.getString(downloadDirectoryKey), expectedRoot);
+      expect(await Directory(downloadsPath).exists(), isFalse);
+      expect(await Directory(p.join(expectedRoot, 'audio')).exists(), isTrue);
+      expect(
+        await Directory(p.join(expectedRoot, 'thumbnails')).exists(),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'iOS repairs a persisted Downloads root from an affected install',
+    () async {
+      final invalidRoot = p.normalize(
+        p.join(sandbox.path, 'Downloads', 'BStream-Music'),
+      );
+      final expectedRoot = p.normalize(p.join(documentsPath, 'BStream-Music'));
+      final database = _RecordingLocalDatabaseService();
+      SharedPreferences.setMockInitialValues({
+        downloadDirectoryKey: invalidRoot,
+      });
+
+      final container = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+          databaseServiceProvider.overrideWithValue(database),
+        ],
+      );
+      addTearDown(container.dispose);
+      addTearDown(database.dispose);
+
+      final settings = await container.read(settingsControllerProvider.future);
+      final preferences = await SharedPreferences.getInstance();
+
+      expect(settings.downloadDirectory, expectedRoot);
+      expect(preferences.getString(downloadDirectoryKey), expectedRoot);
+      expect(database.rewrites, <(String, String?)>[
+        (expectedRoot, invalidRoot),
+      ]);
+      expect(await Directory(invalidRoot).exists(), isFalse);
+      expect(await Directory(p.join(expectedRoot, 'audio')).exists(), isTrue);
+      expect(
+        await Directory(p.join(expectedRoot, 'thumbnails')).exists(),
+        isTrue,
+      );
+    },
+  );
+
   test('startup restores the persisted capsule mini player mode', () async {
     SharedPreferences.setMockInitialValues({
       'settings.surfaceBackgroundMode': 'transparent',

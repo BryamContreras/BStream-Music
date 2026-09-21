@@ -981,6 +981,19 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       return p.join(appRoot.path, _mediaRootDirectoryName);
     }
 
+    if (_platform == AppPlatformType.ios) {
+      // NSDownloadsDirectory is not an application-owned writable location on
+      // iOS. In particular, re-signed/sideloaded builds can receive a path such
+      // as `<container>/Downloads` even though the sandbox only grants the app
+      // access to its standard Documents/Library/tmp directories. Selecting
+      // that value bricks Settings and every provider awaiting Settings before
+      // the first download even starts. Documents is stable, private to the
+      // current container, and is also the root expected by our iOS path-rebase
+      // migration when the container UUID changes after an update or restore.
+      final documents = await getApplicationDocumentsDirectory();
+      return p.join(documents.path, _mediaRootDirectoryName);
+    }
+
     try {
       final downloads = await getDownloadsDirectory();
       if (downloads != null) {
