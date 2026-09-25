@@ -20,6 +20,7 @@ class ClassicVinylDeck extends StatefulWidget {
     required this.progress,
     this.trackTransitionsEnabled = true,
     this.expanded = false,
+    this.portraitLayout = false,
     super.key,
   });
 
@@ -33,6 +34,7 @@ class ClassicVinylDeck extends StatefulWidget {
   final double progress;
   final bool trackTransitionsEnabled;
   final bool expanded;
+  final bool portraitLayout;
 
   @override
   State<ClassicVinylDeck> createState() => _ClassicVinylDeckState();
@@ -165,6 +167,7 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
         final geometry = _VinylDeckGeometry.fromSize(
           constraints.biggest,
           expanded: widget.expanded,
+          portraitLayout: widget.portraitLayout,
         );
         final extent = geometry.extent;
         final recordExtent = geometry.recordDiameter;
@@ -281,6 +284,7 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
                         painter: ClassicVinylTonearmPainter(
                           progress: _tonearmController,
                           expanded: widget.expanded,
+                          portraitLayout: widget.portraitLayout,
                           dark: dark,
                           accent: colors.primary,
                         ),
@@ -306,12 +310,26 @@ class _VinylDeckGeometry {
     required this.armLength,
   });
 
-  factory _VinylDeckGeometry.fromSize(Size size, {required bool expanded}) {
+  factory _VinylDeckGeometry.fromSize(
+    Size size, {
+    required bool expanded,
+    bool portraitLayout = false,
+  }) {
     final extent = math.min(size.width, size.height);
-    final recordDiameter = extent * (expanded ? 1.06 : 0.98);
+    final portrait = portraitLayout || size.height > size.width * 1.08;
+    final compactPortrait = portrait && extent < 400;
+    // Expanded artwork must remain visibly larger even when the portrait
+    // deck is width-constrained on compact phones such as the S22 Ultra.
+    // Keep the extra diameter inside the existing overflow-safe stack so the
+    // record can breathe upward without changing the controls' layout slot.
+    // Portrait expanded players get a little more scale while compact phones
+    // deliberately use a smaller record so the controls can breathe below it.
+    final recordDiameter =
+        extent *
+        (expanded ? (compactPortrait ? 1.34 : (portrait ? 1.28 : 1.16)) : 0.98);
     final recordCenter = Offset(
-      extent * (expanded ? 0.395 : 0.415),
-      extent * (expanded ? 0.545 : 0.535),
+      extent * (expanded ? 0.385 : 0.415),
+      extent * (expanded ? (portrait ? 0.54 : 0.50) : 0.535),
     );
     return _VinylDeckGeometry(
       extent: extent,
@@ -426,18 +444,24 @@ class ClassicVinylTonearmPainter extends CustomPainter {
   ClassicVinylTonearmPainter({
     required this.progress,
     required this.expanded,
+    this.portraitLayout = false,
     required this.dark,
     required this.accent,
   }) : super(repaint: progress);
 
   final Animation<double> progress;
   final bool expanded;
+  final bool portraitLayout;
   final bool dark;
   final Color accent;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final geometry = _VinylDeckGeometry.fromSize(size, expanded: expanded);
+    final geometry = _VinylDeckGeometry.fromSize(
+      size,
+      expanded: expanded,
+      portraitLayout: portraitLayout,
+    );
     final shortest = geometry.extent;
     final pivot = geometry.pivot;
     final pivotRadius = geometry.pivotRadius;
@@ -690,6 +714,7 @@ class ClassicVinylTonearmPainter extends CustomPainter {
   bool shouldRepaint(covariant ClassicVinylTonearmPainter oldDelegate) =>
       oldDelegate.progress != progress ||
       oldDelegate.expanded != expanded ||
+      oldDelegate.portraitLayout != portraitLayout ||
       oldDelegate.dark != dark ||
       oldDelegate.accent != accent;
 }

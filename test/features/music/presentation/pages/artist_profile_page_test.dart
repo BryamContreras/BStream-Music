@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -55,7 +56,13 @@ void main() {
         transparent ? findsOneWidget : findsNothing,
       );
       if (mode.isLiquidGlass) {
-        expect(decoration.color, tonalSurface);
+        expect(
+          decoration.color,
+          AppColors.tabHeaderSurfaceFor(
+            tester.element(appBarFinder),
+            scrolledUnder: true,
+          ),
+        );
       } else {
         expect(decoration.color!.a, transparent ? lessThan(1) : 1);
       }
@@ -64,19 +71,24 @@ void main() {
           of: appBarFinder,
           matching: find.byType(LiquidGlassSurface),
         ),
-        findsNothing,
+        mode.isLiquidGlass ? findsOneWidget : findsNothing,
       );
       expect(
         find.descendant(
           of: appBarFinder,
           matching: find.byType(BackdropFilter),
         ),
-        transparent ? findsOneWidget : findsNothing,
+        transparent || mode.isLiquidGlass ? findsOneWidget : findsNothing,
       );
-      expect(appBarWidget.forceMaterialTransparency, transparent);
+      expect(
+        appBarWidget.forceMaterialTransparency,
+        transparent || mode.isLiquidGlass,
+      );
       expect(
         appBarWidget.backgroundColor,
-        transparent ? Colors.transparent : decoration.color,
+        transparent || mode.isLiquidGlass
+            ? Colors.transparent
+            : decoration.color,
       );
       expect(appBarWidget.systemOverlayStyle?.statusBarColor, tonalSurface);
       final statusBarFinder = find.byKey(

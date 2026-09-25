@@ -231,6 +231,13 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
           child: SizedBox(
             key: const ValueKey('artist-profile-app-bar-spacer'),
             height: surfaceDetailAppBarBodyInset(context),
+            child: AppColors.surfaceBackgroundModeFor(context).usesBackdrop
+                ? ArtworkGradientHeaderBackground(
+                    artworkSource: profile.artist.thumbnailUrl,
+                    cacheWidth: 640,
+                    keyPrefix: 'artist-profile-app-bar-underlay',
+                  )
+                : null,
           ),
         ),
         SliverToBoxAdapter(

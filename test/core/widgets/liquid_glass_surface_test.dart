@@ -590,7 +590,12 @@ void main() {
     expect(find.byType(BackdropFilter), findsOneWidget);
     expect(movingMaterial.backdropGroupKey, same(sharedBackdrop));
     expect(movingMaterial.enabled, isTrue);
-    expect(identical(movingMaterial.filter, restingFilter), isTrue);
+    expect(identical(movingMaterial.filter, restingFilter), isFalse);
+    expect(
+      movingMaterial.filter.toString(),
+      contains('blur(4.0, 4.0'),
+      reason: 'Mobile motion uses the lighter transient blur.',
+    );
     expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
 
     await tester.pumpWidget(

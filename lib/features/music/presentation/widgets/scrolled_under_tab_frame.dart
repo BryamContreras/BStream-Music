@@ -6,6 +6,11 @@ import 'package:flutter/rendering.dart'
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/liquid_glass_surface.dart';
+
+/// Pinned title bars need a little more optical depth than floating pills so
+/// text stays legible while rows and artwork move directly behind them.
+const tabHeaderLiquidGlassIntensity = 1.2;
 
 /// Hosts a tab's slivers in one scroll view and pins its dynamic header above
 /// them. Keeping both in the same viewport lets content genuinely paint behind
@@ -76,12 +81,10 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
     final liquidGlass = mode.isLiquidGlass;
     final surface = Material(
       key: widget.surfaceKey,
-      color: liquidGlass
-          ? Theme.of(context).colorScheme.surface
-          : AppColors.tabHeaderSurfaceFor(
-              context,
-              scrolledUnder: _scrolledUnder,
-            ),
+      color: AppColors.tabHeaderSurfaceFor(
+        context,
+        scrolledUnder: _scrolledUnder,
+      ),
       elevation: liquidGlass ? 0 : (_scrolledUnder ? 1 : 0),
       shadowColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
@@ -112,9 +115,14 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
       return surface;
     }
     if (mode.isLiquidGlass) {
-      // Reserve refractive glass for compact floating pills. Saturated
-      // artwork would otherwise turn this wide title bar into a color band.
-      return surface;
+      return LiquidGlassSurface(
+        key: const ValueKey('tab-header-liquid-glass'),
+        borderRadius: BorderRadius.zero,
+        blurSigma: 8,
+        intensity: tabHeaderLiquidGlassIntensity,
+        edgeTreatment: LiquidGlassEdgeTreatment.bottom,
+        child: surface,
+      );
     }
     return ClipRect(
       child: BackdropFilter(

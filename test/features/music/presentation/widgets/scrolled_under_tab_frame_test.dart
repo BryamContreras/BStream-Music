@@ -121,7 +121,7 @@ void main() {
     expect(itemRect.bottom, greaterThan(headerRect.top));
   });
 
-  testWidgets('liquid glass keeps large pinned chrome tonal and solid', (
+  testWidgets('liquid glass layers the title and keeps its footer tonal', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -147,21 +147,72 @@ void main() {
     final tonalSurface = Theme.of(
       tester.element(headerSurface),
     ).colorScheme.surface;
+    final glassFinder = find.byKey(const ValueKey('tab-header-liquid-glass'));
+    final headerGlass = tester.widget<LiquidGlassSurface>(glassFinder);
 
     expect(
       find.byKey(const ValueKey('tab-combined-liquid-glass')),
       findsNothing,
     );
-    expect(find.byKey(const ValueKey('tab-header-liquid-glass')), findsNothing);
+    expect(glassFinder, findsOneWidget);
     expect(
       find.byKey(const ValueKey('tab-pinned-footer-liquid-glass')),
       findsNothing,
     );
-    expect(find.byType(LiquidGlassSurface), findsNothing);
-    expect(find.byType(BackdropFilter), findsNothing);
-    expect(headerMaterial.color, tonalSurface);
+    expect(find.byType(LiquidGlassSurface), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: footerSurface,
+        matching: find.byType(LiquidGlassSurface),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: glassFinder,
+        matching: find.byKey(LiquidGlassSurface.backdropKey),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: glassFinder,
+        matching: find.byKey(LiquidGlassSurface.surfaceTintKey),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: glassFinder,
+        matching: find.byKey(LiquidGlassSurface.opticsKey),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: glassFinder,
+        matching: find.byKey(LiquidGlassSurface.shadowKey),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: glassFinder,
+        matching: find.byKey(LiquidGlassSurface.adaptiveEdgeKey),
+      ),
+      findsNothing,
+    );
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(
+      headerMaterial.color,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(headerSurface),
+        scrolledUnder: false,
+      ),
+    );
     expect(footerMaterial.color, tonalSurface);
-    expect(headerMaterial.color?.a, 1);
+    expect(headerMaterial.color?.a, greaterThan(0));
+    expect(headerMaterial.color?.a, lessThan(0.2));
     expect(footerMaterial.color?.a, 1);
     expect(headerMaterial.elevation, 0);
     expect(footerMaterial.elevation, 0);
@@ -169,6 +220,10 @@ void main() {
     expect(footerMaterial.surfaceTintColor, Colors.transparent);
     expect(tester.getSize(headerSurface).height, 64);
     expect(tester.getSize(footerSurface).height, 54);
+    expect(headerGlass.blurSigma, 8);
+    expect(headerGlass.intensity, tabHeaderLiquidGlassIntensity);
+    expect(headerGlass.borderRadius, BorderRadius.zero);
+    expect(headerGlass.edgeTreatment, LiquidGlassEdgeTreatment.bottom);
     expect(
       (tester
                   .widget<DecoratedBox>(
@@ -178,7 +233,7 @@ void main() {
               as BoxDecoration)
           .gradient,
       isNull,
-      reason: 'Large liquid-mode chrome uses one solid tonal fill.',
+      reason: 'Liquid Glass supplies the title bar layers without a gradient.',
     );
     expect(
       (tester
@@ -208,7 +263,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(tester.widget<Material>(headerSurface).elevation, 0);
+    final scrolledHeaderMaterial = tester.widget<Material>(headerSurface);
+    expect(
+      scrolledHeaderMaterial.color,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(headerSurface),
+        scrolledUnder: true,
+      ),
+    );
+    expect(
+      scrolledHeaderMaterial.color!.a,
+      greaterThan(headerMaterial.color!.a),
+    );
+    expect(scrolledHeaderMaterial.elevation, 0);
     expect(tester.widget<Material>(footerSurface).elevation, 0);
     final headerRect = tester.getRect(headerSurface);
     final footerRect = tester.getRect(footerSurface);
@@ -221,7 +288,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('liquid glass keeps a lone large pinned header tonal', (
+  testWidgets('liquid glass layers a lone pinned title without a boxed edge', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -232,17 +299,55 @@ void main() {
 
     final headerSurface = find.byKey(const ValueKey('test-tab-header-surface'));
     final headerMaterial = tester.widget<Material>(headerSurface);
-    final expectedSurface = Theme.of(
-      tester.element(headerSurface),
-    ).colorScheme.surface;
+    final glassFinder = find.byKey(const ValueKey('tab-header-liquid-glass'));
+    final headerGlass = tester.widget<LiquidGlassSurface>(glassFinder);
+    final tint =
+        tester
+                .widget<DecoratedBox>(
+                  find.descendant(
+                    of: glassFinder,
+                    matching: find.byKey(LiquidGlassSurface.surfaceTintKey),
+                  ),
+                )
+                .decoration
+            as BoxDecoration;
+    final effectiveAlpha =
+        1 - (1 - tint.color!.a) * (1 - headerMaterial.color!.a);
 
-    expect(find.byKey(const ValueKey('tab-header-liquid-glass')), findsNothing);
-    expect(find.byType(LiquidGlassSurface), findsNothing);
-    expect(find.byType(BackdropFilter), findsNothing);
-    expect(headerMaterial.color, expectedSurface);
-    expect(headerMaterial.color?.a, 1);
+    expect(glassFinder, findsOneWidget);
+    expect(find.byType(LiquidGlassSurface), findsOneWidget);
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(
+      headerMaterial.color,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(headerSurface),
+        scrolledUnder: false,
+      ),
+    );
+    expect(headerMaterial.color?.a, greaterThan(0));
+    expect(headerMaterial.color?.a, lessThan(0.2));
     expect(headerMaterial.elevation, 0);
     expect(headerMaterial.surfaceTintColor, Colors.transparent);
+    expect(headerGlass.blurSigma, 8);
+    expect(headerGlass.intensity, tabHeaderLiquidGlassIntensity);
+    expect(headerGlass.borderRadius, BorderRadius.zero);
+    expect(headerGlass.edgeTreatment, LiquidGlassEdgeTreatment.bottom);
+    expect(effectiveAlpha, greaterThan(tint.color!.a));
+    expect(effectiveAlpha, lessThan(1));
+    expect(
+      find.descendant(
+        of: glassFinder,
+        matching: find.byKey(LiquidGlassSurface.opticsKey),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: glassFinder,
+        matching: find.byKey(LiquidGlassSurface.shadowKey),
+      ),
+      findsNothing,
+    );
     expect(
       (tester
                   .widget<DecoratedBox>(

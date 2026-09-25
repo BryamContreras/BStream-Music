@@ -93,8 +93,10 @@ class LiquidGlassSurface extends StatelessWidget {
 
   /// Whether this sheet or the content behind it is currently moving.
   ///
-  /// Motion never disables blur or refraction. It only energizes the material
-  /// sheen while a capsule is morphing, then lets the highlights settle.
+  /// Motion keeps the blur and painted optical edge live. On mobile, the
+  /// runtime refraction pass is deferred while the surface is moving because
+  /// its position-aware shader would otherwise rebuild a backdrop lens every
+  /// frame. Full refraction returns as soon as the geometry settles.
   final bool backdropMotion;
 
   /// Whether this sheet paints a standalone shadow and refractive perimeter.
@@ -145,6 +147,18 @@ class LiquidGlassSurface extends StatelessWidget {
     final opticalMotionCurve = backdropMotion
         ? Curves.easeOutCubic
         : Curves.easeOutQuart;
+    final mobilePlatform = switch (Theme.of(context).platform) {
+      TargetPlatform.android || TargetPlatform.iOS => true,
+      _ => false,
+    };
+    final refractionEnabledDuringMotion = !(backdropMotion && mobilePlatform);
+    // A moving capsule still needs a little blur to keep the backdrop alive,
+    // but the full resting sigma is unnecessarily expensive while its bounds
+    // are changing every frame. Use a lighter transient blur on mobile and
+    // restore the configured quality as soon as the geometry settles.
+    final motionBlurSigma = backdropMotion && mobilePlatform
+        ? math.min(blurSigma, 4.0)
+        : blurSigma;
 
     final clippedSheet = ClipRRect(
       borderRadius: resolvedBorderRadius,
@@ -154,9 +168,12 @@ class LiquidGlassSurface extends StatelessWidget {
         children: [
           Positioned.fill(
             child: _LiquidGlassBackdrop(
-              blurSigma: blurSigma,
+              blurSigma: motionBlurSigma,
               backdropGroupKey: backdropGroupKey,
-              refractionEnabled: hasOpticalEdge && adaptiveEdgeEnabled,
+              refractionEnabled:
+                  hasOpticalEdge &&
+                  adaptiveEdgeEnabled &&
+                  refractionEnabledDuringMotion,
               treatment: resolvedEdgeTreatment,
               borderRadius: borderRadius,
               textDirection: textDirection,
@@ -864,24 +881,27 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
         (value * opticalEnergy).clamp(0.0, maximum);
 
     if (treatment == LiquidGlassEdgeTreatment.bottom) {
+      // Integrated chrome shares the color-preserving edge of the floating
+      // menu and mini-player. Keep the seam low-energy so it reads as light
+      // refracting through the glass instead of a white divider.
       final seamY = math.max(0.0, size.height - 0.5);
       canvas.drawLine(
         Offset(0, math.max(0.0, seamY - 1.1)),
         Offset(size.width, math.max(0.0, seamY - 1.1)),
         Paint()
-          ..strokeWidth = highContrast ? 1.8 : 1.4
-          ..blendMode = opticalBlendMode
-          ..color = Colors.black.withValues(alpha: alpha(0.16, 0.24))
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8),
+          ..strokeWidth = highContrast ? 0.9 : 0.55
+          ..blendMode = BlendMode.softLight
+          ..color = Colors.black.withValues(alpha: alpha(0.06, 0.1))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.1),
       );
       canvas.drawLine(
         Offset(0, seamY),
         Offset(size.width, seamY),
         Paint()
-          ..strokeWidth = highContrast ? 1.1 : 0.8
-          ..blendMode = opticalBlendMode
-          ..color = Colors.white.withValues(alpha: alpha(0.58))
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.25),
+          ..strokeWidth = highContrast ? 0.55 : 0.35
+          ..blendMode = BlendMode.softLight
+          ..color = Colors.white.withValues(alpha: alpha(0.08, 0.12))
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8),
       );
       return;
     }

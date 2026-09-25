@@ -941,8 +941,10 @@ void main() {
           viewport.height - systemBottomInset - layoutBottomPadding;
       final deckControlsGap = controls.top - deck.bottom;
       final remainingControlsHeight = usableBottom - controls.top;
-      expect(deck.width / viewport.width, greaterThanOrEqualTo(0.98));
-      expect(deckControlsGap, inInclusiveRange(30.0, 43.0));
+      // Compact portrait phones reserve part of the width/height budget for
+      // the larger labeled controls below the turntable.
+      expect(deck.width / viewport.width, inInclusiveRange(0.88, 0.92));
+      expect(deckControlsGap, inInclusiveRange(75.0, 90.0));
       expect(controls.height, closeTo(remainingControlsHeight, 1));
       expect(controls.bottom, closeTo(usableBottom, 1));
 
@@ -957,6 +959,15 @@ void main() {
       );
       expect(vinylSeek, findsOneWidget);
       expect(tester.getSize(vinylSeek).height, 18);
+      final vinylSeekRect = tester.getRect(vinylSeek);
+      final positionLabel = tester.getRect(
+        find.byKey(const ValueKey('apple-player-position')),
+      );
+      final durationLabel = tester.getRect(
+        find.byKey(const ValueKey('apple-player-duration')),
+      );
+      expect(positionLabel.bottom, lessThanOrEqualTo(vinylSeekRect.top + 0.1));
+      expect(durationLabel.bottom, lessThanOrEqualTo(vinylSeekRect.top + 0.1));
       final vinylSeekThemeFinder = find.ancestor(
         of: vinylSeek,
         matching: find.byType(SliderTheme),
@@ -965,7 +976,7 @@ void main() {
       final vinylSeekTheme = tester
           .widget<SliderTheme>(vinylSeekThemeFinder)
           .data;
-      expect(vinylSeekTheme.trackHeight, 4);
+      expect(vinylSeekTheme.trackHeight, 6);
       expect(
         vinylSeekTheme.activeTrackColor,
         AppColors.downloadAccentFor(tester.element(vinylSeek)),
@@ -1003,11 +1014,8 @@ void main() {
 
       final utilityButtonRects = [
         for (final key in const [
-          'player-shuffle-control',
           'player-lyrics-control',
-          'player-repeat-control',
           'player-volume-control',
-          'player-queue-toggle',
         ])
           tester.getRect(find.byKey(ValueKey(key))),
       ];
@@ -1029,29 +1037,66 @@ void main() {
       final previous = tester.getRect(
         find.byKey(const ValueKey('player-previous-control')),
       );
+      final shuffle = tester.getRect(
+        find.byKey(const ValueKey('player-shuffle-control')),
+      );
       final primary = tester.getRect(
         find.byKey(const ValueKey('player-primary-control')),
       );
       final next = tester.getRect(
         find.byKey(const ValueKey('player-next-control')),
       );
-      expect(previous.center.dy, closeTo(primary.center.dy, 0.1));
-      expect(primary.center.dy, closeTo(next.center.dy, 0.1));
-      expect(primary.center.dx, closeTo(transport.center.dx, 0.1));
-      expect(previous.size.aspectRatio, closeTo(1, 0.001));
-      expect(primary.size.aspectRatio, closeTo(1, 0.001));
-      expect(next.size.aspectRatio, closeTo(1, 0.001));
-      expect(previous.width, closeTo(next.width, 0.001));
-      expect(previous.width, inInclusiveRange(74, 76));
-      expect(primary.width, inInclusiveRange(89, 91));
-      expect(primary.width / previous.width, inInclusiveRange(1.15, 1.25));
-      final expectedTransportGap = (transport.width * 0.04).clamp(12.0, 34.0);
-      expect(primary.left - previous.right, closeTo(expectedTransportGap, 0.1));
-      expect(next.left - primary.right, closeTo(expectedTransportGap, 0.1));
-      expect(
-        previous.left - transport.left,
-        closeTo(transport.right - next.right, 0.1),
+      final repeat = tester.getRect(
+        find.byKey(const ValueKey('player-repeat-control')),
       );
+      final transportButtons = [shuffle, previous, primary, next, repeat];
+      for (final button in transportButtons) {
+        expect(button.center.dy, closeTo(primary.center.dy, 0.1));
+        expect(button.left, greaterThanOrEqualTo(transport.left - 0.1));
+        expect(button.right, lessThanOrEqualTo(transport.right + 0.1));
+        expect(button.size.aspectRatio, closeTo(1, 0.001));
+      }
+      for (var index = 1; index < transportButtons.length; index += 1) {
+        expect(
+          transportButtons[index].center.dx,
+          greaterThan(transportButtons[index - 1].center.dx),
+        );
+      }
+      expect(primary.center.dx, closeTo(transport.center.dx, 0.1));
+      expect(previous.width, closeTo(next.width, 0.001));
+      expect(shuffle.width, closeTo(repeat.width, 0.001));
+      expect(previous.width, inInclusiveRange(69, 72));
+      expect(primary.width, inInclusiveRange(82, 85));
+      expect(primary.width / previous.width, inInclusiveRange(1.15, 1.25));
+      expect(
+        shuffle.left - transport.left,
+        closeTo(transport.right - repeat.right, 0.1),
+      );
+      final transportFinder = find.byKey(
+        const ValueKey('classic-vinyl-player-transport'),
+      );
+      final utilityFinder = find.byKey(
+        const ValueKey('classic-vinyl-player-utility-row'),
+      );
+      for (final key in const [
+        'player-shuffle-control',
+        'player-repeat-control',
+      ]) {
+        expect(
+          find.descendant(
+            of: transportFinder,
+            matching: find.byKey(ValueKey(key)),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: utilityFinder,
+            matching: find.byKey(ValueKey(key)),
+          ),
+          findsNothing,
+        );
+      }
       _expectTransparentPrimaryControl(tester, mobile: true);
       for (final finder in [
         find.descendant(
@@ -1152,6 +1197,64 @@ void main() {
     expect(transport.right, closeTo(controls.right, 1));
     expect(utilities.left, closeTo(controls.left, 1));
     expect(utilities.right, closeTo(controls.right, 1));
+    for (final key in const [
+      'player-shuffle-control',
+      'player-previous-control',
+      'player-primary-control',
+      'player-next-control',
+      'player-repeat-control',
+    ]) {
+      final button = tester.getRect(find.byKey(ValueKey(key)));
+      expect(button.left, greaterThanOrEqualTo(transport.left - 0.1));
+      expect(button.right, lessThanOrEqualTo(transport.right + 0.1));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Classic Vinyl avoids scrolling at the shortest landscape size', (
+    tester,
+  ) async {
+    const viewport = Size(480, 240);
+    _configureView(tester, viewport, bottomPadding: 24);
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot.copyWith(position: const Duration(seconds: 45)),
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        style: PlayerStyle.classicVinyl,
+      ),
+    );
+    await tester.pump();
+
+    final controls = tester.getRect(
+      find.byKey(const ValueKey('classic-vinyl-player-controls')),
+    );
+    final transport = tester.getRect(
+      find.byKey(const ValueKey('classic-vinyl-player-transport')),
+    );
+    expect(controls.width, greaterThanOrEqualTo(239));
+    expect(controls.bottom, lessThanOrEqualTo(viewport.height - 24 + 0.1));
+    for (final key in const [
+      'player-shuffle-control',
+      'player-previous-control',
+      'player-primary-control',
+      'player-next-control',
+      'player-repeat-control',
+    ]) {
+      final button = tester.getRect(find.byKey(ValueKey(key)));
+      expect(button.left, greaterThanOrEqualTo(transport.left - 0.1));
+      expect(button.right, lessThanOrEqualTo(transport.right + 0.1));
+      expect(button.bottom, lessThanOrEqualTo(viewport.height - 24 + 0.1));
+    }
+    final scrollable = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byKey(const ValueKey('classic-vinyl-player-controls-scroll')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(scrollable.position.maxScrollExtent, 0);
     expect(tester.takeException(), isNull);
   });
 
@@ -1189,9 +1292,10 @@ void main() {
       );
       expect(deck.width, greaterThanOrEqualTo(210), reason: '$viewport deck');
       if (viewport.height >= 700) {
+        final expectedDeckWidthRatio = viewport.width < 400 ? 0.88 : 0.98;
         expect(
           deck.width,
-          greaterThanOrEqualTo(viewport.width * 0.98),
+          greaterThanOrEqualTo(viewport.width * expectedDeckWidthRatio),
           reason: '$viewport expanded deck',
         );
         expect(
@@ -1211,12 +1315,23 @@ void main() {
         lessThanOrEqualTo(viewport.height - 24 + 0.1),
         reason: '$viewport controls',
       );
+      final scrollable = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(const ValueKey('classic-vinyl-player-stack')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(
+        scrollable.position.maxScrollExtent,
+        0,
+        reason: '$viewport should not require player scrolling',
+      );
       expect(tester.takeException(), isNull, reason: '$viewport');
     }
   });
 
   testWidgets(
-    'Classic Vinyl scrolls instead of using roomy controls when less than 285dp remain',
+    'Classic Vinyl compacts instead of scrolling when the roomy controls do not fit',
     (tester) async {
       const viewport = Size(600, 700);
       _configureView(tester, viewport, bottomPadding: 24);
@@ -1244,7 +1359,7 @@ void main() {
           matching: find.byType(Scrollable),
         ),
       );
-      expect(scrollable.position.maxScrollExtent, greaterThan(0));
+      expect(scrollable.position.maxScrollExtent, 0);
       expect(tester.takeException(), isNull);
     },
   );
@@ -2337,8 +2452,15 @@ void main() {
           matching: find.byType(Icon),
         ),
       );
+      final favoriteIcon = tester.widget<Icon>(
+        find.descendant(
+          of: find.byKey(const ValueKey('apple-player-favorite-surface')),
+          matching: find.byType(Icon),
+        ),
+      );
       expect(favoriteButton.iconSize, inInclusiveRange(20, 24));
       expect(menuIcon.size, inInclusiveRange(20, 24));
+      expect(favoriteIcon.icon, Icons.favorite_border_rounded);
 
       final previous = find.byKey(const ValueKey('player-previous-control'));
       final primary = find.byKey(const ValueKey('player-primary-control'));

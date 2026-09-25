@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -587,7 +588,7 @@ void main() {
     );
   });
 
-  testWidgets('liquid glass detail surface uses a solid tonal app bar', (
+  testWidgets('liquid glass detail surface uses layered glass in its app bar', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -629,26 +630,43 @@ void main() {
     ).colorScheme.surface;
 
     expect(blurFinder, findsNothing);
+    final liquidGlassFinder = find.descendant(
+      of: appBarFinder,
+      matching: find.byType(LiquidGlassSurface),
+    );
+    expect(liquidGlassFinder, findsOneWidget);
     expect(
       find.descendant(
-        of: appBarFinder,
-        matching: find.byType(LiquidGlassSurface),
+        of: liquidGlassFinder,
+        matching: find.byKey(LiquidGlassSurface.backdropKey),
       ),
-      findsNothing,
-    );
-    expect(
-      find.descendant(of: appBarFinder, matching: find.byType(BackdropFilter)),
-      findsNothing,
+      findsOneWidget,
     );
     final statusBarRect = tester.getRect(statusBarFinder);
     final toolbarRect = tester.getRect(surfaceFinder);
     expect(statusBarRect.height, 24);
     expect(statusBarRect.bottom, toolbarRect.top);
     expect(toolbarRect.height, kToolbarHeight);
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('remote-collection-app-bar-spacer')),
+          )
+          .height,
+      tester
+          .getSize(find.byKey(const ValueKey('remote-collection-app-bar')))
+          .height,
+    );
 
     final decoration =
         tester.widget<DecoratedBox>(surfaceFinder).decoration as BoxDecoration;
-    expect(decoration.color, tonalSurface);
+    expect(
+      decoration.color,
+      AppColors.tabHeaderSurfaceFor(
+        tester.element(appBarFinder),
+        scrolledUnder: true,
+      ),
+    );
     expect(decoration.gradient, isNull);
     expect(decoration.border, isNull);
     final statusBarFill = tester.widget<ColoredBox>(
@@ -656,8 +674,8 @@ void main() {
     );
     expect(statusBarFill.color, tonalSurface);
     final appBar = tester.widget<AppBar>(appBarFinder);
-    expect(appBar.forceMaterialTransparency, isFalse);
-    expect(appBar.backgroundColor, tonalSurface);
+    expect(appBar.forceMaterialTransparency, isTrue);
+    expect(appBar.backgroundColor, Colors.transparent);
     expect(appBar.systemOverlayStyle?.statusBarColor, tonalSurface);
   });
 

@@ -2112,6 +2112,7 @@ class _AppleMusicTimeline extends ConsumerStatefulWidget {
     this.trackHeight = appleMusicSliderTrackHeight,
     this.sliderHeight,
     this.activeTrackColor,
+    this.labelsAbove = false,
     this.sliderKey = const ValueKey('apple-player-linear-seek'),
   });
 
@@ -2120,6 +2121,7 @@ class _AppleMusicTimeline extends ConsumerStatefulWidget {
   final double trackHeight;
   final double? sliderHeight;
   final Color? activeTrackColor;
+  final bool labelsAbove;
   final Key sliderKey;
 
   @override
@@ -2184,117 +2186,108 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
       seekTo((shownPosition + delta).inMilliseconds.toDouble());
     }
 
-    return Column(
-      key: const ValueKey('apple-player-timeline'),
-      children: [
-        Semantics(
-          slider: true,
-          enabled: canSeek,
-          label: widget.strings.nowPlaying,
-          value:
-              '${formatDuration(shownPosition)} / ${formatDuration(duration)}',
-          increasedValue: formatDuration(increasedPosition),
-          decreasedValue: formatDuration(decreasedPosition),
-          onIncrease: canSeek
-              ? () => seekBy(const Duration(seconds: 10))
-              : null,
-          onDecrease: canSeek
-              ? () => seekBy(const Duration(seconds: -10))
-              : null,
-          child: ExcludeSemantics(
-            child: SizedBox(
-              height: widget.sliderHeight ?? (widget.compact ? 16 : 24),
-              child: SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: widget.trackHeight,
-                  trackShape: const UniformPlaybackSliderTrackShape(),
-                  activeTrackColor:
-                      activeTrackColor ?? foreground.withValues(alpha: 0.88),
-                  inactiveTrackColor: foreground.withValues(alpha: 0.28),
-                  disabledActiveTrackColor:
-                      activeTrackColor?.withValues(alpha: 0.38) ??
-                      foreground.withValues(alpha: 0.3),
-                  disabledInactiveTrackColor: foreground.withValues(
-                    alpha: 0.18,
-                  ),
-                  thumbShape: SliderComponentShape.noThumb,
-                  overlayShape: SliderComponentShape.noOverlay,
-                ),
-                child: Slider(
-                  key: widget.sliderKey,
-                  min: 0,
-                  max: math.max(1, durationMilliseconds).toDouble(),
-                  value: canSeek ? shownMilliseconds : 0.0,
-                  onChangeStart: canSeek
-                      ? (value) => setState(() => _dragMilliseconds = value)
-                      : null,
-                  onChanged: canSeek
-                      ? (value) => setState(() => _dragMilliseconds = value)
-                      : null,
-                  onChangeEnd: canSeek
-                      ? (value) {
-                          setState(() => _dragMilliseconds = null);
-                          seekTo(value);
-                        }
-                      : null,
-                ),
-              ),
+    final slider = Semantics(
+      slider: true,
+      enabled: canSeek,
+      label: widget.strings.nowPlaying,
+      value: '${formatDuration(shownPosition)} / ${formatDuration(duration)}',
+      increasedValue: formatDuration(increasedPosition),
+      decreasedValue: formatDuration(decreasedPosition),
+      onIncrease: canSeek ? () => seekBy(const Duration(seconds: 10)) : null,
+      onDecrease: canSeek ? () => seekBy(const Duration(seconds: -10)) : null,
+      child: ExcludeSemantics(
+        child: SizedBox(
+          height: widget.sliderHeight ?? (widget.compact ? 16 : 24),
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: widget.trackHeight,
+              trackShape: const UniformPlaybackSliderTrackShape(),
+              activeTrackColor:
+                  activeTrackColor ?? foreground.withValues(alpha: 0.88),
+              inactiveTrackColor: foreground.withValues(alpha: 0.28),
+              disabledActiveTrackColor:
+                  activeTrackColor?.withValues(alpha: 0.38) ??
+                  foreground.withValues(alpha: 0.3),
+              disabledInactiveTrackColor: foreground.withValues(alpha: 0.18),
+              thumbShape: SliderComponentShape.noThumb,
+              overlayShape: SliderComponentShape.noOverlay,
+            ),
+            child: Slider(
+              key: widget.sliderKey,
+              min: 0,
+              max: math.max(1, durationMilliseconds).toDouble(),
+              value: canSeek ? shownMilliseconds : 0.0,
+              onChangeStart: canSeek
+                  ? (value) => setState(() => _dragMilliseconds = value)
+                  : null,
+              onChanged: canSeek
+                  ? (value) => setState(() => _dragMilliseconds = value)
+                  : null,
+              onChangeEnd: canSeek
+                  ? (value) {
+                      setState(() => _dragMilliseconds = null);
+                      seekTo(value);
+                    }
+                  : null,
             ),
           ),
         ),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final textDirection = Directionality.of(context);
-            final textScaler = MediaQuery.textScalerOf(context);
-            double measuredWidth(String value) {
-              final painter = TextPainter(
-                text: TextSpan(text: value, style: labelStyle),
-                textDirection: textDirection,
-                textScaler: textScaler,
-                maxLines: 1,
-              )..layout();
-              return painter.width;
-            }
+      ),
+    );
+    final labels = LayoutBuilder(
+      builder: (context, constraints) {
+        final textDirection = Directionality.of(context);
+        final textScaler = MediaQuery.textScalerOf(context);
+        double measuredWidth(String value) {
+          final painter = TextPainter(
+            text: TextSpan(text: value, style: labelStyle),
+            textDirection: textDirection,
+            textScaler: textScaler,
+            maxLines: 1,
+          )..layout();
+          return painter.width;
+        }
 
-            final stackLabels =
-                measuredWidth(positionLabel) +
-                    measuredWidth(durationLabel) +
-                    16 >
-                constraints.maxWidth;
-            final position = Text(
-              key: const ValueKey('apple-player-position'),
-              positionLabel,
-              maxLines: 1,
-              style: labelStyle,
-            );
-            final totalDuration = Text(
-              key: const ValueKey('apple-player-duration'),
-              durationLabel,
-              maxLines: 1,
-              style: labelStyle,
-            );
-            if (stackLabels) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: position,
-                  ),
-                  Align(
-                    alignment: AlignmentDirectional.centerEnd,
-                    child: totalDuration,
-                  ),
-                ],
-              );
-            }
-            return Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [position, totalDuration],
-            );
-          },
-        ),
-      ],
+        final stackLabels =
+            measuredWidth(positionLabel) + measuredWidth(durationLabel) + 16 >
+            constraints.maxWidth;
+        final position = Text(
+          key: const ValueKey('apple-player-position'),
+          positionLabel,
+          maxLines: 1,
+          style: labelStyle,
+        );
+        final totalDuration = Text(
+          key: const ValueKey('apple-player-duration'),
+          durationLabel,
+          maxLines: 1,
+          style: labelStyle,
+        );
+        if (stackLabels) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: position,
+              ),
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: totalDuration,
+              ),
+            ],
+          );
+        }
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [position, totalDuration],
+        );
+      },
+    );
+
+    return Column(
+      key: const ValueKey('apple-player-timeline'),
+      children: widget.labelsAbove ? [labels, slider] : [slider, labels],
     );
   }
 }
@@ -3819,6 +3812,7 @@ class _PlayerFavoriteButton extends ConsumerWidget {
     required this.savedTrackId,
     required this.strings,
     this.appleStyle = false,
+    this.compact = false,
   });
 
   final PlayerSnapshot snapshot;
@@ -3826,6 +3820,7 @@ class _PlayerFavoriteButton extends ConsumerWidget {
   final String? savedTrackId;
   final AppStrings strings;
   final bool appleStyle;
+  final bool compact;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3851,10 +3846,10 @@ class _PlayerFavoriteButton extends ConsumerWidget {
         ),
       ),
       child: SizedBox.square(
-        dimension: 40,
+        dimension: compact ? 36 : 40,
         child: Center(
           child: Icon(
-            isFavorite ? Icons.star_rounded : Icons.star_border_rounded,
+            isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
           ),
         ),
       ),
@@ -3866,9 +3861,12 @@ class _PlayerFavoriteButton extends ConsumerWidget {
           : strings.addToFavorites,
       color: isFavorite ? activeColor : inactiveColor,
       disabledColor: inactiveColor.withValues(alpha: 0.38),
-      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+      constraints: BoxConstraints.tightFor(
+        width: compact ? 40 : 48,
+        height: compact ? 40 : 48,
+      ),
       padding: EdgeInsets.zero,
-      iconSize: appleStyle ? 22 : 30,
+      iconSize: appleStyle ? (compact ? 20 : 22) : 30,
       icon: appleStyle
           ? appleIcon
           : Icon(
@@ -4632,6 +4630,7 @@ class _VolumeButton extends ConsumerStatefulWidget {
     required this.tooltip,
     required this.iconSize,
     required this.color,
+    this.labelFontSize,
     this.width,
     this.label,
     super.key,
@@ -4642,6 +4641,7 @@ class _VolumeButton extends ConsumerStatefulWidget {
   final String tooltip;
   final double iconSize;
   final Color color;
+  final double? labelFontSize;
   final double? width;
   final String? label;
 
@@ -4715,6 +4715,7 @@ class _VolumeButtonState extends ConsumerState<_VolumeButton> {
                 tooltip: widget.tooltip,
                 label: widget.label!,
                 iconSize: widget.iconSize,
+                labelFontSize: widget.labelFontSize,
                 color: widget.color,
                 icon: _volumeIcon(widget.snapshot.volume),
                 onPressed: _togglePopover,
@@ -4921,6 +4922,7 @@ class _LabeledControlButton extends StatelessWidget {
     required this.color,
     required this.icon,
     required this.onPressed,
+    this.labelFontSize,
     super.key,
   });
 
@@ -4932,6 +4934,7 @@ class _LabeledControlButton extends StatelessWidget {
   final Color color;
   final IconData icon;
   final VoidCallback? onPressed;
+  final double? labelFontSize;
 
   @override
   Widget build(BuildContext context) {
@@ -4957,7 +4960,10 @@ class _LabeledControlButton extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+            style: TextStyle(
+              fontSize: labelFontSize ?? 14,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),
@@ -4975,6 +4981,7 @@ class _PlayerMenu extends ConsumerWidget {
     required this.onOpenAlbum,
     required this.strings,
     this.appleStyle = false,
+    this.compact = false,
     this.triggerIconColor,
   });
 
@@ -4986,6 +4993,7 @@ class _PlayerMenu extends ConsumerWidget {
   final VoidCallback? onOpenAlbum;
   final AppStrings strings;
   final bool appleStyle;
+  final bool compact;
   final Color? triggerIconColor;
 
   @override
@@ -5018,9 +5026,11 @@ class _PlayerMenu extends ConsumerWidget {
           color: playbackIconColor.withValues(alpha: 0.12),
           border: Border.all(color: playbackIconColor.withValues(alpha: 0.08)),
         ),
-        child: const SizedBox.square(
-          dimension: 40,
-          child: Center(child: Icon(Icons.more_horiz_rounded, size: 22)),
+        child: SizedBox.square(
+          dimension: compact ? 36 : 40,
+          child: Center(
+            child: Icon(Icons.more_horiz_rounded, size: compact ? 20 : 22),
+          ),
         ),
       );
       return GlassPopupMenuButton<String>(
@@ -5035,7 +5045,7 @@ class _PlayerMenu extends ConsumerWidget {
         // clipped down to the first (Share) icon.
         style: appleStyle
             ? IconButton.styleFrom(
-                fixedSize: const Size.square(48),
+                fixedSize: Size.square(compact ? 40 : 48),
                 padding: EdgeInsets.zero,
               )
             : null,

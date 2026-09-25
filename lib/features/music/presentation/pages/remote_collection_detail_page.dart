@@ -133,6 +133,13 @@ class RemoteCollectionDetailPage extends ConsumerWidget {
             child: SizedBox(
               key: const ValueKey('remote-collection-app-bar-spacer'),
               height: surfaceDetailAppBarBodyInset(context),
+              child: AppColors.surfaceBackgroundModeFor(context).usesBackdrop
+                  ? ArtworkGradientHeaderBackground(
+                      artworkSource: resolvedArtworkSource,
+                      cacheWidth: 640,
+                      keyPrefix: 'remote-collection-app-bar-underlay',
+                    )
+                  : null,
             ),
           ),
           SliverToBoxAdapter(

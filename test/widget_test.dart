@@ -33,6 +33,7 @@ import 'package:bstream_music/features/music/presentation/widgets/gradient_progr
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_page_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/scrolled_under_tab_frame.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/features/music/presentation/widgets/track_result_tile.dart';
@@ -94,7 +95,7 @@ void main() {
     expect(find.text('Inicio'), findsWidgets);
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('home-tab-title'))).data,
-      'Buenos días',
+      'BStream Music',
     );
     expect(find.byIcon(Icons.search_rounded), findsWidgets);
     expect(find.text('Reproductor'), findsNothing);
@@ -166,12 +167,11 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('home greeting does not include the authenticated account name', (
+  testWidgets('home title stays branded with an authenticated account', (
     tester,
   ) async {
     await tester.pumpWidget(
       _testApp(
-        homeGreetingTime: DateTime(2026, 8, 24, 15),
         youtubeMusicAuthState: const YouTubeMusicAuthState(
           phase: YouTubeMusicAuthPhase.authenticated,
           generation: 1,
@@ -186,7 +186,7 @@ void main() {
 
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('home-tab-title'))).data,
-      'Buenas tardes',
+      'BStream Music',
     );
     expect(find.text('Inicio'), findsWidgets);
   });
@@ -1393,7 +1393,7 @@ void main() {
   );
 
   testWidgets(
-    'mobile liquid glass keeps the large header tonal and localizes floating chrome',
+    'mobile liquid glass layers the pinned title and localizes floating chrome',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       tester.view
@@ -1469,20 +1469,54 @@ void main() {
       expect(tester.widget(navigation), isA<LiquidGlassSurface>());
       expect(tester.widget(detachedSearch), isA<LiquidGlassSurface>());
       expect(tester.widget(miniPlayerGlass), isA<LiquidGlassSurface>());
-      expect(
-        find.byKey(const ValueKey('tab-header-liquid-glass')),
-        findsNothing,
+      final headerGlassFinder = find.byKey(
+        const ValueKey('tab-header-liquid-glass'),
       );
+      expect(headerGlassFinder, findsOneWidget);
       expect(
         find.ancestor(of: header, matching: find.byType(LiquidGlassSurface)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: headerGlassFinder,
+          matching: find.byKey(LiquidGlassSurface.backdropKey),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: headerGlassFinder,
+          matching: find.byKey(LiquidGlassSurface.opticsKey),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: headerGlassFinder,
+          matching: find.byKey(LiquidGlassSurface.shadowKey),
+        ),
         findsNothing,
       );
       expect(
-        find.ancestor(of: header, matching: find.byType(BackdropFilter)),
+        find.descendant(
+          of: headerGlassFinder,
+          matching: find.byKey(LiquidGlassSurface.adaptiveEdgeKey),
+        ),
         findsNothing,
       );
-      expect(headerMaterial.color, Theme.of(context).colorScheme.surface);
-      expect(headerMaterial.color?.a, 1);
+      expect(
+        find.descendant(
+          of: headerGlassFinder,
+          matching: find.byKey(LiquidGlassSurface.surfaceTintKey),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        headerMaterial.color,
+        AppColors.tabHeaderSurfaceFor(context, scrolledUnder: false),
+      );
+      expect(headerMaterial.color?.a, lessThan(0.2));
       expect(headerMaterial.elevation, 0);
       expect(headerDecoration.gradient, isNull);
       expect(tester.widget(navigationHover), isA<LiquidGlassHoverTarget>());
@@ -1498,6 +1532,29 @@ void main() {
       final navigationGlass = tester.widget<LiquidGlassSurface>(navigation);
       final searchGlass = tester.widget<LiquidGlassSurface>(detachedSearch);
       final miniGlass = tester.widget<LiquidGlassSurface>(miniPlayerGlass);
+      final headerGlass = tester.widget<LiquidGlassSurface>(headerGlassFinder);
+      expect(headerGlass.blurSigma, navigationGlass.blurSigma);
+      expect(headerGlass.intensity, tabHeaderLiquidGlassIntensity);
+      expect(headerGlass.intensity, greaterThan(navigationGlass.intensity));
+      expect(headerGlass.borderRadius, BorderRadius.zero);
+      expect(headerGlass.edgeTreatment, LiquidGlassEdgeTreatment.bottom);
+      Color glassTint(Finder surface) =>
+          (tester
+                      .widget<DecoratedBox>(
+                        find.descendant(
+                          of: surface,
+                          matching: find.byKey(
+                            LiquidGlassSurface.surfaceTintKey,
+                          ),
+                        ),
+                      )
+                      .decoration
+                  as BoxDecoration)
+              .color!;
+      expect(
+        glassTint(headerGlassFinder).a,
+        greaterThan(glassTint(navigation).a),
+      );
       BackdropFilter materialFor(Finder surface) =>
           tester.widget<BackdropFilter>(
             find.descendant(
@@ -1871,7 +1928,7 @@ void main() {
         expect(
           filter.enabled,
           isTrue,
-          reason: 'Blur and refraction stay live through every scroll frame.',
+          reason: 'The mobile blur stays live through every scroll frame.',
         );
       }
       await scrollGesture.up();
@@ -8975,7 +9032,6 @@ Widget _testApp({
   IncomingTrackLinkService? incomingTrackLinkService,
   YouTubeMusicSearch? youtubeMusicSearch,
   YouTubeMusicAuthState? youtubeMusicAuthState,
-  DateTime? homeGreetingTime,
   List<CatalogPlaylist>? catalogPlaylists,
   Stream<ExternalAudioRequest>? externalAudioRequests,
   Stream<AndroidAppActivationEvent>? androidAppActivations,
@@ -8989,9 +9045,6 @@ Widget _testApp({
       : null;
   return ProviderScope(
     overrides: [
-      homeGreetingClockProvider.overrideWithValue(
-        () => homeGreetingTime ?? DateTime(2026, 8, 24, 9),
-      ),
       searchBrowseCatalogProvider.overrideWithValue(
         AsyncData(
           SearchBrowseCatalog(

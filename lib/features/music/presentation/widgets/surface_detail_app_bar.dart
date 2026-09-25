@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/widgets/liquid_glass_surface.dart';
 
 /// Top chrome for album, mix and artist detail routes.
 ///
@@ -35,10 +36,12 @@ class SurfaceDetailAppBar extends StatelessWidget
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final surfaceMode = AppColors.surfaceBackgroundModeFor(context);
-    final transparent = surfaceMode.usesBackdrop && !surfaceMode.isLiquidGlass;
-    final headerSurfaceColor = surfaceMode.isLiquidGlass
-        ? theme.colorScheme.surface
-        : AppColors.tabHeaderSurfaceFor(context, scrolledUnder: true);
+    final liquidGlass = surfaceMode.isLiquidGlass;
+    final transparent = surfaceMode.usesBackdrop && !liquidGlass;
+    final headerSurfaceColor = AppColors.tabHeaderSurfaceFor(
+      context,
+      scrolledUnder: true,
+    );
     final surface = DecoratedBox(
       key: surfaceKey,
       decoration: BoxDecoration(
@@ -51,7 +54,16 @@ class SurfaceDetailAppBar extends StatelessWidget
       // would otherwise collapse and leave no painted/blurred surface.
       child: const SizedBox.expand(),
     );
-    final toolbarSurface = transparent
+    final toolbarSurface = liquidGlass
+        ? LiquidGlassSurface(
+            key: const ValueKey('surface-detail-liquid-glass'),
+            borderRadius: BorderRadius.zero,
+            blurSigma: 8,
+            intensity: 1.2,
+            edgeTreatment: LiquidGlassEdgeTreatment.bottom,
+            child: surface,
+          )
+        : transparent
         ? ClipRect(
             child: BackdropFilter(
               key: blurKey,
@@ -78,7 +90,9 @@ class SurfaceDetailAppBar extends StatelessWidget
       key: appBarKey,
       leading: leading,
       title: title,
-      backgroundColor: transparent ? Colors.transparent : headerSurfaceColor,
+      backgroundColor: transparent || liquidGlass
+          ? Colors.transparent
+          : headerSurfaceColor,
       foregroundColor: theme.colorScheme.onSurface,
       systemOverlayStyle:
           (theme.brightness == Brightness.dark
@@ -88,7 +102,7 @@ class SurfaceDetailAppBar extends StatelessWidget
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
-      forceMaterialTransparency: transparent,
+      forceMaterialTransparency: transparent || liquidGlass,
       flexibleSpace: flexibleSpace,
     );
   }

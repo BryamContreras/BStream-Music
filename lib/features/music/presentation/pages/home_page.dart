@@ -68,15 +68,6 @@ bool _supportsNavigationHover(BuildContext context) =>
 
 enum HomeInitialDestination { home, player }
 
-typedef HomeGreetingClock = DateTime Function();
-
-/// Wall clock used by Home's greeting. Keeping the function injectable makes
-/// morning and afternoon behavior deterministic in tests, while a later Home
-/// rebuild still observes the current device time.
-final homeGreetingClockProvider = Provider<HomeGreetingClock>(
-  (ref) => DateTime.now,
-);
-
 final androidExternalAudioRequestsProvider =
     Provider<Stream<ExternalAudioRequest>?>((ref) {
       if (!AppPlatform.isAndroid) {
@@ -3015,7 +3006,6 @@ class _HomeView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final greetingTime = ref.watch(homeGreetingClockProvider)();
     final history = ref.watch(historyProvider);
     final hasHistory = history.value?.isNotEmpty ?? false;
     final recommendationsState = ref.watch(homeRecommendationsProvider);
@@ -3037,7 +3027,7 @@ class _HomeView extends ConsumerWidget {
           Expanded(
             child: Text(
               key: const ValueKey('home-tab-title'),
-              strings.homeGreeting(hour: greetingTime.hour),
+              'BStream Music',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: appTabTitleStyle(context),
