@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../domain/entities/search_result.dart';
 import '../providers/music_providers.dart';
@@ -1799,99 +1800,105 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
       child: MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
         onExit: (_) => setState(() => _hovered = false),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: surface,
-            borderRadius: radius,
-            border: Border.all(
-              color: _hovered
-                  ? colors.primary
-                  : AppColors.cardBorderFor(context),
-              width: _hovered ? 1.4 : 1,
-            ),
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              key: ValueKey('search-album-open-${album.browseId}'),
+        child: AppCardGradientBorder(
+          emphasized: _hovered,
+          width: _hovered ? 1.4 : 1,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: surface,
               borderRadius: radius,
-              onTap: _openAlbum,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 7,
-                ),
-                child: Row(
-                  children: [
-                    HoverEqualizerArtwork(
-                      width: 52,
-                      height: 18,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(appArtworkRadius),
-                        child: SizedBox.square(
-                          dimension: 62,
-                          child: ProportionalArtwork(
-                            source: album.thumbnailUrl,
-                            cacheWidth: 256,
-                            fallback: const ColoredBox(
-                              color: Color(0xFF202520),
-                              child: Icon(Icons.album_rounded),
+              border: Border.all(
+                color: _hovered
+                    ? colors.primary
+                    : AppColors.cardBorderFor(context),
+                width: _hovered ? 1.4 : 1,
+              ),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                key: ValueKey('search-album-open-${album.browseId}'),
+                borderRadius: radius,
+                onTap: _openAlbum,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 7,
+                  ),
+                  child: Row(
+                    children: [
+                      HoverEqualizerArtwork(
+                        width: 52,
+                        height: 18,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(appArtworkRadius),
+                          child: SizedBox.square(
+                            dimension: 62,
+                            child: ProportionalArtwork(
+                              source: album.thumbnailUrl,
+                              cacheWidth: 256,
+                              fallback: const ColoredBox(
+                                color: Color(0xFF202520),
+                                child: Icon(Icons.album_rounded),
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          MarqueeText(
-                            album.title,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                                  color: AppColors.contentTitleFor(context),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            artist,
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(
-                                  color: AppColors.contentSubtitleFor(context),
-                                ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (details.isNotEmpty) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            MarqueeText(
+                              album.title,
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(
+                                    color: AppColors.contentTitleFor(context),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
                             const SizedBox(height: 2),
                             Text(
-                              details,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall
+                              artist,
+                              style: Theme.of(context).textTheme.bodyMedium
                                   ?.copyWith(
                                     color: AppColors.contentSubtitleFor(
                                       context,
                                     ),
                                   ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
+                            if (details.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                details,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: AppColors.contentSubtitleFor(
+                                        context,
+                                      ),
+                                    ),
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      color: colors.primary,
-                      size: 30,
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: colors.primary,
+                        size: 30,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

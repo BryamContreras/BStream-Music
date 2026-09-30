@@ -60,6 +60,12 @@ dependencies:
   media_kit_libs_windows_audio: ^1.0.9
   media_kit_libs_linux: ^1.2.1
   media_kit_libs_macos_audio: ^1.1.4
+  # Keep Android's video decoder on Media3 1.4.1, the version strictly pinned
+  # by our just_audio silence-skipping fork. Newer video_player_android pulls
+  # Media3 1.5+ and makes the Android build unsatisfiable.
+  video_player: 2.10.1
+  video_player_android: 2.8.7
+  video_player_win: ^3.3.0
   audio_metadata_reader: ^1.7.1
   audio_service: ^0.18.18
   audio_service_mpris: ^0.2.1

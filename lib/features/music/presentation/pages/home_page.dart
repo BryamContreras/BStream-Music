@@ -1142,6 +1142,9 @@ class _HomePageState extends ConsumerState<HomePage> {
           animatedArtworkEnabled:
               settings.value?.animatedArtworkEnabled ??
               defaultAnimatedArtworkEnabled,
+          spotifyCanvasEnabled: settings.value?.spotifyCanvasEnabled ?? false,
+          appleAnimatedArtworkEnabled:
+              settings.value?.appleAnimatedArtworkEnabled ?? false,
         ),
       ),
     );
@@ -1149,6 +1152,9 @@ class _HomePageState extends ConsumerState<HomePage> {
     final playerStyle = miniPlayerAppearance.playerStyle;
     final playerArtworkStyle = miniPlayerAppearance.playerArtworkStyle;
     final animatedArtworkEnabled = miniPlayerAppearance.animatedArtworkEnabled;
+    final spotifyCanvasEnabled = miniPlayerAppearance.spotifyCanvasEnabled;
+    final appleAnimatedArtworkEnabled =
+        miniPlayerAppearance.appleAnimatedArtworkEnabled;
     // ThemeExtension modes switch halfway through AnimatedTheme.lerp. Use the
     // persisted setting for structural shell behavior so a scroll gesture
     // cannot briefly choose the non-Liquid hide policy during that animation.
@@ -1416,6 +1422,10 @@ class _HomePageState extends ConsumerState<HomePage> {
                                               playerArtworkStyle,
                                           animatedArtworkEnabled:
                                               animatedArtworkEnabled,
+                                          spotifyCanvasEnabled:
+                                              spotifyCanvasEnabled,
+                                          appleAnimatedArtworkEnabled:
+                                              appleAnimatedArtworkEnabled,
                                           onOpenPlayer: _openPlayer,
                                           onCollapsePlayer: _handleSystemBack,
                                           onOpenSearch: _openSearch,
@@ -2609,6 +2619,8 @@ class _PersistentCurrentViews extends StatefulWidget {
     required this.playerStyle,
     required this.playerArtworkStyle,
     required this.animatedArtworkEnabled,
+    required this.spotifyCanvasEnabled,
+    required this.appleAnimatedArtworkEnabled,
     required this.onOpenPlayer,
     required this.onCollapsePlayer,
     required this.onOpenSearch,
@@ -2633,6 +2645,8 @@ class _PersistentCurrentViews extends StatefulWidget {
   final PlayerStyle playerStyle;
   final PlayerArtworkStyle playerArtworkStyle;
   final bool animatedArtworkEnabled;
+  final bool spotifyCanvasEnabled;
+  final bool appleAnimatedArtworkEnabled;
   final VoidCallback onOpenPlayer;
   final VoidCallback onCollapsePlayer;
   final VoidCallback onOpenSearch;
@@ -2844,6 +2858,8 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               style: widget.playerStyle,
               artworkStyle: widget.playerArtworkStyle,
               animatedArtworkEnabled: widget.animatedArtworkEnabled,
+              spotifyCanvasEnabled: widget.spotifyCanvasEnabled,
+              appleAnimatedArtworkEnabled: widget.appleAnimatedArtworkEnabled,
               trackTransitionsEnabled:
                   widget.selectedIndex == widget.playerIndex &&
                   !widget.playerTransitionActive,

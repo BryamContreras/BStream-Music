@@ -95,6 +95,8 @@ class SettingsState {
     this.playerStyle = defaultPlayerStyle,
     this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
     this.playerArtworkStyle = defaultPlayerArtworkStyle,
+    this.appleAnimatedArtworkEnabled = false,
+    this.spotifyCanvasEnabled = false,
     this.miniPlayerMode = defaultMiniPlayerMode,
     this.miniPlayerBackgroundMode = defaultMiniPlayerBackgroundMode,
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
@@ -116,6 +118,8 @@ class SettingsState {
   final PlayerStyle playerStyle;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
+  final bool appleAnimatedArtworkEnabled;
+  final bool spotifyCanvasEnabled;
   final MiniPlayerMode miniPlayerMode;
   final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final LyricsTextAlignment lyricsTextAlignment;
@@ -137,6 +141,8 @@ class SettingsState {
     PlayerStyle? playerStyle,
     bool? animatedArtworkEnabled,
     PlayerArtworkStyle? playerArtworkStyle,
+    bool? appleAnimatedArtworkEnabled,
+    bool? spotifyCanvasEnabled,
     MiniPlayerMode? miniPlayerMode,
     MiniPlayerBackgroundMode? miniPlayerBackgroundMode,
     LyricsTextAlignment? lyricsTextAlignment,
@@ -160,6 +166,9 @@ class SettingsState {
       animatedArtworkEnabled:
           animatedArtworkEnabled ?? this.animatedArtworkEnabled,
       playerArtworkStyle: playerArtworkStyle ?? this.playerArtworkStyle,
+      appleAnimatedArtworkEnabled:
+          appleAnimatedArtworkEnabled ?? this.appleAnimatedArtworkEnabled,
+      spotifyCanvasEnabled: spotifyCanvasEnabled ?? this.spotifyCanvasEnabled,
       miniPlayerMode: miniPlayerMode ?? this.miniPlayerMode,
       miniPlayerBackgroundMode:
           miniPlayerBackgroundMode ?? this.miniPlayerBackgroundMode,
@@ -199,6 +208,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _playerStyleKey = 'settings.playerStyle';
   static const _animatedArtworkEnabledKey = 'settings.animatedArtworkEnabled';
   static const _playerArtworkStyleKey = 'settings.playerArtworkStyle';
+  static const _appleAnimatedArtworkEnabledKey =
+      'settings.appleAnimatedArtworkEnabled';
+  static const _spotifyCanvasEnabledKey = 'settings.spotifyCanvasEnabled';
   static const _miniPlayerModeKey = 'settings.miniPlayerMode';
   static const _miniPlayerBackgroundModeKey =
       'settings.miniPlayerBackgroundMode';
@@ -217,6 +229,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
   Future<void> _animatedArtworkWriteTail = Future<void>.value();
+  Future<void> _remoteArtworkWriteTail = Future<void>.value();
   Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
   Future<void> _lyricsRomanizationWriteTail = Future<void>.value();
   Future<void> _recommendationHistoryWriteTail = Future<void>.value();
@@ -245,6 +258,12 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final playerArtworkStyle = PlayerArtworkStyle.fromCode(
       prefs.getString(_playerArtworkStyleKey),
     );
+    final spotifyCanvasEnabled =
+        prefs.getBool(_spotifyCanvasEnabledKey) ?? false;
+    // Old or concurrently written preferences must never enable both sources.
+    final appleAnimatedArtworkEnabled =
+        (prefs.getBool(_appleAnimatedArtworkEnabledKey) ?? false) &&
+        !spotifyCanvasEnabled;
     final miniPlayerMode = MiniPlayerMode.fromCode(
       prefs.getString(_miniPlayerModeKey),
       platform: defaultTargetPlatform,
@@ -443,6 +462,8 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       playerStyle: playerStyle,
       animatedArtworkEnabled: animatedArtworkEnabled,
       playerArtworkStyle: playerArtworkStyle,
+      appleAnimatedArtworkEnabled: appleAnimatedArtworkEnabled,
+      spotifyCanvasEnabled: spotifyCanvasEnabled,
       miniPlayerMode: miniPlayerMode,
       miniPlayerBackgroundMode: miniPlayerBackgroundMode,
       lyricsTextAlignment: lyricsTextAlignment,
@@ -700,6 +721,50 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await prefs.setString(_playerArtworkStyleKey, style.code);
     final current = await future;
     state = AsyncData(current.copyWith(playerArtworkStyle: style));
+  }
+
+  Future<void> setSpotifyCanvasEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.spotifyCanvasEnabled == enabled &&
+        (!enabled || !current.appleAnimatedArtworkEnabled)) {
+      return;
+    }
+    state = AsyncData(
+      current.copyWith(
+        spotifyCanvasEnabled: enabled,
+        appleAnimatedArtworkEnabled: enabled
+            ? false
+            : current.appleAnimatedArtworkEnabled,
+      ),
+    );
+    final write = _remoteArtworkWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_spotifyCanvasEnabledKey, enabled);
+      if (enabled) await prefs.setBool(_appleAnimatedArtworkEnabledKey, false);
+    });
+    _remoteArtworkWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> setAppleAnimatedArtworkEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.appleAnimatedArtworkEnabled == enabled &&
+        (!enabled || !current.spotifyCanvasEnabled)) {
+      return;
+    }
+    state = AsyncData(
+      current.copyWith(
+        appleAnimatedArtworkEnabled: enabled,
+        spotifyCanvasEnabled: enabled ? false : current.spotifyCanvasEnabled,
+      ),
+    );
+    final write = _remoteArtworkWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_appleAnimatedArtworkEnabledKey, enabled);
+      if (enabled) await prefs.setBool(_spotifyCanvasEnabledKey, false);
+    });
+    _remoteArtworkWriteTail = write.catchError((_) {});
+    await write;
   }
 
   Future<void> setMiniPlayerMode(MiniPlayerMode mode) async {

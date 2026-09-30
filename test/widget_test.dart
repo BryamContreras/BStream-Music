@@ -7,6 +7,7 @@ import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/theme/app_ui.dart';
+import 'package:bstream_music/core/widgets/app_shared_widgets.dart';
 import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/core/widgets/marquee_text.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
@@ -4693,6 +4694,13 @@ void main() {
         'recommended-3',
       ]) {
         expect(find.byKey(ValueKey('home-recommendation-$id')), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(ValueKey('home-recommendation-$id')),
+            matching: find.byType(AppCardGradientBorder),
+          ),
+          findsNothing,
+        );
       }
       expect(find.text('Cancion reciente'), findsOneWidget);
       expect(find.text('Mis playlists'), findsNothing);
@@ -6328,15 +6336,11 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('Las letras ahora cambian y se desplazan'),
+      find.textContaining('Hay nuevos estilos de portadas animadas'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('La portada Expandida ahora deja ver'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Se refinaron el renderizado y las transiciones'),
+      find.textContaining('Spotify Canvas y Animated Artwork'),
       findsOneWidget,
     );
     expect(

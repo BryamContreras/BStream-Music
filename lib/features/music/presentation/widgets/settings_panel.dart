@@ -14,6 +14,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../platform_channels/android_supported_links_settings_channel.dart';
 import '../../../../platform_channels/ios_file_export_channel.dart';
@@ -369,6 +370,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         playerStyle: state.playerStyle,
         animatedArtworkEnabled: state.animatedArtworkEnabled,
         playerArtworkStyle: state.playerArtworkStyle,
+        appleAnimatedArtworkEnabled: state.appleAnimatedArtworkEnabled,
+        spotifyCanvasEnabled: state.spotifyCanvasEnabled,
         miniPlayerMode: state.miniPlayerMode,
         miniPlayerBackgroundMode: state.miniPlayerBackgroundMode,
         strings: strings,
@@ -387,6 +390,12 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onPlayerArtworkStyleChanged: (style) => ref
             .read(settingsControllerProvider.notifier)
             .setPlayerArtworkStyle(style),
+        onAppleAnimatedArtworkEnabledChanged: (enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .setAppleAnimatedArtworkEnabled(enabled),
+        onSpotifyCanvasEnabledChanged: (enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .setSpotifyCanvasEnabled(enabled),
         onMiniPlayerModeChanged: (mode) => ref
             .read(settingsControllerProvider.notifier)
             .setMiniPlayerMode(mode),
@@ -1746,7 +1755,7 @@ class _SettingsEntryCard extends StatelessWidget {
     );
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 760),
-      child: card,
+      child: AppCardGradientBorder(solidInLiquidGlass: true, child: card),
     );
   }
 }
@@ -1825,18 +1834,14 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Added the Classic Vinyl player with a rotating record and animated tonearm. BStream Music, Apple Music Style, and Classic Vinyl now use responsive landscape layouts.',
             'Android can now conservatively shorten confirmed prolonged silence in streaming and downloaded songs without disrupting crossfade or quiet musical passages.',
             'Swipe the mobile mini player left for the next song or right for the previous one, with subtle resisted movement and protection against accidental changes.',
-            'Lyrics now change and scroll more fluidly, show a filling wave during instrumental passages, and retain a dark playback presentation together with the full player when the app theme is Light.',
-            'Expanded artwork now reveals more of the lower cover, while animated artwork motion is slightly more visible without changing its particles.',
-            'Rendering and transitions throughout the app were refined for steadier motion at 60 Hz or the display refresh rate when hardware permits.',
+            'New animated artwork styles are available: Spotify Canvas and Animated Artwork from Apple Music.',
             'TikTok LIVE connection bootstrap, fallbacks, and bounded retries are now more resilient to transient upstream changes.',
           ]
         : const <String>[
             'Se agregó el reproductor Vinilo Clásico con disco giratorio y aguja animada. BStream Music, Apple Music y Vinilo Clásico ahora usan diseños horizontales adaptables.',
             'Android ahora puede acortar de forma conservadora los silencios prolongados confirmados en canciones en streaming y descargadas, sin afectar el crossfade ni los pasajes musicales suaves.',
             'Desliza el mini reproductor móvil hacia la izquierda para avanzar o hacia la derecha para volver, con movimiento sutil y protección contra cambios accidentales.',
-            'Las letras ahora cambian y se desplazan con mayor fluidez, muestran una onda que se rellena durante los instrumentales y conservan junto al reproductor su presentación oscura cuando la aplicación usa el tema claro.',
-            'La portada Expandida ahora deja ver una mayor parte de su zona inferior y el movimiento de las portadas animadas se percibe un poco más, sin modificar las partículas.',
-            'Se refinaron el renderizado y las transiciones de toda la aplicación para mantener mayor fluidez a 60 Hz o a la frecuencia de la pantalla cuando el dispositivo lo permite.',
+            'Hay nuevos estilos de portadas animadas: Spotify Canvas y Animated Artwork de Apple Music.',
             'Se reforzaron el inicio de conexión, los fallbacks y los reintentos limitados de TikTok LIVE ante cambios temporales del servicio.',
           ];
     await showAppDialog<void>(
@@ -2351,6 +2356,8 @@ class _AppearanceSettings extends StatelessWidget {
     required this.playerStyle,
     required this.animatedArtworkEnabled,
     required this.playerArtworkStyle,
+    required this.appleAnimatedArtworkEnabled,
+    required this.spotifyCanvasEnabled,
     required this.miniPlayerMode,
     required this.miniPlayerBackgroundMode,
     required this.strings,
@@ -2360,6 +2367,8 @@ class _AppearanceSettings extends StatelessWidget {
     required this.onPlayerStyleChanged,
     required this.onAnimatedArtworkEnabledChanged,
     required this.onPlayerArtworkStyleChanged,
+    required this.onAppleAnimatedArtworkEnabledChanged,
+    required this.onSpotifyCanvasEnabledChanged,
     required this.onMiniPlayerModeChanged,
     required this.onMiniPlayerBackgroundModeChanged,
   });
@@ -2370,6 +2379,8 @@ class _AppearanceSettings extends StatelessWidget {
   final PlayerStyle playerStyle;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
+  final bool appleAnimatedArtworkEnabled;
+  final bool spotifyCanvasEnabled;
   final MiniPlayerMode miniPlayerMode;
   final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final AppStrings strings;
@@ -2380,6 +2391,8 @@ class _AppearanceSettings extends StatelessWidget {
   final Future<void> Function(PlayerStyle) onPlayerStyleChanged;
   final Future<void> Function(bool) onAnimatedArtworkEnabledChanged;
   final Future<void> Function(PlayerArtworkStyle) onPlayerArtworkStyleChanged;
+  final Future<void> Function(bool) onAppleAnimatedArtworkEnabledChanged;
+  final Future<void> Function(bool) onSpotifyCanvasEnabledChanged;
   final Future<void> Function(MiniPlayerMode) onMiniPlayerModeChanged;
   final Future<void> Function(MiniPlayerBackgroundMode)
   onMiniPlayerBackgroundModeChanged;
@@ -2607,6 +2620,50 @@ class _AppearanceSettings extends StatelessWidget {
             title: strings.playerArtworkStyle,
             subtitle: strings.playerArtworkStyleLabel(playerArtworkStyle),
             onTap: () => _choosePlayerArtworkStyle(context),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('apple-animated-artwork-toggle'),
+            icon: Icons.live_tv_rounded,
+            title: strings.appleAnimatedArtwork,
+            subtitle: AppPlatform.current == AppPlatformType.linux
+                ? strings.spotifyCanvasUnavailable
+                : strings.appleAnimatedArtworkDescription,
+            onTap: AppPlatform.current == AppPlatformType.linux
+                ? null
+                : () => onAppleAnimatedArtworkEnabledChanged(
+                    !appleAnimatedArtworkEnabled,
+                  ),
+            trailing: Switch.adaptive(
+              key: const ValueKey('apple-animated-artwork-switch'),
+              value:
+                  AppPlatform.current != AppPlatformType.linux &&
+                  appleAnimatedArtworkEnabled,
+              onChanged: AppPlatform.current == AppPlatformType.linux
+                  ? null
+                  : onAppleAnimatedArtworkEnabledChanged,
+            ),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('spotify-canvas-toggle'),
+            icon: Icons.movie_filter_rounded,
+            title: strings.spotifyCanvas,
+            subtitle: AppPlatform.current == AppPlatformType.linux
+                ? strings.spotifyCanvasUnavailable
+                : strings.spotifyCanvasDescription,
+            onTap: AppPlatform.current == AppPlatformType.linux
+                ? null
+                : () => onSpotifyCanvasEnabledChanged(!spotifyCanvasEnabled),
+            trailing: Switch.adaptive(
+              key: const ValueKey('spotify-canvas-switch'),
+              value:
+                  AppPlatform.current != AppPlatformType.linux &&
+                  spotifyCanvasEnabled,
+              onChanged: AppPlatform.current == AppPlatformType.linux
+                  ? null
+                  : onSpotifyCanvasEnabledChanged,
+            ),
           ),
           const SizedBox(height: 24),
           Text(
@@ -3395,80 +3452,83 @@ class _SleepTimerSettings extends StatelessWidget {
     final customSelected = !_presets.contains(state.selectedDuration);
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 520),
-      child: Material(
-        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(appCardRadius),
-          side: BorderSide(
-            color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+      child: AppCardGradientBorder(
+        solidInLiquidGlass: true,
+        child: Material(
+          color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(appCardRadius),
+            side: BorderSide(
+              color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+            ),
           ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SwitchListTile.adaptive(
-              value: state.isActive,
-              onChanged: onEnabledChanged,
-              secondary: const Icon(Icons.bedtime_rounded),
-              title: Text(
-                strings.automaticShutdown,
-                style: const TextStyle(fontWeight: FontWeight.w800),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile.adaptive(
+                value: state.isActive,
+                onChanged: onEnabledChanged,
+                secondary: const Icon(Icons.bedtime_rounded),
+                title: Text(
+                  strings.automaticShutdown,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(
+                  state.isActive
+                      ? strings.sleepTimerRemaining(state.remaining)
+                      : strings.sleepTimerOff,
+                  style: appListCardSubtitleStyle(context),
+                ),
               ),
-              subtitle: Text(
-                state.isActive
-                    ? strings.sleepTimerRemaining(state.remaining)
-                    : strings.sleepTimerOff,
-                style: appListCardSubtitleStyle(context),
-              ),
-            ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 240),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.topCenter,
-              child: state.isActive
-                  ? Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              for (
-                                var index = 0;
-                                index < _presets.length;
-                                index++
-                              ) ...[
-                                if (index > 0) const SizedBox(width: 8),
-                                Expanded(
-                                  child: _PlaybackOptionButton(
-                                    selected:
-                                        state.selectedDuration ==
-                                        _presets[index],
-                                    inactiveIcon: Icons.schedule_rounded,
-                                    label: strings.timerMinutes(
-                                      _presets[index].inMinutes,
+              AnimatedSize(
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.topCenter,
+                child: state.isActive
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                for (
+                                  var index = 0;
+                                  index < _presets.length;
+                                  index++
+                                ) ...[
+                                  if (index > 0) const SizedBox(width: 8),
+                                  Expanded(
+                                    child: _PlaybackOptionButton(
+                                      selected:
+                                          state.selectedDuration ==
+                                          _presets[index],
+                                      inactiveIcon: Icons.schedule_rounded,
+                                      label: strings.timerMinutes(
+                                        _presets[index].inMinutes,
+                                      ),
+                                      onTap: () =>
+                                          onDurationSelected(_presets[index]),
                                     ),
-                                    onTap: () =>
-                                        onDurationSelected(_presets[index]),
                                   ),
-                                ),
+                                ],
                               ],
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          _PlaybackOptionButton(
-                            selected: customSelected,
-                            inactiveIcon: Icons.tune_rounded,
-                            label: strings.customDuration,
-                            onTap: onCustomDuration,
-                          ),
-                        ],
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-          ],
+                            ),
+                            const SizedBox(height: 10),
+                            _PlaybackOptionButton(
+                              selected: customSelected,
+                              inactiveIcon: Icons.tune_rounded,
+                              label: strings.customDuration,
+                              onTap: onCustomDuration,
+                            ),
+                          ],
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3498,64 +3558,67 @@ class _CrossfadeSettings extends StatelessWidget {
         Theme.of(context).platform != TargetPlatform.android;
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: desktopLayout ? 760 : 520),
-      child: Material(
-        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(appCardRadius),
-          side: BorderSide(
-            color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SwitchListTile.adaptive(
-              key: const ValueKey('settings-crossfade-switch'),
-              value: enabled,
-              onChanged: onEnabledChanged,
-              secondary: const Icon(Icons.multitrack_audio_rounded),
-              title: Text(
-                strings.crossfade,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-              subtitle: Text(
-                strings.crossfadeSummary,
-                style: appListCardSubtitleStyle(context),
-              ),
+      child: AppCardGradientBorder(
+        solidInLiquidGlass: true,
+        child: Material(
+          color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(appCardRadius),
+            side: BorderSide(
+              color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
             ),
-            AnimatedSwitcher(
-              key: const ValueKey('settings-crossfade-options-transition'),
-              duration: MediaQuery.disableAnimationsOf(context)
-                  ? Duration.zero
-                  : const Duration(milliseconds: 180),
-              reverseDuration: MediaQuery.disableAnimationsOf(context)
-                  ? Duration.zero
-                  : const Duration(milliseconds: 140),
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, animation) => ClipRect(
-                child: SizeTransition(
-                  sizeFactor: animation,
-                  alignment: Alignment.topCenter,
-                  child: FadeTransition(opacity: animation, child: child),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile.adaptive(
+                key: const ValueKey('settings-crossfade-switch'),
+                value: enabled,
+                onChanged: onEnabledChanged,
+                secondary: const Icon(Icons.multitrack_audio_rounded),
+                title: Text(
+                  strings.crossfade,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(
+                  strings.crossfadeSummary,
+                  style: appListCardSubtitleStyle(context),
                 ),
               ),
-              child: enabled
-                  ? Padding(
-                      key: const ValueKey('settings-crossfade-options'),
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                      child: _CrossfadeDurationSlider(
-                        duration: duration,
-                        strings: strings,
-                        onDurationSelected: onDurationSelected,
+              AnimatedSwitcher(
+                key: const ValueKey('settings-crossfade-options-transition'),
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : const Duration(milliseconds: 180),
+                reverseDuration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : const Duration(milliseconds: 140),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, animation) => ClipRect(
+                  child: SizeTransition(
+                    sizeFactor: animation,
+                    alignment: Alignment.topCenter,
+                    child: FadeTransition(opacity: animation, child: child),
+                  ),
+                ),
+                child: enabled
+                    ? Padding(
+                        key: const ValueKey('settings-crossfade-options'),
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: _CrossfadeDurationSlider(
+                          duration: duration,
+                          strings: strings,
+                          onDurationSelected: onDurationSelected,
+                        ),
+                      )
+                    : const SizedBox.shrink(
+                        key: ValueKey('settings-crossfade-options-hidden'),
                       ),
-                    )
-                  : const SizedBox.shrink(
-                      key: ValueKey('settings-crossfade-options-hidden'),
-                    ),
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3581,27 +3644,30 @@ class _SkipSilenceSettings extends StatelessWidget {
         Theme.of(context).platform != TargetPlatform.android;
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: desktopLayout ? 760 : 520),
-      child: Material(
-        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(appCardRadius),
-          side: BorderSide(
-            color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+      child: AppCardGradientBorder(
+        solidInLiquidGlass: true,
+        child: Material(
+          color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(appCardRadius),
+            side: BorderSide(
+              color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
+            ),
           ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: SwitchListTile.adaptive(
-          key: const ValueKey('settings-skip-silence-switch'),
-          value: enabled,
-          onChanged: onEnabledChanged,
-          secondary: const Icon(Icons.fast_forward_rounded),
-          title: Text(
-            strings.skipSilence,
-            style: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-          subtitle: Text(
-            strings.skipSilenceSummary,
-            style: appListCardSubtitleStyle(context),
+          clipBehavior: Clip.antiAlias,
+          child: SwitchListTile.adaptive(
+            key: const ValueKey('settings-skip-silence-switch'),
+            value: enabled,
+            onChanged: onEnabledChanged,
+            secondary: const Icon(Icons.fast_forward_rounded),
+            title: Text(
+              strings.skipSilence,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            subtitle: Text(
+              strings.skipSilenceSummary,
+              style: appListCardSubtitleStyle(context),
+            ),
           ),
         ),
       ),

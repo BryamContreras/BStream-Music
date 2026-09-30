@@ -376,6 +376,38 @@ abstract final class AppColors {
     );
   }
 
+  /// A restrained accent gradient for card outlines. Keep the existing
+  /// surface-aware border as the base so light and Liquid Glass themes retain
+  /// their contrast instead of acquiring an opaque neon stroke.
+  static LinearGradient cardBorderGradientFor(
+    BuildContext context, {
+    bool solidInLiquidGlass = false,
+    bool emphasized = false,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final accent = theme.extension<AppAccentTheme>();
+    final seed = accent?.seed ?? colors.primary;
+    final dark = accent?.dark ?? colors.primary;
+    final base = cardBorderFor(context, solidInLiquidGlass: solidInLiquidGlass);
+    return LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color.alphaBlend(
+          seed.withValues(alpha: emphasized ? 0.78 : 0.62),
+          base,
+        ),
+        Color.alphaBlend(seed.withValues(alpha: 0.11), base),
+        Color.alphaBlend(
+          dark.withValues(alpha: emphasized ? 0.68 : 0.50),
+          base,
+        ),
+      ],
+      stops: const [0, 0.55, 1],
+    );
+  }
+
   /// Shared fill for text inputs. In transparent mode the field remains more
   /// opaque than the glass panel around it, keeping text and icons legible
   /// while still carrying a restrained accent tint.

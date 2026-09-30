@@ -1,5 +1,6 @@
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_ui.dart';
+import 'package:bstream_music/core/widgets/app_shared_widgets.dart';
 import 'package:bstream_music/features/music/domain/entities/search_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
@@ -408,6 +409,13 @@ void main() {
       findsOneWidget,
     );
     for (final category in SearchCategory.values) {
+      expect(
+        find.ancestor(
+          of: find.byKey(ValueKey('search-category-surface-${category.name}')),
+          matching: find.byType(AppCardGradientBorder),
+        ),
+        findsNothing,
+      );
       final tapTarget = tester.getRect(
         find.byKey(ValueKey('search-category-${category.name}')),
       );

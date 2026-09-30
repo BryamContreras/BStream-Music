@@ -7,6 +7,71 @@ import '../theme/app_theme.dart';
 import '../theme/app_ui.dart';
 import 'liquid_glass_surface.dart';
 
+/// Paints a thin accent gradient over a card without changing its layout,
+/// clipping, ink reactions or surface treatment.
+class AppCardGradientBorder extends StatelessWidget {
+  const AppCardGradientBorder({
+    required this.child,
+    this.radius = appCardRadius,
+    this.width = 1,
+    this.emphasized = false,
+    this.solidInLiquidGlass = false,
+    super.key,
+  });
+
+  final Widget child;
+  final double radius;
+  final double width;
+  final bool emphasized;
+  final bool solidInLiquidGlass;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+    foregroundPainter: _AppCardGradientBorderPainter(
+      gradient: AppColors.cardBorderGradientFor(
+        context,
+        solidInLiquidGlass: solidInLiquidGlass,
+        emphasized: emphasized,
+      ),
+      radius: radius,
+      width: width,
+    ),
+    child: child,
+  );
+}
+
+class _AppCardGradientBorderPainter extends CustomPainter {
+  const _AppCardGradientBorderPainter({
+    required this.gradient,
+    required this.radius,
+    required this.width,
+  });
+
+  final LinearGradient gradient;
+  final double radius;
+  final double width;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty || width <= 0) return;
+    final rect = (Offset.zero & size).deflate(width / 2);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = width
+      ..shader = gradient.createShader(rect);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, Radius.circular(radius - width / 2)),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_AppCardGradientBorderPainter oldDelegate) =>
+      gradient != oldDelegate.gradient ||
+      radius != oldDelegate.radius ||
+      width != oldDelegate.width;
+}
+
 /// Adds the lighter blur used behind text inputs when transparent surfaces are
 /// enabled. The field's themed fill supplies the shared menu tint.
 class AppSurfaceInput extends StatelessWidget {
@@ -147,83 +212,87 @@ class AppListCard extends StatelessWidget {
     final highlight = accent ?? colors.primary;
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: appContentMaxWidth),
-      child: Material(
-        color: appListCardSurface(context),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(appCardRadius),
-          side: BorderSide(color: appListCardBorder(context)),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: appListCardMinHeight),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                appListCardPaddingHorizontal,
-                appListCardPaddingVertical,
-                12,
-                appListCardPaddingVertical,
+      child: AppCardGradientBorder(
+        child: Material(
+          color: appListCardSurface(context),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(appCardRadius),
+            side: BorderSide(color: appListCardBorder(context)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: appListCardMinHeight,
               ),
-              child: Row(
-                children: [
-                  Container(
-                    width: appListCardIconSize,
-                    height: appListCardIconSize,
-                    decoration: BoxDecoration(
-                      color: highlight.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(
-                        appListCardIconRadius,
-                      ),
-                      border: Border.all(
-                        color: highlight.withValues(alpha: 0.24),
-                      ),
-                    ),
-                    child: Icon(icon, color: highlight, size: 24),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: appListCardTitleStyle(context),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  appListCardPaddingHorizontal,
+                  appListCardPaddingVertical,
+                  12,
+                  appListCardPaddingVertical,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: appListCardIconSize,
+                      height: appListCardIconSize,
+                      decoration: BoxDecoration(
+                        color: highlight.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(
+                          appListCardIconRadius,
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          subtitle,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: appListCardSubtitleStyle(context),
+                        border: Border.all(
+                          color: highlight.withValues(alpha: 0.24),
                         ),
-                      ],
+                      ),
+                      child: Icon(icon, color: highlight, size: 24),
                     ),
-                  ),
-                  if (status != null) ...[
-                    const SizedBox(width: 8),
-                    Icon(
-                      status!
-                          ? Icons.check_circle_rounded
-                          : Icons.error_rounded,
-                      color: status! ? colors.primary : colors.error,
-                      size: 19,
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: appListCardTitleStyle(context),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            subtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: appListCardSubtitleStyle(context),
+                          ),
+                        ],
+                      ),
                     ),
+                    if (status != null) ...[
+                      const SizedBox(width: 8),
+                      Icon(
+                        status!
+                            ? Icons.check_circle_rounded
+                            : Icons.error_rounded,
+                        color: status! ? colors.primary : colors.error,
+                        size: 19,
+                      ),
+                    ],
+                    if (trailing case final trailing?) ...[
+                      const SizedBox(width: 8),
+                      trailing,
+                    ] else if (onTap != null) ...[
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ],
                   ],
-                  if (trailing case final trailing?) ...[
-                    const SizedBox(width: 8),
-                    trailing,
-                  ] else if (onTap != null) ...[
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      color: colors.onSurfaceVariant,
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
           ),
@@ -259,22 +328,26 @@ class _AppCardShellState extends State<AppCardShell> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-        decoration: ShapeDecoration(
-          color: appListCardSurface(context),
-          shape: shape,
-        ),
-        child: Material(
-          color: Colors.transparent,
-          elevation: 0,
-          shadowColor: const Color(0x14000000),
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(appCardRadius),
+      child: AppCardGradientBorder(
+        emphasized: _hovered,
+        width: _hovered ? 1.4 : 1,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          decoration: ShapeDecoration(
+            color: appListCardSurface(context),
+            shape: shape,
           ),
-          child: widget.child,
+          child: Material(
+            color: Colors.transparent,
+            elevation: 0,
+            shadowColor: const Color(0x14000000),
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(appCardRadius),
+            ),
+            child: widget.child,
+          ),
         ),
       ),
     );

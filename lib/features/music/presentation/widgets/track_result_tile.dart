@@ -7,6 +7,7 @@ import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/player/player_service.dart';
@@ -97,108 +98,118 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        key: ValueKey(
-          'track-result-surface-${track.id.isNotEmpty ? track.id : track.url}',
-        ),
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: surfaceColor,
-          borderRadius: borderRadius,
-          border: Border.all(color: borderColor, width: _hovered ? 1.4 : 1),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
+      child: AppCardGradientBorder(
+        solidInLiquidGlass: true,
+        emphasized: isCurrent || _hovered,
+        width: _hovered ? 1.4 : 1,
+        child: AnimatedContainer(
+          key: ValueKey(
+            'track-result-surface-${track.id.isNotEmpty ? track.id : track.url}',
+          ),
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: surfaceColor,
             borderRadius: borderRadius,
-            onTap: () => _play(ref, openPlayer: true),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              child: Row(
-                children: [
-                  Stack(
-                    children: [
-                      _Thumbnail(
-                        url: artwork?.source,
-                        fallbackUrl: artwork?.fallbackSource,
-                      ),
-                      if (isCurrent || _hovered)
-                        NowPlayingEqualizerOverlay(
-                          key: ValueKey('track-result-now-playing-$identity'),
-                          isPlaying: isPlaying,
-                          width: 46,
-                          height: 18,
-                        ),
-                    ],
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+            border: Border.all(color: borderColor, width: _hovered ? 1.4 : 1),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: borderRadius,
+              onTap: () => _play(ref, openPlayer: true),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 7,
+                ),
+                child: Row(
+                  children: [
+                    Stack(
                       children: [
-                        MarqueeText(
-                          track.title,
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(
-                                fontWeight: isCurrent
-                                    ? FontWeight.w800
-                                    : FontWeight.w700,
-                                color: AppColors.contentTitleFor(context),
-                              ),
+                        _Thumbnail(
+                          url: artwork?.source,
+                          fallbackUrl: artwork?.fallbackSource,
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${track.artist}  -  ${formatDuration(track.duration)}',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: AppColors.contentSubtitleFor(context),
-                              ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (downloadState != null) ...[
-                          const SizedBox(height: 5),
-                          GradientProgressBar(
-                            value: _visibleProgress(downloadState),
-                            indeterminate: _isIndeterminate(downloadState),
-                            height: 4,
-                            colors: _progressColors(
-                              context,
-                              downloadState.status,
-                            ),
+                        if (isCurrent || _hovered)
+                          NowPlayingEqualizerOverlay(
+                            key: ValueKey('track-result-now-playing-$identity'),
+                            isPlaying: isPlaying,
+                            width: 46,
+                            height: 18,
                           ),
-                          if (downloadState.errorMessage?.trim().isNotEmpty ==
-                              true) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              downloadState.errorMessage!.trim(),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    color: Theme.of(context).colorScheme.error,
-                                  ),
-                            ),
-                          ],
-                        ],
                       ],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  TrackPlayButton(
-                    key: ValueKey('track-result-play-$identity'),
-                    tooltip: isPlaying ? strings.pause : strings.play,
-                    isPlaying: isPlaying,
-                    onPressed: () => _togglePlayback(ref),
-                  ),
-                  _TrackResultMenu(
-                    key: ValueKey('track-result-menu-$identity'),
-                    track: track,
-                    strings: strings,
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          MarqueeText(
+                            track.title,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                                  fontWeight: isCurrent
+                                      ? FontWeight.w800
+                                      : FontWeight.w700,
+                                  color: AppColors.contentTitleFor(context),
+                                ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${track.artist}  -  ${formatDuration(track.duration)}',
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: AppColors.contentSubtitleFor(context),
+                                ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (downloadState != null) ...[
+                            const SizedBox(height: 5),
+                            GradientProgressBar(
+                              value: _visibleProgress(downloadState),
+                              indeterminate: _isIndeterminate(downloadState),
+                              height: 4,
+                              colors: _progressColors(
+                                context,
+                                downloadState.status,
+                              ),
+                            ),
+                            if (downloadState.errorMessage?.trim().isNotEmpty ==
+                                true) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                downloadState.errorMessage!.trim(),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.error,
+                                    ),
+                              ),
+                            ],
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    TrackPlayButton(
+                      key: ValueKey('track-result-play-$identity'),
+                      tooltip: isPlaying ? strings.pause : strings.play,
+                      isPlaying: isPlaying,
+                      onPressed: () => _togglePlayback(ref),
+                    ),
+                    _TrackResultMenu(
+                      key: ValueKey('track-result-menu-$identity'),
+                      track: track,
+                      strings: strings,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

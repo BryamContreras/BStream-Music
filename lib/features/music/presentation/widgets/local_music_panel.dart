@@ -646,57 +646,61 @@ class _DeviceAudioTrackCard extends StatelessWidget {
             : AppColors.cardBorderFor(context, solidInLiquidGlass: true),
       ),
     );
-    return Material(
-      key: ValueKey('local-track-${track.id}'),
-      color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
-      shape: shape,
-      clipBehavior: Clip.antiAlias,
-      child: ListTile(
-        minTileHeight: 72,
-        minVerticalPadding: 7,
-        contentPadding: const EdgeInsets.only(left: 12, right: 4),
-        horizontalTitleGap: 10,
-        onTap: onTap,
-        leading: ClipRRect(
-          borderRadius: BorderRadius.circular(appListCardIconRadius),
-          child: SizedBox.square(
-            dimension: 52,
-            child: SourceImage(
-              source: track.artworkSource,
-              cacheWidth: 192,
-              fallback: Container(
-                color: colors.primary.withValues(alpha: 0.14),
-                child: Icon(
-                  isCurrent
-                      ? Icons.graphic_eq_rounded
-                      : Icons.music_note_rounded,
-                  color: colors.primary,
+    return AppCardGradientBorder(
+      solidInLiquidGlass: true,
+      emphasized: isCurrent,
+      child: Material(
+        key: ValueKey('local-track-${track.id}'),
+        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+        shape: shape,
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          minTileHeight: 72,
+          minVerticalPadding: 7,
+          contentPadding: const EdgeInsets.only(left: 12, right: 4),
+          horizontalTitleGap: 10,
+          onTap: onTap,
+          leading: ClipRRect(
+            borderRadius: BorderRadius.circular(appListCardIconRadius),
+            child: SizedBox.square(
+              dimension: 52,
+              child: SourceImage(
+                source: track.artworkSource,
+                cacheWidth: 192,
+                fallback: Container(
+                  color: colors.primary.withValues(alpha: 0.14),
+                  child: Icon(
+                    isCurrent
+                        ? Icons.graphic_eq_rounded
+                        : Icons.music_note_rounded,
+                    color: colors.primary,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-        title: Text(
-          track.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: appListCardTitleStyle(
-            context,
-          ).copyWith(fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700),
-        ),
-        subtitle: Text(
-          metadata,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: appListCardSubtitleStyle(context),
-        ),
-        trailing: IconButton(
-          key: ValueKey('local-track-play-${track.id}'),
-          tooltip: isPlaying ? pauseTooltip : playTooltip,
-          onPressed: onPlayPause,
-          icon: Icon(
-            isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-            color: colors.primary,
+          title: Text(
+            track.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: appListCardTitleStyle(context).copyWith(
+              fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
+            ),
+          ),
+          subtitle: Text(
+            metadata,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: appListCardSubtitleStyle(context),
+          ),
+          trailing: IconButton(
+            key: ValueKey('local-track-play-${track.id}'),
+            tooltip: isPlaying ? pauseTooltip : playTooltip,
+            onPressed: onPlayPause,
+            icon: Icon(
+              isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              color: colors.primary,
+            ),
           ),
         ),
       ),

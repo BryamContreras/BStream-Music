@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
+import 'package:bstream_music/core/widgets/app_shared_widgets.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
@@ -28,6 +29,82 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('remote artwork toggles persist and are mutually exclusive', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(
+          _PersistingCrossfadeSettingsController.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    expect(
+      (await container.read(
+        settingsControllerProvider.future,
+      )).spotifyCanvasEnabled,
+      isFalse,
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value!
+          .appleAnimatedArtworkEnabled,
+      isFalse,
+    );
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setAppleAnimatedArtworkEnabled(true);
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value!
+          .appleAnimatedArtworkEnabled,
+      isTrue,
+    );
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setSpotifyCanvasEnabled(true);
+    expect(
+      container.read(settingsControllerProvider).value?.spotifyCanvasEnabled,
+      isTrue,
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value!
+          .appleAnimatedArtworkEnabled,
+      isFalse,
+    );
+    await container
+        .read(settingsControllerProvider.notifier)
+        .setAppleAnimatedArtworkEnabled(true);
+    expect(
+      container.read(settingsControllerProvider).value!.spotifyCanvasEnabled,
+      isFalse,
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .value!
+          .appleAnimatedArtworkEnabled,
+      isTrue,
+    );
+    expect(
+      (await SharedPreferences.getInstance()).getBool(
+        'settings.spotifyCanvasEnabled',
+      ),
+      isFalse,
+    );
+    expect(
+      (await SharedPreferences.getInstance()).getBool(
+        'settings.appleAnimatedArtworkEnabled',
+      ),
+      isTrue,
+    );
+  });
+
   test('lyrics romanization preferences persist enabled languages', () async {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer(
@@ -524,6 +601,12 @@ void main() {
     final playerArtworkStyleSelector = find.byKey(
       const ValueKey('player-artwork-style-selector'),
     );
+    final spotifyCanvasToggle = find.byKey(
+      const ValueKey('spotify-canvas-toggle'),
+    );
+    final appleAnimatedArtworkToggle = find.byKey(
+      const ValueKey('apple-animated-artwork-toggle'),
+    );
     final surfaceBackgroundSelector = find.byKey(
       const ValueKey('surface-background-selector'),
     );
@@ -535,6 +618,14 @@ void main() {
     expect(animatedArtworkToggle, findsOneWidget);
     expect(animatedArtworkSwitch, findsOneWidget);
     expect(playerArtworkStyleSelector, findsOneWidget);
+    expect(spotifyCanvasToggle, findsOneWidget);
+    expect(appleAnimatedArtworkToggle, findsOneWidget);
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('spotify-canvas-switch')))
+          .value,
+      isFalse,
+    );
     expect(surfaceBackgroundSelector, findsOneWidget);
     expect(backgroundSelector, findsOneWidget);
     expect(find.text('Efectos de superficie'), findsOneWidget);
@@ -550,7 +641,7 @@ void main() {
     expect(
       find.descendant(
         of: animatedArtworkToggle,
-        matching: find.text('Portadas animadas'),
+        matching: find.text('Portadas en Movimiento'),
       ),
       findsOneWidget,
     );
@@ -609,6 +700,10 @@ void main() {
     expect(
       tester.getTopLeft(selector).dy,
       greaterThan(tester.getTopLeft(playerArtworkStyleSelector).dy),
+    );
+    expect(
+      tester.getTopLeft(spotifyCanvasToggle).dy,
+      greaterThan(tester.getTopLeft(appleAnimatedArtworkToggle).dy),
     );
     expect(
       tester.getTopLeft(animatedArtworkToggle).dy,
@@ -1063,6 +1158,26 @@ void main() {
     expect(timerShape.side.width, cardShape.side.width);
     expect(crossfadeShape.side.color, cardShape.side.color);
     expect(crossfadeShape.side.width, cardShape.side.width);
+    expect(
+      find.descendant(
+        of: appearanceCard,
+        matching: find.byType(AppCardGradientBorder),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: timerCard,
+        matching: find.byType(AppCardGradientBorder),
+      ),
+      findsOneWidget,
+    );
+    final gradient = AppColors.cardBorderGradientFor(
+      tester.element(appearanceCard),
+      solidInLiquidGlass: true,
+    );
+    expect(gradient.colors.first, isNot(gradient.colors[1]));
+    expect(gradient.colors.last, isNot(gradient.colors[1]));
 
     final cardGap =
         tester.getTopLeft(lyricsCard).dy -

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'source_image.dart';
+import 'spotify_canvas_video.dart';
 
 /// A responsive turntable surface used by the Classic Vinyl player style.
 ///
@@ -17,6 +18,7 @@ class ClassicVinylDeck extends StatefulWidget {
     required this.identity,
     required this.isPlaying,
     required this.animationEnabled,
+    this.canvasUrl,
     required this.progress,
     this.trackTransitionsEnabled = true,
     this.expanded = false,
@@ -31,6 +33,7 @@ class ClassicVinylDeck extends StatefulWidget {
   final String identity;
   final bool isPlaying;
   final bool animationEnabled;
+  final Uri? canvasUrl;
   final double progress;
   final bool trackTransitionsEnabled;
   final bool expanded;
@@ -199,12 +202,23 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
             key: ValueKey('classic-vinyl-label-${widget.identity}'),
             dimension: labelExtent,
             child: ClipOval(
-              child: SourceImage(
-                source: widget.artworkSource,
-                fallbackSource: widget.artworkFallbackSource,
-                fit: BoxFit.cover,
-                cacheWidth: 640,
-                fallback: fallback,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  SourceImage(
+                    source: widget.artworkSource,
+                    fallbackSource: widget.artworkFallbackSource,
+                    fit: BoxFit.cover,
+                    cacheWidth: 640,
+                    fallback: fallback,
+                  ),
+                  if (widget.canvasUrl != null)
+                    SpotifyCanvasVideo(
+                      key: ValueKey('vinyl-canvas-${widget.identity}'),
+                      url: widget.canvasUrl!,
+                      isPlaying: widget.isPlaying,
+                    ),
+                ],
               ),
             ),
           ),

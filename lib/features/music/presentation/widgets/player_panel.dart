@@ -16,7 +16,9 @@ import '../../../../core/utils/share_position_origin.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../core/widgets/liquid_glass_surface.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
+import '../../../../services/animated_artwork/apple_animated_artwork_resolver.dart';
 import '../../../../services/player/player_service.dart';
+import '../../../../services/spotify_canvas/spotify_canvas_resolver.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../domain/entities/local_track.dart';
@@ -37,11 +39,32 @@ import 'playback_gradient_background.dart';
 import 'playlist_artwork.dart';
 import 'playlist_picker_dialog.dart';
 import 'source_image.dart';
+import 'spotify_canvas_video.dart';
 import 'track_change_transition.dart';
 import 'uniform_playback_slider_track_shape.dart';
 import 'wavy_playback_seek_bar.dart';
 
 part 'classic_vinyl_player_layout.dart';
+
+final _spotifyCanvasResolverProvider = Provider<SpotifyCanvasResolver>(
+  (ref) => SpotifyCanvasResolver(),
+);
+
+final _spotifyCanvasUrlProvider = FutureProvider.autoDispose
+    .family<Uri?, SpotifyCanvasTrack>(
+      (ref, track) => ref.read(_spotifyCanvasResolverProvider).resolve(track),
+    );
+
+final _appleAnimatedArtworkResolverProvider =
+    Provider<AppleAnimatedArtworkResolver>(
+      (ref) => AppleAnimatedArtworkResolver(),
+    );
+
+final _appleAnimatedArtworkUrlProvider = FutureProvider.autoDispose
+    .family<Uri?, AppleAnimatedArtworkTrack>(
+      (ref, track) =>
+          ref.read(_appleAnimatedArtworkResolverProvider).resolve(track),
+    );
 
 @visibleForTesting
 const expandedArtworkHeroEdgeFadeGradient = LinearGradient(
@@ -134,6 +157,8 @@ class PlayerPanel extends ConsumerStatefulWidget {
     this.style = defaultPlayerStyle,
     this.artworkStyle = defaultPlayerArtworkStyle,
     this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
+    this.spotifyCanvasEnabled = false,
+    this.appleAnimatedArtworkEnabled = false,
     super.key,
   });
 
@@ -144,6 +169,8 @@ class PlayerPanel extends ConsumerStatefulWidget {
   final PlayerStyle style;
   final PlayerArtworkStyle artworkStyle;
   final bool animatedArtworkEnabled;
+  final bool spotifyCanvasEnabled;
+  final bool appleAnimatedArtworkEnabled;
 
   @override
   ConsumerState<PlayerPanel> createState() => _PlayerPanelState();
@@ -230,6 +257,37 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         : preferredLocalTrackArtworkSource(savedTrack);
     final artworkSource = localArtwork?.source ?? snapshot.thumbnailUrl;
     final artworkFallbackSource = localArtwork?.fallbackSource;
+    final canvasTrack = SpotifyCanvasTrack(
+      snapshot.title ?? '',
+      snapshot.artist ?? '',
+      snapshot.duration ?? Duration.zero,
+    );
+    final remoteArtworkAllowed =
+        snapshot.status != PlayerStatus.idle &&
+        snapshot.status != PlayerStatus.failed &&
+        AppPlatform.current != AppPlatformType.linux &&
+        AppPlatform.current != AppPlatformType.unsupported;
+    final spotifyCanvasUrl =
+        widget.spotifyCanvasEnabled &&
+            remoteArtworkAllowed &&
+            (snapshot.duration ?? Duration.zero) > Duration.zero
+        ? ref.watch(_spotifyCanvasUrlProvider(canvasTrack)).value
+        : null;
+    final appleArtworkTrack = AppleAnimatedArtworkTrack(
+      title: snapshot.title ?? '',
+      artist: snapshot.artist ?? '',
+      album: snapshot.album ?? '',
+      duration: snapshot.duration ?? Duration.zero,
+      preferVertical:
+          widget.artworkStyle == PlayerArtworkStyle.expanded &&
+          widget.style != PlayerStyle.classicVinyl,
+    );
+    final canvasUrl =
+        widget.appleAnimatedArtworkEnabled &&
+            !widget.spotifyCanvasEnabled &&
+            remoteArtworkAllowed
+        ? ref.watch(_appleAnimatedArtworkUrlProvider(appleArtworkTrack)).value
+        : spotifyCanvasUrl;
     final artworkParticleColor = widget.animatedArtworkEnabled
         ? ref.watch(artworkProgressColorProvider(artworkSource)).value
         : null;
@@ -378,6 +436,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                             artworkStyle: widget.artworkStyle,
                             animatedArtworkEnabled:
                                 widget.animatedArtworkEnabled,
+                            canvasUrl: canvasUrl,
                             drawBackground: widget.drawBackground,
                             hasTrack: hasTrack,
                             isFavorite: isFavorite,
@@ -405,6 +464,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                             artworkStyle: widget.artworkStyle,
                             animatedArtworkEnabled:
                                 widget.animatedArtworkEnabled,
+                            canvasUrl: canvasUrl,
                             drawBackground: widget.drawBackground,
                             hasTrack: hasTrack,
                             isFavorite: isFavorite,
@@ -459,6 +519,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                         widget.trackTransitionsEnabled,
                                     animatedArtworkEnabled:
                                         widget.animatedArtworkEnabled,
+                                    canvasUrl: canvasUrl,
                                   ),
                                 ),
                               Padding(
@@ -698,6 +759,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                                         fullBleedArtwork,
                                                     animatedArtworkEnabled: widget
                                                         .animatedArtworkEnabled,
+                                                    canvasUrl: canvasUrl,
                                                     maxExtent: artworkExtent,
                                                     isFavorite: mobileLandscape
                                                         ? false
@@ -1224,6 +1286,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
     required this.trackTransitionsEnabled,
     required this.artworkStyle,
     required this.animatedArtworkEnabled,
+    required this.canvasUrl,
     required this.drawBackground,
     required this.hasTrack,
     required this.isFavorite,
@@ -1248,6 +1311,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
   final bool trackTransitionsEnabled;
   final PlayerArtworkStyle artworkStyle;
   final bool animatedArtworkEnabled;
+  final Uri? canvasUrl;
   final bool drawBackground;
   final bool hasTrack;
   final bool isFavorite;
@@ -1447,6 +1511,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                       expandedTargetWidth: expandedArtworkTargetWidth,
                       fullBleedExpanded: fullBleedArtwork,
                       animatedArtworkEnabled: animatedArtworkEnabled,
+                      canvasUrl: canvasUrl,
                       maxExtent: artworkExtent,
                       isFavorite: false,
                       // Apple Music keeps the cover shadow restrained even on tall
@@ -1571,6 +1636,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                       isPlaying: snapshot.status == PlayerStatus.playing,
                       trackTransitionsEnabled: trackTransitionsEnabled,
                       animatedArtworkEnabled: animatedArtworkEnabled,
+                      canvasUrl: canvasUrl,
                     ),
                   ),
                 Padding(
@@ -2754,6 +2820,7 @@ class _ExpandedArtworkHero extends StatefulWidget {
     required this.isPlaying,
     required this.trackTransitionsEnabled,
     required this.animatedArtworkEnabled,
+    required this.canvasUrl,
   });
 
   final String? url;
@@ -2763,6 +2830,7 @@ class _ExpandedArtworkHero extends StatefulWidget {
   final bool isPlaying;
   final bool trackTransitionsEnabled;
   final bool animatedArtworkEnabled;
+  final Uri? canvasUrl;
 
   @override
   State<_ExpandedArtworkHero> createState() => _ExpandedArtworkHeroState();
@@ -2813,6 +2881,7 @@ class _ExpandedArtworkHeroState extends State<_ExpandedArtworkHero> {
         identity: widget.identity,
         isPlaying: widget.isPlaying,
         animatedArtworkEnabled: widget.animatedArtworkEnabled,
+        canvasUrl: widget.canvasUrl,
       ),
     );
 
@@ -2856,6 +2925,7 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
     required this.identity,
     required this.isPlaying,
     required this.animatedArtworkEnabled,
+    required this.canvasUrl,
   });
 
   final String source;
@@ -2864,6 +2934,7 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
   final String identity;
   final bool isPlaying;
   final bool animatedArtworkEnabled;
+  final Uri? canvasUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -2890,6 +2961,17 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
               isPlaying: isPlaying,
               animatedArtworkEnabled: animatedArtworkEnabled,
             ),
+            if (canvasUrl != null)
+              ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback:
+                    expandedArtworkHeroEdgeFadeGradient.createShader,
+                child: SpotifyCanvasVideo(
+                  key: ValueKey('canvas-$identity'),
+                  url: canvasUrl!,
+                  isPlaying: isPlaying,
+                ),
+              ),
             if (animatedArtworkEnabled && particleColor != null)
               AnimatedArtworkParticles(
                 color: particleColor!,
@@ -3078,6 +3160,7 @@ class _LargeArtwork extends StatefulWidget {
     required this.expandedTargetWidth,
     required this.fullBleedExpanded,
     required this.animatedArtworkEnabled,
+    required this.canvasUrl,
     required this.maxExtent,
     required this.isFavorite,
     required this.shadowCompactness,
@@ -3095,6 +3178,7 @@ class _LargeArtwork extends StatefulWidget {
   final double expandedTargetWidth;
   final bool fullBleedExpanded;
   final bool animatedArtworkEnabled;
+  final Uri? canvasUrl;
   final double maxExtent;
   final bool isFavorite;
   final double shadowCompactness;
@@ -3154,6 +3238,7 @@ class _LargeArtworkState extends State<_LargeArtwork> {
         compactness: expanded ? 1.0 : widget.shadowCompactness,
         horizontalClearance: widget.shadowHorizontalClearance,
         borderRadius: borderRadius,
+        canvasUrl: widget.canvasUrl,
       ),
     );
     final artworkStack = Stack(
@@ -3241,6 +3326,7 @@ class _PlayerArtworkSurface extends StatelessWidget {
     required this.compactness,
     required this.horizontalClearance,
     required this.borderRadius,
+    required this.canvasUrl,
   });
 
   final String? url;
@@ -3253,6 +3339,7 @@ class _PlayerArtworkSurface extends StatelessWidget {
   final double compactness;
   final double horizontalClearance;
   final double borderRadius;
+  final Uri? canvasUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -3358,6 +3445,26 @@ class _PlayerArtworkSurface extends StatelessWidget {
                         ],
                       ),
               ),
+              if (canvasUrl != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(borderRadius),
+                  child: expanded
+                      ? ShaderMask(
+                          blendMode: BlendMode.dstIn,
+                          shaderCallback: expandedArtworkBoundedEdgeFadeGradient
+                              .createShader,
+                          child: SpotifyCanvasVideo(
+                            key: ValueKey('canvas-$identity'),
+                            url: canvasUrl!,
+                            isPlaying: isPlaying,
+                          ),
+                        )
+                      : SpotifyCanvasVideo(
+                          key: ValueKey('canvas-$identity'),
+                          url: canvasUrl!,
+                          isPlaying: isPlaying,
+                        ),
+                ),
               if (animatedArtworkEnabled && particleColor != null)
                 AnimatedArtworkParticles(
                   color: particleColor!,

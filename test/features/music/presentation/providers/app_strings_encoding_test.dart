@@ -271,7 +271,7 @@ void main() {
     expect(spanish.playerStyleBStreamMusic, 'BStream Music');
     expect(spanish.playerStyleAppleMusic, 'Apple Music Style');
     expect(spanish.playerStyleClassicVinyl, 'Vinilo Clásico');
-    expect(spanish.animatedArtwork, 'Portadas animadas');
+    expect(spanish.animatedArtwork, 'Portadas en Movimiento');
     expect(
       spanish.animatedArtworkDescription,
       'Añade movimiento, profundidad y zoom sutiles a la portada del reproductor.',
@@ -298,7 +298,7 @@ void main() {
     expect(english.playerStyleBStreamMusic, 'BStream Music');
     expect(english.playerStyleAppleMusic, 'Apple Music Style');
     expect(english.playerStyleClassicVinyl, 'Classic Vinyl');
-    expect(english.animatedArtwork, 'Animated artwork');
+    expect(english.animatedArtwork, 'Artwork motion');
     expect(
       english.animatedArtworkDescription,
       'Adds subtle motion, depth, and zoom to the player artwork.',

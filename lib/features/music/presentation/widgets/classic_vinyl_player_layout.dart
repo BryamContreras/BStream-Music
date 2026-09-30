@@ -9,6 +9,7 @@ class _ClassicVinylPlayerLayout extends StatelessWidget {
     required this.trackTransitionsEnabled,
     required this.artworkStyle,
     required this.animatedArtworkEnabled,
+    required this.canvasUrl,
     required this.drawBackground,
     required this.hasTrack,
     required this.isFavorite,
@@ -32,6 +33,7 @@ class _ClassicVinylPlayerLayout extends StatelessWidget {
   final bool trackTransitionsEnabled;
   final PlayerArtworkStyle artworkStyle;
   final bool animatedArtworkEnabled;
+  final Uri? canvasUrl;
   final bool drawBackground;
   final bool hasTrack;
   final bool isFavorite;
@@ -254,6 +256,7 @@ class _ClassicVinylPlayerLayout extends StatelessWidget {
                 visualIdentity: visualIdentity,
                 isPlaying: snapshot.status == PlayerStatus.playing,
                 animationEnabled: animatedArtworkEnabled,
+                canvasUrl: canvasUrl,
                 trackTransitionsEnabled: trackTransitionsEnabled,
                 expanded: deckUsesExpandedGeometry,
                 portraitLayout: !twoColumn,
@@ -430,6 +433,7 @@ class _ClassicVinylPlaybackDeck extends ConsumerWidget {
     required this.visualIdentity,
     required this.isPlaying,
     required this.animationEnabled,
+    required this.canvasUrl,
     required this.trackTransitionsEnabled,
     required this.expanded,
     required this.portraitLayout,
@@ -440,6 +444,7 @@ class _ClassicVinylPlaybackDeck extends ConsumerWidget {
   final String visualIdentity;
   final bool isPlaying;
   final bool animationEnabled;
+  final Uri? canvasUrl;
   final bool trackTransitionsEnabled;
   final bool expanded;
   final bool portraitLayout;
@@ -468,6 +473,7 @@ class _ClassicVinylPlaybackDeck extends ConsumerWidget {
       identity: visualIdentity,
       isPlaying: isPlaying,
       animationEnabled: animationEnabled,
+      canvasUrl: canvasUrl,
       progress: progress,
       trackTransitionsEnabled: trackTransitionsEnabled,
       expanded: expanded,

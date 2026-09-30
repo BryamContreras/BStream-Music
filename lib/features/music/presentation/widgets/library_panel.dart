@@ -1137,103 +1137,110 @@ class _LiveQueueTile extends ConsumerWidget {
               color: AppColors.cardBorderFor(context, solidInLiquidGlass: true),
             ),
     );
-    return Material(
-      key: ValueKey('library-live-track-${item.id}'),
-      color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
-      clipBehavior: Clip.antiAlias,
-      shape: shape,
-      child: ListTile(
-        dense: false,
-        minTileHeight: 86,
-        contentPadding: const EdgeInsets.only(left: 12, right: 4),
-        horizontalTitleGap: 10,
+    return AppCardGradientBorder(
+      radius: 8,
+      solidInLiquidGlass: true,
+      emphasized: isCurrent,
+      child: Material(
+        key: ValueKey('library-live-track-${item.id}'),
+        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+        clipBehavior: Clip.antiAlias,
         shape: shape,
-        tileColor: Colors.transparent,
-        leading: _LocalArtwork(source: _thumbnailSource),
-        title: MarqueeText(
-          item.displayTitle,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: AppColors.contentTitleFor(context),
+        child: ListTile(
+          dense: false,
+          minTileHeight: 86,
+          contentPadding: const EdgeInsets.only(left: 12, right: 4),
+          horizontalTitleGap: 10,
+          shape: shape,
+          tileColor: Colors.transparent,
+          leading: _LocalArtwork(source: _thumbnailSource),
+          title: MarqueeText(
+            item.displayTitle,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: AppColors.contentTitleFor(context),
+            ),
           ),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    '${strings.requestedBy}: ${item.requestedBy}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: subtitleStyle,
-                  ),
-                ),
-                if (item.requestedByModerator) ...[
-                  const SizedBox(width: 6),
-                  Icon(
-                    Icons.shield_rounded,
-                    size: 15,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 3),
-                  Text(
-                    strings.moderator,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      '${strings.requestedBy}: ${item.requestedBy}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: subtitleStyle,
                     ),
                   ),
+                  if (item.requestedByModerator) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.shield_rounded,
+                      size: 15,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      strings.moderator,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
-            ),
-            Text(
-              _statusText(strings, isCurrent: isCurrent),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: subtitleStyle.copyWith(
-                color: statusColor,
-                fontWeight: FontWeight.w700,
               ),
-            ),
-          ],
-        ),
-        trailing: item.isReady
-            ? IconButton.filledTonal(
-                tooltip: strings.play,
-                icon: const Icon(Icons.play_arrow_rounded),
-                iconSize: playIconSize,
-                padding: EdgeInsets.zero,
-                style: AppPlatform.isMobile
-                    ? IconButton.styleFrom(
-                        fixedSize: Size.square(playButtonSize),
-                        minimumSize: Size.square(playButtonSize),
-                        maximumSize: Size.square(playButtonSize),
-                        padding: EdgeInsets.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        visualDensity: VisualDensity.compact,
-                      )
-                    : null,
-                constraints: BoxConstraints.tight(Size.square(playButtonSize)),
-                onPressed: () async {
+              Text(
+                _statusText(strings, isCurrent: isCurrent),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: subtitleStyle.copyWith(
+                  color: statusColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          trailing: item.isReady
+              ? IconButton.filledTonal(
+                  tooltip: strings.play,
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  iconSize: playIconSize,
+                  padding: EdgeInsets.zero,
+                  style: AppPlatform.isMobile
+                      ? IconButton.styleFrom(
+                          fixedSize: Size.square(playButtonSize),
+                          minimumSize: Size.square(playButtonSize),
+                          maximumSize: Size.square(playButtonSize),
+                          padding: EdgeInsets.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                        )
+                      : null,
+                  constraints: BoxConstraints.tight(
+                    Size.square(playButtonSize),
+                  ),
+                  onPressed: () async {
+                    onOpenPlayer();
+                    await ref
+                        .read(tiktokLiveControllerProvider.notifier)
+                        .playLiveQueueItem(item.id);
+                  },
+                )
+              : _LiveQueueStatusIcon(item: item, color: statusColor),
+          onTap: item.isReady
+              ? () async {
                   onOpenPlayer();
                   await ref
                       .read(tiktokLiveControllerProvider.notifier)
                       .playLiveQueueItem(item.id);
-                },
-              )
-            : _LiveQueueStatusIcon(item: item, color: statusColor),
-        onTap: item.isReady
-            ? () async {
-                onOpenPlayer();
-                await ref
-                    .read(tiktokLiveControllerProvider.notifier)
-                    .playLiveQueueItem(item.id);
-              }
-            : null,
+                }
+              : null,
+        ),
       ),
     );
   }
@@ -1668,174 +1675,181 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        decoration: BoxDecoration(
-          color: resolvedSurfaceColor,
-          borderRadius: borderRadius,
-          border: Border.all(
-            color: isCurrent || _hovered
-                ? colors.primary
-                : appListCardBorder(context, solidInLiquidGlass: true),
-            width: isCurrent || _hovered ? 1.4 : 1,
+      child: AppCardGradientBorder(
+        solidInLiquidGlass: true,
+        emphasized: isCurrent || _hovered,
+        width: isCurrent || _hovered ? 1.4 : 1,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          decoration: BoxDecoration(
+            color: resolvedSurfaceColor,
+            borderRadius: borderRadius,
+            border: Border.all(
+              color: isCurrent || _hovered
+                  ? colors.primary
+                  : appListCardBorder(context, solidInLiquidGlass: true),
+              width: isCurrent || _hovered ? 1.4 : 1,
+            ),
           ),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: ListTile(
-            minTileHeight: _libraryArtworkRowMinHeight,
-            minVerticalPadding: 7,
-            contentPadding: _libraryOverviewContentPadding,
-            horizontalTitleGap: 10,
-            shape: RoundedRectangleBorder(borderRadius: borderRadius),
-            leading: Stack(
-              children: <Widget>[
-                _LocalArtwork(
-                  source: widget.item.artworkSource,
-                  fallbackSource: widget.item.artworkFallbackSource,
-                ),
-                if (isDownloaded)
-                  Positioned(
-                    right: 1,
-                    bottom: 1,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: colors.surface.withValues(alpha: 0.9),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(2),
-                        child: Icon(
-                          Icons.download_done_rounded,
-                          size: 14,
-                          color: colors.primary,
+          child: Material(
+            color: Colors.transparent,
+            child: ListTile(
+              minTileHeight: _libraryArtworkRowMinHeight,
+              minVerticalPadding: 7,
+              contentPadding: _libraryOverviewContentPadding,
+              horizontalTitleGap: 10,
+              shape: RoundedRectangleBorder(borderRadius: borderRadius),
+              leading: Stack(
+                children: <Widget>[
+                  _LocalArtwork(
+                    source: widget.item.artworkSource,
+                    fallbackSource: widget.item.artworkFallbackSource,
+                  ),
+                  if (isDownloaded)
+                    Positioned(
+                      right: 1,
+                      bottom: 1,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colors.surface.withValues(alpha: 0.9),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(
+                            Icons.download_done_rounded,
+                            size: 14,
+                            color: colors.primary,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                if (isCurrent || _hovered)
-                  NowPlayingEqualizerOverlay(isPlaying: isPlaying),
-              ],
-            ),
-            title: MarqueeText(
-              widget.item.title,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
-                color: isCurrent
-                    ? colors.primary
-                    : AppColors.contentTitleFor(context),
+                  if (isCurrent || _hovered)
+                    NowPlayingEqualizerOverlay(isPlaying: isPlaying),
+                ],
               ),
-            ),
-            subtitle: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                PlaylistTrackSubtitle(
-                  artist: widget.item.artist,
-                  duration: formatDuration(widget.item.duration),
-                  isDownloaded: isDownloaded,
-                  streamOnlyLabel: strings.streamOnlySong,
-                  cloudKey: ValueKey(
-                    'library-catalog-cloud-${widget.item.entry.id}',
-                  ),
-                  textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.contentSubtitleFor(context),
-                  ),
+              title: MarqueeText(
+                widget.item.title,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
+                  color: isCurrent
+                      ? colors.primary
+                      : AppColors.contentTitleFor(context),
                 ),
-                if (downloadState != null)
-                  _PlaylistDownloadProgress(
-                    key: ValueKey(
-                      'library-catalog-download-${widget.item.entry.id}',
+              ),
+              subtitle: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PlaylistTrackSubtitle(
+                    artist: widget.item.artist,
+                    duration: formatDuration(widget.item.duration),
+                    isDownloaded: isDownloaded,
+                    streamOnlyLabel: strings.streamOnlySong,
+                    cloudKey: ValueKey(
+                      'library-catalog-cloud-${widget.item.entry.id}',
                     ),
-                    task: downloadState,
+                    textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.contentSubtitleFor(context),
+                    ),
                   ),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                TrackPlayButton(
-                  key: ValueKey('library-catalog-play-${widget.item.entry.id}'),
-                  tooltip: widget.item.isPlayable
-                      ? isPlaying
-                            ? strings.pause
-                            : strings.play
-                      : strings.choose(
-                          'Canción no disponible en YouTube Music',
-                          'Song unavailable on YouTube Music',
-                        ),
-                  isPlaying: isPlaying,
-                  onPressed: widget.item.isPlayable ? _togglePlayback : null,
-                ),
-                SizedBox(
-                  width: 36,
-                  height: 44,
-                  child: GlassPopupMenuButton<_TrackMenuAction>(
-                    key: ValueKey(
-                      'library-catalog-menu-${widget.item.entry.id}',
-                    ),
-                    tooltip: strings.moreOptions,
-                    padding: EdgeInsets.zero,
-                    iconSize: menuIconSize,
-                    child: Center(
-                      child: Icon(
-                        Icons.more_vert_rounded,
-                        size: menuIconSize,
-                        color: menuIconColor,
+                  if (downloadState != null)
+                    _PlaylistDownloadProgress(
+                      key: ValueKey(
+                        'library-catalog-download-${widget.item.entry.id}',
                       ),
+                      task: downloadState,
                     ),
-                    onSelected: (action) => _handleAction(context, action),
-                    itemBuilder: (context) {
-                      final entries = <PopupMenuEntry<_TrackMenuAction>>[];
-                      final remote = widget.item.playback?.remoteTrack;
-                      if (remote != null &&
-                          (!isDownloaded || canCancelDownload)) {
-                        entries.add(
-                          PopupMenuItem<_TrackMenuAction>(
-                            value: _TrackMenuAction.download,
-                            child: _trackMenuItem(
-                              context,
-                              canCancelDownload
-                                  ? Icons.close_rounded
-                                  : Icons.download_rounded,
-                              canCancelDownload
-                                  ? strings.cancelDownload
-                                  : strings.download,
-                            ),
+                ],
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  TrackPlayButton(
+                    key: ValueKey(
+                      'library-catalog-play-${widget.item.entry.id}',
+                    ),
+                    tooltip: widget.item.isPlayable
+                        ? isPlaying
+                              ? strings.pause
+                              : strings.play
+                        : strings.choose(
+                            'Canción no disponible en YouTube Music',
+                            'Song unavailable on YouTube Music',
                           ),
-                        );
-                      }
-                      if (widget.item.isPlayable) {
-                        entries.add(
-                          PopupMenuItem<_TrackMenuAction>(
-                            value: _TrackMenuAction.addToPlaylist,
-                            child: _trackMenuItem(
-                              context,
-                              Icons.playlist_add_rounded,
-                              strings.addToPlaylist,
-                            ),
-                          ),
-                        );
-                      }
-                      entries.add(
-                        PopupMenuItem<_TrackMenuAction>(
-                          value: _TrackMenuAction.removeFromPlaylist,
-                          child: _trackMenuItem(
-                            context,
-                            Icons.playlist_remove_rounded,
-                            widget.playlist.isFavorites
-                                ? strings.removeFromFavorites
-                                : strings.removeFromPlaylist,
-                          ),
-                        ),
-                      );
-                      return entries;
-                    },
+                    isPlaying: isPlaying,
+                    onPressed: widget.item.isPlayable ? _togglePlayback : null,
                   ),
-                ),
-              ],
+                  SizedBox(
+                    width: 36,
+                    height: 44,
+                    child: GlassPopupMenuButton<_TrackMenuAction>(
+                      key: ValueKey(
+                        'library-catalog-menu-${widget.item.entry.id}',
+                      ),
+                      tooltip: strings.moreOptions,
+                      padding: EdgeInsets.zero,
+                      iconSize: menuIconSize,
+                      child: Center(
+                        child: Icon(
+                          Icons.more_vert_rounded,
+                          size: menuIconSize,
+                          color: menuIconColor,
+                        ),
+                      ),
+                      onSelected: (action) => _handleAction(context, action),
+                      itemBuilder: (context) {
+                        final entries = <PopupMenuEntry<_TrackMenuAction>>[];
+                        final remote = widget.item.playback?.remoteTrack;
+                        if (remote != null &&
+                            (!isDownloaded || canCancelDownload)) {
+                          entries.add(
+                            PopupMenuItem<_TrackMenuAction>(
+                              value: _TrackMenuAction.download,
+                              child: _trackMenuItem(
+                                context,
+                                canCancelDownload
+                                    ? Icons.close_rounded
+                                    : Icons.download_rounded,
+                                canCancelDownload
+                                    ? strings.cancelDownload
+                                    : strings.download,
+                              ),
+                            ),
+                          );
+                        }
+                        if (widget.item.isPlayable) {
+                          entries.add(
+                            PopupMenuItem<_TrackMenuAction>(
+                              value: _TrackMenuAction.addToPlaylist,
+                              child: _trackMenuItem(
+                                context,
+                                Icons.playlist_add_rounded,
+                                strings.addToPlaylist,
+                              ),
+                            ),
+                          );
+                        }
+                        entries.add(
+                          PopupMenuItem<_TrackMenuAction>(
+                            value: _TrackMenuAction.removeFromPlaylist,
+                            child: _trackMenuItem(
+                              context,
+                              Icons.playlist_remove_rounded,
+                              widget.playlist.isFavorites
+                                  ? strings.removeFromFavorites
+                                  : strings.removeFromPlaylist,
+                            ),
+                          ),
+                        );
+                        return entries;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              onTap: widget.item.isPlayable ? _openOrPlay : null,
             ),
-            onTap: widget.item.isPlayable ? _openOrPlay : null,
           ),
         ),
       ),
@@ -3136,22 +3150,26 @@ class _FolderShellState extends State<_FolderShell> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-        decoration: ShapeDecoration(
-          color: appListCardSurface(context),
-          shape: shape,
-        ),
-        child: Material(
-          color: Colors.transparent,
-          elevation: 0,
-          shadowColor: const Color(0x14000000),
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(appCardRadius),
+      child: AppCardGradientBorder(
+        emphasized: _hovered,
+        width: _hovered ? 1.4 : 1,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          decoration: ShapeDecoration(
+            color: appListCardSurface(context),
+            shape: shape,
           ),
-          child: widget.child,
+          child: Material(
+            color: Colors.transparent,
+            elevation: 0,
+            shadowColor: const Color(0x14000000),
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(appCardRadius),
+            ),
+            child: widget.child,
+          ),
         ),
       ),
     );
@@ -3284,253 +3302,262 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
       child: MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
         onExit: (_) => setState(() => _hovered = false),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: resolvedSurfaceColor,
-            borderRadius: borderRadius,
-            border: Border.all(
-              color: borderColor,
-              width: selected || _hovered ? 1.4 : 1,
+        child: AppCardGradientBorder(
+          solidInLiquidGlass: true,
+          emphasized: selected || isCurrent || _hovered,
+          width: selected || _hovered ? 1.4 : 1,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: resolvedSurfaceColor,
+              borderRadius: borderRadius,
+              border: Border.all(
+                color: borderColor,
+                width: selected || _hovered ? 1.4 : 1,
+              ),
             ),
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: ListTile(
-              dense: false,
-              minTileHeight: 70,
-              minVerticalPadding: 7,
-              contentPadding: const EdgeInsets.only(left: 12, right: 4),
-              horizontalTitleGap: 10,
-              shape: RoundedRectangleBorder(borderRadius: borderRadius),
-              tileColor: Colors.transparent,
-              leading: Stack(
-                children: [
-                  _LocalArtwork(
-                    key: ValueKey('library-track-artwork-${track.id}'),
-                    source: artwork?.source,
-                    fallbackSource: artwork?.fallbackSource,
-                  ),
-                  if (isFavorite)
-                    const Positioned(
-                      top: 1,
-                      right: 1,
-                      child: FavoriteStarBadge(iconSize: 15),
+            child: Material(
+              color: Colors.transparent,
+              child: ListTile(
+                dense: false,
+                minTileHeight: 70,
+                minVerticalPadding: 7,
+                contentPadding: const EdgeInsets.only(left: 12, right: 4),
+                horizontalTitleGap: 10,
+                shape: RoundedRectangleBorder(borderRadius: borderRadius),
+                tileColor: Colors.transparent,
+                leading: Stack(
+                  children: [
+                    _LocalArtwork(
+                      key: ValueKey('library-track-artwork-${track.id}'),
+                      source: artwork?.source,
+                      fallbackSource: artwork?.fallbackSource,
                     ),
-                  if (isCurrent || _hovered)
-                    NowPlayingEqualizerOverlay(
-                      key: ValueKey('now-playing-${track.id}'),
-                      isPlaying: isPlaying,
-                    ),
-                ],
-              ),
-              title: Text(
-                track.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
-                  color: AppColors.contentTitleFor(context),
-                ),
-              ),
-              subtitle: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  PlaylistTrackSubtitle(
-                    artist: track.artist,
-                    duration: formatDuration(track.duration),
-                    isDownloaded:
-                        mode != _TrackListMode.playlist || localAudioAvailable,
-                    streamOnlyLabel: strings.streamOnlySong,
-                    cloudKey: ValueKey('library-legacy-cloud-${track.id}'),
-                    textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.contentSubtitleFor(context),
-                    ),
-                  ),
-                  if (downloadState != null)
-                    _PlaylistDownloadProgress(
-                      key: ValueKey('library-legacy-download-${track.id}'),
-                      task: downloadState,
-                    ),
-                ],
-              ),
-              trailing: selectionActive
-                  ? SizedBox.square(
-                      dimension: 48,
-                      child: Center(
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 160),
-                          child: Icon(
-                            selected
-                                ? Icons.check_circle_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            key: ValueKey(
-                              selected
-                                  ? 'selection-check-${track.id}'
-                                  : 'selection-empty-${track.id}',
-                            ),
-                            color: selected
-                                ? colors.primary
-                                : colors.onSurfaceVariant,
-                            size: 28,
-                          ),
-                        ),
+                    if (isFavorite)
+                      const Positioned(
+                        top: 1,
+                        right: 1,
+                        child: FavoriteStarBadge(iconSize: 15),
                       ),
-                    )
-                  : Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TrackPlayButton(
-                          key: ValueKey('library-track-play-${track.id}'),
-                          tooltip: isPlaying ? strings.pause : strings.play,
-                          isPlaying: isPlaying,
-                          onPressed: () => _togglePlayback(ref),
-                        ),
-                        SizedBox(
-                          width: menuButtonWidth,
-                          height: menuButtonSize,
-                          child: GlassPopupMenuButton<_TrackMenuAction>(
-                            key: ValueKey('library-track-menu-${track.id}'),
-                            tooltip: strings.moreOptions,
-                            padding: EdgeInsets.zero,
-                            splashRadius: menuButtonSize / 2,
-                            iconSize: menuIconSize,
-                            child: Center(
-                              child: Icon(
-                                Icons.more_vert_rounded,
-                                size: menuIconSize,
-                                color: menuItemIconColor,
+                    if (isCurrent || _hovered)
+                      NowPlayingEqualizerOverlay(
+                        key: ValueKey('now-playing-${track.id}'),
+                        isPlaying: isPlaying,
+                      ),
+                  ],
+                ),
+                title: Text(
+                  track.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w700,
+                    color: AppColors.contentTitleFor(context),
+                  ),
+                ),
+                subtitle: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    PlaylistTrackSubtitle(
+                      artist: track.artist,
+                      duration: formatDuration(track.duration),
+                      isDownloaded:
+                          mode != _TrackListMode.playlist ||
+                          localAudioAvailable,
+                      streamOnlyLabel: strings.streamOnlySong,
+                      cloudKey: ValueKey('library-legacy-cloud-${track.id}'),
+                      textStyle: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(
+                            color: AppColors.contentSubtitleFor(context),
+                          ),
+                    ),
+                    if (downloadState != null)
+                      _PlaylistDownloadProgress(
+                        key: ValueKey('library-legacy-download-${track.id}'),
+                        task: downloadState,
+                      ),
+                  ],
+                ),
+                trailing: selectionActive
+                    ? SizedBox.square(
+                        dimension: 48,
+                        child: Center(
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 160),
+                            child: Icon(
+                              selected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.radio_button_unchecked_rounded,
+                              key: ValueKey(
+                                selected
+                                    ? 'selection-check-${track.id}'
+                                    : 'selection-empty-${track.id}',
                               ),
+                              color: selected
+                                  ? colors.primary
+                                  : colors.onSurfaceVariant,
+                              size: 28,
                             ),
-                            onSelected: (action) =>
-                                _handleAction(context, ref, action),
-                            itemBuilder: (context) => switch (mode) {
-                              _TrackListMode.downloads => [
-                                PopupMenuItem(
-                                  value: _TrackMenuAction.renameTrack,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.drive_file_rename_outline_rounded,
-                                        color: menuItemIconColor,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Text(strings.rename),
-                                    ],
-                                  ),
-                                ),
-                                PopupMenuItem(
-                                  value: _TrackMenuAction.addToPlaylist,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.playlist_add_rounded,
-                                        color: menuItemIconColor,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Text(strings.addToPlaylist),
-                                    ],
-                                  ),
-                                ),
-                                PopupMenuItem(
-                                  value: _TrackMenuAction.toggleFavorite,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        isFavorite
-                                            ? Icons.favorite_rounded
-                                            : Icons.favorite_border_rounded,
-                                        color: isFavorite
-                                            ? Theme.of(
-                                                context,
-                                              ).colorScheme.primary
-                                            : menuItemIconColor,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Text(
-                                        isFavorite
-                                            ? strings.removeFromFavorites
-                                            : strings.addToFavorites,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                PopupMenuItem(
-                                  value: _TrackMenuAction.deleteTrack,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.delete_outline_rounded,
-                                        color: menuItemIconColor,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Text(strings.deleteSong),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                              _TrackListMode.playlist => [
-                                if (remoteTrack != null)
-                                  PopupMenuItem(
-                                    value: _TrackMenuAction.download,
-                                    child: _trackMenuItem(
-                                      context,
-                                      canCancelDownload
-                                          ? Icons.close_rounded
-                                          : Icons.download_rounded,
-                                      canCancelDownload
-                                          ? strings.cancelDownload
-                                          : strings.download,
-                                    ),
-                                  ),
-                                PopupMenuItem(
-                                  value: _TrackMenuAction.addToPlaylist,
-                                  child: _trackMenuItem(
-                                    context,
-                                    Icons.playlist_add_rounded,
-                                    strings.addToPlaylist,
-                                  ),
-                                ),
-                                PopupMenuItem(
-                                  value: _TrackMenuAction.renameTrack,
-                                  child: _trackMenuItem(
-                                    context,
-                                    Icons.drive_file_rename_outline_rounded,
-                                    strings.rename,
-                                  ),
-                                ),
-                                PopupMenuItem(
-                                  value: _TrackMenuAction.toggleFavorite,
-                                  child: _trackMenuItem(
-                                    context,
-                                    isFavorite
-                                        ? Icons.favorite_rounded
-                                        : Icons.favorite_border_rounded,
-                                    isFavorite
-                                        ? strings.removeFromFavorites
-                                        : strings.addToFavorites,
-                                  ),
-                                ),
-                                if (playlistId != Playlist.favoritesId)
-                                  PopupMenuItem(
-                                    value: _TrackMenuAction.removeFromPlaylist,
-                                    child: _trackMenuItem(
-                                      context,
-                                      Icons.playlist_remove_rounded,
-                                      strings.removeFromPlaylist,
-                                    ),
-                                  ),
-                              ],
-                            },
                           ),
                         ),
-                      ],
-                    ),
-              onLongPress: widget.onLongPress,
-              onTap: widget.onSelectionTap ?? () => _openOrPlay(ref),
+                      )
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TrackPlayButton(
+                            key: ValueKey('library-track-play-${track.id}'),
+                            tooltip: isPlaying ? strings.pause : strings.play,
+                            isPlaying: isPlaying,
+                            onPressed: () => _togglePlayback(ref),
+                          ),
+                          SizedBox(
+                            width: menuButtonWidth,
+                            height: menuButtonSize,
+                            child: GlassPopupMenuButton<_TrackMenuAction>(
+                              key: ValueKey('library-track-menu-${track.id}'),
+                              tooltip: strings.moreOptions,
+                              padding: EdgeInsets.zero,
+                              splashRadius: menuButtonSize / 2,
+                              iconSize: menuIconSize,
+                              child: Center(
+                                child: Icon(
+                                  Icons.more_vert_rounded,
+                                  size: menuIconSize,
+                                  color: menuItemIconColor,
+                                ),
+                              ),
+                              onSelected: (action) =>
+                                  _handleAction(context, ref, action),
+                              itemBuilder: (context) => switch (mode) {
+                                _TrackListMode.downloads => [
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.renameTrack,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons
+                                              .drive_file_rename_outline_rounded,
+                                          color: menuItemIconColor,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Text(strings.rename),
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.addToPlaylist,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.playlist_add_rounded,
+                                          color: menuItemIconColor,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Text(strings.addToPlaylist),
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.toggleFavorite,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          isFavorite
+                                              ? Icons.favorite_rounded
+                                              : Icons.favorite_border_rounded,
+                                          color: isFavorite
+                                              ? Theme.of(
+                                                  context,
+                                                ).colorScheme.primary
+                                              : menuItemIconColor,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Text(
+                                          isFavorite
+                                              ? strings.removeFromFavorites
+                                              : strings.addToFavorites,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.deleteTrack,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.delete_outline_rounded,
+                                          color: menuItemIconColor,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Text(strings.deleteSong),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                                _TrackListMode.playlist => [
+                                  if (remoteTrack != null)
+                                    PopupMenuItem(
+                                      value: _TrackMenuAction.download,
+                                      child: _trackMenuItem(
+                                        context,
+                                        canCancelDownload
+                                            ? Icons.close_rounded
+                                            : Icons.download_rounded,
+                                        canCancelDownload
+                                            ? strings.cancelDownload
+                                            : strings.download,
+                                      ),
+                                    ),
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.addToPlaylist,
+                                    child: _trackMenuItem(
+                                      context,
+                                      Icons.playlist_add_rounded,
+                                      strings.addToPlaylist,
+                                    ),
+                                  ),
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.renameTrack,
+                                    child: _trackMenuItem(
+                                      context,
+                                      Icons.drive_file_rename_outline_rounded,
+                                      strings.rename,
+                                    ),
+                                  ),
+                                  PopupMenuItem(
+                                    value: _TrackMenuAction.toggleFavorite,
+                                    child: _trackMenuItem(
+                                      context,
+                                      isFavorite
+                                          ? Icons.favorite_rounded
+                                          : Icons.favorite_border_rounded,
+                                      isFavorite
+                                          ? strings.removeFromFavorites
+                                          : strings.addToFavorites,
+                                    ),
+                                  ),
+                                  if (playlistId != Playlist.favoritesId)
+                                    PopupMenuItem(
+                                      value:
+                                          _TrackMenuAction.removeFromPlaylist,
+                                      child: _trackMenuItem(
+                                        context,
+                                        Icons.playlist_remove_rounded,
+                                        strings.removeFromPlaylist,
+                                      ),
+                                    ),
+                                ],
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                onLongPress: widget.onLongPress,
+                onTap: widget.onSelectionTap ?? () => _openOrPlay(ref),
+              ),
             ),
           ),
         ),

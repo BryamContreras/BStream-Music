@@ -823,7 +823,8 @@ class AppStrings {
   String get playerStyleAppleMusic => 'Apple Music Style';
   String get playerStyleClassicVinyl =>
       choose('Vinilo Clásico', 'Classic Vinyl');
-  String get animatedArtwork => choose('Portadas animadas', 'Animated artwork');
+  String get animatedArtwork =>
+      choose('Portadas en Movimiento', 'Artwork motion');
   String get animatedArtworkDescription => choose(
     'Añade movimiento, profundidad y zoom sutiles a la portada del reproductor.',
     'Adds subtle motion, depth, and zoom to the player artwork.',
@@ -832,6 +833,15 @@ class AppStrings {
       choose('Estilo de las portadas', 'Artwork style');
   String get playerArtworkStyleClassic => choose('Clásico', 'Classic');
   String get playerArtworkStyleExpanded => choose('Expandido', 'Expanded');
+  String get appleAnimatedArtwork => 'Animated Artwork';
+  String get appleAnimatedArtworkDescription =>
+      'Apple Music (m8tec · boidu.dev)';
+  String get spotifyCanvas => 'Spotify Canvas';
+  String get spotifyCanvasDescription => 'Canvas (spotycovs.lol)';
+  String get spotifyCanvasUnavailable => choose(
+    'No disponible en Linux; se mantiene la portada.',
+    'Unavailable on Linux; the cover remains visible.',
+  );
   String get miniPlayer => choose('Mini reproductor', 'Mini player');
   String get miniPlayerStyle => choose('Estilo', 'Style');
   String get miniPlayerClassic => choose('Clásico', 'Classic');
