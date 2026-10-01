@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -77,10 +78,17 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
 
     VideoPlayerController? controller;
     try {
-      controller = VideoPlayerController.networkUrl(
-        widget.url,
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-      );
+      // The player cache hands us only completed local media. Keeping the
+      // decoder off the network also makes a track switch stop the old fetch.
+      controller = widget.url.scheme == 'file'
+          ? VideoPlayerController.file(
+              File.fromUri(widget.url),
+              videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+            )
+          : VideoPlayerController.networkUrl(
+              widget.url,
+              videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+            );
       _controller = controller;
       await controller.initialize().timeout(const Duration(seconds: 9));
       if (!mounted || generation != _generation) {

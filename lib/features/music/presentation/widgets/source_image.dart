@@ -4,6 +4,29 @@ import '../../../../core/utils/cached_artwork_image_provider.dart';
 import '../../../../core/utils/image_source.dart';
 import 'device_audio_artwork_image_provider.dart';
 
+/// Intercepts only artwork belonging to the player's three-song visual cache.
+/// Other images (search, queue, profiles) keep their normal shared cache.
+class PlaybackArtworkCacheScope extends InheritedWidget {
+  const PlaybackArtworkCacheScope({
+    required this.revision,
+    required this.tracksSource,
+    required this.localPathFor,
+    required super.child,
+    super.key,
+  });
+
+  final int revision;
+  final bool Function(String) tracksSource;
+  final String? Function(String) localPathFor;
+
+  static PlaybackArtworkCacheScope? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<PlaybackArtworkCacheScope>();
+
+  @override
+  bool updateShouldNotify(PlaybackArtworkCacheScope oldWidget) =>
+      revision != oldWidget.revision;
+}
+
 /// Renders local paths, file URIs, and HTTP(S) artwork through one shared
 /// fallback policy.
 class SourceImage extends StatefulWidget {
@@ -77,6 +100,19 @@ class _SourceImageState extends State<SourceImage> {
       return fallback;
     }
     if (isNetworkImageSource(normalized)) {
+      final playbackCache = PlaybackArtworkCacheScope.maybeOf(context);
+      if (playbackCache?.tracksSource(normalized) == true) {
+        final cachedPath = playbackCache!.localPathFor(normalized);
+        if (cachedPath == null) return fallback;
+        return SourceImage(
+          source: cachedPath,
+          fallbackSource: widget.fallbackSource,
+          fit: widget.fit,
+          cacheWidth: widget.cacheWidth,
+          filterQuality: widget.filterQuality,
+          fallback: fallback,
+        );
+      }
       final sizedSource =
           sizedGoogleArtworkSource(normalized, widget.cacheWidth) ?? normalized;
       return _networkArtworkForSource(
@@ -135,6 +171,14 @@ class _SourceImageState extends State<SourceImage> {
     if (normalizedFallback == null ||
         normalizedFallback.isEmpty ||
         normalizedFallback == primarySource) {
+      return widget.fallback;
+    }
+    final playbackCache = PlaybackArtworkCacheScope.maybeOf(context);
+    if (primarySource != null &&
+        playbackCache?.tracksSource(primarySource) == true &&
+        isNetworkImageSource(normalizedFallback)) {
+      // The playback cache tries remote fallback candidates itself. Starting
+      // another image-provider request here would outlive a track switch.
       return widget.fallback;
     }
     return SourceImage(

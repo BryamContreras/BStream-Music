@@ -2850,6 +2850,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             keepTickerEnabled: widget.playerTransitionActive,
             animateInitialEntry: !_playerWasInitialDestination,
             child: PlayerPanel(
+              active: widget.selectedIndex == widget.playerIndex,
               onOpenSearch: widget.onOpenSearch,
               onCollapse: widget.onCollapsePlayer,
               // Keep the dark artwork backdrop scoped to the player. The

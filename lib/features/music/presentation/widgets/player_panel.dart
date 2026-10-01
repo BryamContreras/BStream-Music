@@ -25,6 +25,7 @@ import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/artwork_progress_color_provider.dart';
 import '../providers/music_providers.dart';
+import '../providers/playback_visual_cache_provider.dart';
 import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
 import 'animated_artwork_motion.dart';
@@ -150,6 +151,7 @@ class _PlayerSurroundingTheme extends InheritedWidget {
 
 class PlayerPanel extends ConsumerStatefulWidget {
   const PlayerPanel({
+    this.active = true,
     this.onOpenSearch,
     this.onCollapse,
     this.drawBackground = true,
@@ -163,6 +165,7 @@ class PlayerPanel extends ConsumerStatefulWidget {
   });
 
   final VoidCallback? onOpenSearch;
+  final bool active;
   final VoidCallback? onCollapse;
   final bool drawBackground;
   final bool trackTransitionsEnabled;
@@ -188,9 +191,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
   bool _albumNavigationBusy = false;
   final Map<String, _AlbumNavigationTarget> _albumNavigationTargets = {};
   final Set<String> _albumNavigationMisses = {};
-
   @override
   Widget build(BuildContext context) {
+    final visualCache = ref.watch(playbackVisualCacheProvider);
+    final visualActive = widget.active && TickerMode.valuesOf(context).enabled;
     final presentation = ref.watch(
       playerControllerProvider.select((player) {
         final snapshot =
@@ -263,6 +267,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       snapshot.duration ?? Duration.zero,
     );
     final remoteArtworkAllowed =
+        visualActive &&
         snapshot.status != PlayerStatus.idle &&
         snapshot.status != PlayerStatus.failed &&
         AppPlatform.current != AppPlatformType.linux &&
@@ -282,7 +287,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
           widget.artworkStyle == PlayerArtworkStyle.expanded &&
           widget.style != PlayerStyle.classicVinyl,
     );
-    final canvasUrl =
+    final resolvedCanvasUrl =
         widget.appleAnimatedArtworkEnabled &&
             !widget.spotifyCanvasEnabled &&
             remoteArtworkAllowed
@@ -298,6 +303,19 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       artist: snapshot.artist,
       thumbnailUrl: artworkSource,
     );
+    if (visualActive) {
+      visualCache.activate(
+        trackKey: visualIdentity,
+        coverSource: artworkSource,
+        coverFallbackSource: artworkFallbackSource,
+        videoUrl: resolvedCanvasUrl,
+      );
+    } else {
+      visualCache.deactivate();
+    }
+    final canvasUrl = visualActive
+        ? visualCache.videoFileFor(visualIdentity, resolvedCanvasUrl)
+        : null;
     final hasTrack =
         snapshot.title != null ||
         snapshot.artist != null ||
@@ -1034,7 +1052,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         );
       },
     );
-    return panel;
+    return PlaybackArtworkCacheScope(
+      revision: visualCache.revision,
+      tracksSource: visualCache.tracksCover,
+      localPathFor: visualCache.coverPathFor,
+      child: panel,
+    );
   }
 
   Future<void> _openMobilePlaybackQueue(BuildContext context) async {

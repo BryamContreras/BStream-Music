@@ -18,6 +18,7 @@ import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/player/player_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../providers/music_providers.dart';
+import '../providers/playback_visual_cache_provider.dart';
 import 'favorite_star_badge.dart';
 import 'playback_progress_line.dart';
 import 'playlist_artwork.dart';
@@ -182,6 +183,7 @@ class MiniPlayer extends ConsumerWidget {
       artist: presentation.artist,
       thumbnailUrl: artworkSource,
     );
+    final visualCache = ref.watch(playbackVisualCacheProvider);
     final metadata = TrackChangeTransition(
       key: const ValueKey('mini-player-metadata'),
       switcherKey: const ValueKey('mini-player-track-transition'),
@@ -678,7 +680,14 @@ class MiniPlayer extends ConsumerWidget {
       ),
     );
 
-    return miniPlayer;
+    return PlaybackArtworkCacheScope(
+      revision: visualCache.revision,
+      // Reuse only files finished in the full player. Mini-player never starts
+      // a full-size artwork or Canvas download of its own.
+      tracksSource: (source) => visualCache.coverPathFor(source) != null,
+      localPathFor: visualCache.coverPathFor,
+      child: miniPlayer,
+    );
   }
 }
 

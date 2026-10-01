@@ -10,6 +10,51 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('player cache shows only a complete local cover', (tester) async {
+    const remote = 'https://example.invalid/current-cover.jpg';
+    final directory = Directory.systemTemp.createTempSync(
+      'bstream-cover-scope-',
+    );
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      directory.deleteSync(recursive: true);
+    });
+    final file = File('${directory.path}/cover.png');
+    file.writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      ),
+    );
+
+    Widget scoped(int revision, String? path) => MaterialApp(
+      home: PlaybackArtworkCacheScope(
+        revision: revision,
+        tracksSource: (source) => source == remote,
+        localPathFor: (_) => path,
+        child: const SourceImage(
+          source: remote,
+          fallback: Text('waiting for cover'),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(scoped(0, null));
+    expect(find.byType(Image), findsNothing);
+    expect(find.text('waiting for cover'), findsOneWidget);
+
+    await tester.pumpWidget(scoped(1, file.path));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 30)),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    final image = tester.widget<Image>(find.byType(Image));
+    expect((image.image as ResizeImage).imageProvider, isA<FileImage>());
+  });
+
   testWidgets('SourceImage uses its fallback for missing sources', (
     tester,
   ) async {

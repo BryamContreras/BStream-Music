@@ -381,6 +381,8 @@ void main() {
       of: blur,
       matching: find.byType(Image),
     );
+    // Outside the full player, mini-player keeps its normal thumbnail loading
+    // without starting a Canvas or full-player artwork transfer.
     expect(backgroundImage, findsOneWidget);
     final image = tester.widget<Image>(backgroundImage);
     final provider = image.image as ResizeImage;
