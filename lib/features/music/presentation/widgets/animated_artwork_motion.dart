@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'ambient_animation_frame_gate.dart';
+
 /// Gives album artwork a restrained, continuously moving presentation.
 ///
 /// Zoom, pan, and depth use independent, closed loops so their movement does
@@ -67,6 +69,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
   late final AnimationController _panController;
   late final AnimationController _depthController;
   late final Listenable _motion;
+  late final AmbientAnimationFrameGate _paintFrames;
   bool _motionAllowed = false;
   bool _reducedMotion = false;
   bool _tickerEnabled = true;
@@ -110,6 +113,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
       debugLabel: 'animated-artwork-depth',
     );
     _motion = Listenable.merge(_controllers);
+    _paintFrames = AmbientAnimationFrameGate(_motion);
   }
 
   @override
@@ -117,6 +121,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
     super.didChangeDependencies();
     _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
+    _paintFrames.setDisplayRefreshRate(View.of(context).display.refreshRate);
     _synchronizeMotion();
   }
 
@@ -185,6 +190,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _paintFrames.dispose();
     for (final controller in _controllers) {
       controller.dispose();
     }
@@ -202,7 +208,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
             : null;
         return RepaintBoundary(
           child: AnimatedBuilder(
-            animation: _motion,
+            animation: _paintFrames,
             // The image is retained as its own layer. Only the inexpensive
             // transforms above it change on animation ticks.
             child: RepaintBoundary(child: widget.child),

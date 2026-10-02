@@ -116,6 +116,58 @@ const expandedArtworkHeroFocusFadeGradient = LinearGradient(
   stops: [0, 0.08, 0.16, 0.68, 0.78, 0.90, 1],
 );
 
+// The sharp cover is opaque while it moves. A stationary blurred copy above
+// it supplies the inverse of the former focus mask, so the large saveLayer is
+// not invalidated on every animation frame.
+LinearGradient _expandedArtworkHeroVeilGradient(double focusFraction) {
+  return LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: const [
+      Color(0xAAFFFFFF),
+      Color(0x26FFFFFF),
+      Colors.transparent,
+      Colors.transparent,
+      Color(0x26FFFFFF),
+      Color(0x99FFFFFF),
+      Colors.white,
+      Colors.white,
+    ],
+    stops: [
+      0,
+      0.08 * focusFraction,
+      0.16 * focusFraction,
+      0.68 * focusFraction,
+      0.78 * focusFraction,
+      0.90 * focusFraction,
+      focusFraction,
+      1,
+    ],
+  );
+}
+
+LinearGradient _expandedArtworkHeroTailGradient(double focusFraction) {
+  final tail = 1 - focusFraction;
+  return LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: const [
+      Colors.white,
+      Colors.white,
+      Color(0xE6FFFFFF),
+      Color(0x99FFFFFF),
+      Colors.transparent,
+    ],
+    stops: [
+      0,
+      focusFraction,
+      focusFraction + (tail * 0.4),
+      focusFraction + (tail * 0.75),
+      1,
+    ],
+  );
+}
+
 @visibleForTesting
 const expandedArtworkBoundedEdgeFadeGradient = LinearGradient(
   begin: Alignment.topCenter,
@@ -3081,24 +3133,59 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
         final width = constraints.maxWidth;
         final focusedOverscan = (width * 0.035).clamp(10.0, 18.0).toDouble();
         final focusedExtent = width + (focusedOverscan * 2);
+        final focusFraction = (focusedExtent / constraints.maxHeight)
+            .clamp(0.0, 1.0)
+            .toDouble();
 
         return Stack(
           fit: StackFit.expand,
           clipBehavior: Clip.hardEdge,
           children: [
+            Positioned(
+              top: 0,
+              left: -focusedOverscan,
+              right: -focusedOverscan,
+              height: focusedExtent,
+              child: ClipRect(
+                child: AnimatedArtworkMotion(
+                  enabled: animatedArtworkEnabled,
+                  isPlaying: isPlaying,
+                  identity: identity,
+                  borderRadius: BorderRadius.zero,
+                  // The sharp cover moves while its stationary blurred veil
+                  // blends its edges into the tail.
+                  depthEnabled: false,
+                  child: ColoredBox(
+                    color: colors.surfaceContainerHighest,
+                    child: SourceImage(
+                      key: const ValueKey(
+                        'player-expanded-artwork-focused-image',
+                      ),
+                      source: source,
+                      fallbackSource: fallbackSource,
+                      fit: BoxFit.cover,
+                      fallback: fallback(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
             RepaintBoundary(
               key: const ValueKey('player-expanded-artwork-static-backdrop'),
               child: ShaderMask(
-                key: const ValueKey('player-expanded-artwork-edge-fade'),
+                key: const ValueKey('player-expanded-artwork-focus-fade'),
                 blendMode: BlendMode.dstIn,
-                shaderCallback:
-                    expandedArtworkHeroEdgeFadeGradient.createShader,
+                shaderCallback: _expandedArtworkHeroVeilGradient(
+                  focusFraction,
+                ).createShader,
                 child: ShaderMask(
-                  key: const ValueKey('player-expanded-artwork-blur'),
+                  key: const ValueKey('player-expanded-artwork-edge-fade'),
                   blendMode: BlendMode.dstIn,
-                  shaderCallback:
-                      expandedArtworkHeroBlurFadeGradient.createShader,
+                  shaderCallback: _expandedArtworkHeroTailGradient(
+                    focusFraction,
+                  ).createShader,
                   child: ClipRect(
+                    key: const ValueKey('player-expanded-artwork-blur'),
                     child: ImageFiltered(
                       imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
                       child: Transform.scale(
@@ -3115,60 +3202,6 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
                             fallback: fallback(),
                           ),
                         ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 0,
-              left: -focusedOverscan,
-              right: -focusedOverscan,
-              height: focusedExtent,
-              child: AnimatedArtworkMotion(
-                enabled: animatedArtworkEnabled,
-                isPlaying: isPlaying,
-                identity: identity,
-                borderRadius: BorderRadius.zero,
-                // Perspective over a screen-sized blurred saveLayer made the
-                // raster thread redraw several million filtered pixels each
-                // tick. The sharp square keeps the same pan and breathing
-                // zoom as before, while its static blurred continuation stays
-                // retained behind it.
-                depthEnabled: false,
-                child: ShaderMask(
-                  key: const ValueKey(
-                    'player-expanded-artwork-focused-edge-fade',
-                  ),
-                  blendMode: BlendMode.dstIn,
-                  // The focus layer starts at y=0. Give it the hero's shader
-                  // height so this retained mask matches the former outer
-                  // full-height edge fade at the neutral pose.
-                  shaderCallback: (bounds) =>
-                      expandedArtworkHeroEdgeFadeGradient.createShader(
-                        Rect.fromLTWH(
-                          bounds.left,
-                          bounds.top,
-                          bounds.width,
-                          constraints.maxHeight,
-                        ),
-                      ),
-                  child: ShaderMask(
-                    key: const ValueKey('player-expanded-artwork-focus-fade'),
-                    blendMode: BlendMode.dstIn,
-                    shaderCallback:
-                        expandedArtworkHeroFocusFadeGradient.createShader,
-                    child: ColoredBox(
-                      color: colors.surfaceContainerHighest,
-                      child: SourceImage(
-                        key: const ValueKey(
-                          'player-expanded-artwork-focused-image',
-                        ),
-                        source: source,
-                        fallbackSource: fallbackSource,
-                        fit: BoxFit.cover,
-                        fallback: fallback(),
                       ),
                     ),
                   ),

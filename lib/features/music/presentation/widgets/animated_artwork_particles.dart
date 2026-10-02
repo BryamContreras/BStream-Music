@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import 'ambient_animation_frame_gate.dart';
+
 /// Paints a layered field of artwork-tinted particles above an animated cover.
 ///
 /// The field is deterministic for [identity], so ordinary widget rebuilds do
@@ -49,6 +51,7 @@ class AnimatedArtworkParticles extends StatefulWidget {
 class _AnimatedArtworkParticlesState extends State<AnimatedArtworkParticles>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _controller;
+  late final AmbientAnimationFrameGate _paintFrames;
   late List<ArtworkParticleSpec> _particleSpecs;
   bool _renderAllowed = false;
   bool _reducedMotion = false;
@@ -70,6 +73,7 @@ class _AnimatedArtworkParticlesState extends State<AnimatedArtworkParticles>
       duration: widget.cycleDuration,
       debugLabel: 'animated-artwork-particles',
     );
+    _paintFrames = AmbientAnimationFrameGate(_controller);
     _particleSpecs = List<ArtworkParticleSpec>.unmodifiable(
       _createParticleSpecs(widget.identity, widget.particleCount),
     );
@@ -80,6 +84,7 @@ class _AnimatedArtworkParticlesState extends State<AnimatedArtworkParticles>
     super.didChangeDependencies();
     _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
+    _paintFrames.setDisplayRefreshRate(View.of(context).display.refreshRate);
     _synchronize();
   }
 
@@ -143,6 +148,7 @@ class _AnimatedArtworkParticlesState extends State<AnimatedArtworkParticles>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _paintFrames.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -159,6 +165,7 @@ class _AnimatedArtworkParticlesState extends State<AnimatedArtworkParticles>
         key: const ValueKey('animated-artwork-particles-paint'),
         painter: ArtworkParticlePainter(
           progress: _controller,
+          repaintFrames: _paintFrames,
           identity: widget.identity,
           color: widget.color,
           brightness: Theme.of(context).brightness,
@@ -271,6 +278,7 @@ class ArtworkParticleSpec {
 class ArtworkParticlePainter extends CustomPainter {
   ArtworkParticlePainter({
     required this.progress,
+    this.repaintFrames,
     required this.identity,
     required this.color,
     required this.brightness,
@@ -281,9 +289,10 @@ class ArtworkParticlePainter extends CustomPainter {
        assert(particleSpecs.length == particleCount),
        assert(bottomFadeStart >= 0 && bottomFadeStart <= 1),
        _palette = _createParticlePalette(color, brightness),
-       super(repaint: progress);
+       super(repaint: repaintFrames ?? progress);
 
   final Animation<double> progress;
+  final Listenable? repaintFrames;
   final String identity;
   final Color color;
   final Brightness brightness;
