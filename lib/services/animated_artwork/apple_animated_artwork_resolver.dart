@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../visual_track_identity.dart';
+
 typedef ArtworkJsonFetcher = Future<Map<String, dynamic>?> Function(Uri uri);
 typedef ArtworkTextFetcher = Future<String?> Function(Uri uri);
 
@@ -81,7 +83,8 @@ class AppleAnimatedArtworkResolver {
   }
 
   Future<Uri?> _resolveUncached(AppleAnimatedArtworkTrack track) async {
-    final artist = _primaryArtist(track.artist);
+    final artist = primaryVisualArtist(track.artist);
+    final title = cleanVisualTrackTitle(track.title);
     final album = track.album.trim();
     final knownAlbum =
         album.isNotEmpty &&
@@ -98,8 +101,11 @@ class AppleAnimatedArtworkResolver {
           }),
         );
         if (data != null &&
-            _matches(artist, data['artist']) &&
-            _matches(album, data['album'])) {
+            data['artist'] is String &&
+            sameVisualArtist(artist, data['artist'] as String) &&
+            data['album'] is String &&
+            normalVisualText(album) ==
+                normalVisualText(data['album'] as String)) {
           final hls =
               _appleUrl(
                 track.preferVertical ? data['url_tall'] : data['url'],
@@ -116,22 +122,68 @@ class AppleAnimatedArtworkResolver {
       }
     }
 
+    final initialQuery = <String, String>{
+      's': title,
+      'a': artist,
+      if (knownAlbum) 'al': album,
+      if (track.duration > Duration.zero) 'd': '${track.duration.inSeconds}',
+    };
+    final queries = <Map<String, String>>[
+      initialQuery,
+      if (initialQuery.containsKey('d'))
+        <String, String>{...initialQuery}..remove('d'),
+    ];
+    for (final query in queries) {
+      final result = await _boiduMp4(
+        query,
+        title,
+        artist,
+        track.preferVertical,
+      );
+      if (result != null) return result;
+    }
+
+    // YouTube often supplies a video or single's album, or no album at all.
+    // Consult Apple's song catalog after direct lookups miss even when boidu
+    // found no song; otherwise a valid animated album can never be reached.
+    // Keep this bounded to two verified editions.
+    for (final alternativeAlbum in await _alternateAlbums(
+      track,
+      title,
+      artist,
+    )) {
+      if (normalVisualText(alternativeAlbum) == normalVisualText(album)) {
+        continue;
+      }
+      final result = await _boiduMp4(
+        {'s': title, 'a': artist, 'al': alternativeAlbum},
+        title,
+        artist,
+        track.preferVertical,
+      );
+      if (result != null) return result;
+    }
+    return null;
+  }
+
+  Future<Uri?> _boiduMp4(
+    Map<String, String> query,
+    String title,
+    String artist,
+    bool preferVertical,
+  ) async {
     try {
-      final query = <String, String>{
-        's': _cleanTitle(track.title),
-        'a': artist,
-        if (knownAlbum) 'al': album,
-        if (track.duration > Duration.zero) 'd': '${track.duration.inSeconds}',
-      };
       final data = await _fetchJson(Uri.https('artwork.boidu.dev', '/', query));
       if (data == null ||
-          !_matches(_cleanTitle(track.title), data['name']) ||
-          !_matches(artist, data['artist'])) {
+          data['name'] is! String ||
+          !sameVisualTitle(title, data['name'] as String) ||
+          data['artist'] is! String ||
+          !sameVisualArtist(artist, data['artist'] as String)) {
         return null;
       }
       final hls =
           _appleUrl(
-            track.preferVertical ? data['animatedVertical'] : data['animated'],
+            preferVertical ? data['animatedVertical'] : data['animated'],
             '.m3u8',
           ) ??
           _appleUrl(data['animated'], '.m3u8');
@@ -140,11 +192,65 @@ class AppleAnimatedArtworkResolver {
         if (mp4 != null) return mp4;
       }
       return _boundedDirectMp4(
-            track.preferVertical ? data['videoUrlVertical'] : data['videoUrl'],
+            preferVertical ? data['videoUrlVertical'] : data['videoUrl'],
           ) ??
           _boundedDirectMp4(data['videoUrl']);
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<List<String>> _alternateAlbums(
+    AppleAnimatedArtworkTrack track,
+    String title,
+    String artist,
+  ) async {
+    try {
+      final data = await _fetchJson(
+        Uri.https('itunes.apple.com', '/search', {
+          'term': '$title $artist',
+          'entity': 'song',
+          'limit': '25',
+        }),
+      );
+      final results = data?['results'];
+      if (results is! List) return const [];
+      final albums = <String>[];
+      final originalAlbum = normalVisualText(track.album);
+      for (final item in results) {
+        if (item is! Map) continue;
+        final name = item['trackName'];
+        final performer = item['artistName'];
+        final collection = item['collectionName'];
+        if (name is! String ||
+            performer is! String ||
+            collection is! String ||
+            !sameVisualTitle(title, name) ||
+            !sameVisualArtist(artist, performer) ||
+            RegExp(
+              r'\b(?:remix|live|acoustic|instrumental|karaoke)\b',
+              caseSensitive: false,
+            ).hasMatch(collection)) {
+          continue;
+        }
+        final durationMs = item['trackTimeMillis'];
+        if (track.duration > Duration.zero &&
+            durationMs is num &&
+            (track.duration.inMilliseconds - durationMs).abs() > 60000) {
+          continue;
+        }
+        final normalizedAlbum = normalVisualText(collection);
+        if (normalizedAlbum != originalAlbum &&
+            !albums.any(
+              (other) => normalVisualText(other) == normalizedAlbum,
+            )) {
+          albums.add(collection);
+        }
+        if (albums.length == 2) break;
+      }
+      return albums;
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -231,38 +337,6 @@ class AppleAnimatedArtworkResolver {
       return null;
     }
     return uri;
-  }
-
-  static String _primaryArtist(String artist) => artist
-      .split(
-        RegExp(r'\s*(?:,|&| feat\.? | ft\.? | x )\s*', caseSensitive: false),
-      )
-      .first
-      .trim();
-
-  static String _cleanTitle(String title) => title
-      .replaceAll(
-        RegExp(
-          r'\s*[\[(]\s*(?:official\s+)?(?:music\s+)?(?:video|audio|lyrics?|visualizer)\s*[\])]',
-          caseSensitive: false,
-        ),
-        '',
-      )
-      .trim();
-
-  static String _normal(String value) => value
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ')
-      .trim()
-      .replaceAll(RegExp(r'\s+'), ' ');
-
-  static bool _matches(String requested, Object? found) {
-    if (found is! String) return false;
-    final a = _normal(requested);
-    final b = _normal(found);
-    return a.isNotEmpty &&
-        b.isNotEmpty &&
-        (a == b || (a.length >= 6 && b.startsWith('$a ')));
   }
 
   static Future<Map<String, dynamic>?> _requestJson(Uri uri) async {

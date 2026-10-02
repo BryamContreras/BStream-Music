@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../../../../core/utils/cached_artwork_image_provider.dart';
@@ -11,6 +13,8 @@ class PlaybackArtworkCacheScope extends InheritedWidget {
     required this.revision,
     required this.tracksSource,
     required this.localPathFor,
+    this.allowNetworkPreviews = true,
+    this.useMiniArtworkPreview = false,
     required super.child,
     super.key,
   });
@@ -18,13 +22,17 @@ class PlaybackArtworkCacheScope extends InheritedWidget {
   final int revision;
   final bool Function(String) tracksSource;
   final String? Function(String) localPathFor;
+  final bool allowNetworkPreviews;
+  final bool useMiniArtworkPreview;
 
   static PlaybackArtworkCacheScope? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<PlaybackArtworkCacheScope>();
 
   @override
   bool updateShouldNotify(PlaybackArtworkCacheScope oldWidget) =>
-      revision != oldWidget.revision;
+      revision != oldWidget.revision ||
+      allowNetworkPreviews != oldWidget.allowNetworkPreviews ||
+      useMiniArtworkPreview != oldWidget.useMiniArtworkPreview;
 }
 
 /// Renders local paths, file URIs, and HTTP(S) artwork through one shared
@@ -96,21 +104,37 @@ class _SourceImageState extends State<SourceImage> {
   Widget build(BuildContext context) {
     final normalized = widget.source?.trim();
     final fallback = _resolvedFallback(normalized);
+    final playbackCache = PlaybackArtworkCacheScope.maybeOf(context);
     if (normalized == null || normalized.isEmpty) {
       return fallback;
     }
     if (isNetworkImageSource(normalized)) {
-      final playbackCache = PlaybackArtworkCacheScope.maybeOf(context);
       if (playbackCache?.tracksSource(normalized) == true) {
-        final cachedPath = playbackCache!.localPathFor(normalized);
-        if (cachedPath == null) return fallback;
-        return SourceImage(
-          source: cachedPath,
+        if (!playbackCache!.allowNetworkPreviews) {
+          return fallback;
+        }
+        final cachedPath = playbackCache.localPathFor(normalized);
+        // The mini player has already requested this small preview. Reusing
+        // the same image-provider key keeps it visible while the full-sized,
+        // cancellable player download is looked up or decoded. In particular,
+        // do not replace it with the placeholder for one frame on entry.
+        final preview = _networkArtworkForSource(
+          source: sizedGoogleArtworkSource(normalized, 256) ?? normalized,
           fallbackSource: widget.fallbackSource,
           fit: widget.fit,
-          cacheWidth: widget.cacheWidth,
-          filterQuality: widget.filterQuality,
           fallback: fallback,
+          cacheWidth: 256,
+        );
+        if (cachedPath == null) return preview;
+        return Image.file(
+          File(cachedPath),
+          fit: widget.fit,
+          filterQuality: widget.filterQuality,
+          cacheWidth: widget.cacheWidth,
+          gaplessPlayback: true,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+              wasSynchronouslyLoaded || frame != null ? child : preview,
+          errorBuilder: (_, _, _) => preview,
         );
       }
       final sizedSource =
@@ -125,6 +149,33 @@ class _SourceImageState extends State<SourceImage> {
 
     final deviceAudioUri = deviceAudioUriFromArtworkSource(normalized);
     if (deviceAudioUri != null) {
+      if (playbackCache?.useMiniArtworkPreview == true &&
+          widget.cacheWidth > 256) {
+        final preview = Image(
+          image: DeviceAudioArtworkImageProvider(
+            audioUri: deviceAudioUri,
+            targetWidth: 256,
+          ),
+          fit: widget.fit,
+          filterQuality: widget.filterQuality,
+          gaplessPlayback: true,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+              wasSynchronouslyLoaded || frame != null ? child : fallback,
+          errorBuilder: (_, _, _) => fallback,
+        );
+        return Image(
+          image: DeviceAudioArtworkImageProvider(
+            audioUri: deviceAudioUri,
+            targetWidth: widget.cacheWidth,
+          ),
+          fit: widget.fit,
+          filterQuality: widget.filterQuality,
+          gaplessPlayback: true,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+              wasSynchronouslyLoaded || frame != null ? child : preview,
+          errorBuilder: (_, _, _) => preview,
+        );
+      }
       return Image(
         image: DeviceAudioArtworkImageProvider(
           audioUri: deviceAudioUri,
@@ -140,6 +191,30 @@ class _SourceImageState extends State<SourceImage> {
     final file = imageFileFromSource(normalized);
     if (file == null) {
       return fallback;
+    }
+
+    if (playbackCache?.useMiniArtworkPreview == true &&
+        widget.cacheWidth > 256) {
+      final preview = Image.file(
+        file,
+        fit: widget.fit,
+        filterQuality: widget.filterQuality,
+        gaplessPlayback: true,
+        cacheWidth: 256,
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+            wasSynchronouslyLoaded || frame != null ? child : fallback,
+        errorBuilder: (_, _, _) => fallback,
+      );
+      return Image.file(
+        file,
+        fit: widget.fit,
+        filterQuality: widget.filterQuality,
+        gaplessPlayback: true,
+        cacheWidth: widget.cacheWidth,
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+            wasSynchronouslyLoaded || frame != null ? child : preview,
+        errorBuilder: (_, _, _) => preview,
+      );
     }
 
     if (_localSource != normalized || _localExists == null) {
@@ -194,6 +269,7 @@ class _SourceImageState extends State<SourceImage> {
     required List<String> candidates,
     required BoxFit fit,
     required Widget fallback,
+    int? cacheWidth,
     bool fadeIn = false,
   }) {
     Widget buildCandidate(int index) {
@@ -203,7 +279,7 @@ class _SourceImageState extends State<SourceImage> {
       return Image(
         image: ResizeImage(
           CachedArtworkImageProvider(candidates[index]),
-          width: widget.cacheWidth,
+          width: cacheWidth ?? widget.cacheWidth,
         ),
         fit: fit,
         filterQuality: widget.filterQuality,
@@ -232,7 +308,9 @@ class _SourceImageState extends State<SourceImage> {
     required String? fallbackSource,
     required BoxFit fit,
     required Widget fallback,
+    int? cacheWidth,
   }) {
+    final decodeWidth = cacheWidth ?? widget.cacheWidth;
     final youtubeVideoId = youtubeVideoIdFromThumbnailSource(source);
     final eagerLocalFallback = _isLocalFallbackSource(fallbackSource);
     if (youtubeVideoId == null) {
@@ -240,6 +318,7 @@ class _SourceImageState extends State<SourceImage> {
         candidates: <String>[source],
         fit: fit,
         fallback: eagerLocalFallback ? const SizedBox.shrink() : fallback,
+        cacheWidth: decodeWidth,
       );
       return eagerLocalFallback
           ? _layerArtwork(base: fallback, overlay: network)
@@ -256,11 +335,12 @@ class _SourceImageState extends State<SourceImage> {
       ),
       fit: fit,
       fallback: eagerLocalFallback ? const SizedBox.shrink() : fallback,
+      cacheWidth: decodeWidth,
     );
     final visiblePreview = eagerLocalFallback
         ? _layerArtwork(base: fallback, overlay: preview)
         : preview;
-    if (widget.cacheWidth < _youtubeUpgradeMinimumDecodeWidth) {
+    if (decodeWidth < _youtubeUpgradeMinimumDecodeWidth) {
       return visiblePreview;
     }
 
@@ -275,6 +355,7 @@ class _SourceImageState extends State<SourceImage> {
       candidates: upgradeCandidates,
       fit: fit,
       fallback: const SizedBox.shrink(),
+      cacheWidth: decodeWidth,
       fadeIn: true,
     );
     return _layerArtwork(base: visiblePreview, overlay: upgrade);

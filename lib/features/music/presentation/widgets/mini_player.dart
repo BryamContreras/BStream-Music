@@ -67,6 +67,17 @@ const miniPlayerSwipeDistanceFraction = 0.18;
 @visibleForTesting
 const miniPlayerSwipeMinimumFlingVelocity = 700.0;
 
+/// The artwork ring is only ~44 px wide: sub-second position changes cannot
+/// be seen, but animating each 250 ms update keeps the raster thread busy.
+/// Advance it once per second while leaving the full-player seek bars precise.
+@visibleForTesting
+double miniArtworkRingProgress(Duration position, Duration? duration) {
+  final totalMilliseconds = duration?.inMilliseconds ?? 0;
+  if (totalMilliseconds <= 0) return 0;
+  final wholeSeconds = position.inSeconds.clamp(0, duration!.inSeconds);
+  return (wholeSeconds * 1000 / totalMilliseconds).clamp(0.0, 1.0).toDouble();
+}
+
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({
     this.onOpenPlayer,
@@ -1254,7 +1265,10 @@ class _MiniBlurBackground extends StatelessWidget {
     final physicalWidth =
         MediaQuery.sizeOf(context).width *
         MediaQuery.devicePixelRatioOf(context);
-    final cacheWidth = (physicalWidth * 1.28).ceil().clamp(640, 1280).toInt();
+    // This is a heavily blurred, narrow strip. A full-player-sized decode
+    // adds pixels the blur cannot show and can trigger a second high-resolution
+    // YouTube request while only the mini player is visible.
+    final cacheWidth = (physicalWidth * 0.65).ceil().clamp(384, 512).toInt();
 
     return ImageFiltered(
       imageFilter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
@@ -1566,7 +1580,7 @@ class _MiniFallbackBackground extends StatelessWidget {
   }
 }
 
-class _MiniArtwork extends ConsumerWidget {
+class _MiniArtwork extends StatelessWidget {
   const _MiniArtwork({
     required this.url,
     required this.fallbackUrl,
@@ -1582,22 +1596,7 @@ class _MiniArtwork extends ConsumerWidget {
   final bool circular;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final progress = circular
-        ? ref.watch(
-            playerControllerProvider.select((player) {
-              final snapshot = player.value;
-              final duration = snapshot?.duration;
-              if (duration == null || duration.inMilliseconds <= 0) {
-                return 0.0;
-              }
-              return (snapshot!.position.inMilliseconds /
-                      duration.inMilliseconds)
-                  .clamp(0.0, 1.0)
-                  .toDouble();
-            }),
-          )
-        : 0.0;
+  Widget build(BuildContext context) {
     final ringInset = circular ? 2.5 : 0.0;
 
     return SizedBox(
@@ -1625,25 +1624,10 @@ class _MiniArtwork extends ConsumerWidget {
             ),
           if (circular)
             Positioned.fill(
-              child: ExcludeSemantics(
-                child: TweenAnimationBuilder<double>(
-                  key: const ValueKey('mini-player-artwork-progress-animation'),
-                  tween: Tween<double>(end: progress),
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  builder: (context, animatedProgress, _) {
-                    return CircularProgressIndicator(
-                      key: const ValueKey('mini-player-artwork-progress-ring'),
-                      value: animatedProgress,
-                      strokeWidth: 2,
-                      strokeCap: StrokeCap.round,
-                      color: AppColors.downloadAccentFor(context),
-                      backgroundColor: AppColors.menuInactiveSliderFor(
-                        context,
-                      ).withValues(alpha: 0.55),
-                    );
-                  },
-                ),
+              // Position ticks only rebuild and paint this small ring. The
+              // artwork underneath keeps its image stream and raster layer.
+              child: RepaintBoundary(
+                child: ExcludeSemantics(child: _MiniArtworkProgressRing()),
               ),
             ),
           if (isFavorite)
@@ -1653,6 +1637,39 @@ class _MiniArtwork extends ConsumerWidget {
               child: FavoriteStarBadge(iconSize: 11),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _MiniArtworkProgressRing extends ConsumerWidget {
+  const _MiniArtworkProgressRing();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final progress = ref.watch(
+      playerControllerProvider.select((player) {
+        final snapshot = player.value;
+        return miniArtworkRingProgress(
+          snapshot?.position ?? Duration.zero,
+          snapshot?.duration,
+        );
+      }),
+    );
+    return TweenAnimationBuilder<double>(
+      key: const ValueKey('mini-player-artwork-progress-animation'),
+      tween: Tween<double>(end: progress),
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      builder: (context, animatedProgress, _) => CircularProgressIndicator(
+        key: const ValueKey('mini-player-artwork-progress-ring'),
+        value: animatedProgress,
+        strokeWidth: 2,
+        strokeCap: StrokeCap.round,
+        color: AppColors.downloadAccentFor(context),
+        backgroundColor: AppColors.menuInactiveSliderFor(
+          context,
+        ).withValues(alpha: 0.55),
       ),
     );
   }

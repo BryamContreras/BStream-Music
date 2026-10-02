@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../visual_track_identity.dart';
+
 /// Canvas is not available in Spotify's public Web API. This optional lookup
 /// uses a public third-party endpoint; failure must never affect playback.
 typedef CanvasJsonFetcher = Future<Map<String, dynamic>?> Function(Uri uri);
@@ -38,6 +40,7 @@ class SpotifyCanvasResolver {
   final CanvasMediaSizeProbe _probeMediaSize;
   final Map<SpotifyCanvasTrack, _CachedCanvas> _cache = {};
   final Map<SpotifyCanvasTrack, Future<Uri?>> _inFlight = {};
+  DateTime? _cooldownUntil;
 
   Future<Uri?> resolve(SpotifyCanvasTrack track) {
     if (track.title.trim().isEmpty || track.artist.trim().isEmpty) {
@@ -47,11 +50,17 @@ class SpotifyCanvasResolver {
     if (cached != null && cached.expires.isAfter(DateTime.now())) {
       return Future.value(cached.url);
     }
+    if (_cooldownUntil?.isAfter(DateTime.now()) == true) {
+      return Future.value(null);
+    }
     return _inFlight.putIfAbsent(track, () async {
       Uri? url;
       var transientFailure = false;
       try {
         url = await _resolveUncached(track);
+      } on _CanvasThrottled {
+        _cooldownUntil = DateTime.now().add(const Duration(seconds: 60));
+        transientFailure = true;
       } catch (_) {
         // Offline, rate limited, or provider changed: retain album artwork.
         transientFailure = true;
@@ -74,38 +83,115 @@ class SpotifyCanvasResolver {
   }
 
   Future<Uri?> _resolveUncached(SpotifyCanvasTrack track) async {
-    final queryTitle = _cleanTitle(track.title);
+    final queryTitle = cleanVisualTrackTitle(track.title);
     if (queryTitle.isEmpty) return null;
-    final search = await _fetchJson(
-      Uri.https('www.spotycovs.lol', '/api/search', {'track': queryTitle}),
-    );
-    final results = search?['results'];
-    if (results is! List) return null;
-    String? spotifyId;
-    for (final result in results) {
-      if (result is! Map) continue;
-      final name = result['name'];
-      final artists = result['artistNames'];
-      final id = result['trackId'];
-      if (name is! String || artists is! List || id is! String) continue;
-      if (!_sameTitle(queryTitle, name) ||
-          !_sameArtist(track.artist, artists)) {
-        continue;
+    final artist = primaryVisualArtist(track.artist);
+    final fullArtist = track.artist
+        .trim()
+        .replaceFirst(RegExp(r'\s*-\s*Topic$', caseSensitive: false), '')
+        .trim();
+    final ids = <String>[];
+    final queries = <String>[queryTitle, '$artist - $queryTitle'];
+    for (final query in queries.toSet()) {
+      final search = await _fetchJson(
+        Uri.https('www.spotycovs.lol', '/api/search', {'track': query}),
+      );
+      _checkThrottle(search);
+      final results = search?['results'];
+      if (results is! List) continue;
+      for (final result in results) {
+        if (result is! Map) continue;
+        final name = result['name'];
+        final artists = result['artistNames'];
+        final id = result['trackId'];
+        if (name is! String || artists is! List || id is! String) continue;
+        if (!sameVisualTitle(queryTitle, name) || artists.isEmpty) {
+          continue;
+        }
+        final primaryMatch =
+            artists.first is String &&
+            sameVisualArtist(track.artist, artists.first as String);
+        final collaboratorMatch =
+            !primaryMatch &&
+            artists
+                .skip(1)
+                .any(
+                  (value) =>
+                      value is String && sameVisualArtist(track.artist, value),
+                );
+        if (!primaryMatch && !collaboratorMatch) continue;
+        final durationMs = result['durationMs'];
+        final visualVideo =
+            cleanVisualTrackTitle(track.title) != track.title.trim();
+        final tolerance = visualVideo ? 60000 : 15000;
+        // A secondary credit alone is ambiguous without a matching duration.
+        if (collaboratorMatch &&
+            (track.duration <= Duration.zero || durationMs is! num)) {
+          continue;
+        }
+        if (track.duration > Duration.zero &&
+            durationMs is num &&
+            (track.duration.inMilliseconds - durationMs).abs() > tolerance) {
+          continue;
+        }
+        if (!RegExp(r'^[A-Za-z0-9]{22}$').hasMatch(id)) continue;
+        if (!ids.contains(id)) ids.add(id);
+        if (ids.length == 2) break;
       }
-      final durationMs = result['durationMs'];
-      if (track.duration > Duration.zero &&
-          durationMs is num &&
-          (track.duration.inMilliseconds - durationMs).abs() > 15000) {
-        continue;
-      }
-      if (!RegExp(r'^[A-Za-z0-9]{22}$').hasMatch(id)) continue;
-      spotifyId = id;
-      break;
+      // A verified title/artist already identifies the releases to inspect.
+      // A second search here usually repeats the same IDs and costs a rate-
+      // limited request even when Spotify has no Canvas for the song.
+      if (ids.isNotEmpty) break;
     }
-    if (spotifyId == null) return null;
-    final canvas = await _fetchJson(
-      Uri.https('www.spotycovs.lol', '/api/canvas', {'id': spotifyId}),
-    );
+    for (final spotifyId in ids) {
+      final canvas = await _fetchJson(
+        Uri.https('www.spotycovs.lol', '/api/canvas', {'id': spotifyId}),
+      );
+      _checkThrottle(canvas);
+      final url = await _videoFromCanvasPayload(canvas);
+      if (url != null) return url;
+    }
+
+    // The provider's short /api/search list can omit a popular studio track
+    // entirely (for example, returning only a live "vampire" rendition).
+    // Its own best-match endpoint searches the full catalog. Accept it only
+    // when the returned resolution explicitly confirms title and artist.
+    // Keep a band's full name ("Polo & Pan") in the query. Splitting on '&'
+    // alone cannot distinguish a band from a collaboration.
+    final directArtists = <String>[fullArtist];
+    if (normalVisualText(fullArtist) != normalVisualText(artist) &&
+        RegExp(
+          r'\s+(?:feat\.?|ft\.?|featuring|x)\s+',
+          caseSensitive: false,
+        ).hasMatch(fullArtist)) {
+      directArtists.add(artist);
+    }
+    for (final queryArtist in directArtists) {
+      final direct = await _fetchJson(
+        Uri.https('www.spotycovs.lol', '/api/canvas', {
+          'track': '$queryTitle $queryArtist',
+        }),
+      );
+      _checkThrottle(direct);
+      final resolution = direct?['resolution'];
+      final resolvedId = direct?['trackId'];
+      if (resolution is! Map ||
+          resolvedId is! String ||
+          !RegExp(r'^[A-Za-z0-9]{22}$').hasMatch(resolvedId) ||
+          resolution['matchedTrack'] is! String ||
+          resolution['matchedArtist'] is! String ||
+          !sameVisualTitle(queryTitle, resolution['matchedTrack'] as String) ||
+          normalVisualText(resolution['matchedArtist'] as String) !=
+              normalVisualText(queryArtist)) {
+        continue;
+      }
+      final url = await _videoFromCanvasPayload(direct);
+      if (url != null) return url;
+    }
+    return null;
+  }
+
+  Future<Uri?> _videoFromCanvasPayload(Map<String, dynamic>? canvas) async {
     final canvases = canvas?['canvases'];
     if (canvas?['hasCanvas'] != true || canvases is! List) return null;
     for (final item in canvases) {
@@ -126,41 +212,12 @@ class SpotifyCanvasResolver {
     return null;
   }
 
-  static String _cleanTitle(String title) => title
-      .replaceAll(
-        RegExp(
-          r'\s*[\[(]\s*(?:official\s+)?(?:music\s+)?(?:video|audio|lyrics?|visualizer)\s*[\])]',
-          caseSensitive: false,
-        ),
-        '',
-      )
-      .trim();
-
-  static String _normal(String value) => value
-      .toLowerCase()
-      .replaceAll(RegExp(r'[áàäâ]'), 'a')
-      .replaceAll(RegExp(r'[éèëê]'), 'e')
-      .replaceAll(RegExp(r'[íìïî]'), 'i')
-      .replaceAll(RegExp(r'[óòöô]'), 'o')
-      .replaceAll(RegExp(r'[úùüû]'), 'u')
-      .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ')
-      .trim()
-      .replaceAll(RegExp(r'\s+'), ' ');
-
-  static bool _sameTitle(String requested, String found) =>
-      _normal(_cleanTitle(requested)) == _normal(_cleanTitle(found));
-
-  static bool _sameArtist(String requested, List<dynamic> found) {
-    final primary = requested
-        .split(
-          RegExp(r'\s*(?:,|&| feat\.? | ft\.? | x )\s*', caseSensitive: false),
-        )
-        .first;
-    final normalized = _normal(primary);
-    return normalized.isNotEmpty &&
-        found.any(
-          (artist) => artist is String && _normal(artist) == normalized,
-        );
+  static void _checkThrottle(Map<String, dynamic>? response) {
+    final code = response?['code'] ?? response?['error'];
+    if (code is String &&
+        (code.contains('cooldown') || code.contains('rate_limit'))) {
+      throw const _CanvasThrottled();
+    }
   }
 
   static Future<Map<String, dynamic>?> _requestJson(Uri uri) async {
@@ -173,8 +230,10 @@ class SpotifyCanvasResolver {
       final response = await request.close().timeout(
         const Duration(seconds: 5),
       );
-      if (response.statusCode == HttpStatus.tooManyRequests ||
-          response.statusCode >= HttpStatus.internalServerError) {
+      if (response.statusCode == HttpStatus.tooManyRequests) {
+        throw const _CanvasThrottled();
+      }
+      if (response.statusCode >= HttpStatus.internalServerError) {
         throw HttpException('Canvas service temporarily unavailable');
       }
       if (response.statusCode != HttpStatus.ok ||
@@ -210,6 +269,10 @@ class SpotifyCanvasResolver {
       client.close(force: true);
     }
   }
+}
+
+class _CanvasThrottled implements Exception {
+  const _CanvasThrottled();
 }
 
 class _CachedCanvas {

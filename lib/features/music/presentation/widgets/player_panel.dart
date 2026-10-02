@@ -1054,8 +1054,13 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     );
     return PlaybackArtworkCacheScope(
       revision: visualCache.revision,
-      tracksSource: visualCache.tracksCover,
+      // This persistent view remains mounted behind the browsing tabs.
+      // Outside the full player, block its network image providers as well as
+      // its dedicated cover/video transfers.
+      tracksSource: visualActive ? visualCache.tracksCover : (source) => true,
       localPathFor: visualCache.coverPathFor,
+      allowNetworkPreviews: visualActive,
+      useMiniArtworkPreview: visualActive,
       child: panel,
     );
   }
@@ -2223,8 +2228,14 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
 
   @override
   Widget build(BuildContext context) {
+    final timelineVisible = TickerMode.valuesOf(context).enabled;
     final timeline = ref.watch(
       playerControllerProvider.select((player) {
+        // The full player stays mounted behind other tabs. Do not rebuild its
+        // slider four times a second while the page is invisible.
+        if (!timelineVisible) {
+          return (position: Duration.zero, duration: null);
+        }
         final snapshot = player.value;
         return (
           position: snapshot?.position ?? Duration.zero,
@@ -5623,8 +5634,12 @@ class _Timeline extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final timelineVisible = TickerMode.valuesOf(context).enabled;
     final timeline = ref.watch(
       playerControllerProvider.select((player) {
+        if (!timelineVisible) {
+          return (position: Duration.zero, duration: null, isPlaying: false);
+        }
         final snapshot = player.value;
         return (
           position: snapshot?.position ?? Duration.zero,

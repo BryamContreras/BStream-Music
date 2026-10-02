@@ -10,7 +10,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('player cache shows only a complete local cover', (tester) async {
+  testWidgets('player keeps the mini preview until its complete cover decodes', (
+    tester,
+  ) async {
     const remote = 'https://example.invalid/current-cover.jpg';
     final directory = Directory.systemTemp.createTempSync(
       'bstream-cover-scope-',
@@ -42,17 +44,100 @@ void main() {
     );
 
     await tester.pumpWidget(scoped(0, null));
-    expect(find.byType(Image), findsNothing);
-    expect(find.text('waiting for cover'), findsOneWidget);
+    final pendingPreview = tester.widget<Image>(find.byType(Image));
+    final previewProvider = pendingPreview.image as ResizeImage;
+    expect(previewProvider.width, 256);
+    expect(previewProvider.imageProvider, isA<CachedArtworkImageProvider>());
 
     await tester.pumpWidget(scoped(1, file.path));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 30)),
+    final images = tester.widgetList<Image>(find.byType(Image)).toList();
+    final fullCover = images.singleWhere(
+      (image) =>
+          image.image is ResizeImage &&
+          (image.image as ResizeImage).imageProvider is FileImage,
     );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    final image = tester.widget<Image>(find.byType(Image));
-    expect((image.image as ResizeImage).imageProvider, isA<FileImage>());
+    final frameBuilder = fullCover.frameBuilder!;
+    final context = tester.element(find.byType(SourceImage).first);
+    const decoded = Text('decoded frame');
+    expect(frameBuilder(context, decoded, null, false), isA<Image>());
+    expect(frameBuilder(context, decoded, 0, false), same(decoded));
+  });
+
+  testWidgets('hidden full player does not request remote artwork', (
+    tester,
+  ) async {
+    for (final cachedPath in <String?>[
+      null,
+      'previously-completed-cover.png',
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PlaybackArtworkCacheScope(
+            revision: 0,
+            tracksSource: (_) => true,
+            localPathFor: (_) => cachedPath,
+            allowNetworkPreviews: false,
+            child: const SourceImage(
+              source: 'https://example.invalid/hidden-cover.jpg',
+              fallback: Text('hidden cover'),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(Image), findsNothing);
+      expect(find.text('hidden cover'), findsOneWidget);
+    }
+  });
+
+  testWidgets('full player reuses the mini preview for downloaded covers', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync(
+      'bstream-local-cover-',
+    );
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      directory.deleteSync(recursive: true);
+    });
+    final file = File('${directory.path}/downloaded-cover.png');
+    file.writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlaybackArtworkCacheScope(
+          revision: 0,
+          tracksSource: (_) => false,
+          localPathFor: (_) => null,
+          useMiniArtworkPreview: true,
+          child: SourceImage(
+            source: file.path,
+            cacheWidth: 1280,
+            fallback: const Text('missing cover'),
+          ),
+        ),
+      ),
+    );
+
+    final covers = tester.widgetList<Image>(find.byType(Image)).toList();
+    final fullCover = covers.singleWhere(
+      (image) =>
+          image.image is ResizeImage &&
+          (image.image as ResizeImage).width == 1280,
+    );
+    final frameBuilder = fullCover.frameBuilder!;
+    final context = tester.element(find.byType(SourceImage).first);
+    const decoded = Text('decoded frame');
+    final preview = frameBuilder(context, decoded, null, false) as Image;
+    expect((preview.image as ResizeImage).width, 256);
+    expect(frameBuilder(context, decoded, 0, false), same(decoded));
   });
 
   testWidgets('SourceImage uses its fallback for missing sources', (

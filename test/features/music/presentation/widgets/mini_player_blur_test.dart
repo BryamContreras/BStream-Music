@@ -15,6 +15,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('tiny artwork ring ignores imperceptible sub-second ticks', () {
+    const duration = Duration(minutes: 3);
+    expect(
+      miniArtworkRingProgress(
+        const Duration(seconds: 12, milliseconds: 250),
+        duration,
+      ),
+      miniArtworkRingProgress(
+        const Duration(seconds: 12, milliseconds: 900),
+        duration,
+      ),
+    );
+    expect(
+      miniArtworkRingProgress(const Duration(seconds: 13), duration),
+      greaterThan(
+        miniArtworkRingProgress(const Duration(seconds: 12), duration),
+      ),
+    );
+    expect(miniArtworkRingProgress(Duration.zero, null), 0);
+    expect(miniArtworkRingProgress(const Duration(minutes: 4), duration), 1);
+  });
+
   test('playback visual identity has a stable source fallback', () {
     final first = playbackVisualIdentity(
       sourceUrl: ' https://music.example/track-a ',
@@ -381,12 +403,12 @@ void main() {
       of: blur,
       matching: find.byType(Image),
     );
-    // Outside the full player, mini-player keeps its normal thumbnail loading
-    // without starting a Canvas or full-player artwork transfer.
+    // The blurred strip stays below the large-artwork upgrade threshold, so
+    // the mini player does not request a second high-resolution rendition.
     expect(backgroundImage, findsOneWidget);
     final image = tester.widget<Image>(backgroundImage);
     final provider = image.image as ResizeImage;
-    expect(provider.width, 1280);
+    expect(provider.width, 512);
     expect(image.filterQuality, FilterQuality.high);
     final container = tester.widget<Container>(
       find.byKey(const ValueKey('mini-player-container')),
@@ -748,6 +770,49 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'capsule position ticks rebuild the ring without rebuilding artwork',
+    (tester) async {
+      _configureView(tester, const Size(360, 200));
+      const initial = PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: 'Progreso circular',
+        artist: 'BStream Music',
+        trackId: 'capsule-progress-track',
+        thumbnailUrl: 'https://example.invalid/capsule-progress-artwork.jpg',
+        position: Duration(seconds: 45),
+        duration: Duration(minutes: 3),
+      );
+      final controller = _TestPlayerController(snapshot: initial);
+      await tester.pumpWidget(
+        _miniPlayerHarness(
+          mode: MiniPlayerMode.capsule,
+          backgroundMode: MiniPlayerBackgroundMode.accent,
+          playerController: controller,
+        ),
+      );
+      await tester.pump();
+
+      final artworkFinder = find.descendant(
+        of: find.byKey(const ValueKey('mini-player-artwork')),
+        matching: find.byType(ProportionalArtwork),
+      );
+      final artworkBefore = tester.widget<ProportionalArtwork>(artworkFinder);
+      controller.emit(initial.copyWith(position: const Duration(seconds: 90)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      expect(
+        tester.widget<ProportionalArtwork>(artworkFinder),
+        same(artworkBefore),
+      );
+      final ring = tester.widget<CircularProgressIndicator>(
+        find.byKey(const ValueKey('mini-player-artwork-progress-ring')),
+      );
+      expect(ring.value, closeTo(0.5, 0.001));
+    },
+  );
 
   testWidgets('desktop capsule keeps its controls inside the floating card', (
     tester,
