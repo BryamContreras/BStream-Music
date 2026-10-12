@@ -12,7 +12,10 @@ void main() {
           alignment: Alignment.topLeft,
           child: SizedBox(
             width: 120,
-            child: MarqueeText('A very long playlist title'),
+            child: MarqueeText(
+              'A very long playlist title',
+              style: TextStyle(fontSize: 14),
+            ),
           ),
         ),
       ),
@@ -31,7 +34,10 @@ void main() {
       const MaterialApp(
         home: Align(
           alignment: Alignment.topLeft,
-          child: SizedBox(width: 120, child: MarqueeText('Short')),
+          child: SizedBox(
+            width: 120,
+            child: MarqueeText('Short', style: TextStyle(fontSize: 14)),
+          ),
         ),
       ),
     );
@@ -81,6 +87,94 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
+    expect(_marqueeTranslation(tester), 0);
+    expect(tester.hasRunningAnimations, isFalse);
+  });
+
+  testWidgets('does not tick while waiting at either end', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 80,
+            child: MarqueeText(
+              'A very long playlist title',
+              style: TextStyle(fontSize: 14),
+              pause: Duration(milliseconds: 200),
+              travel: Duration(milliseconds: 400),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(_marqueeTranslation(tester), 0);
+    expect(tester.hasRunningAnimations, isFalse);
+
+    await tester.pump(const Duration(milliseconds: 70));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(_marqueeTranslation(tester), lessThan(0));
+    expect(tester.hasRunningAnimations, isTrue);
+
+    await tester.pump(const Duration(milliseconds: 300));
+    final endPosition = _marqueeTranslation(tester);
+    expect(endPosition, lessThan(0));
+    expect(tester.hasRunningAnimations, isFalse);
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(_marqueeTranslation(tester), endPosition);
+    expect(tester.hasRunningAnimations, isFalse);
+
+    await tester.pump(const Duration(milliseconds: 70));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(_marqueeTranslation(tester), greaterThan(endPosition));
+    expect(tester.hasRunningAnimations, isTrue);
+  });
+
+  testWidgets('stops offscreen and resumes after scrolling into view', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: ScrollNotificationObserver(
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                SizedBox(height: 800),
+                SizedBox(
+                  width: 80,
+                  child: MarqueeText(
+                    'A very long playlist title',
+                    style: TextStyle(fontSize: 14),
+                    pause: Duration(milliseconds: 200),
+                    travel: Duration(seconds: 1),
+                  ),
+                ),
+                SizedBox(height: 800),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
+    expect(_marqueeTranslation(tester), 0);
+    expect(tester.hasRunningAnimations, isFalse);
+
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -700),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 420));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(_marqueeTranslation(tester), lessThan(0));
+
+    await tester.drag(find.byType(SingleChildScrollView), const Offset(0, 700));
+    await tester.pump();
+    await tester.pump();
     expect(_marqueeTranslation(tester), 0);
     expect(tester.hasRunningAnimations, isFalse);
   });

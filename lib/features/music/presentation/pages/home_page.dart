@@ -10,7 +10,6 @@ import 'package:flutter/services.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/theme/app_dialog.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/widgets/marquee_text.dart';
@@ -28,6 +27,8 @@ import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 import '../../domain/usecases/get_track_info.dart';
 import '../providers/music_providers.dart';
+import '../providers/track_selection_controller.dart';
+import '../providers/player/related_radio_queue_extender.dart';
 import '../widgets/app_update_dialog.dart';
 import '../widgets/bstream_logo.dart';
 import '../widgets/favorite_star_badge.dart';
@@ -38,7 +39,7 @@ import '../widgets/mini_player.dart';
 import '../widgets/playback_gradient_background.dart';
 import '../widgets/playback_page_transition.dart';
 import '../widgets/player_panel.dart';
-import '../widgets/playlist_picker_dialog.dart';
+import '../widgets/playlist_actions.dart';
 import '../widgets/scrolled_under_tab_frame.dart';
 import '../widgets/settings_panel.dart';
 import '../widgets/source_image.dart';
@@ -429,69 +430,12 @@ class _HomePageState extends ConsumerState<HomePage> {
     List<TrackInfo> tracks, {
     String? initialPlaylistName,
   }) async {
-    if (tracks.isEmpty || !context.mounted) return;
-    final strings = ref.read(appStringsProvider);
-    String? playlistId;
-    if (initialPlaylistName != null) {
-      final rawName = await showAppDialog<String>(
-        context: context,
-        builder: (_) => CreatePlaylistDialog(
-          strings: strings,
-          initialName: initialPlaylistName,
-        ),
-      );
-      final name = rawName?.trim();
-      if (!mounted || name == null || name.isEmpty) {
-        return;
-      }
-      final created = await ref
-          .read(playlistsControllerProvider.notifier)
-          .create(name);
-      playlistId = created?.id;
-      if (!mounted || playlistId == null) {
-        return;
-      }
-    }
-    final playlists = (await ref.read(
-      playlistsControllerProvider.future,
-    )).where((playlist) => !playlist.isFavorites).toList(growable: false);
-    if (!context.mounted) return;
-    if (playlistId == null && playlists.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(strings.createPlaylistFirst)));
-      return;
-    }
-    final localTracks = await ref
-        .read(libraryRepositoryProvider)
-        .getLocalTracks();
-    final catalogs = await ref.read(catalogPlaylistsProvider.future);
-    if (!context.mounted) return;
-    playlistId ??= await showAppDialog<String>(
-      context: context,
-      builder: (_) => PlaylistPickerDialog(
-        title: strings.choosePlaylist,
-        playlists: playlists,
-        tracks: localTracks,
-        catalogPlaylists: catalogs,
-      ),
+    await addCollectionToPlaylist(
+      context,
+      ref,
+      tracks,
+      initialPlaylistName: initialPlaylistName,
     );
-    if (playlistId == null || !context.mounted) return;
-    try {
-      final added = await ref
-          .read(playlistsControllerProvider.notifier)
-          .addRemoteTracksToPlaylist(playlistId, tracks, download: false);
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(strings.songsAddedToPlaylist(added))),
-      );
-    } catch (error) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(strings.error)));
-      return;
-    }
   }
 
   void _queueExternalAudioRequest(ExternalAudioRequest request) {
@@ -940,6 +884,10 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _handleSystemBack() {
     final strings = ref.read(appStringsProvider);
+    if (_selectedIndex == _searchIndex &&
+        ref.read(trackSelectionProvider(searchTrackSelectionScope)).clear()) {
+      return;
+    }
     if (_selectedIndex == _localIndex &&
         _localMusicNavigationController.maybePop()) {
       return;
@@ -1345,9 +1293,15 @@ class _HomePageState extends ConsumerState<HomePage> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  const SizedBox.expand(
-                    key: ValueKey('shell-background-browsing'),
-                    child: BrowsingTabBackground(),
+                  SizedBox.expand(
+                    key: const ValueKey('shell-background-browsing'),
+                    child: BrowsingTabBackground(
+                      showCustomPhoto:
+                          _selectedIndex == _homeIndex ||
+                          _selectedIndex == _searchIndex ||
+                          _selectedIndex == _libraryIndex ||
+                          _selectedIndex == _settingsIndex,
+                    ),
                   ),
                   PlaybackPageVisibilityTransition(
                     fadeKey: const ValueKey(
@@ -3022,6 +2976,7 @@ class _HomeView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final compactViewport = MediaQuery.sizeOf(context).width < 700;
     final strings = ref.watch(appStringsProvider);
     final history = ref.watch(historyProvider);
     final hasHistory = history.value?.isNotEmpty ?? false;
@@ -3079,7 +3034,12 @@ class _HomeView extends ConsumerWidget {
           ),
         ],
       ),
-      scrollCacheExtent: const ScrollCacheExtent.pixels(900),
+      // A compact viewport only needs a few shelves ahead. Retaining almost
+      // another full screen of offstage artwork multiplies image/row work
+      // while music is playing and the user scrolls through recommendations.
+      scrollCacheExtent: compactViewport
+          ? const ScrollCacheExtent.pixels(600)
+          : const ScrollCacheExtent.pixels(900),
       slivers: [
         if (showLegacyHistory)
           SliverToBoxAdapter(
@@ -3153,7 +3113,11 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
               : (expandedCards ? 228 : 200),
         ),
         child: ListView.separated(
-          scrollCacheExtent: const ScrollCacheExtent.pixels(760),
+          // Keep several cards ready for a fling without mounting nearly an
+          // entire twelve-item shelf on a narrow phone.
+          scrollCacheExtent: expandedCards
+              ? const ScrollCacheExtent.pixels(760)
+              : const ScrollCacheExtent.pixels(480),
           padding: const EdgeInsets.symmetric(horizontal: 6),
           scrollDirection: Axis.horizontal,
           itemCount: section.items.length,
@@ -3244,7 +3208,7 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
         final service = ref.read(youtubeMusicSearchProvider);
         final link = const BStreamTrackLinkCodec().tryFromTrack(selected.track);
         if (service is YouTubeMusicRelated && link != null) {
-          queueExtender = _buildPersonalizedQueueExtender(
+          queueExtender = buildRelatedRadioQueueExtender(
             related: service as YouTubeMusicRelated,
             seedVideoId: link.videoId,
             initialQueue: recommendationQueue,
@@ -3297,68 +3261,6 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
           );
       onOpenPlayer();
       unawaited(playFuture);
-    };
-  }
-
-  RecommendationQueueExtender _buildPersonalizedQueueExtender({
-    required YouTubeMusicRelated related,
-    required String seedVideoId,
-    required List<RecommendationPlaybackItem> initialQueue,
-  }) {
-    final expanded = List<RecommendationPlaybackItem>.of(initialQueue);
-    const linkCodec = BStreamTrackLinkCodec();
-    final seenVideoIds = initialQueue
-        .map((item) => linkCodec.tryFromTrack(item.track)?.videoId)
-        .whereType<String>()
-        .toSet();
-    final requestedContinuations = <String>{};
-    String? continuation;
-    var needsInitialPage = true;
-    var exhausted = false;
-
-    return () async {
-      if (exhausted) {
-        return List<RecommendationPlaybackItem>.unmodifiable(expanded);
-      }
-
-      final previousLength = expanded.length;
-      // A continuation can occasionally contain only duplicates from the
-      // visible shelf. Follow a small bounded number of pages so one sparse
-      // response does not falsely end the radio.
-      for (var request = 0; request < 3; request++) {
-        if (!needsInitialPage) {
-          final token = continuation;
-          if (token == null ||
-              token.isEmpty ||
-              !requestedContinuations.add(token)) {
-            exhausted = true;
-            break;
-          }
-        }
-        final page = needsInitialPage
-            ? await related.getNext(seedVideoId, radio: true, limit: 30)
-            : await related.getNextContinuation(continuation!, limit: 30);
-        needsInitialPage = false;
-        final nextContinuation = page.continuation?.trim();
-        continuation = nextContinuation == null || nextContinuation.isEmpty
-            ? null
-            : nextContinuation;
-        for (final song in page.songs) {
-          if (!seenVideoIds.add(song.videoId)) {
-            continue;
-          }
-          expanded.add(
-            RecommendationPlaybackItem(track: trackInfoFromInnerTubeSong(song)),
-          );
-        }
-        if (continuation == null) {
-          exhausted = true;
-        }
-        if (expanded.length > previousLength || exhausted) {
-          break;
-        }
-      }
-      return List<RecommendationPlaybackItem>.unmodifiable(expanded);
     };
   }
 
@@ -3446,7 +3348,9 @@ class _HomeRecentSection extends StatelessWidget {
               minimumHeight: expandedCards ? 228 : 200,
             ),
             child: ListView.separated(
-              scrollCacheExtent: const ScrollCacheExtent.pixels(760),
+              scrollCacheExtent: expandedCards
+                  ? const ScrollCacheExtent.pixels(760)
+                  : const ScrollCacheExtent.pixels(480),
               padding: const EdgeInsets.symmetric(horizontal: 6),
               scrollDirection: Axis.horizontal,
               itemCount: tracks.length,
@@ -3528,7 +3432,7 @@ class _RecommendedTrackCard extends StatelessWidget {
       key: ValueKey('home-recommendation-${track.id}'),
       width: width,
       child: Material(
-        color: AppColors.homeCardSurfaceFor(context, solidInLiquidGlass: true),
+        color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(appCardRadius),
@@ -3815,7 +3719,7 @@ class _RecentTrackCard extends ConsumerWidget {
       key: const ValueKey('home-recent-card'),
       width: width,
       child: Material(
-        color: AppColors.homeCardSurfaceFor(context, solidInLiquidGlass: true),
+        color: AppColors.homeCardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(appCardRadius),

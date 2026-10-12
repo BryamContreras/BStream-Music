@@ -7,6 +7,19 @@ final downloadControllerProvider =
 
 const _unsetDownloadTaskValue = Object();
 
+final playlistDownloadPreparationsProvider =
+    NotifierProvider<_PlaylistDownloadPreparations, Set<String>>(
+      _PlaylistDownloadPreparations.new,
+    );
+
+class _PlaylistDownloadPreparations extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const {};
+
+  void start(String id) => state = {...state, id};
+  void stop(String id) => state = {...state}..remove(id);
+}
+
 class DownloadTaskState {
   const DownloadTaskState({
     required this.url,
@@ -73,6 +86,8 @@ class DownloadTaskState {
 class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
   final _queue = <TrackInfo>[];
   final _cleanupTimers = <String, Timer>{};
+  final _playlistEnqueues = <String, _PlaylistDownloadBatch>{};
+  final _cancelGenerations = <String, int>{};
   bool _isProcessing = false;
 
   @override
@@ -117,12 +132,161 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
         timer.cancel();
       }
       _cleanupTimers.clear();
+      for (final batch in _playlistEnqueues.values) {
+        batch.cancelled = true;
+      }
     });
     return const {};
   }
 
   Future<void> downloadAudio(TrackInfo track) {
     return _enqueue(track, DownloadMediaType.audio);
+  }
+
+  /// Adds only missing audio to the existing queue. File checks are local;
+  /// resolution, retries, cancellation and catalog linking stay in _download.
+  Future<int> downloadPlaylist(Playlist playlist) {
+    final existing = _playlistEnqueues[playlist.id];
+    if (existing != null && !existing.cancelled) return existing.operation;
+    final batch = _PlaylistDownloadBatch();
+    _playlistEnqueues[playlist.id] = batch;
+    ref.read(playlistDownloadPreparationsProvider.notifier).start(playlist.id);
+    batch.operation = _queuePlaylistDownloads(playlist, batch).whenComplete(() {
+      if (identical(_playlistEnqueues[playlist.id], batch)) {
+        _playlistEnqueues.remove(playlist.id);
+        if (ref.mounted) {
+          ref
+              .read(playlistDownloadPreparationsProvider.notifier)
+              .stop(playlist.id);
+        }
+      }
+    });
+    return batch.operation;
+  }
+
+  Future<int> _queuePlaylistDownloads(
+    Playlist playlist,
+    _PlaylistDownloadBatch batch,
+  ) async {
+    final library = await ref.read(libraryTracksProvider.future);
+    if (batch.cancelled) return 0;
+    final catalog = await ref.read(catalogPlaylistProvider(playlist.id).future);
+    if (batch.cancelled) return 0;
+    return _queueMissingDownloads(
+      playlistDownloadItems(playlist, catalog, library),
+      isCancelled: () => batch.cancelled,
+    );
+  }
+
+  Future<int> downloadTracks(Iterable<TrackInfo> tracks) async {
+    final requested = tracks.toList(growable: false);
+    const codec = BStreamTrackLinkCodec();
+    final generations = _cancellationSnapshot(requested);
+    final library = await ref.read(libraryTracksProvider.future);
+    final localsByVideoId = <String, LocalTrack>{};
+    for (final local in library) {
+      final id = codec
+          .tryFromTrack(
+            TrackInfo(
+              id: local.sourceId ?? '',
+              title: local.title,
+              artist: local.artist,
+              url: local.sourceUrl ?? '',
+            ),
+          )
+          ?.videoId;
+      if (id != null && id.isNotEmpty) {
+        localsByVideoId.putIfAbsent(id, () => local);
+      }
+    }
+    return _queueMissingDownloads([
+      for (final track in requested)
+        CatalogPlaybackItem(
+          entryId: track.id,
+          remoteTrack: track,
+          localTrack: localsByVideoId[codec.tryFromTrack(track)?.videoId],
+        ),
+    ], generationsAtRequest: generations);
+  }
+
+  Future<int> cancelPlaylistDownloads(Playlist playlist) async {
+    _playlistEnqueues.remove(playlist.id)?.cancelled = true;
+    ref.read(playlistDownloadPreparationsProvider.notifier).stop(playlist.id);
+    final library = await ref.read(libraryTracksProvider.future);
+    final catalog = await ref.read(catalogPlaylistProvider(playlist.id).future);
+    final ids = playlistDownloadVideoIds(playlist, catalog, library);
+    for (final id in ids) {
+      _cancelGenerations[id] = (_cancelGenerations[id] ?? 0) + 1;
+    }
+    final urls = pendingPlaylistDownloadUrls(playlist, catalog, library, state);
+    final cancelled = await Future.wait(urls.map(cancelDownload));
+    return cancelled.where((value) => value).length;
+  }
+
+  Future<int> _queueMissingDownloads(
+    List<CatalogPlaybackItem> items, {
+    bool Function()? isCancelled,
+    Map<String, int>? generationsAtRequest,
+  }) async {
+    const codec = BStreamTrackLinkCodec();
+    final generations =
+        generationsAtRequest ??
+        _cancellationSnapshot(
+          items.map((item) => item.remoteTrack).whereType<TrackInfo>(),
+        );
+    final activeVideoIds = <String>{
+      for (final task in state.values)
+        if (task.isCancellable)
+          ?codec
+              .tryFromTrack(
+                TrackInfo(id: '', title: '', artist: '', url: task.url),
+              )
+              ?.videoId,
+    };
+    final seen = <String>{};
+    final availability = <String, Future<bool>>{};
+    final probe = ref.read(localAudioUsabilityProbeProvider);
+    var queued = 0;
+    for (final item in items) {
+      if (isCancelled?.call() == true) break;
+      final remote = item.remoteTrack;
+      if (remote == null) continue;
+      final identity = codec.tryFromTrack(remote)?.videoId;
+      if (identity == null || !seen.add(identity)) continue;
+      if ((_cancelGenerations[identity] ?? 0) != generations[identity]) {
+        continue;
+      }
+      final local = item.localTrack;
+      if (local != null &&
+          await availability.putIfAbsent(
+            local.filePath,
+            () => probe(local.filePath),
+          )) {
+        continue;
+      }
+      if (isCancelled?.call() == true) break;
+      if ((_cancelGenerations[identity] ?? 0) != generations[identity]) {
+        continue;
+      }
+      if (activeVideoIds.contains(identity) ||
+          state[remote.url]?.isCancellable == true) {
+        continue;
+      }
+      await downloadAudio(remote);
+      activeVideoIds.add(identity);
+      queued++;
+    }
+    return queued;
+  }
+
+  Map<String, int> _cancellationSnapshot(Iterable<TrackInfo> tracks) {
+    const codec = BStreamTrackLinkCodec();
+    final generations = <String, int>{};
+    for (final track in tracks) {
+      final id = codec.tryFromTrack(track)?.videoId;
+      if (id != null) generations[id] = _cancelGenerations[id] ?? 0;
+    }
+    return generations;
   }
 
   /// Removes a queued task or interrupts only its active transfer.
@@ -312,4 +476,82 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
       _cleanupTimers.remove(url);
     });
   }
+}
+
+class _PlaylistDownloadBatch {
+  bool cancelled = false;
+  late final Future<int> operation;
+}
+
+List<CatalogPlaybackItem> playlistDownloadItems(
+  Playlist playlist,
+  CatalogPlaylist? catalog,
+  Iterable<LocalTrack> library,
+) {
+  if (catalog != null) return catalogPlaylistPlaybackItems(catalog, library);
+  final localsById = {for (final track in library) track.id: track};
+  return [
+    for (final id in playlist.trackIds)
+      if (localsById[id] case final local?)
+        CatalogPlaybackItem(
+          entryId: id,
+          localTrack: local,
+          remoteTrack:
+              local.sourceId?.trim().isNotEmpty == true ||
+                  local.sourceUrl?.trim().isNotEmpty == true
+              ? TrackInfo(
+                  id: local.sourceId?.trim().isNotEmpty == true
+                      ? local.sourceId!.trim()
+                      : local.id,
+                  title: local.title,
+                  artist: local.artist,
+                  artists: local.artists,
+                  artistBrowseIds: local.artistBrowseIds,
+                  album: local.album,
+                  duration: local.duration,
+                  thumbnailUrl: local.thumbnailUrl,
+                  catalogThumbnailUrl: local.catalogThumbnailUrl,
+                  url: local.sourceUrl?.trim().isNotEmpty == true
+                      ? local.sourceUrl!.trim()
+                      : 'https://www.youtube.com/watch?v=${local.sourceId!.trim()}',
+                  metadataSource: local.metadataSource,
+                )
+              : null,
+        ),
+  ];
+}
+
+Set<String> playlistDownloadVideoIds(
+  Playlist playlist,
+  CatalogPlaylist? catalog,
+  Iterable<LocalTrack> library,
+) {
+  const codec = BStreamTrackLinkCodec();
+  return {
+    for (final item in playlistDownloadItems(playlist, catalog, library))
+      if (item.remoteTrack case final remote?)
+        ?codec.tryFromTrack(remote)?.videoId,
+  };
+}
+
+Set<String> pendingPlaylistDownloadUrls(
+  Playlist playlist,
+  CatalogPlaylist? catalog,
+  Iterable<LocalTrack> library,
+  Map<String, DownloadTaskState> tasks,
+) {
+  const codec = BStreamTrackLinkCodec();
+  final ids = playlistDownloadVideoIds(playlist, catalog, library);
+  return {
+    for (final task in tasks.values)
+      if (task.isCancellable &&
+          ids.contains(
+            codec
+                .tryFromTrack(
+                  TrackInfo(id: '', title: '', artist: '', url: task.url),
+                )
+                ?.videoId,
+          ))
+        task.url,
+  };
 }

@@ -5,6 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('red accent is a saturated red rather than a pink or coral tone', () {
+    final red = HSVColor.fromColor(AppAccent.red.seedColor);
+    expect(AppAccent.red.seedColor, const Color(0xFFFF3B3F));
+    expect(red.saturation, greaterThan(0.75));
+    expect(red.hue, greaterThan(355));
+    expect(AppAccent.fromCode('red'), AppAccent.red);
+  });
+
   test('white is the first and initial accent option', () {
     expect(AppAccent.values.first, AppAccent.white);
     expect(AppAccent.fromCode(null), AppAccent.white);
@@ -137,20 +145,22 @@ void main() {
     expect(contentTitle, isNot(AppAccent.blue.seedColor));
   });
 
-  testWidgets(
-    'content cards can opt out of Liquid Glass without changing other modes',
-    (tester) async {
+  testWidgets('content cards share artwork translucency in all surface modes', (
+    tester,
+  ) async {
+    for (final brightness in Brightness.values) {
       for (final mode in SurfaceBackgroundMode.values) {
         late Color inheritedSurface;
-        late Color solidSurface;
         late Color inheritedBorder;
         late Color solidBorder;
         late Color inheritedHomeSurface;
-        late Color solidHomeSurface;
         await tester.pumpWidget(
           MaterialApp(
             theme: ThemeData(
-              scaffoldBackgroundColor: const Color(0xFF030504),
+              brightness: brightness,
+              scaffoldBackgroundColor: brightness == Brightness.dark
+                  ? const Color(0xFF030504)
+                  : Colors.white,
               extensions: [
                 const AppAccentTheme(accent: AppAccent.blue),
                 AppSurfaceTheme(backgroundMode: mode),
@@ -159,20 +169,12 @@ void main() {
             home: Builder(
               builder: (context) {
                 inheritedSurface = AppColors.cardSurfaceFor(context);
-                solidSurface = AppColors.cardSurfaceFor(
-                  context,
-                  solidInLiquidGlass: true,
-                );
                 inheritedBorder = AppColors.cardBorderFor(context);
                 solidBorder = AppColors.cardBorderFor(
                   context,
                   solidInLiquidGlass: true,
                 );
                 inheritedHomeSurface = AppColors.homeCardSurfaceFor(context);
-                solidHomeSurface = AppColors.homeCardSurfaceFor(
-                  context,
-                  solidInLiquidGlass: true,
-                );
                 return const SizedBox.shrink();
               },
             ),
@@ -180,19 +182,19 @@ void main() {
         );
         await tester.pumpAndSettle();
 
+        expect(
+          inheritedSurface.a,
+          closeTo(mode.isLiquidGlass ? 0.68 : 0.4896, 0.0001),
+        );
+        expect(inheritedHomeSurface.a, inheritedSurface.a);
         if (mode.isLiquidGlass) {
-          expect(inheritedSurface.a, lessThan(1));
           expect(inheritedBorder.a, lessThan(1));
-          expect(inheritedHomeSurface.a, lessThan(1));
-          expect(solidSurface.a, 1);
           expect(solidBorder.a, 1);
-          expect(solidHomeSurface, solidSurface);
+          expect(inheritedHomeSurface, inheritedSurface);
         } else {
-          expect(solidSurface, inheritedSurface);
           expect(solidBorder, inheritedBorder);
-          expect(solidHomeSurface, inheritedHomeSurface);
         }
       }
-    },
-  );
+    }
+  });
 }

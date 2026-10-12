@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:flutter/widgets.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../core/errors/app_exception.dart' as app_errors;
@@ -21,6 +22,7 @@ typedef JustAudioRemoteDiagnosticProbe =
 enum _SkipSilenceWriteResult { applied, failed, timedOut }
 
 class JustAudioPlayerService
+    with WidgetsBindingObserver
     implements
         PlayerService,
         NativeRemoteQueuePlayer,
@@ -28,6 +30,7 @@ class JustAudioPlayerService
         SkipSilenceCapablePlayer {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
   static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
+  static const _backgroundPositionSnapshotInterval = Duration(seconds: 1);
   static const _androidAudioLoadConfiguration = AudioLoadConfiguration(
     androidLoadControl: AndroidLoadControl(
       // Keep enough encoded audio ahead for the native PCM detector to scan a
@@ -76,7 +79,22 @@ class JustAudioPlayerService
     // warmup for tests and alternate entry points that construct the service
     // directly; image generation itself is deferred to the system request.
     unawaited(_initializeNotificationArtworkSafely());
+    WidgetsBinding.instance.addObserver(this);
     _attachPrimaryPlayer(_player);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Android keeps the audio engine running while the display is off. Keep
+    // the UI/notification timeline fresh, but avoid waking Riverpod and its
+    // listeners for every fine-grained position sample in the background.
+    final background =
+        state == AppLifecycleState.hidden || state == AppLifecycleState.paused;
+    final wasBackground = _appInBackground;
+    _appInBackground = background;
+    if (wasBackground && !background && !_disposed) {
+      _emit(_snapshot.copyWith(position: _player.position));
+    }
   }
 
   void _attachPrimaryPlayer(AudioPlayer player) {
@@ -96,8 +114,12 @@ class JustAudioPlayerService
             if (_crossfadeRamp != null && !_primaryStillRepresentsSnapshot) {
               return;
             }
-            _emit(_snapshot.copyWith(position: position));
-            _maybeStartCrossfade();
+            if (_shouldPublishPositionSnapshot(position)) {
+              _emit(_snapshot.copyWith(position: position));
+            }
+            // The crossfade must still use every 250-500 ms source-clock
+            // sample, including while the screen is off or silence is skipped.
+            _maybeStartCrossfade(positionOverride: position);
           }),
       player.durationStream.listen((duration) {
         if (!identical(player, _player)) {
@@ -427,6 +449,17 @@ class JustAudioPlayerService
   int _seekRevision = 0;
   StreamSubscription<PlayerException>? _crossfadeErrorSubscription;
   bool _disposed = false;
+  bool _appInBackground = false;
+
+  bool _shouldPublishPositionSnapshot(Duration position) {
+    if (!_appInBackground) {
+      return true;
+    }
+    final delta = position - _snapshot.position;
+    // A seek, a new item or an accelerated silence jump is reported at once.
+    return delta < Duration.zero ||
+        delta >= _backgroundPositionSnapshotInterval;
+  }
 
   Future<void> _initializeNotificationArtworkSafely() async {
     try {
@@ -2485,6 +2518,7 @@ class JustAudioPlayerService
       return;
     }
     _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     _playbackGeneration++;
     _remoteQueueRevision++;
     _crossfadeGeneration++;

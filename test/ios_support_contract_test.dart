@@ -129,6 +129,36 @@ void main() {
       );
     });
 
+    test('Now Playing widget is embedded with a shared App Group', () {
+      const group = 'group.com.bstream.bstreamMusic';
+      final project = File(
+        'ios/Runner.xcodeproj/project.pbxproj',
+      ).readAsStringSync();
+      expect(project, contains('NowPlayingWidget.swift in Sources'));
+      expect(
+        project,
+        contains('NowPlayingWidget.appex in Embed App Extensions'),
+      );
+      expect(project, contains('com.bstream.bstreamMusic.NowPlayingWidget'));
+      for (final path in <String>[
+        'ios/Runner/DebugProfile.entitlements',
+        'ios/Runner/Release.entitlements',
+        'ios/NowPlayingWidget/NowPlayingWidget.entitlements',
+      ]) {
+        expect(File(path).readAsStringSync(), contains(group));
+      }
+      expect(
+        File('ios/NowPlayingWidget/Info.plist').readAsStringSync(),
+        contains('com.apple.widgetkit-extension'),
+      );
+      expect(
+        File('.github/workflows/desktop-builds.yml').readAsStringSync(),
+        contains(
+          'Payload/Runner.app/PlugIns/NowPlayingWidget.appex/NowPlayingWidget',
+        ),
+      );
+    });
+
     test('release workflow publishes a validated unsigned IPA payload', () {
       final workflow = File(
         '.github/workflows/desktop-builds.yml',

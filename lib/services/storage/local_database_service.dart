@@ -119,6 +119,12 @@ const _requiredDatabaseIndexes = <_DatabaseIndexDefinition>[
     descending: <bool>[false],
   ),
   _DatabaseIndexDefinition(
+    name: 'idx_library_track_order_position',
+    table: 'library_track_order',
+    columns: <String>['position'],
+    descending: <bool>[false],
+  ),
+  _DatabaseIndexDefinition(
     name: 'idx_playlists_updated_at',
     table: 'playlists',
     columns: <String>['updated_at'],
@@ -368,8 +374,54 @@ class LocalDatabaseService {
 
   Future<List<LocalTrack>> getLocalTracks() async {
     final db = await database;
-    final rows = await db.query('local_tracks', orderBy: 'added_at DESC');
+    final rows = await db.rawQuery('''
+      SELECT local_tracks.*
+      FROM local_tracks
+      LEFT JOIN library_track_order
+        ON library_track_order.track_id = local_tracks.id
+      ORDER BY
+        CASE WHEN library_track_order.position IS NULL THEN 1 ELSE 0 END,
+        library_track_order.position ASC,
+        local_tracks.added_at DESC,
+        local_tracks.id ASC
+    ''');
     return rows.map(LocalTrackModel.fromMap).toList(growable: false);
+  }
+
+  /// Persists the complete visible library order. Unordered/new downloads are
+  /// left at the end until the user explicitly reorders the list again.
+  Future<void> reorderLocalTracks(List<String> orderedTrackIds) async {
+    final db = await database;
+    await db.transaction((transaction) async {
+      final rows = await transaction.query(
+        'local_tracks',
+        columns: const <String>['id'],
+      );
+      final existingIds = rows
+          .map((row) => row['id']?.toString())
+          .whereType<String>()
+          .toSet();
+      final requestedIds = orderedTrackIds.toSet();
+      if (requestedIds.length != orderedTrackIds.length ||
+          requestedIds.length != existingIds.length ||
+          !requestedIds.containsAll(existingIds)) {
+        throw ArgumentError.value(
+          orderedTrackIds,
+          'orderedTrackIds',
+          'Must contain every local track exactly once.',
+        );
+      }
+
+      await transaction.delete('library_track_order');
+      final batch = transaction.batch();
+      for (var position = 0; position < orderedTrackIds.length; position++) {
+        batch.insert('library_track_order', <String, Object?>{
+          'track_id': orderedTrackIds[position],
+          'position': position,
+        });
+      }
+      await batch.commit(noResult: true);
+    });
   }
 
   Future<void> saveLocalTrack(LocalTrack track) async {
@@ -1964,6 +2016,7 @@ class LocalDatabaseService {
         ''');
         await _createRecommendationTables(db);
         await _createPlaylistSyncTables(db);
+        await _createLibraryTrackOrderTable(db);
         await _createIndexes(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
@@ -2069,6 +2122,9 @@ class LocalDatabaseService {
           await _backfillCatalogPlaylistData(db);
           await _createIndexes(db);
         }
+        if (oldVersion < 9) {
+          await _createLibraryTrackOrderTable(db);
+        }
       },
       onOpen: _repairAndValidateCurrentSchema,
     );
@@ -2146,6 +2202,7 @@ class LocalDatabaseService {
       }
     }
     await _backfillCatalogPlaylistData(db);
+    await _createLibraryTrackOrderTable(db);
     await _validateSchemaForVersion(db, AppConstants.databaseVersion);
     await _repairIndexes(db);
   }
@@ -2158,6 +2215,11 @@ class LocalDatabaseService {
     if (!tables.containsAll(const <String>{'local_tracks', 'playlists'})) {
       throw const FormatException(
         'La base de datos no contiene las tablas de biblioteca requeridas.',
+      );
+    }
+    if (version >= 9 && !tables.contains('library_track_order')) {
+      throw const FormatException(
+        'La base de datos no contiene el orden de la biblioteca requerido.',
       );
     }
 
@@ -2632,6 +2694,20 @@ class LocalDatabaseService {
           ON DELETE CASCADE
       )
     ''');
+  }
+
+  Future<void> _createLibraryTrackOrderTable(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS library_track_order (
+        track_id TEXT PRIMARY KEY,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        FOREIGN KEY (track_id) REFERENCES local_tracks(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_library_track_order_position '
+      'ON library_track_order(position)',
+    );
   }
 
   /// Converts the legacy JSON memberships exactly once. Item identifiers are

@@ -164,9 +164,12 @@ jobs:
           test -d "$app"
           test -f "$app/Info.plist"
           test -x "$app/Runner"
+          test -f "$app/PlugIns/NowPlayingWidget.appex/Info.plist"
+          test -x "$app/PlugIns/NowPlayingWidget.appex/NowPlayingWidget"
           test ! -e "$app/embedded.mobileprovision"
           test ! -d "$app/_CodeSignature"
           /usr/bin/lipo "$app/Runner" -verify_arch arm64
+          /usr/bin/lipo "$app/PlugIns/NowPlayingWidget.appex/NowPlayingWidget" -verify_arch arm64
 
           built_version="$(
             /usr/libexec/PlistBuddy \
@@ -191,6 +194,8 @@ jobs:
           entries="$(/usr/bin/unzip -Z1 "$ipa")"
           grep -Fxq "Payload/Runner.app/Info.plist" <<<"$entries"
           grep -Fxq "Payload/Runner.app/Runner" <<<"$entries"
+          grep -Fxq "Payload/Runner.app/PlugIns/NowPlayingWidget.appex/Info.plist" <<<"$entries"
+          grep -Fxq "Payload/Runner.app/PlugIns/NowPlayingWidget.appex/NowPlayingWidget" <<<"$entries"
           if grep -Eq '^__MACOSX/|^Payload/Runner\.app/_CodeSignature/' <<<"$entries"; then
             echo "The unsigned IPA contains signing data or AppleDouble metadata." >&2
             exit 1

@@ -8,6 +8,8 @@ class SearchInput extends StatefulWidget {
     required this.hintText,
     required this.tooltip,
     required this.clearTooltip,
+    this.onChanged,
+    this.onFocusChanged,
     this.onCleared,
     this.initialText = '',
     this.compact = false,
@@ -20,6 +22,8 @@ class SearchInput extends StatefulWidget {
   final String hintText;
   final String tooltip;
   final String clearTooltip;
+  final ValueChanged<String>? onChanged;
+  final void Function(bool hasFocus, String text)? onFocusChanged;
   final VoidCallback? onCleared;
   final String initialText;
   final bool compact;
@@ -42,6 +46,7 @@ class _SearchInputState extends State<SearchInput> {
     _controller = TextEditingController(text: widget.initialText);
     _hadText = _controller.text.isNotEmpty;
     _controller.addListener(_handleTextChanged);
+    _focusNode.addListener(_handleFocusChanged);
   }
 
   @override
@@ -75,9 +80,14 @@ class _SearchInputState extends State<SearchInput> {
     }
   }
 
+  void _handleFocusChanged() {
+    widget.onFocusChanged?.call(_focusNode.hasFocus, _controller.text);
+  }
+
   @override
   void dispose() {
     _controller.removeListener(_handleTextChanged);
+    _focusNode.removeListener(_handleFocusChanged);
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -108,6 +118,7 @@ class _SearchInputState extends State<SearchInput> {
           focusNode: _focusNode,
           autofocus: widget.autofocus,
           textInputAction: TextInputAction.search,
+          onChanged: widget.onChanged,
           onSubmitted: (_) => submit(),
           decoration: InputDecoration(
             hintText: widget.hintText,

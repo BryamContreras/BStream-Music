@@ -85,7 +85,7 @@ void main() {
     final database = await service.database;
     final versionRows = await database.rawQuery('PRAGMA user_version');
     expect(versionRows.single['user_version'], AppConstants.databaseVersion);
-    expect(AppConstants.databaseVersion, 8);
+    expect(AppConstants.databaseVersion, 9);
 
     final tableInfo = await database.rawQuery(
       'PRAGMA table_info(local_tracks)',

@@ -19,6 +19,8 @@ class ClassicVinylDeck extends StatefulWidget {
     required this.isPlaying,
     required this.animationEnabled,
     this.canvasUrl,
+    this.videoStartOffset = Duration.zero,
+    this.videoDurationHint = Duration.zero,
     required this.progress,
     this.trackTransitionsEnabled = true,
     this.expanded = false,
@@ -34,6 +36,8 @@ class ClassicVinylDeck extends StatefulWidget {
   final bool isPlaying;
   final bool animationEnabled;
   final Uri? canvasUrl;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final double progress;
   final bool trackTransitionsEnabled;
   final bool expanded;
@@ -217,6 +221,9 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
                       key: ValueKey('vinyl-canvas-${widget.identity}'),
                       url: widget.canvasUrl!,
                       isPlaying: widget.isPlaying,
+                      identity: widget.identity,
+                      startOffset: widget.videoStartOffset,
+                      durationHint: widget.videoDurationHint,
                     ),
                 ],
               ),

@@ -35,28 +35,29 @@ class MarqueeText extends StatefulWidget {
 
 class _MarqueeTextState extends State<MarqueeText>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late final AnimationController _controller;
+  AnimationController? _controller;
   Timer? _startTimer;
   ScrollNotificationObserverState? _scrollNotificationObserver;
+  bool _observingScroll = false;
 
   double _overflow = 0;
+  double _pendingOverflow = 0;
   bool _metricsPending = false;
+  bool _restartPending = false;
   bool _visibilityCheckPending = false;
   bool _viewportVisible = true;
   bool _appActive = true;
   bool _tickerEnabled = true;
   bool _reducedMotion = false;
 
-  Duration get _cycleDuration =>
-      widget.pause + widget.travel + widget.pause + widget.travel;
+  _MarqueeMotionPhase _phase = _MarqueeMotionPhase.atStart;
+
+  AnimationController get _animationController =>
+      _controller ??= AnimationController(vsync: this, duration: widget.travel);
 
   @override
   void initState() {
     super.initState();
-    // Initialize while the State is mounted. Short labels never build the
-    // animated branch, so lazy initialization would otherwise happen during
-    // dispose after the element tree has already been deactivated.
-    _controller = AnimationController(vsync: this, duration: _cycleDuration);
     WidgetsBinding.instance.addObserver(this);
     final lifecycleState = WidgetsBinding.instance.lifecycleState;
     _appActive =
@@ -68,14 +69,17 @@ class _MarqueeTextState extends State<MarqueeText>
     super.didChangeDependencies();
     final observer = ScrollNotificationObserver.maybeOf(context);
     if (observer != _scrollNotificationObserver) {
-      _scrollNotificationObserver?.removeListener(_handleScrollNotification);
+      if (_observingScroll) {
+        _scrollNotificationObserver?.removeListener(_handleScrollNotification);
+        _observingScroll = false;
+      }
       _scrollNotificationObserver = observer;
-      observer?.addListener(_handleScrollNotification);
     }
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
     _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    _syncScrollObservation();
     _updateAnimationAvailability();
-    _scheduleVisibilityCheck();
+    if (_overflow > 0) _scheduleVisibilityCheck();
   }
 
   @override
@@ -86,22 +90,28 @@ class _MarqueeTextState extends State<MarqueeText>
         oldWidget.pause != widget.pause ||
         oldWidget.travel != widget.travel ||
         oldWidget.gap != widget.gap) {
-      _scheduleMetrics(0);
+      // The next build measures the new label. Keep the previous layout until
+      // then instead of briefly drawing a static/ellipsized title.
+      _restartPending = true;
+      _scheduleMetrics(_overflow);
     }
   }
 
   @override
   void dispose() {
     _startTimer?.cancel();
-    _scrollNotificationObserver?.removeListener(_handleScrollNotification);
+    if (_observingScroll) {
+      _scrollNotificationObserver?.removeListener(_handleScrollNotification);
+    }
     WidgetsBinding.instance.removeObserver(this);
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
+    _syncScrollObservation();
     _updateAnimationAvailability();
   }
 
@@ -123,10 +133,14 @@ class _MarqueeTextState extends State<MarqueeText>
         // would move the sole copy past the viewport and leave empty space at
         // the right edge when it reaches the end.
         final overflow = available.isFinite ? painter.width - available : 0.0;
-        _scheduleMetrics(overflow > 0 ? overflow : 0);
-        _scheduleVisibilityCheck();
+        final measuredOverflow = overflow > 0 ? overflow : 0.0;
+        final textWidth = painter.width;
+        final textHeight = painter.height;
+        painter.dispose();
+        _scheduleMetrics(measuredOverflow);
+        if (measuredOverflow > 0) _scheduleVisibilityCheck();
 
-        if (_overflow <= 0 || !available.isFinite) {
+        if (measuredOverflow <= 0 || !available.isFinite) {
           return Text(
             widget.text,
             style: widget.style,
@@ -138,24 +152,7 @@ class _MarqueeTextState extends State<MarqueeText>
           );
         }
 
-        final sequence = TweenSequence<double>([
-          TweenSequenceItem(
-            tween: ConstantTween<double>(0),
-            weight: widget.pause.inMilliseconds.toDouble(),
-          ),
-          TweenSequenceItem(
-            tween: Tween<double>(begin: 0, end: -_overflow),
-            weight: widget.travel.inMilliseconds.toDouble(),
-          ),
-          TweenSequenceItem(
-            tween: ConstantTween<double>(-_overflow),
-            weight: widget.pause.inMilliseconds.toDouble(),
-          ),
-          TweenSequenceItem(
-            tween: Tween<double>(begin: -_overflow, end: 0),
-            weight: widget.travel.inMilliseconds.toDouble(),
-          ),
-        ]);
+        final controller = _animationController;
         // Keep a fixed viewport at the width offered by the card.  The text
         // itself keeps its measured width, while the Stack clips only the
         // horizontal movement.  Giving the viewport the measured text height
@@ -163,7 +160,7 @@ class _MarqueeTextState extends State<MarqueeText>
         // screen height and make every card overflow vertically.
         return SizedBox(
           width: available,
-          height: painter.height,
+          height: textHeight,
           child: ClipRect(
             child: Stack(
               clipBehavior: Clip.hardEdge,
@@ -173,14 +170,14 @@ class _MarqueeTextState extends State<MarqueeText>
                   top: 0,
                   child: AnimatedBuilder(
                     key: const ValueKey('marquee-text-animation'),
-                    animation: _controller,
+                    animation: controller,
                     builder: (context, child) {
                       return Transform.translate(
-                        offset: Offset(sequence.evaluate(_controller), 0),
+                        offset: Offset(-_overflow * controller.value, 0),
                         child: child,
                       );
                     },
-                    child: _buildLabel(painter.width, painter.height),
+                    child: _buildLabel(textWidth, textHeight),
                   ),
                 ),
               ],
@@ -208,7 +205,11 @@ class _MarqueeTextState extends State<MarqueeText>
   }
 
   void _scheduleMetrics(double overflow) {
+    _pendingOverflow = overflow;
     if (_metricsPending) {
+      return;
+    }
+    if ((_overflow - overflow).abs() <= 0.5 && !_restartPending) {
       return;
     }
     _metricsPending = true;
@@ -217,19 +218,48 @@ class _MarqueeTextState extends State<MarqueeText>
       if (!mounted) {
         return;
       }
-      final changed = (_overflow - overflow).abs() > 0.5;
-      if (!changed) {
+      final changed = (_overflow - _pendingOverflow).abs() > 0.5;
+      if (!changed && !_restartPending) {
         return;
       }
-      setState(() {
-        _overflow = overflow;
-      });
-      _controller
-        ..duration = _cycleDuration
-        ..stop();
+      _restartPending = false;
+      if (changed) {
+        setState(() {
+          _overflow = _pendingOverflow;
+        });
+      }
       _startTimer?.cancel();
+      _startTimer = null;
+      _phase = _MarqueeMotionPhase.atStart;
+      final controller = _controller;
+      if (controller != null) {
+        controller
+          ..stop()
+          ..duration = widget.travel
+          ..value = 0;
+      }
+      _syncScrollObservation();
       _updateAnimationAvailability();
+      if (_overflow > 0) _scheduleVisibilityCheck();
     });
+  }
+
+  void _syncScrollObservation() {
+    // Short labels and inactive routes have no animation to reveal. They do
+    // not need one geometry check per scroll frame from the global observer.
+    final shouldObserve =
+        _scrollNotificationObserver != null &&
+        _overflow > 0 &&
+        _appActive &&
+        _tickerEnabled &&
+        !_reducedMotion;
+    if (shouldObserve == _observingScroll) return;
+    if (shouldObserve) {
+      _scrollNotificationObserver!.addListener(_handleScrollNotification);
+    } else {
+      _scrollNotificationObserver?.removeListener(_handleScrollNotification);
+    }
+    _observingScroll = shouldObserve;
   }
 
   bool get _animationEnabled =>
@@ -271,28 +301,56 @@ class _MarqueeTextState extends State<MarqueeText>
     if (!_animationEnabled) {
       _startTimer?.cancel();
       _startTimer = null;
-      _controller.stop();
-      if (_controller.value != 0) {
-        _controller.value = 0;
+      _phase = _MarqueeMotionPhase.atStart;
+      final controller = _controller;
+      controller?.stop();
+      if (controller != null && controller.value != 0) {
+        controller.value = 0;
       }
       return;
     }
-    if (!_controller.isAnimating && _startTimer == null) {
-      _queueCycleStart();
+    if (_phase == _MarqueeMotionPhase.atStart &&
+        !_animationController.isAnimating &&
+        _startTimer == null) {
+      _queueForward();
     }
   }
 
-  void _queueCycleStart() {
+  void _queueForward() {
     if (!_animationEnabled) return;
     _startTimer?.cancel();
-    _startTimer = Timer(widget.pause, () {
+    // The old cycle paused once between cycles and once at the start of the
+    // next cycle. Keep that reading time, without ticking stationary frames.
+    _startTimer = Timer(widget.pause + widget.pause, () {
       _startTimer = null;
       if (!mounted || !_animationEnabled) return;
-      _controller
-        ..duration = _cycleDuration
+      _phase = _MarqueeMotionPhase.forward;
+      _animationController
+        ..duration = widget.travel
         ..forward(from: 0).whenCompleteOrCancel(() {
-          if (mounted && _animationEnabled) _queueCycleStart();
+          if (!mounted ||
+              !_animationEnabled ||
+              _phase != _MarqueeMotionPhase.forward) {
+            return;
+          }
+          _phase = _MarqueeMotionPhase.atEnd;
+          _startTimer = Timer(widget.pause, () {
+            _startTimer = null;
+            if (!mounted || !_animationEnabled) return;
+            _phase = _MarqueeMotionPhase.reverse;
+            _animationController.reverse(from: 1).whenCompleteOrCancel(() {
+              if (!mounted ||
+                  !_animationEnabled ||
+                  _phase != _MarqueeMotionPhase.reverse) {
+                return;
+              }
+              _phase = _MarqueeMotionPhase.atStart;
+              _queueForward();
+            });
+          });
         });
     });
   }
 }
+
+enum _MarqueeMotionPhase { atStart, forward, atEnd, reverse }

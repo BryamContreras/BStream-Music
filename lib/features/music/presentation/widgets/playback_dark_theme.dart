@@ -7,7 +7,10 @@ import '../../../../core/theme/app_theme.dart';
 ///
 /// The application theme remains untouched, so leaving the player or Lyrics
 /// immediately restores the user's selected light or dark appearance.
-ThemeData alwaysDarkPlaybackTheme(ThemeData inheritedTheme) {
+ThemeData alwaysDarkPlaybackTheme(
+  ThemeData inheritedTheme, {
+  String? fontFamily,
+}) {
   final accentTheme = inheritedTheme.extension<AppAccentTheme>();
   final seed = accentTheme?.seed ?? inheritedTheme.colorScheme.primary;
   final darkAccent = accentTheme?.dark ?? inheritedTheme.colorScheme.primary;
@@ -39,7 +42,9 @@ ThemeData alwaysDarkPlaybackTheme(ThemeData inheritedTheme) {
     filledButtonTheme: inheritedTheme.filledButtonTheme,
     textButtonTheme: inheritedTheme.textButtonTheme,
     tooltipTheme: inheritedTheme.tooltipTheme,
-    fontFamily: AppPlatform.isLinux ? 'Roboto' : null,
-    fontFamilyFallback: AppPlatform.isLinux ? const [] : null,
+    fontFamily: fontFamily ?? (AppPlatform.isLinux ? 'Roboto' : null),
+    fontFamilyFallback: AppPlatform.isLinux && fontFamily == null
+        ? const []
+        : null,
   );
 }

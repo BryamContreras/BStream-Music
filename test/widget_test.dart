@@ -24,6 +24,7 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/track_selection_controller.dart';
 import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
@@ -100,6 +101,50 @@ void main() {
     );
     expect(find.byIcon(Icons.search_rounded), findsWidgets);
     expect(find.text('Reproductor'), findsNothing);
+  });
+
+  testWidgets('selected font reaches the light and dark app themes', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(320, 700)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+    final settingsController = _FakeSettingsController(
+      const SettingsState(
+        downloadDirectory: '/tmp/bstream',
+        language: AppLanguage.spanish,
+        playerFont: PlayerFont.fredoka,
+      ),
+    );
+    await tester.pumpWidget(_testApp(settingsController: settingsController));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp).first);
+    expect(
+      app.theme?.textTheme.bodyMedium?.fontFamily,
+      PlayerFont.fredoka.fontFamily,
+    );
+    expect(
+      app.darkTheme?.textTheme.bodyMedium?.fontFamily,
+      PlayerFont.fredoka.fontFamily,
+    );
+    expect(
+      Theme.of(
+        tester.element(find.byKey(const ValueKey('home-tab-title'))),
+      ).textTheme.bodyMedium?.fontFamily,
+      PlayerFont.fredoka.fontFamily,
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('Ajustes').last);
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('startup checks once and shows a newer release', (tester) async {
@@ -1209,6 +1254,7 @@ void main() {
         const ValueKey('search-input-surface'),
       );
       expect(searchInputSurface, findsOneWidget);
+      final searchInputHeight = tester.getSize(searchInputSurface).height;
       expect(
         find.descendant(
           of: searchInputSurface,
@@ -1258,7 +1304,14 @@ void main() {
         tester.getRect(libraryFilterRegion).width,
         tester.view.physicalSize.width,
       );
-      expect(tester.getRect(libraryFilterRegion).height, lessThanOrEqualTo(60));
+      expect(
+        tester.getSize(libraryFilterSurface).height,
+        closeTo(searchInputHeight, 0.1),
+      );
+      expect(
+        tester.getRect(libraryFilterRegion).height,
+        closeTo(searchInputHeight + 10, 0.1),
+      );
       expect(
         find.ancestor(
           of: detailHeaderSurface,
@@ -1271,26 +1324,23 @@ void main() {
           of: libraryFilterRegion,
           matching: find.byType(BackdropFilter),
         ),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.descendant(
           of: libraryFilterSurface,
           matching: find.byType(BackdropFilter),
         ),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<Material>(libraryFilterRegion).color,
+        Colors.transparent,
+      );
+      expect(
+        find.byKey(const ValueKey('tab-pinned-footer-accent-gradient')),
         findsNothing,
       );
-      final libraryFilterRegionDecoration =
-          tester
-                  .widget<DecoratedBox>(
-                    find.byKey(
-                      const ValueKey('tab-pinned-footer-accent-gradient'),
-                    ),
-                  )
-                  .decoration
-              as BoxDecoration;
-      expect(libraryFilterRegionDecoration.borderRadius, isNull);
-      expect(libraryFilterRegionDecoration.gradient, isA<LinearGradient>());
       final libraryFilterFieldContext = tester.element(
         find.descendant(
           of: libraryFilterSurface,
@@ -4203,9 +4253,9 @@ void main() {
         .first;
     expect(
       tester.widget<Material>(recentMaterial).color,
-      AppColors.homeCardSurfaceFor(recentContext, solidInLiquidGlass: true),
+      AppColors.homeCardSurfaceFor(recentContext),
     );
-    expect(tester.widget<Material>(recentMaterial).color?.a, 1);
+    expect(tester.widget<Material>(recentMaterial).color?.a, 0.68);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
@@ -6324,28 +6374,25 @@ void main() {
       findsOneWidget,
     );
     expect(
+      find.textContaining('widget del reproductor para la pantalla de inicio'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('imagen de tu galería'), findsOneWidget);
+    expect(
+      find.textContaining('cambiar la fuente de toda la aplicación'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('rendimiento de los artworks animados'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('álbumes, mixes y resultados de búsqueda'),
+      findsOneWidget,
+    );
+    expect(
       find.textContaining('Se agregó el reproductor Vinilo Clásico'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('acortar de forma conservadora los silencios'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Desliza el mini reproductor móvil'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Hay nuevos estilos de portadas animadas'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Spotify Canvas y Animated Artwork'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Se reforzaron el inicio de conexión'),
-      findsOneWidget,
+      findsNothing,
     );
     await tester.tap(
       find.byKey(const ValueKey('settings-about-whats-new-close')),
@@ -6718,6 +6765,60 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('system back closes search selection before leaving the tab', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    _configureMobileHomeViewport(tester);
+    const track = TrackInfo(
+      id: 'selection-result',
+      title: 'Seleccionable',
+      artist: 'Artista',
+      url: 'https://youtu.be/abcdefghijk',
+    );
+    await tester.pumpWidget(
+      _testApp(searchController: _FakeSearchController([track])),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('Buscar').last);
+    await _pumpUntil(
+      tester,
+      () => find.text('Seleccionable').evaluate().isNotEmpty,
+      reason: 'the mounted Search tab and its async results',
+    );
+    await tester.longPress(find.text('Seleccionable'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.byKey(const ValueKey('search-selection-toolbar')),
+      findsOneWidget,
+    );
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    );
+    await tester.binding.handlePopRoute();
+    expect(
+      container.read(trackSelectionProvider(searchTrackSelectionScope)).active,
+      isFalse,
+    );
+    await _pumpUntil(
+      tester,
+      () => find
+          .byKey(const ValueKey('search-selection-toolbar'))
+          .evaluate()
+          .isEmpty,
+      reason: 'the selection header reverse transition',
+    );
+    expect(find.text('Seleccionable'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await _pumpUntil(
+      tester,
+      () => find.byKey(const ValueKey('home-tab-title')).evaluate().isNotEmpty,
+      reason: 'Back to Home after exiting selection',
+    );
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('track result actions live under a three dot menu', (
     tester,
   ) async {
@@ -6887,7 +6988,9 @@ void main() {
     );
     var decoration =
         tester.widget<AnimatedContainer>(surface).decoration! as BoxDecoration;
-    expect(decoration.color?.a, 1);
+    final currentSurfaceColor = decoration.color!;
+    expect(currentSurfaceColor.a, greaterThan(0.68));
+    expect(currentSurfaceColor.a, lessThan(1));
     expect((decoration.border! as Border).top.width, 1);
 
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
@@ -6898,6 +7001,8 @@ void main() {
 
     decoration =
         tester.widget<AnimatedContainer>(surface).decoration! as BoxDecoration;
+    expect(decoration.color, isNot(currentSurfaceColor));
+    expect(decoration.color?.a, lessThan(1));
     expect((decoration.border! as Border).top.width, 1.4);
   });
 
@@ -9016,6 +9121,7 @@ Widget _settingsTestApp({
 
 Widget _testApp({
   SettingsController? settingsController,
+  SearchController? searchController,
   PlayerService? playerService,
   PlayerController? playerController,
   DeviceAudioCatalog? deviceAudioCatalog,
@@ -9067,6 +9173,8 @@ Widget _testApp({
         androidAppActivationsProvider.overrideWithValue(androidAppActivations),
       if (settingsController != null)
         settingsControllerProvider.overrideWith(() => settingsController),
+      if (searchController != null)
+        searchControllerProvider.overrideWith(() => searchController),
       if (deviceAudioCatalog != null)
         deviceAudioCatalogProvider.overrideWithValue(deviceAudioCatalog),
       downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),

@@ -71,7 +71,7 @@ enum AppAccent {
     AppAccent.blue => const Color(0xFF3D8BFF),
     AppAccent.purple => const Color(0xFFA66CFF),
     AppAccent.orange => const Color(0xFFFFA047),
-    AppAccent.red => const Color(0xFFFF5A5F),
+    AppAccent.red => const Color(0xFFFF3B3F),
     AppAccent.yellow => const Color(0xFFFFD54F),
     AppAccent.pink => const Color(0xFFFF5C93),
     AppAccent.teal => const Color(0xFF2DD4BF),

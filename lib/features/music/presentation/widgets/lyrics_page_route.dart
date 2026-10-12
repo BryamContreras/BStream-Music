@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers/music_providers.dart';
 import 'lyrics_page.dart';
 import 'playback_dark_theme.dart';
 import 'playback_page_transition.dart';
@@ -29,10 +31,25 @@ class _LyricsPageRoute extends PageRouteBuilder<void> {
         maintainState: true,
         allowSnapshotting: true,
         pageBuilder: (context, animation, secondaryAnimation) {
-          final inheritedTheme = Theme.of(context);
-          return Theme(
-            key: const ValueKey('lyrics-always-dark-theme'),
-            data: alwaysDarkPlaybackTheme(inheritedTheme),
+          return Consumer(
+            builder: (context, ref, child) {
+              final playerFont = ref.watch(
+                settingsControllerProvider.select(
+                  (settings) => settings.value?.playerFont ?? defaultPlayerFont,
+                ),
+              );
+              return Theme(
+                key: const ValueKey('lyrics-always-dark-theme'),
+                data: alwaysDarkPlaybackTheme(
+                  Theme.of(context),
+                  fontFamily: playerFont.fontFamily,
+                ),
+                child: DefaultTextStyle.merge(
+                  style: TextStyle(fontFamily: playerFont.fontFamily),
+                  child: child!,
+                ),
+              );
+            },
             child: Semantics(
               scopesRoute: true,
               explicitChildNodes: true,

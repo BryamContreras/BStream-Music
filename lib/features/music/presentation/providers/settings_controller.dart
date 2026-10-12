@@ -5,6 +5,12 @@ final settingsControllerProvider =
       SettingsController.new,
     );
 
+final appBackgroundImageServiceProvider = Provider<AppBackgroundImageService>(
+  (ref) => AppBackgroundImageService(),
+);
+
+const _unchangedAppBackground = Object();
+
 const supportedCrossfadeDurations = <Duration>[
   Duration(seconds: 1),
   Duration(seconds: 2),
@@ -92,7 +98,11 @@ class SettingsState {
     this.themeMode = AppThemeMode.system,
     this.accent = AppAccent.white,
     this.surfaceBackgroundMode = SurfaceBackgroundMode.accent,
+    this.appBackgroundFileName,
+    this.appBackgroundPath,
     this.playerStyle = defaultPlayerStyle,
+    this.playerFont = defaultPlayerFont,
+    this.showAudioQuality = false,
     this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
     this.playerArtworkStyle = defaultPlayerArtworkStyle,
     this.appleAnimatedArtworkEnabled = false,
@@ -115,7 +125,15 @@ class SettingsState {
   final AppThemeMode themeMode;
   final AppAccent accent;
   final SurfaceBackgroundMode surfaceBackgroundMode;
+
+  /// Relative file name owned by [AppBackgroundImageService].
+  final String? appBackgroundFileName;
+
+  /// Resolved path in the current app container; never persisted directly.
+  final String? appBackgroundPath;
   final PlayerStyle playerStyle;
+  final PlayerFont playerFont;
+  final bool showAudioQuality;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
   final bool appleAnimatedArtworkEnabled;
@@ -138,7 +156,11 @@ class SettingsState {
     AppThemeMode? themeMode,
     AppAccent? accent,
     SurfaceBackgroundMode? surfaceBackgroundMode,
+    Object? appBackgroundFileName = _unchangedAppBackground,
+    Object? appBackgroundPath = _unchangedAppBackground,
     PlayerStyle? playerStyle,
+    PlayerFont? playerFont,
+    bool? showAudioQuality,
     bool? animatedArtworkEnabled,
     PlayerArtworkStyle? playerArtworkStyle,
     bool? appleAnimatedArtworkEnabled,
@@ -162,7 +184,16 @@ class SettingsState {
       accent: accent ?? this.accent,
       surfaceBackgroundMode:
           surfaceBackgroundMode ?? this.surfaceBackgroundMode,
+      appBackgroundFileName:
+          identical(appBackgroundFileName, _unchangedAppBackground)
+          ? this.appBackgroundFileName
+          : appBackgroundFileName as String?,
+      appBackgroundPath: identical(appBackgroundPath, _unchangedAppBackground)
+          ? this.appBackgroundPath
+          : appBackgroundPath as String?,
       playerStyle: playerStyle ?? this.playerStyle,
+      playerFont: playerFont ?? this.playerFont,
+      showAudioQuality: showAudioQuality ?? this.showAudioQuality,
       animatedArtworkEnabled:
           animatedArtworkEnabled ?? this.animatedArtworkEnabled,
       playerArtworkStyle: playerArtworkStyle ?? this.playerArtworkStyle,
@@ -205,7 +236,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _themeModeKey = 'settings.themeMode';
   static const _accentKey = 'settings.accent';
   static const _surfaceBackgroundModeKey = 'settings.surfaceBackgroundMode';
+  static const _appBackgroundFileNameKey = 'settings.appBackgroundFileName';
   static const _playerStyleKey = 'settings.playerStyle';
+  static const _playerFontKey = 'settings.playerFont';
+  static const _showAudioQualityKey = 'settings.showAudioQuality';
   static const _animatedArtworkEnabledKey = 'settings.animatedArtworkEnabled';
   static const _playerArtworkStyleKey = 'settings.playerArtworkStyle';
   static const _appleAnimatedArtworkEnabledKey =
@@ -236,6 +270,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   Future<void> _localMusicFiltersWriteTail = Future<void>.value();
   Future<void> _crossfadeWriteTail = Future<void>.value();
   Future<void> _skipSilenceWriteTail = Future<void>.value();
+  Future<void> _appBackgroundWriteTail = Future<void>.value();
 
   @override
   Future<SettingsState> build() async {
@@ -251,7 +286,48 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     final surfaceBackgroundMode = SurfaceBackgroundMode.fromCode(
       prefs.getString(_surfaceBackgroundModeKey),
     );
+    final appBackgroundService = ref.read(appBackgroundImageServiceProvider);
+    var appBackgroundFileName = prefs.getString(_appBackgroundFileNameKey);
+    var appBackgroundPath = await appBackgroundService.resolve(
+      appBackgroundFileName,
+    );
+    if (appBackgroundFileName != null && appBackgroundPath == null) {
+      await prefs.remove(_appBackgroundFileNameKey);
+      appBackgroundFileName = null;
+    }
+    // Android can reclaim the activity while the system photo picker is open.
+    // Recover that choice without ever discarding a previously selected photo
+    // unless the optimized copy and preference write both succeed.
+    if (_platform == AppPlatformType.android && Platform.isAndroid) {
+      try {
+        final lost = await ImagePicker().retrieveLostData();
+        final files = lost.files;
+        if (files != null && files.isNotEmpty) {
+          final recoveredName = await appBackgroundService.saveFile(
+            File(files.first.path),
+          );
+          if (await prefs.setString(_appBackgroundFileNameKey, recoveredName)) {
+            final previousName = appBackgroundFileName;
+            appBackgroundFileName = recoveredName;
+            appBackgroundPath = await appBackgroundService.resolve(
+              recoveredName,
+            );
+            try {
+              await appBackgroundService.delete(previousName);
+            } catch (error) {
+              debugPrint('Could not remove old app background: $error');
+            }
+          } else {
+            await appBackgroundService.delete(recoveredName);
+          }
+        }
+      } catch (error) {
+        debugPrint('Could not recover selected app background: $error');
+      }
+    }
     final playerStyle = PlayerStyle.fromCode(prefs.getString(_playerStyleKey));
+    final playerFont = PlayerFont.fromCode(prefs.getString(_playerFontKey));
+    final showAudioQuality = prefs.getBool(_showAudioQualityKey) ?? false;
     final animatedArtworkEnabled =
         prefs.getBool(_animatedArtworkEnabledKey) ??
         defaultAnimatedArtworkEnabled;
@@ -459,7 +535,13 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       themeMode: themeMode,
       accent: accent,
       surfaceBackgroundMode: surfaceBackgroundMode,
+      appBackgroundFileName: appBackgroundPath == null
+          ? null
+          : appBackgroundFileName,
+      appBackgroundPath: appBackgroundPath,
       playerStyle: playerStyle,
+      playerFont: playerFont,
+      showAudioQuality: showAudioQuality,
       animatedArtworkEnabled: animatedArtworkEnabled,
       playerArtworkStyle: playerArtworkStyle,
       appleAnimatedArtworkEnabled: appleAnimatedArtworkEnabled,
@@ -695,11 +777,93 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     state = AsyncData(current.copyWith(surfaceBackgroundMode: mode));
   }
 
+  Future<void> setAppBackgroundPhoto(File file) =>
+      _queueAppBackgroundWrite(() => _setAppBackgroundPhoto(file));
+
+  Future<void> _setAppBackgroundPhoto(File file) async {
+    final current = state.asData?.value ?? await future;
+    final service = ref.read(appBackgroundImageServiceProvider);
+    final nextFileName = await service.saveFile(file);
+    final nextPath = await service.resolve(nextFileName);
+    if (nextPath == null) {
+      await service.delete(nextFileName);
+      throw StateError('No se pudo guardar el fondo de la app.');
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!await prefs.setString(_appBackgroundFileNameKey, nextFileName)) {
+        throw StateError('No se pudo guardar el fondo de la app.');
+      }
+    } catch (_) {
+      await service.delete(nextFileName);
+      rethrow;
+    }
+    state = AsyncData(
+      current.copyWith(
+        appBackgroundFileName: nextFileName,
+        appBackgroundPath: nextPath,
+      ),
+    );
+    if (current.appBackgroundFileName != null) {
+      try {
+        await service.delete(current.appBackgroundFileName);
+      } catch (error) {
+        debugPrint('Could not remove old app background: $error');
+      }
+    }
+  }
+
+  Future<void> clearAppBackgroundPhoto() =>
+      _queueAppBackgroundWrite(_clearAppBackgroundPhoto);
+
+  Future<void> _clearAppBackgroundPhoto() async {
+    final current = state.asData?.value ?? await future;
+    if (current.appBackgroundFileName == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.remove(_appBackgroundFileNameKey)) {
+      throw StateError('No se pudo quitar el fondo de la app.');
+    }
+    state = AsyncData(
+      current.copyWith(appBackgroundFileName: null, appBackgroundPath: null),
+    );
+    try {
+      await ref
+          .read(appBackgroundImageServiceProvider)
+          .delete(current.appBackgroundFileName);
+    } catch (error) {
+      debugPrint('Could not remove old app background: $error');
+    }
+  }
+
+  Future<void> _queueAppBackgroundWrite(Future<void> Function() operation) {
+    final write = _appBackgroundWriteTail
+        .catchError((_) {})
+        .then((_) => operation());
+    _appBackgroundWriteTail = write.catchError((_) {});
+    return write;
+  }
+
   Future<void> setPlayerStyle(PlayerStyle style) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_playerStyleKey, style.code);
     final current = await future;
     state = AsyncData(current.copyWith(playerStyle: style));
+  }
+
+  Future<void> setPlayerFont(PlayerFont font) async {
+    final current = state.asData?.value ?? await future;
+    if (current.playerFont == font) return;
+    state = AsyncData(current.copyWith(playerFont: font));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_playerFontKey, font.code);
+  }
+
+  Future<void> setShowAudioQuality(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.showAudioQuality == enabled) return;
+    state = AsyncData(current.copyWith(showAudioQuality: enabled));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_showAudioQualityKey, enabled);
   }
 
   Future<void> setAnimatedArtworkEnabled(bool enabled) async {

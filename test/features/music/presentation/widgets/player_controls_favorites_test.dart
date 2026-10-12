@@ -83,7 +83,7 @@ void main() {
             of: artwork,
             matching: find.byKey(const ValueKey('animated-artwork-particles')),
           ),
-          findsOneWidget,
+          findsNothing,
         );
 
         await tester.pumpWidget(
@@ -128,7 +128,7 @@ void main() {
 
         await tester.pumpWidget(
           _playerHarness(
-            key: ValueKey('${style.name}-reduced-motion-particles'),
+            key: ValueKey('${style.name}-reduced-motion-artwork'),
             platform: TargetPlatform.android,
             snapshot: snapshot.copyWith(status: PlayerStatus.playing),
             localTrack: trackWithArtwork,
@@ -269,7 +269,7 @@ void main() {
             of: hero,
             matching: find.byKey(const ValueKey('animated-artwork-particles')),
           ),
-          findsOneWidget,
+          findsNothing,
         );
         expect(
           find.descendant(
@@ -299,7 +299,7 @@ void main() {
         expect(heroRect.left, closeTo(0, 0.1));
         expect(heroRect.right, closeTo(390, 0.1));
         expect(heroRect.top, lessThan(0));
-        expect(heroRect.bottom, closeTo(555.75, 0.1));
+        expect(heroRect.bottom, closeTo(493.35, 0.1));
         expect(heroRect.bottom, greaterThan(classicArtworkRect.bottom));
         expect(heroRect.top, lessThan(foregroundRect.bottom));
         expect(heroRect.bottom, greaterThan(foregroundRect.top));
@@ -381,7 +381,11 @@ void main() {
         expect(heroRect.left, closeTo(0, 0.1));
         expect(heroRect.right, closeTo(320, 0.1));
         expect(heroRect.top, lessThan(0));
-        expect(heroRect.bottom, closeTo(466.4, 0.1));
+        expect(heroRect.bottom, closeTo(408.4, 0.1));
+        final blurredImageRect = tester.getRect(
+          find.byKey(const ValueKey('player-expanded-artwork-blurred-image')),
+        );
+        expect(blurredImageRect.width, closeTo(blurredImageRect.height, 0.1));
         expect(
           heroRect.bottom,
           greaterThan(tester.getRect(largeArtwork).bottom),
@@ -1528,6 +1532,57 @@ void main() {
     },
   );
 
+  testWidgets('the chosen font reaches all three full player styles', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+
+    for (final style in PlayerStyle.values) {
+      Future<(String?, String?)> render(PlayerFont font) async {
+        await tester.pumpWidget(
+          _playerHarness(
+            key: ValueKey('player-font-${style.name}-${font.code}'),
+            platform: TargetPlatform.android,
+            snapshot: snapshot,
+            localTrack: localTrack,
+            playlists: _TestPlaylistsController(),
+            style: style,
+            playerFont: font,
+            brightness: Brightness.light,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+
+        final title = find.byKey(const ValueKey('player-track-title'));
+        final artist = find.byKey(const ValueKey('player-track-artist'));
+        expect(title, findsOneWidget, reason: '$style title');
+        expect(artist, findsOneWidget, reason: '$style artist');
+        expect(
+          Theme.of(tester.element(title)).brightness,
+          Brightness.dark,
+          reason: '$style player theme',
+        );
+        expect(
+          Theme.of(tester.element(find.byType(Scaffold).first)).brightness,
+          Brightness.light,
+          reason: '$style surrounding app theme',
+        );
+        return (
+          tester.widget<MarqueeText>(title).style?.fontFamily,
+          tester.widget<Text>(artist).style?.fontFamily,
+        );
+      }
+
+      final platformFonts = await render(PlayerFont.current);
+      expect(platformFonts.$1, isNot('Lora'));
+      expect(platformFonts.$2, isNot('Lora'));
+      expect(await render(PlayerFont.lora), ('Lora', 'Lora'));
+      expect(await render(PlayerFont.current), platformFonts);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets('player overflow menus retain the light app theme', (
     tester,
   ) async {
@@ -1690,7 +1745,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    final queueTitle = find.textContaining('Cola de');
+    final queueTitle = find.textContaining('Cola de Reproducción');
     expect(queueTitle, findsOneWidget);
     expect(
       Theme.of(tester.element(queueTitle)).brightness,
@@ -2729,12 +2784,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump();
 
-    expect(find.textContaining('Cola de'), findsNothing);
+    expect(find.textContaining('Cola de Reproducción'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    final queueTitle = find.textContaining('Cola de');
+    final queueTitle = find.textContaining('Cola de Reproducción');
     expect(queueTitle, findsOneWidget);
     expect(find.byTooltip('Cerrar'), findsOneWidget);
     expect(ModalRoute.of(tester.element(queueTitle))?.isCurrent, isTrue);
@@ -2748,10 +2803,156 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 700));
 
-    expect(find.textContaining('Cola de'), findsNothing);
+    expect(find.textContaining('Cola de Reproducción'), findsNothing);
     final appleLayout = find.byKey(const ValueKey('apple-player-layout'));
     expect(appleLayout, findsOneWidget);
     expect(ModalRoute.of(tester.element(appleLayout))?.isCurrent, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playback queue header toggles pause and advances the queue', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+    final controller = _TestPlayerController(
+      snapshot.copyWith(status: PlayerStatus.playing),
+    );
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playerController: controller,
+        style: PlayerStyle.appleMusic,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Cancion de prueba'), findsWidgets);
+    expect(find.text('BStream Music'), findsWidgets);
+    final queueTitle = find.byKey(const ValueKey('queue-title'));
+    final queueDivider = find.byKey(const ValueKey('queue-list-divider'));
+    expect(tester.widget<Text>(queueTitle).textAlign, TextAlign.center);
+    expect(
+      tester.getTopLeft(queueTitle).dy,
+      greaterThan(tester.getBottomRight(queueDivider).dy),
+      reason:
+          'the queue summary belongs below the divider, apart from the current track card',
+    );
+    expect(find.text('Pausar'), findsOneWidget);
+    expect(find.text('Ver en la lista'), findsOneWidget);
+    expect(find.text('Siguiente'), findsOneWidget);
+    expect(find.text('Cola de Reproducción - 0 Canciones'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('queue-playback-toggle')));
+    await tester.pump();
+    expect(controller.togglePlayPauseCalls, 1);
+    expect(find.text('Pausado'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('queue-play-next')));
+    await tester.pump();
+    expect(controller.playNextCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playback queue actions fit a compact mobile width', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(320, 568));
+    final controller = _TestPlayerController(
+      snapshot.copyWith(status: PlayerStatus.playing),
+    );
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playerController: controller,
+        style: PlayerStyle.appleMusic,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Pausar'), findsOneWidget);
+    expect(find.text('Ver en la lista'), findsOneWidget);
+    expect(find.text('Siguiente'), findsOneWidget);
+    for (final key in const [
+      ValueKey('queue-playback-toggle'),
+      ValueKey('queue-view-in-list'),
+      ValueKey('queue-play-next'),
+    ]) {
+      final buttonRect = tester.getRect(find.byKey(key));
+      final label = switch (key.value) {
+        'queue-playback-toggle' => find.text('Pausar'),
+        'queue-view-in-list' => find.text('Ver en la lista'),
+        _ => find.text('Siguiente'),
+      };
+      final labelRect = tester.getRect(label);
+      expect(labelRect.left, greaterThanOrEqualTo(buttonRect.left));
+      expect(labelRect.right, lessThanOrEqualTo(buttonRect.right));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playback queue header scrolls to the current song', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+    final entries = List<PlaybackQueueEntry>.generate(
+      20,
+      (index) => PlaybackQueueEntry(
+        id: 'queue-$index',
+        title: 'Canción $index',
+        artist: 'Artista $index',
+        isRemote: false,
+      ),
+    );
+
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: snapshot.copyWith(status: PlayerStatus.playing),
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playbackQueue: PlaybackQueueState(entries: entries, currentIndex: 16),
+        style: PlayerStyle.appleMusic,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Cola de Reproducción - 20 Canciones'), findsOneWidget);
+    final viewButton = tester.widget<FilledButton>(
+      find.byKey(const ValueKey('queue-view-in-list')),
+    );
+    expect(viewButton.onPressed, isNotNull);
+    await tester.tap(find.byKey(const ValueKey('queue-view-in-list')));
+    for (var frame = 0; frame < 8; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    final currentSong = find.byKey(
+      const ValueKey('playback-queue-16-queue-16'),
+    );
+    expect(currentSong, findsOneWidget);
+    final listRect = tester.getRect(find.byType(ReorderableListView));
+    final songRect = tester.getRect(currentSong);
+    expect(songRect.top, greaterThanOrEqualTo(listRect.top));
+    expect(songRect.bottom, lessThanOrEqualTo(listRect.bottom));
     expect(tester.takeException(), isNull);
   });
 
@@ -4561,10 +4762,12 @@ Widget _playerHarness({
   bool disableAnimations = false,
   ValueListenable<bool>? trackTransitionsEnabledListenable,
   PlayerStyle style = defaultPlayerStyle,
+  PlayerFont? playerFont,
   PlayerArtworkStyle artworkStyle = defaultPlayerArtworkStyle,
   bool animatedArtworkEnabled = false,
   SurfaceBackgroundMode backgroundMode = SurfaceBackgroundMode.accent,
   Brightness brightness = Brightness.dark,
+  PlaybackQueueState? playbackQueue,
 }) {
   const accent = AppAccent.blue;
   final scheme = ColorScheme.fromSeed(
@@ -4584,6 +4787,14 @@ Widget _playerHarness({
             ),
       ),
       playlistsControllerProvider.overrideWith(() => playlists),
+      if (playerFont != null)
+        settingsControllerProvider.overrideWith(
+          () => _PlayerFontSettingsController(playerFont),
+        ),
+      if (playbackQueue != null)
+        playbackQueueProvider.overrideWith(
+          () => _TestPlaybackQueueNotifier(playbackQueue),
+        ),
       libraryTracksProvider.overrideWith((ref) async => [localTrack]),
       trackShareServiceProvider.overrideWithValue(
         shareService ?? _TestTrackShareService(),
@@ -4634,6 +4845,28 @@ Widget _playerHarness({
       ),
     ),
   );
+}
+
+class _PlayerFontSettingsController extends SettingsController {
+  _PlayerFontSettingsController(this.font);
+
+  final PlayerFont font;
+
+  @override
+  Future<SettingsState> build() async => SettingsState(
+    downloadDirectory: '/tmp/BStream-Music',
+    language: AppLanguage.spanish,
+    playerFont: font,
+  );
+}
+
+class _TestPlaybackQueueNotifier extends PlaybackQueueNotifier {
+  _TestPlaybackQueueNotifier(this.initial);
+
+  final PlaybackQueueState initial;
+
+  @override
+  PlaybackQueueState build() => initial;
 }
 
 class _RecordingDownloadController extends DownloadController {
@@ -4847,6 +5080,8 @@ class _TestPlayerController extends PlayerController {
   Duration? lastSeek;
   int volumeCalls = 0;
   double? lastVolume;
+  int togglePlayPauseCalls = 0;
+  int playNextCalls = 0;
 
   @override
   Future<PlayerSnapshot> build() async => snapshot;
@@ -4865,6 +5100,24 @@ class _TestPlayerController extends PlayerController {
   Future<void> setVolume(double volume) async {
     volumeCalls++;
     lastVolume = volume;
+  }
+
+  @override
+  Future<void> togglePlayPause() async {
+    togglePlayPauseCalls++;
+    final current = state.value ?? snapshot;
+    emit(
+      current.copyWith(
+        status: current.status == PlayerStatus.playing
+            ? PlayerStatus.paused
+            : PlayerStatus.playing,
+      ),
+    );
+  }
+
+  @override
+  Future<void> playNext({bool automatic = false}) async {
+    playNextCalls++;
   }
 
   @override

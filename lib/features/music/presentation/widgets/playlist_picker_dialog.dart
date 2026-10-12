@@ -78,6 +78,10 @@ class PlaylistPickerDialog extends StatelessWidget {
     required this.playlists,
     required this.tracks,
     this.catalogPlaylists = const <CatalogPlaylist>[],
+    this.showCreateButton = false,
+    this.onCreatePlaylist,
+    this.createTooltip,
+    this.emptyMessage,
     super.key,
   });
 
@@ -85,6 +89,10 @@ class PlaylistPickerDialog extends StatelessWidget {
   final List<Playlist> playlists;
   final List<LocalTrack> tracks;
   final List<CatalogPlaylist> catalogPlaylists;
+  final bool showCreateButton;
+  final VoidCallback? onCreatePlaylist;
+  final String? createTooltip;
+  final String? emptyMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -97,9 +105,23 @@ class PlaylistPickerDialog extends StatelessWidget {
         .toList(growable: false);
 
     return AppAlertDialog(
-      title: Text(
-        title,
-        style: TextStyle(color: AppColors.contentHeadingFor(context)),
+      key: const ValueKey('playlist-picker-dialog'),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(color: AppColors.contentHeadingFor(context)),
+            ),
+          ),
+          if (showCreateButton)
+            IconButton(
+              key: const ValueKey('playlist-picker-create'),
+              tooltip: createTooltip,
+              icon: const Icon(Icons.add_rounded),
+              onPressed: onCreatePlaylist,
+            ),
+        ],
       ),
       contentPadding: const EdgeInsets.fromLTRB(4, 8, 4, 16),
       content: ConstrainedBox(
@@ -112,28 +134,34 @@ class PlaylistPickerDialog extends StatelessWidget {
           // provide intrinsic dimensions, so give the lazy list a finite width
           // while still allowing the dialog constraints to shrink it on mobile.
           width: 420,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: selectablePlaylists.length,
-            itemBuilder: (context, index) {
-              final playlist = selectablePlaylists[index];
-              return SimpleDialogOption(
-                onPressed: () => Navigator.of(context).pop(playlist.id),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 8,
+          child: selectablePlaylists.isEmpty && emptyMessage != null
+              ? Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(emptyMessage!),
+                )
+              : ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: selectablePlaylists.length,
+                  itemBuilder: (context, index) {
+                    final playlist = selectablePlaylists[index];
+                    return SimpleDialogOption(
+                      key: ValueKey('playlist-picker-option-${playlist.id}'),
+                      onPressed: () => Navigator.of(context).pop(playlist.id),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 8,
+                      ),
+                      child: _PlaylistOption(
+                        playlist: playlist,
+                        thumbnailSources: _playlistThumbnailSources(
+                          playlist,
+                          tracksById,
+                          catalog: catalogsById[playlist.id],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-                child: _PlaylistOption(
-                  playlist: playlist,
-                  thumbnailSources: _playlistThumbnailSources(
-                    playlist,
-                    tracksById,
-                    catalog: catalogsById[playlist.id],
-                  ),
-                ),
-              );
-            },
-          ),
         ),
       ),
     );

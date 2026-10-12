@@ -2,7 +2,7 @@
 
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, iOS, Windows, Linux, and macOS.
 
-Current version: **1.2.8+128**.
+Current version: **1.2.9+129**.
 
 > The repository does not store media content. YouTube search, playback, and
 > downloads use BStream's self-contained Dart InnerTube pipeline. Supported
@@ -11,24 +11,14 @@ Current version: **1.2.8+128**.
 
 <img width="1221" height="840" alt="{3AC80665-A6EC-436D-9C87-A1413432F0E3}" src="https://github.com/user-attachments/assets/8c918bae-6f84-46fa-8923-24ea68b6f8a4" />
 
-## What's new in 1.2.8
+## What's new in 1.2.9
 
-- Added the Classic Vinyl player with a rotating record and animated tonearm,
-  and completed responsive landscape layouts across the player styles.
-- Added conservative Android silence skipping for streaming and downloaded
-  songs. It protects musical pauses and remains coordinated with crossfade.
-- Added mobile mini-player gestures: swipe left for the next song or right for
-  the previous one, with subtle resisted motion and an accidental-swipe guard.
-- Improved synchronized lyrics with smoother line and scroll transitions plus
-  a filling wave indicator during instrumental passages.
-- The full player and Lyrics now retain their dark playback presentation even
-  when the rest of the app uses the Light theme.
-- Refined Expanded artwork so more of the lower cover remains visible, while
-  animated covers move a little more clearly without changing their particles.
-- Improved animation and rendering paths throughout the app for steadier
-  motion, targeting 60 Hz or the display refresh rate when hardware permits.
-- Hardened TikTok LIVE connection bootstrap, fallbacks, and bounded retries so
-  active rooms recover more reliably from transient upstream changes.
+- Added a home-screen player widget.
+- Personalize the app background with an image from your gallery.
+- Change the font throughout the app.
+- Optimized animated artwork performance.
+- Select multiple songs in albums, mixes, and search results to add them to a
+  playlist or download them.
 
 ## Main features
 
@@ -430,6 +420,17 @@ audio background mode for lock-screen and Now Playing controls. Remote search,
 playback, downloads, embedded YouTube Music account login, TikTok LIVE, backup
 export, and CSV export are adapted to iOS. The system document picker handles
 exports outside BStream's sandbox.
+
+The Now Playing home-screen widget is available on iOS 14 or newer (small and
+medium sizes). Its artwork and metadata are copied into the shared App Group
+`group.com.bstream.bstreamMusic`; the widget never starts an audio engine or
+downloads music. Its controls open BStream to execute playback actions. For
+device signing, register that App Group for **both** the Runner and
+`com.bstream.bstreamMusic.NowPlayingWidget` extension and sign both targets
+with profiles that include the entitlement. An external signing tool that
+strips the group entitlement or does not sign the extension cannot provide a
+working widget. The Android home-screen widget uses the active media session
+for its transport controls.
 
 With the user's Media Library permission, the Local view reads songs through
 `MPMediaLibrary`. Only media that is downloaded to the device, exposes a

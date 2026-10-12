@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
+import 'package:bstream_music/features/music/domain/entities/download_options.dart';
+import 'package:bstream_music/features/music/domain/entities/download_result.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
@@ -16,6 +18,81 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'playlist overflow queues Download all through the download controller',
+    (tester) async {
+      final now = DateTime.utc(2026);
+      final playlist = Playlist(
+        id: 'bulk-menu',
+        name: 'Playlist completa',
+        trackIds: const [],
+        createdAt: now,
+        updatedAt: now,
+      );
+      final downloads = _RecordingPlaylistDownloads();
+      await tester.pumpWidget(
+        _playlistHarness(
+          playlist: playlist,
+          catalog: CatalogPlaylist(
+            playlist: playlist,
+            entries: [
+              _entry(
+                id: 'remote',
+                playlistId: playlist.id,
+                videoId: 'abcdefghijk',
+                title: 'Pendiente',
+                artist: 'Artist',
+                position: 0,
+                now: now,
+              ),
+            ],
+          ),
+          tracks: [],
+          audioProbe: (_) async => false,
+          downloads: downloads,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('library-detail-header')),
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('playlist-download-all-bulk-menu')),
+      );
+      await tester.pumpAndSettle();
+      expect(downloads.playlistIds, ['bulk-menu']);
+      expect(
+        find.text('Canción añadida a la cola de descargas.'),
+        findsOneWidget,
+      );
+      final menu = find.descendant(
+        of: find.byKey(const ValueKey('library-detail-header')),
+        matching: find.byIcon(Icons.more_vert_rounded),
+      );
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('playlist-download-all-bulk-menu')),
+        findsNothing,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('playlist-cancel-downloads-bulk-menu')),
+      );
+      await tester.pumpAndSettle();
+      expect(downloads.cancelledPlaylists, ['bulk-menu']);
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('playlist-download-all-bulk-menu')),
+        findsOneWidget,
+      );
+    },
+  );
+
   test(
     'audio availability ignores artwork and rejects empty audio files',
     () async {
@@ -212,7 +289,7 @@ void main() {
             )
             .first,
       );
-      expect((remoteSurface.decoration! as BoxDecoration).color?.a, 1);
+      expect((remoteSurface.decoration! as BoxDecoration).color?.a, 0.68);
 
       expect(
         find.byKey(const ValueKey('library-catalog-cloud-remote')),
@@ -315,11 +392,17 @@ Widget _playlistHarness({
   required CatalogPlaylist catalog,
   required List<LocalTrack> tracks,
   required LocalAudioUsabilityProbe audioProbe,
+  DownloadController? downloads,
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
 }) {
   final navigation = LibraryNavigationController()..openPlaylist(playlist.id);
   return ProviderScope(
     overrides: [
+      if (downloads != null)
+        downloadControllerProvider.overrideWith(() => downloads),
+      youtubeMusicShareablePlaylistBindingDetailsProvider.overrideWith(
+        (ref) async => const {},
+      ),
       playlistsControllerProvider.overrideWith(
         () => _FixedPlaylistsController(<Playlist>[playlist]),
       ),
@@ -351,6 +434,36 @@ Widget _playlistHarness({
 }
 
 void _noop() {}
+
+class _RecordingPlaylistDownloads extends DownloadController {
+  final playlistIds = <String>[];
+  final cancelledPlaylists = <String>[];
+
+  @override
+  Map<String, DownloadTaskState> build() => const {};
+
+  @override
+  Future<int> downloadPlaylist(Playlist playlist) async {
+    playlistIds.add(playlist.id);
+    const url = 'https://youtu.be/abcdefghijk';
+    state = {
+      url: const DownloadTaskState(
+        url: url,
+        taskId: 'queued',
+        mediaType: DownloadMediaType.audio,
+        status: DownloadProgressStatus.queued,
+      ),
+    };
+    return 1;
+  }
+
+  @override
+  Future<int> cancelPlaylistDownloads(Playlist playlist) async {
+    cancelledPlaylists.add(playlist.id);
+    state = const {};
+    return 1;
+  }
+}
 
 class _FixedPlaylistsController extends PlaylistsController {
   _FixedPlaylistsController(this.playlists);

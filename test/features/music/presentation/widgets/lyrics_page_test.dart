@@ -1210,11 +1210,37 @@ void main() {
             .first,
       );
       expect(romanizedStyle.style.fontSize, lessThan(originalFontSize));
+      expect(romanizedStyle.style.fontSize, greaterThanOrEqualTo(14));
+      expect(romanizedStyle.style.fontWeight, FontWeight.w500);
+      expect(romanizedStyle.style.inherit, isFalse);
+      expect(romanizedStyle.style.color, Colors.white);
+      final originalTextStyle = tester
+          .widget<RichText>(
+            find.descendant(
+              of: find.text('First line'),
+              matching: find.byType(RichText),
+            ),
+          )
+          .text
+          .style;
+      final romanizedTextStyle = tester
+          .widget<RichText>(
+            find.descendant(
+              of: find.byKey(const ValueKey('lyrics-line-romanization-0')),
+              matching: find.byType(RichText),
+            ),
+          )
+          .text
+          .style;
+      expect(romanizedTextStyle?.color, originalTextStyle?.color);
       expect(
         tester
-            .getRect(find.byKey(const ValueKey('lyrics-line-romanization-0')))
-            .top,
-        greaterThan(tester.getRect(find.text('First line')).bottom),
+                .getRect(
+                  find.byKey(const ValueKey('lyrics-line-romanization-0')),
+                )
+                .top -
+            tester.getRect(find.text('First line')).bottom,
+        inInclusiveRange(2, 6),
       );
       final semantics = tester.ensureSemantics();
       final semanticsData = tester

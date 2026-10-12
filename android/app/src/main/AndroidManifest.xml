@@ -20,6 +20,16 @@
         <meta-data
             android:name="bstream_music.notification_icon"
             android:resource="@drawable/ic_stat_bstream_music" />
+        <receiver
+            android:name=".BStreamMusicWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/bstream_music_widget" />
+        </receiver>
         <activity
             android:name=".MainActivity"
             android:exported="true"

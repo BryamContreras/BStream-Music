@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_description">BStream Music: canción actual y controles</string>
+    <string name="widget_artwork_description">Portada de la canción</string>
+    <string name="widget_previous">Anterior</string>
+    <string name="widget_play_pause">Reproducir o pausar</string>
+    <string name="widget_next">Siguiente</string>
+    <string name="widget_repeat">Repetir</string>
+    <string name="widget_repeat_all">Repetir cola</string>
+    <string name="widget_repeat_one">Repetir canciÃ³n</string>
+    <string name="widget_favorite">Favoritos</string>
+</resources>

@@ -119,6 +119,45 @@ void main() {
     }
   });
 
+  testWidgets('artist glass app bar restores its optics after scrolling', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final service = _ArtistProfileService()
+      ..profilePopularSongs = _popularSongs;
+    await tester.pumpWidget(
+      _artistProfileApp(
+        service: service,
+        player: _RecordingPlayerController(),
+        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final glassFinder = find.byKey(
+      const ValueKey('surface-detail-liquid-glass'),
+    );
+    bool isMoving() =>
+        tester.widget<LiquidGlassSurface>(glassFinder).backdropMotion;
+    expect(isMoving(), isFalse);
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('artist-profile-scroll'))),
+    );
+    await gesture.moveBy(const Offset(0, -160));
+    await tester.pump();
+    expect(isMoving(), isTrue);
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(isMoving(), isFalse);
+  });
+
   testWidgets(
     'artist identity and artwork gradient render before the profile request finishes',
     (tester) async {

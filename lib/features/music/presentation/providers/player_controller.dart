@@ -4,6 +4,7 @@ enum _LocalPlaybackAttempt { played, unavailable, cancelled }
 
 class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   static const _playlistQueueSourcePrefix = 'playlist:';
+  static const downloadedLibraryQueueSourceId = 'library:downloads';
   static const String liveQueueSourceId = 'tiktok-live';
   static const _remoteCacheTrackIdPrefix =
       PlaybackIdentity.remoteCacheTrackIdPrefix;
@@ -52,6 +53,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   LocalDatabaseShutdownRegistration? _playbackHistoryShutdownRegistration;
   bool _recommendationHistorySuspended = false;
   final RemotePrefetchCoordinator _remotePrefetch = RemotePrefetchCoordinator();
+  final Map<String, RemotePlaybackSource> _preparedRemoteAudioSources = {};
 
   Future<void> _crossfadeConfigurationTail = Future<void>.value();
   Future<void> _skipSilenceConfigurationTail = Future<void>.value();
@@ -241,8 +243,17 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         return;
       }
       final decorated = _decorateSnapshot(snapshot);
-      _observePlaybackHistory(decorated);
-      state = AsyncData(decorated);
+      // A failed source can be replaced automatically. Start that recovery
+      // before publishing the backend failure so a transient aborted load
+      // never flashes as a terminal error while the next source is prepared.
+      final recovering = _maybeRecoverRemoteFailure(
+        decorated,
+        failedCachedRemote: failedCachedRemote,
+      );
+      if (!recovering) {
+        _observePlaybackHistory(decorated);
+        state = AsyncData(decorated);
+      }
       if (queueIndexChanged && decorated.isRemote) {
         _remotePrefetch.invalidate();
         unawaited(_warmUpcomingRemoteTracks(_playRequestId));
@@ -253,10 +264,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       if (queueIndexChanged) {
         unawaited(_maybeExtendRecommendationQueue());
       }
-      if (!_maybeRecoverRemoteFailure(
-        decorated,
-        failedCachedRemote: failedCachedRemote,
-      )) {
+      if (!recovering) {
         _maybeHandleCompletion(decorated);
       }
     });
@@ -890,6 +898,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
               );
             }
             _clearPendingRemoteSnapshot(requestId);
+            _rememberPreparedAudioSource(cachedSource);
             unawaited(_warmUpcomingRemoteTracks(requestId));
             return;
           } catch (_) {
@@ -939,6 +948,15 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
             );
           }
           _clearPendingRemoteSnapshot(requestId);
+          _rememberPreparedAudioSource(
+            RemotePlaybackSource(
+              track: track,
+              uri: File(cachedTrack.filePath).uri,
+              queueEntryId:
+                  pendingSnapshot.queueEntryId ??
+                  _remoteQueueEntryId(_queueIndex),
+            ),
+          );
           unawaited(_warmUpcomingRemoteTracks(requestId));
           return;
         } catch (_) {
@@ -1295,9 +1313,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         ? '$provider falló. Probando otro cliente InnerTube...'
         : '$provider falló: $detail. Probando otro cliente InnerTube...';
     _remoteRetry.setNotice(requestId, message);
-    final pending = _remoteLoadingSnapshot(
-      track,
-    ).copyWith(errorMessage: message);
+    // This is a recovery step, not a failure of the selected song. Keep the
+    // technical cause in diagnostics and show the normal loading state.
+    final pending = _remoteLoadingSnapshot(track);
     _pendingRemoteSnapshot = pending;
     state = AsyncData(pending);
   }
@@ -1691,9 +1709,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (!_isCurrentRemoteSelection(track, requestId, expectedQueueEntryId)) {
       return;
     }
-    final pendingSnapshot = _remoteLoadingSnapshot(
-      track,
-    ).copyWith(errorMessage: _fallbackNoticeFor(requestId));
+    final pendingSnapshot = _remoteLoadingSnapshot(track);
     _pendingRemoteSnapshot = pendingSnapshot;
     state = AsyncData(pendingSnapshot);
     try {
@@ -1854,6 +1870,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       onCancelled: () =>
           _clearCancelledRemoteRetryNotice(requestId, expectedQueueEntryId),
       onTerminal: (error, stackTrace) {
+        if (!_isCurrentRemoteSelection(
+          track,
+          requestId,
+          expectedQueueEntryId,
+        )) {
+          return;
+        }
         final failedSnapshot = _remoteTerminalSnapshot(
           track,
           expectedQueueEntryId: expectedQueueEntryId,
@@ -1979,9 +2002,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         'Conexión inestable. Reintentando $attempt/'
         '$total…';
     _remoteRetry.setNotice(requestId, message);
-    final pending = _remoteLoadingSnapshot(
-      track,
-    ).copyWith(errorMessage: message);
+    final pending = _remoteLoadingSnapshot(track);
     _pendingRemoteSnapshot = pending;
     state = AsyncData(pending);
   }
@@ -1992,8 +2013,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   ) {
     final pending = _pendingRemoteSnapshot;
     if (pending?.queueEntryId != expectedQueueEntryId ||
-        (!_isCurrentPlayRequest(requestId) &&
-            !_remoteRetry.noticeBelongsTo(requestId))) {
+        !_isCurrentPlayRequest(requestId)) {
       return;
     }
     _pendingRemoteSnapshot = null;
@@ -2908,6 +2928,42 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     });
   }
 
+  Future<bool> toggleCurrentFavorite() async {
+    final snapshot =
+        state.value ?? ref.read(playerServiceProvider).currentSnapshot;
+    if (snapshot.isExternal) return false;
+
+    final playlists = ref.read(playlistsControllerProvider.notifier);
+    if (_queueIndex >= 0 && _queueIndex < _queue.length) {
+      final current = _queue[_queueIndex];
+      final local = current.local;
+      if (local != null && !_activePlaybackIsRemote) {
+        return playlists.toggleFavorite(local.id);
+      }
+      final remote = current.remote;
+      if (remote != null) return playlists.toggleFavoriteRemote(remote);
+    }
+
+    final trackId = snapshot.trackId?.trim();
+    if (trackId == null || trackId.isEmpty) return false;
+    if (!snapshot.isRemote) return playlists.toggleFavorite(trackId);
+
+    final sourceUrl = snapshot.sourceUrl?.trim();
+    if (sourceUrl == null || sourceUrl.isEmpty) return false;
+    final remote =
+        currentRemoteTrackFor(sourceUrl) ??
+        TrackInfo(
+          id: trackId,
+          title: snapshot.title ?? 'Untitled',
+          artist: snapshot.artist ?? 'Unknown',
+          url: sourceUrl,
+          thumbnailUrl: snapshot.thumbnailUrl,
+          duration: snapshot.duration,
+          album: snapshot.album,
+        );
+    return playlists.toggleFavoriteRemote(remote);
+  }
+
   void setRepeatMode(PlaybackRepeatMode mode) {
     if (_repeatMode == mode) {
       return;
@@ -2949,6 +3005,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (plan == null) {
       return;
     }
+    final retainedEntryIds = <String>{
+      plan.currentQueueEntryId,
+      for (final entry in plan.upcoming) entry.queueEntryId,
+    };
+    _preparedRemoteAudioSources.removeWhere(
+      (entryId, _) => !retainedEntryIds.contains(entryId),
+    );
     await _remotePrefetch.prepare(
       plan: plan,
       cacheEnabled: cache.isEnabled,
@@ -2961,6 +3024,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
           _resolveRemoteTrack(track, shouldContinue: shouldContinue),
       networkSource: (track, queueIndex) =>
           _networkRemotePlaybackSource(track, queueIndex: queueIndex),
+      onSourcePrepared: _rememberPreparedAudioSource,
       service: service,
       prepareCrossfade: service is CrossfadeCapablePlayer
           ? _scheduleCrossfadePreparation
@@ -3232,20 +3296,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       if (snapshot.status == PlayerStatus.playing ||
           snapshot.status == PlayerStatus.paused) {
         _clearRemoteFallbackNotice(_playRequestId);
-        snapshot = snapshot.copyWith(errorMessage: null);
-      } else if (snapshot.status == PlayerStatus.failed) {
-        if (_isFallbackInnerTubeStream(remote)) {
-          // The fallback itself failed. Its definitive player error must
-          // replace the transient primary-resolver notice and remain visible.
-          _clearRemoteFallbackNotice(_playRequestId);
-        } else {
-          // Some backends publish the rejected primary source through both the
-          // load Future and an error stream. Keep the fallback notice until the
-          // queue has actually switched to an alternate InnerTube client.
-          snapshot = snapshot.copyWith(errorMessage: fallbackNotice);
-        }
-      } else {
-        snapshot = snapshot.copyWith(errorMessage: fallbackNotice);
+      } else if (snapshot.status == PlayerStatus.failed &&
+          _isFallbackInnerTubeStream(remote)) {
+        // The definitive fallback failure can now be reported by the retry
+        // path; the previous source's recovery notice is no longer relevant.
+        _clearRemoteFallbackNotice(_playRequestId);
       }
     }
 
@@ -3299,6 +3354,30 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   TrackInfo? currentRemoteTrackFor(String sourceUrl) {
     final current = _playingRemoteTrack;
     return current != null && current.url == sourceUrl ? current : null;
+  }
+
+  LocalTrack? currentLocalTrackFor(String? trackId) {
+    if (_activePlaybackIsRemote ||
+        _queueIndex < 0 ||
+        _queueIndex >= _queue.length) {
+      return null;
+    }
+    final current = _queue[_queueIndex].local;
+    return current?.id == trackId ? current : null;
+  }
+
+  /// The native queue can start a prefetched song without resolving it again.
+  /// Keep the format of that prepared source available to the player UI.
+  RemotePlaybackSource? preparedAudioSourceFor(String sourceUrl) {
+    final entryId = _currentRemoteQueueEntryId;
+    if (entryId == null) return null;
+    final source = _preparedRemoteAudioSources[entryId];
+    return source?.track.url == sourceUrl ? source : null;
+  }
+
+  void _rememberPreparedAudioSource(RemotePlaybackSource source) {
+    if (_disposed) return;
+    _preparedRemoteAudioSources[source.queueEntryId] = source;
   }
 
   /// Refreshes the metadata of the active remote item without reopening its

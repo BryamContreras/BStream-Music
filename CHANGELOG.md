@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.9+129 — 2026-10-12
+
+### Added
+
+- Added a home-screen player widget.
+- Added custom app backgrounds using images selected from the gallery.
+- Added app-wide font customization.
+- Added multi-selection in albums, mixes, and search results, with actions to
+  add the selected songs to a playlist or download them.
+
+### Changed
+
+- Optimized animated artwork performance.
+
 ## 1.2.8+128 — 2026-09-17
 
 ### Added

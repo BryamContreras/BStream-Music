@@ -257,6 +257,44 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     _requestYouTubeMusicSync();
   }
 
+  Future<void> reorderCatalogPlaylist(
+    String playlistId,
+    List<String> orderedEntryIds,
+  ) async {
+    final database = ref.read(databaseServiceProvider);
+    final catalog = await database.getCatalogPlaylist(playlistId);
+    if (catalog == null) {
+      throw StateError('La playlist ya no está disponible.');
+    }
+    final activeEntries = catalog.entries
+        .where((entry) => !entry.isDeleted)
+        .toList(growable: false);
+    final entriesById = <String, PlaylistEntry>{
+      for (final entry in activeEntries) entry.id: entry,
+    };
+    if (orderedEntryIds.length != activeEntries.length ||
+        orderedEntryIds.toSet().length != orderedEntryIds.length ||
+        !orderedEntryIds.toSet().containsAll(entriesById.keys)) {
+      throw ArgumentError.value(
+        orderedEntryIds,
+        'orderedEntryIds',
+        'Must contain every active playlist entry exactly once.',
+      );
+    }
+
+    await database.replaceCatalogEntries(
+      playlistId: playlistId,
+      entries: <PlaylistEntry>[
+        for (final entryId in orderedEntryIds) entriesById[entryId]!,
+      ],
+      expectedRevision: catalog.playlist.localRevision,
+      now: DateTime.now(),
+    );
+    await _reloadCatalogState();
+    await _syncActivePlaybackQueueById(playlistId);
+    _requestYouTubeMusicSync();
+  }
+
   Future<void> renamePlaylist(String playlistId, String name) async {
     if (playlistId == Playlist.favoritesId) {
       return;

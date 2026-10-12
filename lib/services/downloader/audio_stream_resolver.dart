@@ -94,6 +94,7 @@ class AudioStreamResolution {
     this.videoId,
     this.formatId,
     this.codec,
+    this.bitrate,
     this.clientProfileKey,
     this.expiresAt,
   });
@@ -122,6 +123,9 @@ class AudioStreamResolution {
   /// Codec reported by the extractor (for example `mp4a.40.2` or `opus`).
   final String? codec;
 
+  /// Bitrate in bits per second of the selected audio format, if reported.
+  final int? bitrate;
+
   /// Exact InnerTube client profile that produced the signed media URL.
   final String? clientProfileKey;
 
@@ -144,6 +148,7 @@ class AudioStreamResolution {
       videoId: videoId,
       formatId: formatId,
       codec: codec,
+      bitrate: bitrate,
       clientProfileKey: clientProfileKey,
       expiresAt: expiresAt,
     );
@@ -164,6 +169,7 @@ class AudioStreamResolution {
       videoId: track.id.isEmpty ? null : track.id,
       formatId: track.streamFormatId,
       codec: track.streamCodec,
+      bitrate: track.streamBitrate,
       clientProfileKey: track.streamClientProfileKey,
     );
   }

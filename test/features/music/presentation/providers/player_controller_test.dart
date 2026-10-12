@@ -1930,7 +1930,7 @@ void main() {
           .read(playerControllerProvider)
           .requireValue;
       expect(retryingBeforeOriginalCompletes.status, PlayerStatus.loading);
-      expect(retryingBeforeOriginalCompletes.errorMessage, contains('1/2'));
+      expect(retryingBeforeOriginalCompletes.errorMessage, isNull);
 
       player.completeOriginalSuccessfully();
       await play;
@@ -1942,8 +1942,8 @@ void main() {
       expect(retryingAfterOriginalCompletes.status, PlayerStatus.loading);
       expect(
         retryingAfterOriginalCompletes.errorMessage,
-        retryingBeforeOriginalCompletes.errorMessage,
-        reason: 'the stale successful Future must not clear the retry notice',
+        isNull,
+        reason: 'the stale successful Future must not publish an error',
       );
       expect(container.read(playbackQueueProvider).currentIndex, 0);
       expect(player.attemptedRemote, hasLength(1));
@@ -2011,7 +2011,7 @@ void main() {
           .read(playerControllerProvider)
           .requireValue;
       expect(noticeBeforeRetry.status, PlayerStatus.loading);
-      expect(noticeBeforeRetry.errorMessage, contains('1/2'));
+      expect(noticeBeforeRetry.errorMessage, isNull);
 
       retryDelay.releaseNext();
       await player.retryAttemptStarted;
@@ -2023,8 +2023,8 @@ void main() {
       expect(whileRetryFutureIsPending.status, PlayerStatus.loading);
       expect(
         whileRetryFutureIsPending.errorMessage,
-        noticeBeforeRetry.errorMessage,
-        reason: 'the duplicate backend failure must preserve the retry notice',
+        isNull,
+        reason: 'the duplicate backend failure must remain transient',
       );
       expect(container.read(playbackQueueProvider).currentIndex, 0);
       expect(player.attemptedRemote, hasLength(2));
@@ -2151,6 +2151,16 @@ void main() {
         'https://media.example/first.m4a',
       ]);
 
+      final observed = <PlayerSnapshot>[];
+      final subscription = container.listen<AsyncValue<PlayerSnapshot>>(
+        playerControllerProvider,
+        (_, next) {
+          final snapshot = next.value;
+          if (snapshot != null) observed.add(snapshot);
+        },
+      );
+      addTearDown(subscription.close);
+
       player.emit(
         const PlayerSnapshot(
           status: PlayerStatus.failed,
@@ -2167,6 +2177,15 @@ void main() {
       expect(player.playedRemote.last.streamUrl, contains('refreshed.m4a'));
       expect(player.lastSeekPosition, const Duration(minutes: 5, seconds: 12));
       expect(container.read(playbackQueueProvider).currentIndex, 0);
+      expect(
+        observed.where(
+          (snapshot) =>
+              snapshot.status == PlayerStatus.failed ||
+              snapshot.errorMessage != null,
+        ),
+        isEmpty,
+        reason: 'The recoverable backend failure must not flash in the UI.',
+      );
 
       player.emit(
         const PlayerSnapshot(
@@ -2291,7 +2310,8 @@ void main() {
               ) ==
               true,
         ),
-        isTrue,
+        isFalse,
+        reason: 'A recovered source failure is not a playback error.',
       );
       final playing = container.read(playerControllerProvider).requireValue;
       expect(playing.status, PlayerStatus.playing);
@@ -2355,59 +2375,62 @@ void main() {
     },
   );
 
-  testWidgets(
-    'the mini player paints the primary error until fallback starts',
-    (tester) async {
-      final fallbackGate = Completer<void>();
-      final player = _RejectPrimaryInnerTubePlayerService();
-      final resolver = _ModeAwareFallbackAudioResolver(
-        fallbackGate: fallbackGate.future,
-      );
-      final container = _container(player, audioResolver: resolver);
-      addTearDown(container.dispose);
-      const track = TrackInfo(
-        id: 'visible-fallback-error',
-        title: 'Visible fallback error',
-        artist: 'Artist',
-        url: 'https://www.youtube.com/watch?v=visible-error',
-      );
+  testWidgets('the mini player keeps the loading state while fallback starts', (
+    tester,
+  ) async {
+    final fallbackGate = Completer<void>();
+    final player = _RejectPrimaryInnerTubePlayerService();
+    final resolver = _ModeAwareFallbackAudioResolver(
+      fallbackGate: fallbackGate.future,
+    );
+    final container = _container(player, audioResolver: resolver);
+    addTearDown(container.dispose);
+    const track = TrackInfo(
+      id: 'visible-fallback-error',
+      title: 'Visible fallback error',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=visible-error',
+    );
 
-      await container.read(playerControllerProvider.future);
-      await tester.pumpWidget(
-        UncontrolledProviderScope(
-          container: container,
-          child: const MaterialApp(
-            home: Scaffold(
-              body: Align(
-                alignment: Alignment.bottomCenter,
-                child: SizedBox(width: 720, child: MiniPlayer()),
-              ),
+    await container.read(playerControllerProvider.future);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(width: 720, child: MiniPlayer()),
             ),
           ),
         ),
-      );
+      ),
+    );
 
-      final playFuture = container
-          .read(playerControllerProvider.notifier)
-          .playRemote(track);
-      await tester.pump();
+    final playFuture = container
+        .read(playerControllerProvider.notifier)
+        .playRemote(track);
+    await tester.pump();
 
-      expect(find.textContaining('InnerTube principal falló'), findsOneWidget);
+    expect(find.textContaining('InnerTube principal falló'), findsNothing);
+    expect(
+      container.read(playerControllerProvider).requireValue.status,
+      PlayerStatus.loading,
+    );
 
-      fallbackGate.complete();
-      await playFuture;
-      await tester.pumpAndSettle();
+    fallbackGate.complete();
+    await playFuture;
+    await tester.pumpAndSettle();
 
-      expect(find.textContaining('InnerTube principal falló'), findsNothing);
-      expect(
-        container.read(playerControllerProvider).requireValue.status,
-        PlayerStatus.playing,
-      );
-      await container
-          .read(playerControllerProvider.notifier)
-          .resetRecommendationHistoryTracking();
-    },
-  );
+    expect(find.textContaining('InnerTube principal falló'), findsNothing);
+    expect(
+      container.read(playerControllerProvider).requireValue.status,
+      PlayerStatus.playing,
+    );
+    await container
+        .read(playerControllerProvider.notifier)
+        .resetRecommendationHistoryTracking();
+  });
 
   testWidgets('the full player shows three lines of the final fallback error', (
     tester,
@@ -3110,6 +3133,56 @@ void main() {
       expect(player.nativeRemoteStarts, 1);
       expect(player.stopCalls, 1);
       expect(player.playedRemote.map((track) => track.id), ['first']);
+    },
+  );
+
+  test(
+    'native queue keeps the resolved format when the next song starts',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
+      final tracks = [
+        _unresolvedRemoteTrack('first'),
+        _unresolvedRemoteTrack('second'),
+      ];
+      final container = _container(
+        player,
+        audioResolver: _BitrateAudioResolver(),
+        remoteCache: _TrackingRemotePlaybackCache(),
+      );
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      await container
+          .read(playerControllerProvider.notifier)
+          .playRemote(tracks.first, queue: tracks);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.isNotEmpty &&
+            player.remoteWindows.last.any(
+              (source) => source.track.id == tracks.last.id,
+            ),
+      );
+
+      final nextSource = player.remoteWindows.last.firstWhere(
+        (source) => source.track.id == tracks.last.id,
+      );
+      player.emitNativeTransition(nextSource);
+      await _waitUntil(
+        () => container.read(playbackQueueProvider).currentIndex == 1,
+      );
+      final controller = container.read(playerControllerProvider.notifier);
+      expect(
+        controller.currentRemoteTrackFor(tracks.last.url)?.streamBitrate,
+        isNull,
+      );
+      expect(
+        controller.preparedAudioSourceFor(tracks.last.url)?.track.streamBitrate,
+        148000,
+      );
+      expect(
+        controller.preparedAudioSourceFor(tracks.last.url)?.track.streamCodec,
+        'opus',
+      );
     },
   );
 
@@ -4103,6 +4176,9 @@ void main() {
       track.album,
     );
     expect(container.read(currentLyricsLookupProvider)?.album, track.album);
+    final controller = container.read(playerControllerProvider.notifier);
+    expect(controller.currentLocalTrackFor(track.id)?.filePath, track.filePath);
+    expect(controller.currentLocalTrackFor('another-track'), isNull);
   });
 
   test(
@@ -5883,6 +5959,23 @@ class _FakeAudioResolverFromRepository implements AudioStreamResolver {
           : Map<String, String>.unmodifiable(response.httpHeaders!),
       videoId: track.id.isEmpty ? null : track.id,
       formatId: response.extractor,
+    );
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
+class _BitrateAudioResolver implements AudioStreamResolver {
+  @override
+  Future<AudioStreamResolution> resolve(TrackInfo track) async {
+    return AudioStreamResolution(
+      source: AudioStreamSource.innerTube,
+      streamUrl: 'https://media.example/${track.id}.webm',
+      streamExtension: 'webm',
+      streamMimeType: 'audio/webm',
+      codec: 'opus',
+      bitrate: 148000,
     );
   }
 

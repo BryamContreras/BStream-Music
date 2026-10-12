@@ -7,6 +7,7 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/player/just_audio_player_service.dart';
 import 'package:bstream_music/services/player/notification_artwork_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -134,6 +135,54 @@ void main() {
     expect(attempts, 1);
     expect(asynchronousErrors, isEmpty);
   });
+
+  test(
+    'background position snapshots are coalesced without hiding seeks',
+    () async {
+      final fixture = await _Fixture.create();
+      final positions = <Duration>[];
+      final subscription = fixture.service.snapshotStream.listen(
+        (snapshot) => positions.add(snapshot.position),
+      );
+      try {
+        fixture.backend.emitPosition(const Duration(milliseconds: 250));
+        await _drainEvents();
+        expect(positions.last, const Duration(milliseconds: 250));
+
+        fixture.service.didChangeAppLifecycleState(AppLifecycleState.paused);
+        fixture.backend.emitPosition(const Duration(milliseconds: 500));
+        fixture.backend.emitPosition(const Duration(milliseconds: 900));
+        await _drainEvents();
+        expect(positions, [const Duration(milliseconds: 250)]);
+
+        fixture.backend.emitPosition(const Duration(milliseconds: 1250));
+        await _drainEvents();
+        expect(positions.last, const Duration(milliseconds: 1250));
+        expect(positions.length, 2);
+
+        fixture.backend.emitPosition(const Duration(seconds: 5));
+        await _drainEvents();
+        expect(positions.last, const Duration(seconds: 5));
+        expect(positions.length, 3);
+
+        fixture.backend.emitPosition(const Duration(milliseconds: 400));
+        await _drainEvents();
+        expect(positions.last, const Duration(milliseconds: 400));
+        expect(positions.length, 4);
+
+        fixture.backend.emitPosition(const Duration(milliseconds: 700));
+        await _drainEvents();
+        expect(positions.length, 4);
+        fixture.service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+        await _drainEvents();
+        expect(positions.last, const Duration(milliseconds: 700));
+        expect(positions.length, 5);
+      } finally {
+        await subscription.cancel();
+        await fixture.dispose();
+      }
+    },
+  );
 
   test(
     'hung source A cannot block B or overwrite it when A completes late',
@@ -442,6 +491,33 @@ void main() {
   );
 
   group('dual-deck crossfade', () {
+    test(
+      'background snapshot throttling keeps crossfade timing precise',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.playAndPrepare(
+            masterVolume: 0.7,
+            crossfadeDuration: const Duration(seconds: 2),
+            trackDuration: const Duration(seconds: 10),
+          );
+          fixture.service.didChangeAppLifecycleState(AppLifecycleState.paused);
+          fixture.primary.emitPosition(const Duration(milliseconds: 7900));
+          expect(fixture.standby.playCalls, 0);
+
+          fixture.primary.emitPosition(const Duration(seconds: 8));
+          expect(
+            fixture.service.currentSnapshot.position,
+            const Duration(milliseconds: 7900),
+            reason: 'The 100 ms UI update may be suppressed in the background.',
+          );
+          await _waitUntil(() => fixture.standby.playCalls > 0);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
     test(
       'skip silence stays synchronized across an active crossfade',
       () async {

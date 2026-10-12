@@ -50,7 +50,13 @@ enum _TrackMenuAction {
   removeFromPlaylist,
 }
 
-enum _PlaylistMenuAction { sharePlaylist, renamePlaylist, deletePlaylist }
+enum _PlaylistMenuAction {
+  downloadAll,
+  cancelDownloads,
+  sharePlaylist,
+  renamePlaylist,
+  deletePlaylist,
+}
 
 // Keep overview covers at the same visual size as artwork in downloaded-song
 // and playlist detail rows. The shared card icon token is intentionally
@@ -266,6 +272,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                     _addSelectedTracksToPlaylist(context, allTracks: items),
                 onDeleteSelected: (context) =>
                     _deleteSelectedLibraryTracks(context, items),
+                onReorderTracks: _reorderDownloadedTracks,
               ),
               loading: () =>
                   const _PanelLoading(key: ValueKey('downloads-load')),
@@ -386,6 +393,12 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                               onBack: _goRoot,
                               onOpenPlayer: widget.onOpenPlayer,
                               playlist: playlist,
+                              onReorderEntries: (entryIds) => ref
+                                  .read(playlistsControllerProvider.notifier)
+                                  .reorderCatalogPlaylist(
+                                    playlist.id,
+                                    entryIds,
+                                  ),
                             );
                           },
                           loading: () => const _PanelLoading(
@@ -784,6 +797,19 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
         .toList(growable: false);
   }
 
+  Future<void> _reorderDownloadedTracks(List<String> orderedIds) async {
+    final database = ref.read(databaseServiceProvider);
+    await database.reorderLocalTracks(orderedIds);
+    ref.invalidate(libraryTracksProvider);
+    final orderedTracks = await database.getLocalTracks();
+    await ref
+        .read(playerControllerProvider.notifier)
+        .syncLocalQueueSource(
+          PlayerController.downloadedLibraryQueueSourceId,
+          orderedTracks,
+        );
+  }
+
   Future<void> _showCreateDialog(BuildContext context) async {
     final strings = ref.read(appStringsProvider);
     final rawName = await showAppDialog<String>(
@@ -1143,7 +1169,7 @@ class _LiveQueueTile extends ConsumerWidget {
       emphasized: isCurrent,
       child: Material(
         key: ValueKey('library-live-track-${item.id}'),
-        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+        color: AppColors.cardSurfaceFor(context),
         clipBehavior: Clip.antiAlias,
         shape: shape,
         child: ListTile(
@@ -1541,6 +1567,7 @@ class _CatalogTrackListView extends ConsumerWidget {
     required this.onBack,
     required this.onOpenPlayer,
     required this.playlist,
+    required this.onReorderEntries,
   });
 
   final double bottomContentPadding;
@@ -1552,6 +1579,7 @@ class _CatalogTrackListView extends ConsumerWidget {
   final VoidCallback onBack;
   final VoidCallback onOpenPlayer;
   final Playlist playlist;
+  final Future<void> Function(List<String> orderedEntryIds) onReorderEntries;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1559,6 +1587,7 @@ class _CatalogTrackListView extends ConsumerWidget {
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('library-detail-header-surface'),
       pinnedFooterSurfaceKey: const ValueKey('library-filter-region-surface'),
+      pinnedFooterHasOwnSurface: true,
       scrollKey: const ValueKey('library-catalog-track-scroll'),
       header: _DetailHeader(
         key: const ValueKey('library-detail-header'),
@@ -1590,21 +1619,63 @@ class _CatalogTrackListView extends ConsumerWidget {
           : <Widget>[
               SliverPadding(
                 padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
-                sliver: SliverList.builder(
-                  itemCount: items.length,
-                  itemBuilder: (context, index) => Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                    child: _CatalogTrackTile(
-                      key: ValueKey(
-                        'library-catalog-entry-${items[index].entry.id}',
+                sliver: filterController.text.trim().isEmpty
+                    ? SliverReorderableList(
+                        itemCount: items.length,
+                        onReorderItem: (oldIndex, newIndex) async {
+                          final reordered = items.toList();
+                          final moved = reordered.removeAt(oldIndex);
+                          reordered.insert(newIndex, moved);
+                          try {
+                            await onReorderEntries(
+                              reordered
+                                  .map((item) => item.entry.id)
+                                  .toList(growable: false),
+                            );
+                          } catch (error) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(
+                              context,
+                            ).showSnackBar(SnackBar(content: Text('$error')));
+                          }
+                        },
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          return Padding(
+                            key: ValueKey(
+                              'library-catalog-row-${item.entry.id}',
+                            ),
+                            padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                            child: _CatalogTrackTile(
+                              key: ValueKey(
+                                'library-catalog-entry-${item.entry.id}',
+                              ),
+                              item: item,
+                              queueItems: queueItems,
+                              playlist: playlist,
+                              onOpenPlayer: onOpenPlayer,
+                              reorderHandle: _LibraryReorderHandle(
+                                index: index,
+                              ),
+                            ),
+                          );
+                        },
+                      )
+                    : SliverList.builder(
+                        itemCount: items.length,
+                        itemBuilder: (context, index) => Padding(
+                          padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+                          child: _CatalogTrackTile(
+                            key: ValueKey(
+                              'library-catalog-entry-${items[index].entry.id}',
+                            ),
+                            item: items[index],
+                            queueItems: queueItems,
+                            playlist: playlist,
+                            onOpenPlayer: onOpenPlayer,
+                          ),
+                        ),
                       ),
-                      item: items[index],
-                      queueItems: queueItems,
-                      playlist: playlist,
-                      onOpenPlayer: onOpenPlayer,
-                    ),
-                  ),
-                ),
               ),
             ],
     );
@@ -1617,6 +1688,7 @@ class _CatalogTrackTile extends ConsumerStatefulWidget {
     required this.queueItems,
     required this.playlist,
     required this.onOpenPlayer,
+    this.reorderHandle,
     super.key,
   });
 
@@ -1624,6 +1696,7 @@ class _CatalogTrackTile extends ConsumerStatefulWidget {
   final List<_CatalogDisplayItem> queueItems;
   final Playlist playlist;
   final VoidCallback onOpenPlayer;
+  final Widget? reorderHandle;
 
   @override
   ConsumerState<_CatalogTrackTile> createState() => _CatalogTrackTileState();
@@ -1662,7 +1735,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
     final menuIconSize = AppPlatform.isMobile ? 32.0 : 28.0;
     final menuIconColor = AppColors.menuIconFor(context);
     final borderRadius = BorderRadius.circular(appCardRadius);
-    final baseColor = appListCardSurface(context, solidInLiquidGlass: true);
+    final baseColor = appListCardSurface(context);
     final activeColor = Color.alphaBlend(
       colors.primary.withValues(alpha: 0.13),
       baseColor,
@@ -1765,6 +1838,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
+                  ?widget.reorderHandle,
                   TrackPlayButton(
                     key: ValueKey(
                       'library-catalog-play-${widget.item.entry.id}',
@@ -2001,6 +2075,7 @@ class _TrackListView extends ConsumerWidget {
     required this.onDeleteSelected,
     this.playlist,
     this.playlistId,
+    this.onReorderTracks,
   });
 
   final double bottomContentPadding;
@@ -2022,11 +2097,16 @@ class _TrackListView extends ConsumerWidget {
   final Future<void> Function(BuildContext context) onDeleteSelected;
   final Playlist? playlist;
   final String? playlistId;
+  final Future<void> Function(List<String> orderedTrackIds)? onReorderTracks;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
     final selectionActive = selectionEnabled && selectedTrackIds.isNotEmpty;
+    final canReorder =
+        onReorderTracks != null &&
+        filterController.text.trim().isEmpty &&
+        !selectionActive;
     return ScrolledUnderTabFrame(
       surfaceKey: ValueKey(
         selectionActive
@@ -2034,6 +2114,7 @@ class _TrackListView extends ConsumerWidget {
             : 'library-detail-header-surface',
       ),
       pinnedFooterSurfaceKey: const ValueKey('library-filter-region-surface'),
+      pinnedFooterHasOwnSurface: true,
       scrollKey: const ValueKey('library-track-scroll'),
       header: AnimatedSwitcher(
         duration: const Duration(milliseconds: 180),
@@ -2079,32 +2160,69 @@ class _TrackListView extends ConsumerWidget {
           : <Widget>[
               SliverPadding(
                 padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
-                sliver: SliverList.builder(
-                  itemCount: tracks.length,
-                  itemBuilder: (context, index) {
-                    return Padding(
-                      padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                      child: _LocalTrackTile(
-                        key: ValueKey('library-track-${tracks[index].id}'),
-                        track: tracks[index],
-                        mode: mode,
-                        playlistId: playlistId,
-                        queueTracks: queueTracks,
-                        onOpenPlayer: onOpenPlayer,
-                        selectionActive: selectionActive,
-                        selected: selectedTrackIds.contains(tracks[index].id),
-                        onLongPress: selectionEnabled
-                            ? () => onSelectTrack(tracks[index].id)
-                            : null,
-                        onSelectionTap: selectionActive
-                            ? () => onToggleTrack(tracks[index].id)
-                            : null,
+                sliver: canReorder
+                    ? SliverReorderableList(
+                        itemCount: tracks.length,
+                        onReorderItem: (oldIndex, newIndex) async {
+                          final reordered = tracks.toList();
+                          final moved = reordered.removeAt(oldIndex);
+                          reordered.insert(newIndex, moved);
+                          try {
+                            await onReorderTracks!(
+                              reordered
+                                  .map((track) => track.id)
+                                  .toList(growable: false),
+                            );
+                          } catch (error) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(
+                              context,
+                            ).showSnackBar(SnackBar(content: Text('$error')));
+                          }
+                        },
+                        itemBuilder: (context, index) => _buildTrackRow(
+                          context,
+                          index,
+                          selectionActive: selectionActive,
+                          reorderHandle: _LibraryReorderHandle(index: index),
+                        ),
+                      )
+                    : SliverList.builder(
+                        itemCount: tracks.length,
+                        itemBuilder: (context, index) => _buildTrackRow(
+                          context,
+                          index,
+                          selectionActive: selectionActive,
+                        ),
                       ),
-                    );
-                  },
-                ),
               ),
             ],
+    );
+  }
+
+  Widget _buildTrackRow(
+    BuildContext context,
+    int index, {
+    required bool selectionActive,
+    Widget? reorderHandle,
+  }) {
+    final track = tracks[index];
+    return Padding(
+      key: ValueKey('library-track-row-${track.id}'),
+      padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+      child: _LocalTrackTile(
+        key: ValueKey('library-track-${track.id}'),
+        track: track,
+        mode: mode,
+        playlistId: playlistId,
+        queueTracks: queueTracks,
+        onOpenPlayer: onOpenPlayer,
+        selectionActive: selectionActive,
+        selected: selectedTrackIds.contains(track.id),
+        onLongPress: selectionEnabled ? () => onSelectTrack(track.id) : null,
+        onSelectionTap: selectionActive ? () => onToggleTrack(track.id) : null,
+        reorderHandle: reorderHandle,
+      ),
     );
   }
 }
@@ -2205,23 +2323,41 @@ class _LibraryFilterSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 4, 6, 6),
-      child: SizedBox(
-        height: 50,
-        child: AppSurfaceInput(
-          key: const ValueKey('library-filter-surface'),
-          blur: false,
-          child: TextField(
-            controller: controller,
-            textAlignVertical: TextAlignVertical.center,
-            decoration: InputDecoration(
-              hintText: hintText,
-              prefixIcon: const Icon(Icons.search_rounded),
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(vertical: 10),
-              prefixIconConstraints: const BoxConstraints(
-                minWidth: 48,
-                minHeight: 48,
-              ),
+      child: AppSurfaceInput(
+        key: const ValueKey('library-filter-surface'),
+        child: TextField(
+          controller: controller,
+          textAlignVertical: TextAlignVertical.center,
+          decoration: InputDecoration(
+            hintText: hintText,
+            prefixIcon: const Icon(Icons.search_rounded),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LibraryReorderHandle extends ConsumerWidget {
+  const _LibraryReorderHandle({required this.index});
+
+  final int index;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final strings = ref.watch(appStringsProvider);
+    return Tooltip(
+      message: strings.reorderSong,
+      child: ReorderableDragStartListener(
+        index: index,
+        child: SizedBox(
+          width: 30,
+          height: 48,
+          child: Center(
+            child: Icon(
+              Icons.drag_indicator_rounded,
+              size: 20,
+              color: AppColors.contentSubtitleFor(context),
             ),
           ),
         ),
@@ -2343,6 +2479,25 @@ class _PlaylistMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
+    final catalog = ref.watch(catalogPlaylistProvider(playlist.id)).value;
+    final library =
+        ref.watch(libraryTracksProvider).value ?? const <LocalTrack>[];
+    final hasPendingDownloads = ref.watch(
+      downloadControllerProvider.select(
+        (tasks) => pendingPlaylistDownloadUrls(
+          playlist,
+          catalog,
+          library,
+          tasks,
+        ).isNotEmpty,
+      ),
+    );
+    final preparingDownloads = ref.watch(
+      playlistDownloadPreparationsProvider.select(
+        (ids) => ids.contains(playlist.id),
+      ),
+    );
+    final canCancelDownloads = hasPendingDownloads || preparingDownloads;
     final shareableBindings = ref.watch(
       youtubeMusicShareablePlaylistBindingDetailsProvider,
     );
@@ -2390,6 +2545,23 @@ class _PlaylistMenu extends ConsumerWidget {
         ),
         onSelected: (action) => _handleAction(context, ref, action),
         itemBuilder: (context) => [
+          PopupMenuItem(
+            key: ValueKey(
+              canCancelDownloads
+                  ? 'playlist-cancel-downloads-${playlist.id}'
+                  : 'playlist-download-all-${playlist.id}',
+            ),
+            value: canCancelDownloads
+                ? _PlaylistMenuAction.cancelDownloads
+                : _PlaylistMenuAction.downloadAll,
+            child: _trackMenuItem(
+              context,
+              canCancelDownloads ? Icons.close_rounded : Icons.download_rounded,
+              canCancelDownloads
+                  ? strings.cancelDownloads
+                  : strings.downloadAll,
+            ),
+          ),
           if (canShare)
             PopupMenuItem(
               key: ValueKey('playlist-share-${playlist.id}'),
@@ -2454,6 +2626,46 @@ class _PlaylistMenu extends ConsumerWidget {
     _PlaylistMenuAction action,
   ) async {
     switch (action) {
+      case _PlaylistMenuAction.cancelDownloads:
+        final strings = ref.read(appStringsProvider);
+        try {
+          await ref
+              .read(downloadControllerProvider.notifier)
+              .cancelPlaylistDownloads(playlist);
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(strings.downloadsCancelled)));
+        } catch (error) {
+          debugPrint('Could not cancel playlist downloads: $error');
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(strings.bulkDownloadCancelFailed)),
+          );
+        }
+      case _PlaylistMenuAction.downloadAll:
+        final strings = ref.read(appStringsProvider);
+        try {
+          final queued = await ref
+              .read(downloadControllerProvider.notifier)
+              .downloadPlaylist(playlist);
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                queued == 0
+                    ? strings.noPendingPlaylistDownloads
+                    : strings.songsQueuedForDownload(queued),
+              ),
+            ),
+          );
+        } catch (error) {
+          debugPrint('Could not queue playlist downloads: $error');
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(strings.playlistDownloadFailed)),
+          );
+        }
       case _PlaylistMenuAction.sharePlaylist:
         await _sharePlaylist(context, ref);
       case _PlaylistMenuAction.renamePlaylist:
@@ -3144,13 +3356,16 @@ class _FolderShellState extends State<_FolderShell> {
     final shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(appCardRadius),
       side: BorderSide(
-        color: _hovered ? colors.primary : appListCardBorder(context),
+        color: _hovered
+            ? colors.primary
+            : appListCardBorder(context, solidInLiquidGlass: true),
       ),
     );
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AppCardGradientBorder(
+        solidInLiquidGlass: true,
         emphasized: _hovered,
         width: _hovered ? 1.4 : 1,
         child: AnimatedContainer(
@@ -3213,6 +3428,7 @@ class _LocalTrackTile extends ConsumerStatefulWidget {
     required this.selected,
     required this.onLongPress,
     required this.onSelectionTap,
+    this.reorderHandle,
     this.playlistId,
     super.key,
   });
@@ -3225,6 +3441,7 @@ class _LocalTrackTile extends ConsumerStatefulWidget {
   final bool selected;
   final VoidCallback? onLongPress;
   final VoidCallback? onSelectionTap;
+  final Widget? reorderHandle;
   final String? playlistId;
 
   @override
@@ -3280,10 +3497,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     );
     final canCancelDownload = downloadState?.isCancellable == true;
     final borderRadius = BorderRadius.circular(appCardRadius);
-    final baseColor = AppColors.cardSurfaceFor(
-      context,
-      solidInLiquidGlass: true,
-    );
+    final baseColor = AppColors.cardSurfaceFor(context);
     final resolvedSurfaceColor = selected
         ? Color.alphaBlend(colors.primary.withValues(alpha: 0.14), baseColor)
         : isCurrent
@@ -3407,6 +3621,7 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
                     : Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          ?widget.reorderHandle,
                           TrackPlayButton(
                             key: ValueKey('library-track-play-${track.id}'),
                             tooltip: isPlaying ? strings.pause : strings.play,
@@ -3579,13 +3794,18 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
       }
     }
 
-    final queueSourceId = playlistId == null
-        ? null
-        : PlayerController.playlistQueueSourceId(playlistId!);
+    final queueSourceId = switch (mode) {
+      _TrackListMode.downloads =>
+        PlayerController.downloadedLibraryQueueSourceId,
+      _TrackListMode.playlist =>
+        playlistId == null
+            ? null
+            : PlayerController.playlistQueueSourceId(playlistId!),
+    };
     await player.playLocal(
       track,
       queue: queueTracks,
-      useNativeQueue: queueSourceId == null,
+      useNativeQueue: mode == _TrackListMode.downloads || queueSourceId == null,
       queueSourceId: queueSourceId,
     );
   }
@@ -3602,15 +3822,21 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
       return;
     }
 
-    final queueSourceId = playlistId == null
-        ? null
-        : PlayerController.playlistQueueSourceId(playlistId!);
+    final queueSourceId = switch (mode) {
+      _TrackListMode.downloads =>
+        PlayerController.downloadedLibraryQueueSourceId,
+      _TrackListMode.playlist =>
+        playlistId == null
+            ? null
+            : PlayerController.playlistQueueSourceId(playlistId!),
+    };
     final playFuture = ref
         .read(playerControllerProvider.notifier)
         .playLocal(
           track,
           queue: queueTracks,
-          useNativeQueue: queueSourceId == null,
+          useNativeQueue:
+              mode == _TrackListMode.downloads || queueSourceId == null,
           queueSourceId: queueSourceId,
         );
     onOpenPlayer();

@@ -1,12 +1,17 @@
+import 'dart:async';
+
 import 'package:bstream_music/core/theme/app_colors.dart';
+import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/theme/app_ui.dart';
 import 'package:bstream_music/core/widgets/app_shared_widgets.dart';
 import 'package:bstream_music/features/music/domain/entities/search_result.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
+import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/track_selection_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
@@ -16,6 +21,274 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'browse category cards stay opaque in every surface style and theme',
+    (tester) async {
+      for (final brightness in Brightness.values) {
+        for (final mode in SurfaceBackgroundMode.values) {
+          await tester.pumpWidget(
+            _searchApp(
+              controller: _RecordingSearchController(SearchState()),
+              brightness: brightness,
+              surfaceBackgroundMode: mode,
+            ),
+          );
+          await tester.pumpAndSettle();
+          for (final id in ['pop', 'party']) {
+            final surface = tester.widget<Ink>(
+              find.byKey(ValueKey('search-browse-surface-$id')),
+            );
+            final gradient = (surface.decoration! as BoxDecoration).gradient!;
+            expect(
+              gradient.colors.every((color) => color.a == 1),
+              isTrue,
+              reason: '$id / $mode / $brightness',
+            );
+          }
+        }
+      }
+    },
+  );
+
+  testWidgets('search adds the marked songs to an existing playlist', (
+    tester,
+  ) async {
+    final tracks = _searchTracks('Elegida', 'selected', count: 3);
+    final playlists = _SearchSelectionPlaylists();
+    final controller = _RecordingSearchController(
+      SearchState(
+        query: 'consulta',
+        pages: {
+          SearchCategory.songs: SearchPage(
+            category: SearchCategory.songs,
+            backend: SearchBackend.innerTube,
+            tracks: tracks,
+          ),
+        },
+      ),
+    );
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        extraOverrides: [
+          playlistsControllerProvider.overrideWith(() => playlists),
+          libraryTracksProvider.overrideWith((ref) async => []),
+          catalogPlaylistsProvider.overrideWith((ref) async => []),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Elegida 1'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Elegida 2'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('search-selection-add-to-playlist')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('playlist-picker-create')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('playlist-picker-option-selection-playlist')),
+    );
+    await tester.pumpAndSettle();
+    expect(playlists.tracks, [tracks[1], tracks[2]]);
+    expect(
+      find.byKey(const ValueKey('search-selection-toolbar')),
+      findsNothing,
+    );
+  });
+
+  for (final category in [SearchCategory.songs, SearchCategory.videos]) {
+    testWidgets('$category supports multiselect downloads without playback', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 760);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      final tracks = _searchTracks('Seleccionable', 'selected', count: 3);
+      final downloads = _SearchSelectedDownloads();
+      final player = _RecordingPlayerController();
+      final controller = _RecordingSearchController(
+        SearchState(
+          query: 'consulta',
+          selectedCategory: category,
+          pages: {
+            category: SearchPage(
+              category: category,
+              backend: SearchBackend.innerTube,
+              tracks: tracks,
+            ),
+          },
+        ),
+      );
+      await tester.pumpWidget(
+        _searchApp(
+          controller: controller,
+          platform: TargetPlatform.android,
+          extraOverrides: [
+            downloadControllerProvider.overrideWith(() => downloads),
+            playerControllerProvider.overrideWith(() => player),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('Seleccionable 0'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Seleccionable 2'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('search-selection-toolbar')),
+        findsOneWidget,
+      );
+      expect(find.byType(TextField), findsNothing);
+      expect(
+        tester
+            .widget<Checkbox>(
+              find.byKey(const ValueKey('track-result-selection-selected-1')),
+            )
+            .value,
+        isFalse,
+      );
+      await tester.tap(find.byKey(const ValueKey('search-selection-download')));
+      await tester.pumpAndSettle();
+      expect(downloads.tracks, [tracks[0], tracks[2]]);
+      expect(player.lastTrack, isNull);
+      expect(player.lastRecommendationSelected, isNull);
+      expect(
+        find.byKey(const ValueKey('search-selection-toolbar')),
+        findsNothing,
+      );
+      expect(find.byType(TextField), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('search selections clear on another query or category', (
+    tester,
+  ) async {
+    final songs = _searchTracks('Cancion', 'selected', count: 2);
+    final videos = _searchTracks('Video', 'videos', count: 2);
+    final controller = _RecordingSearchController(
+      SearchState(
+        query: 'consulta',
+        pages: {
+          SearchCategory.songs: SearchPage(
+            category: SearchCategory.songs,
+            backend: SearchBackend.innerTube,
+            tracks: songs,
+          ),
+          SearchCategory.videos: SearchPage(
+            category: SearchCategory.videos,
+            backend: SearchBackend.innerTube,
+            tracks: videos,
+          ),
+        },
+      ),
+    );
+    await tester.pumpWidget(_searchApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Cancion 0'));
+    await tester.pumpAndSettle();
+    await controller.selectCategory(SearchCategory.videos);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('search-selection-toolbar')),
+      findsNothing,
+    );
+    await tester.longPress(find.text('Video 0'));
+    await tester.pumpAndSettle();
+    await controller.submit('otra consulta');
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(SearchView)),
+    );
+    expect(
+      container.read(trackSelectionProvider(searchTrackSelectionScope)).active,
+      isFalse,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('suggests while typing and searches a selected suggestion', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final controller = _RecordingSearchController(SearchState());
+    final suggestions = _RecordingSuggestionSearch();
+
+    await tester.pumpWidget(
+      _searchApp(controller: controller, suggestionsService: suggestions),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'tay');
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(suggestions.requestedQueries, isEmpty);
+    expect(find.byKey(const ValueKey('search-suggestion-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('search-browse-grid')), findsNothing);
+
+    await tester.enterText(find.byType(TextField), 'taylor');
+    await tester.pump(const Duration(milliseconds: 310));
+    expect(suggestions.requestedQueries, <String>['taylor']);
+    suggestions.complete('taylor', <String>[
+      'taylor',
+      'Taylor Swift',
+      'Taylor Swift canciones',
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Taylor Swift'), findsOneWidget);
+    await tester.tap(find.text('Taylor Swift'));
+    await tester.pump();
+
+    expect(controller.submittedQueries, <String>['Taylor Swift']);
+    expect(find.byKey(const ValueKey('search-suggestion-0')), findsNothing);
+  });
+
+  testWidgets('ignores suggestions from an older typed query', (tester) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final suggestions = _RecordingSuggestionSearch();
+
+    await tester.pumpWidget(
+      _searchApp(
+        controller: _RecordingSearchController(SearchState()),
+        suggestionsService: suggestions,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'bad');
+    await tester.pump(const Duration(milliseconds: 310));
+    expect(suggestions.requestedQueries, <String>['bad']);
+
+    await tester.enterText(find.byType(TextField), 'bad bunny');
+    await tester.pump(const Duration(milliseconds: 310));
+    suggestions.complete('bad bunny', <String>['Bad Bunny nuevo']);
+    await tester.pumpAndSettle();
+    expect(find.text('Bad Bunny nuevo'), findsOneWidget);
+
+    suggestions.complete('bad', <String>['Resultado obsoleto']);
+    await tester.pumpAndSettle();
+    expect(find.text('Resultado obsoleto'), findsNothing);
+    expect(find.text('Bad Bunny nuevo'), findsOneWidget);
+  });
+
   testWidgets('shows an adaptive browse grid above the reserved player space', (
     tester,
   ) async {
@@ -825,6 +1098,114 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final category in [SearchCategory.songs, SearchCategory.videos]) {
+    testWidgets('${category.name} starts radio from the selected result only', (
+      tester,
+    ) async {
+      const selected = TrackInfo(
+        id: 'abc123def45',
+        title: 'Cancion elegida',
+        artist: 'Artista',
+        url: 'https://music.youtube.com/watch?v=abc123def45',
+      );
+      const unrelated = TrackInfo(
+        id: 'xyz123uvw45',
+        title: 'Otro resultado',
+        artist: 'Otro artista',
+        url: 'https://music.youtube.com/watch?v=xyz123uvw45',
+      );
+      final controller = _RecordingSearchController(
+        SearchState(
+          query: 'consulta',
+          selectedCategory: category,
+          pages: {
+            category: SearchPage(
+              category: category,
+              backend: SearchBackend.innerTube,
+              tracks: const [selected, unrelated],
+            ),
+          },
+        ),
+      );
+      final player = _RecordingPlayerController();
+      await tester.pumpWidget(
+        _searchApp(
+          controller: controller,
+          extraOverrides: [playerControllerProvider.overrideWith(() => player)],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(
+          ValueKey(
+            category == SearchCategory.songs
+                ? 'track-result-surface-${selected.id}'
+                : 'track-result-play-${selected.id}',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(player.lastRecommendationSelected?.track, selected);
+      expect(player.lastRecommendationQueue?.map((item) => item.track), [
+        selected,
+      ]);
+      expect(player.lastRecommendationSourceId, 'search-radio:${selected.id}');
+      expect(player.lastRecommendationExtender, isNotNull);
+      expect(player.lastTrack, isNull);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('a search result without a radio ID stays a one-song queue', (
+    tester,
+  ) async {
+    const selected = TrackInfo(
+      id: 'outside',
+      title: 'Sin radio',
+      artist: 'Artista',
+      url: 'https://example.com/audio',
+    );
+    const unrelated = TrackInfo(
+      id: 'other',
+      title: 'Otro resultado',
+      artist: 'Otro artista',
+      url: 'https://example.com/other',
+    );
+    final controller = _RecordingSearchController(
+      SearchState(
+        query: 'consulta',
+        selectedCategory: SearchCategory.videos,
+        pages: {
+          SearchCategory.videos: SearchPage(
+            category: SearchCategory.videos,
+            backend: SearchBackend.innerTubeVideoFallback,
+            tracks: const [selected, unrelated],
+          ),
+        },
+      ),
+    );
+    final player = _RecordingPlayerController();
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        extraOverrides: [playerControllerProvider.overrideWith(() => player)],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('track-result-surface-outside')),
+    );
+    await tester.pump();
+
+    expect(player.lastTrack, selected);
+    expect(player.lastQueue, [selected]);
+    expect(player.lastRecommendationSelected, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'uses a subtle category transition without resetting the search scroll',
     (tester) async {
@@ -1398,11 +1779,14 @@ void main() {
 
 Widget _searchApp({
   required _RecordingSearchController controller,
+  YouTubeMusicSearchSuggestions? suggestionsService,
   VoidCallback? onOpenPlayer,
   ValueChanged<SearchBrowseCategory>? onBrowseCategorySelected,
   SearchBrowseCatalog? browseCatalog,
   List<Override> extraOverrides = const [],
   TargetPlatform? platform,
+  Brightness brightness = Brightness.light,
+  SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
   bool disableAnimations = false,
   double bottomContentPadding = 0,
 }) {
@@ -1416,6 +1800,9 @@ Widget _searchApp({
   return ProviderScope(
     overrides: [
       searchControllerProvider.overrideWith(() => controller),
+      youtubeMusicSearchSuggestionsProvider.overrideWithValue(
+        suggestionsService ?? const _NoSuggestionsSearch(),
+      ),
       appStringsProvider.overrideWithValue(strings),
       searchBrowseCatalogProvider.overrideWithValue(
         AsyncData(resolvedBrowseCatalog),
@@ -1423,7 +1810,11 @@ Widget _searchApp({
       ...extraOverrides,
     ],
     child: MaterialApp(
-      theme: platform == null ? null : ThemeData(platform: platform),
+      theme: ThemeData(
+        platform: platform,
+        brightness: brightness,
+        extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
+      ),
       builder: disableAnimations
           ? (context, child) => MediaQuery(
               data: MediaQuery.of(
@@ -1441,6 +1832,72 @@ Widget _searchApp({
       ),
     ),
   );
+}
+
+class _NoSuggestionsSearch implements YouTubeMusicSearchSuggestions {
+  const _NoSuggestionsSearch();
+
+  @override
+  Future<List<String>> getSearchSuggestions(
+    String query, {
+    int limit = 8,
+  }) async => const <String>[];
+}
+
+class _SearchSelectedDownloads extends DownloadController {
+  List<TrackInfo>? tracks;
+
+  @override
+  Map<String, DownloadTaskState> build() => const {};
+
+  @override
+  Future<int> downloadTracks(Iterable<TrackInfo> tracks) async {
+    this.tracks = tracks.toList();
+    return tracks.length;
+  }
+}
+
+class _SearchSelectionPlaylists extends PlaylistsController {
+  List<TrackInfo>? tracks;
+
+  @override
+  Future<List<Playlist>> build() async => [
+    Playlist(
+      id: 'selection-playlist',
+      name: 'Selección',
+      trackIds: const [],
+      createdAt: DateTime.utc(2026),
+      updatedAt: DateTime.utc(2026),
+    ),
+  ];
+
+  @override
+  Future<int> addRemoteTracksToPlaylist(
+    String playlistId,
+    Iterable<TrackInfo> tracks, {
+    bool download = false,
+  }) async {
+    expect(playlistId, 'selection-playlist');
+    expect(download, isFalse);
+    this.tracks = tracks.toList();
+    return tracks.length;
+  }
+}
+
+class _RecordingSuggestionSearch implements YouTubeMusicSearchSuggestions {
+  final List<String> requestedQueries = <String>[];
+  final Map<String, Completer<List<String>>> _pending =
+      <String, Completer<List<String>>>{};
+
+  @override
+  Future<List<String>> getSearchSuggestions(String query, {int limit = 8}) {
+    requestedQueries.add(query);
+    return (_pending[query] = Completer<List<String>>()).future;
+  }
+
+  void complete(String query, List<String> values) {
+    _pending[query]!.complete(values);
+  }
 }
 
 List<TrackInfo> _searchTracks(
@@ -1508,6 +1965,10 @@ class _RecordingPlayerController extends PlayerController {
   TrackInfo? lastTrack;
   List<TrackInfo>? lastQueue;
   String? lastQueueSourceId;
+  RecommendationPlaybackItem? lastRecommendationSelected;
+  List<RecommendationPlaybackItem>? lastRecommendationQueue;
+  String? lastRecommendationSourceId;
+  RecommendationQueueExtender? lastRecommendationExtender;
 
   @override
   Future<PlayerSnapshot> build() async =>
@@ -1522,5 +1983,18 @@ class _RecordingPlayerController extends PlayerController {
     lastTrack = track;
     lastQueue = queue == null ? null : List.unmodifiable(queue);
     lastQueueSourceId = queueSourceId;
+  }
+
+  @override
+  Future<void> playRecommendation(
+    RecommendationPlaybackItem selected, {
+    required List<RecommendationPlaybackItem> queue,
+    String? queueSourceId,
+    RecommendationQueueExtender? queueExtender,
+  }) async {
+    lastRecommendationSelected = selected;
+    lastRecommendationQueue = List.unmodifiable(queue);
+    lastRecommendationSourceId = queueSourceId;
+    lastRecommendationExtender = queueExtender;
   }
 }

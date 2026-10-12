@@ -33,6 +33,7 @@ void main() {
       final service = InnerTubeSearchService(
         transport: transport,
         endpoint: Uri.parse('https://example.test/search'),
+        suggestionsEndpoint: Uri.parse('https://example.test/suggestions'),
         browseEndpoint: Uri.parse('https://example.test/browse'),
         playerEndpoint: Uri.parse('https://example.test/player'),
         bootstrapUri: Uri.parse('https://example.test/bootstrap'),
@@ -176,6 +177,143 @@ void main() {
       expect(transport.requests, hasLength(2));
       expect(transport.requests[0].body['query'], 'first');
       expect(transport.requests[1].body['query'], 'second');
+    });
+
+    test('requests anonymous suggestions and bounds distinct text', () async {
+      transport.response = InnerTubeHttpResponse(
+        statusCode: HttpStatus.ok,
+        body: jsonEncode({
+          'contents': [
+            {
+              'searchSuggestionsSectionRenderer': {
+                'contents': [
+                  {
+                    'searchSuggestionRenderer': {
+                      'navigationEndpoint': {
+                        'searchEndpoint': {'query': '  Higher   Power  '},
+                      },
+                    },
+                  },
+                  {'searchSuggestionRenderer': <String, Object>{}},
+                  {
+                    'historySuggestionRenderer': {
+                      'navigationEndpoint': {
+                        'searchEndpoint': {'query': 'higher power'},
+                      },
+                    },
+                  },
+                  {
+                    'searchSuggestionRenderer': {
+                      'navigationEndpoint': {
+                        'searchEndpoint': {'query': 'Higher Power Coldplay'},
+                      },
+                    },
+                  },
+                  {
+                    'searchSuggestionRenderer': {
+                      'navigationEndpoint': {
+                        'searchEndpoint': {'query': 'Higher Power live'},
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+      final service = createService();
+
+      expect(await service.getSearchSuggestions('  higher  ', limit: 2), [
+        'Higher Power',
+        'Higher Power Coldplay',
+      ]);
+
+      final request = transport.requests.single;
+      expect(request.uri.path, '/suggestions');
+      expect(request.uri.queryParameters, {
+        'key': 'bootstrap-key',
+        'prettyPrint': 'false',
+      });
+      expect(request.headers['X-YouTube-Client-Name'], '99');
+      expect(request.headers['X-YouTube-Client-Version'], 'bootstrap-version');
+      expect(request.headers['X-Goog-Visitor-Id'], 'visitor-data');
+      expect(request.headers['Origin'], 'https://music.youtube.com');
+      expect(request.timeout, const Duration(seconds: 2));
+      expect(request.body['input'], 'higher');
+      expect(request.body.containsKey('params'), isFalse);
+      expect(request.body['context'], {
+        'client': {
+          'clientName': 'TEST_REMIX',
+          'clientVersion': 'bootstrap-version',
+          'hl': 'es',
+          'gl': 'NI',
+          'visitorData': 'visitor-data',
+        },
+      });
+    });
+
+    test(
+      'returns empty suggestions for blank or unrecognized content',
+      () async {
+        final service = createService();
+        expect(await service.getSearchSuggestions('  '), isEmpty);
+        expect(transport.getRequests, isEmpty);
+        expect(transport.requests, isEmpty);
+
+        transport.response = const InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: '{"contents":[{"otherSectionRenderer":{}}]}',
+        );
+        expect(await service.getSearchSuggestions('noche'), isEmpty);
+        expect(transport.requests, hasLength(1));
+        await expectLater(
+          service.getSearchSuggestions('noche', limit: 0),
+          throwsRangeError,
+        );
+        await expectLater(
+          service.getSearchSuggestions('noche', limit: 21),
+          throwsRangeError,
+        );
+        expect(transport.requests, hasLength(1));
+      },
+    );
+
+    test('uses one brief retry for transient suggestions failure', () async {
+      transport.responses.addAll([
+        const InnerTubeHttpResponse(
+          statusCode: HttpStatus.serviceUnavailable,
+          body: 'temporarily unavailable',
+        ),
+        const InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: '{"contents":[]}',
+        ),
+      ]);
+      final delays = <Duration>[];
+      final service = createService(
+        retryDelay: (delay) async {
+          delays.add(delay);
+        },
+      );
+
+      expect(await service.getSearchSuggestions('bad bunny'), isEmpty);
+      expect(transport.requests, hasLength(2));
+      expect(delays, [const Duration(milliseconds: 150)]);
+    });
+
+    test('does not retry rate-limited suggestions', () async {
+      transport.response = const InnerTubeHttpResponse(
+        statusCode: HttpStatus.tooManyRequests,
+        body: 'slow down',
+      );
+      final service = createService();
+
+      await expectLater(
+        service.getSearchSuggestions('bad bunny'),
+        throwsA(isA<InnerTubeHttpException>()),
+      );
+      expect(transport.requests, hasLength(1));
     });
 
     test(

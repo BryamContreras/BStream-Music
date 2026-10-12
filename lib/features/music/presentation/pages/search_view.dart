@@ -8,13 +8,19 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
 import '../../../../core/widgets/marquee_text.dart';
+import '../../../../services/sharing/bstream_track_link.dart';
+import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../domain/entities/search_result.dart';
+import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
+import '../providers/track_selection_controller.dart';
+import '../providers/player/related_radio_queue_extender.dart';
 import '../widgets/search_input.dart';
 import '../widgets/scrolled_under_tab_frame.dart';
 import '../widgets/now_playing_equalizer.dart';
 import '../widgets/source_image.dart';
 import '../widgets/track_result_tile.dart';
+import '../widgets/track_selection_toolbar.dart';
 import 'artist_profile_page.dart';
 import 'remote_collection_detail_page.dart';
 
@@ -43,10 +49,123 @@ class SearchView extends ConsumerStatefulWidget {
 }
 
 class _SearchViewState extends ConsumerState<SearchView> {
+  static const _suggestionDebounce = Duration(milliseconds: 300);
+  static const _suggestionCacheCapacity = 24;
+
   bool _focusInputAfterClear = false;
+  bool _searchInputFocused = false;
+  String _draftQuery = '';
+  List<String> _suggestions = const <String>[];
+  final Map<String, List<String>> _suggestionCache = <String, List<String>>{};
+  Timer? _suggestionTimer;
+  int _suggestionGeneration = 0;
+
+  @override
+  void didUpdateWidget(covariant SearchView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.active && !widget.active) {
+      _cancelPendingSuggestions();
+      _searchInputFocused = false;
+      _suggestions = const <String>[];
+    }
+  }
+
+  @override
+  void dispose() {
+    _cancelPendingSuggestions();
+    super.dispose();
+  }
+
+  void _cancelPendingSuggestions() {
+    _suggestionTimer?.cancel();
+    _suggestionTimer = null;
+    _suggestionGeneration++;
+  }
+
+  void _handleInputFocusChanged(bool hasFocus, String text) {
+    if (hasFocus) {
+      _searchInputFocused = true;
+      _handleDraftChanged(text);
+      return;
+    }
+    _cancelPendingSuggestions();
+    if (mounted) {
+      setState(() {
+        _searchInputFocused = false;
+        _suggestions = const <String>[];
+      });
+    }
+  }
+
+  void _handleDraftChanged(String text) {
+    _cancelPendingSuggestions();
+    final query = text.trim();
+    final cacheKey = query.toLowerCase();
+    final cached = _suggestionCache[cacheKey];
+    setState(() {
+      _draftQuery = text;
+      _suggestions = cached ?? const <String>[];
+    });
+    if (!widget.active ||
+        !_searchInputFocused ||
+        query.isEmpty ||
+        cached != null) {
+      return;
+    }
+
+    final generation = _suggestionGeneration;
+    _suggestionTimer = Timer(_suggestionDebounce, () {
+      unawaited(_loadSuggestions(query, cacheKey, generation));
+    });
+  }
+
+  Future<void> _loadSuggestions(
+    String query,
+    String cacheKey,
+    int generation,
+  ) async {
+    final suggestionsService = ref.read(youtubeMusicSearchSuggestionsProvider);
+    if (suggestionsService == null) {
+      return;
+    }
+    try {
+      final suggestions = await suggestionsService.getSearchSuggestions(query);
+      if (!mounted ||
+          !widget.active ||
+          !_searchInputFocused ||
+          generation != _suggestionGeneration ||
+          _draftQuery.trim().toLowerCase() != cacheKey) {
+        return;
+      }
+      _suggestionCache.remove(cacheKey);
+      _suggestionCache[cacheKey] = suggestions;
+      while (_suggestionCache.length > _suggestionCacheCapacity) {
+        _suggestionCache.remove(_suggestionCache.keys.first);
+      }
+      setState(() => _suggestions = suggestions);
+    } on Object {
+      // The typed query remains selectable when suggestions are unavailable.
+    }
+  }
+
+  void _submitSearch(String query) {
+    _cancelPendingSuggestions();
+    setState(() {
+      _searchInputFocused = false;
+      _draftQuery = query;
+      _suggestions = const <String>[];
+    });
+    FocusManager.instance.primaryFocus?.unfocus();
+    unawaited(ref.read(searchControllerProvider.notifier).submit(query));
+  }
 
   void _clearSearch() {
-    setState(() => _focusInputAfterClear = true);
+    _cancelPendingSuggestions();
+    setState(() {
+      _focusInputAfterClear = true;
+      _draftQuery = '';
+      _suggestions = const <String>[];
+    });
     ref.read(searchControllerProvider.notifier).clear();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _focusInputAfterClear) {
@@ -88,12 +207,34 @@ class _SearchViewState extends ConsumerState<SearchView> {
   Widget build(BuildContext context) {
     final results = ref.watch(searchControllerProvider);
     final searchState = results.value ?? SearchState();
+    final selection = ref.watch(
+      trackSelectionProvider(searchTrackSelectionScope),
+    );
+    ref.listen(searchControllerProvider, (previous, next) {
+      final before = previous?.value;
+      final after = next.value;
+      if (next.hasError ||
+          before?.query != after?.query ||
+          before?.selectedCategory != after?.selectedCategory) {
+        selection.clear();
+      } else if (after != null &&
+          !after.isSelectedCategoryLoading &&
+          after.hasSelectedPage) {
+        selection.retainTracks(after.selectedTracks);
+      }
+    });
+    final showSuggestions =
+        !selection.active &&
+        widget.active &&
+        _searchInputFocused &&
+        _draftQuery.trim().isNotEmpty;
     final strings = ref.watch(appStringsProvider);
     final fallbackBrowseCategories = fallbackSearchBrowseCategories(strings);
     // Persistent tab slots remain mounted after their first visit. Avoid
     // starting discovery merely because an offstage Search widget exists;
     // the local cards are already enough until the tab is actually visible.
-    final browseCatalog = widget.active && !searchState.hasQuery
+    final browseCatalog =
+        widget.active && !searchState.hasQuery && !showSuggestions
         ? ref.watch(searchBrowseCatalogProvider)
         : null;
     final browseCategories =
@@ -124,7 +265,14 @@ class _SearchViewState extends ConsumerState<SearchView> {
           alignment: Alignment.centerLeft,
           children: <Widget>[...previousChildren, ?currentChild],
         ),
-        child: showHeading
+        child: selection.active
+            ? TrackSelectionToolbar(
+                key: const ValueKey('search-selection-header'),
+                scope: searchTrackSelectionScope,
+                tracks: searchState.selectedTracks,
+                keyPrefix: 'search-selection',
+              )
+            : showHeading
             ? Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
@@ -146,8 +294,9 @@ class _SearchViewState extends ConsumerState<SearchView> {
                 hintText: strings.searchHint,
                 tooltip: strings.search,
                 clearTooltip: strings.clearSearch,
-                onSubmitted: (query) =>
-                    ref.read(searchControllerProvider.notifier).submit(query),
+                onChanged: _handleDraftChanged,
+                onFocusChanged: _handleInputFocusChanged,
+                onSubmitted: _submitSearch,
                 onCleared: _clearSearch,
               ),
       ),
@@ -168,7 +317,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (showHeading)
+                if (showHeading && !selection.active)
                   Padding(
                     key: const ValueKey('search-input-container'),
                     padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -178,13 +327,15 @@ class _SearchViewState extends ConsumerState<SearchView> {
                       hintText: strings.searchHint,
                       tooltip: strings.search,
                       clearTooltip: strings.clearSearch,
-                      onSubmitted: (query) => ref
-                          .read(searchControllerProvider.notifier)
-                          .submit(query),
+                      onChanged: _handleDraftChanged,
+                      onFocusChanged: _handleInputFocusChanged,
+                      onSubmitted: _submitSearch,
                       onCleared: _clearSearch,
                     ),
                   ),
-                if (searchState.hasQuery) ...[
+                if (searchState.hasQuery &&
+                    !showSuggestions &&
+                    !selection.active) ...[
                   const SizedBox(height: 10),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -198,7 +349,9 @@ class _SearchViewState extends ConsumerState<SearchView> {
                     ),
                   ),
                 ],
-                if (searchState.fallbackOnly) ...[
+                if (searchState.fallbackOnly &&
+                    !showSuggestions &&
+                    !selection.active) ...[
                   const SizedBox(height: 10),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -213,7 +366,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
             ),
           ),
         ),
-        if (!searchState.hasQuery && !results.hasError)
+        if (!showSuggestions && !searchState.hasQuery && !results.hasError)
           SliverToBoxAdapter(
             child: Padding(
               key: const ValueKey('search-browse-heading'),
@@ -227,15 +380,22 @@ class _SearchViewState extends ConsumerState<SearchView> {
               ),
             ),
           ),
-        _SearchResultsSliver(
-          results: results,
-          strings: strings,
-          browseCategories: browseCategories,
-          onBrowseCategorySelected: (category) =>
-              _selectBrowseCategory(category, strings),
-          onOpenPlayer: widget.onOpenPlayer,
-          onAddToPlaylist: widget.onAddToPlaylist,
-        ),
+        if (showSuggestions)
+          _SearchSuggestionsSliver(
+            query: _draftQuery.trim(),
+            suggestions: _suggestions,
+            onSelected: _submitSearch,
+          )
+        else
+          _SearchResultsSliver(
+            results: results,
+            strings: strings,
+            browseCategories: browseCategories,
+            onBrowseCategorySelected: (category) =>
+                _selectBrowseCategory(category, strings),
+            onOpenPlayer: widget.onOpenPlayer,
+            onAddToPlaylist: widget.onAddToPlaylist,
+          ),
         SliverToBoxAdapter(
           child: SizedBox(
             key: const ValueKey('search-scroll-bottom-reserve'),
@@ -243,6 +403,60 @@ class _SearchViewState extends ConsumerState<SearchView> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SearchSuggestionsSliver extends StatelessWidget {
+  const _SearchSuggestionsSliver({
+    required this.query,
+    required this.suggestions,
+    required this.onSelected,
+  });
+
+  final String query;
+  final List<String> suggestions;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = <String>[query];
+    final seen = <String>{query.toLowerCase()};
+    for (final suggestion in suggestions) {
+      final normalized = suggestion.trim();
+      if (normalized.isEmpty || !seen.add(normalized.toLowerCase())) {
+        continue;
+      }
+      visible.add(normalized);
+      if (visible.length == 8) break;
+    }
+
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (context, index) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Material(
+            type: MaterialType.transparency,
+            child: ListTile(
+              key: ValueKey('search-suggestion-$index'),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+              leading: const Icon(Icons.search_rounded, size: 22),
+              title: Text(
+                visible[index],
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: AppColors.contentTitleFor(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              trailing: const Icon(Icons.arrow_forward_rounded, size: 20),
+              onTap: () => onSelected(visible[index]),
+            ),
+          ),
+        ),
+        childCount: visible.length,
+      ),
     );
   }
 }
@@ -1255,7 +1469,7 @@ class _SearchCategoryResultsSliverState
   }
 }
 
-class _SearchCategoryResultsBody extends StatelessWidget {
+class _SearchCategoryResultsBody extends ConsumerWidget {
   const _SearchCategoryResultsBody({
     required this.state,
     required this.strings,
@@ -1269,7 +1483,7 @@ class _SearchCategoryResultsBody extends StatelessWidget {
   final AddRemoteTracksToPlaylist? onAddToPlaylist;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (state.isSelectedCategoryLoading || !state.hasSelectedPage) {
       return SizedBox(
         height: _minimumBodyHeight(context),
@@ -1328,7 +1542,8 @@ class _SearchCategoryResultsBody extends StatelessWidget {
               'search-result-${tracks[index].id.isNotEmpty ? tracks[index].id : tracks[index].url}',
             ),
             track: tracks[index],
-            queue: tracks,
+            selectionScope: searchTrackSelectionScope,
+            onPlayTrack: (track) => _playSearchResult(ref, track),
             preferCatalogArtwork:
                 state.selectedCategory != SearchCategory.videos,
             onOpenPlayer: onOpenPlayer,
@@ -1336,6 +1551,28 @@ class _SearchCategoryResultsBody extends StatelessWidget {
           if (index < tracks.length - 1) const SizedBox(height: 6),
         ],
       ],
+    );
+  }
+
+  Future<void> _playSearchResult(WidgetRef ref, TrackInfo track) {
+    final player = ref.read(playerControllerProvider.notifier);
+    final service = ref.read(youtubeMusicSearchProvider);
+    final link = const BStreamTrackLinkCodec().tryFromTrack(track);
+    if (service is! YouTubeMusicRelated || link == null) {
+      // A provider without watch-next support must never fall back to the
+      // unrelated list of search hits.
+      return player.playRemote(track, queue: [track]);
+    }
+    final selected = RecommendationPlaybackItem(track: track);
+    return player.playRecommendation(
+      selected,
+      queue: [selected],
+      queueSourceId: 'search-radio:${link.videoId}',
+      queueExtender: buildRelatedRadioQueueExtender(
+        related: service as YouTubeMusicRelated,
+        seedVideoId: link.videoId,
+        initialQueue: [selected],
+      ),
     );
   }
 

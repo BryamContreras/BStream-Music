@@ -15,6 +15,7 @@ class TrackInfoModel extends TrackInfo {
     super.streamSource,
     super.streamFormatId,
     super.streamCodec,
+    super.streamBitrate,
     super.streamClientProfileKey,
     super.extractor,
     super.album,
@@ -65,6 +66,7 @@ class TrackInfoModel extends TrackInfo {
           _stringValue(json['stream_codec']) ??
           _stringValue(_selectedStreamFormat(json)?['acodec']) ??
           _stringValue(json['acodec']),
+      streamBitrate: _intValue(json['stream_bitrate']),
       streamClientProfileKey: _stringValue(json['stream_client_profile_key']),
       extractor:
           _stringValue(json['extractor']) ??
@@ -105,6 +107,7 @@ class TrackInfoModel extends TrackInfo {
       'stream_source': streamSource,
       'stream_format_id': streamFormatId,
       'stream_codec': streamCodec,
+      'stream_bitrate': streamBitrate,
       'stream_client_profile_key': streamClientProfileKey,
       'extractor': extractor,
       'album': album,

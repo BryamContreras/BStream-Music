@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent">
+
+    <FrameLayout
+        android:id="@+id/widget_surface"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_gravity="center_vertical"
+        android:background="@drawable/bstream_widget_background">
+
+        <ImageView
+            android:id="@+id/widget_backdrop"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bstream_widget_background"
+            android:clipToOutline="true"
+            android:contentDescription="@null"
+            android:scaleType="fitXY" />
+
+        <LinearLayout
+            android:id="@+id/widget_card"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="6dp">
+
+            <ImageView
+                android:id="@+id/widget_artwork"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="@drawable/bstream_widget_artwork_background"
+                android:clipToOutline="true"
+                android:contentDescription="@string/widget_artwork_description"
+                android:scaleType="centerCrop" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="6dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/widget_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:ellipsize="end"
+                    android:fontFamily="sans-serif-medium"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/widget_artist"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:visibility="gone" />
+
+                <FrameLayout
+                    android:layout_width="1dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="30dp"
+                    android:gravity="center"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/widget_repeat"
+                        android:layout_width="0dp"
+                        android:layout_height="28dp"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="@string/widget_repeat"
+                        android:padding="0dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/bstream_widget_repeat"
+                        android:tint="#FFFFFFFF" />
+
+                    <ImageView
+                        android:id="@+id/widget_previous"
+                        android:layout_width="0dp"
+                        android:layout_height="28dp"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="@string/widget_previous"
+                        android:padding="0dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/bstream_widget_previous"
+                        android:tint="#FFFFFFFF" />
+
+                    <ImageView
+                        android:id="@+id/widget_play_pause"
+                        android:layout_width="0dp"
+                        android:layout_height="30dp"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="@string/widget_play_pause"
+                        android:padding="0dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/bstream_widget_play"
+                        android:tint="#FFFFFFFF" />
+
+                    <ImageView
+                        android:id="@+id/widget_next"
+                        android:layout_width="0dp"
+                        android:layout_height="28dp"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="@string/widget_next"
+                        android:padding="0dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/bstream_widget_next"
+                        android:tint="#FFFFFFFF" />
+
+                    <ImageView
+                        android:id="@+id/widget_favorite"
+                        android:layout_width="0dp"
+                        android:layout_height="28dp"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent"
+                        android:contentDescription="@string/widget_favorite"
+                        android:padding="0dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/bstream_widget_heart_outline"
+                        android:tint="#FFFFFFFF" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>

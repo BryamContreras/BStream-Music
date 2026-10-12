@@ -321,33 +321,27 @@ abstract final class AppColors {
         : colors.outlineVariant.withValues(alpha: 0.8);
   }
 
-  /// Shared surface for content cards.
-  ///
-  /// [solidInLiquidGlass] is an explicit opt-out for content that should keep
-  /// a regular Material-card treatment while the surrounding application
-  /// chrome uses Liquid Glass. Accent and transparent modes are unaffected.
-  static Color cardSurfaceFor(
-    BuildContext context, {
-    bool solidInLiquidGlass = false,
-  }) {
+  /// Matches the translucency of artwork-detail cards in every content list.
+  static double cardSurfaceOpacityFor(BuildContext context) =>
+      surfaceBackgroundModeFor(context).isLiquidGlass ? 0.68 : 0.72 * 0.68;
+
+  /// Shared, accent-tinted fill for content cards, including Liquid Glass mode.
+  static Color cardSurfaceFor(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final mode = surfaceBackgroundModeFor(context);
-    if (mode.isLiquidGlass && !solidInLiquidGlass) {
-      return Colors.white.withValues(
-        alpha: theme.brightness == Brightness.dark ? 0.045 : 0.14,
-      );
-    }
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
     final tintedSurface = Color.alphaBlend(
       accent.withValues(alpha: 0.055),
       colors.surface,
     );
-    final translucentSurface = tintedSurface.withValues(alpha: 0.72);
-    if (!mode.isLiquidGlass) {
-      return translucentSurface;
-    }
-    return Color.alphaBlend(translucentSurface, theme.scaffoldBackgroundColor);
+    final baseSurface = mode.isLiquidGlass
+        ? Color.alphaBlend(
+            tintedSurface.withValues(alpha: 0.72),
+            theme.scaffoldBackgroundColor,
+          )
+        : tintedSurface;
+    return baseSurface.withValues(alpha: cardSurfaceOpacityFor(context));
   }
 
   static Color cardBorderFor(
@@ -372,7 +366,7 @@ abstract final class AppColors {
     }
     return Color.alphaBlend(
       translucentBorder,
-      cardSurfaceFor(context, solidInLiquidGlass: true),
+      cardSurfaceFor(context).withValues(alpha: 1),
     );
   }
 
@@ -544,27 +538,18 @@ abstract final class AppColors {
     );
   }
 
-  static Color homeCardSurfaceFor(
-    BuildContext context, {
-    bool solidInLiquidGlass = false,
-  }) {
+  static Color homeCardSurfaceFor(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     if (surfaceBackgroundModeFor(context).isLiquidGlass) {
-      if (solidInLiquidGlass) {
-        return cardSurfaceFor(context, solidInLiquidGlass: true);
-      }
-      return Colors.white.withValues(
-        alpha: theme.brightness == Brightness.dark ? 0.045 : 0.13,
-      );
+      return cardSurfaceFor(context);
     }
     final accent = theme.extension<AppAccentTheme>()?.seed ?? colors.primary;
     final tintedSurface = Color.alphaBlend(
       accent.withValues(alpha: 0.07),
       colors.surface,
     );
-    final mode = surfaceBackgroundModeFor(context);
-    return tintedSurface.withValues(alpha: mode.isLiquidGlass ? 0.56 : 0.78);
+    return tintedSurface.withValues(alpha: cardSurfaceOpacityFor(context));
   }
 
   /// Very light wash used by tab surfaces without turning the whole page into

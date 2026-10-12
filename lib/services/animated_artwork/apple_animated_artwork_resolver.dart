@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../player/visual_load_diagnostics.dart';
 import '../visual_track_identity.dart';
 
 typedef ArtworkJsonFetcher = Future<Map<String, dynamic>?> Function(Uri uri);
@@ -60,9 +61,14 @@ class AppleAnimatedArtworkResolver {
     }
     final cached = _cache[track];
     if (cached != null && cached.expires.isAfter(DateTime.now())) {
+      logVisualLoad(
+        'apple lookup memory-cache hit',
+        track: '${track.title}|${track.artist}',
+      );
       return Future.value(cached.url);
     }
     return _inFlight.putIfAbsent(track, () async {
+      final timer = Stopwatch()..start();
       Uri? url;
       try {
         url = await _resolveUncached(track);
@@ -78,6 +84,11 @@ class AppleAnimatedArtworkResolver {
         ),
       );
       if (_cache.length > 100) _cache.remove(_cache.keys.first);
+      logVisualLoad(
+        url == null ? 'apple lookup unavailable' : 'apple lookup resolved',
+        track: '${track.title}|${track.artist}',
+        elapsedMs: timer.elapsedMilliseconds,
+      );
       return url;
     });
   }
@@ -94,11 +105,17 @@ class AppleAnimatedArtworkResolver {
         ).hasMatch(album);
     if (knownAlbum) {
       try {
+        final providerTimer = Stopwatch()..start();
         final data = await _fetchJson(
           Uri.https('artwork.m8tec.top', '/api/v1/artwork/search', {
             'artist': artist,
             'album': album,
           }),
+        );
+        logVisualLoad(
+          'apple m8tec response',
+          track: '${track.title}|${track.artist}',
+          elapsedMs: providerTimer.elapsedMilliseconds,
         );
         if (data != null &&
             data['artist'] is String &&
@@ -114,10 +131,19 @@ class AppleAnimatedArtworkResolver {
               _appleUrl(data['url'], '.m3u8');
           if (hls != null) {
             final mp4 = await _playlistMp4(hls);
+            logVisualLoad(
+              'apple m8tec playlist',
+              track: '${track.title}|${track.artist}',
+              elapsedMs: providerTimer.elapsedMilliseconds,
+            );
             if (mp4 != null) return mp4;
           }
         }
       } catch (_) {
+        logVisualLoad(
+          'apple m8tec failed',
+          track: '${track.title}|${track.artist}',
+        );
         // Continue with the secondary source.
       }
     }
@@ -173,7 +199,13 @@ class AppleAnimatedArtworkResolver {
     bool preferVertical,
   ) async {
     try {
+      final providerTimer = Stopwatch()..start();
       final data = await _fetchJson(Uri.https('artwork.boidu.dev', '/', query));
+      logVisualLoad(
+        'apple boidu response',
+        track: '$title|$artist',
+        elapsedMs: providerTimer.elapsedMilliseconds,
+      );
       if (data == null ||
           data['name'] is! String ||
           !sameVisualTitle(title, data['name'] as String) ||
@@ -189,6 +221,11 @@ class AppleAnimatedArtworkResolver {
           _appleUrl(data['animated'], '.m3u8');
       if (hls != null) {
         final mp4 = await _playlistMp4(hls);
+        logVisualLoad(
+          'apple boidu playlist',
+          track: '$title|$artist',
+          elapsedMs: providerTimer.elapsedMilliseconds,
+        );
         if (mp4 != null) return mp4;
       }
       return _boundedDirectMp4(
@@ -196,6 +233,7 @@ class AppleAnimatedArtworkResolver {
           ) ??
           _boundedDirectMp4(data['videoUrl']);
     } catch (_) {
+      logVisualLoad('apple boidu failed', track: '$title|$artist');
       return null;
     }
   }

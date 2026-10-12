@@ -651,7 +651,7 @@ class _DeviceAudioTrackCard extends StatelessWidget {
       emphasized: isCurrent,
       child: Material(
         key: ValueKey('local-track-${track.id}'),
-        color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+        color: AppColors.cardSurfaceFor(context),
         shape: shape,
         clipBehavior: Clip.antiAlias,
         child: ListTile(

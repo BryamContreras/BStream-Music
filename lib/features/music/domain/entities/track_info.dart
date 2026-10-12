@@ -15,6 +15,7 @@ class TrackInfo {
     this.streamSource,
     this.streamFormatId,
     this.streamCodec,
+    this.streamBitrate,
     this.streamClientProfileKey,
     this.extractor,
     this.album,
@@ -42,6 +43,9 @@ class TrackInfo {
   final String? streamSource;
   final String? streamFormatId;
   final String? streamCodec;
+
+  /// Bitrate in bits per second, when reported for the selected audio stream.
+  final int? streamBitrate;
 
   /// Exact InnerTube client profile that produced [streamUrl].
   final String? streamClientProfileKey;
@@ -74,6 +78,7 @@ class TrackInfo {
     String? streamSource,
     String? streamFormatId,
     String? streamCodec,
+    int? streamBitrate,
     String? streamClientProfileKey,
     String? extractor,
     String? album,
@@ -98,6 +103,7 @@ class TrackInfo {
       streamSource: streamSource ?? this.streamSource,
       streamFormatId: streamFormatId ?? this.streamFormatId,
       streamCodec: streamCodec ?? this.streamCodec,
+      streamBitrate: streamBitrate ?? this.streamBitrate,
       streamClientProfileKey:
           streamClientProfileKey ?? this.streamClientProfileKey,
       extractor: extractor ?? this.extractor,

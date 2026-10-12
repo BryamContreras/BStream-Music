@@ -21,6 +21,7 @@ import 'playlist_artwork.dart';
 import 'source_image.dart';
 import 'track_play_button.dart';
 import '../providers/music_providers.dart';
+import '../providers/track_selection_controller.dart';
 
 enum _TrackResultAction { download, addToPlaylist }
 
@@ -30,7 +31,9 @@ class TrackResultTile extends ConsumerStatefulWidget {
     required this.onOpenPlayer,
     this.queue,
     this.queueSourceId,
+    this.onPlayTrack,
     this.preferCatalogArtwork = true,
+    this.selectionScope,
     super.key,
   });
 
@@ -38,7 +41,9 @@ class TrackResultTile extends ConsumerStatefulWidget {
   final VoidCallback onOpenPlayer;
   final List<TrackInfo>? queue;
   final String? queueSourceId;
+  final Future<void> Function(TrackInfo track)? onPlayTrack;
   final bool preferCatalogArtwork;
+  final Object? selectionScope;
 
   @override
   ConsumerState<TrackResultTile> createState() => _TrackResultTileState();
@@ -56,6 +61,12 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
       downloadControllerProvider.select((tasks) => tasks[track.url]),
     );
     final strings = ref.watch(appStringsProvider);
+    final scope = widget.selectionScope;
+    final selection = scope == null
+        ? null
+        : ref.watch(trackSelectionProvider(scope));
+    final selecting = selection?.active == true;
+    final selected = selection?.contains(track) == true;
     final playback = ref.watch(
       playerControllerProvider.select((player) {
         final snapshot = player.value;
@@ -77,17 +88,16 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
     final identity = track.id.trim().isNotEmpty ? track.id : track.url;
     final colors = Theme.of(context).colorScheme;
     final borderRadius = BorderRadius.circular(appCardRadius);
-    final baseColor = AppColors.cardSurfaceFor(
-      context,
-      solidInLiquidGlass: true,
-    );
-    final surfaceColor = isCurrent || _hovered
+    final baseColor = AppColors.cardSurfaceFor(context);
+    final surfaceColor = selected
+        ? Color.alphaBlend(colors.primary.withValues(alpha: 0.13), baseColor)
+        : isCurrent || _hovered
         ? Color.alphaBlend(
             colors.onSurface.withValues(alpha: _hovered ? 0.09 : 0.075),
             baseColor,
           )
         : baseColor;
-    final borderColor = isCurrent || _hovered
+    final borderColor = selected || isCurrent || _hovered
         ? colors.primary
         : AppColors.cardBorderFor(context, solidInLiquidGlass: true);
     final artwork = preferredRemoteTrackArtworkSource(
@@ -100,7 +110,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
       onExit: (_) => setState(() => _hovered = false),
       child: AppCardGradientBorder(
         solidInLiquidGlass: true,
-        emphasized: isCurrent || _hovered,
+        emphasized: selected || isCurrent || _hovered,
         width: _hovered ? 1.4 : 1,
         child: AnimatedContainer(
           key: ValueKey(
@@ -118,7 +128,17 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
             color: Colors.transparent,
             child: InkWell(
               borderRadius: borderRadius,
-              onTap: () => _play(ref, openPlayer: true),
+              onLongPress: selection == null || selection.busy
+                  ? null
+                  : () {
+                      FocusManager.instance.primaryFocus?.unfocus();
+                      selection.select(track);
+                    },
+              onTap: selecting
+                  ? selection!.busy
+                        ? null
+                        : () => selection.toggle(track)
+                  : () => _play(ref, openPlayer: true),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
@@ -197,17 +217,27 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    TrackPlayButton(
-                      key: ValueKey('track-result-play-$identity'),
-                      tooltip: isPlaying ? strings.pause : strings.play,
-                      isPlaying: isPlaying,
-                      onPressed: () => _togglePlayback(ref),
-                    ),
-                    _TrackResultMenu(
-                      key: ValueKey('track-result-menu-$identity'),
-                      track: track,
-                      strings: strings,
-                    ),
+                    if (selecting)
+                      Checkbox(
+                        key: ValueKey('track-result-selection-$identity'),
+                        value: selected,
+                        onChanged: selection!.busy
+                            ? null
+                            : (_) => selection.toggle(track),
+                      )
+                    else ...[
+                      TrackPlayButton(
+                        key: ValueKey('track-result-play-$identity'),
+                        tooltip: isPlaying ? strings.pause : strings.play,
+                        isPlaying: isPlaying,
+                        onPressed: () => _togglePlayback(ref),
+                      ),
+                      _TrackResultMenu(
+                        key: ValueKey('track-result-menu-$identity'),
+                        track: track,
+                        strings: strings,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -219,10 +249,15 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
   }
 
   Future<void> _play(WidgetRef ref, {bool openPlayer = false}) async {
-    final queue = widget.queue ?? [track];
-    final playFuture = ref
-        .read(playerControllerProvider.notifier)
-        .playRemote(track, queue: queue, queueSourceId: widget.queueSourceId);
+    final Future<void> playFuture;
+    if (widget.onPlayTrack case final onPlayTrack?) {
+      playFuture = onPlayTrack(track);
+    } else {
+      final queue = widget.queue ?? [track];
+      playFuture = ref
+          .read(playerControllerProvider.notifier)
+          .playRemote(track, queue: queue, queueSourceId: widget.queueSourceId);
+    }
     if (openPlayer) {
       onOpenPlayer();
     }

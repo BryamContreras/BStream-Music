@@ -41,6 +41,8 @@
 	<true/>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>BStream Music necesita acceso para mostrar y reproducir la música guardada en tu dispositivo.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BStream Music necesita acceso a tus fotos para elegir un fondo personalizado.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

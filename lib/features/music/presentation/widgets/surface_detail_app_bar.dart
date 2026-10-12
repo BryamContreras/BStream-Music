@@ -1,10 +1,35 @@
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/liquid_glass_surface.dart';
+
+/// Signals only the start and end of vertical scrolling. Liquid Glass can use
+/// its existing mobile motion treatment without rebuilding the scrolling body
+/// for every update notification.
+class GlassScrollMotionNotifier extends ValueNotifier<bool> {
+  GlassScrollMotionNotifier() : super(false);
+
+  bool handleNotification(ScrollNotification notification) {
+    if (notification.depth != 0 || notification.metrics.axis != Axis.vertical) {
+      return false;
+    }
+    final moving = switch (notification) {
+      ScrollStartNotification() ||
+      ScrollUpdateNotification() ||
+      OverscrollNotification() => true,
+      ScrollEndNotification() => false,
+      UserScrollNotification(direction: ScrollDirection.idle) => false,
+      _ => null,
+    };
+    if (moving != null && value != moving) value = moving;
+    return false;
+  }
+}
 
 /// Top chrome for album, mix and artist detail routes.
 ///
@@ -19,6 +44,7 @@ class SurfaceDetailAppBar extends StatelessWidget
     this.surfaceKey,
     this.blurKey,
     this.statusBarSurfaceKey,
+    this.backdropMotion,
     super.key,
   });
 
@@ -28,6 +54,7 @@ class SurfaceDetailAppBar extends StatelessWidget
   final Key? surfaceKey;
   final Key? blurKey;
   final Key? statusBarSurfaceKey;
+  final ValueListenable<bool>? backdropMotion;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -54,15 +81,25 @@ class SurfaceDetailAppBar extends StatelessWidget
       // would otherwise collapse and leave no painted/blurred surface.
       child: const SizedBox.expand(),
     );
+    Widget liquidToolbar(bool moving, Widget child) => LiquidGlassSurface(
+      key: const ValueKey('surface-detail-liquid-glass'),
+      borderRadius: BorderRadius.zero,
+      blurSigma: 8,
+      intensity: 1.2,
+      edgeTreatment: LiquidGlassEdgeTreatment.bottom,
+      backdropMotion: moving,
+      child: child,
+    );
+    final motion = backdropMotion;
     final toolbarSurface = liquidGlass
-        ? LiquidGlassSurface(
-            key: const ValueKey('surface-detail-liquid-glass'),
-            borderRadius: BorderRadius.zero,
-            blurSigma: 8,
-            intensity: 1.2,
-            edgeTreatment: LiquidGlassEdgeTreatment.bottom,
-            child: surface,
-          )
+        ? motion == null
+              ? liquidToolbar(false, surface)
+              : ValueListenableBuilder<bool>(
+                  valueListenable: motion,
+                  child: surface,
+                  builder: (context, moving, child) =>
+                      liquidToolbar(moving, child!),
+                )
         : transparent
         ? ClipRect(
             child: BackdropFilter(

@@ -6,17 +6,50 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../providers/music_providers.dart';
+import 'app_background_photo.dart';
 import 'source_image.dart';
 import 'track_change_transition.dart';
 
 /// Neutral background used by the browsing tabs. Artwork belongs to the player
 /// surface and should not tint navigation screens behind their content cards.
-class BrowsingTabBackground extends StatelessWidget {
-  const BrowsingTabBackground({super.key});
+class BrowsingTabBackground extends ConsumerWidget {
+  const BrowsingTabBackground({required this.showCustomPhoto, super.key});
+
+  final bool showCustomPhoto;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final photoPath = showCustomPhoto
+        ? ref.watch(
+            settingsControllerProvider.select(
+              (settings) => settings.value?.appBackgroundPath,
+            ),
+          )
+        : null;
     final colors = Theme.of(context).colorScheme;
+    if (photoPath != null) {
+      return Stack(
+        key: const ValueKey('browsing-tab-background-photo'),
+        fit: StackFit.expand,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [colors.surface, colors.surfaceContainerLowest],
+              ),
+            ),
+          ),
+          AppBackgroundPhoto(
+            path: photoPath,
+            scrim: colors.brightness == Brightness.dark
+                ? const Color(0x7A000000)
+                : const Color(0xA6FFFFFF),
+          ),
+        ],
+      );
+    }
     return DecoratedBox(
       key: const ValueKey('browsing-tab-background-surface'),
       decoration: BoxDecoration(

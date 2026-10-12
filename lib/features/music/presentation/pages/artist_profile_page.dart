@@ -95,10 +95,18 @@ class ArtistProfilePage extends ConsumerStatefulWidget {
 }
 
 class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
+  final GlassScrollMotionNotifier _glassScrollMotion =
+      GlassScrollMotionNotifier();
   bool _subscriptionBusy = false;
   bool _radioBusy = false;
   bool _popularPlaybackBusy = false;
   bool? _subscriptionOverride;
+
+  @override
+  void dispose() {
+    _glassScrollMotion.dispose();
+    super.dispose();
+  }
 
   ArtistProfileRequest get _request => (
     artistBrowseId: widget.artistBrowseId,
@@ -150,6 +158,7 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
       extendBodyBehindAppBar: true,
       backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: SurfaceDetailAppBar(
+        backdropMotion: _glassScrollMotion,
         appBarKey: const ValueKey('artist-profile-app-bar'),
         surfaceKey: const ValueKey('artist-profile-app-bar-surface'),
         blurKey: const ValueKey('artist-profile-app-bar-blur'),
@@ -165,13 +174,30 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
       // Render the identity and artwork immediately. Mix pages feel faster
       // because their header metadata is already known before tracks load;
       // artist pages now follow the same progressive pattern.
-      body: _buildProfile(
-        context,
-        profile,
-        profileLoaded: profileState.hasValue,
-        profileLoading: profileState.isLoading,
-        profileFailed: profileState.hasError && !profileState.hasValue,
-        bottomContentPadding: bottomContentPadding,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          RepaintBoundary(
+            key: const ValueKey('artist-profile-artwork-underlay'),
+            child: ArtworkGradientHeaderBackground(
+              artworkSource: profile.artist.thumbnailUrl,
+              cacheWidth: 640,
+              keyPrefix: 'artist-profile',
+              extendColorThroughContent: true,
+            ),
+          ),
+          NotificationListener<ScrollNotification>(
+            onNotification: _glassScrollMotion.handleNotification,
+            child: _buildProfile(
+              context,
+              profile,
+              profileLoaded: profileState.hasValue,
+              profileLoading: profileState.isLoading,
+              profileFailed: profileState.hasError && !profileState.hasValue,
+              bottomContentPadding: bottomContentPadding,
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: ColoredBox(
         color: underlayMiniPlayer
@@ -231,13 +257,6 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
           child: SizedBox(
             key: const ValueKey('artist-profile-app-bar-spacer'),
             height: surfaceDetailAppBarBodyInset(context),
-            child: AppColors.surfaceBackgroundModeFor(context).usesBackdrop
-                ? ArtworkGradientHeaderBackground(
-                    artworkSource: profile.artist.thumbnailUrl,
-                    cacheWidth: 640,
-                    keyPrefix: 'artist-profile-app-bar-underlay',
-                  )
-                : null,
           ),
         ),
         SliverToBoxAdapter(
@@ -245,13 +264,6 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
             key: const ValueKey('artist-profile-header'),
             child: Stack(
               children: [
-                Positioned.fill(
-                  child: ArtworkGradientHeaderBackground(
-                    artworkSource: profile.artist.thumbnailUrl,
-                    cacheWidth: 640,
-                    keyPrefix: 'artist-profile',
-                  ),
-                ),
                 _ArtistHeader(
                   profile: profile,
                   radioLabel: strings.artistMix,
@@ -334,7 +346,7 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
             ),
           ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            padding: const EdgeInsets.fromLTRB(6, 0, 6, 10),
             sliver: SliverList.separated(
               itemCount: tracks.length,
               separatorBuilder: (_, _) => const SizedBox(height: 6),

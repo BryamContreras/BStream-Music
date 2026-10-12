@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/utils/image_source.dart';
 import '../../core/utils/cached_artwork_image_provider.dart';
+import 'visual_load_diagnostics.dart';
 
 /// A session-only cache for the player, bounded to the current song and the
 /// two songs played immediately before it. Only complete downloads are used.
@@ -52,7 +53,8 @@ class PlaybackVisualCache extends ChangeNotifier {
     required Uri? videoUrl,
   }) {
     if (_disposed) return;
-    if (_activeKey != trackKey) {
+    final newlyActivated = _activeKey != trackKey;
+    if (newlyActivated) {
       final previous = _entries[_activeKey];
       previous?.cancelPending();
       _activeKey = trackKey;
@@ -61,6 +63,11 @@ class PlaybackVisualCache extends ChangeNotifier {
 
     final entry = _entries.remove(trackKey) ?? _VisualEntry(trackKey);
     _entries[trackKey] = entry;
+    if (newlyActivated &&
+        entry.videoFile != null &&
+        entry.videoUrl == videoUrl) {
+      logVisualLoad('video file cache hit', track: trackKey);
+    }
     while (_entries.length > maxRetainedTracks) {
       final oldest = _entries.keys.first;
       final evicted = _entries.remove(oldest)!;
@@ -221,6 +228,7 @@ class PlaybackVisualCache extends ChangeNotifier {
     Uri url,
     _Transfer transfer,
   ) async {
+    final timer = Stopwatch()..start();
     File? file;
     try {
       file = await _download(entry.key, url, 'video', _maxVideoBytes, transfer);
@@ -234,6 +242,14 @@ class PlaybackVisualCache extends ChangeNotifier {
             _entries[entry.key] == entry &&
             entry.videoUrl == url) {
           entry.videoFile = file;
+          logVisualLoad(
+            transfer.diskCacheHit
+                ? 'video disk-cache hit'
+                : 'video download complete',
+            track: entry.key,
+            elapsedMs: timer.elapsedMilliseconds,
+            bytes: visualLoadTimingsEnabled ? file.lengthSync() : null,
+          );
           assert(() {
             debugPrint(
               'BStream visual video ${entry.key}: ${file!.lengthSync()} bytes',
@@ -242,6 +258,11 @@ class PlaybackVisualCache extends ChangeNotifier {
           }());
           _changed();
         } else if (!transfer.cancelled && file == null) {
+          logVisualLoad(
+            'video download failed',
+            track: entry.key,
+            elapsedMs: timer.elapsedMilliseconds,
+          );
           entry.videoFailedAt = DateTime.now();
         }
       }
@@ -261,7 +282,10 @@ class PlaybackVisualCache extends ChangeNotifier {
     final target = File(
       '${folder.path}${Platform.pathSeparator}$hash.${kind == 'video' ? 'mp4' : 'img'}',
     );
-    if (await target.exists() && await target.length() > 0) return target;
+    if (await target.exists() && await target.length() > 0) {
+      transfer.diskCacheHit = true;
+      return target;
+    }
     if (await target.exists()) {
       try {
         await target.delete();
@@ -420,6 +444,7 @@ class _VisualEntry {
 
 class _Transfer {
   bool cancelled = false;
+  bool diskCacheHit = false;
   HttpClient? client;
   HttpClientRequest? request;
 

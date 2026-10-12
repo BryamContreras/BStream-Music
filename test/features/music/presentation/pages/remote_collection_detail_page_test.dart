@@ -4,6 +4,7 @@ import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
+import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playlist_picker_dialog.dart';
@@ -16,6 +17,182 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 
 void main() {
+  testWidgets(
+    'album selection adds only marked songs and survives picker cancellation',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      final player = _RecordingPlayerController();
+      final playlists = _PickerPlaylistsController();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            playlistsControllerProvider.overrideWith(() => playlists),
+            libraryTracksProvider.overrideWith((ref) async => []),
+            catalogPlaylistsProvider.overrideWith((ref) async => []),
+          ],
+          child: _detailApp(
+            player: player,
+            tracksProvider: FutureProvider((ref) async => _tracks),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('Primera cancion'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('collection-selection-toolbar')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('track-result-play-song-1')),
+        findsNothing,
+      );
+      await tester.tap(find.text('Segunda cancion'));
+      await tester.pumpAndSettle();
+      final checkboxes = tester.widgetList<Checkbox>(find.byType(Checkbox));
+      expect(checkboxes.every((checkbox) => checkbox.value == true), isTrue);
+      await tester.tap(find.text('Primera cancion'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('collection-selection-add-to-playlist')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('playlist-picker-create')),
+        findsOneWidget,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('collection-selection-toolbar')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Checkbox>(
+              find.byKey(const ValueKey('track-result-selection-song-2')),
+            )
+            .value,
+        isTrue,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('collection-selection-add-to-playlist')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('playlist-picker-option-existing')),
+      );
+      await tester.pumpAndSettle();
+      expect(playlists.receivedTracks, [_tracks.last]);
+      expect(playlists.download, isFalse);
+      expect(player.playCalls, 0);
+      expect(
+        find.byKey(const ValueKey('collection-selection-toolbar')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'mix selection downloads only selected audio using the shared queue',
+    (tester) async {
+      final downloads = _SelectedDownloads();
+      final player = _RecordingPlayerController();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [downloadControllerProvider.overrideWith(() => downloads)],
+          child: _detailApp(
+            player: player,
+            subtitle: 'Mix recomendado',
+            tracksProvider: FutureProvider((ref) async => _tracks),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('Segunda cancion'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('collection-selection-download')),
+      );
+      await tester.pumpAndSettle();
+      expect(downloads.tracks, [_tracks.last]);
+      expect(player.playCalls, 0);
+      expect(
+        find.byKey(const ValueKey('collection-selection-toolbar')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('Back clears collection selection without leaving the detail', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: FutureProvider((ref) async => _tracks),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Primera cancion'));
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('collection-selection-toolbar')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('remote-collection-detail')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'albums expose the existing-playlist picker and plus without a callback',
+    (tester) async {
+      final controller = _PickerPlaylistsController();
+      final tracksProvider = FutureProvider<List<TrackInfo>>(
+        (ref) async => _tracks,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            playlistsControllerProvider.overrideWith(() => controller),
+            libraryTracksProvider.overrideWith((ref) async => []),
+            catalogPlaylistsProvider.overrideWith((ref) async => []),
+          ],
+          child: _detailApp(
+            player: _RecordingPlayerController(),
+            tracksProvider: tracksProvider,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('remote-collection-add-to-playlist')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('playlist-picker-create')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('playlist-picker-option-existing')),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.destination, 'existing');
+      expect(controller.receivedTracks, _tracks);
+      expect(controller.download, isFalse);
+    },
+  );
+
   testWidgets('create playlist dialog prefills, edits and cancels safely', (
     tester,
   ) async {
@@ -121,7 +298,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.download_rounded), findsOneWidget);
-      expect(find.byIcon(Icons.playlist_add_rounded), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byWidgetPredicate((widget) => widget is PopupMenuItem),
+          matching: find.byIcon(Icons.playlist_add_rounded),
+        ),
+        findsOneWidget,
+      );
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
 
@@ -679,6 +862,50 @@ void main() {
     expect(appBar.systemOverlayStyle?.statusBarColor, tonalSurface);
   });
 
+  testWidgets('collection glass app bar restores optics after scrolling', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final tracksProvider = FutureProvider<List<TrackInfo>>(
+      (ref) async => [
+        for (var index = 0; index < 12; index++)
+          _tracks.first.copyWith(id: 'scroll-song-$index'),
+      ],
+      retry: (_, _) => null,
+    );
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: tracksProvider,
+        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final glassFinder = find.byKey(
+      const ValueKey('surface-detail-liquid-glass'),
+    );
+    bool isMoving() =>
+        tester.widget<LiquidGlassSurface>(glassFinder).backdropMotion;
+    expect(isMoving(), isFalse);
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(CustomScrollView)),
+    );
+    await gesture.moveBy(const Offset(0, -160));
+    await tester.pump();
+    expect(isMoving(), isTrue);
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(isMoving(), isFalse);
+  });
+
   testWidgets(
     'reuses the bounded artwork decode for the blurred header background',
     (tester) async {
@@ -860,13 +1087,15 @@ void main() {
       greaterThanOrEqualTo(48),
     );
 
-    final scrollable = find.byType(CustomScrollView);
-    await tester.drag(scrollable, const Offset(0, -700));
-    await tester.pumpAndSettle();
-
     final trackTile = find.byKey(
       const ValueKey('remote-collection-track-song-1'),
     );
+    await tester.scrollUntilVisible(
+      trackTile,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     expect(trackTile, findsOneWidget);
     expect(tester.getRect(trackTile).height, greaterThanOrEqualTo(48));
     final playButton = find.byKey(const ValueKey('track-result-play-song-1'));
@@ -929,6 +1158,48 @@ Widget _detailApp({
 }
 
 void _noop() {}
+
+class _SelectedDownloads extends DownloadController {
+  List<TrackInfo>? tracks;
+
+  @override
+  Map<String, DownloadTaskState> build() => const {};
+
+  @override
+  Future<int> downloadTracks(Iterable<TrackInfo> tracks) async {
+    this.tracks = tracks.toList();
+    return tracks.length;
+  }
+}
+
+class _PickerPlaylistsController extends PlaylistsController {
+  String? destination;
+  List<TrackInfo>? receivedTracks;
+  bool? download;
+
+  @override
+  Future<List<Playlist>> build() async => [
+    Playlist(
+      id: 'existing',
+      name: 'Mi playlist',
+      trackIds: const [],
+      createdAt: DateTime.utc(2026),
+      updatedAt: DateTime.utc(2026),
+    ),
+  ];
+
+  @override
+  Future<int> addRemoteTracksToPlaylist(
+    String playlistId,
+    Iterable<TrackInfo> tracks, {
+    bool download = false,
+  }) async {
+    destination = playlistId;
+    receivedTracks = tracks.toList();
+    this.download = download;
+    return tracks.length;
+  }
+}
 
 class _RecordingPlayerController extends PlayerController {
   int playCalls = 0;

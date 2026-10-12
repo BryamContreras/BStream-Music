@@ -1,4 +1,6 @@
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/app_background_photo.dart';
+import 'package:bstream_music/features/music/presentation/widgets/artwork_gradient_header_background.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_gradient_background.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +8,67 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('custom photo appears only on opted-in browsing tabs', (
+    tester,
+  ) async {
+    Widget browsingBackground({required bool showCustomPhoto}) => ProviderScope(
+      overrides: [
+        settingsControllerProvider.overrideWith(_PhotoSettingsController.new),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: BrowsingTabBackground(showCustomPhoto: showCustomPhoto),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(browsingBackground(showCustomPhoto: true));
+    await tester.pump();
+    expect(find.byType(AppBackgroundPhoto), findsOneWidget);
+
+    await tester.pumpWidget(browsingBackground(showCustomPhoto: false));
+    await tester.pump();
+    expect(find.byType(AppBackgroundPhoto), findsNothing);
+  });
+
+  testWidgets('custom photo does not replace artwork on detail or player', (
+    tester,
+  ) async {
+    final controller = _BackgroundPlayerController(
+      const PlayerSnapshot(status: PlayerStatus.paused),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          playerControllerProvider.overrideWith(() => controller),
+          settingsControllerProvider.overrideWith(_PhotoSettingsController.new),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                Expanded(child: PlayerPlaybackGradientBackground()),
+                Expanded(
+                  child: ArtworkGradientHeaderBackground(
+                    artworkSource: null,
+                    cacheWidth: 640,
+                    keyPrefix: 'photo-scope-test',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(AppBackgroundPhoto), findsNothing);
+    expect(
+      find.byKey(const ValueKey('photo-scope-test-background-fallback')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('player background changes artwork without a luminance dip', (
     tester,
   ) async {
@@ -95,4 +158,13 @@ class _BackgroundPlayerController extends PlayerController {
   void emit(PlayerSnapshot snapshot) {
     state = AsyncData(snapshot);
   }
+}
+
+class _PhotoSettingsController extends SettingsController {
+  @override
+  Future<SettingsState> build() async => const SettingsState(
+    downloadDirectory: '/tmp/BStream-Music',
+    language: AppLanguage.spanish,
+    appBackgroundPath: '/tmp/BStream-Music/background.png',
+  );
 }

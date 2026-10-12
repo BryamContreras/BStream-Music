@@ -10,6 +10,8 @@ class _ClassicVinylPlayerLayout extends StatelessWidget {
     required this.artworkStyle,
     required this.animatedArtworkEnabled,
     required this.canvasUrl,
+    required this.videoStartOffset,
+    required this.videoDurationHint,
     required this.drawBackground,
     required this.hasTrack,
     required this.isFavorite,
@@ -34,6 +36,8 @@ class _ClassicVinylPlayerLayout extends StatelessWidget {
   final PlayerArtworkStyle artworkStyle;
   final bool animatedArtworkEnabled;
   final Uri? canvasUrl;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final bool drawBackground;
   final bool hasTrack;
   final bool isFavorite;
@@ -257,6 +261,8 @@ class _ClassicVinylPlayerLayout extends StatelessWidget {
                 isPlaying: snapshot.status == PlayerStatus.playing,
                 animationEnabled: animatedArtworkEnabled,
                 canvasUrl: canvasUrl,
+                videoStartOffset: videoStartOffset,
+                videoDurationHint: videoDurationHint,
                 trackTransitionsEnabled: trackTransitionsEnabled,
                 expanded: deckUsesExpandedGeometry,
                 portraitLayout: !twoColumn,
@@ -434,6 +440,8 @@ class _ClassicVinylPlaybackDeck extends ConsumerWidget {
     required this.isPlaying,
     required this.animationEnabled,
     required this.canvasUrl,
+    required this.videoStartOffset,
+    required this.videoDurationHint,
     required this.trackTransitionsEnabled,
     required this.expanded,
     required this.portraitLayout,
@@ -445,6 +453,8 @@ class _ClassicVinylPlaybackDeck extends ConsumerWidget {
   final bool isPlaying;
   final bool animationEnabled;
   final Uri? canvasUrl;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final bool trackTransitionsEnabled;
   final bool expanded;
   final bool portraitLayout;
@@ -474,6 +484,8 @@ class _ClassicVinylPlaybackDeck extends ConsumerWidget {
       isPlaying: isPlaying,
       animationEnabled: animationEnabled,
       canvasUrl: canvasUrl,
+      videoStartOffset: videoStartOffset,
+      videoDurationHint: videoDurationHint,
       progress: progress,
       trackTransitionsEnabled: trackTransitionsEnabled,
       expanded: expanded,

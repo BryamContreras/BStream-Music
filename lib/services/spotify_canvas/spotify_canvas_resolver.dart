@@ -148,7 +148,10 @@ class SpotifyCanvasResolver {
         Uri.https('www.spotycovs.lol', '/api/canvas', {'id': spotifyId}),
       );
       _checkThrottle(canvas);
-      final url = await _videoFromCanvasPayload(canvas);
+      final url = await _videoFromCanvasPayload(
+        canvas,
+        expectedTrackId: spotifyId,
+      );
       if (url != null) return url;
     }
 
@@ -185,13 +188,19 @@ class SpotifyCanvasResolver {
               normalVisualText(queryArtist)) {
         continue;
       }
-      final url = await _videoFromCanvasPayload(direct);
+      final url = await _videoFromCanvasPayload(
+        direct,
+        expectedTrackId: resolvedId,
+      );
       if (url != null) return url;
     }
     return null;
   }
 
-  Future<Uri?> _videoFromCanvasPayload(Map<String, dynamic>? canvas) async {
+  Future<Uri?> _videoFromCanvasPayload(
+    Map<String, dynamic>? canvas, {
+    required String expectedTrackId,
+  }) async {
     final canvases = canvas?['canvases'];
     if (canvas?['hasCanvas'] != true || canvases is! List) return null;
     for (final item in canvases) {
@@ -201,8 +210,11 @@ class SpotifyCanvasResolver {
       final url = Uri.tryParse(rawUrl);
       if (url != null &&
           url.scheme == 'https' &&
-          url.host == 'canvaz.scdn.co' &&
-          url.path.endsWith('.mp4')) {
+          url.userInfo.isEmpty &&
+          url.port == 443 &&
+          ((url.host == 'canvaz.scdn.co' && url.path.endsWith('.mp4')) ||
+              (_isProviderStream(url) &&
+                  url.queryParameters['id'] == expectedTrackId))) {
         final bytes = await _probeMediaSize(url);
         if (bytes != null && bytes > 0 && bytes <= maxCanvasBytes) {
           return url;
@@ -211,6 +223,12 @@ class SpotifyCanvasResolver {
     }
     return null;
   }
+
+  static bool _isProviderStream(Uri uri) =>
+      (uri.host == 'www.spotycovs.lol' || uri.host == 'spotycovs.lol') &&
+      uri.path == '/api/canvas' &&
+      uri.queryParameters['stream'] == '1' &&
+      RegExp(r'^[A-Za-z0-9]{22}$').hasMatch(uri.queryParameters['id'] ?? '');
 
   static void _checkThrottle(Map<String, dynamic>? response) {
     final code = response?['code'] ?? response?['error'];
@@ -258,15 +276,59 @@ class SpotifyCanvasResolver {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
     try {
       return await (() async {
-        final request = await client.headUrl(uri);
+        // Spotycovs' proxied stream is GET-only. Keep HEAD for direct Spotify
+        // media, with a one-byte Range fallback when a host cannot report size.
+        if (!_isProviderStream(uri)) {
+          final request = await client.headUrl(uri);
+          final response = await request.close();
+          _checkMediaStatus(response);
+          if (response.statusCode == HttpStatus.ok &&
+              response.contentLength > 0) {
+            return response.contentLength;
+          }
+          if (response.statusCode != HttpStatus.ok &&
+              response.statusCode != HttpStatus.methodNotAllowed &&
+              response.statusCode != HttpStatus.notImplemented) {
+            return null;
+          }
+          await response.drain<void>();
+        }
+
+        final request = await client.getUrl(uri);
+        request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-0');
         final response = await request.close();
+        _checkMediaStatus(response);
+        final mime = response.headers.contentType?.mimeType;
+        if (mime != null &&
+            !mime.startsWith('video/') &&
+            mime != 'application/mp4' &&
+            mime != 'application/octet-stream') {
+          return null;
+        }
+        if (response.statusCode == HttpStatus.partialContent) {
+          final range = response.headers.value(HttpHeaders.contentRangeHeader);
+          final total = RegExp(
+            r'^bytes\s+\d+-\d+/(\d+)$',
+          ).firstMatch(range ?? '')?.group(1);
+          return total == null ? null : int.tryParse(total);
+        }
         return response.statusCode == HttpStatus.ok &&
                 response.contentLength > 0
             ? response.contentLength
             : null;
-      })().timeout(const Duration(seconds: 4));
+      })().timeout(const Duration(seconds: 6));
     } finally {
       client.close(force: true);
+    }
+  }
+
+  static void _checkMediaStatus(HttpClientResponse response) {
+    if (response.statusCode == HttpStatus.tooManyRequests) {
+      throw const _CanvasThrottled();
+    }
+    if (response.statusCode >= HttpStatus.internalServerError &&
+        response.statusCode != HttpStatus.notImplemented) {
+      throw HttpException('Canvas media temporarily unavailable');
     }
   }
 }

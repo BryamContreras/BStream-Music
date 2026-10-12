@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_description">BStream Music: now playing and controls</string>
+    <string name="widget_artwork_description">Song artwork</string>
+    <string name="widget_previous">Previous</string>
+    <string name="widget_play_pause">Play or pause</string>
+    <string name="widget_next">Next</string>
+    <string name="widget_repeat">Repeat</string>
+    <string name="widget_repeat_all">Repeat queue</string>
+    <string name="widget_repeat_one">Repeat song</string>
+    <string name="widget_favorite">Favorites</string>
+</resources>

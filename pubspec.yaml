@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.8+128
+version: 1.2.9+129
 
 environment:
   sdk: ^3.12.0
@@ -56,6 +56,7 @@ dependencies:
   image: ^4.8.0
   uuid: ^4.5.3
   file_picker: ^12.2.0
+  image_picker: ^1.2.4
   media_kit: ^1.2.6
   media_kit_libs_windows_audio: ^1.0.9
   media_kit_libs_linux: ^1.2.1
@@ -115,6 +116,10 @@ flutter:
   assets:
     - assets/icons/bstream_icon.png
     - assets/fonts/Roboto-LICENSE.txt
+    - assets/fonts/Nunito-OFL.txt
+    - assets/fonts/Lora-OFL.txt
+    - assets/fonts/SpaceMono-OFL.txt
+    - assets/fonts/Fredoka-OFL.txt
     - assets/dictionaries/kuromoji-ipadic.bin.bz2
     - assets/youtube/po_token.html
     - assets/youtube/ejs/0.8.0/yt.solver.lib.min.js.b64
@@ -134,6 +139,21 @@ flutter:
           weight: 700
         - asset: assets/fonts/Roboto-Black.ttf
           weight: 900
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito-Variable.ttf
+    - family: Lora
+      fonts:
+        - asset: assets/fonts/Lora-Variable.ttf
+    - family: Space Mono
+      fonts:
+        - asset: assets/fonts/SpaceMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/SpaceMono-Bold.ttf
+          weight: 700
+    - family: Fredoka
+      fonts:
+        - asset: assets/fonts/Fredoka-Variable.ttf
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

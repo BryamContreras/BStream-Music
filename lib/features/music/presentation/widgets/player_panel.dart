@@ -23,18 +23,17 @@ import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
-import '../providers/artwork_progress_color_provider.dart';
 import '../providers/music_providers.dart';
 import '../providers/playback_visual_cache_provider.dart';
 import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
 import 'animated_artwork_motion.dart';
-import 'animated_artwork_particles.dart';
 import 'classic_vinyl_deck.dart';
 import 'favorite_star_badge.dart';
 import 'glass_popup_menu_button.dart';
 import 'lyrics_page_route.dart';
 import 'now_playing_equalizer.dart';
+import 'playback_audio_quality.dart';
 import 'playback_dark_theme.dart';
 import 'playback_gradient_background.dart';
 import 'playlist_artwork.dart';
@@ -278,6 +277,11 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       }),
     );
     final strings = ref.watch(appStringsProvider);
+    final playerFont = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => settings.value?.playerFont ?? defaultPlayerFont,
+      ),
+    );
     final playbackQueue = ref.watch(playbackQueueProvider);
     final favoriteTrackIds = ref.watch(favoriteTrackIdsProvider);
     final localTracks =
@@ -345,9 +349,15 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             remoteArtworkAllowed
         ? ref.watch(_appleAnimatedArtworkUrlProvider(appleArtworkTrack)).value
         : spotifyCanvasUrl;
-    final artworkParticleColor = widget.animatedArtworkEnabled
-        ? ref.watch(artworkProgressColorProvider(artworkSource)).value
-        : null;
+    final videoStartOffset =
+        widget.appleAnimatedArtworkEnabled && !widget.spotifyCanvasEnabled
+        ? const Duration(seconds: 7)
+        : Duration.zero;
+    final autoFitInsetArtwork =
+        widget.appleAnimatedArtworkEnabled &&
+        !widget.spotifyCanvasEnabled &&
+        widget.artworkStyle == PlayerArtworkStyle.expanded;
+    final videoDurationHint = snapshot.duration ?? Duration.zero;
     final visualIdentity = playbackVisualIdentity(
       trackId: snapshot.trackId,
       sourceUrl: snapshot.sourceUrl,
@@ -481,7 +491,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         }
 
         final surroundingTheme = Theme.of(context);
-        final playerTheme = alwaysDarkPlaybackTheme(surroundingTheme);
+        final playerTheme = alwaysDarkPlaybackTheme(
+          surroundingTheme,
+          fontFamily: playerFont.fontFamily,
+        );
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -507,6 +520,8 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                             animatedArtworkEnabled:
                                 widget.animatedArtworkEnabled,
                             canvasUrl: canvasUrl,
+                            videoStartOffset: videoStartOffset,
+                            videoDurationHint: videoDurationHint,
                             drawBackground: widget.drawBackground,
                             hasTrack: hasTrack,
                             isFavorite: isFavorite,
@@ -527,7 +542,6 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                             snapshot: snapshot,
                             artworkSource: artworkSource,
                             artworkFallbackSource: artworkFallbackSource,
-                            artworkParticleColor: artworkParticleColor,
                             visualIdentity: visualIdentity,
                             trackTransitionsEnabled:
                                 widget.trackTransitionsEnabled,
@@ -535,6 +549,9 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                             animatedArtworkEnabled:
                                 widget.animatedArtworkEnabled,
                             canvasUrl: canvasUrl,
+                            autoFitInsetArtwork: autoFitInsetArtwork,
+                            videoStartOffset: videoStartOffset,
+                            videoDurationHint: videoDurationHint,
                             drawBackground: widget.drawBackground,
                             hasTrack: hasTrack,
                             isFavorite: isFavorite,
@@ -581,7 +598,6 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                   child: _ExpandedArtworkHero(
                                     url: artworkSource,
                                     fallbackUrl: artworkFallbackSource,
-                                    particleColor: artworkParticleColor,
                                     identity: visualIdentity,
                                     isPlaying:
                                         snapshot.status == PlayerStatus.playing,
@@ -590,6 +606,9 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                     animatedArtworkEnabled:
                                         widget.animatedArtworkEnabled,
                                     canvasUrl: canvasUrl,
+                                    autoFitInsetArtwork: autoFitInsetArtwork,
+                                    videoStartOffset: videoStartOffset,
+                                    videoDurationHint: videoDurationHint,
                                   ),
                                 ),
                               Padding(
@@ -813,8 +832,6 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                                     url: artworkSource,
                                                     fallbackUrl:
                                                         artworkFallbackSource,
-                                                    particleColor:
-                                                        artworkParticleColor,
                                                     identity: visualIdentity,
                                                     isPlaying:
                                                         snapshot.status ==
@@ -830,6 +847,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                                     animatedArtworkEnabled: widget
                                                         .animatedArtworkEnabled,
                                                     canvasUrl: canvasUrl,
+                                                    videoStartOffset:
+                                                        videoStartOffset,
+                                                    videoDurationHint:
+                                                        videoDurationHint,
                                                     maxExtent: artworkExtent,
                                                     isFavorite: mobileLandscape
                                                         ? false
@@ -1314,10 +1335,9 @@ double _expandedArtworkHeroTop(double width) {
 double _expandedArtworkHeroHeight(BoxConstraints constraints) {
   final width = constraints.maxWidth;
   final upwardBleed = -_expandedArtworkHeroTop(width);
-  // Let the blurred image continue slightly past the title region before it
-  // disappears into the player background. The focused square and foreground
-  // layout stay fixed; only this soft lower tail gains height.
-  final blurredTail = (width * 0.48).clamp(164.0, 196.0).toDouble();
+  // Keep a short blurred fringe below the square cover. A longer tail repeats
+  // too much of the image beneath the title and makes it look duplicated.
+  final blurredTail = (width * 0.32).clamp(106.0, 138.0).toDouble();
   return math.min(width + blurredTail, constraints.maxHeight + upwardBleed);
 }
 
@@ -1361,12 +1381,14 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
     required this.snapshot,
     required this.artworkSource,
     required this.artworkFallbackSource,
-    required this.artworkParticleColor,
     required this.visualIdentity,
     required this.trackTransitionsEnabled,
     required this.artworkStyle,
     required this.animatedArtworkEnabled,
     required this.canvasUrl,
+    required this.autoFitInsetArtwork,
+    required this.videoStartOffset,
+    required this.videoDurationHint,
     required this.drawBackground,
     required this.hasTrack,
     required this.isFavorite,
@@ -1386,12 +1408,14 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
   final PlayerSnapshot snapshot;
   final String? artworkSource;
   final String? artworkFallbackSource;
-  final Color? artworkParticleColor;
   final String visualIdentity;
   final bool trackTransitionsEnabled;
   final PlayerArtworkStyle artworkStyle;
   final bool animatedArtworkEnabled;
   final Uri? canvasUrl;
+  final bool autoFitInsetArtwork;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final bool drawBackground;
   final bool hasTrack;
   final bool isFavorite;
@@ -1583,7 +1607,6 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                   : _LargeArtwork(
                       url: artworkSource,
                       fallbackUrl: artworkFallbackSource,
-                      particleColor: artworkParticleColor,
                       identity: visualIdentity,
                       isPlaying: snapshot.status == PlayerStatus.playing,
                       trackTransitionsEnabled: trackTransitionsEnabled,
@@ -1592,6 +1615,8 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                       fullBleedExpanded: fullBleedArtwork,
                       animatedArtworkEnabled: animatedArtworkEnabled,
                       canvasUrl: canvasUrl,
+                      videoStartOffset: videoStartOffset,
+                      videoDurationHint: videoDurationHint,
                       maxExtent: artworkExtent,
                       isFavorite: false,
                       // Apple Music keeps the cover shadow restrained even on tall
@@ -1711,12 +1736,14 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                     child: _ExpandedArtworkHero(
                       url: artworkSource,
                       fallbackUrl: artworkFallbackSource,
-                      particleColor: artworkParticleColor,
                       identity: visualIdentity,
                       isPlaying: snapshot.status == PlayerStatus.playing,
                       trackTransitionsEnabled: trackTransitionsEnabled,
                       animatedArtworkEnabled: animatedArtworkEnabled,
                       canvasUrl: canvasUrl,
+                      autoFitInsetArtwork: autoFitInsetArtwork,
+                      videoStartOffset: videoStartOffset,
+                      videoDurationHint: videoDurationHint,
                     ),
                   ),
                 Padding(
@@ -2286,12 +2313,13 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
         // The full player stays mounted behind other tabs. Do not rebuild its
         // slider four times a second while the page is invisible.
         if (!timelineVisible) {
-          return (position: Duration.zero, duration: null);
+          return (position: Duration.zero, duration: null, snapshot: null);
         }
         final snapshot = player.value;
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
+          snapshot: snapshot,
         );
       }),
     );
@@ -2324,6 +2352,11 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
     );
     final positionLabel = formatDuration(shownPosition);
     final durationLabel = formatDuration(duration);
+    final audioQualityLabel = _audioQualityForSnapshot(timeline.snapshot, ref);
+    final audioQuality = _PlayerAudioQualityLabel(
+      label: audioQualityLabel,
+      compact: widget.compact,
+    );
 
     void seekTo(double milliseconds) {
       final next = Duration(
@@ -2400,9 +2433,11 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
           return painter.width;
         }
 
-        final stackLabels =
-            measuredWidth(positionLabel) + measuredWidth(durationLabel) + 16 >
-            constraints.maxWidth;
+        final sideWidth = math.max(
+          measuredWidth(positionLabel),
+          measuredWidth(durationLabel),
+        );
+        final stackLabels = sideWidth * 2 + 8 > constraints.maxWidth;
         final position = Text(
           key: const ValueKey('apple-player-position'),
           positionLabel,
@@ -2423,6 +2458,7 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
                 alignment: AlignmentDirectional.centerStart,
                 child: position,
               ),
+              if (audioQualityLabel != null) Center(child: audioQuality),
               Align(
                 alignment: AlignmentDirectional.centerEnd,
                 child: totalDuration,
@@ -2431,8 +2467,23 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
           );
         }
         return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [position, totalDuration],
+          children: [
+            SizedBox(
+              width: sideWidth,
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: position,
+              ),
+            ),
+            Expanded(child: Center(child: audioQuality)),
+            SizedBox(
+              width: sideWidth,
+              child: Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: totalDuration,
+              ),
+            ),
+          ],
         );
       },
     );
@@ -2586,7 +2637,7 @@ class _HeaderIconSlot extends StatelessWidget {
   }
 }
 
-class _PlaybackQueuePanel extends ConsumerWidget {
+class _PlaybackQueuePanel extends ConsumerStatefulWidget {
   const _PlaybackQueuePanel({
     required this.queue,
     required this.strings,
@@ -2600,13 +2651,107 @@ class _PlaybackQueuePanel extends ConsumerWidget {
   final bool standaloneRail;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_PlaybackQueuePanel> createState() =>
+      _PlaybackQueuePanelState();
+}
+
+class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
+  static const double _estimatedQueueItemExtent = 77;
+  final ScrollController _queueScrollController = ScrollController();
+  final Map<String, GlobalKey> _queueEntryKeys = <String, GlobalKey>{};
+
+  @override
+  void dispose() {
+    _queueScrollController.dispose();
+    super.dispose();
+  }
+
+  GlobalKey _keyForEntry(int index, PlaybackQueueEntry entry) {
+    final identity = '$index:${entry.id}';
+    return _queueEntryKeys.putIfAbsent(identity, GlobalKey.new);
+  }
+
+  void _scrollToCurrentEntry() {
+    final queue = widget.queue;
+    final index = queue.currentIndex;
+    if (index < 0 || index >= queue.entries.length) return;
+
+    final entryKey = _keyForEntry(index, queue.entries[index]);
+    Future<void> revealEntry() async {
+      final targetContext = entryKey.currentContext;
+      if (targetContext == null || !mounted) return;
+      await Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.35,
+        duration: const Duration(milliseconds: 360),
+        curve: Curves.easeInOutCubic,
+      );
+    }
+
+    if (entryKey.currentContext != null) {
+      unawaited(revealEntry());
+      return;
+    }
+    if (!_queueScrollController.hasClients) return;
+
+    final position = _queueScrollController.position;
+    final estimatedOffset = 10 + index * _estimatedQueueItemExtent;
+    final targetOffset = estimatedOffset
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    unawaited(
+      _queueScrollController
+          .animateTo(
+            targetOffset,
+            duration: const Duration(milliseconds: 360),
+            curve: Curves.easeInOutCubic,
+          )
+          .then((_) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (entryKey.currentContext != null) {
+                unawaited(revealEntry());
+              }
+            });
+          }),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final queue = widget.queue;
+    final strings = widget.strings;
+    final onClose = widget.onClose;
+    final standaloneRail = widget.standaloneRail;
     final colors = Theme.of(context).colorScheme;
-    final isPlaying = ref.watch(
+    final playback = ref.watch(
       playerControllerProvider.select(
-        (player) => player.value?.status == PlayerStatus.playing,
+        (player) => (
+          status:
+              player.value?.status ??
+              const PlayerSnapshot(status: PlayerStatus.idle).status,
+          title: player.value?.title,
+          artist: player.value?.artist,
+          thumbnailUrl: player.value?.thumbnailUrl,
+        ),
       ),
     );
+    final currentEntry =
+        queue.currentIndex >= 0 && queue.currentIndex < queue.entries.length
+        ? queue.entries[queue.currentIndex]
+        : null;
+    final currentTitle = currentEntry?.title ?? playback.title;
+    final currentArtist = currentEntry?.artist ?? playback.artist;
+    final currentThumbnail =
+        currentEntry?.thumbnailUrl ?? playback.thumbnailUrl;
+    final isPlaying = playback.status == PlayerStatus.playing;
+    final hasCurrentTrack =
+        currentEntry != null ||
+        (playback.status != PlayerStatus.idle &&
+            playback.status != PlayerStatus.failed &&
+            currentTitle?.trim().isNotEmpty == true);
+    final queueActionTextStyle = Theme.of(
+      context,
+    ).textTheme.labelLarge?.copyWith(fontSize: 13, fontWeight: FontWeight.w800);
     return ClipRect(
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
@@ -2622,41 +2767,227 @@ class _PlaybackQueuePanel extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
-                child: Row(
+                padding: const EdgeInsets.fromLTRB(16, 12, 10, 12),
+                child: Column(
                   children: [
-                    Expanded(
-                      child: Text(
-                        strings.playbackQueueSummary(queue.entries.length),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.contentHeadingFor(context),
+                    Row(
+                      children: [
+                        SizedBox.square(
+                          dimension: 52,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(
+                              appArtworkRadius,
                             ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    SizedBox.square(
-                      dimension: 48,
-                      child: IconButton(
-                        tooltip: strings.close,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints.tightFor(
-                          width: 48,
-                          height: 48,
+                            child: ColoredBox(
+                              color: colors.surfaceContainerHighest,
+                              child: currentThumbnail == null
+                                  ? Icon(
+                                      Icons.music_note_rounded,
+                                      size: 24,
+                                      color: colors.onSurfaceVariant,
+                                    )
+                                  : SourceImage(
+                                      source: currentThumbnail,
+                                      fit: BoxFit.cover,
+                                      cacheWidth: 256,
+                                      fallback: Icon(
+                                        Icons.music_note_rounded,
+                                        size: 24,
+                                        color: colors.onSurfaceVariant,
+                                      ),
+                                    ),
+                            ),
+                          ),
                         ),
-                        icon: const Icon(Icons.close_rounded, size: 20),
-                        onPressed: onClose,
-                      ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                currentTitle?.trim().isNotEmpty == true
+                                    ? currentTitle!
+                                    : strings.noPlayback,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w900,
+                                      color: AppColors.contentHeadingFor(
+                                        context,
+                                      ),
+                                    ),
+                              ),
+                              if (currentArtist?.trim().isNotEmpty == true) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  currentArtist!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: AppColors.contentSubtitleFor(
+                                          context,
+                                        ),
+                                      ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        SizedBox.square(
+                          dimension: 48,
+                          child: IconButton(
+                            tooltip: strings.close,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 48,
+                              height: 48,
+                            ),
+                            icon: const Icon(Icons.close_rounded, size: 20),
+                            onPressed: onClose,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            key: const ValueKey('queue-playback-toggle'),
+                            onPressed: hasCurrentTrack
+                                ? () => unawaited(
+                                    ref
+                                        .read(playerControllerProvider.notifier)
+                                        .togglePlayPause(),
+                                  )
+                                : null,
+                            icon: Icon(
+                              isPlaying
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                              size: 19,
+                            ),
+                            label: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                isPlaying
+                                    ? strings.pause
+                                    : strings.playbackPaused,
+                                maxLines: 1,
+                              ),
+                            ),
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(42),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              textStyle: queueActionTextStyle,
+                              backgroundColor: colors.primary,
+                              foregroundColor: colors.onPrimary,
+                              disabledBackgroundColor: colors.primary
+                                  .withValues(alpha: 0.35),
+                              disabledForegroundColor: colors.onPrimary
+                                  .withValues(alpha: 0.75),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton(
+                            key: const ValueKey('queue-view-in-list'),
+                            onPressed:
+                                queue.currentIndex >= 0 &&
+                                    queue.currentIndex < queue.entries.length
+                                ? _scrollToCurrentEntry
+                                : null,
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(42),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              textStyle: queueActionTextStyle?.copyWith(
+                                fontSize: 12,
+                              ),
+                              backgroundColor: colors.primary,
+                              foregroundColor: colors.onPrimary,
+                              disabledBackgroundColor: colors.primary
+                                  .withValues(alpha: 0.35),
+                              disabledForegroundColor: colors.onPrimary
+                                  .withValues(alpha: 0.75),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(strings.viewInList, maxLines: 1),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.icon(
+                            key: const ValueKey('queue-play-next'),
+                            onPressed: hasCurrentTrack
+                                ? () => unawaited(
+                                    ref
+                                        .read(playerControllerProvider.notifier)
+                                        .playNext(),
+                                  )
+                                : null,
+                            icon: const Icon(Icons.skip_next_rounded, size: 19),
+                            label: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(strings.next, maxLines: 1),
+                            ),
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(42),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              textStyle: queueActionTextStyle,
+                              backgroundColor: colors.primary,
+                              foregroundColor: colors.onPrimary,
+                              disabledBackgroundColor: colors.primary
+                                  .withValues(alpha: 0.35),
+                              disabledForegroundColor: colors.onPrimary
+                                  .withValues(alpha: 0.75),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
               Divider(
+                key: const ValueKey('queue-list-divider'),
                 height: 1,
                 color: colors.onSurface.withValues(alpha: 0.1),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                child: Text(
+                  strings.playbackQueueSummary(queue.entries.length),
+                  key: const ValueKey('queue-title'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.contentHeadingFor(context),
+                  ),
+                ),
               ),
               Expanded(
                 child: queue.entries.isEmpty
@@ -2673,6 +3004,7 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                         ),
                       )
                     : ReorderableListView.builder(
+                        scrollController: _queueScrollController,
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         itemCount: queue.entries.length,
                         itemBuilder: (context, index) {
@@ -2685,22 +3017,25 @@ class _PlaybackQueuePanel extends ConsumerWidget {
                             ),
                             child: ReorderableDelayedDragStartListener(
                               index: index,
-                              child: _PlaybackQueueTile(
-                                entry: entry,
-                                isCurrent: isCurrent,
-                                isPlaying: isCurrent && isPlaying,
-                                onTap: isCurrent
-                                    ? null
-                                    : () {
-                                        unawaited(
-                                          ref
-                                              .read(
-                                                playerControllerProvider
-                                                    .notifier,
-                                              )
-                                              .playQueueIndex(index),
-                                        );
-                                      },
+                              child: KeyedSubtree(
+                                key: _keyForEntry(index, entry),
+                                child: _PlaybackQueueTile(
+                                  entry: entry,
+                                  isCurrent: isCurrent,
+                                  isPlaying: isCurrent && isPlaying,
+                                  onTap: isCurrent
+                                      ? null
+                                      : () {
+                                          unawaited(
+                                            ref
+                                                .read(
+                                                  playerControllerProvider
+                                                      .notifier,
+                                                )
+                                                .playQueueIndex(index),
+                                          );
+                                        },
+                                ),
                               ),
                             ),
                           );
@@ -2901,22 +3236,26 @@ class _ExpandedArtworkHero extends StatefulWidget {
   const _ExpandedArtworkHero({
     required this.url,
     required this.fallbackUrl,
-    required this.particleColor,
+    required this.videoStartOffset,
+    required this.videoDurationHint,
     required this.identity,
     required this.isPlaying,
     required this.trackTransitionsEnabled,
     required this.animatedArtworkEnabled,
     required this.canvasUrl,
+    required this.autoFitInsetArtwork,
   });
 
   final String? url;
   final String? fallbackUrl;
-  final Color? particleColor;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final String identity;
   final bool isPlaying;
   final bool trackTransitionsEnabled;
   final bool animatedArtworkEnabled;
   final Uri? canvasUrl;
+  final bool autoFitInsetArtwork;
 
   @override
   State<_ExpandedArtworkHero> createState() => _ExpandedArtworkHeroState();
@@ -2963,11 +3302,14 @@ class _ExpandedArtworkHeroState extends State<_ExpandedArtworkHero> {
       child: _ExpandedArtworkHeroSurface(
         source: source,
         fallbackSource: widget.fallbackUrl,
-        particleColor: widget.particleColor,
+        videoStartOffset: widget.videoStartOffset,
+        videoDurationHint: widget.videoDurationHint,
         identity: widget.identity,
         isPlaying: widget.isPlaying,
         animatedArtworkEnabled: widget.animatedArtworkEnabled,
         canvasUrl: widget.canvasUrl,
+        autoFitInsetArtwork: widget.autoFitInsetArtwork,
+        cacheSource: widget.url,
       ),
     );
 
@@ -3007,20 +3349,26 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
   const _ExpandedArtworkHeroSurface({
     required this.source,
     required this.fallbackSource,
-    required this.particleColor,
+    required this.videoStartOffset,
+    required this.videoDurationHint,
     required this.identity,
     required this.isPlaying,
     required this.animatedArtworkEnabled,
     required this.canvasUrl,
+    required this.autoFitInsetArtwork,
+    required this.cacheSource,
   });
 
   final String source;
   final String? fallbackSource;
-  final Color? particleColor;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final String identity;
   final bool isPlaying;
   final bool animatedArtworkEnabled;
   final Uri? canvasUrl;
+  final bool autoFitInsetArtwork;
+  final String? cacheSource;
 
   @override
   Widget build(BuildContext context) {
@@ -3034,9 +3382,8 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
       child: RepaintBoundary(
         key: const ValueKey('player-expanded-artwork'),
         // Keep the expensive edge mask inside the retained artwork layer.
-        // Masking the whole animated Stack forced the GPU to recompose a
-        // screen-sized saveLayer whenever either the cover or a particle
-        // moved, even though the underlying imagery itself was unchanged.
+        // Masking the whole animated Stack would force a screen-sized
+        // saveLayer whenever the underlying artwork moves.
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -3056,19 +3403,17 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
                   key: ValueKey('canvas-$identity'),
                   url: canvasUrl!,
                   isPlaying: isPlaying,
+                  identity: identity,
+                  startOffset: videoStartOffset,
+                  durationHint: videoDurationHint,
+                  autoFitInsetArtwork: autoFitInsetArtwork,
+                  coverPath: cacheSource == null
+                      ? null
+                      : PlaybackArtworkCacheScope.maybeOf(
+                              context,
+                            )?.localPathFor(cacheSource!) ??
+                            imageFileFromSource(cacheSource!)?.path,
                 ),
-              ),
-            if (animatedArtworkEnabled && particleColor != null)
-              AnimatedArtworkParticles(
-                color: particleColor!,
-                identity: identity,
-                isPlaying: isPlaying,
-                borderRadius: BorderRadius.zero,
-                particleCount: AnimatedArtworkParticles.expandedParticleCount,
-                // Match the first fully-opaque stop of the artwork mask, but
-                // fade motes in their tiny painter instead of a full-screen
-                // offscreen layer.
-                bottomFadeStart: 0.66,
               ),
             DecoratedBox(
               key: const ValueKey('player-expanded-artwork-header-scrim'),
@@ -3186,23 +3531,38 @@ class _ExpandedArtworkHeroImagery extends StatelessWidget {
                   ).createShader,
                   child: ClipRect(
                     key: const ValueKey('player-expanded-artwork-blur'),
-                    child: ImageFiltered(
-                      imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                      child: Transform.scale(
-                        scale: 1.16,
-                        child: ColoredBox(
-                          color: colors.surfaceContainerHighest,
-                          child: SourceImage(
-                            key: const ValueKey(
-                              'player-expanded-artwork-blurred-image',
+                    child: Stack(
+                      fit: StackFit.expand,
+                      clipBehavior: Clip.none,
+                      children: [
+                        Positioned(
+                          top: 0,
+                          left: -focusedOverscan,
+                          right: -focusedOverscan,
+                          height: focusedExtent,
+                          child: ImageFiltered(
+                            imageFilter: ImageFilter.blur(
+                              sigmaX: 28,
+                              sigmaY: 28,
                             ),
-                            source: source,
-                            fallbackSource: fallbackSource,
-                            fit: BoxFit.cover,
-                            fallback: fallback(),
+                            child: Transform.scale(
+                              scale: 1.16,
+                              child: ColoredBox(
+                                color: colors.surfaceContainerHighest,
+                                child: SourceImage(
+                                  key: const ValueKey(
+                                    'player-expanded-artwork-blurred-image',
+                                  ),
+                                  source: source,
+                                  fallbackSource: fallbackSource,
+                                  fit: BoxFit.cover,
+                                  fallback: fallback(),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
                 ),
@@ -3219,7 +3579,8 @@ class _LargeArtwork extends StatefulWidget {
   const _LargeArtwork({
     required this.url,
     required this.fallbackUrl,
-    required this.particleColor,
+    required this.videoStartOffset,
+    required this.videoDurationHint,
     required this.identity,
     required this.isPlaying,
     required this.trackTransitionsEnabled,
@@ -3237,7 +3598,8 @@ class _LargeArtwork extends StatefulWidget {
 
   final String? url;
   final String? fallbackUrl;
-  final Color? particleColor;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final String identity;
   final bool isPlaying;
   final bool trackTransitionsEnabled;
@@ -3297,7 +3659,8 @@ class _LargeArtworkState extends State<_LargeArtwork> {
       child: _PlayerArtworkSurface(
         url: source,
         fallbackUrl: widget.fallbackUrl,
-        particleColor: widget.particleColor,
+        videoStartOffset: widget.videoStartOffset,
+        videoDurationHint: widget.videoDurationHint,
         identity: widget.identity,
         isPlaying: widget.isPlaying,
         animatedArtworkEnabled: widget.animatedArtworkEnabled && source != null,
@@ -3385,7 +3748,8 @@ class _PlayerArtworkSurface extends StatelessWidget {
   const _PlayerArtworkSurface({
     required this.url,
     required this.fallbackUrl,
-    required this.particleColor,
+    required this.videoStartOffset,
+    required this.videoDurationHint,
     required this.identity,
     required this.isPlaying,
     required this.animatedArtworkEnabled,
@@ -3398,7 +3762,8 @@ class _PlayerArtworkSurface extends StatelessWidget {
 
   final String? url;
   final String? fallbackUrl;
-  final Color? particleColor;
+  final Duration videoStartOffset;
+  final Duration videoDurationHint;
   final String identity;
   final bool isPlaying;
   final bool animatedArtworkEnabled;
@@ -3524,24 +3889,19 @@ class _PlayerArtworkSurface extends StatelessWidget {
                             key: ValueKey('canvas-$identity'),
                             url: canvasUrl!,
                             isPlaying: isPlaying,
+                            identity: identity,
+                            startOffset: videoStartOffset,
+                            durationHint: videoDurationHint,
                           ),
                         )
                       : SpotifyCanvasVideo(
                           key: ValueKey('canvas-$identity'),
                           url: canvasUrl!,
                           isPlaying: isPlaying,
+                          identity: identity,
+                          startOffset: videoStartOffset,
+                          durationHint: videoDurationHint,
                         ),
-                ),
-              if (animatedArtworkEnabled && particleColor != null)
-                AnimatedArtworkParticles(
-                  color: particleColor!,
-                  identity: identity,
-                  isPlaying: isPlaying,
-                  borderRadius: BorderRadius.circular(borderRadius),
-                  particleCount: expanded
-                      ? AnimatedArtworkParticles.expandedParticleCount
-                      : AnimatedArtworkParticles.defaultParticleCount,
-                  bottomFadeStart: expanded ? 0.56 : 1,
                 ),
             ],
           ),
@@ -5671,13 +6031,19 @@ class _Timeline extends ConsumerWidget {
     final timeline = ref.watch(
       playerControllerProvider.select((player) {
         if (!timelineVisible) {
-          return (position: Duration.zero, duration: null, isPlaying: false);
+          return (
+            position: Duration.zero,
+            duration: null,
+            isPlaying: false,
+            snapshot: null,
+          );
         }
         final snapshot = player.value;
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
           isPlaying: snapshot?.status == PlayerStatus.playing,
+          snapshot: snapshot,
         );
       }),
     );
@@ -5686,6 +6052,11 @@ class _Timeline extends ConsumerWidget {
     final progressColor = AppColors.downloadAccentFor(context);
     final positionLabel = formatDuration(position);
     final durationLabel = formatDuration(duration);
+    final audioQualityLabel = _audioQualityForSnapshot(timeline.snapshot, ref);
+    final audioQuality = _PlayerAudioQualityLabel(
+      label: audioQualityLabel,
+      compact: spacingCompactness > 0.5,
+    );
     final labelStyle = DefaultTextStyle.of(context).style.merge(
       TextStyle(
         fontWeight: FontWeight.w900,
@@ -5709,9 +6080,11 @@ class _Timeline extends ConsumerWidget {
     return LayoutBuilder(
       key: const ValueKey('player-timeline'),
       builder: (context, constraints) {
-        final stackLabels =
-            labelWidth(positionLabel) + labelWidth(durationLabel) + 16 >
-            constraints.maxWidth;
+        final sideWidth = math.max(
+          labelWidth(positionLabel),
+          labelWidth(durationLabel),
+        );
+        final stackLabels = sideWidth * 2 + 8 > constraints.maxWidth;
         final labels = stackLabels
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -5720,6 +6093,7 @@ class _Timeline extends ConsumerWidget {
                     alignment: AlignmentDirectional.centerStart,
                     child: Text(positionLabel, style: labelStyle),
                   ),
+                  if (audioQualityLabel != null) Center(child: audioQuality),
                   Align(
                     alignment: AlignmentDirectional.centerEnd,
                     child: Text(durationLabel, style: labelStyle),
@@ -5727,10 +6101,22 @@ class _Timeline extends ConsumerWidget {
                 ],
               )
             : Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(positionLabel, style: labelStyle),
-                  Text(durationLabel, style: labelStyle),
+                  SizedBox(
+                    width: sideWidth,
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(positionLabel, style: labelStyle),
+                    ),
+                  ),
+                  Expanded(child: Center(child: audioQuality)),
+                  SizedBox(
+                    width: sideWidth,
+                    child: Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: Text(durationLabel, style: labelStyle),
+                    ),
+                  ),
                 ],
               );
 
@@ -5755,6 +6141,66 @@ class _Timeline extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+String? _audioQualityForSnapshot(PlayerSnapshot? snapshot, WidgetRef ref) {
+  if (!(ref.watch(settingsControllerProvider).value?.showAudioQuality ??
+      false)) {
+    return null;
+  }
+  if (snapshot == null ||
+      (snapshot.status != PlayerStatus.playing &&
+          snapshot.status != PlayerStatus.paused &&
+          snapshot.status != PlayerStatus.completed)) {
+    return null;
+  }
+  final sourceUrl = snapshot.sourceUrl?.trim();
+  final controller = ref.read(playerControllerProvider.notifier);
+
+  if (snapshot.isRemote) {
+    if (sourceUrl == null || sourceUrl.isEmpty) return null;
+    final current = controller.currentRemoteTrackFor(sourceUrl);
+    final prepared = controller.preparedAudioSourceFor(sourceUrl);
+    final track = current?.streamUrl?.isNotEmpty == true
+        ? current
+        : prepared?.track ?? current;
+    if (track == null) return null;
+    return playbackAudioQualityLabel(
+      codec: track.streamCodec,
+      mimeType: track.streamMimeType,
+      extension: track.streamExtension,
+      bitrate: track.streamBitrate,
+      localSource: prepared?.uri.scheme == 'file'
+          ? prepared!.uri.toFilePath()
+          : null,
+    );
+  }
+  final local = controller.currentLocalTrackFor(snapshot.trackId);
+  return playbackAudioQualityLabel(localSource: local?.filePath ?? sourceUrl);
+}
+
+class _PlayerAudioQualityLabel extends StatelessWidget {
+  const _PlayerAudioQualityLabel({required this.label, required this.compact});
+
+  final String? label;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    if (label == null) return const SizedBox.shrink();
+    return Text(
+      label!,
+      key: const ValueKey('player-audio-quality'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
+      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+        color: AppColors.downloadAccentFor(context),
+        fontSize: compact ? 11 : 12,
+        fontWeight: FontWeight.w800,
+      ),
     );
   }
 }

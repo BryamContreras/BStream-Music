@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:bstream_music/core/theme/app_colors.dart';
@@ -487,6 +488,15 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
       await tester.pump();
 
+      expect(
+        find.byKey(const ValueKey('show-audio-quality-toggle')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('show-audio-quality-switch')),
+        findsNothing,
+      );
+
       expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('settings-detail-appearance')),
@@ -573,6 +583,166 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('appearance selects and applies a player font', (tester) async {
+    _configureView(tester, const Size(430, 1000));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+    await tester.pumpAndSettle();
+
+    final surfaceSelector = find.byKey(
+      const ValueKey('surface-background-selector'),
+    );
+    final fontSelector = find.byKey(const ValueKey('player-font-selector'));
+    final styleSelector = find.byKey(const ValueKey('player-style-selector'));
+    expect(fontSelector, findsOneWidget);
+    expect(
+      find.descendant(
+        of: fontSelector,
+        matching: find.text('Fuente de la app'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: fontSelector,
+        matching: find.text(
+          const AppStrings(AppLanguage.spanish).playerFontCurrent,
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getTopLeft(fontSelector).dy,
+      greaterThan(tester.getTopLeft(surfaceSelector).dy),
+    );
+    expect(
+      tester.getTopLeft(fontSelector).dy,
+      lessThan(tester.getTopLeft(styleSelector).dy),
+    );
+
+    await tester.ensureVisible(fontSelector);
+    await tester.tap(fontSelector);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('settings-player-font-preview-title')),
+      findsNothing,
+    );
+    for (final font in <PlayerFont>[
+      PlayerFont.fredoka,
+      PlayerFont.nunito,
+      PlayerFont.spaceMono,
+      PlayerFont.lora,
+    ]) {
+      final option = find.byKey(
+        ValueKey('settings-player-font-option-${font.code}'),
+      );
+      await tester.ensureVisible(option);
+      await tester.tap(option);
+      await tester.pumpAndSettle();
+      final label = find.descendant(
+        of: option,
+        matching: find.text(
+          const AppStrings(AppLanguage.spanish).playerFontLabel(font),
+        ),
+      );
+      expect(tester.widget<Text>(label).style?.fontFamily, font.fontFamily);
+    }
+
+    expect(
+      find.descendant(
+        of: fontSelector,
+        matching: find.text(
+          const AppStrings(AppLanguage.spanish).playerFontCurrent,
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Aplicar'));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: fontSelector, matching: find.text('Lora')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('app background picker preserves the current photo on cancel', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(430, 1000));
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+    var pickCount = 0;
+
+    await tester.pumpWidget(
+      _settingsHarness(
+        navigationController: navigationController,
+        overrides: [
+          appBackgroundPhotoPickerProvider.overrideWithValue(() async {
+            pickCount += 1;
+            return pickCount == 1 ? File('selected-photo.jpg') : null;
+          }),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+    await tester.pumpAndSettle();
+
+    final selector = find.byKey(const ValueKey('app-background-selector'));
+    expect(selector, findsOneWidget);
+    expect(
+      find.descendant(of: selector, matching: find.text('Sin Fondo')),
+      findsOneWidget,
+    );
+    await tester.ensureVisible(selector);
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-app-background-option-custom')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('settings-app-background-option-custom')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: selector, matching: find.text('Personalizado')),
+      findsOneWidget,
+    );
+
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('settings-app-background-option-custom')),
+    );
+    await tester.pumpAndSettle();
+    expect(pickCount, 2);
+    expect(
+      find.descendant(of: selector, matching: find.text('Personalizado')),
+      findsOneWidget,
+    );
+
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('settings-app-background-option-none')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: selector, matching: find.text('Sin Fondo')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('appearance selects player, surface, and mini player modes', (
     tester,
@@ -671,7 +841,7 @@ void main() {
     expect(
       find.descendant(
         of: surfaceBackgroundSelector,
-        matching: find.text('Fondo de las superficies'),
+        matching: find.text('Estilo de las superficies'),
       ),
       findsOneWidget,
     );
@@ -726,7 +896,7 @@ void main() {
       find.byKey(const ValueKey('settings-surface-background-dialog')),
       findsOneWidget,
     );
-    expect(find.text('Fondo de las superficies'), findsWidgets);
+    expect(find.text('Estilo de las superficies'), findsWidgets);
     expect(
       find.byKey(const ValueKey('settings-surface-background-option-accent')),
       findsOneWidget,
@@ -2316,7 +2486,7 @@ void main() {
                 find.byKey(ValueKey('csv-profile-surface-${profile.$1}')),
               )
               .color,
-          AppColors.neutralSurfaceFor(tester.element(tileFinder)),
+          AppColors.cardSurfaceFor(tester.element(tileFinder)),
         );
       }
       await tester.tap(find.byKey(const ValueKey('csv-export-profile-cancel')));
@@ -2528,7 +2698,7 @@ void main() {
         find.descendant(of: card, matching: find.byType(LiquidGlassSurface)),
         findsNothing,
       );
-      expect(_outerMaterial(tester, card).color?.a, 1);
+      expect(_outerMaterial(tester, card).color?.a, 0.68);
     }
   });
 }
@@ -2684,9 +2854,34 @@ class _FixedSettingsController extends SettingsController {
   }
 
   @override
+  Future<void> setAppBackgroundPhoto(File file) async {
+    final current = await future;
+    state = AsyncData(
+      current.copyWith(
+        appBackgroundFileName: 'background_1_1.jpg',
+        appBackgroundPath: file.path,
+      ),
+    );
+  }
+
+  @override
+  Future<void> clearAppBackgroundPhoto() async {
+    final current = await future;
+    state = AsyncData(
+      current.copyWith(appBackgroundFileName: null, appBackgroundPath: null),
+    );
+  }
+
+  @override
   Future<void> setPlayerStyle(PlayerStyle style) async {
     final current = await future;
     state = AsyncData(current.copyWith(playerStyle: style));
+  }
+
+  @override
+  Future<void> setPlayerFont(PlayerFont font) async {
+    final current = await future;
+    state = AsyncData(current.copyWith(playerFont: font));
   }
 
   @override

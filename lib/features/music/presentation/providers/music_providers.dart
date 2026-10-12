@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:crypto/crypto.dart';
 import 'package:image/image.dart' as image;
 import 'package:path/path.dart' as p;
@@ -42,12 +43,14 @@ import '../../../../services/sharing/track_share_service.dart';
 import '../../../../services/sharing/youtube_music_playlist_share_service.dart';
 import '../../../../services/sharing/youtube_music_link.dart';
 import '../../../../services/storage/backup_service.dart';
+import '../../../../services/storage/app_background_image_service.dart';
 import '../../../../services/storage/library_csv_import_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
 import '../../../../services/storage/library_operation_coordinator.dart';
 import '../../../../services/storage/local_database_service.dart';
 import '../../../../services/storage/local_database_shutdown_coordinator.dart';
 import '../../../../services/storage/local_library_reconciler.dart';
+import '../../../../services/widgets/home_screen_widget_sync.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../../../services/youtube_music/shared_preferences_visitor_data_store.dart';
 import '../../../../services/youtube_music/playback/playback.dart';
@@ -87,11 +90,13 @@ import '../../domain/usecases/get_playlists.dart';
 import '../../domain/usecases/get_track_info.dart';
 import '../../domain/usecases/search_tracks.dart';
 import 'app_strings.dart';
+import 'local_audio_availability.dart';
 import 'lyrics_animation_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
 import 'player_artwork_style.dart';
 import 'player_style.dart';
+import 'player_font.dart';
 import 'youtube_music_auth_controller.dart';
 import 'player/catalog_playback_item.dart';
 import 'player/catalog_playlist_playback.dart';
@@ -108,6 +113,7 @@ export 'mini_player_background_mode.dart';
 export 'mini_player_mode.dart';
 export 'player_artwork_style.dart';
 export 'player_style.dart';
+export 'player_font.dart';
 export 'player/catalog_playback_item.dart';
 export 'player/catalog_playlist_playback.dart';
 export 'player/playback_identity.dart';
@@ -138,6 +144,78 @@ part 'settings_controller.dart';
 part 'sleep_timer_controller.dart';
 part 'tiktok_live_controller.dart';
 part 'youtube_music_playlist_sync_controller.dart';
+
+final homeScreenWidgetSyncProvider = Provider<void>((ref) {
+  if (!AppPlatform.isMobile) return;
+  final widgetSync = HomeScreenWidgetSync(
+    onAction: (action) async {
+      await ref.read(playerControllerProvider.future);
+      final player = ref.read(playerControllerProvider.notifier);
+      switch (action) {
+        case 'toggle':
+          await player.togglePlayPause();
+        case 'next':
+          await player.playNext();
+        case 'previous':
+          await player.playPrevious();
+        case 'repeat':
+          player.cycleRepeatMode();
+        case 'favorite':
+          await player.toggleCurrentFavorite();
+      }
+    },
+  );
+
+  void publish() {
+    final snapshot = ref.read(playerControllerProvider).value;
+    final accent =
+        ref.read(settingsControllerProvider).value?.accent ?? AppAccent.white;
+    final language =
+        ref.read(settingsControllerProvider).value?.language ??
+        AppLanguage.spanish;
+    final hasTrack =
+        snapshot?.trackId != null || (snapshot?.title?.isNotEmpty ?? false);
+    final currentTrackId = snapshot?.trackId;
+    final isFavorite =
+        currentTrackId != null &&
+        ref.read(favoriteTrackIdsProvider).contains(currentTrackId);
+    widgetSync.publish(
+      trackId: hasTrack ? snapshot?.trackId : null,
+      title: hasTrack ? snapshot?.title : null,
+      artist: hasTrack ? snapshot?.artist : null,
+      artworkUrl: hasTrack ? snapshot?.thumbnailUrl : null,
+      isPlaying: snapshot?.status == PlayerStatus.playing,
+      isFavorite: isFavorite,
+      repeatMode: snapshot?.repeatMode.name ?? 'off',
+      accentColor: accent.seedColor.toARGB32(),
+      languageCode: language.code,
+    );
+  }
+
+  ref.listen(
+    playerControllerProvider.select((value) {
+      final snapshot = value.value;
+      return (
+        trackId: snapshot?.trackId,
+        title: snapshot?.title,
+        artist: snapshot?.artist,
+        artworkUrl: snapshot?.thumbnailUrl,
+        status: snapshot?.status,
+        repeatMode: snapshot?.repeatMode,
+      );
+    }),
+    (_, _) => publish(),
+    fireImmediately: true,
+  );
+  ref.listen(
+    settingsControllerProvider.select(
+      (value) => (accent: value.value?.accent, language: value.value?.language),
+    ),
+    (_, _) => publish(),
+  );
+  ref.listen(favoriteTrackIdsProvider, (_, _) => publish());
+  ref.onDispose(widgetSync.dispose);
+});
 
 String _innerTubeDeviceRegion() {
   final country = PlatformDispatcher.instance.locale.countryCode
@@ -587,6 +665,14 @@ final youtubeMusicSearchProvider = Provider<YouTubeMusicSearch>((ref) {
   ref.onDispose(service.dispose);
   return service;
 });
+
+final youtubeMusicSearchSuggestionsProvider =
+    Provider<YouTubeMusicSearchSuggestions?>((ref) {
+      final search = ref.watch(youtubeMusicSearchProvider);
+      return search is YouTubeMusicSearchSuggestions
+          ? search as YouTubeMusicSearchSuggestions
+          : null;
+    });
 
 sealed class HomeRecommendationItem {
   const HomeRecommendationItem();

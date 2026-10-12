@@ -1,13 +1,23 @@
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/platform/app_platform.dart';
 import '../../domain/entities/lyrics_romanization_language.dart';
 import 'lyrics_animation_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
 import 'player_artwork_style.dart';
 import 'player_style.dart';
+import 'player_font.dart';
 
 enum AppLanguage { spanish, english }
+
+String systemFontNameForPlatform(AppPlatformType platform) =>
+    switch (platform) {
+      AppPlatformType.android || AppPlatformType.linux => 'Roboto',
+      AppPlatformType.ios || AppPlatformType.macos => 'San Francisco',
+      AppPlatformType.windows => 'Segoe UI',
+      AppPlatformType.unsupported => 'System',
+    };
 
 extension AppLanguageLabel on AppLanguage {
   String get label => switch (this) {
@@ -310,10 +320,26 @@ class AppStrings {
   String get download => choose('Descargar', 'Download');
   String get downloadAudio => choose('Descargar audio', 'Download audio');
   String get cancelDownload => choose('Cancelar descarga', 'Cancel download');
+  String get cancelDownloads =>
+      choose('Cancelar descargas', 'Cancel downloads');
+  String get downloadsCancelled => choose(
+    'Descargas pendientes canceladas.',
+    'Pending downloads cancelled.',
+  );
+  String get bulkDownloadFailed => choose(
+    'No se pudieron preparar las descargas. Inténtalo de nuevo.',
+    'Could not queue the downloads. Try again.',
+  );
+  String get bulkDownloadCancelFailed => choose(
+    'No se pudieron cancelar las descargas. Inténtalo de nuevo.',
+    'Could not cancel the downloads. Try again.',
+  );
   String get downloadCancelled =>
       choose('Descarga cancelada', 'Download cancelled');
   String get noPlayback => choose('Sin reproducción', 'Nothing playing');
   String get nowPlaying => choose('En reproducción', 'Now playing');
+  String get playbackPaused => choose('Pausado', 'Paused');
+  String get viewInList => choose('Ver en la lista', 'View in list');
   String get minimizePlayer =>
       choose('Minimizar reproductor', 'Minimize player');
   String get noTitle => choose('Sin título', 'Untitled');
@@ -463,6 +489,27 @@ class AppStrings {
     'The playlist could not be shared.',
   );
   String get addToPlaylist => choose('Añadir a playlist', 'Add to playlist');
+  String get playlistAddFailed => choose(
+    'No se pudo añadir a la playlist. Inténtalo de nuevo.',
+    'Could not add to the playlist. Try again.',
+  );
+  String get downloadAll => choose('Descargar todo', 'Download all');
+  String songsQueuedForDownload(int count) => choose(
+    count == 1
+        ? 'Canción añadida a la cola de descargas.'
+        : '$count canciones añadidas a la cola de descargas.',
+    count == 1
+        ? 'Song added to the download queue.'
+        : '$count songs added to the download queue.',
+  );
+  String get noPendingPlaylistDownloads => choose(
+    'No hay canciones pendientes de descargar.',
+    'There are no songs left to download.',
+  );
+  String get playlistDownloadFailed => choose(
+    'No se pudo preparar la descarga de la playlist. Inténtalo de nuevo.',
+    'Could not queue the playlist download. Try again.',
+  );
   String get favorites => choose('Favoritos', 'Favorites');
   String get addToFavorites => choose('Añadir a favoritos', 'Add to favorites');
   String get removeFromFavorites =>
@@ -576,6 +623,8 @@ class AppStrings {
   String get cancel => choose('Cancelar', 'Cancel');
   String get name => choose('Nombre', 'Name');
   String get filterSongs => choose('Filtrar canciones', 'Filter songs');
+  String get reorderSong =>
+      choose('Mantén y arrastra para reordenar', 'Drag to reorder');
   String get noSongsToShow =>
       choose('No hay canciones para mostrar.', 'No songs to show.');
   String get noLocalPlaylists => choose(
@@ -813,12 +862,42 @@ class AppStrings {
   String get surfaceEffects =>
       choose('Efectos de superficie', 'Surface effects');
   String get surfaceBackground =>
-      choose('Fondo de las superficies', 'Surface background');
+      choose('Estilo de las superficies', 'Surface style');
+  String get appBackground => choose('Fondo de la App', 'App background');
+  String get appBackgroundNone => choose('Sin Fondo', 'No background');
+  String get appBackgroundCustom => choose('Personalizado', 'Custom');
+  String get appBackgroundSelectionFailed => choose(
+    'No se pudo usar esa foto. Prueba con otra imagen.',
+    'Could not use that photo. Try another image.',
+  );
   String get surfaceBackgroundAccent => choose('Acento', 'Accent');
   String get surfaceBackgroundTransparent =>
       choose('Transparente', 'Transparent');
   String get surfaceBackgroundLiquidGlass => 'Liquid Glass Style';
+  String get playerFont => choose('Fuente de la app', 'App font');
+  String get playerFontCurrent =>
+      AppPlatform.current == AppPlatformType.unsupported
+      ? choose('Sistema', 'System')
+      : systemFontNameForPlatform(AppPlatform.current);
+  String get playerFontCurrentDescription => choose(
+    'La fuente que ya usas en la app',
+    'The font already used by the app',
+  );
+  String get playerFontNunitoDescription =>
+      choose('Redondeada y cálida', 'Rounded and warm');
+  String get playerFontLoraDescription =>
+      choose('Elegante, con serifas', 'Elegant, with serifs');
+  String get playerFontSpaceMonoDescription =>
+      choose('Monoespaciada y retro', 'Monospaced and retro');
+  String get playerFontFredokaDescription =>
+      choose('Redondeada y alegre', 'Rounded and playful');
   String get playerStyle => choose('Estilo', 'Style');
+  String get showAudioQuality =>
+      choose('Mostrar códec y calidad', 'Show codec and quality');
+  String get showAudioQualityDescription => choose(
+    'Muestra el formato y la tasa de bits de la canción cuando están disponibles.',
+    'Shows the song format and bitrate when available.',
+  );
   String get playerStyleBStreamMusic => 'BStream Music';
   String get playerStyleAppleMusic => 'Apple Music Style';
   String get playerStyleClassicVinyl =>
@@ -1152,6 +1231,20 @@ class AppStrings {
     PlayerStyle.bstreamMusic => playerStyleBStreamMusic,
     PlayerStyle.appleMusic => playerStyleAppleMusic,
     PlayerStyle.classicVinyl => playerStyleClassicVinyl,
+  };
+  String playerFontLabel(PlayerFont font) => switch (font) {
+    PlayerFont.current => playerFontCurrent,
+    PlayerFont.nunito => 'Nunito',
+    PlayerFont.lora => 'Lora',
+    PlayerFont.spaceMono => 'Space Mono',
+    PlayerFont.fredoka => 'Fredoka',
+  };
+  String playerFontDescription(PlayerFont font) => switch (font) {
+    PlayerFont.current => playerFontCurrentDescription,
+    PlayerFont.nunito => playerFontNunitoDescription,
+    PlayerFont.lora => playerFontLoraDescription,
+    PlayerFont.spaceMono => playerFontSpaceMonoDescription,
+    PlayerFont.fredoka => playerFontFredokaDescription,
   };
   String playerArtworkStyleLabel(PlayerArtworkStyle style) => switch (style) {
     PlayerArtworkStyle.classic => playerArtworkStyleClassic,

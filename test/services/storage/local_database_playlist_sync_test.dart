@@ -16,48 +16,105 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 void main() {
   setUpAll(sqfliteFfiInit);
 
-  test('fresh v8 contains catalog and sync schema', () async {
-    final sandbox = await Directory.systemTemp.createTemp('bstream-v8-fresh-');
-    final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
-    addTearDown(() async {
-      await service.close();
-      await sandbox.delete(recursive: true);
-    });
+  test(
+    'fresh v9 contains catalog, sync, and library ordering schema',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'bstream-v9-fresh-',
+      );
+      final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+      addTearDown(() async {
+        await service.close();
+        await sandbox.delete(recursive: true);
+      });
 
-    final db = await service.database;
-    expect(await db.getVersion(), AppConstants.databaseVersion);
-    expect(AppConstants.databaseVersion, 8);
-    final tables = (await db.rawQuery(
-      "SELECT name FROM sqlite_master WHERE type = 'table'",
-    )).map((row) => row['name']).toSet();
-    expect(
-      tables,
-      containsAll(const <String>{
-        'catalog_tracks',
-        'playlist_items',
-        'ytm_playlist_bindings',
-        'ytm_playlist_base_items',
-        'playlist_sync_intents',
-        'playlist_sync_conflicts',
-      }),
-    );
-    final itemColumns = (await db.rawQuery(
-      'PRAGMA table_info(playlist_items)',
-    )).map((row) => row['name']).toSet();
-    expect(
-      itemColumns,
-      containsAll(const <String>{
-        'item_id',
-        'remote_video_id',
-        'remote_set_video_id',
-        'position',
-      }),
-    );
-    final conflictColumns = (await db.rawQuery(
-      'PRAGMA table_info(playlist_sync_conflicts)',
-    )).map((row) => row['name']).toSet();
-    expect(conflictColumns, contains('message'));
-  });
+      final db = await service.database;
+      expect(await db.getVersion(), AppConstants.databaseVersion);
+      expect(AppConstants.databaseVersion, 9);
+      final tables = (await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table'",
+      )).map((row) => row['name']).toSet();
+      expect(
+        tables,
+        containsAll(const <String>{
+          'catalog_tracks',
+          'playlist_items',
+          'ytm_playlist_bindings',
+          'ytm_playlist_base_items',
+          'playlist_sync_intents',
+          'playlist_sync_conflicts',
+          'library_track_order',
+        }),
+      );
+      final itemColumns = (await db.rawQuery(
+        'PRAGMA table_info(playlist_items)',
+      )).map((row) => row['name']).toSet();
+      expect(
+        itemColumns,
+        containsAll(const <String>{
+          'item_id',
+          'remote_video_id',
+          'remote_set_video_id',
+          'position',
+        }),
+      );
+      final conflictColumns = (await db.rawQuery(
+        'PRAGMA table_info(playlist_sync_conflicts)',
+      )).map((row) => row['name']).toSet();
+      expect(conflictColumns, contains('message'));
+    },
+  );
+
+  test(
+    'downloaded song order persists and new tracks remain at the end',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'bstream-library-order-',
+      );
+      final service = _TestDatabase(p.join(sandbox.path, 'library.db'));
+      addTearDown(() async {
+        await service.close();
+        await sandbox.delete(recursive: true);
+      });
+
+      LocalTrack track(String id, int day) => LocalTrack(
+        id: id,
+        title: id,
+        artist: 'Artist',
+        filePath: p.join(sandbox.path, '$id.m4a'),
+        addedAt: DateTime.utc(2025, 1, day),
+      );
+
+      await service.saveLocalTrack(track('first', 1));
+      await service.saveLocalTrack(track('second', 2));
+      await service.saveLocalTrack(track('third', 3));
+      expect(
+        (await service.getLocalTracks()).map((track) => track.id),
+        <String>['third', 'second', 'first'],
+      );
+
+      await service.reorderLocalTracks(<String>['second', 'first', 'third']);
+      expect(
+        (await service.getLocalTracks()).map((track) => track.id),
+        <String>['second', 'first', 'third'],
+      );
+
+      await service.saveLocalTrack(track('new-download', 4));
+      expect(
+        (await service.getLocalTracks()).map((track) => track.id),
+        <String>['second', 'first', 'third', 'new-download'],
+      );
+      await service.deleteLocalTrack('first');
+      expect(
+        (await service.getLocalTracks()).map((track) => track.id),
+        <String>['second', 'third', 'new-download'],
+      );
+      await expectLater(
+        service.reorderLocalTracks(<String>['second', 'second']),
+        throwsArgumentError,
+      );
+    },
+  );
 
   test(
     'playlist updates preserve creation time and revision semantics',
@@ -170,7 +227,7 @@ void main() {
       );
       expect(catalog.entries.last.track.provider, CatalogProvider.legacy);
       expect(catalog.entries.map((entry) => entry.id).toSet(), hasLength(3));
-      expect((await service.database).getVersion(), completion(8));
+      expect((await service.database).getVersion(), completion(9));
     },
   );
 

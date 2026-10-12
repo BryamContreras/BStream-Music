@@ -366,6 +366,39 @@ void main() {
   });
 
   testWidgets(
+    'liquid title uses motion optics only during vertical scrolling',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      await tester.pumpWidget(
+        const _FrameHarness(
+          surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+        ),
+      );
+
+      final glassFinder = find.byKey(const ValueKey('tab-header-liquid-glass'));
+      bool isMoving() =>
+          tester.widget<LiquidGlassSurface>(glassFinder).backdropMotion;
+      expect(isMoving(), isFalse);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('test-tab-scroll'))),
+      );
+      await gesture.moveBy(const Offset(0, -180));
+      await tester.pump();
+      expect(isMoving(), isTrue);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(isMoving(), isFalse);
+    },
+  );
+
+  testWidgets(
     'pinned footer stays compact and blurs content from the shared scroll',
     (tester) async {
       tester.view.physicalSize = const Size(360, 640);

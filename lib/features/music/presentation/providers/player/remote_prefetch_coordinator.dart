@@ -195,6 +195,7 @@ class RemotePrefetchCoordinator {
     resolve,
     required RemotePlaybackSource Function(TrackInfo track, int queueIndex)
     networkSource,
+    void Function(RemotePlaybackSource source)? onSourcePrepared,
     required PlayerService service,
     Future<void> Function(CrossfadePlaybackSource? source)? prepareCrossfade,
   }) async {
@@ -267,6 +268,7 @@ class RemotePrefetchCoordinator {
           ));
         }
         preparedSources.add(source);
+        onSourcePrepared?.call(source);
         if (preparedSources.length == 1 && crossfadePreparer != null) {
           await _mutateServiceIfCurrent(
             current,
@@ -326,6 +328,7 @@ class RemotePrefetchCoordinator {
             queueEntryId: previous.queueEntryId,
             isOnlyLogicalQueueItem: previous.isOnlyLogicalQueueItem,
           );
+          onSourcePrepared?.call(preparedSources[warmup.sourceIndex]);
           await _mutateServiceIfCurrent(
             current,
             () => nativeService.updateRemoteQueue(preparedSources),

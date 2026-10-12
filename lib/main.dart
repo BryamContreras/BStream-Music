@@ -198,6 +198,7 @@ class BStreamMusicApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(desktopMediaSessionProvider);
+    ref.watch(homeScreenWidgetSyncProvider);
     // Keep the per-track lyrics offset synchronized even while its route is
     // closed, without rebuilding the app when the offset itself changes.
     ref.watch(lyricsOffsetControllerProvider.select((_) => null));
@@ -209,6 +210,7 @@ class BStreamMusicApp extends ConsumerWidget {
           accent: value?.accent ?? AppAccent.white,
           surfaceBackgroundMode:
               value?.surfaceBackgroundMode ?? SurfaceBackgroundMode.accent,
+          playerFont: value?.playerFont ?? defaultPlayerFont,
           themeMode: value?.themeMode.materialMode ?? ThemeMode.system,
         );
       }),
@@ -216,6 +218,7 @@ class BStreamMusicApp extends ConsumerWidget {
     final language = appearance.language;
     final accent = appearance.accent;
     final surfaceBackgroundMode = appearance.surfaceBackgroundMode;
+    final playerFont = appearance.playerFont;
     final themeMode = appearance.themeMode;
     final isDesktop = AppPlatform.isDesktop;
     final iconButtonSize = isDesktop ? 52.0 : 48.0;
@@ -235,6 +238,7 @@ class BStreamMusicApp extends ConsumerWidget {
       theme: _buildLightTheme(
         accent: accent,
         surfaceBackgroundMode: surfaceBackgroundMode,
+        playerFont: playerFont,
         isDesktop: isDesktop,
         iconButtonSize: iconButtonSize,
         textButtonHeight: textButtonHeight,
@@ -242,6 +246,7 @@ class BStreamMusicApp extends ConsumerWidget {
       darkTheme: _buildDarkTheme(
         accent: accent,
         surfaceBackgroundMode: surfaceBackgroundMode,
+        playerFont: playerFont,
         isDesktop: isDesktop,
         iconButtonSize: iconButtonSize,
         textButtonHeight: textButtonHeight,
@@ -256,6 +261,7 @@ class BStreamMusicApp extends ConsumerWidget {
 ThemeData _buildDarkTheme({
   required AppAccent accent,
   required SurfaceBackgroundMode surfaceBackgroundMode,
+  required PlayerFont playerFont,
   required bool isDesktop,
   required double iconButtonSize,
   required double textButtonHeight,
@@ -283,8 +289,11 @@ ThemeData _buildDarkTheme({
 
   return ThemeData(
     useMaterial3: true,
-    fontFamily: AppPlatform.isLinux ? 'Roboto' : null,
-    fontFamilyFallback: AppPlatform.isLinux ? const [] : null,
+    fontFamily:
+        playerFont.fontFamily ?? (AppPlatform.isLinux ? 'Roboto' : null),
+    fontFamilyFallback: AppPlatform.isLinux && playerFont == PlayerFont.current
+        ? const []
+        : null,
     brightness: Brightness.dark,
     colorScheme: scheme,
     extensions: [
@@ -384,6 +393,7 @@ ThemeData _buildDarkTheme({
 ThemeData _buildLightTheme({
   required AppAccent accent,
   required SurfaceBackgroundMode surfaceBackgroundMode,
+  required PlayerFont playerFont,
   required bool isDesktop,
   required double iconButtonSize,
   required double textButtonHeight,
@@ -409,8 +419,11 @@ ThemeData _buildLightTheme({
 
   return ThemeData(
     useMaterial3: true,
-    fontFamily: AppPlatform.isLinux ? 'Roboto' : null,
-    fontFamilyFallback: AppPlatform.isLinux ? const [] : null,
+    fontFamily:
+        playerFont.fontFamily ?? (AppPlatform.isLinux ? 'Roboto' : null),
+    fontFamilyFallback: AppPlatform.isLinux && playerFont == PlayerFont.current
+        ? const []
+        : null,
     brightness: Brightness.light,
     colorScheme: scheme,
     extensions: [

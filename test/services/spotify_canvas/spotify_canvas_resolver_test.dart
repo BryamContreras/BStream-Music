@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:bstream_music/services/spotify_canvas/spotify_canvas_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -52,6 +54,146 @@ void main() {
     expect(mediaProbes, 1);
     expect(requests.first.queryParameters['track'], 'Woman');
     expect(requests.last.queryParameters['id'], '6Uj1ctrBOjOas8xZXGqKk4');
+  });
+
+  test(
+    'resolves current GET-only provider streams with a one-byte probe',
+    () async {
+      final url = Uri.parse(
+        'https://www.spotycovs.lol/api/canvas?id=6Uj1ctrBOjOas8xZXGqKk4&stream=1',
+      );
+      final methods = <String>[];
+      final ranges = <String?>[];
+      final resolver = SpotifyCanvasResolver(
+        fetchJson: (uri) async =>
+            uri.path == '/api/search' ? result() : canvas(url.toString()),
+      );
+      final resolved = await _withMediaServer(() => resolver.resolve(track), (
+        request,
+      ) async {
+        methods.add(request.method);
+        ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+        request.response
+          ..statusCode = HttpStatus.partialContent
+          ..headers.contentType = ContentType('video', 'mp4')
+          ..headers.set(HttpHeaders.contentRangeHeader, 'bytes 0-0/1310039')
+          ..contentLength = 1
+          ..add([0]);
+        await request.response.close();
+      });
+      expect(resolved, url);
+      expect(methods, ['GET']);
+      expect(ranges, ['bytes=0-0']);
+      expect(await resolver.resolve(track), url);
+      expect(methods, hasLength(1));
+    },
+  );
+
+  test(
+    'direct CDN media falls back to Range when HEAD is unsupported',
+    () async {
+      final url = Uri.parse('https://canvaz.scdn.co/upload/test.cnvs.mp4');
+      final methods = <String>[];
+      final resolver = SpotifyCanvasResolver(
+        fetchJson: (uri) async =>
+            uri.path == '/api/search' ? result() : canvas(url.toString()),
+      );
+      final resolved = await _withMediaServer(() => resolver.resolve(track), (
+        request,
+      ) async {
+        methods.add(request.method);
+        if (request.method == 'HEAD') {
+          request.response.statusCode = HttpStatus.methodNotAllowed;
+        } else {
+          request.response
+            ..statusCode = HttpStatus.partialContent
+            ..headers.contentType = ContentType('video', 'mp4')
+            ..headers.set(HttpHeaders.contentRangeHeader, 'bytes 0-0/1310039')
+            ..contentLength = 1
+            ..add([0]);
+        }
+        await request.response.close();
+      });
+      expect(resolved, url);
+      expect(methods, ['HEAD', 'GET']);
+    },
+  );
+
+  test(
+    'provider streams still reject oversized or unknown total sizes',
+    () async {
+      final url = Uri.parse(
+        'https://www.spotycovs.lol/api/canvas?id=6Uj1ctrBOjOas8xZXGqKk4&stream=1',
+      );
+      for (final total in [
+        '${SpotifyCanvasResolver.maxCanvasBytes + 1}',
+        '*',
+      ]) {
+        final resolver = SpotifyCanvasResolver(
+          fetchJson: (uri) async =>
+              uri.path == '/api/search' ? result() : canvas(url.toString()),
+        );
+        final resolved = await _withMediaServer(() => resolver.resolve(track), (
+          request,
+        ) async {
+          request.response
+            ..statusCode = HttpStatus.partialContent
+            ..headers.contentType = ContentType('video', 'mp4')
+            ..headers.set(HttpHeaders.contentRangeHeader, 'bytes 0-0/$total')
+            ..contentLength = 1
+            ..add([0]);
+          await request.response.close();
+        });
+        expect(resolved, isNull, reason: total);
+      }
+    },
+  );
+
+  test('provider JSON errors cannot be mistaken for small video files', () async {
+    final url = Uri.parse(
+      'https://www.spotycovs.lol/api/canvas?id=6Uj1ctrBOjOas8xZXGqKk4&stream=1',
+    );
+    final resolver = SpotifyCanvasResolver(
+      fetchJson: (uri) async =>
+          uri.path == '/api/search' ? result() : canvas(url.toString()),
+    );
+    final resolved = await _withMediaServer(() => resolver.resolve(track), (
+      request,
+    ) async {
+      request.response
+        ..headers.contentType = ContentType.json
+        ..contentLength = 2
+        ..write('{}');
+      await request.response.close();
+    });
+    expect(resolved, isNull);
+  });
+
+  test('provider streams must belong to the verified Spotify track', () async {
+    for (final rawUrl in [
+      'https://spotycovs.lol/api/canvas?id=6Uj1ctrBOjOas8xZXGqKk4&stream=1',
+      'https://www.spotycovs.lol/api/canvas?id=4HYDUMY0xSpeBr0AMY9cUz&stream=1',
+      'https://www.spotycovs.lol/api/canvas?id=6Uj1ctrBOjOas8xZXGqKk4',
+      'https://www.spotycovs.lol/other?id=6Uj1ctrBOjOas8xZXGqKk4&stream=1',
+      'https://www.spotycovs.lol:8443/api/canvas?id=6Uj1ctrBOjOas8xZXGqKk4&stream=1',
+      'https://user@www.spotycovs.lol/api/canvas?id=6Uj1ctrBOjOas8xZXGqKk4&stream=1',
+    ]) {
+      var probes = 0;
+      final resolver = SpotifyCanvasResolver(
+        fetchJson: (uri) async =>
+            uri.path == '/api/search' ? result() : canvas(rawUrl),
+        probeMediaSize: (_) async {
+          probes++;
+          return 1310039;
+        },
+      );
+      final accepted = rawUrl.startsWith('https://spotycovs.lol/');
+      expect(
+        await resolver.resolve(track),
+        accepted ? Uri.parse(rawUrl) : null,
+      );
+      expect(probes, accepted ? 1 : 0);
+    }
   });
 
   test('does not show Canvas for wrong artist, title or duration', () async {
@@ -183,55 +325,55 @@ void main() {
     ]);
   });
 
-  test(
-    'direct catalog fallback finds a studio Canvas omitted by search',
-    () async {
-      final requests = <Uri>[];
-      final resolver = SpotifyCanvasResolver(
-        fetchJson: (uri) async {
-          requests.add(uri);
-          if (uri.path == '/api/search') {
-            return {
-              'results': [
-                {
-                  'trackId': '1kuGVB7EU95pJObxwvfwKS',
-                  'name': 'vampire - live piano performance',
-                  'artistNames': ['Olivia Rodrigo'],
-                  'durationMs': 217000,
-                },
-              ],
-            };
-          }
+  test('direct catalog fallback finds a studio Canvas omitted by search', () async {
+    final requests = <Uri>[];
+    final resolver = SpotifyCanvasResolver(
+      fetchJson: (uri) async {
+        requests.add(uri);
+        if (uri.path == '/api/search') {
           return {
-            'trackId': '1kuGVB7EU95pJObxwvfwKS',
-            'hasCanvas': true,
-            'resolution': {
-              'matchedTrack': 'vampire',
-              'matchedArtist': 'Olivia Rodrigo',
-            },
-            'canvases': [
+            'results': [
               {
-                'type': 'VIDEO',
-                'canvasUrl': 'https://canvaz.scdn.co/upload/vampire.cnvs.mp4',
+                'trackId': '1kuGVB7EU95pJObxwvfwKS',
+                'name': 'vampire - live piano performance',
+                'artistNames': ['Olivia Rodrigo'],
+                'durationMs': 217000,
               },
             ],
           };
-        },
-        probeMediaSize: (_) async => 1600000,
-      );
-      expect(
-        await resolver.resolve(
-          const SpotifyCanvasTrack(
-            'vampire',
-            'Olivia Rodrigo',
-            Duration(seconds: 219),
-          ),
+        }
+        return {
+          'trackId': '1kuGVB7EU95pJObxwvfwKS',
+          'hasCanvas': true,
+          'resolution': {
+            'matchedTrack': 'vampire',
+            'matchedArtist': 'Olivia Rodrigo',
+          },
+          'canvases': [
+            {
+              'type': 'VIDEO',
+              'canvasUrl':
+                  'https://www.spotycovs.lol/api/canvas?id=1kuGVB7EU95pJObxwvfwKS&stream=1',
+            },
+          ],
+        };
+      },
+      probeMediaSize: (_) async => 1600000,
+    );
+    expect(
+      await resolver.resolve(
+        const SpotifyCanvasTrack(
+          'vampire',
+          'Olivia Rodrigo',
+          Duration(seconds: 219),
         ),
-        Uri.parse('https://canvaz.scdn.co/upload/vampire.cnvs.mp4'),
-      );
-      expect(requests.last.queryParameters['track'], 'vampire Olivia Rodrigo');
-    },
-  );
+      ),
+      Uri.parse(
+        'https://www.spotycovs.lol/api/canvas?id=1kuGVB7EU95pJObxwvfwKS&stream=1',
+      ),
+    );
+    expect(requests.last.queryParameters['track'], 'vampire Olivia Rodrigo');
+  });
 
   test('direct fallback rejects another artist or recording', () async {
     for (final wrong in [
@@ -506,4 +648,54 @@ void main() {
       expect(canvases, sample.$5 ? 1 : 2, reason: sample.$3);
     }
   });
+}
+
+Future<Uri?> _withMediaServer(
+  Future<Uri?> Function() resolve,
+  Future<void> Function(HttpRequest) respond,
+) async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  final client = HttpClient();
+  final subscription = server.listen(respond);
+  try {
+    return await HttpOverrides.runZoned(
+      resolve,
+      createHttpClient: (_) => _RoutedCanvasClient(client, server.port),
+    );
+  } finally {
+    client.close(force: true);
+    await subscription.cancel();
+    await server.close(force: true);
+  }
+}
+
+class _RoutedCanvasClient implements HttpClient {
+  _RoutedCanvasClient(this.client, this.port);
+
+  final HttpClient client;
+  final int port;
+
+  Uri _route(Uri uri) => uri.replace(
+    scheme: 'http',
+    host: InternetAddress.loopbackIPv4.address,
+    port: port,
+  );
+
+  @override
+  Duration? get connectionTimeout => client.connectionTimeout;
+
+  @override
+  set connectionTimeout(Duration? value) => client.connectionTimeout = value;
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri uri) => client.getUrl(_route(uri));
+
+  @override
+  Future<HttpClientRequest> headUrl(Uri uri) => client.headUrl(_route(uri));
+
+  @override
+  void close({bool force = false}) => client.close(force: force);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

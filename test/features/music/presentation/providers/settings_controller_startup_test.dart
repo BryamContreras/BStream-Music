@@ -5,11 +5,13 @@ import 'dart:io';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/core/platform/app_platform.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/services/storage/app_background_image_service.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as image;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -67,6 +69,45 @@ void main() {
       await sandbox.delete(recursive: true);
     }
   });
+
+  test(
+    'audio quality visibility defaults off and preserves an explicit saved value',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final first = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+        ],
+      );
+      expect(
+        (await first.read(settingsControllerProvider.future)).showAudioQuality,
+        isFalse,
+      );
+      await first
+          .read(settingsControllerProvider.notifier)
+          .setShowAudioQuality(true);
+      expect(
+        first.read(settingsControllerProvider).value?.showAudioQuality,
+        isTrue,
+      );
+      first.dispose();
+
+      final second = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+        ],
+      );
+      addTearDown(second.dispose);
+      expect(
+        (await second.read(settingsControllerProvider.future)).showAudioQuality,
+        isTrue,
+      );
+    },
+  );
 
   test(
     'iOS ignores an unusable Downloads location and initializes in Documents',
@@ -208,6 +249,101 @@ void main() {
     expect(
       container.read(settingsControllerProvider).value?.playerStyle,
       PlayerStyle.bstreamMusic,
+    );
+  });
+
+  test(
+    'player font defaults to current and persists the selected family',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final first = ProviderContainer();
+      final initial = await first.read(settingsControllerProvider.future);
+      final preferences = await SharedPreferences.getInstance();
+
+      expect(initial.playerFont, PlayerFont.current);
+      expect(preferences.containsKey('settings.playerFont'), isFalse);
+
+      await first
+          .read(settingsControllerProvider.notifier)
+          .setPlayerFont(PlayerFont.lora);
+      expect(
+        preferences.getString('settings.playerFont'),
+        PlayerFont.lora.code,
+      );
+      expect(
+        first.read(settingsControllerProvider).value?.playerFont,
+        PlayerFont.lora,
+      );
+      first.dispose();
+
+      final second = ProviderContainer();
+      addTearDown(second.dispose);
+      expect(
+        (await second.read(settingsControllerProvider.future)).playerFont,
+        PlayerFont.lora,
+      );
+    },
+  );
+
+  test('custom app background survives restart and clears cleanly', () async {
+    SharedPreferences.setMockInitialValues({});
+    final photo = image.Image(width: 24, height: 16);
+    image.fill(photo, color: image.ColorRgb8(40, 90, 140));
+    final original = File(p.join(sandbox.path, 'selected-photo.png'));
+    final originalBytes = image.encodePng(photo);
+    await original.writeAsBytes(originalBytes);
+    final service = AppBackgroundImageService(
+      supportDirectoryProvider: () async => sandbox,
+    );
+
+    ProviderContainer container() => ProviderContainer(
+      overrides: [
+        settingsControllerProvider.overrideWith(
+          () => SettingsController.forPlatform(AppPlatformType.ios),
+        ),
+        appBackgroundImageServiceProvider.overrideWithValue(service),
+      ],
+    );
+
+    final first = container();
+    await first.read(settingsControllerProvider.future);
+    await first
+        .read(settingsControllerProvider.notifier)
+        .setAppBackgroundPhoto(original);
+    final saved = first.read(settingsControllerProvider).value!;
+    final preferences = await SharedPreferences.getInstance();
+    final storedName = preferences.getString('settings.appBackgroundFileName');
+    final savedPath = saved.appBackgroundPath;
+
+    expect(storedName, saved.appBackgroundFileName);
+    expect(storedName, matches(RegExp(r'^background_\d+_\d+\.jpg$')));
+    expect(p.isAbsolute(storedName!), isFalse);
+    expect(savedPath, p.join(sandbox.path, 'app_backgrounds', storedName));
+    expect(await File(savedPath!).exists(), isTrue);
+    expect(await original.readAsBytes(), originalBytes);
+    first.dispose();
+
+    final restarted = container();
+    final restored = await restarted.read(settingsControllerProvider.future);
+    expect(restored.appBackgroundFileName, storedName);
+    expect(restored.appBackgroundPath, savedPath);
+
+    await restarted
+        .read(settingsControllerProvider.notifier)
+        .clearAppBackgroundPhoto();
+    expect(preferences.containsKey('settings.appBackgroundFileName'), isFalse);
+    expect(
+      restarted.read(settingsControllerProvider).value!.appBackgroundPath,
+      isNull,
+    );
+    expect(await File(savedPath).exists(), isFalse);
+    restarted.dispose();
+
+    final cleared = container();
+    addTearDown(cleared.dispose);
+    expect(
+      (await cleared.read(settingsControllerProvider.future)).appBackgroundPath,
+      isNull,
     );
   });
 

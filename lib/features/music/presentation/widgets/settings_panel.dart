@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -62,6 +63,30 @@ final storageImportFilePickerProvider = Provider<StorageImportFilePicker>((
       linuxOptions: const LinuxOptions(lockParentWindow: true),
     );
     return file?.path;
+  };
+});
+
+typedef AppBackgroundPhotoPicker = Future<File?> Function();
+
+final appBackgroundPhotoPickerProvider = Provider<AppBackgroundPhotoPicker>((
+  ref,
+) {
+  return () async {
+    if (AppPlatform.isMobile) {
+      final selected = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        imageQuality: 88,
+      );
+      return selected == null ? null : File(selected.path);
+    }
+    final selected = await FilePicker.pickFile(
+      type: FileType.image,
+      windowsOptions: const WindowsOptions(lockParentWindow: true),
+      linuxOptions: const LinuxOptions(lockParentWindow: true),
+    );
+    return selected?.path == null ? null : File(selected!.path!);
   };
 });
 
@@ -367,6 +392,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         themeMode: state.themeMode,
         accent: state.accent,
         surfaceBackgroundMode: state.surfaceBackgroundMode,
+        appBackgroundPath: state.appBackgroundPath,
+        playerFont: state.playerFont,
         playerStyle: state.playerStyle,
         animatedArtworkEnabled: state.animatedArtworkEnabled,
         playerArtworkStyle: state.playerArtworkStyle,
@@ -382,6 +409,15 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onSurfaceBackgroundModeChanged: (mode) => ref
             .read(settingsControllerProvider.notifier)
             .setSurfaceBackgroundMode(mode),
+        onPickAppBackgroundPhoto: ref.read(appBackgroundPhotoPickerProvider),
+        onAppBackgroundPhotoSelected: (file) => ref
+            .read(settingsControllerProvider.notifier)
+            .setAppBackgroundPhoto(file),
+        onAppBackgroundCleared: () => ref
+            .read(settingsControllerProvider.notifier)
+            .clearAppBackgroundPhoto(),
+        onPlayerFontChanged: (font) =>
+            ref.read(settingsControllerProvider.notifier).setPlayerFont(font),
         onPlayerStyleChanged: (style) =>
             ref.read(settingsControllerProvider.notifier).setPlayerStyle(style),
         onAnimatedArtworkEnabledChanged: (enabled) => ref
@@ -1536,7 +1572,7 @@ class _CsvProfileDialog extends StatelessWidget {
                   key: ValueKey(
                     'csv-profile-surface-${options[index].$1.name}',
                   ),
-                  color: AppColors.neutralSurfaceFor(context),
+                  color: AppColors.cardSurfaceFor(context),
                   borderRadius: BorderRadius.circular(appCardRadius),
                   clipBehavior: Clip.antiAlias,
                   child: ListTile(
@@ -1672,7 +1708,7 @@ class _SettingsEntryCard extends StatelessWidget {
     final colors = theme.colorScheme;
     final highlight = accent ?? colors.primary;
     final card = Material(
-      color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+      color: AppColors.cardSurfaceFor(context),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(appCardRadius),
         side: BorderSide(
@@ -1803,8 +1839,8 @@ class _AboutApplicationSettings extends StatelessWidget {
             "What's new in ${AppConstants.appVersion}",
           ),
           subtitle: strings.choose(
-            'Vinilo Clásico, Saltar silencios, letras fluidas y gestos',
-            'Classic Vinyl, smoother lyrics, silence skipping, and gestures',
+            'Widget, fondos personalizados, fuentes y selección múltiple',
+            'Widget, custom backgrounds, fonts, and multi-selection',
           ),
           onTap: () => _showWhatsNew(context),
         ),
@@ -1831,18 +1867,18 @@ class _AboutApplicationSettings extends StatelessWidget {
   Future<void> _showWhatsNew(BuildContext context) async {
     final highlights = strings.isEnglish
         ? const <String>[
-            'Added the Classic Vinyl player with a rotating record and animated tonearm. BStream Music, Apple Music Style, and Classic Vinyl now use responsive landscape layouts.',
-            'Android can now conservatively shorten confirmed prolonged silence in streaming and downloaded songs without disrupting crossfade or quiet musical passages.',
-            'Swipe the mobile mini player left for the next song or right for the previous one, with subtle resisted movement and protection against accidental changes.',
-            'New animated artwork styles are available: Spotify Canvas and Animated Artwork from Apple Music.',
-            'TikTok LIVE connection bootstrap, fallbacks, and bounded retries are now more resilient to transient upstream changes.',
+            'The player widget is now available for your home screen.',
+            'Personalize the app background with an image from your gallery.',
+            'You can now change the font throughout the app.',
+            'Animated artwork performance has been optimized.',
+            'Select multiple songs in albums, mixes, and search results to add them to a playlist or download them.',
           ]
         : const <String>[
-            'Se agregó el reproductor Vinilo Clásico con disco giratorio y aguja animada. BStream Music, Apple Music y Vinilo Clásico ahora usan diseños horizontales adaptables.',
-            'Android ahora puede acortar de forma conservadora los silencios prolongados confirmados en canciones en streaming y descargadas, sin afectar el crossfade ni los pasajes musicales suaves.',
-            'Desliza el mini reproductor móvil hacia la izquierda para avanzar o hacia la derecha para volver, con movimiento sutil y protección contra cambios accidentales.',
-            'Hay nuevos estilos de portadas animadas: Spotify Canvas y Animated Artwork de Apple Music.',
-            'Se reforzaron el inicio de conexión, los fallbacks y los reintentos limitados de TikTok LIVE ante cambios temporales del servicio.',
+            'Ya está disponible el widget del reproductor para la pantalla de inicio.',
+            'Personaliza el fondo de la aplicación con una imagen de tu galería.',
+            'Ahora puedes cambiar la fuente de toda la aplicación.',
+            'Se optimizó el rendimiento de los artworks animados.',
+            'Selecciona varias canciones en álbumes, mixes y resultados de búsqueda para añadirlas a una playlist o descargarlas.',
           ];
     await showAppDialog<void>(
       context: context,
@@ -1973,8 +2009,10 @@ class _SettingsDialogOption extends StatelessWidget {
       excludeSemantics: true,
       child: Material(
         color: selected
-            ? colors.primaryContainer.withValues(alpha: 0.72)
-            : colors.surfaceContainerHighest.withValues(alpha: 0.72),
+            ? colors.primaryContainer.withValues(
+                alpha: AppColors.cardSurfaceOpacityFor(context),
+              )
+            : AppColors.cardSurfaceFor(context),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(appListCardIconRadius),
           side: BorderSide(
@@ -2025,6 +2063,154 @@ class _SettingsDialogOption extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayerFontSelectorDialog extends StatefulWidget {
+  const _PlayerFontSelectorDialog({required this.font, required this.strings});
+
+  final PlayerFont font;
+  final AppStrings strings;
+
+  @override
+  State<_PlayerFontSelectorDialog> createState() =>
+      _PlayerFontSelectorDialogState();
+}
+
+class _PlayerFontSelectorDialogState extends State<_PlayerFontSelectorDialog> {
+  late PlayerFont selected = widget.font;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppAlertDialog(
+      key: const ValueKey('settings-player-font-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(widget.strings.playerFont),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final font in PlayerFont.values) ...[
+              if (font != PlayerFont.current) const SizedBox(height: 8),
+              _PlayerFontOption(
+                key: ValueKey('settings-player-font-option-${font.code}'),
+                font: font,
+                selected: selected == font,
+                strings: widget.strings,
+                onTap: () => setState(() => selected = font),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(widget.strings.cancel),
+        ),
+        FilledButton(
+          key: const ValueKey('settings-player-font-apply'),
+          onPressed: () => Navigator.of(context).pop(selected),
+          child: Text(widget.strings.apply),
+        ),
+      ],
+    );
+  }
+}
+
+class _PlayerFontOption extends StatelessWidget {
+  const _PlayerFontOption({
+    required this.font,
+    required this.selected,
+    required this.strings,
+    required this.onTap,
+    super.key,
+  });
+
+  final PlayerFont font;
+  final bool selected;
+  final AppStrings strings;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: strings.playerFontLabel(font),
+      excludeSemantics: true,
+      child: Material(
+        color: selected
+            ? colors.primaryContainer.withValues(
+                alpha: AppColors.cardSurfaceOpacityFor(context),
+              )
+            : AppColors.cardSurfaceFor(context),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(appListCardIconRadius),
+          side: BorderSide(
+            color: selected ? colors.primary : colors.outlineVariant,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.text_fields_rounded,
+                  color: selected ? colors.primary : colors.onSurfaceVariant,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        strings.playerFontLabel(font),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: font.fontFamily,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: selected
+                              ? colors.onPrimaryContainer
+                              : colors.onSurface,
+                        ),
+                      ),
+                      Text(
+                        strings.playerFontDescription(font),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: selected
+                              ? colors.onPrimaryContainer.withValues(alpha: 0.8)
+                              : colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  selected
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  color: selected ? colors.primary : colors.onSurfaceVariant,
+                ),
+              ],
             ),
           ),
         ),
@@ -2268,6 +2454,59 @@ class _SurfaceBackgroundSelectorDialog extends StatelessWidget {
   }
 }
 
+enum _AppBackgroundChoice { none, custom }
+
+class _AppBackgroundSelectorDialog extends StatelessWidget {
+  const _AppBackgroundSelectorDialog({
+    required this.customSelected,
+    required this.strings,
+  });
+
+  final bool customSelected;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppAlertDialog(
+      key: const ValueKey('settings-app-background-dialog'),
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: Text(strings.appBackground),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SettingsDialogOption(
+              key: const ValueKey('settings-app-background-option-none'),
+              selected: !customSelected,
+              icon: Icons.hide_image_rounded,
+              label: strings.appBackgroundNone,
+              onTap: () => Navigator.of(context).pop(_AppBackgroundChoice.none),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDialogOption(
+              key: const ValueKey('settings-app-background-option-custom'),
+              selected: customSelected,
+              icon: Icons.add_photo_alternate_rounded,
+              label: strings.appBackgroundCustom,
+              onTap: () =>
+                  Navigator.of(context).pop(_AppBackgroundChoice.custom),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('settings-app-background-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+      ],
+    );
+  }
+}
+
 class _MiniPlayerBackgroundSelectorDialog extends StatelessWidget {
   const _MiniPlayerBackgroundSelectorDialog({
     required this.mode,
@@ -2353,6 +2592,8 @@ class _AppearanceSettings extends StatelessWidget {
     required this.themeMode,
     required this.accent,
     required this.surfaceBackgroundMode,
+    required this.appBackgroundPath,
+    required this.playerFont,
     required this.playerStyle,
     required this.animatedArtworkEnabled,
     required this.playerArtworkStyle,
@@ -2364,6 +2605,10 @@ class _AppearanceSettings extends StatelessWidget {
     required this.onThemeModeChanged,
     required this.onAccentChanged,
     required this.onSurfaceBackgroundModeChanged,
+    required this.onPickAppBackgroundPhoto,
+    required this.onAppBackgroundPhotoSelected,
+    required this.onAppBackgroundCleared,
+    required this.onPlayerFontChanged,
     required this.onPlayerStyleChanged,
     required this.onAnimatedArtworkEnabledChanged,
     required this.onPlayerArtworkStyleChanged,
@@ -2376,6 +2621,8 @@ class _AppearanceSettings extends StatelessWidget {
   final AppThemeMode themeMode;
   final AppAccent accent;
   final SurfaceBackgroundMode surfaceBackgroundMode;
+  final String? appBackgroundPath;
+  final PlayerFont playerFont;
   final PlayerStyle playerStyle;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
@@ -2388,6 +2635,10 @@ class _AppearanceSettings extends StatelessWidget {
   final ValueChanged<AppAccent> onAccentChanged;
   final Future<void> Function(SurfaceBackgroundMode)
   onSurfaceBackgroundModeChanged;
+  final AppBackgroundPhotoPicker onPickAppBackgroundPhoto;
+  final Future<void> Function(File) onAppBackgroundPhotoSelected;
+  final Future<void> Function() onAppBackgroundCleared;
+  final Future<void> Function(PlayerFont) onPlayerFontChanged;
   final Future<void> Function(PlayerStyle) onPlayerStyleChanged;
   final Future<void> Function(bool) onAnimatedArtworkEnabledChanged;
   final Future<void> Function(PlayerArtworkStyle) onPlayerArtworkStyleChanged;
@@ -2421,6 +2672,16 @@ class _AppearanceSettings extends StatelessWidget {
     await onPlayerStyleChanged(selected);
   }
 
+  Future<void> _choosePlayerFont(BuildContext context) async {
+    final selected = await showAppDialog<PlayerFont>(
+      context: context,
+      builder: (_) =>
+          _PlayerFontSelectorDialog(font: playerFont, strings: strings),
+    );
+    if (!context.mounted || selected == null || selected == playerFont) return;
+    await onPlayerFontChanged(selected);
+  }
+
   Future<void> _choosePlayerArtworkStyle(BuildContext context) async {
     final selected = await showAppDialog<PlayerArtworkStyle>(
       context: context,
@@ -2451,6 +2712,33 @@ class _AppearanceSettings extends StatelessWidget {
       return;
     }
     await onSurfaceBackgroundModeChanged(selected);
+  }
+
+  Future<void> _chooseAppBackground(BuildContext context) async {
+    final selected = await showAppDialog<_AppBackgroundChoice>(
+      context: context,
+      builder: (_) => _AppBackgroundSelectorDialog(
+        customSelected: appBackgroundPath != null,
+        strings: strings,
+      ),
+    );
+    if (!context.mounted || selected == null) return;
+    try {
+      if (selected == _AppBackgroundChoice.none) {
+        await onAppBackgroundCleared();
+        return;
+      }
+      final image = await onPickAppBackgroundPhoto();
+      if (image != null) {
+        await onAppBackgroundPhotoSelected(image);
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(strings.appBackgroundSelectionFailed)),
+      );
+      debugPrint('Could not select app background: $error');
+    }
   }
 
   Future<void> _chooseMiniPlayerBackgroundMode(BuildContext context) async {
@@ -2576,6 +2864,24 @@ class _AppearanceSettings extends StatelessWidget {
             title: strings.surfaceBackground,
             subtitle: strings.surfaceBackgroundModeLabel(surfaceBackgroundMode),
             onTap: () => _chooseSurfaceBackgroundMode(context),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('app-background-selector'),
+            icon: Icons.wallpaper_rounded,
+            title: strings.appBackground,
+            subtitle: appBackgroundPath == null
+                ? strings.appBackgroundNone
+                : strings.appBackgroundCustom,
+            onTap: () => _chooseAppBackground(context),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('player-font-selector'),
+            icon: Icons.text_fields_rounded,
+            title: strings.playerFont,
+            subtitle: strings.playerFontLabel(playerFont),
+            onTap: () => _choosePlayerFont(context),
           ),
           const SizedBox(height: 24),
           Text(
@@ -3455,7 +3761,7 @@ class _SleepTimerSettings extends StatelessWidget {
       child: AppCardGradientBorder(
         solidInLiquidGlass: true,
         child: Material(
-          color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+          color: AppColors.cardSurfaceFor(context),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(appCardRadius),
             side: BorderSide(
@@ -3561,7 +3867,7 @@ class _CrossfadeSettings extends StatelessWidget {
       child: AppCardGradientBorder(
         solidInLiquidGlass: true,
         child: Material(
-          color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+          color: AppColors.cardSurfaceFor(context),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(appCardRadius),
             side: BorderSide(
@@ -3647,7 +3953,7 @@ class _SkipSilenceSettings extends StatelessWidget {
       child: AppCardGradientBorder(
         solidInLiquidGlass: true,
         child: Material(
-          color: AppColors.cardSurfaceFor(context, solidInLiquidGlass: true),
+          color: AppColors.cardSurfaceFor(context),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(appCardRadius),
             side: BorderSide(
@@ -4089,8 +4395,10 @@ class _PlaybackOptionButton extends StatelessWidget {
       height: 52,
       child: Material(
         color: selected
-            ? colors.primaryContainer
-            : colors.surfaceContainerHighest.withValues(alpha: 0.58),
+            ? colors.primaryContainer.withValues(
+                alpha: AppColors.cardSurfaceOpacityFor(context),
+              )
+            : AppColors.cardSurfaceFor(context),
         shape: RoundedRectangleBorder(
           borderRadius: borderRadius,
           side: BorderSide(
@@ -4397,8 +4705,10 @@ class _LocalMusicFilterOption extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     return Material(
       color: selected
-          ? colors.primaryContainer.withValues(alpha: 0.52)
-          : colors.surfaceContainerHighest.withValues(alpha: 0.56),
+          ? colors.primaryContainer.withValues(
+              alpha: AppColors.cardSurfaceOpacityFor(context),
+            )
+          : AppColors.cardSurfaceFor(context),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(appListCardIconRadius),
         side: BorderSide(
@@ -4803,7 +5113,7 @@ class _TikTokCommandAudienceSection extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     return Material(
       key: ValueKey('tiktok-command-section-${audience.name}'),
-      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
+      color: AppColors.cardSurfaceFor(context),
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),

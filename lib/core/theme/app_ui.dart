@@ -97,10 +97,8 @@ TextStyle appSecondaryLabelStyle(BuildContext context) {
 }
 
 /// Returns the card surface color for the current context.
-Color appListCardSurface(
-  BuildContext context, {
-  bool solidInLiquidGlass = false,
-}) => AppColors.cardSurfaceFor(context, solidInLiquidGlass: solidInLiquidGlass);
+Color appListCardSurface(BuildContext context) =>
+    AppColors.cardSurfaceFor(context);
 
 /// Returns the card border color for the current context.
 Color appListCardBorder(

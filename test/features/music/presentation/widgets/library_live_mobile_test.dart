@@ -57,6 +57,18 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      final downloadsEntry = find.byKey(
+        const ValueKey('library-downloads-entry'),
+      );
+      final overviewSurface = tester.widget<AnimatedContainer>(
+        find
+            .descendant(
+              of: downloadsEntry,
+              matching: find.byType(AnimatedContainer),
+            )
+            .first,
+      );
+      expect((overviewSurface.decoration! as ShapeDecoration).color?.a, 0.68);
       await tester.tap(find.byKey(const ValueKey('library-downloads-entry')));
       await tester.pumpAndSettle();
 
@@ -71,7 +83,7 @@ void main() {
             )
             .first,
       );
-      expect((trackSurface.decoration! as BoxDecoration).color?.a, 1);
+      expect((trackSurface.decoration! as BoxDecoration).color?.a, 0.68);
       final image = tester.widget<ProportionalArtwork>(
         find.descendant(
           of: artworkSurface,
@@ -356,7 +368,7 @@ void main() {
           )
           .color!
           .a,
-      1,
+      0.68,
     );
     final playButton = tester.widget<IconButton>(
       find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),

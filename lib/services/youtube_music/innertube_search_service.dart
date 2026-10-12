@@ -37,6 +37,11 @@ abstract interface class YouTubeMusicSearch {
   Future<List<InnerTubeSong>> searchSongs(String query, {int limit = 20});
 }
 
+/// Text suggestions for a search that has not been submitted yet.
+abstract interface class YouTubeMusicSearchSuggestions {
+  Future<List<String>> getSearchSuggestions(String query, {int limit = 8});
+}
+
 abstract interface class YouTubeMusicCatalogSearch {
   Future<List<InnerTubeSong>> searchVideos(String query, {int limit = 20});
 
@@ -175,6 +180,7 @@ abstract interface class YouTubeMusicPlaylistQueueLookup {
 class InnerTubeSearchService
     implements
         YouTubeMusicSearch,
+        YouTubeMusicSearchSuggestions,
         YouTubeMusicCatalogSearch,
         YouTubeMusicArtistSearch,
         YouTubeMusicTrackLookup,
@@ -204,6 +210,7 @@ class InnerTubeSearchService
     InnerTubeArtistParser artistParser = const InnerTubeArtistParser(),
     InnerTubeBootstrapParser bootstrapParser = const InnerTubeBootstrapParser(),
     Uri? endpoint,
+    Uri? suggestionsEndpoint,
     Uri? browseEndpoint,
     Uri? playerEndpoint,
     Uri? nextEndpoint,
@@ -252,6 +259,11 @@ class InnerTubeSearchService
       bootstrapParser: bootstrapParser,
       endpoint:
           endpoint ?? Uri.parse('https://music.youtube.com/youtubei/v1/search'),
+      suggestionsEndpoint:
+          suggestionsEndpoint ??
+          Uri.parse(
+            'https://music.youtube.com/youtubei/v1/music/get_search_suggestions',
+          ),
       browseEndpoint:
           browseEndpoint ??
           Uri.parse('https://music.youtube.com/youtubei/v1/browse'),
@@ -286,6 +298,7 @@ class InnerTubeSearchService
     required InnerTubeArtistParser artistParser,
     required InnerTubeBootstrapParser bootstrapParser,
     required Uri endpoint,
+    required Uri suggestionsEndpoint,
     required Uri browseEndpoint,
     required Uri playerEndpoint,
     required Uri nextEndpoint,
@@ -311,6 +324,7 @@ class InnerTubeSearchService
          artistParser,
          bootstrapParser,
          endpoint,
+         suggestionsEndpoint,
          browseEndpoint,
          playerEndpoint,
          nextEndpoint,
@@ -338,6 +352,7 @@ class InnerTubeSearchService
     this._artistParser,
     this._bootstrapParser,
     this._endpoint,
+    this._suggestionsEndpoint,
     this._browseEndpoint,
     this._playerEndpoint,
     this._nextEndpoint,
@@ -352,6 +367,9 @@ class InnerTubeSearchService
   );
 
   static const int maxResults = 20;
+  static const int maxSuggestionResults = 20;
+  static const Duration _suggestionTimeout = Duration(seconds: 2);
+  static const Duration _suggestionRetryDelay = Duration(milliseconds: 150);
   static const int maxDetailResults = innerTubeDetailResultLimit;
   static const int maxHomeSections = 6;
   static const int maxMoodGenreSections = 12;
@@ -383,6 +401,7 @@ class InnerTubeSearchService
   final InnerTubeArtistParser _artistParser;
   final InnerTubeBootstrapParser _bootstrapParser;
   final Uri _endpoint;
+  final Uri _suggestionsEndpoint;
   final Uri _browseEndpoint;
   final Uri _playerEndpoint;
   final Uri _nextEndpoint;
@@ -417,6 +436,88 @@ class InnerTubeSearchService
 
     final decoded = await _searchCatalog(normalizedQuery, filter: songsFilter);
     return _parser.parse(decoded, limit: limit);
+  }
+
+  @override
+  Future<List<String>> getSearchSuggestions(
+    String query, {
+    int limit = 8,
+  }) async {
+    _ensureActive();
+    if (limit < 1 || limit > maxSuggestionResults) {
+      throw RangeError.range(limit, 1, maxSuggestionResults, 'limit');
+    }
+    final normalizedQuery = query.trim();
+    if (normalizedQuery.isEmpty) {
+      return const <String>[];
+    }
+
+    var configuration = await _configuration();
+    var response = await _requestSuggestions(normalizedQuery, configuration);
+    if (_needsFreshConfiguration(response.statusCode)) {
+      configuration = await _freshConfiguration();
+      response = await _requestSuggestions(normalizedQuery, configuration);
+    }
+    if (response.statusCode < HttpStatus.ok ||
+        response.statusCode >= HttpStatus.multipleChoices) {
+      throw InnerTubeHttpException(response.statusCode, response.body);
+    }
+    if (response.body.trim().isEmpty) {
+      return const <String>[];
+    }
+
+    late final Object? decoded;
+    try {
+      decoded = jsonDecode(response.body);
+    } on FormatException catch (error) {
+      throw InnerTubeFormatException(
+        'YouTube Music returned invalid suggestions JSON: ${error.message}',
+      );
+    }
+    return _parseSuggestions(decoded, limit: limit);
+  }
+
+  List<String> _parseSuggestions(Object? decoded, {required int limit}) {
+    if (decoded is! Map) {
+      return const <String>[];
+    }
+    final sections = decoded['contents'];
+    if (sections is! List) {
+      return const <String>[];
+    }
+
+    final suggestions = <String>[];
+    final seen = <String>{};
+    for (final section in sections) {
+      if (section is! Map) continue;
+      final sectionRenderer = section['searchSuggestionsSectionRenderer'];
+      if (sectionRenderer is! Map) continue;
+      final entries = sectionRenderer['contents'];
+      if (entries is! List) continue;
+
+      for (final entry in entries) {
+        if (entry is! Map) continue;
+        final renderer =
+            entry['searchSuggestionRenderer'] ??
+            entry['historySuggestionRenderer'];
+        if (renderer is! Map) continue;
+        final navigation = renderer['navigationEndpoint'];
+        final searchEndpoint = navigation is Map
+            ? navigation['searchEndpoint']
+            : null;
+        final rawQuery = searchEndpoint is Map ? searchEndpoint['query'] : null;
+        if (rawQuery is! String) continue;
+        final suggestion = rawQuery.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (suggestion.isEmpty || !seen.add(suggestion.toLowerCase())) {
+          continue;
+        }
+        suggestions.add(suggestion);
+        if (suggestions.length == limit) {
+          return List<String>.unmodifiable(suggestions);
+        }
+      }
+    }
+    return List<String>.unmodifiable(suggestions);
   }
 
   @override
@@ -1423,6 +1524,71 @@ class InnerTubeSearchService
         timeout: _requestTimeout,
       ),
     );
+  }
+
+  Future<InnerTubeHttpResponse> _requestSuggestions(
+    String query,
+    InnerTubeConfiguration configuration,
+  ) async {
+    final uri = _suggestionsEndpoint.replace(
+      queryParameters: <String, String>{
+        ..._suggestionsEndpoint.queryParameters,
+        'key': configuration.apiKey,
+        'prettyPrint': 'false',
+      },
+    );
+    final body = <String, Object>{
+      'context': <String, Object>{
+        'client': <String, Object>{
+          'clientName': configuration.clientName,
+          'clientVersion': configuration.clientVersion,
+          'hl': _language,
+          'gl': _region,
+          'visitorData': configuration.visitorData,
+        },
+      },
+      'input': query,
+    };
+    final timeout = _requestTimeout <= _suggestionTimeout
+        ? _requestTimeout
+        : _suggestionTimeout;
+
+    // Suggestions are speculative and become obsolete as the user types.
+    // Avoid the longer catalog retry/backoff budget for this endpoint.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      _ensureActive();
+      late final InnerTubeHttpResponse response;
+      try {
+        response = await _transport.postJson(
+          uri,
+          headers: <String, String>{
+            HttpHeaders.acceptHeader: 'application/json',
+            HttpHeaders.contentTypeHeader: 'application/json; charset=UTF-8',
+            'Origin': 'https://music.youtube.com',
+            HttpHeaders.refererHeader: 'https://music.youtube.com/',
+            HttpHeaders.userAgentHeader: _userAgent,
+            'X-YouTube-Client-Name': configuration.contextClientName,
+            'X-YouTube-Client-Version': configuration.clientVersion,
+            'X-Goog-Visitor-Id': configuration.visitorData,
+          },
+          body: body,
+          timeout: timeout,
+        );
+      } on Object catch (error, stackTrace) {
+        if (attempt == 0 && _isRetryableTransportError(error)) {
+          await _retryDelay(_suggestionRetryDelay);
+          continue;
+        }
+        Error.throwWithStackTrace(_translateRequestError(error), stackTrace);
+      }
+      if (attempt == 0 &&
+          response.statusCode >= HttpStatus.internalServerError) {
+        await _retryDelay(_suggestionRetryDelay);
+        continue;
+      }
+      return response;
+    }
+    throw StateError('Suggestions retry loop ended without a result.');
   }
 
   Future<InnerTubeHttpResponse> _requestPlayer(

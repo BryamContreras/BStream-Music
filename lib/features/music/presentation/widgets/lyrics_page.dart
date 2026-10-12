@@ -2026,6 +2026,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   List<String>? _measuredRomanizedLines;
   double? _measuredContentWidth;
   double? _measuredActiveFontSize;
+  String? _measuredFontFamily;
   TextScaler? _measuredTextScaler;
   TextDirection? _measuredTextDirection;
   Locale? _measuredLocale;
@@ -2286,6 +2287,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     _measuredRomanizedLines = null;
     _measuredContentWidth = null;
     _measuredActiveFontSize = null;
+    _measuredFontFamily = null;
     _measuredTextScaler = null;
     _measuredTextDirection = null;
     _measuredLocale = null;
@@ -2294,6 +2296,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
   bool _ensureLineMetrics({
     required double contentWidth,
     required double activeFontSize,
+    required String? fontFamily,
     required TextScaler textScaler,
     required TextDirection textDirection,
     required Locale? locale,
@@ -2304,6 +2307,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
         _measuredContentWidth != null &&
         (_measuredContentWidth! - contentWidth).abs() < 0.5 &&
         _measuredActiveFontSize == activeFontSize &&
+        _measuredFontFamily == fontFamily &&
         _measuredTextScaler == textScaler &&
         _measuredTextDirection == textDirection &&
         _measuredLocale == locale;
@@ -2324,6 +2328,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
                     : null,
                 contentWidth: contentWidth,
                 activeFontSize: activeFontSize,
+                fontFamily: fontFamily,
                 textScaler: textScaler,
                 textDirection: textDirection,
                 locale: locale,
@@ -2340,6 +2345,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     _measuredRomanizedLines = widget.romanizedLines;
     _measuredContentWidth = contentWidth;
     _measuredActiveFontSize = activeFontSize;
+    _measuredFontFamily = fontFamily;
     _measuredTextScaler = textScaler;
     _measuredTextDirection = textDirection;
     _measuredLocale = locale;
@@ -2371,6 +2377,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
     final textScaler = MediaQuery.textScalerOf(context);
     final textDirection = Directionality.of(context);
     final locale = Localizations.maybeLocaleOf(context);
+    final fontFamily = DefaultTextStyle.of(context).style.fontFamily;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2381,6 +2388,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
         final metricsChanged = _ensureLineMetrics(
           contentWidth: contentWidth,
           activeFontSize: typography.active,
+          fontFamily: fontFamily,
           textScaler: textScaler,
           textDirection: textDirection,
           locale: locale,
@@ -2389,6 +2397,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline> {
           source: widget.sourceFooter,
           seekHint: strings.tapLyricsToSeek,
           contentWidth: contentWidth,
+          fontFamily: fontFamily,
           textScaler: textScaler,
           textDirection: textDirection,
           locale: locale,
@@ -2675,12 +2684,14 @@ class _LyricLineTile extends StatelessWidget {
     final accent = AppColors.downloadAccentFor(context);
     final mobileLayout = _usesMobileLyricsLayout(context);
     final halo = _lyricsHaloFor(context, accent);
+    final fontFamily = DefaultTextStyle.of(context).style.fontFamily;
     final color = active
         ? mobileLayout
               ? Colors.white
               : Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white)
         : Colors.white.withValues(alpha: passed ? 0.62 : 0.38);
     final textStyle = TextStyle(
+      fontFamily: fontFamily,
       color: color,
       fontSize: active ? activeFontSize : inactiveFontSize,
       height: 1.16,
@@ -2723,25 +2734,29 @@ class _LyricLineTile extends StatelessWidget {
             textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
           ),
           if (showRomanization) ...[
-            SizedBox(height: active ? 5 : 4),
-            AnimatedDefaultTextStyle(
-              duration: animationDuration,
-              curve: Curves.easeInOutCubic,
-              style: TextStyle(
-                color: Colors.white.withValues(
-                  alpha: active ? 0.72 : (passed ? 0.55 : 0.48),
+            const SizedBox(height: 4),
+            RepaintBoundary(
+              child: AnimatedDefaultTextStyle(
+                duration: animationDuration,
+                curve: Curves.easeInOutCubic,
+                // Copy the original line's active/inactive color so both
+                // animate as one pair. Only typography differs; the
+                // transliteration stays free of expensive per-glyph halos.
+                style: textStyle.copyWith(
+                  inherit: false,
+                  fontSize: _romanizedLyricsFontSize(activeFontSize),
+                  height: 1.08,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0,
+                  shadows: const [],
                 ),
-                fontSize: ((active ? activeFontSize : inactiveFontSize) * 0.62)
-                    .clamp(15.0, 22.0)
-                    .toDouble(),
-                height: 1.25,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0,
-              ),
-              child: Text(
-                trimmedRomanization,
-                key: romanizationKey,
-                textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
+                child: Text(
+                  trimmedRomanization,
+                  key: romanizationKey,
+                  textAlign: lyricsCentered
+                      ? TextAlign.center
+                      : TextAlign.start,
+                ),
               ),
             ),
           ],
@@ -2933,6 +2948,7 @@ class _PlainLyricsView extends ConsumerWidget {
     final strings = ref.watch(appStringsProvider);
     final typography = _lyricsTypographyFor(context);
     final accent = AppColors.downloadAccentFor(context);
+    final fontFamily = DefaultTextStyle.of(context).style.fontFamily;
     final displayedLyrics = lyricsCentered
         ? lyrics.split('\n').map((line) => line.trim()).join('\n')
         : lyrics;
@@ -2954,6 +2970,7 @@ class _PlainLyricsView extends ConsumerWidget {
     final canPairLines =
         romanizedLines != null && romanizedLines.length == originalLines.length;
     final originalStyle = TextStyle(
+      fontFamily: fontFamily,
       color: Colors.white.withValues(alpha: 0.9),
       fontSize: typography.plain,
       height: 1.38,
@@ -2964,6 +2981,7 @@ class _PlainLyricsView extends ConsumerWidget {
       ],
     );
     final romanizedStyle = TextStyle(
+      fontFamily: fontFamily,
       color: Colors.white.withValues(alpha: 0.62),
       fontSize: typography.plain * 0.62,
       height: 1.36,
@@ -3269,6 +3287,7 @@ double _measureLyricLineExtent({
   required String? romanizedText,
   required double contentWidth,
   required double activeFontSize,
+  required String? fontFamily,
   required TextScaler textScaler,
   required TextDirection textDirection,
   required Locale? locale,
@@ -3277,6 +3296,7 @@ double _measureLyricLineExtent({
   final originalHeight = _measureTextHeight(
     text: originalText,
     style: TextStyle(
+      fontFamily: fontFamily,
       fontSize: activeFontSize,
       height: 1.16,
       fontWeight: FontWeight.w900,
@@ -3293,13 +3313,14 @@ double _measureLyricLineExtent({
   );
   final romanizationHeight = displayedRomanization == null
       ? 0.0
-      : 5 +
+      : 4.0 +
             _measureTextHeight(
               text: displayedRomanization,
               style: TextStyle(
-                fontSize: (activeFontSize * 0.62).clamp(15.0, 22.0).toDouble(),
-                height: 1.25,
-                fontWeight: FontWeight.w700,
+                fontFamily: fontFamily,
+                fontSize: _romanizedLyricsFontSize(activeFontSize),
+                height: 1.08,
+                fontWeight: FontWeight.w500,
               ),
               maxWidth: textWidth,
               textScaler: textScaler,
@@ -3311,17 +3332,22 @@ double _measureLyricLineExtent({
   return (24 + originalHeight + romanizationHeight).ceilToDouble();
 }
 
+double _romanizedLyricsFontSize(double activeFontSize) =>
+    (activeFontSize * 0.60).clamp(14.0, 20.0).toDouble();
+
 double _measureSyncedLyricsGuidanceExtent({
   required String source,
   required String seekHint,
   required double contentWidth,
+  required String? fontFamily,
   required TextScaler textScaler,
   required TextDirection textDirection,
   required Locale? locale,
 }) {
   final sourceHeight = _measureTextHeight(
     text: source,
-    style: const TextStyle(
+    style: TextStyle(
+      fontFamily: fontFamily,
       fontSize: 11,
       height: 1.25,
       fontWeight: FontWeight.w700,
@@ -3333,7 +3359,8 @@ double _measureSyncedLyricsGuidanceExtent({
   );
   final hintHeight = _measureTextHeight(
     text: seekHint,
-    style: const TextStyle(
+    style: TextStyle(
+      fontFamily: fontFamily,
       fontSize: 12,
       height: 1.25,
       fontWeight: FontWeight.w700,

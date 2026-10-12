@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/platform/app_platform.dart';
 import 'package:bstream_music/features/music/presentation/providers/app_strings.dart';
 import 'package:bstream_music/features/music/presentation/providers/mini_player_background_mode.dart';
 import 'package:bstream_music/features/music/presentation/providers/player_artwork_style.dart';
@@ -8,6 +9,14 @@ import 'package:bstream_music/features/music/presentation/providers/player_style
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('default font shows the real platform font name', () {
+    expect(systemFontNameForPlatform(AppPlatformType.android), 'Roboto');
+    expect(systemFontNameForPlatform(AppPlatformType.linux), 'Roboto');
+    expect(systemFontNameForPlatform(AppPlatformType.ios), 'San Francisco');
+    expect(systemFontNameForPlatform(AppPlatformType.macos), 'San Francisco');
+    expect(systemFontNameForPlatform(AppPlatformType.windows), 'Segoe UI');
+  });
+
   test('artist mix labels stay coherent in Spanish and English', () {
     const spanish = AppStrings(AppLanguage.spanish);
     const english = AppStrings(AppLanguage.english);
@@ -262,7 +271,10 @@ void main() {
     const english = AppStrings(AppLanguage.english);
 
     expect(spanish.surfaceEffects, 'Efectos de superficie');
-    expect(spanish.surfaceBackground, 'Fondo de las superficies');
+    expect(spanish.surfaceBackground, 'Estilo de las superficies');
+    expect(spanish.appBackground, 'Fondo de la App');
+    expect(spanish.appBackgroundNone, 'Sin Fondo');
+    expect(spanish.appBackgroundCustom, 'Personalizado');
     expect(spanish.surfaceBackgroundAccent, 'Acento');
     expect(spanish.surfaceBackgroundTransparent, 'Transparente');
     expect(spanish.surfaceBackgroundLiquidGlass, 'Liquid Glass Style');
@@ -289,7 +301,10 @@ void main() {
     expect(spanish.miniPlayerBackgroundTransparent, 'Transparente');
     expect(spanish.miniPlayerBackgroundLiquidGlass, 'Liquid Glass Style');
     expect(english.surfaceEffects, 'Surface effects');
-    expect(english.surfaceBackground, 'Surface background');
+    expect(english.surfaceBackground, 'Surface style');
+    expect(english.appBackground, 'App background');
+    expect(english.appBackgroundNone, 'No background');
+    expect(english.appBackgroundCustom, 'Custom');
     expect(english.surfaceBackgroundAccent, 'Accent');
     expect(english.surfaceBackgroundTransparent, 'Transparent');
     expect(english.surfaceBackgroundLiquidGlass, 'Liquid Glass Style');
