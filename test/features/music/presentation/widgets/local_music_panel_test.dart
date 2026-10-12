@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/domain/entities/device_audio_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
@@ -86,14 +87,13 @@ void main() {
       expect(find.text('Beta'), findsOneWidget);
       expect(find.text('Gamma'), findsOneWidget);
       expect(find.byType(PopupMenuButton), findsNothing);
+      final localTrackCard = find.byKey(
+        const ValueKey('local-track-device:alpha'),
+      );
+      final localTrackCardContext = tester.element(localTrackCard);
       expect(
-        tester
-            .widget<Material>(
-              find.byKey(const ValueKey('local-track-device:alpha')),
-            )
-            .color!
-            .a,
-        1,
+        tester.widget<Material>(localTrackCard).color!.a,
+        AppColors.cardSurfaceOpacityFor(localTrackCardContext),
       );
       final artwork = tester.widget<SourceImage>(
         find.descendant(
