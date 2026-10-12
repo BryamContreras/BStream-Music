@@ -3,6 +3,7 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../domain/entities/lyrics_romanization_language.dart';
 import 'lyrics_animation_style.dart';
+import 'live_widget_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
 import 'player_artwork_style.dart';
@@ -1109,6 +1110,26 @@ class AppStrings {
   String get connect => choose('Conectar', 'Connect');
   String get disconnect => choose('Desconectar', 'Disconnect');
   String get liveOverlay => choose('Overlay LIVE local', 'Local LIVE overlay');
+  String get liveWidget => choose('Widget Live', 'Live widget');
+  String get liveWidgetPreview => choose('Vista previa', 'Preview');
+  String get liveWidgetDescription => choose(
+    'Elige el diseño que aparece en tu transmisión. Usa el color de acento de la app.',
+    'Choose the design shown on your stream. It uses the app accent color.',
+  );
+  String liveWidgetStyleLabel(LiveWidgetStyle style) => switch (style) {
+    LiveWidgetStyle.classic => choose('Clásico', 'Classic'),
+    LiveWidgetStyle.wave => choose('Onda', 'Wave'),
+  };
+  String liveWidgetStyleDescription(LiveWidgetStyle style) => switch (style) {
+    LiveWidgetStyle.classic => choose(
+      'Tarjetas compactas con portada y progreso.',
+      'Compact cards with artwork and progress.',
+    ),
+    LiveWidgetStyle.wave => choose(
+      'Portada grande, onda animada y barra inferior.',
+      'Large artwork, animated wave, and a bottom progress bar.',
+    ),
+  };
   String get liveOverlayResolving => choose('BUSCANDO', 'SEARCHING');
   String get liveOverlayLoading => choose('CARGANDO', 'LOADING');
   String get liveOverlayConnectFirst => choose(

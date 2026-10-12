@@ -102,6 +102,7 @@ class SettingsState {
     this.appBackgroundPath,
     this.playerStyle = defaultPlayerStyle,
     this.playerFont = defaultPlayerFont,
+    this.liveWidgetStyle = LiveWidgetStyle.classic,
     this.showAudioQuality = false,
     this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
     this.playerArtworkStyle = defaultPlayerArtworkStyle,
@@ -133,6 +134,7 @@ class SettingsState {
   final String? appBackgroundPath;
   final PlayerStyle playerStyle;
   final PlayerFont playerFont;
+  final LiveWidgetStyle liveWidgetStyle;
   final bool showAudioQuality;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
@@ -160,6 +162,7 @@ class SettingsState {
     Object? appBackgroundPath = _unchangedAppBackground,
     PlayerStyle? playerStyle,
     PlayerFont? playerFont,
+    LiveWidgetStyle? liveWidgetStyle,
     bool? showAudioQuality,
     bool? animatedArtworkEnabled,
     PlayerArtworkStyle? playerArtworkStyle,
@@ -193,6 +196,7 @@ class SettingsState {
           : appBackgroundPath as String?,
       playerStyle: playerStyle ?? this.playerStyle,
       playerFont: playerFont ?? this.playerFont,
+      liveWidgetStyle: liveWidgetStyle ?? this.liveWidgetStyle,
       showAudioQuality: showAudioQuality ?? this.showAudioQuality,
       animatedArtworkEnabled:
           animatedArtworkEnabled ?? this.animatedArtworkEnabled,
@@ -239,6 +243,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _appBackgroundFileNameKey = 'settings.appBackgroundFileName';
   static const _playerStyleKey = 'settings.playerStyle';
   static const _playerFontKey = 'settings.playerFont';
+  static const _liveWidgetStyleKey = 'settings.liveWidgetStyle';
   static const _showAudioQualityKey = 'settings.showAudioQuality';
   static const _animatedArtworkEnabledKey = 'settings.animatedArtworkEnabled';
   static const _playerArtworkStyleKey = 'settings.playerArtworkStyle';
@@ -271,6 +276,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   Future<void> _crossfadeWriteTail = Future<void>.value();
   Future<void> _skipSilenceWriteTail = Future<void>.value();
   Future<void> _appBackgroundWriteTail = Future<void>.value();
+  Future<void> _liveWidgetStyleWriteTail = Future<void>.value();
 
   @override
   Future<SettingsState> build() async {
@@ -327,6 +333,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     }
     final playerStyle = PlayerStyle.fromCode(prefs.getString(_playerStyleKey));
     final playerFont = PlayerFont.fromCode(prefs.getString(_playerFontKey));
+    final liveWidgetStyle = LiveWidgetStyle.fromCode(
+      prefs.getString(_liveWidgetStyleKey),
+    );
     final showAudioQuality = prefs.getBool(_showAudioQualityKey) ?? false;
     final animatedArtworkEnabled =
         prefs.getBool(_animatedArtworkEnabledKey) ??
@@ -541,6 +550,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       appBackgroundPath: appBackgroundPath,
       playerStyle: playerStyle,
       playerFont: playerFont,
+      liveWidgetStyle: liveWidgetStyle,
       showAudioQuality: showAudioQuality,
       animatedArtworkEnabled: animatedArtworkEnabled,
       playerArtworkStyle: playerArtworkStyle,
@@ -864,6 +874,18 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     state = AsyncData(current.copyWith(showAudioQuality: enabled));
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_showAudioQualityKey, enabled);
+  }
+
+  Future<void> setLiveWidgetStyle(LiveWidgetStyle style) async {
+    final current = state.asData?.value ?? await future;
+    if (current.liveWidgetStyle == style) return;
+    state = AsyncData(current.copyWith(liveWidgetStyle: style));
+    final write = _liveWidgetStyleWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_liveWidgetStyleKey, style.code);
+    });
+    _liveWidgetStyleWriteTail = write.catchError((_) {});
+    await write;
   }
 
   Future<void> setAnimatedArtworkEnabled(bool enabled) async {

@@ -70,6 +70,9 @@ jobs:
       - name: Run tests
         run: flutter test --coverage
 
+      - name: Smoke-test LIVE overlay layouts
+        run: node tool/live_overlay_browser_smoke.mjs
+
       - name: Run Android unit tests
         working-directory: android
         run: |

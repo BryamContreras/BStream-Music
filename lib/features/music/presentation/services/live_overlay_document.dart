@@ -285,6 +285,135 @@ const liveOverlayHtml = r'''<!doctype html>
       font-variant-numeric: tabular-nums;
     }
 
+    .waveform { display: none; }
+
+    /* The scene behind this layout is transparent. Only the two panels have
+       their own fill; the cover and full-width rail remain independent. */
+    #overlay[data-style="wave"] .track.current {
+      align-items: stretch;
+      grid-template-columns: 290px minmax(0, 1fr);
+      grid-template-rows: 180px 92px 18px;
+      gap: 18px 24px;
+      min-height: 0;
+      padding: 0;
+      overflow: visible;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    #overlay[data-style="wave"] .track.current::before,
+    #overlay[data-style="wave"] .track.current::after { display: none; }
+
+    #overlay[data-style="wave"] .current .artwork {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      width: 100%;
+      height: 100%;
+      border-radius: 14px;
+    }
+
+    #overlay[data-style="wave"] .current .details {
+      grid-column: 2;
+      grid-row: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 0;
+      padding: 22px 28px;
+      overflow: hidden;
+      isolation: isolate;
+      border-radius: 20px;
+      background: rgba(19, 24, 32, .86);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+    }
+
+    #overlay[data-style="wave"] .current .details::before {
+      content: "";
+      position: absolute;
+      z-index: 0;
+      inset: -28px;
+      background-image: var(--artwork-image, none);
+      background-size: cover;
+      background-position: center;
+      opacity: .64;
+      filter: blur(24px) brightness(.65);
+      pointer-events: none;
+    }
+
+    #overlay[data-style="wave"] .current .title-row,
+    #overlay[data-style="wave"] .current .artist { position: relative; z-index: 1; }
+    #overlay[data-style="wave"] .current .title-logo { display: none; }
+    #overlay[data-style="wave"] .current .title { font-size: 46px; }
+    #overlay[data-style="wave"] .current .artist { font-size: 32px; margin-top: 12px; }
+    #overlay[data-style="wave"] .current .playback { display: contents; }
+
+    #overlay[data-style="wave"] .current .time-row {
+      grid-column: 2;
+      grid-row: 2;
+      align-items: center;
+      gap: 28px;
+      margin: 0;
+      padding: 14px 28px;
+      border-radius: 20px;
+      background: rgba(19, 24, 32, .86);
+      color: var(--accent);
+      color: color-mix(in srgb, var(--accent) 76%, white);
+      font-size: 34px;
+      font-weight: 800;
+    }
+
+    #overlay[data-style="wave"] .elapsed,
+    #overlay[data-style="wave"] .duration { flex: 0 0 auto; }
+
+    #overlay[data-style="wave"] .current .progress {
+      grid-column: 1 / -1;
+      grid-row: 3;
+      height: 18px;
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--accent-dark) 42%, rgba(0, 0, 0, .6));
+    }
+
+    #overlay[data-style="wave"] .waveform {
+      display: flex;
+      flex: 1 1 0;
+      align-items: center;
+      justify-content: space-between;
+      min-width: 0;
+      height: 58px;
+      gap: 6px;
+    }
+
+    .wave-bar {
+      flex: 0 1 11px;
+      min-width: 2px;
+      border-radius: 6px;
+      background: var(--accent);
+      animation: live-wave 1200ms ease-in-out infinite alternate;
+      animation-delay: var(--delay, 0ms);
+      animation-play-state: paused;
+    }
+
+    .current.is-playing .wave-bar { animation-play-state: running; }
+    .page-hidden .current.is-playing .wave-bar { animation-play-state: paused; }
+
+    @keyframes live-wave {
+      0%, 100% { transform: scaleY(.45); }
+      45% { transform: scaleY(1); }
+      75% { transform: scaleY(.7); }
+    }
+
+    #overlay[data-style="wave"] .track:not(.current) {
+      grid-template-columns: 72px minmax(0, 1fr);
+      min-height: 78px;
+    }
+    #overlay[data-style="wave"] .track:not(.current).has-status {
+      grid-template-columns: 72px minmax(0, 1fr) 116px;
+    }
+    #overlay[data-style="wave"] .track:not(.current) .artwork { width: 56px; height: 56px; }
+    #overlay[data-style="wave"] .track:not(.current) .title { font-size: 22px; }
+    #overlay[data-style="wave"] .track:not(.current) .artist { font-size: 16px; }
+
     @media (max-width: 560px) {
       #overlay { width: calc(100vw - 24px); margin: 12px auto; }
       #queue { gap: 7px; }
@@ -301,6 +430,52 @@ const liveOverlayHtml = r'''<!doctype html>
 
     @media (prefers-reduced-motion: reduce) {
       .progress > span { transition: none; }
+      .wave-bar { animation: none; }
+    }
+
+    @media (max-width: 900px) {
+      #overlay[data-style="wave"] .track.current {
+        grid-template-columns: 190px minmax(0, 1fr);
+        grid-template-rows: 116px 60px 14px;
+        gap: 14px 16px;
+      }
+      #overlay[data-style="wave"] .current .details { padding: 16px 20px; }
+      #overlay[data-style="wave"] .current .title { font-size: 28px; }
+      #overlay[data-style="wave"] .current .artist { font-size: 20px; margin-top: 8px; }
+      #overlay[data-style="wave"] .current .time-row { padding: 10px 20px; font-size: 24px; gap: 16px; }
+      #overlay[data-style="wave"] .waveform { height: 38px; gap: 4px; }
+      #overlay[data-style="wave"] .current .progress { height: 14px; }
+    }
+
+    @media (max-width: 560px) {
+      #overlay[data-style="wave"] .track.current {
+        grid-template-columns: 130px minmax(0, 1fr);
+        grid-template-rows: 76px 44px 10px;
+        gap: 10px 12px;
+        margin-inline: 0;
+      }
+      #overlay[data-style="wave"] .current .details { padding: 10px 12px; border-radius: 12px; }
+      #overlay[data-style="wave"] .current .title { font-size: 18px; }
+      #overlay[data-style="wave"] .current .artist { font-size: 14px; margin-top: 6px; }
+      #overlay[data-style="wave"] .current .time-row { padding: 8px 12px; font-size: 16px; gap: 10px; border-radius: 12px; }
+      #overlay[data-style="wave"] .waveform { height: 28px; gap: 2px; }
+      #overlay[data-style="wave"] .current .progress { height: 10px; }
+      #overlay[data-style="wave"] .track:not(.current) { margin-inline: 0; }
+    }
+
+    @media (max-width: 400px) {
+      #overlay[data-style="wave"] .track.current {
+        grid-template-columns: 96px minmax(0, 1fr);
+        grid-template-rows: 54px 34px 8px;
+        gap: 8px 10px;
+      }
+      #overlay[data-style="wave"] .current .details { padding: 8px; }
+      #overlay[data-style="wave"] .current .title { font-size: 16px; }
+      #overlay[data-style="wave"] .current .artist { font-size: 12px; margin-top: 4px; }
+      #overlay[data-style="wave"] .current .time-row { padding: 6px 8px; font-size: 14px; gap: 6px; }
+      #overlay[data-style="wave"] .waveform { height: 22px; gap: 1px; }
+      #overlay[data-style="wave"] .wave-bar { min-width: 1px; }
+      #overlay[data-style="wave"] .current .progress { height: 8px; }
     }
   </style>
 </head>
@@ -311,6 +486,8 @@ const liveOverlayHtml = r'''<!doctype html>
   <script>
     (() => {
       const queue = document.getElementById('queue');
+      const overlay = document.getElementById('overlay');
+      let overlayStyle = 'classic';
       let retry = 0;
       let socket;
       let reconnectTimer;
@@ -320,6 +497,10 @@ const liveOverlayHtml = r'''<!doctype html>
       const leavingCards = new Map();
       const reducedMotion = window.matchMedia(
         '(prefers-reduced-motion: reduce)');
+      const updateVisibility = () => document.documentElement.classList.toggle(
+        'page-hidden', document.hidden);
+      document.addEventListener('visibilitychange', updateVisibility);
+      updateVisibility();
 
       const fallbackLabels = {
         es: {
@@ -394,6 +575,7 @@ const liveOverlayHtml = r'''<!doctype html>
         if (!source) {
           artwork.replaceChildren();
           artwork.classList.add('fallback');
+          artwork.closest('.track').style.removeProperty('--artwork-image');
           return;
         }
 
@@ -410,6 +592,8 @@ const liveOverlayHtml = r'''<!doctype html>
           artwork.classList.remove('fallback');
           const finish = () => {
             if (artwork.dataset.source !== source || !image.isConnected) return;
+            artwork.closest('.track').style.setProperty(
+              '--artwork-image', `url(${JSON.stringify(source)})`);
             image.classList.remove('pending-artwork');
             artwork.replaceChildren(image);
           };
@@ -446,7 +630,19 @@ const liveOverlayHtml = r'''<!doctype html>
         elapsed.className = 'elapsed';
         const duration = document.createElement('span');
         duration.className = 'duration';
-        times.append(elapsed, duration);
+        const waveform = document.createElement('div');
+        waveform.className = 'waveform';
+        waveform.setAttribute('aria-hidden', 'true');
+        const heights = [.32, .22, .55, .84, .62, .94, .46, .7, .88, .98,
+          .4, .7, .8, .36, .5, .62, .3];
+        heights.forEach((height, index) => {
+          const bar = document.createElement('span');
+          bar.className = 'wave-bar';
+          bar.style.height = `${height * 100}%`;
+          bar.style.setProperty('--delay', `${index * -137}ms`);
+          waveform.append(bar);
+        });
+        times.append(elapsed, waveform, duration);
         playback.append(rail, times);
         return playback;
       };
@@ -495,12 +691,15 @@ const liveOverlayHtml = r'''<!doctype html>
         if (title.textContent !== nextTitle) title.textContent = nextTitle;
         if (artist.textContent !== nextArtist) artist.textContent = nextArtist;
 
-        let playback = details.querySelector('.playback');
+        let playback = card.querySelector('.playback');
         if (current && !playback) {
           playback = createPlayback();
-          details.append(playback);
         } else if (!current && playback) {
           playback.remove();
+        }
+        if (current && playback) {
+          const parent = overlayStyle === 'wave' ? card : details;
+          if (playback.parentElement !== parent) parent.append(playback);
         }
 
         const label = current ? '' : statusLabel(item.status);
@@ -624,7 +823,8 @@ const liveOverlayHtml = r'''<!doctype html>
 
       const reconcileCards = items => {
         const entries = keyedItems(items);
-        const layoutSignature = entries.map(entry => entry.key).join('\u001f');
+        const layoutSignature = overlayStyle + '\u001e' +
+          entries.map(entry => entry.key).join('\u001f');
         const layoutChanged = layoutSignature !== lastLayoutSignature;
 
         if (!layoutChanged) {
@@ -686,6 +886,8 @@ const liveOverlayHtml = r'''<!doctype html>
 
       const render = (state) => {
         updateLocalization(state);
+        overlayStyle = state && state.style === 'wave' ? 'wave' : 'classic';
+        overlay.dataset.style = overlayStyle;
         const accent = state && state.accent ? state.accent : {};
         document.documentElement.style.setProperty(
           '--accent', cssColor(accent.seed, '#f5f7f5'));

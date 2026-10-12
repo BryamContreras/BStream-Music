@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added desktop LIVE widget style selection with Classic and Wave previews.
 - Added a home-screen player widget.
 - Added custom app backgrounds using images selected from the gallery.
 - Added app-wide font customization.

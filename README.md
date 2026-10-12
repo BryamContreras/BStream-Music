@@ -246,6 +246,14 @@ In TikTok LIVE Studio, add a web/browser source with these settings:
 - Canvas: `1280 × 760`
 - Background: transparent; no chroma-key filter is necessary
 
+On desktop, open **Settings → Appearance → Live widget** to preview and select
+**Classic** or **Wave**. Classic keeps the compact queue cards. Wave displays
+larger artwork, a blurred metadata panel, an animated wave between the playback
+times, and a full-width progress bar. Both styles use the app accent and keep
+the scene background transparent. The choice is saved and updates an active
+Windows browser source immediately; no reconnect is required. The wave pauses
+with playback, when the browser source is hidden, and for reduced motion.
+
 Keep BStream running while the source is in use. The page contains its own
 HTML, CSS, and JavaScript and receives queue updates from BStream over WS; it
 does not contact an external overlay service. Port `80` must be free because an
@@ -258,6 +266,10 @@ To preview and style the real HTTP/WS overlay without installing or
 connecting the app, run `dart run tool/live_overlay_preview.dart`, open the
 printed URL, and press `Ctrl+C` when finished. The same one-time Windows
 confirmation is required if the local domain has not been configured yet.
+For an isolated preview without configuring the domain, add `--loopback`;
+`--style=wave` selects the new design. Run
+`node tool/live_overlay_browser_smoke.mjs --capture` with Chrome or Edge
+installed to check both layouts and save screenshots under `build/`.
 
 On Android, the connection can continue while the app is normally in the
 background as long as its Flutter process remains alive. Force-stopping the app

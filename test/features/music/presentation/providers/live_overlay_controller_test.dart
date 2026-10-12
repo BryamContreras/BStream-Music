@@ -215,6 +215,58 @@ void main() {
   });
 
   test(
+    'switches style and stops the wave on pause without restarting the server',
+    () async {
+      final client = _FakeOverlayClient();
+      final player = _FakePlayerController();
+      final container = _overlayContainer(
+        client,
+        live: _FakeLiveController([_item(0), _item(1)]),
+        player: player,
+      );
+      addTearDown(container.dispose);
+      await _flushMicrotasks();
+      await container.read(liveOverlayControllerProvider.notifier).start();
+      expect(client.published.last['style'], 'classic');
+      player.publish(
+        const PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'track-0',
+          isRemote: true,
+          position: Duration(seconds: 30),
+          duration: Duration(minutes: 2),
+        ),
+        liveQueueActive: true,
+      );
+      await _flushMicrotasks();
+      container.read(_testStyleProvider.notifier).select(LiveWidgetStyle.wave);
+      await _flushMicrotasks();
+      expect(client.published.last['style'], 'wave');
+      expect(client.published.last['progress'], .25);
+      expect(client.startCalls, 1);
+      final current = (client.published.last['items']! as List).first as Map;
+      expect(current['id'], 'request-0');
+      expect(current['status'], 'playing');
+      player.publish(
+        const PlayerSnapshot(
+          status: PlayerStatus.paused,
+          trackId: 'track-0',
+          isRemote: true,
+          position: Duration(seconds: 30),
+          duration: Duration(minutes: 2),
+        ),
+        liveQueueActive: true,
+      );
+      await _flushMicrotasks();
+      final paused = (client.published.last['items']! as List).first as Map;
+      expect(paused['status'], 'paused');
+      expect(client.published.last['style'], 'wave');
+      expect(client.published.last['progress'], .25);
+      expect(client.startCalls, 1);
+    },
+  );
+
+  test(
     'localizes a nested Windows permission failure without leaking it',
     () async {
       final client = _FakeOverlayClient()
@@ -462,6 +514,9 @@ ProviderContainer _overlayContainer(
         artworkLoader ?? (_) async => null,
       ),
       liveOverlayAccentProvider.overrideWithValue(AppAccent.blue),
+      liveOverlayStyleProvider.overrideWith(
+        (ref) => ref.watch(_testStyleProvider),
+      ),
       appStringsProvider.overrideWith(
         (ref) => AppStrings(ref.watch(_testLanguageProvider)),
       ),
@@ -508,6 +563,17 @@ final _testLanguageProvider =
     NotifierProvider<_TestLanguageController, AppLanguage>(
       _TestLanguageController.new,
     );
+
+final _testStyleProvider =
+    NotifierProvider<_TestStyleController, LiveWidgetStyle>(
+      _TestStyleController.new,
+    );
+
+class _TestStyleController extends Notifier<LiveWidgetStyle> {
+  @override
+  LiveWidgetStyle build() => LiveWidgetStyle.classic;
+  void select(LiveWidgetStyle style) => state = style;
+}
 
 class _TestLanguageController extends Notifier<AppLanguage> {
   @override

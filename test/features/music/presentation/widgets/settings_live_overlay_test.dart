@@ -4,6 +4,7 @@ import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/features/music/presentation/providers/live_overlay_controller.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/live_widget_style_settings.dart';
 import 'package:bstream_music/services/live/local_overlay_hosts.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
@@ -12,6 +13,130 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final platform in [
+    TargetPlatform.windows,
+    TargetPlatform.macOS,
+    TargetPlatform.linux,
+  ]) {
+    testWidgets(
+      '$platform previews and selects LIVE styles with back to Appearance',
+      (tester) async {
+        tester.view
+          ..devicePixelRatio = 1
+          ..physicalSize = const Size(1100, 1000);
+        addTearDown(() {
+          tester.view
+            ..resetPhysicalSize()
+            ..resetDevicePixelRatio();
+        });
+        final navigation = SettingsNavigationController();
+        addTearDown(navigation.dispose);
+        final settings = _FakeSettingsController();
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              settingsControllerProvider.overrideWith(() => settings),
+              appStringsProvider.overrideWithValue(
+                const AppStrings(AppLanguage.spanish),
+              ),
+            ],
+            child: MaterialApp(
+              theme: ThemeData(platform: platform),
+              home: Scaffold(
+                body: SettingsPanel(navigationController: navigation),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('settings-card-appearance')),
+        );
+        await tester.pumpAndSettle();
+        final selector = find.byKey(
+          const ValueKey('live-widget-style-selector'),
+        );
+        await tester.scrollUntilVisible(
+          selector,
+          280,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(selector);
+        await tester.pumpAndSettle();
+        expect(find.text('Widget Live'), findsOneWidget);
+        expect(
+          tester
+              .widget<LiveWidgetPreview>(
+                find.byKey(const ValueKey('live-widget-preview')),
+              )
+              .style,
+          LiveWidgetStyle.classic,
+        );
+        await tester.tap(find.byKey(const ValueKey('live-widget-style-wave')));
+        await tester.pumpAndSettle();
+        expect(settings.state.value?.liveWidgetStyle, LiveWidgetStyle.wave);
+        expect(
+          tester
+              .widget<LiveWidgetPreview>(
+                find.byKey(const ValueKey('live-widget-preview')),
+              )
+              .style,
+          LiveWidgetStyle.wave,
+        );
+        expect(tester.takeException(), isNull);
+        tester.view.physicalSize = const Size(460, 900);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          tester
+              .getSize(find.byKey(const ValueKey('live-widget-preview')))
+              .width,
+          lessThanOrEqualTo(460),
+        );
+        expect(navigation.maybePop(), isTrue);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('settings-detail-appearance')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const ValueKey('settings-detail-back')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
+      },
+    );
+  }
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+    testWidgets('$platform hides desktop-only LIVE widget styling', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsControllerProvider.overrideWith(
+              _FakeSettingsController.new,
+            ),
+            appStringsProvider.overrideWithValue(
+              const AppStrings(AppLanguage.spanish),
+            ),
+          ],
+          child: MaterialApp(
+            theme: ThemeData(platform: platform),
+            home: const Scaffold(body: SettingsPanel()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('live-widget-style-selector')),
+        findsNothing,
+      );
+    });
+  }
+
   testWidgets('Windows shows LIVE details before the local domain overlay', (
     tester,
   ) async {
@@ -242,6 +367,11 @@ class _FakeSettingsController extends SettingsController {
     downloadDirectory: 'BStream-Music',
     language: AppLanguage.spanish,
   );
+
+  @override
+  Future<void> setLiveWidgetStyle(LiveWidgetStyle style) async {
+    state = AsyncData(state.requireValue.copyWith(liveWidgetStyle: style));
+  }
 }
 
 class _FakeTikTokLiveController extends TikTokLiveController {

@@ -27,6 +27,7 @@ import '../providers/live_overlay_controller.dart';
 import '../providers/music_providers.dart';
 import 'app_update_dialog.dart';
 import 'lyrics_animation_transition.dart';
+import 'live_widget_style_settings.dart';
 import 'scrolled_under_tab_frame.dart';
 
 typedef DownloadDirectoryPicker =
@@ -125,7 +126,15 @@ final settingsSupportedLinksLauncherProvider =
       return channel.open;
     });
 
-enum _SettingsRoute { root, appearance, lyrics, storage, live, about }
+enum _SettingsRoute {
+  root,
+  appearance,
+  liveWidget,
+  lyrics,
+  storage,
+  live,
+  about,
+}
 
 const double _settingsRootCardHorizontalPadding = 6.0;
 
@@ -248,7 +257,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         route: _route,
         title: _routeTitle(_route, strings),
         strings: strings,
-        onBack: _goRoot,
+        onBack: _goBack,
       );
       if (_route != _SettingsRoute.root) {
         return ScrolledUnderTabFrame(
@@ -350,7 +359,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     if (!_canPop) {
       return false;
     }
-    _goRoot();
+    _goBack();
     return true;
   }
 
@@ -362,11 +371,15 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     widget.navigationController?._routeChanged();
   }
 
-  void _goRoot() {
+  void _goBack() {
     if (_route == _SettingsRoute.root) {
       return;
     }
-    setState(() => _route = _SettingsRoute.root);
+    setState(() {
+      _route = _route == _SettingsRoute.liveWidget
+          ? _SettingsRoute.appearance
+          : _SettingsRoute.root;
+    });
     widget.navigationController?._routeChanged();
   }
 
@@ -374,6 +387,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     return switch (route) {
       _SettingsRoute.root => strings.settings,
       _SettingsRoute.appearance => strings.appearance,
+      _SettingsRoute.liveWidget => strings.liveWidget,
       _SettingsRoute.lyrics => strings.lyricsAppearance,
       _SettingsRoute.storage => strings.storage,
       _SettingsRoute.live => strings.liveConnection,
@@ -394,6 +408,12 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         surfaceBackgroundMode: state.surfaceBackgroundMode,
         appBackgroundPath: state.appBackgroundPath,
         playerFont: state.playerFont,
+        liveWidgetStyle: state.liveWidgetStyle,
+        onOpenLiveWidget:
+            AppPlatform.isDesktop &&
+                !AppPlatform.isMobileTargetPlatform(Theme.of(context).platform)
+            ? () => _openRoute(_SettingsRoute.liveWidget)
+            : null,
         playerStyle: state.playerStyle,
         animatedArtworkEnabled: state.animatedArtworkEnabled,
         playerArtworkStyle: state.playerArtworkStyle,
@@ -438,6 +458,14 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onMiniPlayerBackgroundModeChanged: (mode) => ref
             .read(settingsControllerProvider.notifier)
             .setMiniPlayerBackgroundMode(mode),
+      ),
+      _SettingsRoute.liveWidget => LiveWidgetStyleSettings(
+        style: state.liveWidgetStyle,
+        accent: state.accent,
+        strings: strings,
+        onChanged: (style) => ref
+            .read(settingsControllerProvider.notifier)
+            .setLiveWidgetStyle(style),
       ),
       _SettingsRoute.lyrics => _LyricsAppearanceSettings(
         animationStyle: state.lyricsAnimationStyle,
@@ -2594,6 +2622,8 @@ class _AppearanceSettings extends StatelessWidget {
     required this.surfaceBackgroundMode,
     required this.appBackgroundPath,
     required this.playerFont,
+    required this.liveWidgetStyle,
+    this.onOpenLiveWidget,
     required this.playerStyle,
     required this.animatedArtworkEnabled,
     required this.playerArtworkStyle,
@@ -2623,6 +2653,8 @@ class _AppearanceSettings extends StatelessWidget {
   final SurfaceBackgroundMode surfaceBackgroundMode;
   final String? appBackgroundPath;
   final PlayerFont playerFont;
+  final LiveWidgetStyle liveWidgetStyle;
+  final VoidCallback? onOpenLiveWidget;
   final PlayerStyle playerStyle;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
@@ -3005,6 +3037,16 @@ class _AppearanceSettings extends StatelessWidget {
             ),
             onTap: () => _chooseMiniPlayerBackgroundMode(context),
           ),
+          if (onOpenLiveWidget != null) ...[
+            const SizedBox(height: 24),
+            _SettingsEntryCard(
+              key: const ValueKey('live-widget-style-selector'),
+              icon: Icons.live_tv_rounded,
+              title: strings.liveWidget,
+              subtitle: strings.liveWidgetStyleLabel(liveWidgetStyle),
+              onTap: onOpenLiveWidget,
+            ),
+          ],
         ],
       ),
     );

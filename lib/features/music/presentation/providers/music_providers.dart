@@ -92,6 +92,7 @@ import '../../domain/usecases/search_tracks.dart';
 import 'app_strings.dart';
 import 'local_audio_availability.dart';
 import 'lyrics_animation_style.dart';
+import 'live_widget_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
 import 'player_artwork_style.dart';
@@ -109,6 +110,7 @@ import 'player/remote_playback_retry_coordinator.dart';
 
 export 'app_strings.dart';
 export 'lyrics_animation_style.dart';
+export 'live_widget_style.dart';
 export 'mini_player_background_mode.dart';
 export 'mini_player_mode.dart';
 export 'player_artwork_style.dart';

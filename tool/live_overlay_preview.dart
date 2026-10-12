@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:bstream_music/features/music/presentation/services/live_overlay_document.dart';
+import 'package:bstream_music/features/music/presentation/providers/live_widget_style.dart';
 import 'package:bstream_music/services/live/local_overlay_hosts.dart';
 import 'package:bstream_music/services/live/local_overlay_server.dart';
 
@@ -12,20 +13,32 @@ import 'package:bstream_music/services/live/local_overlay_server.dart';
 /// can be styled and captured in LIVE Studio directly from source code:
 ///
 ///   dart run tool/live_overlay_preview.dart
-Future<void> main() async {
-  if (!Platform.isWindows) {
+Future<void> main(List<String> arguments) async {
+  final loopback = arguments.contains('--loopback');
+  if (!loopback && !Platform.isWindows) {
     stderr.writeln('La vista previa local de la overlay requiere Windows.');
     exitCode = 1;
     return;
   }
 
-  final previewState = _previewState();
+  final style = LiveWidgetStyle.fromCode(
+    arguments
+        .where((argument) => argument.startsWith('--style='))
+        .firstOrNull
+        ?.substring(8),
+  );
+  final previewState = _previewState(style);
   final server = LocalLiveOverlayServer(
-    hostProvisioner: WindowsLocalOverlayHostProvisioner(),
+    hostProvisioner: loopback
+        ? const _LoopbackPreviewProvisioner()
+        : WindowsLocalOverlayHostProvisioner(),
+    host: loopback ? '127.0.0.1' : localLiveOverlayHost,
+    port: loopback ? 0 : localLiveOverlayPort,
     htmlDocument: liveOverlayHtml.replaceFirst(
       '      connect();',
       '      window.__bstreamPreviewRender = render;\n'
-          '      render(${jsonEncode(previewState)});\n'
+          '      window.__bstreamPreviewState = ${jsonEncode(previewState)};\n'
+          '      render(window.__bstreamPreviewState);\n'
           '      connect();',
     ),
     brandIconBytes: await File('assets/icons/bstream_icon.png').readAsBytes(),
@@ -68,7 +81,15 @@ Future<void> main() async {
   }
 }
 
-Map<String, Object> _previewState() => <String, Object>{
+class _LoopbackPreviewProvisioner implements LocalOverlayHostProvisioner {
+  const _LoopbackPreviewProvisioner();
+
+  @override
+  Future<void> ensureConfigured() async {}
+}
+
+Map<String, Object> _previewState(LiveWidgetStyle style) => <String, Object>{
+  'style': style.code,
   'type': 'state',
   'version': 1,
   'locale': 'es',

@@ -103,6 +103,7 @@ class LiveOverlayQueueEntry {
 @immutable
 class LiveOverlayAppearance {
   const LiveOverlayAppearance({
+    this.style = LiveWidgetStyle.classic,
     this.accentSeedArgb = 0xFFF5F7F5,
     this.accentDarkArgb = 0xFF8E9891,
     this.playbackProgressPermille = 0,
@@ -115,12 +116,14 @@ class LiveOverlayAppearance {
        assert(playbackDurationMilliseconds >= 0);
 
   final int accentSeedArgb;
+  final LiveWidgetStyle style;
   final int accentDarkArgb;
   final int playbackProgressPermille;
   final int playbackPositionMilliseconds;
   final int playbackDurationMilliseconds;
 
   Map<String, Object> toJson() => <String, Object>{
+    'style': style.code,
     'accent': <String, String>{
       'seed': _cssColor(accentSeedArgb),
       'dark': _cssColor(accentDarkArgb),
@@ -133,6 +136,7 @@ class LiveOverlayAppearance {
   @override
   bool operator ==(Object other) =>
       other is LiveOverlayAppearance &&
+      style == other.style &&
       accentSeedArgb == other.accentSeedArgb &&
       accentDarkArgb == other.accentDarkArgb &&
       playbackProgressPermille == other.playbackProgressPermille &&
@@ -141,6 +145,7 @@ class LiveOverlayAppearance {
 
   @override
   int get hashCode => Object.hash(
+    style,
     accentSeedArgb,
     accentDarkArgb,
     playbackProgressPermille,
@@ -270,6 +275,14 @@ final liveOverlayAccentProvider = Provider<AppAccent>((ref) {
   return ref.watch(settingsControllerProvider).value?.accent ?? AppAccent.white;
 });
 
+final liveOverlayStyleProvider = Provider<LiveWidgetStyle>((ref) {
+  return ref.watch(
+    settingsControllerProvider.select(
+      (settings) => settings.value?.liveWidgetStyle ?? LiveWidgetStyle.classic,
+    ),
+  );
+});
+
 final liveOverlayControllerProvider =
     NotifierProvider<LiveOverlayController, LiveOverlaySnapshot>(
       LiveOverlayController.new,
@@ -278,11 +291,13 @@ final liveOverlayControllerProvider =
 class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
   late LiveOverlayClient _client;
   late LiveOverlayArtworkLoader _artworkLoader;
+  ProviderSubscription<LiveOverlaySnapshot>? _broadcastSubscription;
   var _latestQueue = const <LiveOverlayQueueEntry>[];
   var _latestAppearance = const LiveOverlayAppearance();
   var _liveQueue = const <LiveQueueItem>[];
   PlayerSnapshot? _playback;
   var _accent = AppAccent.white;
+  var _style = LiveWidgetStyle.classic;
   var _strings = const AppStrings(AppLanguage.spanish);
   String? _currentLiveItemId;
   var _operationGeneration = 0;
@@ -295,6 +310,7 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
     _client = ref.watch(liveOverlayClientProvider);
     _artworkLoader = ref.watch(liveOverlayArtworkLoaderProvider);
     _accent = ref.read(liveOverlayAccentProvider);
+    _style = ref.read(liveOverlayStyleProvider);
     _strings = ref.read(appStringsProvider);
     _liveQueue =
         ref.read(tiktokLiveControllerProvider).value?.liveQueue ?? const [];
@@ -319,6 +335,11 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
       _accent = next;
       _rebuildQueue();
     });
+    ref.listen<LiveWidgetStyle>(liveOverlayStyleProvider, (_, next) {
+      if (_style == next) return;
+      _style = next;
+      _rebuildQueue();
+    });
     ref.listen<AppStrings>(appStringsProvider, (_, next) {
       if (_strings.appLanguage == next.appLanguage) return;
       _strings = next;
@@ -326,6 +347,7 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
     });
     ref.onDispose(() {
       _disposed = true;
+      _releaseBroadcastSubscription();
       unawaited(_client.dispose());
     });
     return const LiveOverlaySnapshot();
@@ -333,6 +355,13 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
 
   Future<void> start() async {
     if (state.isActive || state.isBusy) return;
+    // Riverpod pauses a provider with no visible listeners. A running browser
+    // source must still receive playback and appearance changes after Settings
+    // closes, so retain the subscription only for the server's active lifetime.
+    _broadcastSubscription ??= ref.container.listen(
+      liveOverlayControllerProvider,
+      (_, _) {},
+    );
     final operation = ++_operationGeneration;
     state = const LiveOverlaySnapshot(status: LiveOverlayStatus.starting);
     _scheduleArtworkResolution();
@@ -349,6 +378,7 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
             : LiveOverlayStatus.error,
         error: _messageFor(error, stackTrace),
       );
+      _releaseBroadcastSubscription();
     }
   }
 
@@ -367,6 +397,7 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
       await _client.stop();
       if (_disposed || operation != _operationGeneration) return;
       state = const LiveOverlaySnapshot();
+      _releaseBroadcastSubscription();
     } catch (error, stackTrace) {
       if (_disposed || operation != _operationGeneration) return;
       state = LiveOverlaySnapshot(
@@ -375,6 +406,12 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
         error: _messageFor(error, stackTrace),
       );
     }
+  }
+
+  void _releaseBroadcastSubscription() {
+    final subscription = _broadcastSubscription;
+    _broadcastSubscription = null;
+    subscription?.close();
   }
 
   void _rebuildQueue({bool publish = true}) {
@@ -486,6 +523,7 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
               .round()
               .clamp(0, 1000);
     return LiveOverlayAppearance(
+      style: _style,
       accentSeedArgb: _accent.seedColor.toARGB32(),
       accentDarkArgb: _accent.darkColor.toARGB32(),
       playbackProgressPermille: progress,
@@ -639,7 +677,7 @@ LiveOverlayQueueSelection selectLiveOverlayQueue(
             title: item.displayTitle,
             artist: local?.artist ?? remote?.artist ?? '',
             status: isLiveQueueActive && item.id == currentItemId
-                ? 'playing'
+                ? playback?.status.name ?? item.status.name
                 : item.status.name,
             artworkSource: artwork?.trim().isEmpty ?? true
                 ? null

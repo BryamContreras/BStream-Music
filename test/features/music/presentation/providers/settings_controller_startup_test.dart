@@ -71,6 +71,53 @@ void main() {
   });
 
   test(
+    'LIVE widget style keeps the classic default and persists rapid selections',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final first = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+        ],
+      );
+      addTearDown(first.dispose);
+      expect(
+        (await first.read(settingsControllerProvider.future)).liveWidgetStyle,
+        LiveWidgetStyle.classic,
+      );
+      final settings = first.read(settingsControllerProvider.notifier);
+      await Future.wait([
+        settings.setLiveWidgetStyle(LiveWidgetStyle.wave),
+        settings.setLiveWidgetStyle(LiveWidgetStyle.classic),
+        settings.setLiveWidgetStyle(LiveWidgetStyle.wave),
+      ]);
+      expect(
+        first.read(settingsControllerProvider).value?.liveWidgetStyle,
+        LiveWidgetStyle.wave,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('settings.liveWidgetStyle'), 'wave');
+
+      final restored = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+        ],
+      );
+      addTearDown(restored.dispose);
+      expect(
+        (await restored.read(
+          settingsControllerProvider.future,
+        )).liveWidgetStyle,
+        LiveWidgetStyle.wave,
+      );
+      expect(LiveWidgetStyle.fromCode('future-style'), LiveWidgetStyle.classic);
+    },
+  );
+
+  test(
     'audio quality visibility defaults off and preserves an explicit saved value',
     () async {
       SharedPreferences.setMockInitialValues({});
