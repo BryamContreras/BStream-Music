@@ -100,7 +100,7 @@ class _YouTubeMusicSettingsAccountCardState
                     : isSignedIn
                     ? _confirmSignOut
                     : _openSignIn,
-                icon: _actionBusy || isRestoring
+                icon: _actionBusy
                     ? const SizedBox.square(
                         dimension: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),

@@ -5811,12 +5811,19 @@ void main() {
     );
 
     await tester.tap(find.text('Ajustes').last);
-    await tester.pump(const Duration(milliseconds: 300));
-    expectSharedInsets(
-      header: find.byKey(const ValueKey('settings-tab-header-surface')),
-      title: find.byKey(const ValueKey('settings-tab-title')),
-      firstSection: find.byKey(const ValueKey('settings-first-section-title')),
+    await tester.pumpAndSettle();
+    final settingsHeader = find.byKey(
+      const ValueKey('settings-tab-header-surface'),
     );
+    final settingsAccountCard = find.byKey(
+      const ValueKey('settings-youtube-music-account-card'),
+    );
+    expect(
+      tester.getTopLeft(settingsAccountCard).dy -
+          tester.getBottomLeft(settingsHeader).dy,
+      closeTo(appTabFirstSectionTopGap, 0.01),
+    );
+    expect(tester.getTopLeft(settingsAccountCard).dx, closeTo(6, 0.01));
     final settingsCardLeft = tester
         .getTopLeft(find.byKey(const ValueKey('settings-card-language')))
         .dx;
@@ -6197,6 +6204,16 @@ void main() {
     final timerSwitch = find.descendant(
       of: find.byKey(const ValueKey('settings-inline-timer')),
       matching: find.byType(SwitchListTile),
+    );
+    await tester.scrollUntilVisible(
+      timerSwitch,
+      180,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('settings-root')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
     );
     await tester.ensureVisible(timerSwitch);
     await tester.tap(timerSwitch);
