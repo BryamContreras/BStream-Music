@@ -423,6 +423,7 @@ void main() {
       final clearCard = find.byKey(
         const ValueKey('settings-card-clear-recommendations'),
       );
+      await _ensureSettingsVisible(tester, historyCard);
       expect(historyCard, findsOneWidget);
       expect(clearCard, findsOneWidget);
 
@@ -1242,7 +1243,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('settings-card-language')));
+      final languageCard = find.byKey(const ValueKey('settings-card-language'));
+      await _ensureSettingsVisible(tester, languageCard);
+      await tester.tap(languageCard);
       await tester.pumpAndSettle();
 
       final dialog = find.byKey(const ValueKey('settings-language-dialog'));
@@ -2018,7 +2021,7 @@ void main() {
       final storageSettings = find.byKey(
         const ValueKey('settings-card-storage'),
       );
-      await tester.ensureVisible(storageSettings);
+      await _ensureSettingsVisible(tester, storageSettings);
       await tester.pumpAndSettle();
 
       final filtersCard = find.byKey(
@@ -2138,6 +2141,14 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('settings-detail-back')));
     await tester.pumpAndSettle();
 
+    await _ensureSettingsVisible(
+      tester,
+      find.byKey(const ValueKey('settings-inline-timer')),
+    );
+    await _ensureSettingsVisible(
+      tester,
+      find.byKey(const ValueKey('settings-inline-crossfade')),
+    );
     expect(find.byKey(const ValueKey('settings-inline-timer')), findsOneWidget);
     final timerSwitch = find.descendant(
       of: find.byKey(const ValueKey('settings-inline-timer')),
@@ -2403,7 +2414,7 @@ void main() {
     final crossfadeSwitch = find.byKey(
       const ValueKey('settings-crossfade-switch'),
     );
-    await tester.ensureVisible(crossfadeSwitch);
+    await _ensureSettingsVisible(tester, crossfadeSwitch);
     await tester.tap(crossfadeSwitch);
     await tester.pump();
 
@@ -2441,7 +2452,8 @@ void main() {
         _settingsHarness(navigationController: navigationController),
       );
       await tester.pumpAndSettle();
-      await tester.ensureVisible(
+      await _ensureSettingsVisible(
+        tester,
         find.byKey(const ValueKey('settings-card-storage')),
       );
       await tester.tap(find.byKey(const ValueKey('settings-card-storage')));
@@ -2521,7 +2533,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.ensureVisible(
+    await _ensureSettingsVisible(
+      tester,
       find.byKey(const ValueKey('settings-card-storage')),
     );
     await tester.tap(find.byKey(const ValueKey('settings-card-storage')));
@@ -2712,6 +2725,20 @@ void _configureView(WidgetTester tester, Size size) {
       ..resetPhysicalSize()
       ..resetDevicePixelRatio();
   });
+}
+
+Future<void> _ensureSettingsVisible(WidgetTester tester, Finder target) async {
+  final scrollable = find
+      .descendant(
+        of: find.byKey(const ValueKey('settings-root')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  if (target.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(target, 220, scrollable: scrollable);
+  }
+  await tester.ensureVisible(target);
+  await tester.pumpAndSettle();
 }
 
 Widget _settingsHarness({

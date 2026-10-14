@@ -29,6 +29,7 @@ import 'app_update_dialog.dart';
 import 'lyrics_animation_transition.dart';
 import 'live_widget_style_settings.dart';
 import 'scrolled_under_tab_frame.dart';
+import 'youtube_music_settings_account_card.dart';
 
 typedef DownloadDirectoryPicker =
     Future<String?> Function({String? dialogTitle, String? initialDirectory});
@@ -555,6 +556,10 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         ),
         sliver: SliverList.list(
           children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: appSectionGap),
+              child: YouTubeMusicSettingsAccountCard(strings: strings),
+            ),
             _SettingsGroup(
               titleKey: const ValueKey('settings-first-section-title'),
               title: strings.general,

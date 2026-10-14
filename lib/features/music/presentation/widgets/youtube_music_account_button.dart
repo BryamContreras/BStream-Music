@@ -28,7 +28,6 @@ typedef YouTubeMusicAccountButtonAction =
       YouTubeMusicAuthState state,
     );
 
-@visibleForTesting
 Widget buildYouTubeMusicLoginPageForPlatform({
   required bool isWeb,
   required TargetPlatform platform,
