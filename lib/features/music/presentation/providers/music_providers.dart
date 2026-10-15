@@ -18,6 +18,8 @@ import 'package:uuid/uuid.dart';
 import '../../../../core/errors/app_exception.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/platform/app_platform.dart';
+import '../../../../services/player/cast_aware_player_service.dart';
+import 'audio_route_providers.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/bounded_byte_stream.dart';
 import '../../../../core/utils/cached_artwork_image_provider.dart';
@@ -30,6 +32,7 @@ import '../../../../services/downloader/innertube_download_service.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
 import '../../../../services/lyrics/lyrics_romanization_service.dart';
+import '../../../../services/lyrics/lyrics_translation_service.dart';
 import '../../../../services/media_session/desktop_media_session.dart';
 import '../../../../services/media_session/desktop_media_session_binding.dart';
 import '../../../../services/media_session/desktop_media_session_factory.dart';
@@ -52,6 +55,8 @@ import '../../../../services/storage/local_database_shutdown_coordinator.dart';
 import '../../../../services/storage/local_library_reconciler.dart';
 import '../../../../services/widgets/home_screen_widget_sync.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
+import '../../../../services/youtube_music/search_browse_catalog_cache.dart';
+import '../../../../services/youtube_music/search_browse_artwork_cache.dart';
 import '../../../../services/youtube_music/shared_preferences_visitor_data_store.dart';
 import '../../../../services/youtube_music/playback/playback.dart';
 import '../../../../services/youtube_music/account/youtube_music_account.dart'
@@ -90,6 +95,7 @@ import '../../domain/usecases/get_playlists.dart';
 import '../../domain/usecases/get_track_info.dart';
 import '../../domain/usecases/search_tracks.dart';
 import 'app_strings.dart';
+import 'home_feed_activity_provider.dart';
 import 'local_audio_availability.dart';
 import 'lyrics_animation_style.dart';
 import 'live_widget_style.dart';
@@ -109,6 +115,7 @@ import 'player/remote_prefetch_coordinator.dart';
 import 'player/remote_playback_retry_coordinator.dart';
 
 export 'app_strings.dart';
+export 'home_feed_activity_provider.dart';
 export 'lyrics_animation_style.dart';
 export 'live_widget_style.dart';
 export 'mini_player_background_mode.dart';
@@ -264,9 +271,17 @@ final downloaderWarmupProvider = FutureProvider<void>((ref) async {
 });
 
 final playerServiceProvider = Provider<PlayerService>((ref) {
-  final PlayerService service = AppPlatform.isDesktop
+  final PlayerService local = AppPlatform.isDesktop
       ? MediaKitPlayerService()
       : JustAudioPlayerService();
+  // Preserve desktop's native queue/crossfade contract; mobile audio output
+  // uses the OS, and Google Cast/DLNA take over only on explicit selection.
+  final PlayerService service = AppPlatform.isMobile
+      ? CastAwarePlayerService(
+          local: local,
+          cast: ref.watch(castCoordinatorProvider),
+        )
+      : local;
   ref.onDispose(service.dispose);
   return service;
 });
@@ -377,6 +392,48 @@ final lyricsRomanizationServiceProvider = Provider<LyricsRomanizationService>((
   ref.onDispose(service.dispose);
   return service;
 });
+
+final lyricsTranslationServiceProvider = Provider<LyricsTranslationService>((
+  ref,
+) {
+  final service = LyricsTranslationService();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+final currentLyricsDocumentProvider = Provider.autoDispose<LyricsDocument?>((
+  ref,
+) {
+  final selected = ref.watch(selectedLyricsControllerProvider);
+  if (selected != null) return selected;
+  final lookup = ref.watch(currentLyricsLookupProvider);
+  return lookup == null
+      ? null
+      : ref.watch(lyricsProvider(lookup)).asData?.value;
+});
+
+final currentLyricsTranslationProvider =
+    FutureProvider.autoDispose<TranslatedLyricsView?>((ref) {
+      final mode = ref.watch(
+        settingsControllerProvider.select(
+          (settings) => (
+            enabled: settings.value?.lyricsTranslationEnabled == true,
+            language: settings.value?.language ?? AppLanguage.spanish,
+          ),
+        ),
+      );
+      if (!mode.enabled) return null;
+      ref.watch(currentLyricsLookupProvider);
+      final lyrics = ref.watch(currentLyricsDocumentProvider);
+      if (lyrics == null || lyrics.instrumental || !lyrics.hasContent) {
+        return null;
+      }
+      final request = ref
+          .watch(lyricsTranslationServiceProvider)
+          .translateDocument(lyrics, targetLanguage: mode.language.code);
+      ref.onDispose(request.cancel);
+      return request.result;
+    }, retry: (_, _) => null);
 
 final currentLyricsLookupProvider = playerControllerProvider.select((player) {
   final snapshot = player.value;
@@ -500,6 +557,7 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
 
   PlayerSnapshot? latestSnapshot;
   var latestQueue = const PlaybackQueueState();
+  var sessionQueue = DesktopMediaQueue(const <DesktopMediaQueueItem>[]);
 
   Duration relativeSeekPosition(Duration offset) {
     final snapshot = latestSnapshot;
@@ -553,19 +611,9 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
     final queue = latestQueue;
     unawaited(
       binding.update(
-        DesktopMediaSessionState(
+        DesktopMediaSessionState.withQueue(
           snapshot: snapshot,
-          queue: queue.entries
-              .map(
-                (entry) => DesktopMediaQueueItem(
-                  id: entry.id,
-                  title: entry.title,
-                  artist: entry.artist,
-                  album: entry.album,
-                  thumbnailUrl: entry.thumbnailUrl,
-                ),
-              )
-              .toList(growable: false),
+          queue: sessionQueue,
           currentIndex: queue.currentIndex,
         ),
       ),
@@ -580,6 +628,19 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
     }
   }, fireImmediately: true);
   ref.listen<PlaybackQueueState>(playbackQueueProvider, (_, next) {
+    if (!identical(latestQueue.entries, next.entries)) {
+      sessionQueue = DesktopMediaQueue(
+        next.entries.map(
+          (entry) => DesktopMediaQueueItem(
+            id: entry.id,
+            title: entry.title,
+            artist: entry.artist,
+            album: entry.album,
+            thumbnailUrl: entry.thumbnailUrl,
+          ),
+        ),
+      );
+    }
     latestQueue = next;
     publishState();
   }, fireImmediately: true);
@@ -1729,6 +1790,7 @@ class HomeRecommendationsController
   bool _inFlightForcesNetwork = false;
   bool _inFlightRefreshesYouTube = false;
   int _buildEpoch = 0;
+  bool _deferredAutomaticRefresh = false;
 
   @override
   Future<List<HomeRecommendationSection>> build() async {
@@ -1742,6 +1804,18 @@ class HomeRecommendationsController
       ),
     );
     final epoch = ++_buildEpoch;
+    _deferredAutomaticRefresh = false;
+    ref.listen(homeFeedActivityProvider, (_, visible) {
+      if (!visible || !_deferredAutomaticRefresh || !ref.mounted) return;
+      _deferredAutomaticRefresh = false;
+      unawaited(
+        _refresh(
+          forceNetwork: false,
+          refreshYouTube: false,
+          expectedEpoch: epoch,
+        ),
+      );
+    });
     // A dependency rebuild supersedes any older refresh. Old results are
     // rejected by [epoch], while this build remains free to start a new one.
     _refreshInFlight = null;
@@ -1753,8 +1827,13 @@ class HomeRecommendationsController
     _historyArtistSection = null;
     _hasQualifiedArtistHistory = false;
 
-    final youtubeState = ref.read(youtubeMusicHomeRecommendationsProvider);
-    _youtubeMusic = youtubeState.value ?? const [];
+    // An invisible feed must not create a cold generic network provider.
+    if (ref.read(homeFeedActivityProvider)) {
+      final youtubeState = ref.read(youtubeMusicHomeRecommendationsProvider);
+      _youtubeMusic = youtubeState.value ?? const [];
+    } else {
+      _youtubeMusic = const [];
+    }
 
     final source = _personalizedSource;
     CachedPersonalizedRecommendationFeed? cached;
@@ -1773,7 +1852,7 @@ class HomeRecommendationsController
         ? const []
         : _homeSectionsFromPersonalizedFeed(cached.feed, strings);
     final artistSource = _artistSource;
-    if (artistSource != null) {
+    if (artistSource != null && ref.read(homeFeedActivityProvider)) {
       try {
         final result = await artistSource.load();
         _historyArtistSection = _homeArtistSectionFromHistory(
@@ -1800,6 +1879,10 @@ class HomeRecommendationsController
     // once; feed TTL must never pin an old Home after a new listen.
     Timer.run(() {
       if (!ref.mounted || epoch != _buildEpoch) {
+        return;
+      }
+      if (!ref.read(homeFeedActivityProvider)) {
+        _deferredAutomaticRefresh = true;
         return;
       }
       unawaited(
@@ -1891,6 +1974,10 @@ class HomeRecommendationsController
     if (!ref.mounted || expectedEpoch != _buildEpoch) {
       return;
     }
+    if (!forceNetwork && !ref.read(homeFeedActivityProvider)) {
+      _deferredAutomaticRefresh = true;
+      return;
+    }
     final strings = ref.read(appStringsProvider);
     final previous =
         state.asData?.value ??
@@ -1950,7 +2037,8 @@ class HomeRecommendationsController
     var refreshedHasQualifiedArtistHistory = false;
     var historyArtistRefreshSucceeded = false;
     final artistSource = _artistSource;
-    if (artistSource != null) {
+    if (artistSource != null &&
+        (forceNetwork || ref.read(homeFeedActivityProvider))) {
       try {
         final result = await artistSource.load(
           refresh: true,
@@ -1984,6 +2072,13 @@ class HomeRecommendationsController
       historyArtistSection: _historyArtistSection,
       hasQualifiedArtistHistory: _hasQualifiedArtistHistory,
     );
+    if (!forceNetwork && !ref.read(homeFeedActivityProvider)) {
+      // Keep fresh data cached, but do not resolve a shelf of new images in a
+      // maintained, invisible Home subtree. Recalculate from cache on return.
+      _deferredAutomaticRefresh = true;
+      state = AsyncData(previous);
+      return;
+    }
     final error = firstError;
     if (error == null) {
       state = AsyncData(combined);

@@ -150,6 +150,7 @@ class QualifiedPlaybackHistoryTracker {
   bool _disposed = false;
   _QualifiedPlaybackSession? _active;
   Timer? _thresholdTimer;
+  Duration? _scheduledThreshold;
   Future<void> _writeTail = Future<void>.value();
 
   bool get isEnabled => _enabled;
@@ -290,14 +291,19 @@ class QualifiedPlaybackHistoryTracker {
   }
 
   void _scheduleThreshold(_QualifiedPlaybackSession session) {
-    _thresholdTimer?.cancel();
-    _thresholdTimer = null;
     if (!identical(_active, session) ||
         session.playingSince == null ||
         session.initialQualificationWritten) {
+      _thresholdTimer?.cancel();
+      _thresholdTimer = null;
       return;
     }
     final threshold = qualificationThreshold(session.track.duration);
+    // Playback position samples do not move the qualification deadline. Only
+    // a changed duration, pause/resume, or new session requires a new timer.
+    if (_thresholdTimer != null && _scheduledThreshold == threshold) return;
+    _thresholdTimer?.cancel();
+    _thresholdTimer = null;
     final remaining = threshold - session.listened;
     if (remaining <= Duration.zero) {
       _persistIfQualified(session, completed: false);
@@ -308,7 +314,9 @@ class QualifiedPlaybackHistoryTracker {
     final delay = remaining < const Duration(milliseconds: 1)
         ? const Duration(milliseconds: 1)
         : remaining;
+    _scheduledThreshold = threshold;
     _thresholdTimer = _timerFactory(delay, () {
+      _thresholdTimer = null;
       if (!_enabled || _disposed || !identical(_active, session)) {
         return;
       }

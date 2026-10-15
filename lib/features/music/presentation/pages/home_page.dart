@@ -99,7 +99,11 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends ConsumerState<HomePage> {
+class _HomePageState extends ConsumerState<HomePage>
+    with WidgetsBindingObserver {
+  bool _appForeground = true;
+  bool _activityUpdateScheduled = false;
+  bool _rootRouteVisible = true;
   static const _maxViewHistory = 2;
   static const _shellTransitionDuration = Duration(milliseconds: 320);
   static const _playerTransitionDuration = Duration(milliseconds: 320);
@@ -155,6 +159,10 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _appForeground =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
     _selectedIndex = switch (widget.initialDestination) {
       HomeInitialDestination.home => _homeIndex,
       HomeInitialDestination.player => _playerIndex,
@@ -550,6 +558,31 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appForeground = state == AppLifecycleState.resumed;
+    ref
+        .read(homeFeedActivityProvider.notifier)
+        .setVisible(
+          _appForeground && _rootRouteVisible && _selectedIndex == _homeIndex,
+        );
+  }
+
+  void _scheduleHomeFeedActivityUpdate() {
+    _rootRouteVisible = ModalRoute.isCurrentOf(context) ?? true;
+    if (_activityUpdateScheduled) return;
+    _activityUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _activityUpdateScheduled = false;
+      if (!mounted) return;
+      ref
+          .read(homeFeedActivityProvider.notifier)
+          .setVisible(
+            _appForeground && _rootRouteVisible && _selectedIndex == _homeIndex,
+          );
+    });
+  }
+
   void _resetBottomNavigationScrollIntent() {
     _bottomNavigationScrollTravel = 0;
     _bottomNavigationScrollDirection = 0;
@@ -939,6 +972,7 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _removePlayerHistoryEntry();
     unawaited(_externalAudioSubscription?.cancel());
     unawaited(_appActivationSubscription?.cancel());
@@ -1069,6 +1103,7 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    _scheduleHomeFeedActivityUpdate();
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesMobileNavigation;
     final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
@@ -1299,6 +1334,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       showCustomPhoto:
                           _selectedIndex == _homeIndex ||
                           _selectedIndex == _searchIndex ||
+                          _selectedIndex == _localIndex ||
                           _selectedIndex == _libraryIndex ||
                           _selectedIndex == _settingsIndex,
                     ),
@@ -3098,8 +3134,8 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
       (item) => item is HomeRecommendationArtistItem,
     );
     final cardWidth = artistOnly
-        ? (expandedCards ? 148.0 : 124.0)
-        : (expandedCards ? 176.0 : 148.0);
+        ? (expandedCards ? 156.0 : 132.0)
+        : (expandedCards ? 186.0 : 156.0);
     return _HomeSection(
       key: ValueKey('home-recommendations-section-${section.title}'),
       title: section.title,
@@ -3331,7 +3367,7 @@ class _HomeRecentSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final expandedCards = MediaQuery.sizeOf(context).width >= 700;
-    final cardWidth = expandedCards ? 176.0 : 148.0;
+    final cardWidth = expandedCards ? 186.0 : 156.0;
     return _HomeSection(
       title: strings.recentlyPlayed,
       child: history.when(

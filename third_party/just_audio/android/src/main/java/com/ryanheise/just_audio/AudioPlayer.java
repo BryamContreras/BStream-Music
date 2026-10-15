@@ -1,6 +1,8 @@
 package com.ryanheise.just_audio;
 
 import android.content.Context;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 import android.media.audiofx.AudioEffect;
 import android.media.audiofx.Equalizer;
 import android.media.audiofx.LoudnessEnhancer;
@@ -71,6 +73,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.WeakHashMap;
 
 public class AudioPlayer implements MethodCallHandler, Player.Listener, MetadataOutput {
     public static final int ERROR_ABORT = 10000000;
@@ -82,6 +85,35 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private static final long SKIPPED_POSITION_DRIFT_THRESHOLD_MS = 200L;
 
     private static Random random = new Random();
+
+    // BStream's music/crossfade engines share an explicit media-device preference.
+    // Weak keys never keep released Flutter players alive. No communication-mode,
+    // SCO, speakerphone or global Bluetooth state is changed here.
+    private static final WeakHashMap<AudioPlayer, Boolean> bstreamPlayers = new WeakHashMap<>();
+    private static Integer bstreamPreferredDeviceId;
+
+    public static Integer getBStreamPreferredAudioDeviceId() {
+        return bstreamPreferredDeviceId;
+    }
+
+    public static boolean setBStreamPreferredAudioDevice(Context context, Integer deviceId) {
+        AudioDeviceInfo device = findBStreamAudioDevice(context, deviceId);
+        if (deviceId != null && device == null) return false;
+        bstreamPreferredDeviceId = deviceId;
+        for (AudioPlayer instance : new ArrayList<>(bstreamPlayers.keySet())) {
+            if (instance.player != null) instance.player.setPreferredAudioDevice(device);
+        }
+        return true;
+    }
+
+    private static AudioDeviceInfo findBStreamAudioDevice(Context context, Integer deviceId) {
+        if (deviceId == null || Build.VERSION.SDK_INT < 23) return null;
+        AudioManager manager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        for (AudioDeviceInfo device : manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            if (device.getId() == deviceId && device.isSink()) return device;
+        }
+        return null;
+    }
 
     private final Context context;
     private final MethodChannel methodChannel;
@@ -130,7 +162,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             long now = System.currentTimeMillis();
             long newBufferedPosition = player.getBufferedPosition();
             boolean bufferBroadcastDue = newBufferedPosition != bufferedPosition
-                && (lastBufferPositionBroadcastTime == 0L
+                && (!player.isLoading()
+                    || lastBufferPositionBroadcastTime == 0L
                     || now < lastBufferPositionBroadcastTime
                     || now - lastBufferPositionBroadcastTime
                         >= BUFFER_POSITION_BROADCAST_INTERVAL_MS);
@@ -147,15 +180,16 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 handler.postDelayed(this, 200);
                 break;
             case Player.STATE_READY:
-                if (player.getPlayWhenReady()) {
-                    handler.postDelayed(
-                        this,
-                        skipSilenceEnabled
-                            ? SKIPPED_POSITION_POLL_INTERVAL_MS
-                            : BUFFER_POSITION_BROADCAST_INTERVAL_MS);
-                } else {
-                    handler.postDelayed(this, 1000);
+                if (player.getPlayWhenReady() && skipSilenceEnabled) {
+                    handler.postDelayed(this, SKIPPED_POSITION_POLL_INTERVAL_MS);
+                } else if (player.isLoading()) {
+                    handler.postDelayed(this, BUFFER_POSITION_BROADCAST_INTERVAL_MS);
                 }
+                // A paused standby or a deck whose buffer is not changing has
+                // nothing to publish. Media3's loading callback restarts this
+                // watcher when it refills; Dart extrapolates ordinary position
+                // independently. Silence skipping still samples the native
+                // clock while the active deck is playing.
                 break;
             default:
                 // Stop watching buffer
@@ -174,6 +208,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         boolean useLazyPreparation
     ) {
         this.context = applicationContext;
+        bstreamPlayers.put(this, Boolean.TRUE);
         this.rawAudioEffects = rawAudioEffects;
         this.offloadSchedulingEnabled = offloadSchedulingEnabled != null ? offloadSchedulingEnabled : false;
         this.useLazyPreparation = useLazyPreparation;
@@ -385,6 +420,14 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             return true;
         }
         return false;
+    }
+
+    @Override
+    public void onIsLoadingChanged(boolean isLoading) {
+        // Also take the final sample when loading stops. The watcher bypasses
+        // its rate limit for this sample, then sleeps until a refill, play or
+        // silence-option change needs it again.
+        startWatchingBuffer();
     }
 
     @Override
@@ -858,9 +901,13 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 builder.setLivePlaybackSpeedControl(livePlaybackSpeedControl);
             }
             player = builder.build();
+            player.setPreferredAudioDevice(findBStreamAudioDevice(context, bstreamPreferredDeviceId));
             player.setTrackSelectionParameters(
                 player.getTrackSelectionParameters()
                     .buildUpon()
+                    // This engine is audio-only, even when a resolver returns
+                    // a muxed source. Canvas/artwork use their own video player.
+                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
                     .setAudioOffloadPreferences(audioOffloadPreferences)
                     .build()
             );
@@ -1057,6 +1104,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         player.setPlayWhenReady(false);
         updatePosition();
         enqueuePlaybackEvent();
+        startWatchingBuffer();
         if (playResult != null) {
             playResult.success(new HashMap<String, Object>());
             playResult = null;
@@ -1118,6 +1166,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     public void dispose() {
+        bstreamPlayers.remove(this);
         if (processingState == ProcessingState.loading) {
             abortExistingConnection(true);
         }
@@ -1133,6 +1182,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             processingState = ProcessingState.idle;
             broadcastImmediatePlaybackEvent();
         }
+        handler.removeCallbacks(bufferWatcher);
         eventChannel.endOfStream();
         dataEventChannel.endOfStream();
     }

@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/animation/frame_rate_ticker_provider.dart';
+
 /// Compact segmented equalizer shared by artwork cards and playback queues.
 class NowPlayingEqualizer extends StatefulWidget {
   const NowPlayingEqualizer({
@@ -97,7 +99,8 @@ class _HoverEqualizerArtworkState extends State<HoverEqualizerArtwork> {
 }
 
 class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with WidgetsBindingObserver {
+  final _vsync = FrameRateTickerProvider(maxFramesPerSecond: 30);
   late final AnimationController _controller;
   bool _reducedMotion = false;
   bool _tickerEnabled = true;
@@ -112,7 +115,7 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
     _appIsActive =
         lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
     _controller = AnimationController(
-      vsync: this,
+      vsync: _vsync,
       duration: const Duration(seconds: 24),
       value: 0.18,
     );
@@ -123,6 +126,8 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
     super.didChangeDependencies();
     _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
+    _vsync.setDisplayRefreshRate(View.of(context).display.refreshRate);
+    _vsync.enabled = _tickerEnabled && _appIsActive;
     _syncAnimation();
   }
 
@@ -138,6 +143,7 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
+    _vsync.dispose();
     super.dispose();
   }
 
@@ -148,6 +154,7 @@ class _NowPlayingEqualizerState extends State<NowPlayingEqualizer>
     }
     setState(() {
       _appIsActive = state == AppLifecycleState.resumed;
+      _vsync.enabled = _tickerEnabled && _appIsActive;
       _syncAnimation();
     });
   }

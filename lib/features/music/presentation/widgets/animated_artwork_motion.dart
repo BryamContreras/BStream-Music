@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/animation/frame_rate_ticker_provider.dart';
+
 import 'ambient_animation_frame_gate.dart';
 
 /// Gives album artwork a restrained, continuously moving presentation.
@@ -64,7 +66,8 @@ class AnimatedArtworkMotion extends StatefulWidget {
 }
 
 class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
+    with WidgetsBindingObserver {
+  final _vsync = FrameRateTickerProvider();
   late final AnimationController _zoomController;
   late final AnimationController _panController;
   late final AnimationController _depthController;
@@ -98,17 +101,17 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
     _appIsActive =
         lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
     _zoomController = AnimationController(
-      vsync: this,
+      vsync: _vsync,
       duration: widget.zoomDuration,
       debugLabel: 'animated-artwork-zoom',
     );
     _panController = AnimationController(
-      vsync: this,
+      vsync: _vsync,
       duration: widget.panDuration,
       debugLabel: 'animated-artwork-pan',
     );
     _depthController = AnimationController(
-      vsync: this,
+      vsync: _vsync,
       duration: widget.depthDuration,
       debugLabel: 'animated-artwork-depth',
     );
@@ -121,7 +124,10 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
     super.didChangeDependencies();
     _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
-    _paintFrames.setDisplayRefreshRate(View.of(context).display.refreshRate);
+    _vsync.setDisplayRefreshRate(View.of(context).display.refreshRate);
+    _vsync.enabled = _tickerEnabled && _appIsActive;
+    // The clocks themselves are now bounded; retain only same-frame merging.
+    _paintFrames.setDisplayRefreshRate(60);
     _synchronizeMotion();
   }
 
@@ -150,6 +156,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appIsActive = state == AppLifecycleState.resumed;
+    _vsync.enabled = _tickerEnabled && _appIsActive;
     _synchronizeMotion();
   }
 
@@ -194,6 +201,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
     for (final controller in _controllers) {
       controller.dispose();
     }
+    _vsync.dispose();
     super.dispose();
   }
 

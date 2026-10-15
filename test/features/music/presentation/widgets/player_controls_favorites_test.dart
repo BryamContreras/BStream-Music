@@ -8,6 +8,9 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/animated_artwork_motion.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/playback_menu_bottom_sheet.dart';
+import 'package:bstream_music/features/music/presentation/widgets/playback_gradient_background.dart';
+import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/features/music/presentation/widgets/uniform_playback_slider_track_shape.dart';
 import 'package:bstream_music/features/music/presentation/widgets/wavy_playback_seek_bar.dart';
@@ -1463,7 +1466,7 @@ void main() {
     final queueButton = tester.widget<IconButton>(
       find.byKey(const ValueKey('player-queue-toggle')),
     );
-    final menuButton = tester.widget<PopupMenuButton<String>>(
+    final menuButton = tester.widget<IconButton>(
       find.byKey(const ValueKey('player-menu-control')),
     );
 
@@ -1476,7 +1479,7 @@ void main() {
       Colors.white,
     );
     expect(queueButton.style?.foregroundColor?.resolve({}), Colors.white);
-    expect(menuButton.iconColor, Colors.white);
+    expect(menuButton.color, Colors.white);
     expect(tester.takeException(), isNull);
   });
 
@@ -1627,6 +1630,135 @@ void main() {
       await tester.pump();
     }
   });
+
+  for (final style in PlayerStyle.values) {
+    for (final mode in SurfaceBackgroundMode.values) {
+      for (final brightness in Brightness.values) {
+        testWidgets(
+          '${style.name} options use the cover despite ${mode.name} in $brightness',
+          (tester) async {
+            _configureView(tester, const Size(390, 820));
+            await tester.pumpWidget(
+              _playerHarness(
+                platform: TargetPlatform.android,
+                snapshot: snapshot,
+                localTrack: localTrack,
+                playlists: _TestPlaylistsController(),
+                style: style,
+                backgroundMode: mode,
+                brightness: brightness,
+              ),
+            );
+            await tester.pump(const Duration(milliseconds: 500));
+            await tester.tap(find.byKey(const ValueKey('player-menu-control')));
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 400));
+            final sheet = find.byKey(const ValueKey('player-options-menu'));
+            expect(sheet, findsOneWidget);
+            expect(Theme.of(tester.element(sheet)).brightness, brightness);
+            expect(
+              AppColors.surfaceBackgroundModeFor(tester.element(sheet)),
+              SurfaceBackgroundMode.accent,
+            );
+            expect(
+              find.byKey(const ValueKey('app-menu-sheet-liquid-glass')),
+              findsNothing,
+            );
+            expect(
+              find.byKey(const ValueKey('app-menu-sheet-transparent-backdrop')),
+              findsNothing,
+            );
+            expect(
+              find.byKey(const ValueKey('player-menu-playlist')),
+              findsOneWidget,
+            );
+            expect(
+              find.byKey(const ValueKey('player-menu-favorite')),
+              findsOneWidget,
+            );
+            await tester.tap(
+              find.byKey(const ValueKey('player-options-close')),
+            );
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 400));
+            expect(sheet, findsNothing);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      }
+    }
+  }
+
+  testWidgets(
+    'menu samples the cover only while open and ignores position ticks',
+    (tester) async {
+      _configureView(tester, const Size(390, 820));
+      final service = _CountingMenuColorService();
+      final controller = _TestPlayerController(
+        snapshot.copyWith(thumbnailUrl: '/fixture/menu-cover-orange.png'),
+      );
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          playerController: controller,
+          menuColorService: service,
+          backgroundMode: SurfaceBackgroundMode.liquidGlass,
+          style: PlayerStyle.appleMusic,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(service.sources, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('player-menu-control')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(service.sources, ['/fixture/menu-cover-orange.png']);
+      final firstBackground = tester.widget<PlaybackArtworkBackdrop>(
+        find.byKey(const ValueKey('playback-menu-artwork-background')),
+      );
+      expect(firstBackground.source, '/fixture/menu-cover-orange.png');
+      expect(firstBackground.cacheWidth, 256);
+      controller.emit(
+        snapshot.copyWith(
+          position: const Duration(seconds: 10),
+          thumbnailUrl: '/fixture/menu-cover-orange.png',
+        ),
+      );
+      await tester.pump();
+      expect(service.sources, hasLength(1));
+      controller.emit(
+        snapshot.copyWith(
+          trackId: 'other-track',
+          thumbnailUrl: '/fixture/menu-cover-blue.png',
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(service.sources, hasLength(2));
+      expect(service.releases, 1);
+      final secondBackground = tester.widget<PlaybackArtworkBackdrop>(
+        find.byKey(const ValueKey('playback-menu-artwork-background')),
+      );
+      expect(secondBackground.source, '/fixture/menu-cover-blue.png');
+      expect(secondBackground.source, isNot(firstBackground.source));
+      final surface = tester.widget<AnimatedContainer>(
+        find.byKey(const ValueKey('app-menu-sheet-surface')),
+      );
+      expect(
+        (surface.decoration! as BoxDecoration).gradient,
+        isNull,
+        reason:
+            'The artwork must not be covered by the old solid-color gradient.',
+      );
+      await tester.tap(find.byKey(const ValueKey('player-options-close')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(service.releases, 2);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('player volume popover retains the light app theme', (
     tester,
@@ -2861,6 +2993,185 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final platform in [
+    TargetPlatform.android,
+    TargetPlatform.iOS,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets(
+      '$platform queue heart toggles the current track and metadata is larger',
+      (tester) async {
+        _configureView(
+          tester,
+          platform == TargetPlatform.windows
+              ? const Size(1280, 720)
+              : const Size(320, 568),
+        );
+        final playlists = _TestPlaylistsController();
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: platform,
+            snapshot: snapshot,
+            localTrack: localTrack,
+            playlists: playlists,
+            style: PlayerStyle.appleMusic,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        final heart = find.byKey(const ValueKey('queue-favorite-toggle'));
+        final close = find.byKey(const ValueKey('queue-close'));
+        expect(tester.getSize(heart), const Size(48, 48));
+        expect(
+          tester.getCenter(heart).dx,
+          lessThan(tester.getCenter(close).dx),
+        );
+        expect(
+          tester.getCenter(heart).dy,
+          closeTo(tester.getCenter(close).dy, .1),
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('queue-current-title')))
+              .style
+              ?.fontSize,
+          16,
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('queue-current-artist')))
+              .style
+              ?.fontSize,
+          14,
+        );
+        expect(
+          find.descendant(
+            of: heart,
+            matching: find.byIcon(Icons.favorite_border_rounded),
+          ),
+          findsOneWidget,
+        );
+        await tester.tap(heart);
+        await tester.pump();
+        expect(playlists.favoriteIds, contains(trackId));
+        expect(
+          find.descendant(
+            of: heart,
+            matching: find.byIcon(Icons.favorite_rounded),
+          ),
+          findsOneWidget,
+        );
+        await tester.tap(heart);
+        await tester.pump();
+        expect(playlists.favoriteIds, isNot(contains(trackId)));
+        expect(
+          find.descendant(
+            of: heart,
+            matching: find.byIcon(Icons.favorite_border_rounded),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'queue heart reuses the canonical streamed-track favorite action',
+    (tester) async {
+      _configureView(tester, const Size(390, 820));
+      const remote = TrackInfo(
+        id: 'dQw4w9WgXcQ',
+        title: 'Cancion remota',
+        artist: 'Artista remoto',
+        url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        album: 'Album canonico',
+      );
+      final playlists = _TestPlaylistsController();
+      final remoteSnapshot = snapshot.copyWith(
+        trackId: remote.id,
+        title: remote.title,
+        artist: remote.artist,
+        sourceUrl: remote.url,
+        isRemote: true,
+      );
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: remoteSnapshot,
+          localTrack: localTrack,
+          playlists: playlists,
+          canonicalRemoteTrack: remote,
+          style: PlayerStyle.appleMusic,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.byKey(const ValueKey('queue-favorite-toggle')));
+      await tester.pump();
+      expect(playlists.remoteFavoriteCalls, 1);
+      expect(playlists.remoteFavoriteTrack, same(remote));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'queue metadata and heart fit compact landscape with enlarged text',
+    (tester) async {
+      _configureView(tester, const Size(568, 320), textScaleFactor: 2);
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot.copyWith(
+            title: 'Un titulo largo para comprobar los margenes de la cola',
+            artist: 'Un artista con nombre largo',
+          ),
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          style: PlayerStyle.appleMusic,
+          playbackQueue: const PlaybackQueueState(
+            entries: [
+              PlaybackQueueEntry(
+                id: trackId,
+                title: 'Un titulo largo para comprobar los margenes de la cola',
+                artist: 'Un artista con nombre largo',
+                isRemote: false,
+              ),
+            ],
+            currentIndex: 0,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('player-queue-toggle')),
+      );
+      await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      for (final key in [
+        'queue-favorite-toggle',
+        'queue-close',
+        'queue-current-title',
+        'queue-current-artist',
+      ]) {
+        expect(
+          tester.getRect(find.byKey(ValueKey(key))).right,
+          lessThanOrEqualTo(568),
+        );
+      }
+      expect(
+        tester.getSize(find.byType(ReorderableListView)).height,
+        greaterThan(0),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('playback queue actions fit a compact mobile width', (
     tester,
   ) async {
@@ -3983,9 +4294,7 @@ void main() {
         style == PlayerStyle.bstreamMusic ? 1 : 0,
         reason: 'opening the $style menu must not start sharing',
       );
-      final popupSurface = find.byKey(
-        const ValueKey('glass-popup-menu-surface'),
-      );
+      final popupSurface = find.byKey(const ValueKey('app-menu-sheet-surface'));
       expect(popupSurface, findsOneWidget);
       expect(tester.getSize(popupSurface).width, greaterThan(48));
       expect(tester.getSize(popupSurface).height, greaterThan(48));
@@ -4146,7 +4455,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     final share = find.byKey(const ValueKey('player-menu-share'));
-    expect(tester.widget<PopupMenuItem<String>>(share).enabled, isFalse);
+    expect(tester.widget<ListTile>(share).enabled, isFalse);
     await tester.tap(share);
     await tester.pump();
     expect(shareService.shareCalls, 0);
@@ -4754,6 +5063,7 @@ Widget _playerHarness({
   required LocalTrack localTrack,
   required _TestPlaylistsController playlists,
   TrackShareService? shareService,
+  ArtworkProgressColorService? menuColorService,
   TrackInfo? canonicalRemoteTrack,
   _TestPlayerController? playerController,
   YouTubeMusicSearch? youtubeMusicSearch,
@@ -4799,6 +5109,8 @@ Widget _playerHarness({
       trackShareServiceProvider.overrideWithValue(
         shareService ?? _TestTrackShareService(),
       ),
+      if (menuColorService != null)
+        playbackMenuColorServiceProvider.overrideWithValue(menuColorService),
       appStringsProvider.overrideWithValue(
         const AppStrings(AppLanguage.spanish),
       ),
@@ -5127,8 +5439,49 @@ class _TestPlayerController extends PlayerController {
   }
 }
 
+class _CountingMenuColorService extends ArtworkProgressColorService {
+  final sources = <String?>[];
+  int releases = 0;
+
+  @override
+  ArtworkProgressColorLease acquire(String? rawSource) {
+    sources.add(rawSource);
+    return _CountingMenuColorLease(
+      Future.value(
+        rawSource?.contains('blue') == true ? Colors.blue : Colors.orange,
+      ),
+      () => releases++,
+    );
+  }
+}
+
+class _CountingMenuColorLease extends ArtworkProgressColorLease {
+  _CountingMenuColorLease(Future<Color> future, this.onRelease)
+    : super(future: future);
+  final VoidCallback onRelease;
+  bool _released = false;
+  @override
+  void release() {
+    if (_released) return;
+    _released = true;
+    onRelease();
+  }
+}
+
 class _TestPlaylistsController extends PlaylistsController {
   final now = DateTime(2026);
+  int remoteFavoriteCalls = 0;
+  TrackInfo? remoteFavoriteTrack;
+
+  @override
+  Future<bool> toggleFavoriteRemote(
+    TrackInfo track, {
+    bool download = true,
+  }) async {
+    remoteFavoriteCalls++;
+    remoteFavoriteTrack = track;
+    return true;
+  }
 
   Set<String> get favoriteIds {
     final playlists = state.value ?? const <Playlist>[];

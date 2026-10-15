@@ -199,20 +199,25 @@ private struct NowPlayingWidgetView: View {
   }
 
   private var large: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      ArtworkView(cover: entry.cover)
-        .frame(width: 184, height: 184)
-        .frame(maxWidth: .infinity)
-
+    VStack(spacing: 12) {
       Spacer(minLength: 0)
-      Text("\(entry.title) · \(entry.artist)")
-        .font(.system(size: 18, weight: .bold)).lineLimit(1)
-        .foregroundColor(.white)
-      Capsule().fill(entry.accent).frame(width: 42, height: 4)
-        .frame(maxWidth: .infinity, alignment: .center)
+      HStack(spacing: 12) {
+        ArtworkView(cover: entry.cover).frame(width: 92, height: 92)
+        VStack(alignment: .leading, spacing: 4) {
+          Text("BStream Music")
+            .font(.system(size: 13)).lineLimit(1)
+            .foregroundColor(.white.opacity(0.7))
+          Text(entry.title)
+            .font(.system(size: 18, weight: .bold)).lineLimit(1)
+            .foregroundColor(.white)
+          Text(entry.artist)
+            .font(.system(size: 14)).lineLimit(1)
+            .foregroundColor(.white.opacity(0.84))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
       HStack(spacing: 6) {
         Spacer(minLength: 0)
-        control("backward.end.fill", action: "previous", width: 40, height: 44)
         control(
           entry.repeatMode == "one" ? "repeat.1" : "repeat",
           action: "repeat",
@@ -220,6 +225,7 @@ private struct NowPlayingWidgetView: View {
           width: 40,
           height: 44
         )
+        control("backward.end.fill", action: "previous", width: 40, height: 44)
         control(
           entry.isPlaying ? "pause.fill" : "play.fill",
           action: "toggle", width: 48, height: 50
@@ -234,6 +240,7 @@ private struct NowPlayingWidgetView: View {
         )
         Spacer(minLength: 0)
       }
+      Spacer(minLength: 0)
     }
     .padding(.horizontal, 18)
     .padding(.top, 18)

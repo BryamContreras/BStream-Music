@@ -486,6 +486,8 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
   ui.FragmentProgram? _fragmentProgram;
   ui.FragmentShader? _fragmentShader;
   bool _shaderCreationFailed = false;
+  Object? _filterConfigSignature;
+  ImageFilterConfig? _positionAwareFilterConfig;
 
   @override
   void initState() {
@@ -697,18 +699,48 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
             ? null
             : widget.backdropGroupKey;
         final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+        final signature = (
+          size,
+          devicePixelRatio,
+          borderRadius,
+          MediaQuery.sizeOf(context),
+          MediaQuery.viewInsetsOf(context),
+          MediaQuery.paddingOf(context),
+          _surfaceBoundsInPhysicalPixels(
+            fallbackSize: size,
+            devicePixelRatio: devicePixelRatio,
+          ),
+          widget.blurSigma,
+          widget.intensity,
+          widget.treatment,
+          widget.highContrast,
+          effectiveBackdropGroupKey,
+          _fragmentProgram,
+        );
+        final cacheStableLens = switch (Theme.of(context).platform) {
+          TargetPlatform.android || TargetPlatform.iOS => true,
+          _ => false,
+        };
+        if (_usesRefraction &&
+            (!cacheStableLens || signature != _filterConfigSignature)) {
+          _filterConfigSignature = signature;
+          // A new closure/config on every parent rebuild invalidates a stable
+          // lens. Keep its identity until optical/layout inputs really change.
+          // Position is still resolved at paint time, including ancestor motion.
+          _positionAwareFilterConfig = _LiquidGlassImageFilterConfig(
+            resolver: (_) => _materialFilter(
+              surfaceBoundsPx: _surfaceBoundsInPhysicalPixels(
+                fallbackSize: size,
+                devicePixelRatio: devicePixelRatio,
+              ),
+              devicePixelRatio: devicePixelRatio,
+              borderRadius: borderRadius,
+              groupKey: effectiveBackdropGroupKey,
+            ),
+          );
+        }
         final positionAwareFilter = _usesRefraction
-            ? _LiquidGlassImageFilterConfig(
-                resolver: (_) => _materialFilter(
-                  surfaceBoundsPx: _surfaceBoundsInPhysicalPixels(
-                    fallbackSize: size,
-                    devicePixelRatio: devicePixelRatio,
-                  ),
-                  devicePixelRatio: devicePixelRatio,
-                  borderRadius: borderRadius,
-                  groupKey: effectiveBackdropGroupKey,
-                ),
-              )
+            ? _positionAwareFilterConfig
             : null;
         return BackdropFilter(
           key: LiquidGlassSurface.backdropKey,

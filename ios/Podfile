@@ -29,6 +29,11 @@ flutter_ios_podfile_setup
 target 'Runner' do
   use_frameworks!
 
+  # 4.8.0 is the last Cast SDK generation supporting our iOS 13 minimum.
+  # Pin it: later versions require iOS 14/15/16. No Bluetooth guest discovery
+  # permission is needed; Wi-Fi discovery starts only in the Cast menu.
+  pod 'google-cast-sdk-no-bluetooth', '4.8.0'
+
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
     inherit! :search_paths

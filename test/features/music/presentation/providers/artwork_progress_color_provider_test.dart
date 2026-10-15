@@ -82,6 +82,36 @@ void main() {
       );
     });
 
+    test(
+      'menu sampling preserves grayscale without changing progress sampling',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'bstream-menu-gray-',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        final artwork = await _writeSolidPng(
+          directory,
+          'gray.png',
+          Colors.grey,
+        );
+        final menuService = ArtworkProgressColorService(
+          preserveSourceSaturation: true,
+        );
+        final progressService = ArtworkProgressColorService();
+        addTearDown(menuService.dispose);
+        addTearDown(progressService.dispose);
+        final menuColor = await menuService.resolve(artwork.path);
+        expect(menuColor.r, menuColor.g);
+        expect(menuColor.g, menuColor.b);
+        expect(
+          HSLColor.fromColor(
+            await progressService.resolve(artwork.path),
+          ).saturation,
+          closeTo(.28, .02),
+        );
+      },
+    );
+
     test('decodes local artwork through the bounded 32 px cache key', () async {
       final directory = await Directory.systemTemp.createTemp(
         'bstream-artwork-progress-',

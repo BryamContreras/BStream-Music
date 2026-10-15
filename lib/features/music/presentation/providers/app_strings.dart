@@ -48,6 +48,39 @@ class AppStrings {
 
   String choose(String es, String en) => isEnglish ? en : es;
 
+  String get audioOutput => choose('Salida Multimedia', 'Media output');
+  String get thisPhone => choose('Este teléfono', 'This phone');
+  String get castTo => choose('Transmitir a', 'Cast to');
+  String get mediaVolume => choose('Volumen multimedia', 'Media volume');
+  String get deviceVolume => choose('Volumen del dispositivo', 'Device volume');
+  String get systemOutputPicker =>
+      choose('Más salidas del sistema', 'More system outputs');
+  String get outputUnavailable => choose(
+    'El sistema no pudo cambiar la salida de audio.',
+    'The system could not change the audio output.',
+  );
+  String get outputRequested => choose('Salida solicitada', 'Output requested');
+  String get castNetworkHint => choose(
+    'Conecta tu dispositivo y el receptor a la misma Wi-Fi.',
+    'Connect your device and receiver to the same Wi-Fi.',
+  );
+  String get castNoDevices => choose(
+    'No se encontraron dispositivos compatibles.',
+    'No compatible devices found.',
+  );
+  String get castSearching =>
+      choose('Buscando dispositivos…', 'Searching for devices…');
+  String get castRefresh => choose('Buscar dispositivos', 'Find devices');
+  String get castDisconnect => choose('Dejar de transmitir', 'Stop casting');
+  String get castFailed => choose(
+    'No se pudo transmitir. La música continúa en este dispositivo.',
+    'Could not cast. Music continues on this device.',
+  );
+  String get outputLoadFailed => choose(
+    'No se pudieron consultar las salidas de audio.',
+    'Could not read audio outputs.',
+  );
+
   String get home => choose('Inicio', 'Home');
   String homeGreeting({required int hour}) {
     assert(hour >= 0 && hour < 24);
@@ -388,6 +421,29 @@ class AppStrings {
     'These lyrics do not include synchronized timing.',
   );
   String get lyricsOffset => choose('Desfase', 'Offset');
+  String get lyricsSettings => choose('Opciones de letras', 'Lyrics options');
+  String get lyricsOffsetUnavailable => choose(
+    'Disponible para letras sincronizadas.',
+    'Available for synchronized lyrics.',
+  );
+  String get translateLyrics => choose('Traducir letras', 'Translate lyrics');
+  String get translateLyricsSummary => choose(
+    'Al idioma de la app · Google Translate',
+    'To the app language · Google Translate',
+  );
+  String get lyricsTranslationLoading => choose('Traduciendo…', 'Translating…');
+  String get lyricsTranslationError => choose(
+    'No se pudo traducir. Se conserva la letra original.',
+    'Unable to translate. The original lyrics remain available.',
+  );
+  String get lyricsAlreadyInAppLanguage => choose(
+    'La letra ya está en el idioma de la app.',
+    'The lyrics are already in the app language.',
+  );
+  String get lyricsTranslationAttribution => choose(
+    'Traducción automática: Google Translate',
+    'Automatic translation: Google Translate',
+  );
   String get lyricsOffsetHint => choose(
     'Ajústalo si la letra aparece antes o después de la voz.',
     'Adjust it if the lyrics appear before or after the vocals.',

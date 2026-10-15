@@ -96,31 +96,46 @@ class LiveWidgetPreview extends StatelessWidget {
 
   bool get _wave => style == LiveWidgetStyle.wave;
 
+  double get _upcomingCoverSize => _wave ? 56 : 82;
+
+  // Match the browser's content-driven cards: 11px padding and a 1px border
+  // on each side. Its 78/104px CSS min-height does not include a smaller cover.
+  double get _upcomingCardHeight => _upcomingCoverSize + 24;
+
   @override
   Widget build(BuildContext context) {
-    final height = _wave ? 560.0 : 410.0;
+    final height = (_wave ? 326 : 124) + _upcomingCardHeight * 2 + 22 + 56;
     return AspectRatio(
       aspectRatio: 1192 / height,
       child: IgnorePointer(
-        child: FittedBox(
-          child: SizedBox(
-            width: 1192,
-            height: height,
-            child: DefaultTextStyle(
-              style: const TextStyle(color: Colors.white, fontFamily: 'Roboto'),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 28,
+        // This is a scaled browser scene, not app text. Accessibility scaling
+        // still applies to the Settings labels, but must not change its fixed
+        // CSS-sized geometry independently of the covers and panels.
+        child: MediaQuery.withNoTextScaling(
+          child: FittedBox(
+            child: SizedBox(
+              width: 1192,
+              height: height,
+              child: DefaultTextStyle(
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontFamily: 'Roboto',
+                  height: 1.2,
                 ),
-                child: Column(
-                  children: [
-                    if (_wave) _waveCard() else _classicCard(current: true),
-                    const SizedBox(height: 11),
-                    _classicCard(current: false),
-                    const SizedBox(height: 11),
-                    _classicCard(current: false, pending: true),
-                  ],
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 28,
+                  ),
+                  child: Column(
+                    children: [
+                      if (_wave) _waveCard() else _classicCard(current: true),
+                      const SizedBox(height: 11),
+                      _classicCard(current: false),
+                      const SizedBox(height: 11),
+                      _classicCard(current: false, pending: true),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -141,9 +156,14 @@ class LiveWidgetPreview extends StatelessWidget {
     ),
   );
 
-  Widget _metadata({required double titleSize, required double artistSize}) {
+  Widget _metadata({
+    required double titleSize,
+    required double artistSize,
+    double artistGap = 5,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Text(
@@ -152,7 +172,7 @@ class LiveWidgetPreview extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w800),
         ),
-        const SizedBox(height: 5),
+        SizedBox(height: artistGap),
         Text(
           'BStream Music',
           maxLines: 1,
@@ -207,7 +227,11 @@ class LiveWidgetPreview extends StatelessWidget {
                         ),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 28),
-                          child: _metadata(titleSize: 46, artistSize: 32),
+                          child: _metadata(
+                            titleSize: 46,
+                            artistSize: 32,
+                            artistGap: 12,
+                          ),
                         ),
                       ],
                     ),
@@ -261,8 +285,8 @@ class LiveWidgetPreview extends StatelessWidget {
   );
 
   Widget _classicCard({required bool current, bool pending = false}) {
-    final coverSize = current ? 100.0 : (_wave ? 56.0 : 82.0);
-    final height = current ? 124.0 : (_wave ? 78.0 : 104.0);
+    final coverSize = current ? 100.0 : _upcomingCoverSize;
+    final height = current ? 124.0 : _upcomingCardHeight;
     return Container(
       height: height,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 11),
@@ -285,7 +309,11 @@ class LiveWidgetPreview extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _metadata(titleSize: current ? 26 : 22, artistSize: 18),
+                _metadata(
+                  titleSize: current ? 26 : (_wave ? 22 : 25),
+                  artistSize: current ? 18 : (_wave ? 16 : 19),
+                  artistGap: current ? 3 : 5,
+                ),
                 if (current) ...[
                   const SizedBox(height: 9),
                   _progress(7),
@@ -293,8 +321,8 @@ class LiveWidgetPreview extends StatelessWidget {
                   const Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('02:42', style: TextStyle(fontSize: 14)),
-                      Text('04:38', style: TextStyle(fontSize: 14)),
+                      Text('02:42', style: TextStyle(fontSize: 14, height: 1)),
+                      Text('04:38', style: TextStyle(fontSize: 14, height: 1)),
                     ],
                   ),
                 ],

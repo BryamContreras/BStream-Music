@@ -1739,6 +1739,8 @@ class _SettingsEntryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final desktopLayout =
+        AppPlatform.isDesktop && theme.platform != TargetPlatform.android;
     final highlight = accent ?? colors.primary;
     final card = Material(
       color: AppColors.cardSurfaceFor(context),
@@ -1823,7 +1825,9 @@ class _SettingsEntryCard extends StatelessWidget {
       ),
     );
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 760),
+      constraints: BoxConstraints(
+        maxWidth: desktopLayout ? double.infinity : 760,
+      ),
       child: AppCardGradientBorder(solidInLiquidGlass: true, child: card),
     );
   }
@@ -3910,7 +3914,9 @@ class _CrossfadeSettings extends StatelessWidget {
         AppPlatform.isDesktop &&
         Theme.of(context).platform != TargetPlatform.android;
     return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: desktopLayout ? 760 : 520),
+      constraints: BoxConstraints(
+        maxWidth: desktopLayout ? double.infinity : 520,
+      ),
       child: AppCardGradientBorder(
         solidInLiquidGlass: true,
         child: Material(
@@ -3996,7 +4002,9 @@ class _SkipSilenceSettings extends StatelessWidget {
         AppPlatform.isDesktop &&
         Theme.of(context).platform != TargetPlatform.android;
     return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: desktopLayout ? 760 : 520),
+      constraints: BoxConstraints(
+        maxWidth: desktopLayout ? double.infinity : 520,
+      ),
       child: AppCardGradientBorder(
         solidInLiquidGlass: true,
         child: Material(

@@ -51,19 +51,51 @@ class DesktopMediaQueueItem {
   final String? thumbnailUrl;
 }
 
+/// Immutable system-session metadata, prepared when the logical queue changes.
+/// Position updates can reuse both the entries and their fingerprint.
+class DesktopMediaQueue {
+  DesktopMediaQueue(Iterable<DesktopMediaQueueItem> entries)
+    : items = List<DesktopMediaQueueItem>.unmodifiable(entries) {
+    fingerprint = _fingerprintQueue(items);
+  }
+
+  final List<DesktopMediaQueueItem> items;
+  late final int fingerprint;
+}
+
+int _fingerprintQueue(List<DesktopMediaQueueItem> queue) => Object.hashAll(
+  queue.map(
+    (item) => Object.hash(
+      item.id,
+      item.title,
+      item.artist,
+      item.album,
+      item.thumbnailUrl,
+    ),
+  ),
+);
+
 class DesktopMediaSessionState {
   const DesktopMediaSessionState({
     required this.snapshot,
     required this.queue,
     required this.currentIndex,
-  });
+  }) : _queueFingerprint = null;
+
+  DesktopMediaSessionState.withQueue({
+    required this.snapshot,
+    required DesktopMediaQueue queue,
+    required this.currentIndex,
+  }) : queue = queue.items,
+       _queueFingerprint = queue.fingerprint;
 
   final PlayerSnapshot snapshot;
   final List<DesktopMediaQueueItem> queue;
   final int currentIndex;
+  final int? _queueFingerprint;
 
   String get queueKey =>
-      '$currentIndex:${Object.hashAll(queue.map((item) => Object.hash(item.id, item.title, item.artist, item.album, item.thumbnailUrl)))}';
+      '$currentIndex:${_queueFingerprint ?? _fingerprintQueue(queue)}';
 
   bool get hasPrevious => queue.length > 1 && currentIndex >= 0;
 

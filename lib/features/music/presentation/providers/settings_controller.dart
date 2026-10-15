@@ -113,6 +113,7 @@ class SettingsState {
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
     this.lyricsAnimationStyle = LyricsAnimationStyle.smooth,
     this.lyricsRomanizationEnabled = false,
+    this.lyricsTranslationEnabled = false,
     this.lyricsRomanizationLanguages = defaultLyricsRomanizationLanguages,
     this.recommendationHistoryEnabled = true,
     this.localMusicFilters = defaultLocalMusicFilters,
@@ -145,6 +146,7 @@ class SettingsState {
   final LyricsTextAlignment lyricsTextAlignment;
   final LyricsAnimationStyle lyricsAnimationStyle;
   final bool lyricsRomanizationEnabled;
+  final bool lyricsTranslationEnabled;
   final Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages;
   final bool recommendationHistoryEnabled;
   final Set<LocalMusicFilter> localMusicFilters;
@@ -173,6 +175,7 @@ class SettingsState {
     LyricsTextAlignment? lyricsTextAlignment,
     LyricsAnimationStyle? lyricsAnimationStyle,
     bool? lyricsRomanizationEnabled,
+    bool? lyricsTranslationEnabled,
     Set<LyricsRomanizationLanguage>? lyricsRomanizationLanguages,
     bool? recommendationHistoryEnabled,
     Set<LocalMusicFilter>? localMusicFilters,
@@ -211,6 +214,8 @@ class SettingsState {
       lyricsAnimationStyle: lyricsAnimationStyle ?? this.lyricsAnimationStyle,
       lyricsRomanizationEnabled:
           lyricsRomanizationEnabled ?? this.lyricsRomanizationEnabled,
+      lyricsTranslationEnabled:
+          lyricsTranslationEnabled ?? this.lyricsTranslationEnabled,
       lyricsRomanizationLanguages:
           lyricsRomanizationLanguages ?? this.lyricsRomanizationLanguages,
       recommendationHistoryEnabled:
@@ -257,6 +262,8 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _lyricsAnimationStyleKey = 'settings.lyricsAnimation';
   static const _lyricsRomanizationEnabledKey =
       'settings.lyricsRomanizationEnabled';
+  static const _lyricsTranslationEnabledKey =
+      'settings.lyricsTranslationEnabled';
   static const _lyricsRomanizationLanguagesKey =
       'settings.lyricsRomanizationLanguages';
   static const _recommendationHistoryEnabledKey =
@@ -371,8 +378,11 @@ class SettingsController extends AsyncNotifier<SettingsState> {
         lyricsAnimationStyle.code,
       );
     }
+    final lyricsTranslationEnabled =
+        prefs.getBool(_lyricsTranslationEnabledKey) ?? false;
     final lyricsRomanizationEnabled =
-        prefs.getBool(_lyricsRomanizationEnabledKey) ?? false;
+        (prefs.getBool(_lyricsRomanizationEnabledKey) ?? false) &&
+        !lyricsTranslationEnabled;
     final lyricsRomanizationLanguages = LyricsRomanizationLanguage.fromCodes(
       prefs.getStringList(_lyricsRomanizationLanguagesKey),
     );
@@ -561,6 +571,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       lyricsTextAlignment: lyricsTextAlignment,
       lyricsAnimationStyle: lyricsAnimationStyle,
       lyricsRomanizationEnabled: lyricsRomanizationEnabled,
+      lyricsTranslationEnabled: lyricsTranslationEnabled,
       lyricsRomanizationLanguages: lyricsRomanizationLanguages,
       recommendationHistoryEnabled: recommendationHistoryEnabled,
       localMusicFilters: localMusicFilters,
@@ -1022,15 +1033,50 @@ class SettingsController extends AsyncNotifier<SettingsState> {
 
   Future<void> setLyricsRomanizationEnabled(bool enabled) async {
     final current = state.asData?.value ?? await future;
-    if (current.lyricsRomanizationEnabled == enabled) {
+    if (current.lyricsRomanizationEnabled == enabled &&
+        (!enabled || !current.lyricsTranslationEnabled)) {
       return;
     }
-    state = AsyncData(current.copyWith(lyricsRomanizationEnabled: enabled));
+    await _setLyricsModes(
+      current.copyWith(
+        lyricsRomanizationEnabled: enabled,
+        lyricsTranslationEnabled: enabled
+            ? false
+            : current.lyricsTranslationEnabled,
+      ),
+    );
+  }
+
+  Future<void> setLyricsTranslationEnabled(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    if (current.lyricsTranslationEnabled == enabled &&
+        (!enabled || !current.lyricsRomanizationEnabled)) {
+      return;
+    }
+    await _setLyricsModes(
+      current.copyWith(
+        lyricsTranslationEnabled: enabled,
+        lyricsRomanizationEnabled: enabled
+            ? false
+            : current.lyricsRomanizationEnabled,
+      ),
+    );
+  }
+
+  Future<void> _setLyricsModes(SettingsState next) async {
+    state = AsyncData(next);
     final write = _lyricsRomanizationWriteTail.catchError((_) {}).then((
       _,
     ) async {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_lyricsRomanizationEnabledKey, enabled);
+      await prefs.setBool(
+        _lyricsRomanizationEnabledKey,
+        next.lyricsRomanizationEnabled,
+      );
+      await prefs.setBool(
+        _lyricsTranslationEnabledKey,
+        next.lyricsTranslationEnabled,
+      );
     });
     _lyricsRomanizationWriteTail = write.catchError((_) {});
     await write;

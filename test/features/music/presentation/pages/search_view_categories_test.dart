@@ -10,17 +10,440 @@ import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
+import 'package:bstream_music/features/music/presentation/pages/search_browse_category_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/track_selection_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
+import 'package:bstream_music/services/youtube_music/search_browse_catalog_cache.dart';
+import 'package:bstream_music/services/youtube_music/search_browse_artwork_cache.dart';
 import 'package:flutter/material.dart' hide SearchController;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'category pagination keeps shelves and retries a failed continuation',
+    (tester) async {
+      const category = SearchBrowseCategory(
+        id: 'page',
+        title: 'Concentración',
+        searchQuery: 'focus',
+      );
+      const firstItem = InnerTubeHomeCollection(
+        title: 'Primera playlist',
+        browseId: 'VLfirst',
+        kind: InnerTubeHomeCollectionKind.playlist,
+      );
+      const nextItem = InnerTubeHomeCollection(
+        title: 'Otra playlist',
+        browseId: 'VLnext',
+        kind: InnerTubeHomeCollectionKind.playlist,
+      );
+      var continuationAttempts = 0;
+      await tester.pumpWidget(
+        _searchApp(
+          controller: _RecordingSearchController(SearchState()),
+          browseCatalog: SearchBrowseCatalog(
+            categories: [category],
+            usesLiveYouTubeMusicCategories: false,
+          ),
+          extraOverrides: [
+            playerControllerProvider.overrideWith(
+              _RecordingPlayerController.new,
+            ),
+            searchBrowseCategoryPageProvider.overrideWith(
+              (ref, category) async => InnerTubeMoodGenrePage(
+                sections: [
+                  InnerTubeHomeSection(title: 'Flotando', items: [firstItem]),
+                ],
+                continuation: 'next-page',
+              ),
+            ),
+            searchBrowseCategoryContinuationProvider.overrideWith((
+              ref,
+              token,
+            ) async {
+              expect(token, 'next-page');
+              if (++continuationAttempts == 1) {
+                throw StateError('temporary network error');
+              }
+              return InnerTubeMoodGenrePage(
+                sections: [
+                  InnerTubeHomeSection(title: '', items: [firstItem, nextItem]),
+                ],
+                continuation: 'next-page',
+              );
+            }),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('search-browse-action-page')));
+      await tester.pumpAndSettle();
+      final load = find.byKey(const ValueKey('search-browse-load-more'));
+      await tester.ensureVisible(load);
+      await tester.tap(load);
+      await tester.pumpAndSettle();
+      expect(continuationAttempts, 1);
+      expect(find.text('Reintentar'), findsOneWidget);
+      expect(find.text('Flotando'), findsOneWidget);
+      await tester.tap(load);
+      await tester.pumpAndSettle();
+      expect(continuationAttempts, 2);
+      expect(
+        find.byKey(const ValueKey('browse-item-Primera playlist')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('browse-item-Otra playlist')),
+        findsOneWidget,
+      );
+      expect(find.text('Flotando'), findsOneWidget);
+      expect(
+        load,
+        findsNothing,
+        reason: 'a repeated continuation token cannot trigger a loop',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'live category cover shows first-song artwork with opaque category colors',
+    (tester) async {
+      const category = SearchBrowseCategory(
+        id: 'focus',
+        title: 'Concentración',
+        searchQuery: 'focus',
+        target: InnerTubeBrowseTarget(
+          browseId: 'FEmusic_moods_and_genres_category',
+          params: 'focus',
+        ),
+      );
+      await tester.pumpWidget(
+        _searchApp(
+          controller: _RecordingSearchController(SearchState()),
+          browseCatalog: SearchBrowseCatalog(
+            categories: [category],
+            usesLiveYouTubeMusicCategories: true,
+          ),
+          extraOverrides: [
+            searchBrowseCategoryArtworkProvider.overrideWith(
+              (ref, category) async => 'https://img.test/first-song.jpg',
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      final cover = tester.widget<SourceImage>(
+        find.byKey(const ValueKey('search-browse-cover-focus')),
+      );
+      expect(cover.source, 'https://img.test/first-song.jpg');
+      expect(cover.cacheWidth, lessThanOrEqualTo(384));
+      final titlePadding = tester.widget<Padding>(
+        find.byKey(const ValueKey('search-browse-title-padding-focus')),
+      );
+      expect(
+        titlePadding.padding,
+        const EdgeInsetsDirectional.fromSTEB(14, 13, 14, 13),
+      );
+      final surface = tester.widget<Ink>(
+        find.byKey(const ValueKey('search-browse-surface-focus')),
+      );
+      expect(
+        (surface.decoration! as BoxDecoration).gradient!.colors.every(
+          (color) => color.a == 1,
+        ),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'cached category cover appears first and refreshes when metadata changes',
+    (tester) async {
+      const category = SearchBrowseCategory(
+        id: 'focus',
+        title: 'ConcentraciÃ³n',
+        searchQuery: 'focus',
+        target: InnerTubeBrowseTarget(
+          browseId: 'FEmusic_moods_and_genres_category',
+          params: 'focus',
+        ),
+      );
+      final artworkCache = _MemorySearchBrowseCategoryArtworkCache()
+        ..values['focus'] = 'https://img.test/cached-cover.jpg';
+      final refreshedArtwork = Completer<String?>();
+
+      await tester.pumpWidget(
+        _searchApp(
+          controller: _RecordingSearchController(SearchState()),
+          browseCatalog: SearchBrowseCatalog(
+            categories: [category],
+            usesLiveYouTubeMusicCategories: true,
+          ),
+          artworkCache: artworkCache,
+          extraOverrides: [
+            searchBrowseCategoryArtworkProvider.overrideWith(
+              (ref, category) => refreshedArtwork.future,
+            ),
+          ],
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<SourceImage>(
+              find.byKey(const ValueKey('search-browse-cover-focus')),
+            )
+            .source,
+        'https://img.test/cached-cover.jpg',
+      );
+
+      refreshedArtwork.complete('https://img.test/refreshed-cover.jpg');
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<SourceImage>(
+              find.byKey(const ValueKey('search-browse-cover-focus')),
+            )
+            .source,
+        'https://img.test/refreshed-cover.jpg',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'restores cached browse cards and covers before live catalog refresh',
+    (tester) async {
+      const category = SearchBrowseCategory(
+        id: 'yt:focus',
+        title: 'ConcentraciÃ³n',
+        searchQuery: 'ConcentraciÃ³n',
+        target: InnerTubeBrowseTarget(
+          browseId: 'FEmusic_moods_and_genres_category',
+          params: 'focus-target',
+        ),
+      );
+      final catalogCache = _MemorySearchBrowseCatalogCache(
+        SearchBrowseCatalogSnapshot(
+          usesLiveYouTubeMusicCategories: true,
+          categories: const [
+            SearchBrowseCategorySnapshot(
+              id: 'yt:focus',
+              title: 'ConcentraciÃ³n',
+              searchQuery: 'ConcentraciÃ³n',
+              browseId: 'FEmusic_moods_and_genres_category',
+              params: 'focus-target',
+            ),
+          ],
+        ),
+      );
+      final artworkCache = _MemorySearchBrowseCategoryArtworkCache()
+        ..values['yt:focus'] = 'https://img.test/cached-focus.jpg';
+      final liveCatalog = Completer<SearchBrowseCatalog>();
+      final refreshedArtwork = Completer<String?>();
+
+      await tester.pumpWidget(
+        _searchApp(
+          controller: _RecordingSearchController(SearchState()),
+          useDefaultBrowseCatalogOverride: false,
+          catalogCache: catalogCache,
+          artworkCache: artworkCache,
+          extraOverrides: [
+            searchBrowseCatalogProvider.overrideWith(
+              (ref) => liveCatalog.future,
+            ),
+            searchBrowseCategoryArtworkProvider.overrideWith(
+              (ref, category) => refreshedArtwork.future,
+            ),
+          ],
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('search-browse-action-yt:focus')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<SourceImage>(
+              find.byKey(const ValueKey('search-browse-cover-yt:focus')),
+            )
+            .source,
+        'https://img.test/cached-focus.jpg',
+      );
+
+      liveCatalog.complete(
+        SearchBrowseCatalog(
+          categories: [category],
+          usesLiveYouTubeMusicCategories: true,
+        ),
+      );
+      refreshedArtwork.complete('https://img.test/new-focus.jpg');
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<SourceImage>(
+              find.byKey(const ValueKey('search-browse-cover-yt:focus')),
+            )
+            .source,
+        'https://img.test/new-focus.jpg',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('offscreen cards do not start cover lookups', (tester) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final requested = <String>[];
+    final categories = [
+      for (var i = 0; i < 40; i++)
+        SearchBrowseCategory(
+          id: 'card-$i',
+          title: 'Categoría $i',
+          searchQuery: '$i',
+          target: InnerTubeBrowseTarget(
+            browseId: 'FEmusic_moods_and_genres_category',
+            params: 'card-$i',
+          ),
+        ),
+    ];
+    await tester.pumpWidget(
+      _searchApp(
+        controller: _RecordingSearchController(SearchState()),
+        browseCatalog: SearchBrowseCatalog(
+          categories: categories,
+          usesLiveYouTubeMusicCategories: true,
+        ),
+        extraOverrides: [
+          searchBrowseCategoryArtworkProvider.overrideWith((
+            ref,
+            category,
+          ) async {
+            requested.add(category.id);
+            return null;
+          }),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(requested, isNotEmpty);
+    expect(requested.length, lessThan(12));
+    expect(requested, isNot(contains('card-20')));
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final width in [320.0, 1000.0]) {
+    testWidgets(
+      'category shelves fit width $width and open the selected playlist',
+      (tester) async {
+        tester.view.physicalSize = Size(width, 800);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = width < 400
+            ? 1.8
+            : 1;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+          tester.platformDispatcher.clearTextScaleFactorTestValue();
+        });
+        const category = SearchBrowseCategory(
+          id: 'focus',
+          title: 'Concentración',
+          searchQuery: 'focus',
+        );
+        final player = _RecordingPlayerController();
+        final page = InnerTubeMoodGenrePage(
+          sections: [
+            InnerTubeHomeSection(
+              title: 'Flotando',
+              items: const [
+                InnerTubeHomeCollection(
+                  title: 'Lo-fi Loft',
+                  browseId: 'VLlofi',
+                  kind: InnerTubeHomeCollectionKind.playlist,
+                ),
+              ],
+            ),
+            InnerTubeHomeSection(
+              title: 'Música clásica',
+              items: const [
+                InnerTubeHomeCollection(
+                  title: 'Dulce Piano',
+                  browseId: 'VLpiano',
+                  kind: InnerTubeHomeCollectionKind.playlist,
+                ),
+              ],
+            ),
+          ],
+        );
+        await tester.pumpWidget(
+          _searchApp(
+            controller: _RecordingSearchController(SearchState()),
+            browseCatalog: SearchBrowseCatalog(
+              categories: [category],
+              usesLiveYouTubeMusicCategories: false,
+            ),
+            extraOverrides: [
+              playerControllerProvider.overrideWith(() => player),
+              searchBrowseCategoryPageProvider.overrideWith(
+                (ref, category) async => page,
+              ),
+              homeCollectionDetailProvider.overrideWith(
+                (ref, id) async =>
+                    RemoteCollectionData(title: 'Lo-fi Loft', tracks: []),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('search-browse-action-focus')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(SearchBrowseCategoryPage), findsOneWidget);
+        expect(find.text('Flotando'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('browse-item-Lo-fi Loft')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .getSize(find.byKey(const ValueKey('browse-item-Lo-fi Loft')))
+              .width,
+          closeTo(width < 700 ? 156.0 : 186.0, 0.5),
+        );
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.byKey(const ValueKey('browse-item-Lo-fi Loft')));
+        await tester.pumpAndSettle();
+        final detail = tester.widget<RemoteCollectionDetailPage>(
+          find.byType(RemoteCollectionDetailPage),
+        );
+        expect(detail.title, 'Lo-fi Loft');
+        expect(detail.queueSourceId, 'browse-collection:VLlofi');
+        expect(player.lastRecommendationSelected, isNull);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets(
     'browse category cards stay opaque in every surface style and theme',
     (tester) async {
@@ -477,11 +900,19 @@ void main() {
       expect(popRect.top, closeTo(partyRect.top, 0.1));
       expect(popRect.left, lessThan(partyRect.left));
       expect(popRect.height, greaterThanOrEqualTo(48));
-      final popLabelRect = tester.getRect(find.text('Pop'));
-      final popArtworkRect = tester.getRect(
+      expect(
         find.byKey(const ValueKey('search-browse-art-pop')),
+        findsNothing,
+        reason: 'large text gets the full card width without decorative art',
       );
-      expect(popLabelRect.overlaps(popArtworkRect), isFalse);
+      expect(
+        tester
+            .widget<Padding>(
+              find.byKey(const ValueKey('search-browse-title-padding-pop')),
+            )
+            .padding,
+        const EdgeInsetsDirectional.fromSTEB(14, 13, 14, 13),
+      );
       expect(tester.takeException(), isNull);
 
       final popAction = find.byKey(const ValueKey('search-browse-action-pop'));
@@ -559,9 +990,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('browse cards open their collection detail by default', (
-    tester,
-  ) async {
+  testWidgets('browse cards open their shelves by default', (tester) async {
     const pop = SearchBrowseCategory(
       id: 'pop',
       title: 'Pop',
@@ -578,10 +1007,10 @@ void main() {
           usesLiveYouTubeMusicCategories: false,
         ),
         extraOverrides: [
-          searchBrowseCategoryTracksProvider.overrideWith((ref, category) {
+          searchBrowseCategoryPageProvider.overrideWith((ref, category) async {
             categoryLoads++;
             expect(category, pop);
-            return Stream.value(const <TrackInfo>[]);
+            return InnerTubeMoodGenrePage(sections: const []);
           }),
         ],
       ),
@@ -591,12 +1020,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('search-browse-action-pop')));
     await tester.pumpAndSettle();
 
-    final detail = tester.widget<RemoteCollectionDetailPage>(
-      find.byType(RemoteCollectionDetailPage),
+    final detail = tester.widget<SearchBrowseCategoryPage>(
+      find.byType(SearchBrowseCategoryPage),
     );
-    expect(detail.title, 'Pop');
-    expect(detail.subtitle, 'YouTube Music');
-    expect(detail.queueSourceId, 'search-browse:pop');
+    expect(detail.category, pop);
     expect(categoryLoads, 1);
     expect(controller.submittedQueries, isEmpty);
   });
@@ -1783,12 +2210,15 @@ Widget _searchApp({
   VoidCallback? onOpenPlayer,
   ValueChanged<SearchBrowseCategory>? onBrowseCategorySelected,
   SearchBrowseCatalog? browseCatalog,
+  SearchBrowseCatalogCache? catalogCache,
+  bool useDefaultBrowseCatalogOverride = true,
   List<Override> extraOverrides = const [],
   TargetPlatform? platform,
   Brightness brightness = Brightness.light,
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
   bool disableAnimations = false,
   double bottomContentPadding = 0,
+  SearchBrowseCategoryArtworkCache? artworkCache,
 }) {
   const strings = AppStrings(AppLanguage.spanish);
   final resolvedBrowseCatalog =
@@ -1804,8 +2234,15 @@ Widget _searchApp({
         suggestionsService ?? const _NoSuggestionsSearch(),
       ),
       appStringsProvider.overrideWithValue(strings),
-      searchBrowseCatalogProvider.overrideWithValue(
-        AsyncData(resolvedBrowseCatalog),
+      searchBrowseCatalogCacheProvider.overrideWithValue(
+        catalogCache ?? _MemorySearchBrowseCatalogCache(),
+      ),
+      if (useDefaultBrowseCatalogOverride)
+        searchBrowseCatalogProvider.overrideWithValue(
+          AsyncData(resolvedBrowseCatalog),
+        ),
+      searchBrowseCategoryArtworkCacheProvider.overrideWithValue(
+        artworkCache ?? _MemorySearchBrowseCategoryArtworkCache(),
       ),
       ...extraOverrides,
     ],
@@ -1832,6 +2269,44 @@ Widget _searchApp({
       ),
     ),
   );
+}
+
+final class _MemorySearchBrowseCategoryArtworkCache
+    implements SearchBrowseCategoryArtworkCache {
+  _MemorySearchBrowseCategoryArtworkCache({Map<String, String>? values}) {
+    if (values != null) this.values.addAll(values);
+  }
+
+  final values = <String, String>{};
+
+  @override
+  Future<String?> read(String categoryId) async => values[categoryId];
+
+  @override
+  Future<void> write(String categoryId, String? artworkUrl) async {
+    if (artworkUrl == null) {
+      values.remove(categoryId);
+    } else {
+      values[categoryId] = artworkUrl;
+    }
+  }
+}
+
+final class _MemorySearchBrowseCatalogCache
+    implements SearchBrowseCatalogCache {
+  _MemorySearchBrowseCatalogCache([this.snapshot]);
+
+  final SearchBrowseCatalogSnapshot? snapshot;
+
+  @override
+  Future<SearchBrowseCatalogSnapshot?> read(String languageCode) async =>
+      snapshot;
+
+  @override
+  Future<void> write(
+    String languageCode,
+    SearchBrowseCatalogSnapshot catalog,
+  ) async {}
 }
 
 class _NoSuggestionsSearch implements YouTubeMusicSearchSuggestions {

@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/animation/frame_rate_ticker_provider.dart';
+
 import '../../../../core/theme/app_colors.dart';
 
 const _wavyPlaybackTrackInset = 3.0;
@@ -176,15 +178,21 @@ class WavyPlaybackProgressLine extends StatefulWidget {
 }
 
 class _WavyPlaybackProgressLineState extends State<WavyPlaybackProgressLine>
-    with SingleTickerProviderStateMixin {
+    with WidgetsBindingObserver {
+  final _vsync = FrameRateTickerProvider();
   late final AnimationController _wavePhase;
   bool _disableAnimations = false;
+  bool _tickerEnabled = true;
+  bool _appIsActive = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _appIsActive = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     _wavePhase = AnimationController(
-      vsync: this,
+      vsync: _vsync,
       duration: const Duration(milliseconds: 2800),
     );
   }
@@ -192,6 +200,9 @@ class _WavyPlaybackProgressLineState extends State<WavyPlaybackProgressLine>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _tickerEnabled = TickerMode.valuesOf(context).enabled;
+    _vsync.setDisplayRefreshRate(View.of(context).display.refreshRate);
+    _vsync.enabled = _tickerEnabled && _appIsActive;
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
     if (_disableAnimations != disableAnimations) {
       _disableAnimations = disableAnimations;
@@ -210,12 +221,25 @@ class _WavyPlaybackProgressLineState extends State<WavyPlaybackProgressLine>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _wavePhase.dispose();
+    _vsync.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appIsActive = state == AppLifecycleState.resumed;
+    _vsync.enabled = _tickerEnabled && _appIsActive;
+    _syncAnimation();
+  }
+
   void _syncAnimation() {
-    if (widget.isPlaying && widget.enabled && !_disableAnimations) {
+    if (widget.isPlaying &&
+        widget.enabled &&
+        !_disableAnimations &&
+        _tickerEnabled &&
+        _appIsActive) {
       if (!_wavePhase.isAnimating) {
         _wavePhase.repeat();
       }

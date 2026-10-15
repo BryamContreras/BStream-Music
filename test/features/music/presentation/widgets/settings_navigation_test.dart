@@ -1363,34 +1363,44 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('desktop crossfade matches the LIVE request storage card width', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    _configureView(tester, const Size(1100, 1600));
-    final navigationController = SettingsNavigationController();
-    addTearDown(navigationController.dispose);
+  testWidgets(
+    'desktop settings cards fill content width except the sleep timer',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      _configureView(tester, const Size(1100, 1600));
+      final navigationController = SettingsNavigationController();
+      addTearDown(navigationController.dispose);
 
-    await tester.pumpWidget(
-      _settingsHarness(navigationController: navigationController),
-    );
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        _settingsHarness(navigationController: navigationController),
+      );
+      await tester.pumpAndSettle();
 
-    final crossfadeRect = tester.getRect(
-      find.byKey(const ValueKey('settings-inline-crossfade')),
-    );
-    final liveStorageRect = tester.getRect(
-      find.byKey(const ValueKey('settings-card-live-request-storage')),
-    );
+      final crossfadeRect = tester.getRect(
+        find.byKey(const ValueKey('settings-inline-crossfade')),
+      );
+      final liveStorageRect = tester.getRect(
+        find.byKey(const ValueKey('settings-card-live-request-storage')),
+      );
+      final languageRect = tester.getRect(
+        find.byKey(const ValueKey('settings-card-language')),
+      );
+      final timerRect = tester.getRect(
+        find.byKey(const ValueKey('settings-inline-timer')),
+      );
 
-    expect(crossfadeRect.width, closeTo(760, 0.1));
-    expect(crossfadeRect.width, closeTo(liveStorageRect.width, 0.1));
-    expect(crossfadeRect.left, closeTo(liveStorageRect.left, 0.1));
-    expect(crossfadeRect.right, closeTo(liveStorageRect.right, 0.1));
-    expect(tester.takeException(), isNull);
-    debugDefaultTargetPlatformOverride = null;
-  });
+      expect(languageRect.width, greaterThan(760));
+      expect(crossfadeRect.width, greaterThan(760));
+      expect(crossfadeRect.width, closeTo(languageRect.width, 0.1));
+      expect(crossfadeRect.width, closeTo(liveStorageRect.width, 0.1));
+      expect(crossfadeRect.left, closeTo(liveStorageRect.left, 0.1));
+      expect(crossfadeRect.right, closeTo(liveStorageRect.right, 0.1));
+      expect(timerRect.width, closeTo(520, 0.1));
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
 
   testWidgets('wide Android keeps the compact crossfade card width', (
     tester,

@@ -7,6 +7,46 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets(
+    'filter hides downwards and reappears below the pinned title upwards',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      await tester.pumpWidget(
+        const _FrameHarness(
+          showPinnedFooter: true,
+          hidePinnedFooterOnScroll: true,
+        ),
+      );
+      final header = find.byKey(const ValueKey('test-tab-header-surface'));
+      final footer = find.byKey(const ValueKey('tab-floating-footer'));
+      final initialHeader = tester.getRect(header);
+      expect(tester.getSize(footer).height, 54);
+      await tester.drag(
+        find.byKey(const ValueKey('test-tab-scroll')),
+        const Offset(0, -320),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.getSize(footer).height, 0);
+      expect(tester.getRect(header), initialHeader);
+      expect(find.text('Filtro').hitTestable(), findsNothing);
+      await tester.drag(
+        find.byKey(const ValueKey('test-tab-scroll')),
+        const Offset(0, 70),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.getSize(footer).height, 54);
+      expect(tester.getRect(header), initialHeader);
+      expect(tester.getRect(footer).top, closeTo(initialHeader.bottom, 0.1));
+      expect(find.text('Filtro').hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'uses a translucent neutral scrolled-under surface and returns to top',
     (tester) async {
       tester.view.physicalSize = const Size(360, 640);
@@ -526,6 +566,7 @@ class _FrameHarness extends StatelessWidget {
     this.surfaceBackgroundMode = SurfaceBackgroundMode.accent,
     this.textScaler = TextScaler.noScaling,
     this.showPinnedFooter = false,
+    this.hidePinnedFooterOnScroll = false,
   });
 
   final bool showHeader;
@@ -533,6 +574,7 @@ class _FrameHarness extends StatelessWidget {
   final SurfaceBackgroundMode surfaceBackgroundMode;
   final TextScaler textScaler;
   final bool showPinnedFooter;
+  final bool hidePinnedFooterOnScroll;
 
   @override
   Widget build(BuildContext context) {
@@ -553,6 +595,7 @@ class _FrameHarness extends StatelessWidget {
         body: ScrolledUnderTabFrame(
           surfaceKey: const ValueKey('test-tab-header-surface'),
           pinnedFooterSurfaceKey: const ValueKey('test-pinned-footer-surface'),
+          hidePinnedFooterOnScroll: hidePinnedFooterOnScroll,
           scrollKey: const ValueKey('test-tab-scroll'),
           header: showHeader
               ? const Row(

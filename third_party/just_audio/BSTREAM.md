@@ -4,6 +4,20 @@ This directory vendors `just_audio` 0.10.6 under its original BSD-3-Clause
 license. BStream keeps the public Dart API and all non-Android implementations
 unchanged.
 
+The small `BStreamAudioOutput` native facade shares a media-output preference
+across the active and standby/crossfade players using weak references. It calls
+Media3's `setPreferredAudioDevice` on existing engines and reapplies the choice
+when an engine is initialized. A disconnected/invalid device falls back to the
+system default. This is a best-effort AudioTrack preference, not a promise from
+the hardware; no communication mode, SCO or global Bluetooth setting is used.
+The app's native output menu controls Android's media stream volume separately
+from the player's per-track gain. The public just_audio Dart API is unchanged.
+
+The Android audio engine explicitly disables Media3 video-track selection.
+A resolver may return a muxed container, but only its selected audio track is
+decoded; bitrate/format selection is unchanged. Animated artwork and Spotify
+Canvas continue through the separate `video_player` engine.
+
 The Android player replaces Media3's default silence detector with BStream's
 PCM16 RMS processor. It evaluates 100 ms windows every 25 ms, smooths their
 power over 250 ms, enters silence at -52 dBFS and exits at -46 dBFS. At least
@@ -48,6 +62,14 @@ Dart's real-time extrapolation. Long skips and repeated backward seeks remain
 visually synchronized. Ordinary buffered-position notifications retain their
 500 ms rate limit, so the faster clock sampling does not increase bridge events
 when no silence is being removed.
+
+The buffered-position watcher sleeps whenever a ready deck is not loading and
+does not need silence-skipping clock correction. Media3's loading callback
+publishes the final buffered position and restarts the watcher on a refill;
+play/pause and silence-option changes also refresh that decision. A paused
+crossfade standby no longer polls an unchanged buffer every second. Ordinary
+position interpolation and native queue/crossfade transitions stay independent
+of this buffer watcher.
 
 The customization is isolated in
 `BStreamSilenceSkippingProfile.java` and

@@ -23,6 +23,7 @@ import '../widgets/track_result_tile.dart';
 import '../widgets/track_selection_toolbar.dart';
 import 'artist_profile_page.dart';
 import 'remote_collection_detail_page.dart';
+import 'search_browse_category_page.dart';
 
 class SearchView extends ConsumerStatefulWidget {
   const SearchView({
@@ -174,10 +175,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
     });
   }
 
-  void _selectBrowseCategory(
-    SearchBrowseCategory category,
-    AppStrings strings,
-  ) {
+  void _selectBrowseCategory(SearchBrowseCategory category) {
     FocusManager.instance.primaryFocus?.unfocus();
     final callback = widget.onBrowseCategorySelected;
     if (callback != null) {
@@ -187,15 +185,8 @@ class _SearchViewState extends ConsumerState<SearchView> {
 
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => RemoteCollectionDetailPage(
-          title: category.title,
-          subtitle: strings.youtubeMusic,
-          artworkSource: null,
-          queueSourceId: 'search-browse:${category.id}',
-          tracksProvider: searchBrowseCategoryTracksProvider(category),
-          emptyMessage: strings.searchBrowseEmpty,
-          errorMessage: strings.searchBrowseError,
-          fallbackIcon: _SearchBrowseVisual.forCategory(category).icon,
+        builder: (_) => SearchBrowseCategoryPage(
+          category: category,
           onOpenPlayer: widget.onOpenPlayer,
           onAddToPlaylist: widget.onAddToPlaylist,
         ),
@@ -237,13 +228,14 @@ class _SearchViewState extends ConsumerState<SearchView> {
         widget.active && !searchState.hasQuery && !showSuggestions
         ? ref.watch(searchBrowseCatalogProvider)
         : null;
+    final cachedBrowseCatalog =
+        widget.active && !searchState.hasQuery && !showSuggestions
+        ? ref.watch(searchBrowseCachedCatalogProvider)
+        : null;
+    final activeBrowseCatalog =
+        browseCatalog?.asData?.value ?? cachedBrowseCatalog?.asData?.value;
     final browseCategories =
-        browseCatalog?.when(
-          data: (catalog) => catalog.categories,
-          loading: () => fallbackBrowseCategories,
-          error: (_, _) => fallbackBrowseCategories,
-        ) ??
-        fallbackBrowseCategories;
+        activeBrowseCatalog?.categories ?? fallbackBrowseCategories;
     final isMobile = switch (Theme.of(context).platform) {
       TargetPlatform.android || TargetPlatform.iOS => true,
       _ => false,
@@ -391,8 +383,10 @@ class _SearchViewState extends ConsumerState<SearchView> {
             results: results,
             strings: strings,
             browseCategories: browseCategories,
-            onBrowseCategorySelected: (category) =>
-                _selectBrowseCategory(category, strings),
+            loadBrowseArtwork:
+                widget.active &&
+                activeBrowseCatalog?.usesLiveYouTubeMusicCategories == true,
+            onBrowseCategorySelected: _selectBrowseCategory,
             onOpenPlayer: widget.onOpenPlayer,
             onAddToPlaylist: widget.onAddToPlaylist,
           ),
@@ -466,6 +460,7 @@ class _SearchResultsSliver extends StatelessWidget {
     required this.results,
     required this.strings,
     required this.browseCategories,
+    required this.loadBrowseArtwork,
     required this.onBrowseCategorySelected,
     required this.onOpenPlayer,
     required this.onAddToPlaylist,
@@ -474,6 +469,7 @@ class _SearchResultsSliver extends StatelessWidget {
   final AsyncValue<SearchState> results;
   final AppStrings strings;
   final List<SearchBrowseCategory> browseCategories;
+  final bool loadBrowseArtwork;
   final ValueChanged<SearchBrowseCategory> onBrowseCategorySelected;
   final VoidCallback onOpenPlayer;
   final AddRemoteTracksToPlaylist? onAddToPlaylist;
@@ -485,6 +481,7 @@ class _SearchResultsSliver extends StatelessWidget {
         if (!state.hasQuery) {
           return _SearchBrowseCategoriesSliver(
             categories: browseCategories,
+            loadArtwork: loadBrowseArtwork,
             onSelected: onBrowseCategorySelected,
           );
         }
@@ -497,6 +494,7 @@ class _SearchResultsSliver extends StatelessWidget {
       },
       loading: () => _SearchBrowseCategoriesSliver(
         categories: browseCategories,
+        loadArtwork: loadBrowseArtwork,
         onSelected: onBrowseCategorySelected,
       ),
       error: (error, _) => SliverFillRemaining(
@@ -1069,10 +1067,12 @@ final class _SearchBrowseVisual {
 class _SearchBrowseCategoriesSliver extends StatelessWidget {
   const _SearchBrowseCategoriesSliver({
     required this.categories,
+    required this.loadArtwork,
     required this.onSelected,
   });
 
   final List<SearchBrowseCategory> categories;
+  final bool loadArtwork;
   final ValueChanged<SearchBrowseCategory> onSelected;
 
   @override
@@ -1098,6 +1098,7 @@ class _SearchBrowseCategoriesSliver extends StatelessWidget {
           return _SearchBrowseCategoryCard(
             key: ValueKey('search-browse-card-${category.id}'),
             category: category,
+            loadArtwork: loadArtwork,
             visual: visuals[index],
             onTap: () => onSelected(category),
           );
@@ -1107,20 +1108,117 @@ class _SearchBrowseCategoriesSliver extends StatelessWidget {
   }
 }
 
-class _SearchBrowseCategoryCard extends StatelessWidget {
+class _SearchBrowseCategoryCard extends ConsumerStatefulWidget {
   const _SearchBrowseCategoryCard({
     required this.category,
+    required this.loadArtwork,
     required this.visual,
     required this.onTap,
     super.key,
   });
 
   final SearchBrowseCategory category;
+  final bool loadArtwork;
   final _SearchBrowseVisual visual;
   final VoidCallback onTap;
 
   @override
+  ConsumerState<_SearchBrowseCategoryCard> createState() =>
+      _SearchBrowseCategoryCardState();
+}
+
+class _SearchBrowseCategoryCardState
+    extends ConsumerState<_SearchBrowseCategoryCard> {
+  ScrollPosition? _scrollPosition;
+  bool _visible = false;
+  bool _visibilityCheckPending = false;
+  bool _cacheLookupStarted = false;
+  String? _artwork;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final position = Scrollable.maybeOf(context)?.position;
+    if (position != _scrollPosition) {
+      _scrollPosition?.removeListener(_checkVisibilityAfterLayout);
+      _scrollPosition = position;
+      position?.addListener(_checkVisibilityAfterLayout);
+    }
+    _checkVisibilityAfterLayout();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SearchBrowseCategoryCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.category != widget.category) {
+      _artwork = null;
+      _cacheLookupStarted = false;
+    }
+    _checkVisibilityAfterLayout();
+  }
+
+  @override
+  void dispose() {
+    _scrollPosition?.removeListener(_checkVisibilityAfterLayout);
+    super.dispose();
+  }
+
+  void _checkVisibilityAfterLayout() {
+    if (_visibilityCheckPending) return;
+    _visibilityCheckPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _visibilityCheckPending = false;
+      if (!mounted) return;
+      final box = context.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) return;
+      final bounds = MatrixUtils.transformRect(
+        box.getTransformTo(null),
+        Offset.zero & box.size,
+      );
+      final visible = bounds.overlaps(Offset.zero & MediaQuery.sizeOf(context));
+      if (_visible != visible) setState(() => _visible = visible);
+    });
+  }
+
+  void _scheduleCachedArtworkRestore() {
+    if (_cacheLookupStarted) return;
+    _cacheLookupStarted = true;
+    final categoryId = widget.category.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_restoreCachedArtwork(categoryId));
+    });
+  }
+
+  Future<void> _restoreCachedArtwork(String categoryId) async {
+    final cached = await ref
+        .read(searchBrowseCategoryArtworkCacheProvider)
+        .read(categoryId);
+    if (!mounted || cached == null || _artwork != null) return;
+    setState(() => _artwork = cached);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final category = widget.category;
+    final visual = widget.visual;
+    final canLoad =
+        widget.loadArtwork &&
+        category.target != null &&
+        _visible &&
+        TickerMode.valuesOf(context).enabled &&
+        (ModalRoute.of(context)?.isCurrent ?? true);
+    if (canLoad) {
+      _artwork =
+          ref
+              .watch(searchBrowseCategoryArtworkProvider(category))
+              .asData
+              ?.value ??
+          _artwork;
+      if (_artwork == null) _scheduleCachedArtworkRestore();
+    }
+    final showPlaceholderIcon =
+        _artwork == null && MediaQuery.textScalerOf(context).scale(20) <= 30;
     const radius = BorderRadius.all(Radius.circular(12));
     return Semantics(
       button: true,
@@ -1143,10 +1241,41 @@ class _SearchBrowseCategoryCard extends StatelessWidget {
           child: InkWell(
             key: ValueKey('search-browse-action-${category.id}'),
             borderRadius: radius,
-            onTap: onTap,
+            onTap: widget.onTap,
             child: Stack(
               clipBehavior: Clip.hardEdge,
               children: [
+                if (_artwork != null) ...[
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Opacity(
+                        opacity: 0.72,
+                        child: SourceImage(
+                          key: ValueKey('search-browse-cover-${category.id}'),
+                          source: _artwork,
+                          cacheWidth: 384,
+                          fallback: const SizedBox.shrink(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: AlignmentDirectional.centerStart,
+                            end: AlignmentDirectional.centerEnd,
+                            colors: [
+                              visual.startColor.withValues(alpha: 0.8),
+                              visual.endColor.withValues(alpha: 0.32),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
                 Positioned.fill(
                   child: IgnorePointer(
                     child: RepaintBoundary(
@@ -1160,60 +1289,63 @@ class _SearchBrowseCategoryCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                PositionedDirectional(
-                  end: -7,
-                  bottom: -9,
-                  child: Transform.rotate(
-                    angle: -0.13,
-                    child: Container(
-                      key: ValueKey('search-browse-art-${category.id}'),
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.24),
-                        ),
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Colors.white.withValues(alpha: 0.28),
-                            visual.highlightColor.withValues(alpha: 0.20),
-                            Colors.black.withValues(alpha: 0.08),
+                if (showPlaceholderIcon)
+                  PositionedDirectional(
+                    end: -7,
+                    bottom: -9,
+                    child: Transform.rotate(
+                      angle: -0.13,
+                      child: Container(
+                        key: ValueKey('search-browse-art-${category.id}'),
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.24),
+                          ),
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Colors.white.withValues(alpha: 0.28),
+                              visual.highlightColor.withValues(alpha: 0.20),
+                              Colors.black.withValues(alpha: 0.08),
+                            ],
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x32000000),
+                              blurRadius: 12,
+                              offset: Offset(-2, 4),
+                            ),
                           ],
                         ),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x32000000),
-                            blurRadius: 12,
-                            offset: Offset(-2, 4),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        visual.icon,
-                        key: ValueKey('search-browse-icon-${category.id}'),
-                        size: 34,
-                        color: Colors.white.withValues(alpha: 0.94),
-                        shadows: const [
-                          Shadow(color: Color(0x3D000000), blurRadius: 4),
-                        ],
+                        child: Icon(
+                          visual.icon,
+                          key: ValueKey('search-browse-icon-${category.id}'),
+                          size: 34,
+                          color: Colors.white.withValues(alpha: 0.94),
+                          shadows: const [
+                            Shadow(color: Color(0x3D000000), blurRadius: 4),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
                 Positioned.fill(
                   child: Padding(
+                    key: ValueKey('search-browse-title-padding-${category.id}'),
                     padding: const EdgeInsetsDirectional.fromSTEB(
                       14,
                       13,
-                      64,
+                      14,
                       13,
                     ),
                     child: Align(
                       alignment: AlignmentDirectional.topStart,
                       child: Text(
+                        key: ValueKey('search-browse-title-${category.id}'),
                         category.title,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,

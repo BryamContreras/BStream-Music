@@ -13,6 +13,39 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'hidden Home coalesces automatic refreshes until it is visible',
+    () async {
+      final source = _FakePersonalizedHomeFeedSource(
+        CachedPersonalizedRecommendationFeed(
+          feed: _personalizedFeed(),
+          isExpired: false,
+        ),
+      );
+      final artists = _StaticHomeArtistRecommendationSource(const []);
+      final container = _combinedContainer(source, artistSource: artists);
+      container.read(homeFeedActivityProvider.notifier).setVisible(false);
+      await container.read(homeRecommendationsProvider.future);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(source.refreshCalls, 0);
+      expect(artists.loadCalls, 0);
+      expect(
+        container.exists(youtubeMusicHomeRecommendationsProvider),
+        isFalse,
+      );
+      container.invalidate(homeRecommendationsProvider);
+      await container.read(homeRecommendationsProvider.future);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(source.refreshCalls, 0);
+      container.read(homeFeedActivityProvider.notifier).setVisible(true);
+      await _eventually(
+        () => source.refreshCalls == 1 && artists.loadCalls == 1,
+      );
+      container.read(homeFeedActivityProvider.notifier).setVisible(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(source.refreshCalls, 1);
+    },
+  );
+  test(
     'authenticated Home is preferred without calling anonymous Home',
     () async {
       final anonymous = _FakeHomeSearch([

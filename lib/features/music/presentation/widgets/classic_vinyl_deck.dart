@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/animation/frame_rate_ticker_provider.dart';
+
 import 'source_image.dart';
 import 'spotify_canvas_video.dart';
 
@@ -48,7 +50,8 @@ class ClassicVinylDeck extends StatefulWidget {
 }
 
 class _ClassicVinylDeckState extends State<ClassicVinylDeck>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
+    with WidgetsBindingObserver {
+  final _rotationVsync = FrameRateTickerProvider();
   late final AnimationController _rotationController;
   late final AnimationController _tonearmController;
   bool _reducedMotion = false;
@@ -63,12 +66,12 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
     _appIsActive =
         lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
     _rotationController = AnimationController(
-      vsync: this,
+      vsync: _rotationVsync,
       duration: ClassicVinylDeck.rotationDuration,
       debugLabel: 'classic-vinyl-record-rotation',
     );
     _tonearmController = AnimationController(
-      vsync: this,
+      vsync: _rotationVsync,
       value: _normalizedProgress(widget.progress),
       debugLabel: 'classic-vinyl-tonearm-progress',
     );
@@ -79,6 +82,8 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
     super.didChangeDependencies();
     _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
+    _rotationVsync.setDisplayRefreshRate(View.of(context).display.refreshRate);
+    _rotationVsync.enabled = _tickerEnabled && _appIsActive;
     _synchronizeRotation();
     _synchronizeTonearm();
   }
@@ -94,6 +99,7 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appIsActive = state == AppLifecycleState.resumed;
+    _rotationVsync.enabled = _tickerEnabled && _appIsActive;
     _synchronizeRotation();
     _synchronizeTonearm();
   }
@@ -161,6 +167,7 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _rotationController.dispose();
+    _rotationVsync.dispose();
     _tonearmController.dispose();
     super.dispose();
   }

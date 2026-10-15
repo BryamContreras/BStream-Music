@@ -3311,6 +3311,62 @@ void main() {
   );
 
   test(
+    'position snapshots preserve duplicate remote occurrences across reordering',
+    () async {
+      final player = _NativeRemoteQueuePlayerService();
+      final tracks = [
+        _queuedRemoteTrack('duplicate-seed'),
+        _queuedRemoteTrack('duplicate-song'),
+        _queuedRemoteTrack('duplicate-middle'),
+        _queuedRemoteTrack('duplicate-song'),
+      ];
+      final container = _container(
+        player,
+        remoteCache: _TrackingRemotePlaybackCache(),
+      );
+      addTearDown(container.dispose);
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playRemote(tracks.first, queue: tracks);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.isNotEmpty &&
+            player.remoteWindows.last.length == 3,
+      );
+      final firstOccurrence = player.remoteWindows.last.first;
+      final secondOccurrence = player.remoteWindows.last.last;
+      expect(firstOccurrence.track.id, secondOccurrence.track.id);
+      expect(
+        firstOccurrence.queueEntryId,
+        isNot(secondOccurrence.queueEntryId),
+      );
+
+      player.emitNativeTransition(secondOccurrence);
+      await _waitUntil(
+        () => container.read(playbackQueueProvider).currentIndex == 3,
+      );
+      player.emit(
+        player.currentSnapshot.copyWith(position: const Duration(seconds: 12)),
+      );
+      await _flushCompletion();
+      expect(container.read(playbackQueueProvider).currentIndex, 3);
+
+      await controller.reorderQueue(3, 1);
+      player.emit(
+        player.currentSnapshot.copyWith(position: const Duration(seconds: 13)),
+      );
+      await _flushCompletion();
+      expect(container.read(playbackQueueProvider).currentIndex, 1);
+
+      player.emitNativeTransition(firstOccurrence);
+      await _waitUntil(
+        () => container.read(playbackQueueProvider).currentIndex == 2,
+      );
+      expect(player.nativeRemoteStarts, 1);
+    },
+  );
+
+  test(
     'native remote shuffle advances through the same plan it prefetched',
     () async {
       final player = _NativeRemoteQueuePlayerService();
@@ -4495,7 +4551,10 @@ void main() {
           position: Duration(milliseconds: 500),
         ),
       );
-      await _flushCompletion();
+      await _waitUntil(
+        () => repository.playMarks.any((mark) => mark.trackId == 'track-2'),
+        reason: 'The playing notification selection was not recorded.',
+      );
 
       expect(repository.playMarks.map((mark) => mark.trackId), [
         'track-1',
@@ -4683,6 +4742,56 @@ void main() {
       await session.callbacks!.play();
       expect(player.pauseCalls, 1);
       expect(player.resumeCalls, 1);
+    },
+  );
+
+  test(
+    'system session reuses queue metadata for positions and refreshes on reorder',
+    () async {
+      final player = _FakePlayerService();
+      final session = _FakeDesktopMediaSession();
+      final container = _container(player, desktopSession: session);
+      addTearDown(container.dispose);
+      container.read(desktopMediaSessionProvider);
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playLocal(
+        _track(1),
+        queue: [_track(1), _track(2), _track(3)],
+      );
+      await _waitUntil(
+        () => session.states.any((state) => state.queue.length == 3),
+      );
+      final original = session.states.last;
+
+      for (var index = 1; index <= 10; index++) {
+        player.emit(
+          player.currentSnapshot.copyWith(
+            position: Duration(milliseconds: index * 250),
+          ),
+        );
+        await _flushCompletion();
+        expect(session.states.last.queue, same(original.queue));
+        expect(session.states.last.queueKey, original.queueKey);
+      }
+
+      await controller.reorderQueue(2, 1);
+      await _flushCompletion();
+      final reordered = session.states.last;
+      expect(reordered.queue.map((entry) => entry.id), [
+        'track-1',
+        'track-3',
+        'track-2',
+      ]);
+      expect(reordered.queue, isNot(same(original.queue)));
+      expect(reordered.queueKey, isNot(original.queueKey));
+
+      player.emit(
+        player.currentSnapshot.copyWith(position: const Duration(seconds: 3)),
+      );
+      await _flushCompletion();
+      expect(session.states.last.queue, same(reordered.queue));
+      expect(session.states.last.snapshot.position, const Duration(seconds: 3));
     },
   );
 }

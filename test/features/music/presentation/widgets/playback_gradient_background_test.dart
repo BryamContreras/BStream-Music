@@ -2,8 +2,10 @@ import 'package:bstream_music/features/music/presentation/providers/music_provid
 import 'package:bstream_music/features/music/presentation/widgets/app_background_photo.dart';
 import 'package:bstream_music/features/music/presentation/widgets/artwork_gradient_header_background.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_gradient_background.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -127,6 +129,63 @@ void main() {
     expect(transition.duration, Duration.zero);
     expect(transition.reverseDuration, Duration.zero);
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      '$brightness menu backdrop shares the player image and overlay recipe at bounded resolution',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData(brightness: brightness),
+            home: const Scaffold(
+              body: SizedBox(
+                width: 390,
+                height: 400,
+                child: PlaybackArtworkBackdrop(
+                  source: '/fixture/cover.png',
+                  fallbackSource: '/fixture/offline-cover.png',
+                  cacheWidth: 256,
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        final image = tester.widget<SourceImage>(
+          find.byType(SourceImage).first,
+        );
+        expect(image.source, '/fixture/cover.png');
+        expect(image.fallbackSource, '/fixture/offline-cover.png');
+        expect(image.cacheWidth, 256);
+        expect(
+          tester
+              .widget<ImageFiltered>(find.byType(ImageFiltered))
+              .imageFilter
+              .toString(),
+          contains('blur(44.0, 44.0'),
+        );
+        final backdrop = find.byType(PlaybackArtworkBackdrop);
+        final context = tester.element(backdrop);
+        final decorations = tester.widgetList<DecoratedBox>(
+          find.descendant(of: backdrop, matching: find.byType(DecoratedBox)),
+        );
+        expect(
+          decorations.any((box) {
+            final decoration = box.decoration;
+            return decoration is BoxDecoration &&
+                decoration.gradient is LinearGradient &&
+                listEquals(
+                  (decoration.gradient as LinearGradient).colors,
+                  playerPlaybackOverlayColors(context),
+                );
+          }),
+          isTrue,
+        );
+        expect(find.byType(BackdropFilter), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 }
 
 Widget _harness(

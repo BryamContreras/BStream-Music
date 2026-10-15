@@ -73,6 +73,7 @@ dependencies:
   smtc_windows: ^1.1.0
   archive: ^4.0.9
   csv: ^8.0.0
+  xml: ^6.6.1
   url_launcher: ^6.3.2
   app_links: ^7.2.1
   flutter_inappwebview: 6.1.5

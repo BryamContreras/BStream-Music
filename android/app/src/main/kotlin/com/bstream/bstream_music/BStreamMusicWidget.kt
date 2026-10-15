@@ -138,6 +138,10 @@ class BStreamMusicWidget : AppWidgetProvider() {
         }
 
         private fun render(context: Context, manager: AppWidgetManager, id: Int): RemoteViews {
+            return renderForOptions(context, manager.getAppWidgetOptions(id))
+        }
+
+        internal fun renderForOptions(context: Context, options: Bundle): RemoteViews {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val title = prefs.getString("title", "").orEmpty()
             val artist = prefs.getString("artist", "").orEmpty()
@@ -146,7 +150,6 @@ class BStreamMusicWidget : AppWidgetProvider() {
             val repeatMode = prefs.getString("repeatMode", "off").orEmpty()
             val accent = prefs.getInt("accent", 0xFFF5F7F5.toInt())
             val english = prefs.getString("language", "es") == "en"
-            val options = manager.getAppWidgetOptions(id)
             val heightOption = if (context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
                 AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT
             } else {
@@ -165,11 +168,12 @@ class BStreamMusicWidget : AppWidgetProvider() {
                 widthOption,
                 options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250),
             )
-            val layout = when {
-                currentHeight < 72 -> R.layout.bstream_music_widget_compact_small
-                currentHeight < 150 -> R.layout.bstream_music_widget_compact
-                currentHeight >= 165 && currentWidth >= 340 -> R.layout.bstream_music_widget_expanded
-                else -> R.layout.bstream_music_widget
+            val sizeCategory = BStreamWidgetLayout.forSize(currentWidth, currentHeight)
+            val layout = when (sizeCategory) {
+                BStreamWidgetLayout.COMPACT_SMALL -> R.layout.bstream_music_widget_compact_small
+                BStreamWidgetLayout.COMPACT -> R.layout.bstream_music_widget_compact
+                BStreamWidgetLayout.EXPANDED -> R.layout.bstream_music_widget_expanded
+                BStreamWidgetLayout.LARGE -> R.layout.bstream_music_widget
             }
             val hasCover = prefs.getBoolean("hasCover", false)
             val cover = File(context.filesDir, COVER_FILE)
@@ -192,35 +196,42 @@ class BStreamMusicWidget : AppWidgetProvider() {
                 val displayArtist = if (title.isEmpty()) {
                     if (english) "Tap to open" else "Toca para abrir"
                 } else artist
-                val titleAndArtist = SpannableStringBuilder(displayTitle)
-                if (displayTitle.isNotEmpty()) {
-                    titleAndArtist.setSpan(
-                        StyleSpan(Typeface.BOLD),
-                        0,
-                        titleAndArtist.length,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
-                    )
+                if (sizeCategory.hasSeparateMetadata) {
+                    setTextViewText(R.id.widget_player_name, context.getString(R.string.widget_player_name))
+                    setTextViewText(R.id.widget_title, displayTitle)
+                    setTextViewText(R.id.widget_artist, displayArtist)
+                    setViewVisibility(R.id.widget_artist, View.VISIBLE)
+                } else {
+                    val titleAndArtist = SpannableStringBuilder(displayTitle)
+                    if (displayTitle.isNotEmpty()) {
+                        titleAndArtist.setSpan(
+                            StyleSpan(Typeface.BOLD),
+                            0,
+                            titleAndArtist.length,
+                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+                        )
+                    }
+                    if (displayArtist.isNotBlank()) {
+                        val separatorStart = titleAndArtist.length
+                        titleAndArtist.append("  ·  ")
+                        titleAndArtist.setSpan(
+                            ForegroundColorSpan(Color.argb(190, 221, 227, 232)),
+                            separatorStart,
+                            titleAndArtist.length,
+                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+                        )
+                        val artistStart = titleAndArtist.length
+                        titleAndArtist.append(displayArtist)
+                        titleAndArtist.setSpan(
+                            ForegroundColorSpan(Color.argb(215, 221, 227, 232)),
+                            artistStart,
+                            titleAndArtist.length,
+                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+                        )
+                    }
+                    setTextViewText(R.id.widget_title, titleAndArtist)
+                    setViewVisibility(R.id.widget_artist, View.GONE)
                 }
-                if (displayArtist.isNotBlank()) {
-                    val separatorStart = titleAndArtist.length
-                    titleAndArtist.append("  ·  ")
-                    titleAndArtist.setSpan(
-                        ForegroundColorSpan(Color.argb(190, 221, 227, 232)),
-                        separatorStart,
-                        titleAndArtist.length,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
-                    )
-                    val artistStart = titleAndArtist.length
-                    titleAndArtist.append(displayArtist)
-                    titleAndArtist.setSpan(
-                        ForegroundColorSpan(Color.argb(215, 221, 227, 232)),
-                        artistStart,
-                        titleAndArtist.length,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
-                    )
-                }
-                setTextViewText(R.id.widget_title, titleAndArtist)
-                setViewVisibility(R.id.widget_artist, View.GONE)
                 setImageViewResource(
                     R.id.widget_play_pause,
                     if (isPlaying) R.drawable.bstream_widget_pause else R.drawable.bstream_widget_play,

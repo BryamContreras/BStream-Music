@@ -28,14 +28,15 @@ import '../providers/playback_visual_cache_provider.dart';
 import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
 import 'animated_artwork_motion.dart';
+import 'audio_routing_menus.dart';
 import 'classic_vinyl_deck.dart';
 import 'favorite_star_badge.dart';
-import 'glass_popup_menu_button.dart';
 import 'lyrics_page_route.dart';
 import 'now_playing_equalizer.dart';
 import 'playback_audio_quality.dart';
 import 'playback_dark_theme.dart';
 import 'playback_gradient_background.dart';
+import 'playback_menu_bottom_sheet.dart';
 import 'playlist_artwork.dart';
 import 'playlist_picker_dialog.dart';
 import 'source_image.dart';
@@ -2732,6 +2733,12 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
           title: player.value?.title,
           artist: player.value?.artist,
           thumbnailUrl: player.value?.thumbnailUrl,
+          trackId: player.value?.trackId,
+          sourceUrl: player.value?.sourceUrl,
+          isRemote: player.value?.isRemote ?? false,
+          isExternal: player.value?.isExternal ?? false,
+          album: player.value?.album,
+          duration: player.value?.duration,
         ),
       ),
     );
@@ -2749,6 +2756,32 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
         (playback.status != PlayerStatus.idle &&
             playback.status != PlayerStatus.failed &&
             currentTitle?.trim().isNotEmpty == true);
+    final currentSnapshot = PlayerSnapshot(
+      status: playback.status,
+      trackId: playback.trackId,
+      sourceUrl: playback.sourceUrl,
+      title: playback.title,
+      artist: playback.artist,
+      album: playback.album,
+      thumbnailUrl: playback.thumbnailUrl,
+      duration: playback.duration,
+      isRemote: playback.isRemote,
+      isExternal: playback.isExternal,
+    );
+    final savedTrack = _savedTrackForSnapshot(
+      ref.watch(libraryTracksProvider).value ?? const <LocalTrack>[],
+      trackId: playback.trackId,
+      sourceUrl: playback.sourceUrl,
+    );
+    final favoriteIds = ref.watch(favoriteTrackIdsProvider);
+    final isFavorite =
+        favoriteIds.contains(playback.trackId) ||
+        (savedTrack != null && favoriteIds.contains(savedTrack.id));
+    final canFavorite =
+        hasCurrentTrack &&
+        !playback.isExternal &&
+        (playback.trackId?.trim().isNotEmpty == true ||
+            playback.sourceUrl?.trim().isNotEmpty == true);
     final queueActionTextStyle = Theme.of(
       context,
     ).textTheme.labelLarge?.copyWith(fontSize: 13, fontWeight: FontWeight.w800);
@@ -2809,10 +2842,12 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
                                 currentTitle?.trim().isNotEmpty == true
                                     ? currentTitle!
                                     : strings.noPlayback,
-                                maxLines: 1,
+                                key: const ValueKey('queue-current-title'),
+                                maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.titleSmall
                                     ?.copyWith(
+                                      fontSize: 16,
                                       fontWeight: FontWeight.w900,
                                       color: AppColors.contentHeadingFor(
                                         context,
@@ -2823,10 +2858,12 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
                                 const SizedBox(height: 2),
                                 Text(
                                   currentArtist!,
+                                  key: const ValueKey('queue-current-artist'),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(
+                                        fontSize: 14,
                                         color: AppColors.contentSubtitleFor(
                                           context,
                                         ),
@@ -2840,6 +2877,38 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
                         SizedBox.square(
                           dimension: 48,
                           child: IconButton(
+                            key: const ValueKey('queue-favorite-toggle'),
+                            tooltip: isFavorite
+                                ? strings.removeFromFavorites
+                                : strings.addToFavorites,
+                            padding: EdgeInsets.zero,
+                            icon: Icon(
+                              isFavorite
+                                  ? Icons.favorite_rounded
+                                  : Icons.favorite_border_rounded,
+                              size: 26,
+                            ),
+                            color: isFavorite
+                                ? colors.primary
+                                : AppColors.contentHeadingFor(context),
+                            onPressed: !canFavorite
+                                ? null
+                                : () => unawaited(
+                                    _toggleFavoriteForSnapshot(
+                                      context: context,
+                                      ref: ref,
+                                      snapshot: currentSnapshot,
+                                      isFavorite: isFavorite,
+                                      savedTrackId: savedTrack?.id,
+                                      strings: strings,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        SizedBox.square(
+                          dimension: 48,
+                          child: IconButton(
+                            key: const ValueKey('queue-close'),
                             tooltip: strings.close,
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints.tightFor(
@@ -5552,7 +5621,6 @@ class _PlayerMenu extends ConsumerWidget {
     final shareService = ref.read(trackShareServiceProvider);
     final canShare = shareTrack != null && shareService.canShare(shareTrack);
     Widget buildButton(BuildContext actionContext) {
-      final menuIconColor = AppColors.menuIconFor(actionContext);
       final appleIcon = DecoratedBox(
         key: const ValueKey('apple-player-menu-surface'),
         decoration: BoxDecoration(
@@ -5567,193 +5635,84 @@ class _PlayerMenu extends ConsumerWidget {
           ),
         ),
       );
-      return GlassPopupMenuButton<String>(
+      return IconButton(
         key: const ValueKey('player-menu-control'),
-        enabled: snapshot.trackId != null,
         tooltip: strings.moreOptions,
-        position: PopupMenuPosition.under,
         padding: EdgeInsets.zero,
-        // PopupMenuButton.constraints sizes the popup route, not its trigger.
-        // Keep Apple's 48 px touch target on the button style so the menu can
-        // retain its intrinsic width and show every action instead of being
-        // clipped down to the first (Share) icon.
         style: appleStyle
             ? IconButton.styleFrom(
                 fixedSize: Size.square(compact ? 40 : 48),
                 padding: EdgeInsets.zero,
               )
             : null,
-        iconColor: playbackIconColor,
+        color: playbackIconColor,
         icon: appleStyle
             ? appleIcon
             : const Icon(Icons.more_vert_rounded, size: 34),
-        onSelected: (value) {
-          switch (value) {
-            case 'share':
-              if (shareTrack != null) {
-                unawaited(
-                  _shareTrack(
-                    context: actionContext,
-                    ref: ref,
-                    track: shareTrack,
+        onPressed: snapshot.trackId == null
+            ? null
+            : () async {
+                final value = await showPlaybackMenuBottomSheet<String>(
+                  context: actionContext,
+                  builder: (_) => _PlayerOptionsMenu(
                     strings: strings,
+                    canShare: canShare,
+                    canOpenArtist: onOpenArtist != null,
+                    canOpenAlbum: onOpenAlbum != null,
+                    canDownload:
+                        snapshot.isRemote && snapshot.sourceUrl != null,
+                    canCancelDownload: canCancelDownload,
+                    isFavorite: isFavorite,
                   ),
                 );
-              }
-              return;
-            case 'download':
-              unawaited(_downloadCurrent(actionContext, ref));
-              return;
-            case 'playlist':
-              unawaited(_showPlaylistPicker(actionContext, ref));
-              return;
-            case 'favorite':
-              unawaited(
-                _toggleFavoriteForSnapshot(
-                  context: actionContext,
-                  ref: ref,
-                  snapshot: snapshot,
-                  isFavorite: isFavorite,
-                  savedTrackId: savedTrackId,
-                  strings: strings,
-                ),
-              );
-              return;
-            case 'artist':
-              onOpenArtist?.call();
-              return;
-            case 'album':
-              onOpenAlbum?.call();
-              return;
-          }
-        },
-        itemBuilder: (context) => [
-          PopupMenuItem(
-            key: const ValueKey('player-menu-share'),
-            value: 'share',
-            enabled: canShare,
-            child: Row(
-              children: [
-                Icon(
-                  Icons.share_rounded,
-                  color: canShare
-                      ? menuIconColor
-                      : menuIconColor.withValues(alpha: 0.38),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    strings.shareSong,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (onOpenArtist != null)
-            PopupMenuItem(
-              key: const ValueKey('player-menu-go-to-artist'),
-              value: 'artist',
-              child: Row(
-                children: [
-                  Icon(Icons.person_search_rounded, color: menuIconColor),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      strings.goToArtist,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          if (onOpenAlbum != null)
-            PopupMenuItem(
-              key: const ValueKey('player-menu-go-to-album'),
-              value: 'album',
-              child: Row(
-                children: [
-                  Icon(Icons.album_rounded, color: menuIconColor),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      strings.goToAlbum,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          if (snapshot.isRemote && snapshot.sourceUrl != null)
-            PopupMenuItem(
-              key: const ValueKey('player-menu-download'),
-              value: 'download',
-              child: Row(
-                children: [
-                  Icon(
-                    canCancelDownload
-                        ? Icons.close_rounded
-                        : Icons.download_rounded,
-                    color: menuIconColor,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      canCancelDownload
-                          ? strings.cancelDownload
-                          : strings.download,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          PopupMenuItem(
-            value: 'playlist',
-            child: Row(
-              children: [
-                Icon(Icons.playlist_add_rounded, color: menuIconColor),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    strings.addToPlaylist,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          PopupMenuItem(
-            value: 'favorite',
-            child: Row(
-              children: [
-                Icon(
-                  isFavorite
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
-                  color: isFavorite
-                      ? Theme.of(context).colorScheme.primary
-                      : menuIconColor,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    isFavorite
-                        ? strings.removeFromFavorites
-                        : strings.addToFavorites,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+                // Keep the original player context: the menu has already closed
+                // before navigation, the playlist picker or the native share sheet.
+                if (value == null || !actionContext.mounted) return;
+                switch (value) {
+                  case 'share':
+                    if (shareTrack != null) {
+                      unawaited(
+                        _shareTrack(
+                          context: actionContext,
+                          ref: ref,
+                          track: shareTrack,
+                          strings: strings,
+                        ),
+                      );
+                    }
+                    return;
+                  case 'audio-output':
+                    unawaited(showAudioOutputPicker(actionContext, ref));
+                    return;
+                  case 'cast':
+                    unawaited(showCastDevicesMenu(actionContext));
+                    return;
+                  case 'download':
+                    unawaited(_downloadCurrent(actionContext, ref));
+                    return;
+                  case 'playlist':
+                    unawaited(_showPlaylistPicker(actionContext, ref));
+                    return;
+                  case 'favorite':
+                    unawaited(
+                      _toggleFavoriteForSnapshot(
+                        context: actionContext,
+                        ref: ref,
+                        snapshot: snapshot,
+                        isFavorite: isFavorite,
+                        savedTrackId: savedTrackId,
+                        strings: strings,
+                      ),
+                    );
+                    return;
+                  case 'artist':
+                    onOpenArtist?.call();
+                    return;
+                  case 'album':
+                    onOpenAlbum?.call();
+                    return;
+                }
+              },
       );
     }
 
@@ -5902,6 +5861,156 @@ class _PlayerMenu extends ConsumerWidget {
       thumbnailUrl: snapshot.thumbnailUrl,
       duration: snapshot.duration,
       album: snapshot.album,
+    );
+  }
+}
+
+class _PlayerOptionsMenu extends StatelessWidget {
+  const _PlayerOptionsMenu({
+    required this.strings,
+    required this.canShare,
+    required this.canOpenArtist,
+    required this.canOpenAlbum,
+    required this.canDownload,
+    required this.canCancelDownload,
+    required this.isFavorite,
+  });
+
+  final AppStrings strings;
+  final bool canShare;
+  final bool canOpenArtist;
+  final bool canOpenAlbum;
+  final bool canDownload;
+  final bool canCancelDownload;
+  final bool isFavorite;
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground = AppColors.menuForegroundFor(context);
+    final iconColor = AppColors.menuIconFor(context);
+    Widget action({
+      required String key,
+      required String value,
+      required IconData icon,
+      required String label,
+      bool enabled = true,
+      Color? color,
+    }) => ListTile(
+      key: ValueKey(key),
+      enabled: enabled,
+      contentPadding: EdgeInsets.zero,
+      minLeadingWidth: 24,
+      horizontalTitleGap: 12,
+      leading: Icon(
+        icon,
+        color: enabled ? color ?? iconColor : iconColor.withValues(alpha: .38),
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          color: enabled ? foreground : foreground.withValues(alpha: .38),
+        ),
+      ),
+      onTap: enabled ? () => Navigator.of(context).pop(value) : null,
+    );
+
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        key: const ValueKey('player-options-menu'),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    strings.moreOptions,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleLarge?.copyWith(color: foreground),
+                  ),
+                ),
+                IconButton(
+                  key: const ValueKey('player-options-close'),
+                  tooltip: strings.close,
+                  color: foreground,
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (AppPlatform.isMobileTargetPlatform(
+              Theme.of(context).platform,
+            )) ...[
+              action(
+                key: 'player-menu-cast',
+                value: 'cast',
+                icon: Icons.cast_rounded,
+                label: strings.castTo,
+              ),
+              action(
+                key: 'player-menu-audio-output',
+                value: 'audio-output',
+                icon: Icons.speaker_rounded,
+                label: strings.audioOutput,
+              ),
+            ],
+            action(
+              key: 'player-menu-share',
+              value: 'share',
+              icon: Icons.share_rounded,
+              label: strings.shareSong,
+              enabled: canShare,
+            ),
+            if (canOpenArtist)
+              action(
+                key: 'player-menu-go-to-artist',
+                value: 'artist',
+                icon: Icons.person_search_rounded,
+                label: strings.goToArtist,
+              ),
+            if (canOpenAlbum)
+              action(
+                key: 'player-menu-go-to-album',
+                value: 'album',
+                icon: Icons.album_rounded,
+                label: strings.goToAlbum,
+              ),
+            if (canDownload)
+              action(
+                key: 'player-menu-download',
+                value: 'download',
+                icon: canCancelDownload
+                    ? Icons.close_rounded
+                    : Icons.download_rounded,
+                label: canCancelDownload
+                    ? strings.cancelDownload
+                    : strings.download,
+              ),
+            action(
+              key: 'player-menu-playlist',
+              value: 'playlist',
+              icon: Icons.playlist_add_rounded,
+              label: strings.addToPlaylist,
+            ),
+            action(
+              key: 'player-menu-favorite',
+              value: 'favorite',
+              icon: isFavorite
+                  ? Icons.favorite_rounded
+                  : Icons.favorite_border_rounded,
+              label: isFavorite
+                  ? strings.removeFromFavorites
+                  : strings.addToFavorites,
+              color: isFavorite ? Theme.of(context).colorScheme.primary : null,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

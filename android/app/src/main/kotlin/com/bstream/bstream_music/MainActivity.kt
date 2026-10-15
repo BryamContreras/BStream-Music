@@ -52,6 +52,7 @@ class MainActivity : AudioServiceActivity() {
     private var statusBarHidden = false
     private var previousSystemUiVisibility: Int? = null
     private var previousSystemBarsBehavior: Int? = null
+    private var audioOutputPlugin: AudioOutputPlugin? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,6 +72,12 @@ class MainActivity : AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        audioOutputPlugin?.dispose()
+        audioOutputPlugin = AudioOutputPlugin(this, flutterEngine.dartExecutor.binaryMessenger)
+        if (!flutterEngine.plugins.has(BStreamCastEnginePlugin::class.java)) {
+            flutterEngine.plugins.add(BStreamCastEnginePlugin())
+        }
 
         homeWidgetChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -256,6 +263,7 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun onDestroy() {
+        audioOutputPlugin?.dispose()
         externalAudioExecutor.shutdownNow()
         localArtworkExecutor.shutdownNow()
         widgetArtworkExecutor.shutdownNow()

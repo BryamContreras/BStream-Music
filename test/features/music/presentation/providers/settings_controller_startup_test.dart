@@ -157,6 +157,53 @@ void main() {
   );
 
   test(
+    'translation defaults off and persists mutually exclusive lyric modes',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final container = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final initial = await container.read(settingsControllerProvider.future);
+      expect(initial.lyricsTranslationEnabled, isFalse);
+      final controller = container.read(settingsControllerProvider.notifier);
+      await Future.wait([
+        controller.setLyricsRomanizationEnabled(true),
+        controller.setLyricsTranslationEnabled(true),
+        controller.setLyricsRomanizationEnabled(true),
+        controller.setLyricsTranslationEnabled(true),
+      ]);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('settings.lyricsTranslationEnabled'), isTrue);
+      expect(prefs.getBool('settings.lyricsRomanizationEnabled'), isFalse);
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .value
+            ?.lyricsTranslationEnabled,
+        isTrue,
+      );
+      // Resolve corrupt/concurrently written preferences without enabling both.
+      await prefs.setBool('settings.lyricsRomanizationEnabled', true);
+      final restored = ProviderContainer(
+        overrides: [
+          settingsControllerProvider.overrideWith(
+            () => SettingsController.forPlatform(AppPlatformType.ios),
+          ),
+        ],
+      );
+      addTearDown(restored.dispose);
+      final settings = await restored.read(settingsControllerProvider.future);
+      expect(settings.lyricsTranslationEnabled, isTrue);
+      expect(settings.lyricsRomanizationEnabled, isFalse);
+    },
+  );
+
+  test(
     'iOS ignores an unusable Downloads location and initializes in Documents',
     () async {
       final downloadsPath = p.join(sandbox.path, 'Downloads');

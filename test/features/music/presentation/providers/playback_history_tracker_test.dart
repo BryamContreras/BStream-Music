@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/recommendations/recommendation_storage_models.dart';
@@ -126,6 +128,115 @@ void main() {
 
     await tracker.dispose();
   });
+
+  testWidgets('position ticks keep one qualification timer', (tester) async {
+    final writes = <PlaybackHistoryWrite>[];
+    var now = Duration.zero;
+    var timerCount = 0;
+    final tracker = QualifiedPlaybackHistoryTracker(
+      onWrite: (write) async => writes.add(write),
+      monotonicClock: () => now,
+      timerFactory: (duration, callback) {
+        timerCount++;
+        return Timer(duration, callback);
+      },
+    );
+    addTearDown(tracker.dispose);
+    await tracker.setEnabled(true);
+    final track = _track(duration: const Duration(minutes: 3));
+    tracker.update(track: track, status: PlayerStatus.playing);
+
+    for (var index = 0; index < 119; index++) {
+      now += const Duration(milliseconds: 250);
+      await tester.pump(const Duration(milliseconds: 250));
+      tracker.update(track: track, status: PlayerStatus.playing);
+    }
+    expect(writes, isEmpty);
+    expect(timerCount, 1);
+
+    now += const Duration(milliseconds: 250);
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(writes, hasLength(1));
+    expect(writes.single.event.listenedMs, 30000);
+    expect(timerCount, 1);
+    await tracker.dispose();
+  });
+
+  testWidgets('changed duration reschedules the qualification deadline', (
+    tester,
+  ) async {
+    final writes = <PlaybackHistoryWrite>[];
+    var now = Duration.zero;
+    final scheduledDelays = <Duration>[];
+    final tracker = QualifiedPlaybackHistoryTracker(
+      onWrite: (write) async => writes.add(write),
+      monotonicClock: () => now,
+      timerFactory: (duration, callback) {
+        scheduledDelays.add(duration);
+        return Timer(duration, callback);
+      },
+    );
+    addTearDown(tracker.dispose);
+    await tracker.setEnabled(true);
+    tracker.update(
+      track: _track(duration: const Duration(minutes: 3)),
+      status: PlayerStatus.playing,
+    );
+    now = const Duration(seconds: 2);
+    await tester.pump(const Duration(seconds: 2));
+    tracker.update(
+      track: _track(duration: const Duration(seconds: 10)),
+      status: PlayerStatus.playing,
+    );
+    expect(scheduledDelays, [
+      const Duration(seconds: 30),
+      const Duration(seconds: 2),
+    ]);
+    now = const Duration(seconds: 4);
+    await tester.pump(const Duration(seconds: 2));
+    expect(writes, hasLength(1));
+    expect(writes.single.event.listenedMs, 4000);
+    expect(writes.single.event.durationMs, 10000);
+    await tracker.dispose();
+  });
+
+  testWidgets(
+    'pause cancels the stable timer and resume excludes paused time',
+    (tester) async {
+      final writes = <PlaybackHistoryWrite>[];
+      var now = Duration.zero;
+      final scheduledDelays = <Duration>[];
+      final tracker = QualifiedPlaybackHistoryTracker(
+        onWrite: (write) async => writes.add(write),
+        monotonicClock: () => now,
+        timerFactory: (duration, callback) {
+          scheduledDelays.add(duration);
+          return Timer(duration, callback);
+        },
+      );
+      addTearDown(tracker.dispose);
+      await tracker.setEnabled(true);
+      final track = _track(duration: const Duration(seconds: 10));
+      tracker.update(track: track, status: PlayerStatus.playing);
+      now = const Duration(seconds: 1);
+      await tester.pump(const Duration(seconds: 1));
+      tracker.update(track: track, status: PlayerStatus.paused);
+      now = const Duration(seconds: 11);
+      await tester.pump(const Duration(seconds: 10));
+      expect(writes, isEmpty);
+
+      tracker.update(track: track, status: PlayerStatus.playing);
+      expect(scheduledDelays, [
+        const Duration(seconds: 4),
+        const Duration(seconds: 3),
+      ]);
+      now = const Duration(seconds: 14);
+      await tester.pump(const Duration(seconds: 3));
+      expect(writes, hasLength(1));
+      expect(writes.single.event.listenedMs, 4000);
+      await tracker.dispose();
+    },
+  );
 }
 
 QualifiedPlaybackHistoryTracker _tracker(

@@ -1,2 +1,3 @@
 "CFBundleDisplayName" = "BStream Music";
+"NSLocalNetworkUsageDescription" = "BStream Music uses your local network to discover compatible devices and stream music when you choose Cast to.";
 "NSAppleMusicUsageDescription" = "BStream Music needs access to show and play music stored on your device.";

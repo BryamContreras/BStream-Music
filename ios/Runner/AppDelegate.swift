@@ -36,6 +36,8 @@ final class BStreamWidgetActionRelay {
   private let fileExportPlugin = IOSFileExportPlugin()
   private var screenChannel: FlutterMethodChannel?
   private var homeWidgetChannel: FlutterMethodChannel?
+  private var audioOutputPlugin: BStreamAudioOutputPlugin?
+  private var castPlugin: BStreamCastPlugin?
   private let widgetGroup = "group.com.bstream.bstreamMusic"
   private let widgetKind = "BStreamNowPlaying"
 
@@ -54,6 +56,10 @@ final class BStreamWidgetActionRelay {
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    let audioMessenger = engineBridge.applicationRegistrar.messenger()
+    audioOutputPlugin = BStreamAudioOutputPlugin(messenger: audioMessenger)
+    castPlugin = BStreamCastPlugin(messenger: audioMessenger)
 
     let channel = FlutterMethodChannel(
       name: "bstream_music/local_audio",

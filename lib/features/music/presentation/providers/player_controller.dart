@@ -1632,6 +1632,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         return false;
       }
     }
+    if (_isCurrentRemoteQueueEntry(queueEntryId)) return true;
     for (var index = 0; index < _queue.length; index++) {
       if (_queue[index].remote != null &&
           _remoteQueueEntryId(index) == queueEntryId) {
@@ -1666,6 +1667,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         return false;
       }
     }
+    if (_isCurrentRemoteQueueEntry(queueEntryId)) return true;
     for (var index = 0; index < _queue.length; index++) {
       if (_queue[index].remote != null &&
           _remoteQueueEntryId(index) == queueEntryId) {
@@ -2174,6 +2176,12 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   String? get _currentRemoteQueueEntryId {
     return _queueIndex < 0 ? null : _remoteQueueEntryId(_queueIndex);
   }
+
+  bool _isCurrentRemoteQueueEntry(String queueEntryId) =>
+      _queueIndex >= 0 &&
+      _queueIndex < _queue.length &&
+      _queue[_queueIndex].remote != null &&
+      _remoteQueueEntryId(_queueIndex) == queueEntryId;
 
   Future<LocalTrack?> _cachedRemoteTrack(TrackInfo track) {
     return RemotePlaybackSourceFactory.cachedLocal(
@@ -3128,6 +3136,12 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     var index = -1;
     final queueEntryId = snapshot.queueEntryId;
     if (queueEntryId != null && queueEntryId.isNotEmpty) {
+      // Only the durable occurrence id can distinguish duplicate songs. A
+      // reorder still validates the item now occupying the current index.
+      if (_isCurrentRemoteQueueEntry(queueEntryId)) {
+        _markCurrentQueueIndexPlayed();
+        return false;
+      }
       for (var candidate = 0; candidate < _queue.length; candidate++) {
         if (_queue[candidate].remote != null &&
             _remoteQueueEntryId(candidate) == queueEntryId) {

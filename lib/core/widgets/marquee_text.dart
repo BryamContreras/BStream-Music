@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+
+import '../animation/frame_rate_ticker_provider.dart';
 
 /// A single-line title that scrolls only when it does not fit its bounds.
 ///
@@ -33,8 +36,8 @@ class MarqueeText extends StatefulWidget {
   State<MarqueeText> createState() => _MarqueeTextState();
 }
 
-class _MarqueeTextState extends State<MarqueeText>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+class _MarqueeTextState extends State<MarqueeText> with WidgetsBindingObserver {
+  final _vsync = FrameRateTickerProvider(maxFramesPerSecond: 30);
   AnimationController? _controller;
   Timer? _startTimer;
   ScrollNotificationObserverState? _scrollNotificationObserver;
@@ -52,8 +55,8 @@ class _MarqueeTextState extends State<MarqueeText>
 
   _MarqueeMotionPhase _phase = _MarqueeMotionPhase.atStart;
 
-  AnimationController get _animationController =>
-      _controller ??= AnimationController(vsync: this, duration: widget.travel);
+  AnimationController get _animationController => _controller ??=
+      AnimationController(vsync: _vsync, duration: widget.travel);
 
   @override
   void initState() {
@@ -77,6 +80,8 @@ class _MarqueeTextState extends State<MarqueeText>
     }
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
     _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    _vsync.setDisplayRefreshRate(View.of(context).display.refreshRate);
+    _vsync.enabled = _tickerEnabled && _appActive;
     _syncScrollObservation();
     _updateAnimationAvailability();
     if (_overflow > 0) _scheduleVisibilityCheck();
@@ -105,12 +110,14 @@ class _MarqueeTextState extends State<MarqueeText>
     }
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
+    _vsync.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
+    _vsync.enabled = _tickerEnabled && _appActive;
     _syncScrollObservation();
     _updateAnimationAvailability();
   }
@@ -286,10 +293,28 @@ class _MarqueeTextState extends State<MarqueeText>
           !renderObject.hasSize) {
         return;
       }
-      final topLeft = renderObject.localToGlobal(Offset.zero);
-      final bounds = topLeft & renderObject.size;
-      final viewport = Offset.zero & MediaQuery.sizeOf(context);
-      final visible = bounds.overlaps(viewport);
+      var bounds = MatrixUtils.transformRect(
+        renderObject.getTransformTo(null),
+        Offset.zero & renderObject.size,
+      ).intersect(Offset.zero & MediaQuery.sizeOf(context));
+      RenderObject child = renderObject;
+      var ancestor = child.parent;
+      while (ancestor != null && !bounds.isEmpty) {
+        if ((ancestor is RenderOffstage && ancestor.offstage) ||
+            (ancestor is RenderOpacity && ancestor.opacity == 0)) {
+          bounds = Rect.zero;
+          break;
+        }
+        final clip = ancestor.describeApproximatePaintClip(child);
+        if (clip != null) {
+          bounds = bounds.intersect(
+            MatrixUtils.transformRect(ancestor.getTransformTo(null), clip),
+          );
+        }
+        child = ancestor;
+        ancestor = ancestor.parent;
+      }
+      final visible = !bounds.isEmpty && bounds.width > 0 && bounds.height > 0;
       if (_viewportVisible != visible) {
         _viewportVisible = visible;
         _updateAnimationAvailability();

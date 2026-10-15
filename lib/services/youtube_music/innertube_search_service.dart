@@ -374,6 +374,7 @@ class InnerTubeSearchService
   static const int maxHomeSections = 6;
   static const int maxMoodGenreSections = 12;
   static const int maxMoodGenreCategoriesPerSection = 50;
+  static const int maxMoodGenrePageSections = 24;
   static const int _maxHomeContinuationRequests = 1;
   static const int maxDetailContinuationRequests = 4;
   static const int _artistDurationLookupConcurrency = 3;
@@ -710,6 +711,7 @@ class InnerTubeSearchService
     _validateHomeLimits(
       maxSections: maxSections,
       maxItemsPerSection: maxItemsPerSection,
+      sectionLimit: maxMoodGenrePageSections,
     );
     final normalizedTarget = _validateMoodGenreTarget(target);
     final payload = await _loadBrowsePayload(
@@ -733,6 +735,7 @@ class InnerTubeSearchService
     _validateHomeLimits(
       maxSections: maxSections,
       maxItemsPerSection: maxItemsPerSection,
+      sectionLimit: maxMoodGenrePageSections,
     );
     final normalizedContinuation = _validateContinuation(continuation);
     final payload = await _loadBrowsePayload(
@@ -788,6 +791,7 @@ class InnerTubeSearchService
         // title marks a fragment that belongs to the preceding shelf while
         // retaining its playable items for non-visual consumers.
         untitledSectionTitle: allowUntitledSections ? '' : null,
+        sectionLimit: maxMoodGenrePageSections,
       ),
       continuation: _validatedResponseContinuation(payload),
     );
@@ -1430,9 +1434,10 @@ class InnerTubeSearchService
   void _validateHomeLimits({
     required int maxSections,
     required int maxItemsPerSection,
+    int sectionLimit = maxHomeSections,
   }) {
-    if (maxSections < 1 || maxSections > maxHomeSections) {
-      throw RangeError.range(maxSections, 1, maxHomeSections, 'maxSections');
+    if (maxSections < 1 || maxSections > sectionLimit) {
+      throw RangeError.range(maxSections, 1, sectionLimit, 'maxSections');
     }
     if (maxItemsPerSection < 1 || maxItemsPerSection > maxResults) {
       throw RangeError.range(
@@ -4248,15 +4253,10 @@ class InnerTubeHomeParser {
     required Set<String> seenBrowseIds,
     required Set<String> seenArtistBrowseIds,
     String? untitledSectionTitle,
+    int sectionLimit = InnerTubeSearchService.maxHomeSections,
   }) {
-    if (maxSections < 1 ||
-        maxSections > InnerTubeSearchService.maxHomeSections) {
-      throw RangeError.range(
-        maxSections,
-        1,
-        InnerTubeSearchService.maxHomeSections,
-        'maxSections',
-      );
+    if (maxSections < 1 || maxSections > sectionLimit) {
+      throw RangeError.range(maxSections, 1, sectionLimit, 'maxSections');
     }
     if (maxItemsPerSection < 1 ||
         maxItemsPerSection > InnerTubeSearchService.maxResults) {

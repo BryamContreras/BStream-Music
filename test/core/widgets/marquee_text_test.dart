@@ -3,6 +3,52 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('stops text clipped by a nested horizontal viewport', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 140,
+            height: 80,
+            child: ScrollNotificationObserver(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    SizedBox(width: 250),
+                    SizedBox(
+                      width: 80,
+                      child: MarqueeText(
+                        'A very long hidden title',
+                        pause: Duration(milliseconds: 200),
+                        travel: Duration(seconds: 1),
+                      ),
+                    ),
+                    SizedBox(width: 400),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(_marqueeAnimating(tester), isFalse);
+    expect(_marqueeTranslation(tester), 0);
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(-250, 0),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 420));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(_marqueeTranslation(tester), lessThan(0));
+  });
   testWidgets('keeps short labels static and scrolls overflowing labels', (
     tester,
   ) async {
@@ -116,7 +162,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 70));
     await tester.pump(const Duration(milliseconds: 200));
     expect(_marqueeTranslation(tester), lessThan(0));
-    expect(tester.hasRunningAnimations, isTrue);
+    expect(_marqueeAnimating(tester), isTrue);
 
     await tester.pump(const Duration(milliseconds: 300));
     final endPosition = _marqueeTranslation(tester);
@@ -129,7 +175,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 70));
     await tester.pump(const Duration(milliseconds: 100));
     expect(_marqueeTranslation(tester), greaterThan(endPosition));
-    expect(tester.hasRunningAnimations, isTrue);
+    expect(_marqueeAnimating(tester), isTrue);
   });
 
   testWidgets('stops offscreen and resumes after scrolling into view', (
@@ -253,6 +299,9 @@ void main() {
     expect(_marqueeTranslation(tester), lessThan(0));
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    // A bounded clock no longer leaves a pending frame when backgrounded.
+    // Force this test-only paint to inspect the reset pose while suspended.
+    tester.binding.scheduleForcedFrame();
     await tester.pump();
     expect(_marqueeTranslation(tester), 0);
     await tester.pump(const Duration(milliseconds: 400));
@@ -273,3 +322,12 @@ double _marqueeTranslation(WidgetTester tester) {
   );
   return tester.widget<Transform>(transform).transform.getTranslation().x;
 }
+
+bool _marqueeAnimating(WidgetTester tester) =>
+    (tester
+                .widget<AnimatedBuilder>(
+                  find.byKey(const ValueKey('marquee-text-animation')),
+                )
+                .animation
+            as AnimationController)
+        .isAnimating;

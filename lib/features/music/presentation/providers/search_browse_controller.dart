@@ -44,6 +44,57 @@ final class SearchBrowseCatalog {
   final bool usesLiveYouTubeMusicCategories;
 }
 
+final searchBrowseCatalogCacheProvider = Provider<SearchBrowseCatalogCache>(
+  (ref) => const SharedPreferencesSearchBrowseCatalogCache(),
+);
+
+final searchBrowseCachedCatalogProvider = FutureProvider<SearchBrowseCatalog?>((
+  ref,
+) async {
+  final strings = ref.watch(appStringsProvider);
+  final snapshot = await ref
+      .watch(searchBrowseCatalogCacheProvider)
+      .read(strings.appLanguage.code);
+  if (!ref.mounted || snapshot == null) return null;
+  return _searchBrowseCatalogFromSnapshot(snapshot);
+});
+
+SearchBrowseCatalogSnapshot _searchBrowseCatalogSnapshot(
+  SearchBrowseCatalog catalog,
+) => SearchBrowseCatalogSnapshot(
+  usesLiveYouTubeMusicCategories: catalog.usesLiveYouTubeMusicCategories,
+  categories: [
+    for (final category in catalog.categories)
+      SearchBrowseCategorySnapshot(
+        id: category.id,
+        title: category.title,
+        searchQuery: category.searchQuery,
+        browseId: category.target?.browseId,
+        params: category.target?.params,
+      ),
+  ],
+);
+
+SearchBrowseCatalog _searchBrowseCatalogFromSnapshot(
+  SearchBrowseCatalogSnapshot snapshot,
+) => SearchBrowseCatalog(
+  usesLiveYouTubeMusicCategories: snapshot.usesLiveYouTubeMusicCategories,
+  categories: [
+    for (final category in snapshot.categories)
+      SearchBrowseCategory(
+        id: category.id,
+        title: category.title,
+        searchQuery: category.searchQuery,
+        target: category.browseId == null
+            ? null
+            : InnerTubeBrowseTarget(
+                browseId: category.browseId!,
+                params: category.params ?? '',
+              ),
+      ),
+  ],
+);
+
 /// Always-available categories used while YouTube Music is loading and when
 /// its private browse layout changes or the device is offline.
 List<SearchBrowseCategory> fallbackSearchBrowseCategories(AppStrings strings) {
@@ -107,24 +158,33 @@ List<SearchBrowseCategory> fallbackSearchBrowseCategories(AppStrings strings) {
   ]);
 }
 
-/// Localized browse cards from YouTube Music, merged with curated fallbacks so
-/// Search remains useful if the server returns only a very small regional set.
+/// Keep YouTube's actual catalog and order. Local search categories are only a
+/// recovery path when discovery is unavailable, not additions to a valid page.
 final searchBrowseCatalogProvider = FutureProvider<SearchBrowseCatalog>((
   ref,
 ) async {
   final strings = ref.watch(appStringsProvider);
   final fallback = fallbackSearchBrowseCategories(strings);
   final search = ref.watch(youtubeMusicSearchProvider);
+  final cachedCatalog = await ref
+      .read(searchBrowseCatalogCacheProvider)
+      .read(strings.appLanguage.code);
   if (search is! YouTubeMusicMoodsAndGenres) {
-    return SearchBrowseCatalog(
-      categories: fallback,
-      usesLiveYouTubeMusicCategories: false,
-    );
+    return cachedCatalog == null
+        ? SearchBrowseCatalog(
+            categories: fallback,
+            usesLiveYouTubeMusicCategories: false,
+          )
+        : _searchBrowseCatalogFromSnapshot(cachedCatalog);
   }
 
   try {
     final sections = await (search as YouTubeMusicMoodsAndGenres)
-        .getMoodsAndGenres(maxSections: 8, maxCategoriesPerSection: 24);
+        .getMoodsAndGenres(
+          maxSections: InnerTubeSearchService.maxMoodGenreSections,
+          maxCategoriesPerSection:
+              InnerTubeSearchService.maxMoodGenreCategoriesPerSection,
+        );
     final liveCategories = <SearchBrowseCategory>[];
     final seenTargets = <String>{};
     final seenTitles = <String>{};
@@ -148,33 +208,185 @@ final searchBrowseCatalogProvider = FutureProvider<SearchBrowseCatalog>((
       }
     }
     if (liveCategories.isEmpty) {
-      return SearchBrowseCatalog(
-        categories: fallback,
-        usesLiveYouTubeMusicCategories: false,
-      );
+      return cachedCatalog == null
+          ? SearchBrowseCatalog(
+              categories: fallback,
+              usesLiveYouTubeMusicCategories: false,
+            )
+          : _searchBrowseCatalogFromSnapshot(cachedCatalog);
     }
 
-    // Retain the regional YouTube order, then fill recognizable evergreen
-    // categories that may be absent from a sparse or experimental response.
-    for (final category in fallback) {
-      if (liveCategories.length >= 24) break;
-      if (seenTitles.add(_normalizedBrowseCategoryTitle(category.title))) {
-        liveCategories.add(category);
-      }
-    }
-    return SearchBrowseCatalog(
-      categories: liveCategories.take(24).toList(growable: false),
+    final catalog = SearchBrowseCatalog(
+      categories: liveCategories,
       usesLiveYouTubeMusicCategories: true,
     );
+    if (ref.mounted) {
+      await ref
+          .read(searchBrowseCatalogCacheProvider)
+          .write(
+            strings.appLanguage.code,
+            _searchBrowseCatalogSnapshot(catalog),
+          );
+    }
+    return catalog;
   } catch (error, stackTrace) {
     debugPrint('YouTube Music browse categories unavailable: $error');
     debugPrintStack(stackTrace: stackTrace);
-    return SearchBrowseCatalog(
-      categories: fallback,
-      usesLiveYouTubeMusicCategories: false,
-    );
+    return cachedCatalog == null
+        ? SearchBrowseCatalog(
+            categories: fallback,
+            usesLiveYouTubeMusicCategories: false,
+          )
+        : _searchBrowseCatalogFromSnapshot(cachedCatalog);
   }
 });
+
+/// Share the original shelves between the landing-card artwork and its detail
+/// route. Browsing never expands several playlists or resolves song durations.
+final searchBrowseCategoryPageProvider = FutureProvider.autoDispose
+    .family<InnerTubeMoodGenrePage, SearchBrowseCategory>((
+      ref,
+      category,
+    ) async {
+      final search = ref.watch(youtubeMusicSearchProvider);
+      final strings = ref.watch(appStringsProvider);
+      final requests = ref.watch(_searchBrowseRequestsProvider);
+      final page = await requests.run(() async {
+        final target = category.target;
+        if (target != null && search is YouTubeMusicMoodsAndGenres) {
+          return (search as YouTubeMusicMoodsAndGenres).getMoodOrGenre(
+            target,
+            maxSections: InnerTubeSearchService.maxMoodGenrePageSections,
+          );
+        }
+        final tracks = await ref
+            .read(remoteMusicDataSourceProvider)
+            .searchCategory(category.searchQuery, SearchCategory.songs);
+        return InnerTubeMoodGenrePage(
+          sections: [
+            if (tracks.tracks.isNotEmpty)
+              InnerTubeHomeSection(
+                title: strings.searchSongs,
+                songs: tracks.tracks
+                    .map(
+                      (track) => InnerTubeSong(
+                        videoId: track.id,
+                        title: track.title,
+                        artists: track.artists.isEmpty
+                            ? [track.artist]
+                            : track.artists,
+                        thumbnailUrl:
+                            track.catalogThumbnailUrl ?? track.thumbnailUrl,
+                        duration: track.duration,
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+          ],
+        );
+      }, isActive: () => ref.mounted);
+      if (ref.mounted && page != null) _retainRemoteDetailTracks(ref);
+      return page ?? InnerTubeMoodGenrePage(sections: const []);
+    }, retry: (_, _) => null);
+
+final searchBrowseCategoryContinuationProvider = FutureProvider.autoDispose
+    .family<InnerTubeMoodGenrePage, String>((ref, continuation) async {
+      final search = ref.watch(youtubeMusicSearchProvider);
+      if (search is! YouTubeMusicMoodsAndGenres) {
+        return InnerTubeMoodGenrePage(sections: const []);
+      }
+      final page = await (search as YouTubeMusicMoodsAndGenres)
+          .getMoodOrGenreContinuation(
+            continuation,
+            maxSections: InnerTubeSearchService.maxMoodGenrePageSections,
+          );
+      if (ref.mounted) _retainRemoteDetailTracks(ref);
+      return page;
+    }, retry: (_, _) => null);
+
+final searchBrowseCategoryArtworkCacheProvider =
+    Provider<SearchBrowseCategoryArtworkCache>(
+      (ref) => const SharedPreferencesSearchBrowseCategoryArtworkCache(),
+    );
+
+/// One small cover per visible category. If its first item is a playlist, only
+/// its first song is requested. Failed covers leave the category colors intact.
+final searchBrowseCategoryArtworkProvider = FutureProvider.autoDispose
+    .family<String?, SearchBrowseCategory>((ref, category) async {
+      final search = ref.watch(youtubeMusicSearchProvider);
+      final page = await ref.watch(
+        searchBrowseCategoryPageProvider(category).future,
+      );
+      if (!ref.mounted) return null;
+      final first = page.sections
+          .expand((section) => section.items)
+          .firstOrNull;
+      String? artwork;
+      if (first is InnerTubeHomeSongItem) {
+        artwork = first.song.thumbnailUrl;
+      } else if (first is InnerTubeHomeCollection) {
+        artwork = first.thumbnailUrl;
+        if (search is YouTubeMusicCollectionLookup) {
+          try {
+            final songs = await ref
+                .read(_searchBrowseRequestsProvider)
+                .run(
+                  () => (search as YouTubeMusicCollectionLookup)
+                      .getCollectionSongs(first.browseId, limit: 1),
+                  isActive: () => ref.mounted,
+                );
+            artwork = songs?.firstOrNull?.thumbnailUrl ?? artwork;
+          } catch (_) {
+            // The playlist's advertised image remains a valid fallback.
+          }
+        }
+      } else if (first is InnerTubeHomeArtistItem) {
+        artwork = first.artist.thumbnailUrl;
+      }
+      if (ref.mounted) {
+        _retainRemoteDetailTracks(ref);
+        if (artwork != null) {
+          await ref
+              .read(searchBrowseCategoryArtworkCacheProvider)
+              .write(category.id, artwork);
+        }
+      }
+      return artwork;
+    }, retry: (_, _) => null);
+
+final _searchBrowseRequestsProvider = Provider(
+  (ref) => _SearchBrowseRequests(),
+);
+
+/// Bound discovery work even on a wide grid. Disposed/offscreen cards drop
+/// queued work before it reaches the network; there are no periodic refreshes.
+class _SearchBrowseRequests {
+  final _waiting = Queue<Completer<void>>();
+  int _active = 0;
+
+  Future<T?> run<T>(
+    Future<T> Function() action, {
+    required bool Function() isActive,
+  }) async {
+    if (_active >= 2) {
+      final ready = Completer<void>();
+      _waiting.add(ready);
+      await ready.future;
+    } else {
+      _active++;
+    }
+    try {
+      if (!isActive()) return null;
+      return await action();
+    } finally {
+      if (_waiting.isEmpty) {
+        _active--;
+      } else {
+        _waiting.removeFirst().complete();
+      }
+    }
+  }
+}
 
 /// Song queue behind one Search browse card.
 ///

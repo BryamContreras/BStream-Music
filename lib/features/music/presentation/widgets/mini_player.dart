@@ -20,6 +20,7 @@ import '../../domain/entities/local_track.dart';
 import '../providers/music_providers.dart';
 import '../providers/playback_visual_cache_provider.dart';
 import 'favorite_star_badge.dart';
+import 'decorative_progress_transition.dart';
 import 'playback_progress_line.dart';
 import 'playlist_artwork.dart';
 import 'source_image.dart';
@@ -1377,6 +1378,7 @@ class _MiniProgressState extends ConsumerState<_MiniProgress> {
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
+          isPlaying: snapshot?.status == PlayerStatus.playing,
         );
       }),
     );
@@ -1394,6 +1396,7 @@ class _MiniProgressState extends ConsumerState<_MiniProgress> {
       final line = PlaybackProgressLine(
         value: progress,
         color: progressColor,
+        animateProgress: timeline.isPlaying,
         height: widget.height,
         colorAnimationKey: const ValueKey('mini-progress-color-animation'),
         fillKey: const ValueKey('mini-progress-fill'),
@@ -1647,29 +1650,34 @@ class _MiniArtworkProgressRing extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final progress = ref.watch(
+    final timeline = ref.watch(
       playerControllerProvider.select((player) {
         final snapshot = player.value;
-        return miniArtworkRingProgress(
-          snapshot?.position ?? Duration.zero,
-          snapshot?.duration,
+        return (
+          progress: miniArtworkRingProgress(
+            snapshot?.position ?? Duration.zero,
+            snapshot?.duration,
+          ),
+          isPlaying: snapshot?.status == PlayerStatus.playing,
         );
       }),
     );
-    return TweenAnimationBuilder<double>(
-      key: const ValueKey('mini-player-artwork-progress-animation'),
-      tween: Tween<double>(end: progress),
-      duration: const Duration(milliseconds: 160),
-      curve: Curves.easeOutCubic,
-      builder: (context, animatedProgress, _) => CircularProgressIndicator(
-        key: const ValueKey('mini-player-artwork-progress-ring'),
-        value: animatedProgress,
-        strokeWidth: 2,
-        strokeCap: StrokeCap.round,
-        color: AppColors.downloadAccentFor(context),
-        backgroundColor: AppColors.menuInactiveSliderFor(
-          context,
-        ).withValues(alpha: 0.55),
+    return RepaintBoundary(
+      child: DecorativeProgressTransition(
+        key: const ValueKey('mini-player-artwork-progress-animation'),
+        value: timeline.progress,
+        animateProgress: timeline.isPlaying,
+        duration: const Duration(milliseconds: 160),
+        builder: (context, animatedProgress, _) => CircularProgressIndicator(
+          key: const ValueKey('mini-player-artwork-progress-ring'),
+          value: animatedProgress,
+          strokeWidth: 2,
+          strokeCap: StrokeCap.round,
+          color: AppColors.downloadAccentFor(context),
+          backgroundColor: AppColors.menuInactiveSliderFor(
+            context,
+          ).withValues(alpha: 0.55),
+        ),
       ),
     );
   }

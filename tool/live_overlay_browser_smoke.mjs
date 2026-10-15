@@ -147,6 +147,50 @@ try {
       parent: card.querySelector('.playback').parentElement.className };
   })()`);
 
+  const measureCards = () => cdp.evaluate(`(() => {
+    const rect = node => node.getBoundingClientRect().toJSON();
+    return [...document.querySelectorAll('.track:not(.leaving)')].map(card => {
+      const details = card.querySelector('.details');
+      return {
+        card: rect(card), cover: rect(card.querySelector('.artwork')),
+        details: rect(details),
+        metadata: [...details.querySelectorAll('.title-row, .artist')].map(rect),
+        // scrollHeight includes the intentionally oversized blurred ::before
+        // background. Measure text ranges instead to detect actual clipping.
+        text: [...card.querySelectorAll('.title, .artist, .elapsed, .duration')].map(node => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          return { bounds: range.getBoundingClientRect().toJSON(),
+            inMetadata: node.matches('.title, .artist') };
+        }),
+        times: card.querySelector('.time-row') ? rect(card.querySelector('.time-row')) : null,
+      };
+    });
+  })()`);
+
+  function assertCardsFit(cards, width, style) {
+    const inside = (inner, outer) => inner.top >= outer.top - 1 &&
+      inner.bottom <= outer.bottom + 1 && inner.left >= outer.left - 1 &&
+      inner.right <= outer.right + 1;
+    cards.forEach((layout, index) => {
+      const label = `${style} card ${index} at ${width}px`;
+      assert.ok(inside(layout.cover, layout.card), `Cover outside card: ${label}`);
+      assert.ok(inside(layout.details, layout.card), `Details outside card: ${label}`);
+      layout.metadata.forEach(bounds => {
+        assert.ok(inside(bounds, layout.details), `Metadata outside panel: ${label}`);
+      });
+      layout.text.forEach(text => {
+        const panel = style === 'wave' && index === 0 && text.inMetadata
+          ? layout.details : layout.card;
+        assert.ok(text.bounds.top >= panel.top - 1 && text.bounds.bottom <= panel.bottom + 1,
+          `Vertically clipped text: ${label}`);
+      });
+      if (layout.times) assert.ok(inside(layout.times, layout.card), `Times outside card: ${label}`);
+      assert.ok(layout.card.top >= 0 && layout.card.bottom <= 760 &&
+        layout.card.left >= 0 && layout.card.right <= width, `Card outside canvas: ${label}`);
+    });
+  }
+
   for (const width of [1280, 900, 560, 400, 320]) {
     await viewport(width);
     await settle();
@@ -195,6 +239,23 @@ try {
   assert.equal(classic.parent, 'details');
   assert.equal(await cdp.evaluate('window.__card === document.querySelector(".current")'), true, 'Style switch replaced the card');
   await screenshot('live-widget-classic.png');
+
+  // The Settings scene is rendered by Flutter, but the real widget uses CSS.
+  // Check the content inside every browser card, not just the scene's bounds:
+  // overflow:hidden can otherwise conceal vertical clipping in compact cards.
+  const longItems = await cdp.evaluate(`window.__base.items.map(item => ({...item,
+    title: '16bitガール (Full Size) — Tu canción favorita con un título muy largo',
+    artist: 'Kurumi Tokisaki (CV: Asami Sanada), BStream Music y otros artistas'
+  }))`);
+  for (const style of ['classic', 'wave']) {
+    for (const width of [1280, 900, 560, 400, 320]) {
+      await viewport(width);
+      await render({ style, items: longItems });
+      await settle();
+      assertCardsFit(await measureCards(), width, style);
+    }
+  }
+  await viewport(1280);
   await render({ style: '<script>', accent: { seed: 'url(invalid)', dark: 'invalid' } });
   assert.equal((await measure()).style, 'classic');
   assert.equal(await cdp.evaluate('getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()'), '#f5f7f5');
@@ -204,7 +265,7 @@ try {
   assert.equal(await cdp.evaluate('document.querySelectorAll(".playback").length'), 1);
   assert.equal((await measure()).animation, 'paused', 'A ready song should not animate');
   assert.deepEqual(cdp.exceptions, [], 'Browser reported a JavaScript exception');
-  console.log('LIVE overlay browser smoke passed: both styles, 5 viewport sizes, transparency, accent, progress, pause, reduced motion, visibility, and queue transitions.');
+  console.log('LIVE overlay browser smoke passed: both styles, 5 viewport sizes, all card contents, long multilingual metadata, transparency, accent, progress, pause, reduced motion, visibility, and queue transitions.');
 } finally {
   if (cdp) {
     await cdp.send('Browser.close').catch(() => {});

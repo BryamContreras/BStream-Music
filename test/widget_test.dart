@@ -31,6 +31,7 @@ import 'package:bstream_music/features/music/presentation/pages/home_page.dart';
 import 'package:bstream_music/features/music/presentation/pages/search_view.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/download_progress_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/decorative_progress_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/gradient_progress_bar.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_page_transition.dart';
@@ -4229,11 +4230,11 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
-      148,
+      156,
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-      200,
+      202,
     );
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     final recentCard = find.byKey(const ValueKey('home-recent-card'));
@@ -4383,11 +4384,11 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
-      176,
+      186,
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-      228,
+      232,
     );
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -7870,13 +7871,14 @@ void main() {
     final miniProgressRingFinder = find.byKey(
       const ValueKey('mini-player-artwork-progress-ring'),
     );
-    final miniProgressAnimation = tester.widget<TweenAnimationBuilder<double>>(
+    final miniProgressAnimation = tester.widget<DecorativeProgressTransition>(
       miniProgressAnimationFinder,
     );
     final miniProgressRing = tester.widget<CircularProgressIndicator>(
       miniProgressRingFinder,
     );
-    expect(miniProgressAnimation.tween.end, closeTo(0.25, 0.0001));
+    expect(miniProgressAnimation.value, closeTo(0.25, 0.0001));
+    expect(miniProgressAnimation.duration, const Duration(milliseconds: 160));
     expect(miniProgressRing.value, closeTo(0.25, 0.0001));
     expect(miniProgressRing.color, miniProgressAccent);
     expect(miniProgressRing.strokeWidth, 2);
@@ -8502,11 +8504,12 @@ void main() {
       expect(find.text('No hay canciones en la cola actual.'), findsNothing);
 
       await tester.tap(find.byIcon(Icons.more_vert_rounded));
+      await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Control de Volumen'), findsNothing);
-      Navigator.of(
-        tester.element(find.byType(PopupMenuItem<String>).first),
-      ).pop();
+      expect(find.byKey(const ValueKey('player-options-menu')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('player-options-close')));
+      await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
       await tester.tap(find.byTooltip('Volumen'));

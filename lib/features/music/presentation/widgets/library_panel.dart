@@ -1588,6 +1588,7 @@ class _CatalogTrackListView extends ConsumerWidget {
       surfaceKey: const ValueKey('library-detail-header-surface'),
       pinnedFooterSurfaceKey: const ValueKey('library-filter-region-surface'),
       pinnedFooterHasOwnSurface: true,
+      hidePinnedFooterOnScroll: true,
       scrollKey: const ValueKey('library-catalog-track-scroll'),
       header: _DetailHeader(
         key: const ValueKey('library-detail-header'),
@@ -2115,6 +2116,7 @@ class _TrackListView extends ConsumerWidget {
       ),
       pinnedFooterSurfaceKey: const ValueKey('library-filter-region-surface'),
       pinnedFooterHasOwnSurface: true,
+      hidePinnedFooterOnScroll: true,
       scrollKey: const ValueKey('library-track-scroll'),
       header: AnimatedSwitcher(
         duration: const Duration(milliseconds: 180),

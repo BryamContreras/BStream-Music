@@ -2200,6 +2200,42 @@ void main() {
     );
 
     test(
+      'category pages retain more shelves than the Home discovery limit',
+      () async {
+        transport.responses.add(
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(
+              _homePayload([
+                for (var index = 0; index < 10; index++)
+                  _homeCarousel(
+                    title: 'Sección $index',
+                    items: [
+                      _collectionRenderer(
+                        title: 'Playlist $index',
+                        browseId: 'VLPLcategory$index',
+                        playlistId: 'PLcategory$index',
+                      ),
+                    ],
+                  ),
+              ]),
+            ),
+          ),
+        );
+        final page = await createService().getMoodOrGenre(
+          const InnerTubeBrowseTarget(
+            browseId: 'FEmusic_moods_and_genres_category',
+            params: 'focus',
+          ),
+          maxSections: InnerTubeSearchService.maxMoodGenrePageSections,
+        );
+        expect(page.sections, hasLength(10));
+        expect(page.sections.last.title, 'Sección 9');
+        expect(transport.requests, hasLength(1));
+      },
+    );
+
+    test(
       'category detail sends opaque params and continuation sends only its token',
       () async {
         transport.responses.addAll([

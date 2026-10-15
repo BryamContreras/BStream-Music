@@ -49,6 +49,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        testInstrumentationRunner = "com.bstream.bstream_music.WidgetLayoutInstrumentation"
         if (!splitPerAbi) {
             ndk {
                 abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
@@ -98,5 +99,7 @@ flutter {
 }
 
 dependencies {
+    implementation("androidx.mediarouter:mediarouter:1.8.1")
+    implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
     testImplementation(kotlin("test"))
 }

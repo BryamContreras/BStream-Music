@@ -74,12 +74,37 @@ class PlayerPlaybackGradientBackground extends ConsumerWidget {
         (player) => player.value?.thumbnailUrl?.trim(),
       ),
     );
+    return PlaybackArtworkBackdrop(source: source);
+  }
+}
+
+/// Shared photographic background for the player and its menus. Blur and
+/// overlays use one recipe; the menu may reuse a small decoded cover because
+/// no sharp artwork is shown in its background.
+class PlaybackArtworkBackdrop extends StatelessWidget {
+  const PlaybackArtworkBackdrop({
+    required this.source,
+    this.fallbackSource,
+    this.cacheWidth = 1280,
+    this.additionalScrimAlpha = 0,
+    super.key,
+  });
+
+  final String? source;
+  final String? fallbackSource;
+  final int cacheWidth;
+  final double additionalScrimAlpha;
+
+  @override
+  Widget build(BuildContext context) {
     return RepaintBoundary(
       child: Stack(
         fit: StackFit.expand,
         children: [
           _AnimatedPlaybackArtwork(
             source: source,
+            fallbackSource: fallbackSource,
+            cacheWidth: cacheWidth,
             scale: 1.28,
             fallback: const _PlayerBackgroundFallback(),
           ),
@@ -93,6 +118,10 @@ class PlayerPlaybackGradientBackground extends ConsumerWidget {
               ),
             ),
           ),
+          if (additionalScrimAlpha > 0)
+            ColoredBox(
+              color: Colors.black.withValues(alpha: additionalScrimAlpha),
+            ),
         ],
       ),
     );
@@ -145,9 +174,13 @@ class _AnimatedPlaybackArtwork extends StatefulWidget {
     required this.source,
     required this.scale,
     required this.fallback,
+    required this.fallbackSource,
+    required this.cacheWidth,
   });
 
   final String? source;
+  final String? fallbackSource;
+  final int cacheWidth;
   final double scale;
   final Widget fallback;
 
@@ -206,6 +239,8 @@ class _AnimatedPlaybackArtworkState extends State<_AnimatedPlaybackArtwork> {
                     scale: widget.scale,
                     child: _PlaybackBackgroundImage(
                       source: source,
+                      fallbackSource: widget.fallbackSource,
+                      cacheWidth: widget.cacheWidth,
                       fallback: widget.fallback,
                     ),
                   ),
@@ -220,14 +255,24 @@ class _PlaybackBackgroundImage extends StatelessWidget {
   const _PlaybackBackgroundImage({
     required this.source,
     required this.fallback,
+    required this.fallbackSource,
+    required this.cacheWidth,
   });
 
   final String source;
+  final String? fallbackSource;
+  final int cacheWidth;
   final Widget fallback;
 
   @override
   Widget build(BuildContext context) {
-    return SourceImage(source: source, fit: BoxFit.cover, fallback: fallback);
+    return SourceImage(
+      source: source,
+      fallbackSource: fallbackSource,
+      cacheWidth: cacheWidth,
+      fit: BoxFit.cover,
+      fallback: fallback,
+    );
   }
 }
 

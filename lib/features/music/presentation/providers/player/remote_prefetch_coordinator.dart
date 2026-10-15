@@ -37,6 +37,7 @@ class RemotePrefetchPlan {
       entry.queueEntryId,
       PlaybackIdentity.remoteTrack(entry.track),
     ],
+    for (final track in cacheWindow) PlaybackIdentity.remoteTrack(track),
   ].join('\u0000');
 }
 
@@ -156,18 +157,38 @@ abstract final class RemotePrefetchPlanner {
 /// single authority deciding whether an asynchronous prefetch still belongs
 /// to the active logical queue window.
 class RemotePrefetchCoordinator {
+  RemotePrefetchCoordinator({DateTime Function()? clock})
+    : _clock = clock ?? DateTime.now;
+
+  final DateTime Function() _clock;
   String? _signature;
+  String? _failedSignature;
+  DateTime? _retryAfter;
+  int _failureCount = 0;
   Future<void> _serviceMutationTail = Future<void>.value();
 
   String? get signature => _signature;
 
   void invalidate() {
     _signature = null;
+    _failedSignature = null;
+    _retryAfter = null;
+    _failureCount = 0;
   }
 
   bool begin(String signature) {
     if (_signature == signature) {
       return false;
+    }
+    if (_failedSignature == signature &&
+        _retryAfter != null &&
+        _clock().isBefore(_retryAfter!)) {
+      return false;
+    }
+    if (_failedSignature != signature) {
+      _failureCount = 0;
+      _failedSignature = null;
+      _retryAfter = null;
     }
     _signature = signature;
     return true;
@@ -178,6 +199,11 @@ class RemotePrefetchCoordinator {
   void invalidateIfCurrent(String signature) {
     if (_signature == signature) {
       _signature = null;
+      _failedSignature = signature;
+      _failureCount = (_failureCount + 1).clamp(1, 5);
+      _retryAfter = _clock().add(
+        Duration(seconds: (5 * (1 << (_failureCount - 1))).clamp(5, 60)),
+      );
     }
   }
 
@@ -207,6 +233,11 @@ class RemotePrefetchCoordinator {
       return;
     }
 
+    final activeSignature = plan.signature;
+    if (!begin(activeSignature)) {
+      return;
+    }
+
     // Protection and cancellation happen synchronously inside the cache.
     unawaited(retainOnlyTracks(plan.cacheWindow));
     if (!isCurrent()) {
@@ -221,10 +252,6 @@ class RemotePrefetchCoordinator {
             ? (source) =>
                   (service as CrossfadeCapablePlayer).prepareCrossfade(source)
             : null);
-    final activeSignature = plan.signature;
-    if (!begin(activeSignature)) {
-      return;
-    }
     bool current() => isCurrent() && this.isCurrent(activeSignature);
 
     if (plan.upcoming.isEmpty) {
@@ -242,7 +269,7 @@ class RemotePrefetchCoordinator {
 
     var completed = true;
     final preparedSources = <RemotePlaybackSource>[];
-    final warmups = <({int sourceIndex, Future<File?> future})>[];
+    final warmups = <({int sourceIndex, TrackInfo track})>[];
     for (final entry in plan.upcoming) {
       try {
         final existing = await cachedFile(entry.track);
@@ -262,10 +289,7 @@ class RemotePrefetchCoordinator {
             return;
           }
           source = networkSource(resolved, entry.index);
-          warmups.add((
-            sourceIndex: preparedSources.length,
-            future: warmResolved(resolved),
-          ));
+          warmups.add((sourceIndex: preparedSources.length, track: resolved));
         }
         preparedSources.add(source);
         onSourcePrepared?.call(source);
@@ -312,7 +336,10 @@ class RemotePrefetchCoordinator {
 
     for (final warmup in warmups) {
       try {
-        final cached = await warmup.future;
+        if (!current()) return;
+        // Fill the immediate next song first. Do not start three full transfers
+        // while the audible track is also trying to buffer on the same link.
+        final cached = await warmResolved(warmup.track);
         if (!current()) {
           return;
         }
@@ -346,6 +373,10 @@ class RemotePrefetchCoordinator {
         await _mutateServiceIfCurrent(current, () => crossfadePreparer(null));
       }
       invalidateIfCurrent(activeSignature);
+    } else if (completed && current()) {
+      _failedSignature = null;
+      _retryAfter = null;
+      _failureCount = 0;
     }
   }
 
