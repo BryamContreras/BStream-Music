@@ -1,5 +1,11 @@
 # BStream Music
 
+![Flutter 3.47.2](https://img.shields.io/badge/Flutter-3.47.2-02569B?logo=flutter&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20Linux%20%7C%20macOS-blue)
+![Version](https://img.shields.io/badge/version-1.2.9%2B129-brightgreen)
+![Build](https://github.com/BryamContreras/BStream-Music/actions/workflows/desktop-builds.yml/badge.svg?branch=main)
+![License](https://img.shields.io/badge/license-BSD--2--Clause-green)
+
 BStream Music is a cross-platform music player and library manager built with Flutter. It lets you search for music, play and download tracks, organize a local library, and manage playlists on Android, iOS, Windows, Linux, and macOS.
 
 Current version: **1.2.9+129**.
