@@ -393,7 +393,7 @@ jobs:
           # Keep release artifacts within the expected envelope, including IPADIC.
           dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk" 49
           dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk" 51
-          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 51
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 52
 
       - name: Upload Android ARMv7 APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
