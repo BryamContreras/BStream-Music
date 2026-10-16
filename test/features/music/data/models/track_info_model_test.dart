@@ -42,6 +42,8 @@ void main() {
       thumbnailUrl: 'https://i.ytimg.com/vi/DlFXDl_ROAM/hq720.jpg',
       catalogThumbnailUrl: 'https://music.example/catalog-artwork.jpg',
       streamClientProfileKey: 'webMusic',
+      streamSampleRate: 48000,
+      streamChannels: 2,
       url: 'https://www.youtube.com/watch?v=DlFXDl_ROAM',
       metadataSource: TrackMetadataSource.youtubeMusic,
     ).toJson();
@@ -57,12 +59,89 @@ void main() {
     expect(encoded['album_browse_id'], 'MPREmayhem001');
     expect(track.streamClientProfileKey, 'webMusic');
     expect(encoded['stream_client_profile_key'], 'webMusic');
+    expect(track.streamSampleRate, 48000);
+    expect(track.streamChannels, 2);
+    expect(encoded['stream_sample_rate'], 48000);
+    expect(encoded['stream_channels'], 2);
     expect(track.duration, const Duration(minutes: 4, seconds: 12));
     expect(
       track.catalogThumbnailUrl,
       'https://music.example/catalog-artwork.jpg',
     );
     expect(track.metadataSource, TrackMetadataSource.youtubeMusic);
+  });
+
+  test(
+    'selected format supplies sample rate and channels, not another format',
+    () {
+      final track = TrackInfoModel.fromJson({
+        'id': 'stream-facts',
+        'title': 'Track',
+        'artist': 'Artist',
+        'asr': 96000,
+        'audio_channels': 6,
+        'requested_formats': [
+          {
+            'url': 'https://example.com/audio.webm',
+            'ext': 'webm',
+            'vcodec': 'none',
+            'acodec': 'opus',
+            'asr': '48000',
+            'audio_channels': 2,
+          },
+        ],
+      });
+      expect(track.streamSampleRate, 48000);
+      expect(track.streamChannels, 2);
+    },
+  );
+
+  test('missing or malformed selected-stream properties stay unknown', () {
+    for (final value in [null, 0, -1, 'unknown', double.infinity]) {
+      final track = TrackInfoModel.fromJson({
+        'id': 'stream-facts',
+        'title': 'Track',
+        'artist': 'Artist',
+        'stream_sample_rate': value,
+        'stream_channels': value,
+      });
+      expect(track.streamSampleRate, isNull);
+      expect(track.streamChannels, isNull);
+    }
+    final selectedWithoutFacts = TrackInfoModel.fromJson({
+      'id': 'stream-facts',
+      'asr': 96000,
+      'audio_channels': 6,
+      'requested_formats': [
+        {
+          'url': 'https://example.com/audio.m4a',
+          'vcodec': 'none',
+          'acodec': 'aac',
+        },
+      ],
+    });
+    expect(selectedWithoutFacts.streamSampleRate, isNull);
+    expect(selectedWithoutFacts.streamChannels, isNull);
+  });
+
+  test('metadata copies preserve sample rate and channels', () {
+    const original = TrackInfo(
+      id: 'track',
+      title: 'Track',
+      artist: 'Artist',
+      url: 'https://example.com/track',
+      streamSampleRate: 48000,
+      streamChannels: 2,
+    );
+    final updated = original.copyWith(title: 'New catalog title');
+    expect(updated.streamSampleRate, 48000);
+    expect(updated.streamChannels, 2);
+    final replaced = updated.copyWith(
+      streamSampleRate: 44100,
+      streamChannels: 1,
+    );
+    expect(replaced.streamSampleRate, 44100);
+    expect(replaced.streamChannels, 1);
   });
 
   test('keeps search result webpage URLs out of streamUrl', () {

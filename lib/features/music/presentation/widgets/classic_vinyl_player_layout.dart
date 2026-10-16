@@ -254,18 +254,20 @@ class _ClassicVinylPlayerLayout extends StatelessWidget {
             final deck = SizedBox.square(
               key: const ValueKey('classic-vinyl-player-deck-slot'),
               dimension: deckExtent,
-              child: _ClassicVinylPlaybackDeck(
-                artworkSource: artworkSource,
-                artworkFallbackSource: artworkFallbackSource,
-                visualIdentity: visualIdentity,
-                isPlaying: snapshot.status == PlayerStatus.playing,
-                animationEnabled: animatedArtworkEnabled,
-                canvasUrl: canvasUrl,
-                videoStartOffset: videoStartOffset,
-                videoDurationHint: videoDurationHint,
-                trackTransitionsEnabled: trackTransitionsEnabled,
-                expanded: deckUsesExpandedGeometry,
-                portraitLayout: !twoColumn,
+              child: _ArtworkAudioQualityOverlay(
+                child: _ClassicVinylPlaybackDeck(
+                  artworkSource: artworkSource,
+                  artworkFallbackSource: artworkFallbackSource,
+                  visualIdentity: visualIdentity,
+                  isPlaying: snapshot.status == PlayerStatus.playing,
+                  animationEnabled: animatedArtworkEnabled,
+                  canvasUrl: canvasUrl,
+                  videoStartOffset: videoStartOffset,
+                  videoDurationHint: videoDurationHint,
+                  trackTransitionsEnabled: trackTransitionsEnabled,
+                  expanded: deckUsesExpandedGeometry,
+                  portraitLayout: !twoColumn,
+                ),
               ),
             );
 

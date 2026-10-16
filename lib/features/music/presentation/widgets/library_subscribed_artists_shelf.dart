@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/widgets/horizontal_shelf_scroll_behavior.dart';
 import '../../../../services/youtube_music/account/youtube_music_account.dart';
 import 'source_image.dart';
 
@@ -34,19 +35,21 @@ class LibrarySubscribedArtistsShelf extends StatelessWidget {
         const SizedBox(height: 10),
         SizedBox(
           height: 122,
-          child: ListView.separated(
-            key: const ValueKey('library-subscribed-artists-list'),
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            itemCount: artists.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 4),
-            itemBuilder: (context, index) {
-              final artist = artists[index];
-              return _SubscribedArtistCard(
-                artist: artist,
-                onTap: () => onOpenArtist(artist),
-              );
-            },
+          child: HorizontalShelfScroll(
+            child: ListView.separated(
+              key: const ValueKey('library-subscribed-artists-list'),
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: artists.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 4),
+              itemBuilder: (context, index) {
+                final artist = artists[index];
+                return _SubscribedArtistCard(
+                  artist: artist,
+                  onTap: () => onOpenArtist(artist),
+                );
+              },
+            ),
           ),
         ),
       ],

@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/widgets/horizontal_shelf_scroll_behavior.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/remote_music_datasource.dart';
 import '../providers/music_providers.dart';
@@ -363,103 +364,107 @@ class _BrowseShelfState extends ConsumerState<_BrowseShelf> {
               const SizedBox(height: 10),
               SizedBox(
                 height: cardWidth + textHeight + 14,
-                child: ListView.separated(
-                  controller: _scroll,
-                  scrollDirection: Axis.horizontal,
-                  scrollCacheExtent: const ScrollCacheExtent.pixels(120),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: widget.section.items.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 14),
-                  itemBuilder: (context, index) {
-                    final item = widget.section.items[index];
-                    final (
-                      title,
-                      subtitle,
-                      artwork,
-                      icon,
-                      round,
-                    ) = switch (item) {
-                      InnerTubeHomeCollection() => (
-                        item.title,
-                        item.subtitle ??
-                            '${strings.playlist} · ${strings.youtubeMusic}',
-                        item.thumbnailUrl,
-                        Icons.queue_music_rounded,
-                        false,
-                      ),
-                      InnerTubeHomeSongItem() => (
-                        item.song.title,
-                        item.song.artist,
-                        item.song.thumbnailUrl,
-                        Icons.music_note_rounded,
-                        false,
-                      ),
-                      InnerTubeHomeArtistItem() => (
-                        item.artist.name,
-                        strings.searchArtists,
-                        item.artist.thumbnailUrl,
-                        Icons.person_rounded,
-                        true,
-                      ),
-                    };
-                    return SizedBox(
-                      width: cardWidth,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          key: ValueKey('browse-item-$title'),
-                          onTap: () => widget.onOpen(item),
-                          borderRadius: BorderRadius.circular(8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(
-                                  round ? cardWidth / 2 : 8,
-                                ),
-                                child: SizedBox.square(
-                                  dimension: cardWidth,
-                                  child: SourceImage(
-                                    source: artwork,
-                                    cacheWidth: wide ? 480 : 384,
-                                    fallback: ColoredBox(
-                                      color: AppColors.homeCardSurfaceFor(
-                                        context,
+                child: HorizontalShelfScroll(
+                  child: ListView.separated(
+                    controller: _scroll,
+                    scrollDirection: Axis.horizontal,
+                    scrollCacheExtent: const ScrollCacheExtent.pixels(120),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    itemCount: widget.section.items.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 14),
+                    itemBuilder: (context, index) {
+                      final item = widget.section.items[index];
+                      final (
+                        title,
+                        subtitle,
+                        artwork,
+                        icon,
+                        round,
+                      ) = switch (item) {
+                        InnerTubeHomeCollection() => (
+                          item.title,
+                          item.subtitle ??
+                              '${strings.playlist} · ${strings.youtubeMusic}',
+                          item.thumbnailUrl,
+                          Icons.queue_music_rounded,
+                          false,
+                        ),
+                        InnerTubeHomeSongItem() => (
+                          item.song.title,
+                          item.song.artist,
+                          item.song.thumbnailUrl,
+                          Icons.music_note_rounded,
+                          false,
+                        ),
+                        InnerTubeHomeArtistItem() => (
+                          item.artist.name,
+                          strings.searchArtists,
+                          item.artist.thumbnailUrl,
+                          Icons.person_rounded,
+                          true,
+                        ),
+                      };
+                      return SizedBox(
+                        width: cardWidth,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            key: ValueKey('browse-item-$title'),
+                            onTap: () => widget.onOpen(item),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(
+                                    round ? cardWidth / 2 : 8,
+                                  ),
+                                  child: SizedBox.square(
+                                    dimension: cardWidth,
+                                    child: SourceImage(
+                                      source: artwork,
+                                      cacheWidth: wide ? 480 : 384,
+                                      fallback: ColoredBox(
+                                        color: AppColors.homeCardSurfaceFor(
+                                          context,
+                                        ),
+                                        child: Icon(icon, size: 48),
                                       ),
-                                      child: Icon(icon, size: 48),
                                     ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  height: 1.25,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.contentTitleFor(context),
+                                const SizedBox(height: 8),
+                                Text(
+                                  title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    height: 1.25,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.contentTitleFor(context),
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                subtitle,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  height: 1.3,
-                                  color: AppColors.contentSubtitleFor(context),
+                                const SizedBox(height: 2),
+                                Text(
+                                  subtitle,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.3,
+                                    color: AppColors.contentSubtitleFor(
+                                      context,
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
             ],

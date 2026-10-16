@@ -1,4 +1,5 @@
 import 'package:bstream_music/core/errors/app_exception.dart';
+import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -43,6 +44,8 @@ void main() {
         streamUrl: 'https://media.example/file.m4a',
         streamExtension: 'm4a',
         streamMimeType: 'audio/mp4',
+        sampleRate: 44100,
+        channels: 2,
         clientProfileKey: 'androidSdkless',
         expiresAt: expiresAt,
       );
@@ -51,8 +54,36 @@ void main() {
       expect(copy.streamUrl, original.streamUrl);
       expect(copy.streamExtension, original.streamExtension);
       expect(copy.streamMimeType, original.streamMimeType);
+      expect(copy.sampleRate, 44100);
+      expect(copy.channels, 2);
       expect(copy.clientProfileKey, 'androidSdkless');
       expect(copy.expiresAt, same(expiresAt));
+    });
+
+    test('fromTrack preserves actual selected-stream audio properties', () {
+      const track = TrackInfo(
+        id: 'track',
+        title: 'Track',
+        artist: 'Artist',
+        url: 'https://example.com/track',
+        streamUrl: 'https://example.com/audio.webm',
+        streamCodec: 'opus',
+        streamBitrate: 142000,
+        streamSampleRate: 48000,
+        streamChannels: 2,
+      );
+      final resolution = AudioStreamResolution.fromTrack(
+        track,
+        source: AudioStreamSource.innerTube,
+      );
+      expect(resolution.sampleRate, 48000);
+      expect(resolution.channels, 2);
+      expect(resolution.codec, 'opus');
+      expect(resolution.bitrate, 142000);
+      final fallback = AudioStreamResolution.fromFallbackTrack(track);
+      expect(fallback.source, AudioStreamSource.innerTubeFallback);
+      expect(fallback.sampleRate, 48000);
+      expect(fallback.channels, 2);
     });
   });
 

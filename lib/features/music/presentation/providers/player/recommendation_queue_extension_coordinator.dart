@@ -1,5 +1,18 @@
 import 'recommendation_playback_item.dart';
 
+/// Restorable continuation state, excluding work started by an old queue.
+class RecommendationQueueExtensionSnapshot {
+  const RecommendationQueueExtensionSnapshot({
+    required this.sourceId,
+    required this.extender,
+    required this.exhausted,
+  });
+
+  final String sourceId;
+  final RecommendationQueueExtender extender;
+  final bool exhausted;
+}
+
 /// Owns continuation lifetime and coalescing for a recommendation queue.
 ///
 /// Queue reconciliation remains a controller concern; this component only
@@ -30,6 +43,35 @@ class RecommendationQueueExtensionCoordinator {
     _extender = null;
     _inFlight = null;
     _exhausted = false;
+  }
+
+  /// Detaches a queue while retaining its continuation for a later return.
+  ///
+  /// Pending requests are deliberately not retained: they belong to the old
+  /// generation and must not append songs to a temporary or restored queue.
+  RecommendationQueueExtensionSnapshot? suspend() {
+    final sourceId = _sourceId;
+    final extender = _extender;
+    final snapshot = sourceId == null || extender == null
+        ? null
+        : RecommendationQueueExtensionSnapshot(
+            sourceId: sourceId,
+            extender: extender,
+            exhausted: _exhausted,
+          );
+    clear();
+    return snapshot;
+  }
+
+  /// Starts a fresh generation even when restoring the same source identity.
+  void restore(RecommendationQueueExtensionSnapshot? snapshot) {
+    clear();
+    if (snapshot == null) {
+      return;
+    }
+    _sourceId = snapshot.sourceId;
+    _extender = snapshot.extender;
+    _exhausted = snapshot.exhausted;
   }
 
   void invalidate() {
@@ -83,12 +125,22 @@ class RecommendationQueueExtensionCoordinator {
           return false;
         }
         final didSync = await synchronize(sourceId, expanded);
+        if (isDisposed() ||
+            generation != _generation ||
+            _sourceId != sourceId) {
+          return false;
+        }
         if (!didSync || currentLength() <= previousLength) {
           _exhausted = true;
           return false;
         }
         return true;
       } catch (error) {
+        if (isDisposed() ||
+            generation != _generation ||
+            _sourceId != sourceId) {
+          return false;
+        }
         onError(error);
         return false;
       }

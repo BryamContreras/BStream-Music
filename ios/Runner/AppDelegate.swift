@@ -37,6 +37,7 @@ final class BStreamWidgetActionRelay {
   private var screenChannel: FlutterMethodChannel?
   private var homeWidgetChannel: FlutterMethodChannel?
   private var audioOutputPlugin: BStreamAudioOutputPlugin?
+  private var localAudioQualityPlugin: IOSLocalAudioQualityPlugin?
   private var castPlugin: BStreamCastPlugin?
   private let widgetGroup = "group.com.bstream.bstreamMusic"
   private let widgetKind = "BStreamNowPlaying"
@@ -59,6 +60,8 @@ final class BStreamWidgetActionRelay {
 
     let audioMessenger = engineBridge.applicationRegistrar.messenger()
     audioOutputPlugin = BStreamAudioOutputPlugin(messenger: audioMessenger)
+    localAudioQualityPlugin?.dispose()
+    localAudioQualityPlugin = IOSLocalAudioQualityPlugin(messenger: audioMessenger)
     castPlugin = BStreamCastPlugin(messenger: audioMessenger)
 
     let channel = FlutterMethodChannel(

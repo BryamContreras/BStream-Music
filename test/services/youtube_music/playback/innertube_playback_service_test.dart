@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 
+import 'package:bstream_music/core/utils/background_work.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
 import 'package:bstream_music/services/youtube_music/playback/ejs_solver.dart';
 import 'package:bstream_music/services/youtube_music/playback/innertube_client_profile.dart';
@@ -15,6 +17,95 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   const videoId = 'dQw4w9WgXcQ';
+
+  test('large player responses preserve format selection', () async {
+    final service = InnerTubePlaybackService(
+      transport: _FakeTransport(
+        (_, _) => {
+          ..._playerResponse(
+            videoId: videoId,
+            url: 'https://media.example/audio',
+          ),
+          'padding': 'x' * backgroundParsingThreshold,
+        },
+      ),
+      validator: _FakeValidator(),
+      router: InnerTubeClientRouter(
+        profiles: const [InnerTubeClientRegistry.visionOS],
+        primaryKey: 'visionOS',
+      ),
+      maxRequestAttempts: 1,
+    );
+    addTearDown(service.dispose);
+    final result = await service.resolve(videoId);
+    expect(result.format.itag, 140);
+    expect(result.uri, Uri.parse('https://media.example/audio'));
+  });
+
+  test(
+    'a skip while a large player parse waits cannot validate stale audio',
+    () async {
+      final events = ReceivePort();
+      final gates = <SendPort>[];
+      final ready = Completer<void>();
+      final subscription = events.listen((event) {
+        gates.add(event as SendPort);
+        if (gates.length == 2) ready.complete();
+      });
+      final blocking = _BlockedParseWorker(events.sendPort);
+      final workers = [
+        runBackgroundWork(blocking.wait),
+        runBackgroundWork(blocking.wait),
+      ];
+      try {
+        await ready.future.timeout(const Duration(seconds: 5));
+        final responseSent = Completer<void>();
+        final validator = _FakeValidator();
+        final transport = _FakeTransport((_, _) {
+          responseSent.complete();
+          return {
+            ..._playerResponse(
+              videoId: videoId,
+              url: 'https://media.example/stale',
+            ),
+            'padding': 'x' * backgroundParsingThreshold,
+          };
+        });
+        final service = InnerTubePlaybackService(
+          transport: transport,
+          validator: validator,
+          router: InnerTubeClientRouter(
+            profiles: const [InnerTubeClientRegistry.visionOS],
+            primaryKey: 'visionOS',
+          ),
+          maxRequestAttempts: 1,
+        );
+        addTearDown(service.dispose);
+        var current = true;
+        final result = service.resolve(videoId, shouldContinue: () => current);
+        final rejected = expectLater(
+          result,
+          throwsA(isA<InnerTubeClientResponseException>()),
+        );
+        await responseSent.future;
+        await Future<void>.delayed(Duration.zero);
+        current = false;
+        for (final gate in gates) {
+          gate.send(null);
+        }
+        await rejected;
+        expect(validator.uris, isEmpty);
+        expect(transport.postCount, 1);
+      } finally {
+        for (final gate in gates) {
+          gate.send(null);
+        }
+        await Future.wait(workers);
+        await subscription.cancel();
+        events.close();
+      }
+    },
+  );
 
   test('resolves and validates VisionOS audio', () async {
     final transport = _FakeTransport((headers, request) {
@@ -1337,6 +1428,21 @@ Map<String, dynamic> _playerResponse({
     ],
   },
 };
+
+final class _BlockedParseWorker {
+  const _BlockedParseWorker(this.events);
+  final SendPort events;
+
+  Future<void> wait() async {
+    final gate = ReceivePort();
+    try {
+      events.send(gate.sendPort);
+      await gate.first;
+    } finally {
+      gate.close();
+    }
+  }
+}
 
 final class _FakeTransport implements InnerTubeTransport {
   _FakeTransport(this.handler, {this.getResponse});

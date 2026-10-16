@@ -19,11 +19,224 @@ import 'package:bstream_music/services/youtube_music/innertube_search_service.da
 import 'package:bstream_music/services/youtube_music/search_browse_catalog_cache.dart';
 import 'package:bstream_music/services/youtube_music/search_browse_artwork_cache.dart';
 import 'package:flutter/material.dart' hide SearchController;
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('browse cards retain one grid repaint boundary for static art', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _searchApp(
+        controller: _RecordingSearchController(SearchState()),
+        platform: TargetPlatform.windows,
+        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final grid = tester.widget<SliverGrid>(
+      find.byKey(const ValueKey('search-browse-grid')),
+    );
+    expect(
+      (grid.delegate as SliverChildBuilderDelegate).addRepaintBoundaries,
+      isTrue,
+    );
+    final card = find.byKey(const ValueKey('search-browse-card-pop'));
+    expect(
+      find.ancestor(of: card, matching: find.byType(RepaintBoundary)),
+      findsWidgets,
+      reason: 'Scrolling must still reuse the complete static card.',
+    );
+    expect(
+      find.descendant(of: card, matching: find.byType(RepaintBoundary)),
+      findsNothing,
+      reason: 'The static pattern must not add a second retained layer.',
+    );
+    expect(
+      find.byKey(const ValueKey('search-browse-pattern-pop')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'inactive browse retains live card state and artwork through refresh',
+    (tester) async {
+      final activity = ValueNotifier(false);
+      addTearDown(activity.dispose);
+      final categories = List.generate(
+        84,
+        (index) => SearchBrowseCategory(
+          id: 'live-$index',
+          title: 'Live category $index',
+          searchQuery: 'live $index',
+          target: InnerTubeBrowseTarget(browseId: 'moods', params: '$index'),
+        ),
+      );
+      final catalog = SearchBrowseCatalog(
+        categories: categories,
+        usesLiveYouTubeMusicCategories: true,
+      );
+      final refresh = Completer<SearchBrowseCatalog>();
+      var catalogRequests = 0;
+      var artworkRequests = 0;
+      await tester.pumpWidget(
+        _searchApp(
+          controller: _RecordingSearchController(SearchState()),
+          activity: activity,
+          useDefaultBrowseCatalogOverride: false,
+          catalogCache: _MemorySearchBrowseCatalogCache(
+            SearchBrowseCatalogSnapshot(
+              usesLiveYouTubeMusicCategories: true,
+              categories: const [
+                SearchBrowseCategorySnapshot(
+                  id: 'older-cached-card',
+                  title: 'Older disk catalog',
+                  searchQuery: 'cached',
+                ),
+              ],
+            ),
+          ),
+          extraOverrides: [
+            searchBrowseCatalogProvider.overrideWith((ref) {
+              catalogRequests++;
+              return catalogRequests == 1
+                  ? Future.value(catalog)
+                  : refresh.future;
+            }),
+            searchBrowseCategoryArtworkProvider.overrideWith((
+              ref,
+              category,
+            ) async {
+              // Production retains successful metadata lookups; model that cache
+              // so the test counts requests rather than provider auto-disposal.
+              ref.keepAlive();
+              artworkRequests++;
+              return 'https://img.test/${category.id}.jpg';
+            }),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(catalogRequests, 0);
+      expect(artworkRequests, 0);
+      activity.value = true;
+      await tester.pumpAndSettle();
+      final card = find.byKey(const ValueKey('search-browse-card-live-0'));
+      final cover = find.byKey(const ValueKey('search-browse-cover-live-0'));
+      final state = tester.state(card);
+      final coverState = tester.state(cover);
+      final initialArtworkRequests = artworkRequests;
+      final container = ProviderScope.containerOf(tester.element(card));
+      final grid = tester.widget<SliverGrid>(
+        find.byKey(const ValueKey('search-browse-grid')),
+      );
+      expect((grid.delegate as SliverChildBuilderDelegate).childCount, 84);
+      expect(catalogRequests, 1);
+      expect(initialArtworkRequests, greaterThan(0));
+      activity.value = false;
+      await tester.pumpAndSettle();
+      expect(tester.state(card), same(state));
+      expect(tester.state(cover), same(coverState));
+      expect(find.text('Live category 0'), findsOneWidget);
+      expect(
+        tester.widget<SourceImage>(cover).source,
+        'https://img.test/live-0.jpg',
+      );
+      expect(artworkRequests, initialArtworkRequests);
+      container.invalidate(searchBrowseCatalogProvider);
+      await tester.pumpAndSettle();
+      expect(
+        catalogRequests,
+        1,
+        reason: 'An inactive tab must not restart discovery.',
+      );
+      activity.value = true;
+      await tester.pump();
+      await tester.pump();
+      expect(catalogRequests, 2);
+      expect(tester.state(card), same(state));
+      expect(tester.state(cover), same(coverState));
+      expect(artworkRequests, initialArtworkRequests);
+      refresh.complete(
+        SearchBrowseCatalog(
+          categories: [
+            SearchBrowseCategory(
+              id: 'live-0',
+              title: 'Updated live category',
+              searchQuery: 'updated',
+              target: categories.first.target,
+            ),
+          ],
+          usesLiveYouTubeMusicCategories: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Updated live category'), findsOneWidget);
+      expect(tester.state(card), same(state));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'locale change drops retained browse data without inactive discovery',
+    (tester) async {
+      final activity = ValueNotifier(true);
+      addTearDown(activity.dispose);
+      var catalogRequests = 0;
+      await tester.pumpWidget(
+        _searchApp(
+          controller: _RecordingSearchController(SearchState()),
+          activity: activity,
+          useDefaultBrowseCatalogOverride: false,
+          useTestLanguageProvider: true,
+          extraOverrides: [
+            searchBrowseCatalogProvider.overrideWith((ref) async {
+              final language = ref.watch(appStringsProvider).appLanguage;
+              catalogRequests++;
+              return SearchBrowseCatalog(
+                categories: [
+                  SearchBrowseCategory(
+                    id: 'live-${language.code}',
+                    title: language == AppLanguage.spanish
+                        ? 'Spanish live card'
+                        : 'English live card',
+                    searchQuery: language.code,
+                  ),
+                ],
+                usesLiveYouTubeMusicCategories: true,
+              );
+            }),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Spanish live card'), findsOneWidget);
+      expect(catalogRequests, 1);
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(SearchView)),
+      );
+      activity.value = false;
+      await tester.pumpAndSettle();
+      container
+          .read(_browseTestLanguageProvider.notifier)
+          .select(AppLanguage.english);
+      await tester.pumpAndSettle();
+      expect(find.text('Spanish live card'), findsNothing);
+      expect(find.text('Party'), findsOneWidget);
+      expect(catalogRequests, 1);
+      activity.value = true;
+      await tester.pumpAndSettle();
+      expect(find.text('English live card'), findsOneWidget);
+      expect(find.text('Spanish live card'), findsNothing);
+      expect(catalogRequests, 2);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'category pagination keeps shelves and retries a failed continuation',
     (tester) async {
@@ -143,6 +356,15 @@ void main() {
       );
       expect(cover.source, 'https://img.test/first-song.jpg');
       expect(cover.cacheWidth, lessThanOrEqualTo(384));
+      expect(cover.opacity, 0.72);
+      expect(
+        find.ancestor(
+          of: find.byKey(const ValueKey('search-browse-cover-focus')),
+          matching: find.byType(Opacity),
+        ),
+        findsNothing,
+        reason: 'Artwork alpha must not allocate a layer for every card.',
+      );
       final titlePadding = tester.widget<Padding>(
         find.byKey(const ValueKey('search-browse-title-padding-focus')),
       );
@@ -2219,6 +2441,8 @@ Widget _searchApp({
   bool disableAnimations = false,
   double bottomContentPadding = 0,
   SearchBrowseCategoryArtworkCache? artworkCache,
+  ValueListenable<bool>? activity,
+  bool useTestLanguageProvider = false,
 }) {
   const strings = AppStrings(AppLanguage.spanish);
   final resolvedBrowseCatalog =
@@ -2233,7 +2457,12 @@ Widget _searchApp({
       youtubeMusicSearchSuggestionsProvider.overrideWithValue(
         suggestionsService ?? const _NoSuggestionsSearch(),
       ),
-      appStringsProvider.overrideWithValue(strings),
+      if (useTestLanguageProvider)
+        appStringsProvider.overrideWith(
+          (ref) => AppStrings(ref.watch(_browseTestLanguageProvider)),
+        )
+      else
+        appStringsProvider.overrideWithValue(strings),
       searchBrowseCatalogCacheProvider.overrideWithValue(
         catalogCache ?? _MemorySearchBrowseCatalogCache(),
       ),
@@ -2261,14 +2490,34 @@ Widget _searchApp({
             )
           : null,
       home: Scaffold(
-        body: SearchView(
-          onOpenPlayer: onOpenPlayer ?? () {},
-          onBrowseCategorySelected: onBrowseCategorySelected,
-          bottomContentPadding: bottomContentPadding,
-        ),
+        body: activity == null
+            ? SearchView(
+                onOpenPlayer: onOpenPlayer ?? () {},
+                onBrowseCategorySelected: onBrowseCategorySelected,
+                bottomContentPadding: bottomContentPadding,
+              )
+            : ValueListenableBuilder<bool>(
+                valueListenable: activity,
+                builder: (context, active, _) => SearchView(
+                  active: active,
+                  onOpenPlayer: onOpenPlayer ?? () {},
+                  onBrowseCategorySelected: onBrowseCategorySelected,
+                  bottomContentPadding: bottomContentPadding,
+                ),
+              ),
       ),
     ),
   );
+}
+
+final _browseTestLanguageProvider =
+    NotifierProvider<_BrowseTestLanguage, AppLanguage>(_BrowseTestLanguage.new);
+
+class _BrowseTestLanguage extends Notifier<AppLanguage> {
+  @override
+  AppLanguage build() => AppLanguage.spanish;
+
+  void select(AppLanguage language) => state = language;
 }
 
 final class _MemorySearchBrowseCategoryArtworkCache

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:developer' as developer;
 
+import '../../../core/utils/background_work.dart';
 import 'youtube_music_account_models.dart';
 import 'youtube_music_account_parser.dart';
 import 'youtube_music_account_transport.dart';
@@ -134,7 +135,7 @@ class YouTubeMusicAccountGateway
       YouTubeMusicAccountEndpoints.accountMenu,
       _body(),
     );
-    return _parser.parseProfile(response.body);
+    return _parseAccountResponse(response, _parser.parseProfile);
   }
 
   Future<RemoteAccountDirectory> getAccounts() async {
@@ -145,7 +146,7 @@ class YouTubeMusicAccountGateway
         'callCircumstance': 'SWITCHING_USERS_FULL',
       }),
     );
-    return _parser.parseAccountDirectory(response.body);
+    return _parseAccountResponse(response, _parser.parseAccountDirectory);
   }
 
   @override
@@ -174,13 +175,15 @@ class YouTubeMusicAccountGateway
 
     while (true) {
       pagesFetched += 1;
-      for (final playlist in _parser.parsePlaylistSummaries(response.body)) {
+      final page = await _parseAccountResponse(
+        response,
+        _AccountCollectionPageParser(_parser).playlists,
+      );
+      for (final playlist in page.items) {
         playlists.putIfAbsent(playlist.playlistId, () => playlist);
       }
 
-      final continuationTokens = _parser.parseSavedPlaylistContinuationTokens(
-        response.body,
-      );
+      final continuationTokens = page.continuations;
       final continuation = _nextContinuation(
         continuationTokens,
         requestedContinuations,
@@ -229,12 +232,15 @@ class YouTubeMusicAccountGateway
 
     while (true) {
       pagesFetched += 1;
-      for (final artist in _parser.parseSubscribedArtists(response.body)) {
+      final page = await _parseAccountResponse(
+        response,
+        _AccountCollectionPageParser(_parser).artists,
+      );
+      for (final artist in page.items) {
         artists.putIfAbsent(artist.identity, () => artist);
       }
 
-      final continuationTokens = _parser
-          .parseSubscribedArtistContinuationTokens(response.body);
+      final continuationTokens = page.continuations;
       final continuation = _nextContinuation(
         continuationTokens,
         requestedContinuations,
@@ -277,20 +283,19 @@ class YouTubeMusicAccountGateway
 
     while (true) {
       pagesFetched += 1;
-      summary ??= _parser.parsePlaylistHeader(
-        response.body,
-        playlistId: normalizedPlaylistId,
+      final page = await _parseAccountResponse(
+        response,
+        _AccountPlaylistPageParser(
+          _parser,
+          normalizedPlaylistId,
+          entries.length,
+          includeHeader: summary == null,
+        ).parse,
       );
-      entries.addAll(
-        _parser.parsePlaylistEntries(
-          response.body,
-          startingPosition: entries.length,
-        ),
-      );
+      summary ??= page.summary;
+      entries.addAll(page.entries);
 
-      final continuationTokens = _parser.parsePlaylistEntryContinuationTokens(
-        response.body,
-      );
+      final continuationTokens = page.continuations;
       final continuation = _nextContinuation(
         continuationTokens,
         requestedContinuations,
@@ -331,9 +336,14 @@ class YouTubeMusicAccountGateway
       YouTubeMusicAccountEndpoints.browse,
       _body(<String, Object?>{'browseId': 'VL$normalizedPlaylistId'}),
     );
-    return _parser.parsePlaylistHeader(
-      response.body,
-      playlistId: normalizedPlaylistId,
+    return _parseAccountResponse(
+      response,
+      _AccountPlaylistPageParser(
+        _parser,
+        normalizedPlaylistId,
+        0,
+        includeHeader: true,
+      ).header,
     );
   }
 
@@ -452,11 +462,11 @@ class YouTubeMusicAccountGateway
       YouTubeMusicAccountEndpoints.browse,
       _body(<String, Object?>{'browseId': normalizedBrowseId}),
     );
-    return _parseArtistSubscriptionState(
-      response.body,
-      fallbackChannelId: normalizedBrowseId.startsWith('UC')
-          ? normalizedBrowseId
-          : null,
+    return _parseAccountResponse(
+      response,
+      _AccountArtistSubscriptionParser(
+        normalizedBrowseId.startsWith('UC') ? normalizedBrowseId : null,
+      ).parse,
     );
   }
 
@@ -801,6 +811,76 @@ String _requiredChannelId(String channelId) {
     );
   }
   return normalized;
+}
+
+Future<T> _parseAccountResponse<T>(
+  YouTubeMusicAccountResponse response,
+  T Function(Object?) parse,
+) => transformInBackground(
+  response.body,
+  parse,
+  inputSize: response.bodyByteCount,
+);
+
+class _AccountCollectionPage<T> {
+  const _AccountCollectionPage(this.items, this.continuations);
+  final List<T> items;
+  final List<String> continuations;
+}
+
+class _AccountCollectionPageParser {
+  const _AccountCollectionPageParser(this.parser);
+  final YouTubeMusicAccountParser parser;
+
+  _AccountCollectionPage<RemotePlaylistSummary> playlists(Object? body) =>
+      _AccountCollectionPage(
+        parser.parsePlaylistSummaries(body),
+        parser.parseSavedPlaylistContinuationTokens(body),
+      );
+
+  _AccountCollectionPage<RemoteSubscribedArtist> artists(Object? body) =>
+      _AccountCollectionPage(
+        parser.parseSubscribedArtists(body),
+        parser.parseSubscribedArtistContinuationTokens(body),
+      );
+}
+
+class _AccountPlaylistPage {
+  const _AccountPlaylistPage(this.summary, this.entries, this.continuations);
+  final RemotePlaylistSummary? summary;
+  final List<RemotePlaylistEntry> entries;
+  final List<String> continuations;
+}
+
+class _AccountPlaylistPageParser {
+  const _AccountPlaylistPageParser(
+    this.parser,
+    this.playlistId,
+    this.startingPosition, {
+    required this.includeHeader,
+  });
+
+  final YouTubeMusicAccountParser parser;
+  final String playlistId;
+  final int startingPosition;
+  final bool includeHeader;
+
+  RemotePlaylistSummary? header(Object? body) =>
+      parser.parsePlaylistHeader(body, playlistId: playlistId);
+
+  _AccountPlaylistPage parse(Object? body) => _AccountPlaylistPage(
+    includeHeader ? header(body) : null,
+    parser.parsePlaylistEntries(body, startingPosition: startingPosition),
+    parser.parsePlaylistEntryContinuationTokens(body),
+  );
+}
+
+class _AccountArtistSubscriptionParser {
+  const _AccountArtistSubscriptionParser(this.fallbackChannelId);
+  final String? fallbackChannelId;
+
+  RemoteArtistSubscriptionState? parse(Object? body) =>
+      _parseArtistSubscriptionState(body, fallbackChannelId: fallbackChannelId);
 }
 
 RemoteArtistSubscriptionState? _parseArtistSubscriptionState(

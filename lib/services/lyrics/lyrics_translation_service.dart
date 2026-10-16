@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import '../../core/utils/background_work.dart';
 import '../../core/utils/bounded_byte_stream.dart';
 import '../../features/music/domain/entities/lyrics_document.dart';
 
@@ -86,10 +87,11 @@ class GoogleLyricsTranslationSession implements LyricsTranslationSession {
           idleTimeout: const Duration(seconds: 10),
           totalTimeout: const Duration(seconds: 15),
         );
-        final value = jsonDecode(utf8.decode(bytes));
-        if (value is! Map<String, dynamic>) {
-          throw const LyricsTranslationException();
-        }
+        final value = await parseJsonBytesInBackground(
+          bytes,
+          _translationResponse,
+        );
+        if (_closed) throw const LyricsTranslationCancelled();
         return value;
       })().timeout(const Duration(seconds: 15));
     } on TimeoutException catch (error) {
@@ -104,6 +106,13 @@ class GoogleLyricsTranslationSession implements LyricsTranslationSession {
     _closed = true;
     _client.close(force: true);
   }
+}
+
+Map<String, dynamic> _translationResponse(Object? value) {
+  if (value is! Map<String, dynamic>) {
+    throw const LyricsTranslationException();
+  }
+  return value;
 }
 
 class LyricsTranslationRequest {

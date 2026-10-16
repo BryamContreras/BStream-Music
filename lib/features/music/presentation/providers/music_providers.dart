@@ -2801,6 +2801,13 @@ final remotePlaybackRetryDelayProvider = Provider<RemotePlaybackRetryDelay>(
       (duration) => Future<void>.delayed(duration),
 );
 
+/// Mobile wake protection must be bounded while a source is being recovered.
+/// Desktop has no audio foreground service and retains its existing policy.
+/// Successful playback cancels it; another retry notice does not extend it.
+final playbackRecoveryTimeoutProvider = Provider<Duration?>(
+  (ref) => AppPlatform.isMobile ? const Duration(minutes: 3) : null,
+);
+
 final getLibraryTracksProvider = Provider<GetLibraryTracks>((ref) {
   return GetLibraryTracks(ref.watch(libraryRepositoryProvider));
 });

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
+import '../../../../core/widgets/horizontal_shelf_scroll_behavior.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
@@ -60,6 +61,8 @@ class _SearchViewState extends ConsumerState<SearchView> {
   final Map<String, List<String>> _suggestionCache = <String, List<String>>{};
   Timer? _suggestionTimer;
   int _suggestionGeneration = 0;
+  String? _browseCatalogLanguageCode;
+  SearchBrowseCatalog? _retainedBrowseCatalog;
 
   @override
   void didUpdateWidget(covariant SearchView oldWidget) {
@@ -220,7 +223,11 @@ class _SearchViewState extends ConsumerState<SearchView> {
         _searchInputFocused &&
         _draftQuery.trim().isNotEmpty;
     final strings = ref.watch(appStringsProvider);
-    final fallbackBrowseCategories = fallbackSearchBrowseCategories(strings);
+    final languageCode = strings.appLanguage.code;
+    if (_browseCatalogLanguageCode != languageCode) {
+      _browseCatalogLanguageCode = languageCode;
+      _retainedBrowseCatalog = null;
+    }
     // Persistent tab slots remain mounted after their first visit. Avoid
     // starting discovery merely because an offstage Search widget exists;
     // the local cards are already enough until the tab is actually visible.
@@ -232,10 +239,19 @@ class _SearchViewState extends ConsumerState<SearchView> {
         widget.active && !searchState.hasQuery && !showSuggestions
         ? ref.watch(searchBrowseCachedCatalogProvider)
         : null;
-    final activeBrowseCatalog =
-        browseCatalog?.asData?.value ?? cachedBrowseCatalog?.asData?.value;
+    // Losing the active subscription must not replace live cards with local
+    // fallbacks during the outgoing fade. Keep their IDs, State and decoded
+    // artwork until fresh data arrives; a locale change explicitly clears it.
+    final freshBrowseCatalog = browseCatalog?.asData?.value;
+    if (freshBrowseCatalog != null) {
+      _retainedBrowseCatalog = freshBrowseCatalog;
+    } else {
+      _retainedBrowseCatalog ??= cachedBrowseCatalog?.asData?.value;
+    }
+    final activeBrowseCatalog = _retainedBrowseCatalog;
     final browseCategories =
-        activeBrowseCatalog?.categories ?? fallbackBrowseCategories;
+        activeBrowseCatalog?.categories ??
+        fallbackSearchBrowseCategories(strings);
     final isMobile = switch (Theme.of(context).platform) {
       TargetPlatform.android || TargetPlatform.iOS => true,
       _ => false,
@@ -1248,14 +1264,12 @@ class _SearchBrowseCategoryCardState
                 if (_artwork != null) ...[
                   Positioned.fill(
                     child: IgnorePointer(
-                      child: Opacity(
+                      child: SourceImage(
+                        key: ValueKey('search-browse-cover-${category.id}'),
+                        source: _artwork,
                         opacity: 0.72,
-                        child: SourceImage(
-                          key: ValueKey('search-browse-cover-${category.id}'),
-                          source: _artwork,
-                          cacheWidth: 384,
-                          fallback: const SizedBox.shrink(),
-                        ),
+                        cacheWidth: 384,
+                        fallback: const SizedBox.shrink(),
                       ),
                     ),
                   ),
@@ -1278,13 +1292,14 @@ class _SearchBrowseCategoryCardState
                 ],
                 Positioned.fill(
                   child: IgnorePointer(
-                    child: RepaintBoundary(
-                      child: CustomPaint(
-                        key: ValueKey('search-browse-pattern-${category.id}'),
-                        painter: _SearchBrowsePatternPainter(
-                          pattern: visual.pattern,
-                          color: visual.highlightColor,
-                        ),
+                    // SliverGrid already isolates the complete card. The
+                    // pattern is static, so a second nested retained layer
+                    // would not avoid any animation or scroll repaint work.
+                    child: CustomPaint(
+                      key: ValueKey('search-browse-pattern-${category.id}'),
+                      painter: _SearchBrowsePatternPainter(
+                        pattern: visual.pattern,
+                        color: visual.highlightColor,
                       ),
                     ),
                   ),
@@ -1759,27 +1774,29 @@ class _SearchCategoryTabs extends StatelessWidget {
             ? (constraints.maxWidth - naturalWidth) / categories.length
             : 0.0;
 
-        return SingleChildScrollView(
-          key: const ValueKey('search-category-horizontal-scroll'),
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var index = 0; index < categories.length; index++) ...[
-                if (index > 0) const SizedBox(width: spacing),
-                SizedBox(
-                  width: tabWidths[index] + extraWidthPerTab,
-                  child: _SearchCategoryTab(
-                    category: categories[index],
-                    icon: _categoryIcon(categories[index]),
-                    label: _categoryLabel(strings, categories[index]),
-                    selected: categories[index] == selectedCategory,
-                    selectedColor: colors.primaryContainer,
-                    onSelected: onSelected,
+        return HorizontalShelfScroll(
+          child: SingleChildScrollView(
+            key: const ValueKey('search-category-horizontal-scroll'),
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var index = 0; index < categories.length; index++) ...[
+                  if (index > 0) const SizedBox(width: spacing),
+                  SizedBox(
+                    width: tabWidths[index] + extraWidthPerTab,
+                    child: _SearchCategoryTab(
+                      category: categories[index],
+                      icon: _categoryIcon(categories[index]),
+                      label: _categoryLabel(strings, categories[index]),
+                      selected: categories[index] == selectedCategory,
+                      selectedColor: colors.primaryContainer,
+                      onSelected: onSelected,
+                    ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         );
       },

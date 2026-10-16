@@ -13,11 +13,10 @@ import 'desktop_media_session.dart';
 @visibleForTesting
 PlaybackState buildAudioServicePlaybackState(DesktopMediaSessionState state) {
   final snapshot = state.snapshot;
+  final wantsToPlay = snapshot.wantsToPlay;
   final controls = <MediaControl>[
     if (state.hasPrevious) MediaControl.skipToPrevious,
-    snapshot.status == PlayerStatus.playing
-        ? MediaControl.pause
-        : MediaControl.play,
+    wantsToPlay ? MediaControl.pause : MediaControl.play,
     if (state.hasNext) MediaControl.skipToNext,
     MediaControl.stop,
   ];
@@ -38,11 +37,20 @@ PlaybackState buildAudioServicePlaybackState(DesktopMediaSessionState state) {
       PlayerStatus.idle => AudioProcessingState.idle,
       PlayerStatus.loading => AudioProcessingState.loading,
       PlayerStatus.playing || PlayerStatus.paused => AudioProcessingState.ready,
-      PlayerStatus.completed => AudioProcessingState.completed,
+      // Loading a successor or recovering a stream is still one continuous
+      // playback session. In particular, Android must not leave foreground
+      // mode and release its CPU wake lock during these automatic gaps.
+      // The controller owns the bounded recovery and clears playback intent
+      // on a user pause/stop, final completion or exhausted retry.
+      PlayerStatus.completed =>
+        wantsToPlay
+            ? AudioProcessingState.loading
+            : AudioProcessingState.completed,
       PlayerStatus.stopped => AudioProcessingState.idle,
-      PlayerStatus.failed => AudioProcessingState.error,
+      PlayerStatus.failed =>
+        wantsToPlay ? AudioProcessingState.loading : AudioProcessingState.error,
     },
-    playing: snapshot.status == PlayerStatus.playing,
+    playing: wantsToPlay,
     updatePosition: snapshot.position,
     bufferedPosition: snapshot.position,
     speed: 1,
@@ -58,8 +66,10 @@ PlaybackState buildAudioServicePlaybackState(DesktopMediaSessionState state) {
     shuffleMode: snapshot.shuffleEnabled
         ? AudioServiceShuffleMode.all
         : AudioServiceShuffleMode.none,
-    errorCode: snapshot.status == PlayerStatus.failed ? 1 : null,
-    errorMessage: snapshot.status == PlayerStatus.failed
+    errorCode: snapshot.status == PlayerStatus.failed && !wantsToPlay
+        ? 1
+        : null,
+    errorMessage: snapshot.status == PlayerStatus.failed && !wantsToPlay
         ? snapshot.errorMessage
         : null,
   );
@@ -116,6 +126,7 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
   String? _lastTrackKey;
   String? _lastQueueKey;
   PlayerStatus? _lastStatus;
+  bool? _lastWantsToPlay;
   bool? _lastShuffleEnabled;
   PlaybackRepeatMode? _lastRepeatMode;
   DateTime? _lastPositionUpdate;
@@ -154,6 +165,9 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
           androidNotificationIcon: 'drawable/ic_stat_bstream_music',
           androidShowNotificationBadge: true,
           androidNotificationOngoing: true,
+          // Playback intent keeps automatic loads/retries active. A genuine
+          // pause must still release foreground priority and its wake lock.
+          androidStopForegroundOnPause: true,
           artDownscaleWidth: 320,
           artDownscaleHeight: 320,
         ),
@@ -199,6 +213,7 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
         trackKey != _lastTrackKey ||
         queueKey != _lastQueueKey ||
         snapshot.status != _lastStatus ||
+        snapshot.wantsToPlay != _lastWantsToPlay ||
         snapshot.shuffleEnabled != _lastShuffleEnabled ||
         snapshot.repeatMode != _lastRepeatMode;
 
@@ -292,6 +307,7 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
     _lastTrackKey = _trackKey(snapshot);
     _lastQueueKey = state.queueKey;
     _lastStatus = snapshot.status;
+    _lastWantsToPlay = snapshot.wantsToPlay;
     _lastShuffleEnabled = snapshot.shuffleEnabled;
     _lastRepeatMode = snapshot.repeatMode;
   }

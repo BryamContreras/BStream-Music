@@ -416,6 +416,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
             ? () => _openRoute(_SettingsRoute.liveWidget)
             : null,
         playerStyle: state.playerStyle,
+        showAudioQuality: state.showAudioQuality,
         animatedArtworkEnabled: state.animatedArtworkEnabled,
         playerArtworkStyle: state.playerArtworkStyle,
         appleAnimatedArtworkEnabled: state.appleAnimatedArtworkEnabled,
@@ -441,6 +442,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
             ref.read(settingsControllerProvider.notifier).setPlayerFont(font),
         onPlayerStyleChanged: (style) =>
             ref.read(settingsControllerProvider.notifier).setPlayerStyle(style),
+        onShowAudioQualityChanged: (enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .setShowAudioQuality(enabled),
         onAnimatedArtworkEnabledChanged: (enabled) => ref
             .read(settingsControllerProvider.notifier)
             .setAnimatedArtworkEnabled(enabled),
@@ -2634,6 +2638,7 @@ class _AppearanceSettings extends StatelessWidget {
     required this.liveWidgetStyle,
     this.onOpenLiveWidget,
     required this.playerStyle,
+    required this.showAudioQuality,
     required this.animatedArtworkEnabled,
     required this.playerArtworkStyle,
     required this.appleAnimatedArtworkEnabled,
@@ -2649,6 +2654,7 @@ class _AppearanceSettings extends StatelessWidget {
     required this.onAppBackgroundCleared,
     required this.onPlayerFontChanged,
     required this.onPlayerStyleChanged,
+    required this.onShowAudioQualityChanged,
     required this.onAnimatedArtworkEnabledChanged,
     required this.onPlayerArtworkStyleChanged,
     required this.onAppleAnimatedArtworkEnabledChanged,
@@ -2665,6 +2671,7 @@ class _AppearanceSettings extends StatelessWidget {
   final LiveWidgetStyle liveWidgetStyle;
   final VoidCallback? onOpenLiveWidget;
   final PlayerStyle playerStyle;
+  final bool showAudioQuality;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
   final bool appleAnimatedArtworkEnabled;
@@ -2681,6 +2688,7 @@ class _AppearanceSettings extends StatelessWidget {
   final Future<void> Function() onAppBackgroundCleared;
   final Future<void> Function(PlayerFont) onPlayerFontChanged;
   final Future<void> Function(PlayerStyle) onPlayerStyleChanged;
+  final Future<void> Function(bool) onShowAudioQualityChanged;
   final Future<void> Function(bool) onAnimatedArtworkEnabledChanged;
   final Future<void> Function(PlayerArtworkStyle) onPlayerArtworkStyleChanged;
   final Future<void> Function(bool) onAppleAnimatedArtworkEnabledChanged;
@@ -2942,6 +2950,19 @@ class _AppearanceSettings extends StatelessWidget {
             title: strings.playerStyle,
             subtitle: strings.playerStyleLabel(playerStyle),
             onTap: () => _choosePlayerStyle(context),
+          ),
+          const SizedBox(height: appCardGap),
+          _SettingsEntryCard(
+            key: const ValueKey('show-audio-quality-toggle'),
+            icon: Icons.high_quality_rounded,
+            title: strings.showAudioQuality,
+            subtitle: strings.showAudioQualityDescription,
+            onTap: () => onShowAudioQualityChanged(!showAudioQuality),
+            trailing: Switch.adaptive(
+              key: const ValueKey('show-audio-quality-switch'),
+              value: showAudioQuality,
+              onChanged: onShowAudioQualityChanged,
+            ),
           ),
           const SizedBox(height: appCardGap),
           _SettingsEntryCard(

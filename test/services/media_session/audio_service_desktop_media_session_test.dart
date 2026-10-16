@@ -49,6 +49,120 @@ void main() {
       ]);
       expect(state.androidCompactActionIndices, const [0]);
     });
+
+    test('retains playback intent while the next stream is loading', () {
+      final state = buildAudioServicePlaybackState(
+        _state(PlayerStatus.loading, playWhenReady: true),
+      );
+
+      expect(state.processingState, AudioProcessingState.loading);
+      expect(state.playing, isTrue);
+      expect(state.controls.first.action, MediaAction.pause);
+      expect(state.errorCode, isNull);
+      expect(state.errorMessage, isNull);
+    });
+
+    test('does not turn an explicitly paused load into active playback', () {
+      final state = buildAudioServicePlaybackState(
+        _state(PlayerStatus.loading, playWhenReady: false),
+      );
+
+      expect(state.processingState, AudioProcessingState.loading);
+      expect(state.playing, isFalse);
+      expect(state.controls.first.action, MediaAction.play);
+    });
+
+    test('reports a recoverable stream error as active loading', () {
+      final state = buildAudioServicePlaybackState(
+        _state(
+          PlayerStatus.failed,
+          playWhenReady: true,
+          errorMessage: 'A temporary network failure',
+        ),
+      );
+
+      expect(state.processingState, AudioProcessingState.loading);
+      expect(state.playing, isTrue);
+      expect(state.controls.first.action, MediaAction.pause);
+      expect(state.errorCode, isNull);
+      expect(state.errorMessage, isNull);
+    });
+
+    test('releases playback intent when stream recovery is exhausted', () {
+      final state = buildAudioServicePlaybackState(
+        _state(
+          PlayerStatus.failed,
+          playWhenReady: false,
+          errorMessage: 'Recovery exhausted',
+        ),
+      );
+
+      expect(state.processingState, AudioProcessingState.error);
+      expect(state.playing, isFalse);
+      expect(state.controls.first.action, MediaAction.play);
+      expect(state.errorCode, 1);
+      expect(state.errorMessage, 'Recovery exhausted');
+    });
+
+    test(
+      'keeps foreground playback while a completed item has a successor',
+      () {
+        final state = buildAudioServicePlaybackState(
+          _state(PlayerStatus.completed, playWhenReady: true, queueLength: 2),
+        );
+
+        expect(state.processingState, AudioProcessingState.loading);
+        expect(state.playing, isTrue);
+        expect(state.controls[1].action, MediaAction.pause);
+      },
+    );
+
+    test('reports final completion without keeping playback active', () {
+      final state = buildAudioServicePlaybackState(
+        _state(PlayerStatus.completed, playWhenReady: false),
+      );
+
+      expect(state.processingState, AudioProcessingState.completed);
+      expect(state.playing, isFalse);
+      expect(state.controls.first.action, MediaAction.play);
+    });
+
+    test('honors pause intent even before the player status settles', () {
+      final state = buildAudioServicePlaybackState(
+        _state(PlayerStatus.playing, playWhenReady: false),
+      );
+
+      expect(state.processingState, AudioProcessingState.ready);
+      expect(state.playing, isFalse);
+      expect(state.controls.first.action, MediaAction.play);
+    });
+
+    test('keeps automatic gaps active until a deliberate pause or stop', () {
+      final states = [
+        for (final status in [
+          PlayerStatus.playing,
+          PlayerStatus.loading,
+          PlayerStatus.failed,
+          PlayerStatus.completed,
+          PlayerStatus.loading,
+          PlayerStatus.playing,
+        ])
+          buildAudioServicePlaybackState(_state(status, playWhenReady: true)),
+      ];
+
+      expect(states.every((state) => state.playing), isTrue);
+      expect(
+        states.map((state) => state.processingState),
+        isNot(contains(AudioProcessingState.idle)),
+      );
+      for (final status in [PlayerStatus.paused, PlayerStatus.stopped]) {
+        final state = buildAudioServicePlaybackState(
+          _state(status, playWhenReady: false),
+        );
+        expect(state.playing, isFalse);
+        expect(state.controls.first.action, MediaAction.play);
+      }
+    });
   });
 
   group('AudioServiceMediaSessionCallbackBridge', () {
@@ -87,10 +201,17 @@ void main() {
   });
 }
 
-DesktopMediaSessionState _state(PlayerStatus status, {int queueLength = 1}) {
+DesktopMediaSessionState _state(
+  PlayerStatus status, {
+  int queueLength = 1,
+  bool? playWhenReady,
+  String? errorMessage,
+}) {
   return DesktopMediaSessionState(
     snapshot: PlayerSnapshot(
       status: status,
+      playWhenReady: playWhenReady,
+      errorMessage: errorMessage,
       trackId: 'track-1',
       title: 'Track 1',
       artist: 'Artist',

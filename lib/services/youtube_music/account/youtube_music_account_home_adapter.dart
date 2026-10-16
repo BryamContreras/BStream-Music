@@ -1,3 +1,4 @@
+import '../../../core/utils/background_work.dart';
 import '../innertube_search_service.dart';
 import 'youtube_music_account_gateway.dart';
 
@@ -43,13 +44,7 @@ class AuthenticatedYouTubeMusicHome implements YouTubeMusicHome {
     final seenBrowseIds = <String>{};
     final seenArtistBrowseIds = <String>{};
 
-    void addPage(Object? payload) {
-      if (sections.length >= maxSections) return;
-      final parsed = parser.parse(
-        payload,
-        maxSections: maxSections - sections.length,
-        maxItemsPerSection: maxItemsPerSection,
-      );
+    void addPage(List<InnerTubeHomeSection> parsed) {
       for (final section in parsed) {
         final items = section.items
             .where((item) {
@@ -73,22 +68,67 @@ class AuthenticatedYouTubeMusicHome implements YouTubeMusicHome {
       }
     }
 
-    var payload = await account.readMusicHomePage();
-    addPage(payload);
+    Future<_ParsedHomePage> readPage({String? continuation}) async {
+      final payload = await account.readMusicHomePage(
+        continuation: continuation,
+      );
+      // Authenticated Home pages are large nested catalogs. Keep both walks
+      // off the UI isolate, without copying the gateway or session headers.
+      return runBackgroundWork(
+        _AccountHomePageParser(
+          parser,
+          payload,
+          maxSections - sections.length,
+          maxItemsPerSection,
+        ).parse,
+      );
+    }
+
+    var page = await readPage();
+    addPage(page.sections);
     final requestedContinuations = <String>{};
     var continuationRequests = 0;
-    var continuation = _homeContinuationToken(payload);
+    var continuation = page.continuation;
     while (sections.length < maxSections &&
         continuation != null &&
         continuationRequests < maxContinuationRequests &&
         requestedContinuations.add(continuation)) {
       continuationRequests += 1;
-      payload = await account.readMusicHomePage(continuation: continuation);
-      addPage(payload);
-      continuation = _homeContinuationToken(payload);
+      page = await readPage(continuation: continuation);
+      addPage(page.sections);
+      continuation = page.continuation;
     }
     return List<InnerTubeHomeSection>.unmodifiable(sections);
   }
+}
+
+class _AccountHomePageParser {
+  const _AccountHomePageParser(
+    this.parser,
+    this.payload,
+    this.maxSections,
+    this.maxItemsPerSection,
+  );
+
+  final InnerTubeHomeParser parser;
+  final Object? payload;
+  final int maxSections;
+  final int maxItemsPerSection;
+
+  _ParsedHomePage parse() => _ParsedHomePage(
+    parser.parse(
+      payload,
+      maxSections: maxSections,
+      maxItemsPerSection: maxItemsPerSection,
+    ),
+    _homeContinuationToken(payload),
+  );
+}
+
+class _ParsedHomePage {
+  const _ParsedHomePage(this.sections, this.continuation);
+  final List<InnerTubeHomeSection> sections;
+  final String? continuation;
 }
 
 String? _homeContinuationToken(Object? payload) {

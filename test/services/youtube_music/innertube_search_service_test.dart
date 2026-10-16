@@ -1268,6 +1268,49 @@ void main() {
       },
     );
 
+    test(
+      'large Home pages preserve dedupe across worker continuations',
+      () async {
+        final shared = _songRenderer(
+          videoId: 'shared-worker-song',
+          title: 'Shared',
+          artists: const ['Artist'],
+        );
+        transport.responses.addAll([
+          for (var page = 0; page < 2; page++)
+            InnerTubeHttpResponse(
+              statusCode: HttpStatus.ok,
+              body: jsonEncode({
+                ..._homePayload([
+                  _homeCarousel(
+                    title: 'Page $page',
+                    items: [
+                      shared,
+                      if (page == 1)
+                        _songRenderer(
+                          videoId: 'new-worker-song',
+                          title: 'New',
+                          artists: const ['Artist'],
+                        ),
+                    ],
+                  ),
+                ], continuation: page == 0 ? 'worker-continuation' : null),
+                'padding': 'x' * 65536,
+              }),
+            ),
+        ]);
+        final sections = await createService().getHome(maxSections: 2);
+        expect(sections.map((section) => section.title), ['Page 0', 'Page 1']);
+        expect(
+          sections
+              .expand((section) => section.songs)
+              .map((song) => song.videoId),
+          ['shared-worker-song', 'new-worker-song'],
+        );
+        expect(transport.requests, hasLength(2));
+      },
+    );
+
     test('does not request a continuation when the token is absent', () async {
       transport.response = InnerTubeHttpResponse(
         statusCode: HttpStatus.ok,
@@ -1581,69 +1624,76 @@ void main() {
       },
     );
 
-    test(
-      'loads public playlist metadata and songs from one browse chain',
-      () async {
-        final initialPayload = _collectionDetailPayload([
-          _songRenderer(
-            videoId: 'public00001',
-            title: 'Public song one',
-            artists: const ['First artist'],
-          ),
-        ], continuation: 'public-playlist-page-2');
-        initialPayload['header'] = _publicPlaylistHeader(
-          title: 'Playlist publica real',
-          owner: 'BStream Listener',
-          thumbnails: const [
-            ('https://img.test/playlist-160.jpg', 160),
-            ('//img.test/playlist-1280.jpg', 1280),
-            ('https://img.test/playlist-640.jpg', 640),
-          ],
-        );
-        transport.responses.addAll([
-          InnerTubeHttpResponse(
-            statusCode: HttpStatus.ok,
-            body: jsonEncode(initialPayload),
-          ),
-          InnerTubeHttpResponse(
-            statusCode: HttpStatus.ok,
-            body: jsonEncode(
-              _detailContinuationPayload([
-                _songRenderer(
-                  videoId: 'public00002',
-                  title: 'Public song two',
-                  artists: const ['Second artist'],
-                ),
-              ]),
+    for (final background in [false, true]) {
+      test(
+        'loads public playlist metadata and songs from one browse chain (background=$background)',
+        () async {
+          final initialPayload = _collectionDetailPayload([
+            _songRenderer(
+              videoId: 'public00001',
+              title: 'Public song one',
+              artists: const ['First artist'],
             ),
-          ),
-        ]);
-        final service = createService();
+          ], continuation: 'public-playlist-page-2');
+          initialPayload['header'] = _publicPlaylistHeader(
+            title: 'Playlist publica real',
+            owner: 'BStream Listener',
+            thumbnails: const [
+              ('https://img.test/playlist-160.jpg', 160),
+              ('//img.test/playlist-1280.jpg', 1280),
+              ('https://img.test/playlist-640.jpg', 640),
+            ],
+          );
+          if (background) initialPayload['padding'] = 'x' * 65536;
+          transport.responses.addAll([
+            InnerTubeHttpResponse(
+              statusCode: HttpStatus.ok,
+              body: jsonEncode(initialPayload),
+            ),
+            InnerTubeHttpResponse(
+              statusCode: HttpStatus.ok,
+              body: jsonEncode({
+                ..._detailContinuationPayload([
+                  _songRenderer(
+                    videoId: 'public00002',
+                    title: 'Public song two',
+                    artists: const ['Second artist'],
+                  ),
+                ]),
+                if (background) 'padding': 'x' * 65536,
+              }),
+            ),
+          ]);
+          final service = createService();
 
-        final detail = await service.getCollectionDetail(
-          ' VLPLpublic123 ',
-          limit: 2,
-        );
+          final detail = await service.getCollectionDetail(
+            ' VLPLpublic123 ',
+            limit: 2,
+          );
 
-        expect(detail.browseId, 'VLPLpublic123');
-        expect(detail.title, 'Playlist publica real');
-        expect(detail.subtitle, 'BStream Listener');
-        expect(detail.thumbnailUrl, 'https://img.test/playlist-1280.jpg');
-        expect(detail.songs.map((song) => song.videoId), [
-          'public00001',
-          'public00002',
-        ]);
-        expect(transport.getRequests, hasLength(1));
-        expect(transport.requests, hasLength(2));
-        expect(transport.requests.first.body['browseId'], 'VLPLpublic123');
-        expect(transport.requests.first.body, isNot(contains('continuation')));
-        expect(
-          transport.requests.last.body['continuation'],
-          'public-playlist-page-2',
-        );
-        expect(transport.requests.last.body, isNot(contains('browseId')));
-      },
-    );
+          expect(detail.browseId, 'VLPLpublic123');
+          expect(detail.title, 'Playlist publica real');
+          expect(detail.subtitle, 'BStream Listener');
+          expect(detail.thumbnailUrl, 'https://img.test/playlist-1280.jpg');
+          expect(detail.songs.map((song) => song.videoId), [
+            'public00001',
+            'public00002',
+          ]);
+          expect(transport.getRequests, hasLength(1));
+          expect(transport.requests, hasLength(2));
+          expect(transport.requests.first.body['browseId'], 'VLPLpublic123');
+          expect(
+            transport.requests.first.body,
+            isNot(contains('continuation')),
+          );
+          expect(
+            transport.requests.last.body['continuation'],
+            'public-playlist-page-2',
+          );
+          expect(transport.requests.last.body, isNot(contains('browseId')));
+        },
+      );
+    }
 
     test(
       'detail lookups parse more than the 20 search results in one payload',
@@ -1758,59 +1808,63 @@ void main() {
       },
     );
 
-    test(
-      'album continuations inherit header metadata and stop token cycles',
-      () async {
-        transport.responses.addAll([
-          InnerTubeHttpResponse(
-            statusCode: HttpStatus.ok,
-            body: jsonEncode(
-              _albumDetailPayload(
-                title: 'Continued album',
-                artists: const ['Header artist'],
-                tracks: [
+    for (final background in [false, true]) {
+      test(
+        'album continuations inherit header metadata and stop token cycles (background=$background)',
+        () async {
+          transport.responses.addAll([
+            InnerTubeHttpResponse(
+              statusCode: HttpStatus.ok,
+              body: jsonEncode({
+                ..._albumDetailPayload(
+                  title: 'Continued album',
+                  artists: const ['Header artist'],
+                  tracks: [
+                    _songRenderer(
+                      videoId: 'album-page-1',
+                      title: 'First page',
+                      artists: const [],
+                    ),
+                  ],
+                  continuation: 'album-cycle',
+                ),
+                if (background) 'padding': 'x' * 65536,
+              }),
+            ),
+            InnerTubeHttpResponse(
+              statusCode: HttpStatus.ok,
+              body: jsonEncode({
+                ..._detailContinuationPayload([
                   _songRenderer(
-                    videoId: 'album-page-1',
-                    title: 'First page',
+                    videoId: 'album-page-2',
+                    title: 'Second page',
                     artists: const [],
                   ),
-                ],
-                continuation: 'album-cycle',
-              ),
+                ], continuation: 'album-cycle'),
+                if (background) 'padding': 'x' * 65536,
+              }),
             ),
-          ),
-          InnerTubeHttpResponse(
-            statusCode: HttpStatus.ok,
-            body: jsonEncode(
-              _detailContinuationPayload([
-                _songRenderer(
-                  videoId: 'album-page-2',
-                  title: 'Second page',
-                  artists: const [],
-                ),
-              ], continuation: 'album-cycle'),
-            ),
-          ),
-        ]);
-        final service = createService();
+          ]);
+          final service = createService();
 
-        final songs = await service.getAlbumSongs('MPREb_album123');
+          final songs = await service.getAlbumSongs('MPREb_album123');
 
-        expect(songs.map((song) => song.videoId), [
-          'album-page-1',
-          'album-page-2',
-        ]);
-        expect(
-          songs.map((song) => song.album),
-          everyElement('Continued album'),
-        );
-        expect(
-          songs.map((song) => song.artists),
-          everyElement(equals(const ['Header artist'])),
-        );
-        expect(transport.requests, hasLength(2));
-      },
-    );
+          expect(songs.map((song) => song.videoId), [
+            'album-page-1',
+            'album-page-2',
+          ]);
+          expect(
+            songs.map((song) => song.album),
+            everyElement('Continued album'),
+          );
+          expect(
+            songs.map((song) => song.artists),
+            everyElement(equals(const ['Header artist'])),
+          );
+          expect(transport.requests, hasLength(2));
+        },
+      );
+    }
 
     test(
       'detail continuation requests stop at the strict safety cap',
@@ -2232,6 +2286,32 @@ void main() {
         expect(page.sections, hasLength(10));
         expect(page.sections.last.title, 'Sección 9');
         expect(transport.requests, hasLength(1));
+      },
+    );
+
+    test(
+      'large mood responses retain shelves and continuation through a worker',
+      () async {
+        transport.response = InnerTubeHttpResponse(
+          statusCode: HttpStatus.ok,
+          body: jsonEncode({
+            ..._moodGenreDetailPayload(continuation: 'LARGE_PAGE_2'),
+            'padding': 'x' * 65536,
+          }),
+        );
+        final page = await createService().getMoodOrGenre(
+          const InnerTubeBrowseTarget(
+            browseId: 'FEmusic_moods_and_genres_category',
+            params: 'opaque',
+          ),
+        );
+        expect(page.sections, hasLength(2));
+        expect(
+          page.sections.first.collections.single.browseId,
+          'VLPLmoodrelax001',
+        );
+        expect(page.sections.last.songs.single.videoId, 'mood-song-1');
+        expect(page.continuation, 'LARGE_PAGE_2');
       },
     );
 

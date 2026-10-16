@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../../core/utils/bounded_byte_stream.dart';
+import '../../../core/utils/background_work.dart';
 import 'youtube_music_account_transport.dart';
 
 /// Production HTTPS transport for authenticated InnerTube account calls.
@@ -124,14 +125,15 @@ class IoYouTubeMusicAccountTransport implements YouTubeMusicAccountTransport {
           idleTimeout: request.timeout,
           totalTimeout: request.timeout,
         );
-        final bodyText = utf8.decode(responseBytes);
-        final decodedBody = _decodeResponseBody(
-          bodyText,
-          statusCode: httpResponse.statusCode,
+        final decodedBody = await transformInBackground(
+          responseBytes,
+          _AccountResponseBodyParser(httpResponse.statusCode).parse,
+          inputSize: responseBytes.length,
         );
         return YouTubeMusicAccountResponse(
           statusCode: httpResponse.statusCode,
           body: decodedBody,
+          bodyByteCount: responseBytes.length,
           headers: _safeResponseHeaders(httpResponse.headers),
         );
       }();
@@ -262,17 +264,23 @@ Map<String, String> _safeResponseHeaders(HttpHeaders headers) {
   return values;
 }
 
-Object? _decodeResponseBody(String body, {required int statusCode}) {
-  if (body.trim().isEmpty) {
-    return const <String, Object?>{};
-  }
-  try {
-    return jsonDecode(body);
-  } on FormatException {
-    if (statusCode >= 200 && statusCode < 300) {
-      rethrow;
+class _AccountResponseBodyParser {
+  const _AccountResponseBodyParser(this.statusCode);
+  final int statusCode;
+
+  Object? parse(List<int> bytes) {
+    final body = utf8.decode(bytes);
+    if (body.trim().isEmpty) {
+      return const <String, Object?>{};
     }
-    // Do not retain an HTML/error body that may echo account data.
-    return null;
+    try {
+      return jsonDecode(body);
+    } on FormatException {
+      if (statusCode >= 200 && statusCode < 300) {
+        rethrow;
+      }
+      // Do not retain an HTML/error body that may echo account data.
+      return null;
+    }
   }
 }

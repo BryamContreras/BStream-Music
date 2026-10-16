@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/horizontal_shelf_scroll_behavior.dart';
 import '../../../../services/youtube_music/account/youtube_music_account.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/remote_music_datasource.dart';
@@ -883,20 +884,22 @@ class _ReleaseShelf extends StatelessWidget {
         _SectionTitle(title: title),
         SizedBox(
           height: wide ? 238 : 210,
-          child: ListView.separated(
-            scrollCacheExtent: const ScrollCacheExtent.pixels(760),
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            scrollDirection: Axis.horizontal,
-            itemCount: releases.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 10),
-            itemBuilder: (context, index) {
-              final release = releases[index];
-              return _ReleaseCard(
-                release: release,
-                width: cardWidth,
-                onTap: () => onOpen(release),
-              );
-            },
+          child: HorizontalShelfScroll(
+            child: ListView.separated(
+              scrollCacheExtent: const ScrollCacheExtent.pixels(760),
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              scrollDirection: Axis.horizontal,
+              itemCount: releases.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              itemBuilder: (context, index) {
+                final release = releases[index];
+                return _ReleaseCard(
+                  release: release,
+                  width: cardWidth,
+                  onTap: () => onOpen(release),
+                );
+              },
+            ),
           ),
         ),
       ],

@@ -359,6 +359,9 @@ void main() {
     expect(info.title, 'Test Song');
     expect(info.artist, 'BStream');
     expect(playbackInfo.streamClientProfileKey, 'androidSdkless');
+    expect(playbackInfo.streamBitrate, 129000);
+    expect(playbackInfo.streamSampleRate, 44100);
+    expect(playbackInfo.streamChannels, 2);
     expect(results.single.id, 'dQw4w9WgXcQ');
   });
 
@@ -659,6 +662,8 @@ final class _PlayerTransport implements InnerTubeTransport {
                   ? 'video/mp4; codecs="avc1.42001E, mp4a.40.2"'
                   : audioMimeType,
               'bitrate': 129000,
+              'audioSampleRate': '44100',
+              'audioChannels': 2,
               'contentLength': '4096',
             },
             ...additionalAudioFormats,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../../../core/utils/background_work.dart';
 import '../innertube_transport.dart';
 import 'ejs_solver.dart';
 
@@ -191,7 +192,11 @@ final class InnerTubePlayerBootstrapper
         'The YouTube watch page redirected to an untrusted origin.',
       );
     }
-    return InnerTubePlayerBootstrapParser.parse(response.body);
+    return transformInBackground(
+      response.body,
+      InnerTubePlayerBootstrapParser.parse,
+      inputSize: response.body.length,
+    );
   }
 
   Uri _watchUri(String host, String videoId) =>

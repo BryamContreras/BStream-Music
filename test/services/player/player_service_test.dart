@@ -2,6 +2,25 @@ import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('playback intent is independent of loading and audible status', () {
+    const loading = PlayerSnapshot(
+      status: PlayerStatus.loading,
+      playWhenReady: true,
+    );
+    expect(loading.wantsToPlay, isTrue);
+    expect(loading.copyWith(status: PlayerStatus.failed).wantsToPlay, isTrue);
+    expect(loading.copyWith(playWhenReady: false).wantsToPlay, isFalse);
+    expect(loading.copyWith(playWhenReady: null).wantsToPlay, isFalse);
+    expect(
+      const PlayerSnapshot(status: PlayerStatus.playing).wantsToPlay,
+      isTrue,
+    );
+    expect(
+      const PlayerSnapshot(status: PlayerStatus.paused).wantsToPlay,
+      isFalse,
+    );
+  });
+
   test('PlayerSnapshot copyWith retains omitted nullable metadata', () {
     const snapshot = PlayerSnapshot(
       status: PlayerStatus.playing,

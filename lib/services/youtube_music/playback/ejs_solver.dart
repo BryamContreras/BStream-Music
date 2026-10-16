@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
+import '../../../core/utils/background_work.dart';
 import '../innertube_transport.dart';
 import 'javascript_runtime.dart';
 
@@ -152,17 +153,11 @@ class BundledEjsModuleSource implements EjsModuleSource {
         );
       }
       final encoded = await _assetLoader(assetPath);
-      late final String body;
-      try {
-        final compact = encoded.replaceAll(RegExp(r'\s'), '');
-        body = utf8.decode(base64Decode(compact));
-      } on FormatException catch (error) {
-        throw EjsSolverException(
-          'Bundled EJS ${module.name} is not valid Base64 UTF-8.',
-          cause: error,
-        );
-      }
-      _verifyEjsModule(module, body);
+      final body = await transformInBackground(
+        encoded,
+        _EjsModulePreparation(module, isEncoded: true).parse,
+        inputSize: encoded.length,
+      );
       _appendEjsModule(source, module, body);
     }
     return source.join('\n');
@@ -259,8 +254,12 @@ class RemoteEjsModuleSource implements EjsModuleSource {
           'EJS ${module.name} returned HTTP ${response.statusCode}.',
         );
       }
-      _verifyEjsModule(module, response.body);
-      _appendEjsModule(source, module, response.body);
+      final body = await transformInBackground(
+        response.body,
+        _EjsModulePreparation(module, isEncoded: false).parse,
+        inputSize: response.body.length,
+      );
+      _appendEjsModule(source, module, body);
     }
     final bundle = source.join('\n');
     _cached = bundle;
@@ -714,6 +713,30 @@ class EjsSolverException implements Exception {
   String toString() => cause == null
       ? 'EjsSolverException: $message'
       : 'EjsSolverException: $message ($cause)';
+}
+
+class _EjsModulePreparation {
+  const _EjsModulePreparation(this.module, {required this.isEncoded});
+
+  final EjsModuleSpec module;
+  final bool isEncoded;
+
+  String parse(String input) {
+    var body = input;
+    if (isEncoded) {
+      try {
+        final compact = input.replaceAll(RegExp(r'\s'), '');
+        body = utf8.decode(base64Decode(compact));
+      } on FormatException catch (error) {
+        throw EjsSolverException(
+          'Bundled EJS ${module.name} is not valid Base64 UTF-8.',
+          cause: error,
+        );
+      }
+    }
+    _verifyEjsModule(module, body);
+    return body;
+  }
 }
 
 void _verifyEjsModule(EjsModuleSpec module, String body) {

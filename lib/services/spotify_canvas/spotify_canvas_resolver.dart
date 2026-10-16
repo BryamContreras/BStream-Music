@@ -1,6 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
+
+import '../../core/utils/background_work.dart';
 
 import '../visual_track_identity.dart';
 
@@ -265,12 +266,14 @@ class SpotifyCanvasResolver {
           return null;
         }
       }
-      final decoded = jsonDecode(utf8.decode(bytes));
-      return decoded is Map<String, dynamic> ? decoded : null;
+      return await parseJsonBytesInBackground(bytes, _jsonMap);
     } finally {
       client.close(force: true);
     }
   }
+
+  static Map<String, dynamic>? _jsonMap(Object? value) =>
+      value is Map<String, dynamic> ? value : null;
 
   static Future<int?> _requestMediaSize(Uri uri) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);

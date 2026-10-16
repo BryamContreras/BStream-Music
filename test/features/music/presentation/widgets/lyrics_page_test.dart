@@ -1694,7 +1694,7 @@ void main() {
 
     await tester.tap(playback);
     await tester.pump();
-    expect(player.togglePlayPauseCalls, 1);
+    expect(player.pauseCalls, 1);
     expect(tester.takeException(), isNull);
   });
 
@@ -1933,7 +1933,7 @@ void main() {
       );
       await tester.tap(primaryControl);
       await tester.pump();
-      expect(player.togglePlayPauseCalls, 1);
+      expect(player.pauseCalls, 1);
 
       player.emit(lookupSnapshot.copyWith(status: PlayerStatus.paused));
       await tester.pump();
@@ -4245,7 +4245,10 @@ double _lineSlidePixelOffset(WidgetTester tester, String key) {
 
 Finder _activeLine(String text) {
   return find.descendant(
-    of: find.byKey(const ValueKey('active-lyric-line')),
+    of: find.ancestor(
+      of: find.byKey(const ValueKey('active-lyric-line')),
+      matching: find.byType(LyricsTextStyleTransition),
+    ),
     matching: find.text(text),
   );
 }
@@ -4666,6 +4669,7 @@ class _FakePlayerService implements PlayerService {
   final StreamController<PlayerSnapshot> _snapshots =
       StreamController<PlayerSnapshot>.broadcast(sync: true);
   final List<Duration> seekPositions = [];
+  int pauseCalls = 0;
   int togglePlayPauseCalls = 0;
   PlayerSnapshot _snapshot;
 
@@ -4689,7 +4693,9 @@ class _FakePlayerService implements PlayerService {
   Future<void> dispose() => close();
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async {
+    pauseCalls++;
+  }
 
   @override
   Future<void> playLocal(LocalTrack track) async {}

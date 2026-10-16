@@ -952,9 +952,13 @@ class AppStrings {
   String get showAudioQuality =>
       choose('Mostrar códec y calidad', 'Show codec and quality');
   String get showAudioQualityDescription => choose(
-    'Muestra el formato y la tasa de bits de la canción cuando están disponibles.',
-    'Shows the song format and bitrate when available.',
+    'Muestra el códec, la frecuencia de muestreo, la tasa de bits y los canales cuando están disponibles.',
+    'Shows the codec, sample rate, bitrate and channels when available.',
   );
+  String get audioQualityStereo => choose('Estéreo', 'Stereo');
+  String get audioQualityMono => 'Mono';
+  String audioQualityChannels(int channels) =>
+      choose('$channels canales', '$channels channels');
   String get playerStyleBStreamMusic => 'BStream Music';
   String get playerStyleAppleMusic => 'Apple Music Style';
   String get playerStyleClassicVinyl =>

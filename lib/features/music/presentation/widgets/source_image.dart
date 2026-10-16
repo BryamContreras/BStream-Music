@@ -45,14 +45,18 @@ class SourceImage extends StatefulWidget {
     this.fit = BoxFit.cover,
     this.cacheWidth = _maximumDecodedDimension,
     this.filterQuality = FilterQuality.medium,
+    this.opacity = 1,
     super.key,
-  });
+  }) : assert(opacity >= 0 && opacity <= 1);
 
   final String? source;
   final String? fallbackSource;
   final BoxFit fit;
   final int cacheWidth;
   final FilterQuality filterQuality;
+
+  /// Applied by the image paint itself, without an offscreen Opacity layer.
+  final double opacity;
   final Widget fallback;
 
   // Artwork is displayed in bounded cards and player surfaces. Keep the
@@ -69,19 +73,28 @@ class _SourceImageState extends State<SourceImage> {
 
   String? _localSource;
   Future<bool>? _localExists;
+  Animation<double>? _imageOpacity;
 
   @override
   void initState() {
     super.initState();
+    _updateImageOpacity();
     _prepareLocalSource();
   }
 
   @override
   void didUpdateWidget(covariant SourceImage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.opacity != widget.opacity) _updateImageOpacity();
     if (oldWidget.source != widget.source) {
       _prepareLocalSource();
     }
+  }
+
+  void _updateImageOpacity() {
+    _imageOpacity = widget.opacity == 1
+        ? null
+        : AlwaysStoppedAnimation<double>(widget.opacity);
   }
 
   void _prepareLocalSource() {
@@ -130,6 +143,7 @@ class _SourceImageState extends State<SourceImage> {
           File(cachedPath),
           fit: widget.fit,
           filterQuality: widget.filterQuality,
+          opacity: _imageOpacity,
           cacheWidth: widget.cacheWidth,
           gaplessPlayback: true,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
@@ -158,6 +172,7 @@ class _SourceImageState extends State<SourceImage> {
           ),
           fit: widget.fit,
           filterQuality: widget.filterQuality,
+          opacity: _imageOpacity,
           gaplessPlayback: true,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
               wasSynchronouslyLoaded || frame != null ? child : fallback,
@@ -170,6 +185,7 @@ class _SourceImageState extends State<SourceImage> {
           ),
           fit: widget.fit,
           filterQuality: widget.filterQuality,
+          opacity: _imageOpacity,
           gaplessPlayback: true,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
               wasSynchronouslyLoaded || frame != null ? child : preview,
@@ -183,6 +199,7 @@ class _SourceImageState extends State<SourceImage> {
         ),
         fit: widget.fit,
         filterQuality: widget.filterQuality,
+        opacity: _imageOpacity,
         gaplessPlayback: true,
         errorBuilder: (_, _, _) => fallback,
       );
@@ -199,6 +216,7 @@ class _SourceImageState extends State<SourceImage> {
         file,
         fit: widget.fit,
         filterQuality: widget.filterQuality,
+        opacity: _imageOpacity,
         gaplessPlayback: true,
         cacheWidth: 256,
         frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
@@ -209,6 +227,7 @@ class _SourceImageState extends State<SourceImage> {
         file,
         fit: widget.fit,
         filterQuality: widget.filterQuality,
+        opacity: _imageOpacity,
         gaplessPlayback: true,
         cacheWidth: widget.cacheWidth,
         frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
@@ -233,6 +252,7 @@ class _SourceImageState extends State<SourceImage> {
           file,
           fit: widget.fit,
           filterQuality: widget.filterQuality,
+          opacity: _imageOpacity,
           gaplessPlayback: true,
           cacheWidth: widget.cacheWidth,
           errorBuilder: (_, _, _) => fallback,
@@ -261,6 +281,7 @@ class _SourceImageState extends State<SourceImage> {
       fit: widget.fit,
       cacheWidth: widget.cacheWidth,
       filterQuality: widget.filterQuality,
+      opacity: widget.opacity,
       fallback: widget.fallback,
     );
   }
@@ -283,6 +304,7 @@ class _SourceImageState extends State<SourceImage> {
         ),
         fit: fit,
         filterQuality: widget.filterQuality,
+        opacity: _imageOpacity,
         gaplessPlayback: true,
         frameBuilder: fadeIn
             ? (context, child, frame, wasSynchronouslyLoaded) {

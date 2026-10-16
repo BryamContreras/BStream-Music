@@ -16,6 +16,8 @@ class TrackInfoModel extends TrackInfo {
     super.streamFormatId,
     super.streamCodec,
     super.streamBitrate,
+    super.streamSampleRate,
+    super.streamChannels,
     super.streamClientProfileKey,
     super.extractor,
     super.album,
@@ -33,6 +35,7 @@ class TrackInfoModel extends TrackInfo {
       json['artist_browse_ids'],
     );
     final metadataSource = _metadataSource(json['metadata_source']);
+    final selectedFormat = _selectedStreamFormat(json);
     final artist =
         (metadataSource == TrackMetadataSource.youtubeMusic &&
                 artistNames.isNotEmpty
@@ -60,13 +63,21 @@ class TrackInfoModel extends TrackInfo {
       streamSource: _stringValue(json['stream_source']),
       streamFormatId:
           _stringValue(json['stream_format_id']) ??
-          _stringValue(_selectedStreamFormat(json)?['format_id']) ??
+          _stringValue(selectedFormat?['format_id']) ??
           _stringValue(json['format_id']),
       streamCodec:
           _stringValue(json['stream_codec']) ??
-          _stringValue(_selectedStreamFormat(json)?['acodec']) ??
+          _stringValue(selectedFormat?['acodec']) ??
           _stringValue(json['acodec']),
       streamBitrate: _intValue(json['stream_bitrate']),
+      streamSampleRate:
+          _positiveIntValue(json['stream_sample_rate']) ??
+          _positiveIntValue((selectedFormat ?? json)['asr']) ??
+          _positiveIntValue((selectedFormat ?? json)['audioSampleRate']),
+      streamChannels:
+          _positiveIntValue(json['stream_channels']) ??
+          _positiveIntValue((selectedFormat ?? json)['audio_channels']) ??
+          _positiveIntValue((selectedFormat ?? json)['audioChannels']),
       streamClientProfileKey: _stringValue(json['stream_client_profile_key']),
       extractor:
           _stringValue(json['extractor']) ??
@@ -108,6 +119,8 @@ class TrackInfoModel extends TrackInfo {
       'stream_format_id': streamFormatId,
       'stream_codec': streamCodec,
       'stream_bitrate': streamBitrate,
+      'stream_sample_rate': streamSampleRate,
+      'stream_channels': streamChannels,
       'stream_client_profile_key': streamClientProfileKey,
       'extractor': extractor,
       'album': album,
@@ -460,5 +473,11 @@ class TrackInfoModel extends TrackInfo {
       return null;
     }
     return value is num ? value.toInt() : int.tryParse(value.toString());
+  }
+
+  static int? _positiveIntValue(Object? value) {
+    if (value is num && !value.isFinite) return null;
+    final parsed = _intValue(value);
+    return parsed != null && parsed > 0 ? parsed : null;
   }
 }

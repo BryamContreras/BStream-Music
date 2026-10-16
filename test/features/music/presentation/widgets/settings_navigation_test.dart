@@ -491,11 +491,11 @@ void main() {
 
       expect(
         find.byKey(const ValueKey('show-audio-quality-toggle')),
-        findsNothing,
+        findsOneWidget,
       );
       expect(
         find.byKey(const ValueKey('show-audio-quality-switch')),
-        findsNothing,
+        findsOneWidget,
       );
 
       expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
@@ -584,6 +584,56 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final width in [360.0, 1600.0]) {
+    testWidgets('audio quality appears below player style at width $width', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      _configureView(tester, Size(width, 1100));
+      final navigationController = SettingsNavigationController();
+      addTearDown(navigationController.dispose);
+      await tester.pumpWidget(
+        _settingsHarness(navigationController: navigationController),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+      await tester.pumpAndSettle();
+
+      final style = find.byKey(const ValueKey('player-style-selector'));
+      final quality = find.byKey(const ValueKey('show-audio-quality-toggle'));
+      final qualitySwitch = find.byKey(
+        const ValueKey('show-audio-quality-switch'),
+      );
+      final artwork = find.byKey(const ValueKey('animated-artwork-toggle'));
+      expect(tester.widget<Switch>(qualitySwitch).value, isFalse);
+      expect(
+        tester.getTopLeft(quality).dy,
+        greaterThan(tester.getBottomLeft(style).dy),
+      );
+      expect(
+        tester.getBottomLeft(quality).dy,
+        lessThan(tester.getTopLeft(artwork).dy),
+      );
+
+      await tester.ensureVisible(quality);
+      await tester.tap(
+        find.descendant(
+          of: quality,
+          matching: find.text('Mostrar códec y calidad'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(qualitySwitch).value, isTrue);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('settings.showAudioQuality'), isTrue);
+      await tester.tap(qualitySwitch);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(qualitySwitch).value, isFalse);
+      expect(prefs.getBool('settings.showAudioQuality'), isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('appearance selects and applies a player font', (tester) async {
     _configureView(tester, const Size(430, 1000));

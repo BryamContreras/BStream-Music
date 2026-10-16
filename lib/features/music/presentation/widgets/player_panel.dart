@@ -18,12 +18,14 @@ import '../../../../core/widgets/liquid_glass_surface.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/animated_artwork/apple_animated_artwork_resolver.dart';
 import '../../../../services/player/player_service.dart';
+import '../../../../services/player/local_audio_quality_service.dart';
 import '../../../../services/spotify_canvas/spotify_canvas_resolver.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
+import '../providers/local_audio_quality_provider.dart';
 import '../providers/playback_visual_cache_provider.dart';
 import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
@@ -239,10 +241,36 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
   static const _mobileFrameCompressionRange = 100.0;
 
   bool _showPlaybackQueue = false;
+  bool _initialQueueVisibilitySet = false;
+  bool _desktopQueueAutoOpen = false;
   bool _artistNavigationBusy = false;
   bool _albumNavigationBusy = false;
   final Map<String, _AlbumNavigationTarget> _albumNavigationTargets = {};
   final Set<String> _albumNavigationMisses = {};
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _desktopQueueAutoOpen =
+        AppPlatform.isDesktop &&
+        !AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
+    if (!_initialQueueVisibilitySet) {
+      _initialQueueVisibilitySet = true;
+      _showPlaybackQueue = widget.active && _desktopQueueAutoOpen;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant PlayerPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The full player is retained behind the browsing tabs. Open the queue
+    // once per visit, not on playback updates or dependency changes, so the
+    // user can still close it for the remainder of the current visit.
+    if (!oldWidget.active && widget.active && _desktopQueueAutoOpen) {
+      _showPlaybackQueue = true;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final visualCache = ref.watch(playbackVisualCacheProvider);
@@ -2314,13 +2342,12 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
         // The full player stays mounted behind other tabs. Do not rebuild its
         // slider four times a second while the page is invisible.
         if (!timelineVisible) {
-          return (position: Duration.zero, duration: null, snapshot: null);
+          return (position: Duration.zero, duration: null);
         }
         final snapshot = player.value;
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
-          snapshot: snapshot,
         );
       }),
     );
@@ -2353,11 +2380,6 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
     );
     final positionLabel = formatDuration(shownPosition);
     final durationLabel = formatDuration(duration);
-    final audioQualityLabel = _audioQualityForSnapshot(timeline.snapshot, ref);
-    final audioQuality = _PlayerAudioQualityLabel(
-      label: audioQualityLabel,
-      compact: widget.compact,
-    );
 
     void seekTo(double milliseconds) {
       final next = Duration(
@@ -2459,7 +2481,6 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
                 alignment: AlignmentDirectional.centerStart,
                 child: position,
               ),
-              if (audioQualityLabel != null) Center(child: audioQuality),
               Align(
                 alignment: AlignmentDirectional.centerEnd,
                 child: totalDuration,
@@ -2476,7 +2497,7 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
                 child: position,
               ),
             ),
-            Expanded(child: Center(child: audioQuality)),
+            const Spacer(),
             SizedBox(
               width: sideWidth,
               child: Align(
@@ -3285,16 +3306,18 @@ class _ExpandedArtworkPlaceholder extends StatelessWidget {
       constraints: BoxConstraints(maxWidth: maxExtent, maxHeight: maxExtent),
       child: AspectRatio(
         aspectRatio: 1,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (isFavorite)
-              const Positioned(
-                top: 6,
-                right: 6,
-                child: FavoriteStarBadge(iconSize: 26),
-              ),
-          ],
+        child: _ArtworkAudioQualityOverlay(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (isFavorite)
+                const Positioned(
+                  top: 6,
+                  right: 6,
+                  child: FavoriteStarBadge(iconSize: 26),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -3777,29 +3800,31 @@ class _LargeArtworkState extends State<_LargeArtwork> {
       ),
       child: AspectRatio(
         aspectRatio: 1,
-        child: expanded
-            ? LayoutBuilder(
-                builder: (context, constraints) {
-                  final renderedExtent = constraints.biggest.shortestSide;
-                  final requestedScale = renderedExtent <= 0
-                      ? 1.0
-                      : math.max(
-                          1.0,
-                          widget.expandedTargetWidth / renderedExtent,
-                        );
-                  final scale = widget.fullBleedExpanded
-                      ? requestedScale
-                      : math.min(requestedScale, 1.18);
-                  return Transform.scale(
-                    key: const ValueKey('player-artwork-presentation-scale'),
-                    alignment: Alignment.topCenter,
-                    scale: scale,
-                    transformHitTests: false,
-                    child: artworkStack,
-                  );
-                },
-              )
-            : artworkStack,
+        child: _ArtworkAudioQualityOverlay(
+          child: expanded
+              ? LayoutBuilder(
+                  builder: (context, constraints) {
+                    final renderedExtent = constraints.biggest.shortestSide;
+                    final requestedScale = renderedExtent <= 0
+                        ? 1.0
+                        : math.max(
+                            1.0,
+                            widget.expandedTargetWidth / renderedExtent,
+                          );
+                    final scale = widget.fullBleedExpanded
+                        ? requestedScale
+                        : math.min(requestedScale, 1.18);
+                    return Transform.scale(
+                      key: const ValueKey('player-artwork-presentation-scale'),
+                      alignment: Alignment.topCenter,
+                      scale: scale,
+                      transformHitTests: false,
+                      child: artworkStack,
+                    );
+                  },
+                )
+              : artworkStack,
+        ),
       ),
     );
   }
@@ -6140,19 +6165,13 @@ class _Timeline extends ConsumerWidget {
     final timeline = ref.watch(
       playerControllerProvider.select((player) {
         if (!timelineVisible) {
-          return (
-            position: Duration.zero,
-            duration: null,
-            isPlaying: false,
-            snapshot: null,
-          );
+          return (position: Duration.zero, duration: null, isPlaying: false);
         }
         final snapshot = player.value;
         return (
           position: snapshot?.position ?? Duration.zero,
           duration: snapshot?.duration,
           isPlaying: snapshot?.status == PlayerStatus.playing,
-          snapshot: snapshot,
         );
       }),
     );
@@ -6161,11 +6180,6 @@ class _Timeline extends ConsumerWidget {
     final progressColor = AppColors.downloadAccentFor(context);
     final positionLabel = formatDuration(position);
     final durationLabel = formatDuration(duration);
-    final audioQualityLabel = _audioQualityForSnapshot(timeline.snapshot, ref);
-    final audioQuality = _PlayerAudioQualityLabel(
-      label: audioQualityLabel,
-      compact: spacingCompactness > 0.5,
-    );
     final labelStyle = DefaultTextStyle.of(context).style.merge(
       TextStyle(
         fontWeight: FontWeight.w900,
@@ -6202,7 +6216,6 @@ class _Timeline extends ConsumerWidget {
                     alignment: AlignmentDirectional.centerStart,
                     child: Text(positionLabel, style: labelStyle),
                   ),
-                  if (audioQualityLabel != null) Center(child: audioQuality),
                   Align(
                     alignment: AlignmentDirectional.centerEnd,
                     child: Text(durationLabel, style: labelStyle),
@@ -6218,7 +6231,7 @@ class _Timeline extends ConsumerWidget {
                       child: Text(positionLabel, style: labelStyle),
                     ),
                   ),
-                  Expanded(child: Center(child: audioQuality)),
+                  const Spacer(),
                   SizedBox(
                     width: sideWidth,
                     child: Align(
@@ -6254,11 +6267,11 @@ class _Timeline extends ConsumerWidget {
   }
 }
 
-String? _audioQualityForSnapshot(PlayerSnapshot? snapshot, WidgetRef ref) {
-  if (!(ref.watch(settingsControllerProvider).value?.showAudioQuality ??
-      false)) {
-    return null;
-  }
+String? _audioQualityForSnapshot(
+  PlayerSnapshot? snapshot,
+  PlayerController controller,
+  AppStrings strings,
+) {
   if (snapshot == null ||
       (snapshot.status != PlayerStatus.playing &&
           snapshot.status != PlayerStatus.paused &&
@@ -6266,21 +6279,40 @@ String? _audioQualityForSnapshot(PlayerSnapshot? snapshot, WidgetRef ref) {
     return null;
   }
   final sourceUrl = snapshot.sourceUrl?.trim();
-  final controller = ref.read(playerControllerProvider.notifier);
 
   if (snapshot.isRemote) {
     if (sourceUrl == null || sourceUrl.isEmpty) return null;
     final current = controller.currentRemoteTrackFor(sourceUrl);
     final prepared = controller.preparedAudioSourceFor(sourceUrl);
+    final preparedTrack = prepared?.track;
+    if (current?.streamUrl?.isNotEmpty == true &&
+        preparedTrack?.streamUrl?.isNotEmpty == true &&
+        current!.streamUrl != preparedTrack!.streamUrl &&
+        (current.streamCodec != preparedTrack.streamCodec ||
+            current.streamMimeType != preparedTrack.streamMimeType ||
+            current.streamExtension != preparedTrack.streamExtension ||
+            current.streamSampleRate != preparedTrack.streamSampleRate ||
+            current.streamBitrate != preparedTrack.streamBitrate ||
+            current.streamChannels != preparedTrack.streamChannels)) {
+      // Native lookahead can replace an old resolved queue entry, while a
+      // later recovery can refresh only the current entry. Neither URL alone
+      // proves which conflicting format is audible: do not show stale facts.
+      return null;
+    }
     final track = current?.streamUrl?.isNotEmpty == true
         ? current
-        : prepared?.track ?? current;
+        : preparedTrack ?? current;
     if (track == null) return null;
     return playbackAudioQualityLabel(
       codec: track.streamCodec,
       mimeType: track.streamMimeType,
       extension: track.streamExtension,
       bitrate: track.streamBitrate,
+      sampleRate: track.streamSampleRate,
+      channels: track.streamChannels,
+      stereoLabel: strings.audioQualityStereo,
+      monoLabel: strings.audioQualityMono,
+      channelCountLabel: strings.audioQualityChannels,
       localSource: prepared?.uri.scheme == 'file'
           ? prepared!.uri.toFilePath()
           : null,
@@ -6290,26 +6322,113 @@ String? _audioQualityForSnapshot(PlayerSnapshot? snapshot, WidgetRef ref) {
   return playbackAudioQualityLabel(localSource: local?.filePath ?? sourceUrl);
 }
 
-class _PlayerAudioQualityLabel extends StatelessWidget {
-  const _PlayerAudioQualityLabel({required this.label, required this.compact});
+String? _localAudioQualitySource(
+  PlayerSnapshot? snapshot,
+  PlayerController controller,
+) {
+  if (snapshot == null ||
+      snapshot.isRemote ||
+      (snapshot.status != PlayerStatus.playing &&
+          snapshot.status != PlayerStatus.paused &&
+          snapshot.status != PlayerStatus.completed)) {
+    return null;
+  }
+  final source =
+      controller.currentLocalTrackFor(snapshot.trackId)?.filePath ??
+      snapshot.sourceUrl;
+  return source != null && isSupportedLocalAudioQualitySource(source)
+      ? source
+      : null;
+}
 
-  final String? label;
-  final bool compact;
+class _ArtworkAudioQualityOverlay extends ConsumerWidget {
+  const _ArtworkAudioQualityOverlay({required this.child});
+
+  final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    if (label == null) return const SizedBox.shrink();
-    return Text(
-      label!,
-      key: const ValueKey('player-audio-quality'),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      textAlign: TextAlign.center,
-      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-        color: AppColors.downloadAccentFor(context),
-        fontSize: compact ? 11 : 12,
-        fontWeight: FontWeight.w800,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => settings.value?.showAudioQuality ?? false,
       ),
+    );
+    String? label;
+    if (enabled && TickerMode.valuesOf(context).enabled) {
+      final strings = ref.watch(appStringsProvider);
+      final controller = ref.watch(playerControllerProvider.notifier);
+      // Position updates must not rebuild the cover when its format is unchanged.
+      final audio = ref.watch(
+        playerControllerProvider.select(
+          (player) => (
+            label: _audioQualityForSnapshot(player.value, controller, strings),
+            localSource: _localAudioQualitySource(player.value, controller),
+          ),
+        ),
+      );
+      label = audio.label;
+      final localSource = audio.localSource;
+      if (localSource != null) {
+        final quality = ref
+            .watch(localPlaybackAudioQualityProvider(localSource))
+            .value;
+        if (quality != null) {
+          label = playbackAudioQualityLabel(
+            codec: quality.codec,
+            mimeType: quality.mimeType,
+            sampleRate: quality.sampleRate,
+            bitrate: quality.bitrate,
+            channels: quality.channels,
+            localSource: localSource,
+            stereoLabel: strings.audioQualityStereo,
+            monoLabel: strings.audioQualityMono,
+            channelCountLabel: strings.audioQualityChannels,
+          );
+        }
+      }
+    }
+    return Stack(
+      key: const ValueKey('player-artwork-quality-slot'),
+      fit: StackFit.expand,
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        if (label != null)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: Padding(
+                key: const ValueKey('player-audio-quality-overlay'),
+                padding: const EdgeInsets.fromLTRB(10, 10, 10, 7),
+                child: Text(
+                  label,
+                  key: const ValueKey('player-audio-quality'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: AppColors.playbackSecondaryControlForegroundFor(
+                      context,
+                    ),
+                    fontSize: 10,
+                    height: 1.2,
+                    fontWeight: FontWeight.w500,
+                    shadows: const [
+                      Shadow(
+                        color: Color(0xDD000000),
+                        blurRadius: 2,
+                        offset: Offset(0, 1),
+                      ),
+                      Shadow(color: Color(0x99000000), blurRadius: 4),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

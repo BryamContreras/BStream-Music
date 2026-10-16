@@ -19,6 +19,7 @@ import '../../../../services/player/player_service.dart';
 import '../../domain/entities/lyrics.dart';
 import '../providers/music_providers.dart';
 import 'lyrics_animation_transition.dart';
+import 'lyrics_line_layout.dart';
 import 'lyrics_text_style_transition.dart';
 import 'mini_player.dart';
 import 'playback_gradient_background.dart';
@@ -2012,7 +2013,11 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
   List<String>? _measuredRomanizedLines;
   double? _measuredContentWidth;
   double? _measuredActiveFontSize;
-  String? _measuredFontFamily;
+  double? _measuredInactiveFontSize;
+  TextStyle? _measuredInheritedStyle;
+  TextHeightBehavior? _measuredTextHeightBehavior;
+  TextWidthBasis? _measuredTextWidthBasis;
+  LyricsTextAccessibilityOverrides? _measuredAccessibility;
   TextScaler? _measuredTextScaler;
   TextDirection? _measuredTextDirection;
   Locale? _measuredLocale;
@@ -2306,7 +2311,11 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
     _measuredRomanizedLines = null;
     _measuredContentWidth = null;
     _measuredActiveFontSize = null;
-    _measuredFontFamily = null;
+    _measuredInactiveFontSize = null;
+    _measuredInheritedStyle = null;
+    _measuredTextHeightBehavior = null;
+    _measuredTextWidthBasis = null;
+    _measuredAccessibility = null;
     _measuredTextScaler = null;
     _measuredTextDirection = null;
     _measuredLocale = null;
@@ -2315,7 +2324,11 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
   bool _ensureLineMetrics({
     required double contentWidth,
     required double activeFontSize,
-    required String? fontFamily,
+    required double inactiveFontSize,
+    required TextStyle inheritedStyle,
+    required TextHeightBehavior? textHeightBehavior,
+    required TextWidthBasis textWidthBasis,
+    required LyricsTextAccessibilityOverrides accessibility,
     required TextScaler textScaler,
     required TextDirection textDirection,
     required Locale? locale,
@@ -2323,10 +2336,13 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
     final metricsAreCurrent =
         identical(_measuredEntries, _entries) &&
         identical(_measuredRomanizedLines, widget.romanizedLines) &&
-        _measuredContentWidth != null &&
-        (_measuredContentWidth! - contentWidth).abs() < 0.5 &&
+        _measuredContentWidth == contentWidth &&
         _measuredActiveFontSize == activeFontSize &&
-        _measuredFontFamily == fontFamily &&
+        _measuredInactiveFontSize == inactiveFontSize &&
+        _measuredInheritedStyle == inheritedStyle &&
+        _measuredTextHeightBehavior == textHeightBehavior &&
+        _measuredTextWidthBasis == textWidthBasis &&
+        _measuredAccessibility == accessibility &&
         _measuredTextScaler == textScaler &&
         _measuredTextDirection == textDirection &&
         _measuredLocale == locale;
@@ -2334,23 +2350,37 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
       return false;
     }
 
+    final activeStyle = resolveLyricsOriginalStyle(
+      inheritedStyle,
+      fontSize: activeFontSize,
+    );
+    final inactiveStyle = resolveLyricsOriginalStyle(
+      inheritedStyle,
+      fontSize: inactiveFontSize,
+    );
     final extents = <double>[
       for (final entry in _entries)
         entry.isInstrumental
             ? _instrumentalLyricsLineExtent
-            : _measureLyricLineExtent(
+            : measureLyricsLineExtent(
                 originalText: entry.line!.text,
-                romanizedText:
-                    widget.romanizedLines != null &&
-                        entry.sourceIndex < widget.romanizedLines!.length
-                    ? widget.romanizedLines![entry.sourceIndex]
-                    : null,
+                secondaryText: _displayedRomanization(
+                  entry.line!.text,
+                  widget.romanizedLines != null &&
+                          entry.sourceIndex < widget.romanizedLines!.length
+                      ? widget.romanizedLines![entry.sourceIndex]
+                      : null,
+                ),
                 contentWidth: contentWidth,
-                activeFontSize: activeFontSize,
-                fontFamily: fontFamily,
+                activeStyle: activeStyle,
+                inactiveStyle: inactiveStyle,
+                secondaryFontSize: romanizedLyricsFontSize(activeFontSize),
                 textScaler: textScaler,
                 textDirection: textDirection,
                 locale: locale,
+                textHeightBehavior: textHeightBehavior,
+                textWidthBasis: textWidthBasis,
+                accessibility: accessibility,
               ),
     ];
     final offsets = List<double>.filled(extents.length + 1, 0);
@@ -2364,7 +2394,11 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
     _measuredRomanizedLines = widget.romanizedLines;
     _measuredContentWidth = contentWidth;
     _measuredActiveFontSize = activeFontSize;
-    _measuredFontFamily = fontFamily;
+    _measuredInactiveFontSize = inactiveFontSize;
+    _measuredInheritedStyle = inheritedStyle;
+    _measuredTextHeightBehavior = textHeightBehavior;
+    _measuredTextWidthBasis = textWidthBasis;
+    _measuredAccessibility = accessibility;
     _measuredTextScaler = textScaler;
     _measuredTextDirection = textDirection;
     _measuredLocale = locale;
@@ -2396,7 +2430,12 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
     final textScaler = MediaQuery.textScalerOf(context);
     final textDirection = Directionality.of(context);
     final locale = Localizations.maybeLocaleOf(context);
-    final fontFamily = DefaultTextStyle.of(context).style.fontFamily;
+    final defaultTextStyle = DefaultTextStyle.of(context);
+    final fontFamily = defaultTextStyle.style.fontFamily;
+    final textHeightBehavior =
+        defaultTextStyle.textHeightBehavior ??
+        DefaultTextHeightBehavior.maybeOf(context);
+    final accessibility = lyricsTextAccessibilityOverridesOf(context);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2407,7 +2446,11 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
         final metricsChanged = _ensureLineMetrics(
           contentWidth: contentWidth,
           activeFontSize: typography.active,
-          fontFamily: fontFamily,
+          inactiveFontSize: typography.inactive,
+          inheritedStyle: defaultTextStyle.style,
+          textHeightBehavior: textHeightBehavior,
+          textWidthBasis: defaultTextStyle.textWidthBasis,
+          accessibility: accessibility,
           textScaler: textScaler,
           textDirection: textDirection,
           locale: locale,
@@ -2702,32 +2745,30 @@ class _LyricLineTile extends StatelessWidget {
     final accent = AppColors.downloadAccentFor(context);
     final mobileLayout = _usesMobileLyricsLayout(context);
     final halo = _lyricsHaloFor(context, accent);
-    final fontFamily = DefaultTextStyle.of(context).style.fontFamily;
-    final activeStyle = TextStyle(
-      fontFamily: fontFamily,
-      color: mobileLayout
-          ? Colors.white
-          : Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white),
-      fontSize: activeFontSize,
-      height: 1.16,
-      fontWeight: FontWeight.w900,
-      letterSpacing: -0.45,
-      shadows: [
-        Shadow(
-          color: halo.color.withValues(alpha: halo.innerAlpha),
-          blurRadius: halo.innerBlur,
-        ),
-        Shadow(
-          color: halo.color.withValues(alpha: halo.outerAlpha),
-          blurRadius: halo.outerBlur,
-        ),
-        const Shadow(
-          color: Color(0x7A000000),
-          blurRadius: 10,
-          offset: Offset(0, 2),
-        ),
-      ],
-    );
+    final activeStyle =
+        resolveLyricsOriginalStyle(
+          DefaultTextStyle.of(context).style,
+          fontSize: activeFontSize,
+        ).copyWith(
+          color: mobileLayout
+              ? Colors.white
+              : Color.alphaBlend(accent.withValues(alpha: 0.08), Colors.white),
+          shadows: [
+            Shadow(
+              color: halo.color.withValues(alpha: halo.innerAlpha),
+              blurRadius: halo.innerBlur,
+            ),
+            Shadow(
+              color: halo.color.withValues(alpha: halo.outerAlpha),
+              blurRadius: halo.outerBlur,
+            ),
+            const Shadow(
+              color: Color(0x7A000000),
+              blurRadius: 10,
+              offset: Offset(0, 2),
+            ),
+          ],
+        );
     final trimmedRomanization = _displayedRomanization(
       originalText,
       romanizedText,
@@ -2745,7 +2786,7 @@ class _LyricLineTile extends StatelessWidget {
         fontSize: inactiveFontSize,
         shadows: const [],
       ),
-      secondaryFontSize: _romanizedLyricsFontSize(activeFontSize),
+      secondaryFontSize: romanizedLyricsFontSize(activeFontSize),
       textAlign: lyricsCentered ? TextAlign.center : TextAlign.start,
     );
     return Semantics(
@@ -3425,59 +3466,6 @@ String _formatLyricsDuration(Duration duration) {
   }
   return '$minutes:${seconds.toString().padLeft(2, '0')}';
 }
-
-double _measureLyricLineExtent({
-  required String originalText,
-  required String? romanizedText,
-  required double contentWidth,
-  required double activeFontSize,
-  required String? fontFamily,
-  required TextScaler textScaler,
-  required TextDirection textDirection,
-  required Locale? locale,
-}) {
-  final textWidth = math.max(1.0, contentWidth - 16);
-  final originalHeight = _measureTextHeight(
-    text: originalText,
-    style: TextStyle(
-      fontFamily: fontFamily,
-      fontSize: activeFontSize,
-      height: 1.16,
-      fontWeight: FontWeight.w900,
-      letterSpacing: -0.45,
-    ),
-    maxWidth: textWidth,
-    textScaler: textScaler,
-    textDirection: textDirection,
-    locale: locale,
-  );
-  final displayedRomanization = _displayedRomanization(
-    originalText,
-    romanizedText,
-  );
-  final romanizationHeight = displayedRomanization == null
-      ? 0.0
-      : 4.0 +
-            _measureTextHeight(
-              text: displayedRomanization,
-              style: TextStyle(
-                fontFamily: fontFamily,
-                fontSize: _romanizedLyricsFontSize(activeFontSize),
-                height: 1.08,
-                fontWeight: FontWeight.w500,
-              ),
-              maxWidth: textWidth,
-              textScaler: textScaler,
-              textDirection: textDirection,
-              locale: locale,
-            );
-  // Every row reserves its active-state height. The text can animate without
-  // moving every following lyric or invalidating the sliver's scroll geometry.
-  return (24 + originalHeight + romanizationHeight).ceilToDouble();
-}
-
-double _romanizedLyricsFontSize(double activeFontSize) =>
-    (activeFontSize * 0.60).clamp(14.0, 20.0).toDouble();
 
 double _measureSyncedLyricsGuidanceExtent({
   required String source,

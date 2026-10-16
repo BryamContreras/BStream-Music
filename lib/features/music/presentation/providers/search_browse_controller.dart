@@ -251,42 +251,52 @@ final searchBrowseCategoryPageProvider = FutureProvider.autoDispose
       final search = ref.watch(youtubeMusicSearchProvider);
       final strings = ref.watch(appStringsProvider);
       final requests = ref.watch(_searchBrowseRequestsProvider);
-      final page = await requests.run(() async {
-        final target = category.target;
-        if (target != null && search is YouTubeMusicMoodsAndGenres) {
-          return (search as YouTubeMusicMoodsAndGenres).getMoodOrGenre(
-            target,
-            maxSections: InnerTubeSearchService.maxMoodGenrePageSections,
+      void Function()? releaseStartedRequest;
+      try {
+        final page = await requests.run(() async {
+          // Only a request that has actually started survives a brief trip
+          // offscreen. Queued cards remain disposable and never reach HTTP.
+          releaseStartedRequest = ref.keepAlive().close;
+          final target = category.target;
+          if (target != null && search is YouTubeMusicMoodsAndGenres) {
+            return (search as YouTubeMusicMoodsAndGenres).getMoodOrGenre(
+              target,
+              maxSections: InnerTubeSearchService.maxMoodGenrePageSections,
+            );
+          }
+          final tracks = await ref
+              .read(remoteMusicDataSourceProvider)
+              .searchCategory(category.searchQuery, SearchCategory.songs);
+          return InnerTubeMoodGenrePage(
+            sections: [
+              if (tracks.tracks.isNotEmpty)
+                InnerTubeHomeSection(
+                  title: strings.searchSongs,
+                  songs: tracks.tracks
+                      .map(
+                        (track) => InnerTubeSong(
+                          videoId: track.id,
+                          title: track.title,
+                          artists: track.artists.isEmpty
+                              ? [track.artist]
+                              : track.artists,
+                          thumbnailUrl:
+                              track.catalogThumbnailUrl ?? track.thumbnailUrl,
+                          duration: track.duration,
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
+            ],
           );
-        }
-        final tracks = await ref
-            .read(remoteMusicDataSourceProvider)
-            .searchCategory(category.searchQuery, SearchCategory.songs);
-        return InnerTubeMoodGenrePage(
-          sections: [
-            if (tracks.tracks.isNotEmpty)
-              InnerTubeHomeSection(
-                title: strings.searchSongs,
-                songs: tracks.tracks
-                    .map(
-                      (track) => InnerTubeSong(
-                        videoId: track.id,
-                        title: track.title,
-                        artists: track.artists.isEmpty
-                            ? [track.artist]
-                            : track.artists,
-                        thumbnailUrl:
-                            track.catalogThumbnailUrl ?? track.thumbnailUrl,
-                        duration: track.duration,
-                      ),
-                    )
-                    .toList(growable: false),
-              ),
-          ],
-        );
-      }, isActive: () => ref.mounted);
-      if (ref.mounted && page != null) _retainRemoteDetailTracks(ref);
-      return page ?? InnerTubeMoodGenrePage(sections: const []);
+        }, isActive: () => ref.mounted);
+        if (ref.mounted && page != null) _retainRemoteDetailTracks(ref);
+        return page ?? InnerTubeMoodGenrePage(sections: const []);
+      } finally {
+        // Successful pages have the existing timed cache by this point.
+        // Errors release this temporary hold without retaining a failure.
+        releaseStartedRequest?.call();
+      }
     }, retry: (_, _) => null);
 
 final searchBrowseCategoryContinuationProvider = FutureProvider.autoDispose
@@ -322,36 +332,47 @@ final searchBrowseCategoryArtworkProvider = FutureProvider.autoDispose
           .expand((section) => section.items)
           .firstOrNull;
       String? artwork;
-      if (first is InnerTubeHomeSongItem) {
-        artwork = first.song.thumbnailUrl;
-      } else if (first is InnerTubeHomeCollection) {
-        artwork = first.thumbnailUrl;
-        if (search is YouTubeMusicCollectionLookup) {
-          try {
-            final songs = await ref
-                .read(_searchBrowseRequestsProvider)
-                .run(
-                  () => (search as YouTubeMusicCollectionLookup)
-                      .getCollectionSongs(first.browseId, limit: 1),
-                  isActive: () => ref.mounted,
-                );
-            artwork = songs?.firstOrNull?.thumbnailUrl ?? artwork;
-          } catch (_) {
-            // The playlist's advertised image remains a valid fallback.
+      var collectionFailed = false;
+      void Function()? releaseStartedRequest;
+      try {
+        if (first is InnerTubeHomeSongItem) {
+          artwork = first.song.thumbnailUrl;
+        } else if (first is InnerTubeHomeCollection) {
+          artwork = first.thumbnailUrl;
+          if (search is YouTubeMusicCollectionLookup) {
+            try {
+              final songs = await ref.read(_searchBrowseRequestsProvider).run(
+                () {
+                  // Do not retain while waiting for the page or a queue
+                  // slot: an offscreen card must not start a second query.
+                  releaseStartedRequest = ref.keepAlive().close;
+                  return (search as YouTubeMusicCollectionLookup)
+                      .getCollectionSongs(first.browseId, limit: 1);
+                },
+                isActive: () => ref.mounted,
+              );
+              artwork = songs?.firstOrNull?.thumbnailUrl ?? artwork;
+            } catch (_) {
+              collectionFailed = true;
+              // Keep the advertised image visible, but allow a later visit
+              // to retry a failed first-song lookup instead of caching it.
+            }
+          }
+        } else if (first is InnerTubeHomeArtistItem) {
+          artwork = first.artist.thumbnailUrl;
+        }
+        if (ref.mounted) {
+          if (!collectionFailed) _retainRemoteDetailTracks(ref);
+          if (artwork != null) {
+            await ref
+                .read(searchBrowseCategoryArtworkCacheProvider)
+                .write(category.id, artwork);
           }
         }
-      } else if (first is InnerTubeHomeArtistItem) {
-        artwork = first.artist.thumbnailUrl;
+        return artwork;
+      } finally {
+        releaseStartedRequest?.call();
       }
-      if (ref.mounted) {
-        _retainRemoteDetailTracks(ref);
-        if (artwork != null) {
-          await ref
-              .read(searchBrowseCategoryArtworkCacheProvider)
-              .write(category.id, artwork);
-        }
-      }
-      return artwork;
     }, retry: (_, _) => null);
 
 final _searchBrowseRequestsProvider = Provider(

@@ -16,6 +16,7 @@
 		B57E00062F10000100B57E00 /* IOSFileExportPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E00052F10000100B57E00 /* IOSFileExportPlugin.swift */; };
 		B57E20012F10000100B57E00 /* BStreamAudioOutputPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E20022F10000100B57E00 /* BStreamAudioOutputPlugin.swift */; };
 		B57E20032F10000100B57E00 /* BStreamCastPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E20042F10000100B57E00 /* BStreamCastPlugin.swift */; };
+		B57E30012F10000100B57E00 /* IOSLocalAudioQualityPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E30022F10000100B57E00 /* IOSLocalAudioQualityPlugin.swift */; };
 		B57E00072F10000100B57E00 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = B57E000A2F10000100B57E00 /* InfoPlist.strings */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
@@ -81,6 +82,7 @@
 		B57E00052F10000100B57E00 /* IOSFileExportPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSFileExportPlugin.swift; sourceTree = "<group>"; };
 		B57E20022F10000100B57E00 /* BStreamAudioOutputPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BStreamAudioOutputPlugin.swift; sourceTree = "<group>"; };
 		B57E20042F10000100B57E00 /* BStreamCastPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BStreamCastPlugin.swift; sourceTree = "<group>"; };
+		B57E30022F10000100B57E00 /* IOSLocalAudioQualityPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSLocalAudioQualityPlugin.swift; sourceTree = "<group>"; };
 		B57E00082F10000100B57E00 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		B57E00092F10000100B57E00 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
@@ -173,6 +175,7 @@
 				B57E00052F10000100B57E00 /* IOSFileExportPlugin.swift */,
 				B57E20022F10000100B57E00 /* BStreamAudioOutputPlugin.swift */,
 				B57E20042F10000100B57E00 /* BStreamCastPlugin.swift */,
+				B57E30022F10000100B57E00 /* IOSLocalAudioQualityPlugin.swift */,
 				B57E000A2F10000100B57E00 /* InfoPlist.strings */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
@@ -377,6 +380,7 @@
 				B57E00062F10000100B57E00 /* IOSFileExportPlugin.swift in Sources */,
 				B57E20012F10000100B57E00 /* BStreamAudioOutputPlugin.swift in Sources */,
 				B57E20032F10000100B57E00 /* BStreamCastPlugin.swift in Sources */,
+				B57E30012F10000100B57E00 /* IOSLocalAudioQualityPlugin.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
 			);

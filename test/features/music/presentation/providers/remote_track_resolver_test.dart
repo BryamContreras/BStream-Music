@@ -35,6 +35,8 @@ void main() {
               'stream_mime_type': 'audio/mp4',
               'stream_source': AudioStreamSource.innerTube.name,
               'stream_client_profile_key': 'androidSdkless',
+              'stream_sample_rate': 44100,
+              'stream_channels': 2,
             },
           },
         }),
@@ -67,6 +69,11 @@ void main() {
         everyElement('https://media.example/persisted.m4a'),
       );
       expect(resolver.resolveCalls, 0);
+      expect(
+        results.map((value) => value.streamSampleRate),
+        everyElement(44100),
+      );
+      expect(results.map((value) => value.streamChannels), everyElement(2));
     },
   );
 
@@ -174,6 +181,8 @@ void main() {
         streamExtension: 'webm',
         streamMimeType: 'audio/webm',
         streamSource: 'innerTube',
+        streamSampleRate: 96000,
+        streamChannels: 6,
         httpHeaders: {'User-Agent': 'rejected-stream-agent'},
       );
 
@@ -187,6 +196,8 @@ void main() {
       expect(resolved.streamClientProfileKey, 'visionOS');
       expect(resolved.streamSource, AudioStreamSource.innerTubeFallback.name);
       expect(resolved.httpHeaders, isNull);
+      expect(resolved.streamSampleRate, isNull);
+      expect(resolved.streamChannels, isNull);
     },
   );
 
@@ -272,6 +283,8 @@ void main() {
       includeStream: true,
       expiresAt: expiresAt,
       clientProfileKey: 'androidSdkless',
+      sampleRate: 48000,
+      channels: 2,
     );
     final container = ProviderContainer(
       overrides: [
@@ -302,7 +315,43 @@ void main() {
     final cachedTrack = entry['track'] as Map<String, dynamic>;
     expect(entry['expiresAt'], expiresAt.millisecondsSinceEpoch);
     expect(cachedTrack['stream_client_profile_key'], 'androidSdkless');
+    expect(cachedTrack['stream_sample_rate'], 48000);
+    expect(cachedTrack['stream_channels'], 2);
   });
+
+  test(
+    'fresh and in-memory streams keep only the selected audio properties',
+    () async {
+      final resolver = _FakeAudioResolver(
+        includeStream: true,
+        sampleRate: 48000,
+        channels: 2,
+      );
+      final container = ProviderContainer(
+        overrides: [audioStreamResolverProvider.overrideWithValue(resolver)],
+      );
+      addTearDown(container.dispose);
+      const track = TrackInfo(
+        id: 'stream-facts',
+        title: 'Track',
+        artist: 'Artist',
+        url: 'https://example.com/track',
+        streamUrl: 'https://example.com/stale.flac',
+        streamSampleRate: 96000,
+        streamChannels: 6,
+      );
+      final controller = container.read(remoteTrackResolverProvider);
+      final fresh = await controller.resolve(track, forceRefresh: true);
+      expect(fresh.streamSampleRate, 48000);
+      expect(fresh.streamChannels, 2);
+      final cached = await controller.resolve(
+        track.copyWith(title: 'Refreshed catalog title'),
+      );
+      expect(cached.streamSampleRate, 48000);
+      expect(cached.streamChannels, 2);
+      expect(resolver.resolveCalls, 1);
+    },
+  );
 
   test('local TTL expires an entry before a later signed expiry', () async {
     final now = DateTime.now();
@@ -649,6 +698,8 @@ class _FakeAudioResolver implements AudioStreamResolver {
     this.source = AudioStreamSource.innerTube,
     this.expiresAt,
     this.clientProfileKey = 'androidSdkless',
+    this.sampleRate,
+    this.channels,
   });
 
   final Object? error;
@@ -656,6 +707,8 @@ class _FakeAudioResolver implements AudioStreamResolver {
   final AudioStreamSource source;
   final DateTime? expiresAt;
   final String? clientProfileKey;
+  final int? sampleRate;
+  final int? channels;
 
   int resolveCalls = 0;
 
@@ -675,6 +728,8 @@ class _FakeAudioResolver implements AudioStreamResolver {
       streamExtension: 'm4a',
       streamMimeType: 'audio/mp4',
       clientProfileKey: clientProfileKey,
+      sampleRate: sampleRate,
+      channels: channels,
       expiresAt: expiresAt,
     );
   }

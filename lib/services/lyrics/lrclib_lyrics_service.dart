@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
+import '../../core/utils/background_work.dart';
 import '../../features/music/data/parsers/lrc_parser.dart';
 import '../../features/music/domain/entities/lyrics_candidate.dart';
 import '../../features/music/domain/entities/lyrics_document.dart';
@@ -148,6 +148,8 @@ class LrclibLyricsService implements LyricsService {
   final LrclibClock _clock;
   final LrclibMonotonicClock _monotonicClock;
   final Map<String, _CacheEntry> _cache = {};
+  // Weak keys: preparing candidates must not become another unbounded cache.
+  final _preparedDocuments = Expando<LyricsDocument>();
 
   bool _disposed = false;
   DateTime? _rateLimitedUntil;
@@ -279,7 +281,7 @@ class LrclibLyricsService implements LyricsService {
     final records = await _search(_endpoint('search', {'q': manualTitle}));
     final candidates = <LrclibScoredRecord>[];
     for (final record in records) {
-      final document = record.toDocument(_parser);
+      final document = _documentFor(record);
       if (!document.hasPlainLyrics && !document.hasSyncedLyrics) {
         continue;
       }
@@ -361,10 +363,15 @@ class LrclibLyricsService implements LyricsService {
         final exactResponse = await requestExact(exactParameters);
         if (exactResponse != null &&
             exactResponse.statusCode == HttpStatus.ok) {
-          final exact = _recordFromObject(_decodeJson(exactResponse));
+          final exact = (await _parseRecordsResponse(
+            exactResponse,
+            isSearch: false,
+          )).firstOrNull;
           if (exact != null) {
             final validated = _bestMatch(lookup, identities, [exact]);
-            final document = validated?.record.toDocument(_parser);
+            final document = validated == null
+                ? null
+                : _documentFor(validated.record);
             // `/get` can return a valid plain-lyrics mirror while `/search`
             // contains the synchronized LRCLIB record for the same song
             // (common for releases whose metadata differs by a prefix such as
@@ -406,7 +413,7 @@ class LrclibLyricsService implements LyricsService {
         if (broad != null) {
           final broadMatch = _bestMatch(lookup, identities, broad);
           if (broadMatch != null && broadMatch.score >= _strongCandidateScore) {
-            return broadMatch.record.toDocument(_parser);
+            return _documentFor(broadMatch.record);
           }
           remember(broadMatch);
         }
@@ -434,7 +441,7 @@ class LrclibLyricsService implements LyricsService {
       final structuredMatch = _bestMatch(lookup, identities, structured);
       if (structuredMatch != null &&
           structuredMatch.score >= _strongCandidateScore) {
-        return structuredMatch.record.toDocument(_parser);
+        return _documentFor(structuredMatch.record);
       }
       remember(structuredMatch);
     }
@@ -450,7 +457,7 @@ class LrclibLyricsService implements LyricsService {
         remember(_bestMatch(lookup, identities, broad));
       }
     }
-    return best?.record.toDocument(_parser);
+    return best == null ? null : _documentFor(best!.record);
   }
 
   Future<List<LrclibRecord>> _search(Uri uri, {Duration? timeout}) async {
@@ -462,17 +469,7 @@ class LrclibLyricsService implements LyricsService {
     if (response.statusCode != HttpStatus.ok) {
       throw LrclibHttpException(response.statusCode, response.body);
     }
-    final decoded = _decodeJson(response);
-    if (decoded is! List) {
-      throw const LrclibFormatException(
-        'LRCLIB returned a non-list search response.',
-      );
-    }
-    return decoded
-        .map(_recordFromObject)
-        .whereType<LrclibRecord>()
-        .where((record) => record.toDocument(_parser).hasContent)
-        .toList(growable: false);
+    return _parseRecordsResponse(response, isSearch: true);
   }
 
   LrclibScoredRecord? _bestMatch(
@@ -554,7 +551,7 @@ class LrclibLyricsService implements LyricsService {
     for (final record in records) {
       // Instrumental records count as content for automatic lookup, but they
       // are not useful in a list where the listener explicitly wants lyrics.
-      final document = record.toDocument(_parser);
+      final document = _documentFor(record);
       if (!document.hasPlainLyrics && !document.hasSyncedLyrics) {
         continue;
       }
@@ -596,7 +593,7 @@ class LrclibLyricsService implements LyricsService {
       unique.putIfAbsent(
         key,
         () => LyricsCandidate(
-          document: record.toDocument(_parser),
+          document: _documentFor(record),
           similarity: candidate.score,
         ),
       );
@@ -2319,15 +2316,28 @@ class LrclibLyricsService implements LyricsService {
     }
   }
 
-  Object? _decodeJson(LrclibResponse response) {
+  Future<List<LrclibRecord>> _parseRecordsResponse(
+    LrclibResponse response, {
+    required bool isSearch,
+  }) async {
     try {
-      return jsonDecode(response.body);
+      final prepared = await parseJsonInBackground(
+        response.body,
+        _LrclibRecordsResponseParser(_parser, isSearch: isSearch).parse,
+      );
+      for (final item in prepared) {
+        _preparedDocuments[item.record] = item.document;
+      }
+      return prepared.map((item) => item.record).toList(growable: false);
     } on FormatException catch (error) {
       throw LrclibFormatException('Invalid LRCLIB JSON: ${error.message}');
     }
   }
 
-  LrclibRecord? _recordFromObject(Object? value) {
+  LyricsDocument _documentFor(LrclibRecord record) =>
+      _preparedDocuments[record] ??= record.toDocument(_parser);
+
+  static LrclibRecord? _recordFromObject(Object? value) {
     if (value is! Map) {
       return null;
     }
@@ -2387,6 +2397,42 @@ class LrclibLyricsService implements LyricsService {
     _cache.clear();
     _transport.close();
   }
+}
+
+/// Only immutable parser configuration and response data cross the isolate.
+/// Parse LRC timelines once, together with JSON, rather than once per scoring
+/// pass on the UI isolate.
+class _LrclibRecordsResponseParser {
+  const _LrclibRecordsResponseParser(this.parser, {required this.isSearch});
+
+  final LrcParser parser;
+  final bool isSearch;
+
+  List<_PreparedLrclibRecord> parse(Object? decoded) {
+    if (isSearch && decoded is! List) {
+      throw const LrclibFormatException(
+        'LRCLIB returned a non-list search response.',
+      );
+    }
+    final values = isSearch ? decoded as List : <Object?>[decoded];
+    final result = <_PreparedLrclibRecord>[];
+    for (final value in values) {
+      final record = LrclibLyricsService._recordFromObject(value);
+      if (record == null) continue;
+      final document = record.toDocument(parser);
+      if (!isSearch || document.hasContent) {
+        result.add(_PreparedLrclibRecord(record, document));
+      }
+    }
+    return result;
+  }
+}
+
+class _PreparedLrclibRecord {
+  const _PreparedLrclibRecord(this.record, this.document);
+
+  final LrclibRecord record;
+  final LyricsDocument document;
 }
 
 class _CacheEntry {

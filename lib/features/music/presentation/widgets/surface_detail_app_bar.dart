@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart' show ValueListenable;
@@ -14,6 +15,21 @@ import '../../../../core/widgets/liquid_glass_surface.dart';
 class GlassScrollMotionNotifier extends ValueNotifier<bool> {
   GlassScrollMotionNotifier() : super(false);
 
+  static const settleDelay = Duration(milliseconds: 180);
+  Timer? _settleTimer;
+
+  void reset() {
+    _settleTimer?.cancel();
+    _settleTimer = null;
+    if (value) value = false;
+  }
+
+  @override
+  void dispose() {
+    _settleTimer?.cancel();
+    super.dispose();
+  }
+
   bool handleNotification(ScrollNotification notification) {
     if (notification.depth != 0 || notification.metrics.axis != Axis.vertical) {
       return false;
@@ -26,7 +42,19 @@ class GlassScrollMotionNotifier extends ValueNotifier<bool> {
       UserScrollNotification(direction: ScrollDirection.idle) => false,
       _ => null,
     };
-    if (moving != null && value != moving) value = moving;
+    if (moving == true) {
+      _settleTimer?.cancel();
+      _settleTimer = null;
+      if (!value) value = true;
+    } else if (moving == false && value) {
+      // A finger can lift while momentum or another gesture is about to
+      // continue. Do not repeatedly destroy/recreate the refractive pipeline
+      // during those short gaps. The full resting optics still return once.
+      _settleTimer ??= Timer(settleDelay, () {
+        _settleTimer = null;
+        value = false;
+      });
+    }
     return false;
   }
 }

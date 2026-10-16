@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../core/utils/background_work.dart';
 import '../../features/music/data/models/local_track_model.dart';
 import '../../features/music/data/models/playlist_model.dart';
 import '../../features/music/domain/entities/catalog_playlist.dart';
@@ -979,7 +980,7 @@ class LocalDatabaseService {
 
     // Encoding here validates that the payload is composed only of durable
     // JSON values before the previous cache entry is replaced.
-    final payloadJson = jsonEncode(feed.payload);
+    final payloadJson = await _encodeRecommendationPayload(feed.payload);
     final db = await database;
     return db.transaction((transaction) async {
       if (expectedGeneration != null &&
@@ -1015,15 +1016,14 @@ class LocalDatabaseService {
     }
     final row = rows.single;
     try {
-      final decoded = jsonDecode(row['payload_json']! as String);
-      if (decoded is! Map) {
-        return null;
-      }
+      final decoded = await parseJsonInBackground(
+        row['payload_json']! as String,
+        _recommendationPayload,
+      );
+      if (decoded == null) return null;
       return RecommendationFeedCache(
         feedKey: row['feed_key']! as String,
-        payload: decoded.map<String, Object?>(
-          (key, value) => MapEntry(key.toString(), value),
-        ),
+        payload: decoded,
         generatedAt: DateTime.parse(row['generated_at']! as String),
         expiresAt: DateTime.parse(row['expires_at']! as String),
       );
@@ -3312,6 +3312,15 @@ Future<void> _upsertWithoutDelete(
     },
   );
 }
+
+// Feeds contain whole shelves; encoding them is infrequent but can be large.
+// Keep database handles and generation checks in the original isolate.
+Future<String> _encodeRecommendationPayload(Map<String, Object?> payload) =>
+    runBackgroundWork(() => jsonEncode(payload));
+
+Map<String, Object?>? _recommendationPayload(Object? decoded) => decoded is Map
+    ? decoded.map((key, value) => MapEntry(key.toString(), value))
+    : null;
 
 int? _nullableBoolToInt(bool? value) {
   return value == null ? null : (value ? 1 : 0);

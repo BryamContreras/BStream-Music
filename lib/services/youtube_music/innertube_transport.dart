@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import '../../core/utils/background_work.dart';
 
 import '../../core/utils/bounded_byte_stream.dart';
 
@@ -135,7 +136,7 @@ class IoInnerTubeTransport implements InnerTubeTransport {
       });
       return InnerTubeHttpResponse(
         statusCode: response.statusCode,
-        body: utf8.decode(bytes),
+        body: await decodeUtf8InBackground(bytes),
         headers: responseHeaders,
         effectiveUri: _effectiveUri(uri, response.redirects),
       );

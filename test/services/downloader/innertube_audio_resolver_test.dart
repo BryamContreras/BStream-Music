@@ -44,6 +44,8 @@ void main() {
     expect(result.streamMimeType, 'audio/mp4');
     expect(result.formatId, '140');
     expect(result.codec, 'mp4a.40.2');
+    expect(result.sampleRate, 44100);
+    expect(result.channels, 2);
     expect(result.clientProfileKey, 'androidSdkless');
     expect(result.expiresAt, isNotNull);
     expect(result.expiresAt!.isAfter(DateTime.now()), isTrue);
@@ -206,6 +208,8 @@ final class _Transport implements InnerTubeTransport {
               'itag': 140,
               'url': 'https://media.example/audio',
               'mimeType': 'audio/mp4; codecs="mp4a.40.2"',
+              'audioSampleRate': '44100',
+              'audioChannels': 2,
               'contentLength': '2000000',
             },
           ],

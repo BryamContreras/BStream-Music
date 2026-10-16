@@ -98,6 +98,7 @@ class JustAudioPlayerService
   }
 
   void _attachPrimaryPlayer(AudioPlayer player) {
+    _lastPrimaryPlaying = player.playing;
     // The stock position stream can publish five timeline snapshots per
     // second. These listeners follow the authoritative deck when crossfade
     // promotion swaps its role with the prepared deck.
@@ -156,8 +157,24 @@ class JustAudioPlayerService
         if (!identical(player, _player)) {
           return;
         }
+        final wasPlaying = _lastPrimaryPlaying;
+        _lastPrimaryPlaying = state.playing;
         if (_snapshot.status == PlayerStatus.failed) {
+          // Failure recovery owns the next intent decision. In particular, a
+          // technical stop used to interrupt a timed-out native load is not a
+          // user/system pause and must not cancel the controller's retry.
           return;
+        }
+        if (state.playing && !_playbackExplicitlySuppressed) {
+          if (!_playWhenReady) _playIntentRevision++;
+          _playWhenReady = true;
+        } else if (!state.playing &&
+            state.processingState != ProcessingState.completed &&
+            (wasPlaying || !_sourceLoadPending)) {
+          // A native interruption is a real pause. An initially non-playing
+          // loading event, however, is not evidence that the user paused.
+          if (_playWhenReady) _playIntentRevision++;
+          _playWhenReady = false;
         }
         final watch = _remoteStartupWatch;
         if (watch != null) {
@@ -171,7 +188,9 @@ class JustAudioPlayerService
         }
         final status = switch (state.processingState) {
           ProcessingState.loading || ProcessingState.buffering =>
-            state.playing ? PlayerStatus.playing : PlayerStatus.loading,
+            state.playing
+                ? PlayerStatus.playing
+                : (_playWhenReady ? PlayerStatus.loading : PlayerStatus.paused),
           ProcessingState.completed => PlayerStatus.completed,
           _ => state.playing ? PlayerStatus.playing : PlayerStatus.paused,
         };
@@ -341,7 +360,9 @@ class JustAudioPlayerService
     final processingState = expectedPrimary.processingState;
     final status = switch (processingState) {
       ProcessingState.loading || ProcessingState.buffering =>
-        expectedPrimary.playing ? PlayerStatus.playing : PlayerStatus.loading,
+        expectedPrimary.playing
+            ? PlayerStatus.playing
+            : (_playWhenReady ? PlayerStatus.loading : PlayerStatus.paused),
       ProcessingState.completed => PlayerStatus.completed,
       _ => expectedPrimary.playing ? PlayerStatus.playing : PlayerStatus.paused,
     };
@@ -400,6 +421,41 @@ class JustAudioPlayerService
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   double _masterVolume = 1;
   int _playbackGeneration = 0;
+  bool _playWhenReady = false;
+  bool _playbackExplicitlySuppressed = false;
+  bool _lastPrimaryPlaying = false;
+  int _playIntentRevision = 0;
+  int? _sourceLoadGeneration;
+
+  bool get _sourceLoadPending => _sourceLoadGeneration == _playbackGeneration;
+
+  void _beginPlaybackIntent(int generation) {
+    _playIntentRevision++;
+    _playWhenReady = true;
+    _playbackExplicitlySuppressed = false;
+    _sourceLoadGeneration = generation;
+  }
+
+  void _finishSourceLoad(int generation) {
+    if (_sourceLoadGeneration == generation) {
+      _sourceLoadGeneration = null;
+    }
+  }
+
+  Future<bool> _prepareForSourceLoad(int generation) async {
+    try {
+      await _invalidateCrossfadeForExplicitAction();
+    } catch (_) {
+      _finishSourceLoad(generation);
+      rethrow;
+    }
+    if (generation != _playbackGeneration || _disposed) {
+      _finishSourceLoad(generation);
+      return false;
+    }
+    return true;
+  }
+
   int? _reportedFailureGeneration;
   Object? _reportedFailureToken;
   int? _diagnosticGeneration;
@@ -1697,10 +1753,10 @@ class JustAudioPlayerService
   @override
   Future<void> playRemoteSource(RemotePlaybackSource source) async {
     final generation = ++_playbackGeneration;
+    _beginPlaybackIntent(generation);
     _remoteQueueRevision++;
     _cancelActiveSourceLoad();
-    await _invalidateCrossfadeForExplicitAction();
-    if (generation != _playbackGeneration || _disposed) {
+    if (!await _prepareForSourceLoad(generation)) {
       return;
     }
     final track = source.track;
@@ -1794,7 +1850,7 @@ class JustAudioPlayerService
       onTimeout: () {
         _handleSourceLoadTimeout(generation);
       },
-    );
+    ).whenComplete(() => _finishSourceLoad(generation));
   }
 
   @override
@@ -2042,6 +2098,15 @@ class JustAudioPlayerService
     _crossfadeGeneration++;
     _standbyRetirementGeneration++;
     unawaited(_resetCrossfadeState(restorePrimaryVolume: true));
+    // Establish failure ownership before stop's synchronous playing=false
+    // notification. The controller may recover this source; treating this
+    // teardown event as a user pause would cancel that bounded recovery.
+    _emit(
+      _snapshot.copyWith(
+        status: PlayerStatus.failed,
+        errorMessage: 'El reproductor tardó demasiado en abrir el audio.',
+      ),
+    );
     // stop() switches just_audio's platform activation synchronously. That
     // interrupts the still-alive native load before its Future can complete
     // and publish a source after this timeout.
@@ -2055,22 +2120,16 @@ class JustAudioPlayerService
         );
       }),
     );
-    _emit(
-      _snapshot.copyWith(
-        status: PlayerStatus.failed,
-        errorMessage: 'El reproductor tardó demasiado en abrir el audio.',
-      ),
-    );
   }
 
   @override
   Future<void> playLocal(LocalTrack track) async {
     final generation = ++_playbackGeneration;
+    _beginPlaybackIntent(generation);
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
     _cancelActiveSourceLoad();
-    await _invalidateCrossfadeForExplicitAction();
-    if (generation != _playbackGeneration || _disposed) {
+    if (!await _prepareForSourceLoad(generation)) {
       return;
     }
     _localQueueIds = const [];
@@ -2116,7 +2175,7 @@ class JustAudioPlayerService
       onTimeout: () {
         _handleSourceLoadTimeout(generation);
       },
-    );
+    ).whenComplete(() => _finishSourceLoad(generation));
   }
 
   @override
@@ -2125,11 +2184,11 @@ class JustAudioPlayerService
       return;
     }
     final generation = ++_playbackGeneration;
+    _beginPlaybackIntent(generation);
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
     _cancelActiveSourceLoad();
-    await _invalidateCrossfadeForExplicitAction();
-    if (generation != _playbackGeneration || _disposed) {
+    if (!await _prepareForSourceLoad(generation)) {
       return;
     }
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
@@ -2184,7 +2243,7 @@ class JustAudioPlayerService
       onTimeout: () {
         _handleSourceLoadTimeout(generation);
       },
-    );
+    ).whenComplete(() => _finishSourceLoad(generation));
   }
 
   @override
@@ -2243,9 +2302,6 @@ class JustAudioPlayerService
           return;
         }
 
-        final shouldKeepPlaying =
-            _snapshot.status == PlayerStatus.playing ||
-            (_snapshot.status == PlayerStatus.loading && _player.playing);
         final currentTrackId = _snapshot.trackId;
         final currentPosition = _player.position;
         final canUpdateIncrementally =
@@ -2335,9 +2391,9 @@ class JustAudioPlayerService
         if (!isCurrent()) {
           return;
         }
-        if (shouldKeepPlaying && !_player.playing) {
+        if (_playWhenReady && !_player.playing) {
           _startPlayback(generation);
-        } else if (!shouldKeepPlaying && _player.playing) {
+        } else if (!_playWhenReady && _player.playing) {
           await _player.pause();
         }
       },
@@ -2352,6 +2408,10 @@ class JustAudioPlayerService
 
   @override
   Future<void> pause() async {
+    final intentRevision = ++_playIntentRevision;
+    final generation = _playbackGeneration;
+    _playWhenReady = false;
+    _playbackExplicitlySuppressed = true;
     _crossfadePaused = true;
     _crossfadeRamp?.pause();
     final incoming = _crossfadePlayer;
@@ -2359,12 +2419,20 @@ class JustAudioPlayerService
       _player.pause(),
       if (_crossfadeRamp != null && incoming != null) incoming.pause(),
     ]);
-    _emit(_snapshot.copyWith(status: PlayerStatus.paused));
+    if (intentRevision == _playIntentRevision &&
+        generation == _playbackGeneration) {
+      _emit(_snapshot.copyWith(status: PlayerStatus.paused));
+    }
   }
 
   @override
   Future<void> resume() async {
-    _startPlayback(_playbackGeneration);
+    _playIntentRevision++;
+    _playWhenReady = true;
+    _playbackExplicitlySuppressed = false;
+    if (!_sourceLoadPending) {
+      _startPlayback(_playbackGeneration);
+    }
     final incoming = _crossfadePlayer;
     final source = _preparedCrossfadeSource;
     _crossfadePaused = false;
@@ -2372,16 +2440,26 @@ class JustAudioPlayerService
       unawaited(_playCrossfadeIncoming(incoming, _crossfadeGeneration, source));
       _crossfadeRamp?.resume();
     }
-    _emit(_snapshot.copyWith(status: PlayerStatus.playing));
+    _emit(
+      _snapshot.copyWith(
+        status: _sourceLoadPending
+            ? PlayerStatus.loading
+            : PlayerStatus.playing,
+      ),
+    );
   }
 
   @override
   Future<void> togglePlayPause() {
-    return _player.playing ? pause() : resume();
+    return _playWhenReady ? pause() : resume();
   }
 
   @override
   Future<void> stop() async {
+    _playIntentRevision++;
+    _playWhenReady = false;
+    _playbackExplicitlySuppressed = true;
+    _sourceLoadGeneration = null;
     final generation = ++_playbackGeneration;
     _activeRemoteTrack = null;
     _remoteQueueRevision++;
@@ -2518,6 +2596,10 @@ class JustAudioPlayerService
       return;
     }
     _disposed = true;
+    _playIntentRevision++;
+    _playWhenReady = false;
+    _playbackExplicitlySuppressed = true;
+    _sourceLoadGeneration = null;
     WidgetsBinding.instance.removeObserver(this);
     _playbackGeneration++;
     _remoteQueueRevision++;
@@ -2733,18 +2815,27 @@ class JustAudioPlayerService
   }
 
   void _startPlayback(int generation) {
+    if (_disposed || generation != _playbackGeneration || !_playWhenReady) {
+      return;
+    }
     // just_audio's play Future completes when playback is paused, stopped, or
     // reaches the end. Awaiting it would keep playRemote/playLocal pending for
     // the entire song and could overwrite a later completed state. Playback
     // state and failures remain authoritative through the subscriptions above.
-    unawaited(_playAndReportFailure(generation));
+    unawaited(_playAndReportFailure(generation, _playIntentRevision));
   }
 
-  Future<void> _playAndReportFailure(int generation) async {
+  Future<void> _playAndReportFailure(int generation, int intentRevision) async {
     try {
       await _player.play();
     } catch (error, stackTrace) {
-      await _reportPlaybackFailure(error, generation, _activeRemoteTrack);
+      await _reportPlaybackFailure(
+        error,
+        generation,
+        _activeRemoteTrack,
+        isStillCurrent: () =>
+            intentRevision == _playIntentRevision && _playWhenReady,
+      );
       developer.log(
         'play request failed',
         name: 'BStreamPlayback',
@@ -2969,6 +3060,7 @@ class JustAudioPlayerService
     if (_disposed) {
       return;
     }
+    snapshot = snapshot.copyWith(playWhenReady: _playWhenReady);
     _snapshot = snapshot;
     if (!_snapshotController.isClosed) {
       _snapshotController.add(snapshot);

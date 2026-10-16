@@ -6,6 +6,47 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final platform in [
+    TargetPlatform.android,
+    TargetPlatform.iOS,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets('native overscroll keeps $platform physics and full glass', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _FrameHarness(
+          platform: platform,
+          surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+        ),
+      );
+      final scrollFinder = find.byKey(const ValueKey('test-tab-scroll'));
+      final scroll = tester.widget<CustomScrollView>(scrollFinder);
+      final context = tester.element(scrollFinder);
+      final behavior = scroll.scrollBehavior ?? ScrollConfiguration.of(context);
+      expect(scroll.scrollBehavior, isNull);
+      expect(
+        find.byType(StretchingOverscrollIndicator),
+        platform == TargetPlatform.android ? findsOneWidget : findsNothing,
+      );
+      expect(
+        behavior.getScrollPhysics(context),
+        platform == TargetPlatform.iOS
+            ? isA<BouncingScrollPhysics>()
+            : isA<ClampingScrollPhysics>(),
+      );
+      final glass = tester.widget<LiquidGlassSurface>(
+        find.byKey(const ValueKey('tab-header-liquid-glass')),
+      );
+      expect(glass.blurSigma, 8);
+      expect(glass.intensity, tabHeaderLiquidGlassIntensity);
+      expect(glass.adaptiveEdgeEnabled, isTrue);
+      expect(glass.perimeterOpticsEnabled, isTrue);
+      expect(glass.edgeTreatment, LiquidGlassEdgeTreatment.bottom);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets(
     'filter hides downwards and reappears below the pinned title upwards',
     (tester) async {
@@ -561,6 +602,7 @@ void main() {
 
 class _FrameHarness extends StatelessWidget {
   const _FrameHarness({
+    this.platform,
     this.showHeader = true,
     this.disableAnimations = false,
     this.surfaceBackgroundMode = SurfaceBackgroundMode.accent,
@@ -570,6 +612,7 @@ class _FrameHarness extends StatelessWidget {
   });
 
   final bool showHeader;
+  final TargetPlatform? platform;
   final bool disableAnimations;
   final SurfaceBackgroundMode surfaceBackgroundMode;
   final TextScaler textScaler;
@@ -581,6 +624,7 @@ class _FrameHarness extends StatelessWidget {
     return MaterialApp(
       theme: ThemeData(
         useMaterial3: true,
+        platform: platform,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
       ),

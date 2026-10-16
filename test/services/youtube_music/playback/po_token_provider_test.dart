@@ -157,6 +157,39 @@ void main() {
   });
 
   group('BotGuardPoTokenProvider', () {
+    for (final missingChallenge in [false, true]) {
+      test(
+        'large homepage preserves bootstrap/fallback (missing=$missingChallenge)',
+        () async {
+          final transport = _FakeBotGuardTransport(
+            homepageIsInvalid: missingChallenge,
+            responsePadding: 65536,
+          );
+          final runtime = _FakeBotGuardRuntime();
+          final provider = BotGuardPoTokenProvider(
+            transport: transport,
+            runtimeFactory: () => runtime,
+            assetLoader: (_) async => '<html></html>',
+          );
+          addTearDown(provider.dispose);
+          final result = await provider.getTokens(videoId: 'video-1');
+          expect(
+            result.visitorData,
+            missingChallenge ? 'visitor-fallback' : 'visitor-homepage',
+          );
+          expect(transport.attestationCalls, missingChallenge ? 1 : 0);
+          if (missingChallenge) {
+            final context =
+                (transport.lastAttestationBody as Map)['context'] as Map;
+            expect(
+              (context['client'] as Map)['clientVersion'],
+              '2.20990101.00.00',
+            );
+          }
+        },
+      );
+    }
+
     test(
       'uses homepage identity, interpreter and current GenerateIT RPC',
       () async {
@@ -636,6 +669,7 @@ class _FakeBotGuardRuntime implements YoutubeJavaScriptRuntime {
 
 class _FakeBotGuardTransport implements InnerTubeTransport {
   _FakeBotGuardTransport({
+    this.responsePadding = 0,
     this.ttlSeconds = 3600,
     this.homepageIsInvalid = false,
     this.primaryGenerateIsDegraded = false,
@@ -648,6 +682,7 @@ class _FakeBotGuardTransport implements InnerTubeTransport {
 
   final int ttlSeconds;
   final bool homepageIsInvalid;
+  final int responsePadding;
   final bool primaryGenerateIsDegraded;
   final bool compatibilityGenerateIsDegraded;
   final bool homepageGenerateIsDegraded;
@@ -684,12 +719,8 @@ class _FakeBotGuardTransport implements InnerTubeTransport {
       await homepageRelease?.future;
       return InnerTubeHttpResponse(
         statusCode: 200,
-        body: homepageIsInvalid
-            ? _homepageWithoutChallengeFixture()
-            : _homepageFixture(
-                visitorData: 'visitor-homepage',
-                eventId: 'event-homepage',
-              ),
+        body:
+            '${' ' * responsePadding}${homepageIsInvalid ? _homepageWithoutChallengeFixture() : _homepageFixture(visitorData: 'visitor-homepage', eventId: 'event-homepage')}',
       );
     }
     if (uri == BotGuardPoTokenProvider.fallbackVisitorDataUri) {

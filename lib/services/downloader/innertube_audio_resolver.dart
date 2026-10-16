@@ -78,6 +78,8 @@ final class InnerTubeAudioResolver
             resolved.format.isAudioOnly && resolved.format.effectiveBitrate > 0
             ? resolved.format.effectiveBitrate
             : null,
+        sampleRate: resolved.format.audioSampleRate,
+        channels: resolved.format.audioChannels,
         clientProfileKey: resolved.profile.key,
         expiresAt: resolved.expiresAt,
       );

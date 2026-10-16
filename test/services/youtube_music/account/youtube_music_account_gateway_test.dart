@@ -1,8 +1,40 @@
+import 'dart:isolate';
+
+import 'package:bstream_music/core/utils/background_work.dart';
 import 'package:bstream_music/services/youtube_music/account/youtube_music_account.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('authenticated account reads', () {
+    test(
+      'large account responses reduce models outside the UI isolate',
+      () async {
+        final events = ReceivePort();
+        final parsed = events.first;
+        try {
+          final transport = _FakeAccountTransport([
+            YouTubeMusicAccountResponse(
+              statusCode: 200,
+              body: _profileFixture(),
+              bodyByteCount: backgroundParsingThreshold,
+            ),
+          ]);
+          final gateway = YouTubeMusicAccountGateway(
+            transport: transport,
+            sessionHeaders: StaticYouTubeMusicSessionHeadersProvider(
+              YouTubeMusicSessionHeaders(const {}),
+            ),
+            clientContext: _clientContext,
+            parser: _ObservedAccountParser(events.sendPort),
+          );
+          expect((await gateway.getProfile())?.displayName, 'BStream User');
+          expect(await parsed, 'BStream background work');
+        } finally {
+          events.close();
+        }
+      },
+    );
+
     test('parses profile and exact account menu endpoint', () async {
       final transport = _FakeAccountTransport(<Object>[_ok(_profileFixture())]);
       final gateway = _gateway(transport);
@@ -1184,6 +1216,17 @@ Map<String, Object?> _runs(String text) => <String, Object?>{
 Map<String, Object?> _action(YouTubeMusicAccountRequest request) {
   final actions = request.body['actions']! as List<Object?>;
   return actions.single! as Map<String, Object?>;
+}
+
+class _ObservedAccountParser extends YouTubeMusicAccountParser {
+  const _ObservedAccountParser(this.events);
+  final SendPort events;
+
+  @override
+  RemoteAccountProfile? parseProfile(Object? root) {
+    events.send(Isolate.current.debugName);
+    return super.parseProfile(root);
+  }
 }
 
 class _FakeAccountTransport implements YouTubeMusicAccountTransport {

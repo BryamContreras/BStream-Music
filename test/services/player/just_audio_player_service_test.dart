@@ -184,6 +184,240 @@ void main() {
     },
   );
 
+  for (final kind in ['remote', 'local', 'queue']) {
+    test('pause while $kind source loads prevents a late auto-start', () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend..blockNextSourceLoad = true;
+      try {
+        final load = switch (kind) {
+          'remote' => fixture.service.playRemoteSource(
+            _remoteSource('pending'),
+          ),
+          'local' => fixture.service.playLocal(_localTrack('pending')),
+          _ => fixture.service.playLocalQueue([_localTrack('pending')], 0),
+        };
+        await _waitUntil(() => backend.sourceLoadCalls.length == 1);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+
+        await fixture.service.pause();
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+        backend.completeSourceLoad(0);
+        await load;
+        await _drainEvents();
+
+        expect(backend.playCalls, 0);
+        expect(backend.playing, isFalse);
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.paused);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+
+        await fixture.service.resume();
+        await _drainEvents();
+        expect(backend.playCalls, 1);
+        expect(backend.playing, isTrue);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  }
+
+  test(
+    'resume during a pending load waits for that source, not the old one',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('old'));
+        backend.blockNextSourceLoad = true;
+        final load = fixture.service.playRemoteSource(_remoteSource('new'));
+        await _waitUntil(() => backend.sourceLoadCalls.length == 2);
+
+        await fixture.service.pause();
+        final callsBeforeResume = backend.playCalls;
+        await fixture.service.resume();
+        expect(backend.playCalls, callsBeforeResume);
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.loading);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+
+        backend.completeSourceLoad(1);
+        await load;
+        await _drainEvents();
+        expect(backend.playCalls, callsBeforeResume + 1);
+        expect(_queueEntryId(backend), 'remote:new');
+        expect(backend.playing, isTrue);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'native interruption during replacement load prevents late restart',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('old'));
+        backend.blockNextSourceLoad = true;
+        final load = fixture.service.playRemoteSource(_remoteSource('new'));
+        await _waitUntil(() => backend.sourceLoadCalls.length == 2);
+
+        // just_audio handles audio-focus loss and interruptions on its own.
+        await backend.pause();
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+        final callsBeforeReady = backend.playCalls;
+        backend.completeSourceLoad(1);
+        await load;
+        await _drainEvents();
+
+        expect(backend.playCalls, callsBeforeReady);
+        expect(backend.playing, isFalse);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'late play failure after explicit pause cannot fail the paused song',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend
+        ..blockNextPlay = true
+        ..failBlockedPlay = true;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('pending-play'));
+        await backend.playStarted.future;
+        await fixture.service.pause();
+        backend.releasePlay.complete();
+        await _drainEvents();
+
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.paused);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+        expect(backend.playing, isFalse);
+      } finally {
+        if (!backend.releasePlay.isCompleted) backend.releasePlay.complete();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'queue reconciliation cannot restore intent captured before pause',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        final tracks = [_localTrack('a'), _localTrack('b')];
+        await fixture.service.playLocalQueue(tracks, 0);
+        backend.blockMoves = true;
+        final replace = fixture.service.replaceLocalQueue(
+          tracks.reversed.toList(),
+          1,
+        );
+        await backend.moveStarted.future;
+        await fixture.service.pause();
+        final callsBeforeReady = backend.playCalls;
+        backend.releaseMove.complete();
+        await replace;
+        await _drainEvents();
+
+        expect(backend.playCalls, callsBeforeReady);
+        expect(backend.playing, isFalse);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test('pause during load option writes still prevents auto-start', () async {
+    final fixture = await _Fixture.create();
+    final backend = fixture.backend..blockNextLoopMode = true;
+    try {
+      final load = fixture.service.playRemoteSource(_remoteSource('pending'));
+      await backend.loopModeWriteStarted.future;
+      await fixture.service.pause();
+      backend.releaseLoopModeWrite.complete();
+      await load;
+      await _drainEvents();
+
+      expect(backend.playCalls, 0);
+      expect(backend.playing, isFalse);
+      expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  test(
+    'a permitted native interruption resume restores playback intent',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('current'));
+        await backend.pause();
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+        await backend.play();
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.playing);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'native pause while rebuffering is a pause, not continuing recovery',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('current'));
+        backend.emitBuffering();
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+        backend.emitBuffering(playing: false);
+
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.paused);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+        final callsBeforeReady = backend.playCalls;
+        backend.emitReady();
+        await _drainEvents();
+        expect(backend.playCalls, callsBeforeReady);
+        expect(backend.playing, isFalse);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'a late pause acknowledgement cannot overwrite a later resume',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('current'));
+        backend.blockNextPause = true;
+        final pause = fixture.service.pause();
+        await backend.pauseStarted.future;
+        await fixture.service.resume();
+        backend.releasePause.complete();
+        await pause;
+        await _drainEvents();
+
+        expect(backend.playing, isTrue);
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.playing);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+      } finally {
+        if (!backend.releasePause.isCompleted) backend.releasePause.complete();
+        await fixture.dispose();
+      }
+    },
+  );
+
   test(
     'hung source A cannot block B or overwrite it when A completes late',
     () async {
@@ -384,6 +618,82 @@ void main() {
         await _drainEvents();
         expect(backend.sequence, isEmpty);
         expect(fixture.service.currentSnapshot.status, PlayerStatus.failed);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'background timeout teardown keeps intent for bounded source recovery',
+    () async {
+      final deadline = Completer<void>();
+      var deadlineCalls = 0;
+      final fixture = await _Fixture.create(
+        operationDeadline: (_) =>
+            deadlineCalls++ == 0 ? deadline.future : Completer<void>().future,
+      );
+      final backend = fixture.backend..blockNextSourceLoad = true;
+      final snapshots = <PlayerSnapshot>[];
+      final subscription = fixture.service.snapshotStream.listen(snapshots.add);
+      try {
+        fixture.service.didChangeAppLifecycleState(AppLifecycleState.paused);
+        final play = fixture.service.playRemoteSource(
+          _remoteSource('timed-out'),
+        );
+        await _waitUntil(() => backend.sourceLoadCalls.length == 1);
+        deadline.complete();
+        await expectLater(play, throwsA(isA<TimeoutException>()));
+        await _drainEvents();
+
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.failed);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+        expect(
+          snapshots.any((snapshot) => snapshot.status == PlayerStatus.paused),
+          isFalse,
+        );
+        expect(snapshots.every((snapshot) => snapshot.wantsToPlay), isTrue);
+
+        // The timed-out native load can finish late, but must not interrupt the
+        // source selected by the controller's bounded recovery cycle.
+        await fixture.service.playRemoteSource(_remoteSource('recovered'));
+        backend.completeSourceLoad(0);
+        await _drainEvents();
+        expect(_queueEntryId(backend), 'remote:recovered');
+        expect(backend.playing, isTrue);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isTrue);
+
+        await fixture.service.stop();
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
+      } finally {
+        await subscription.cancel();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'explicit pause after source timeout still releases recovery intent',
+    () async {
+      final deadline = Completer<void>();
+      final fixture = await _Fixture.create(
+        operationDeadline: (_) => deadline.future,
+      );
+      final backend = fixture.backend..blockNextSourceLoad = true;
+      try {
+        final play = fixture.service.playRemoteSource(
+          _remoteSource('timed-out'),
+        );
+        await _waitUntil(() => backend.sourceLoadCalls.length == 1);
+        deadline.complete();
+        await expectLater(play, throwsA(isA<TimeoutException>()));
+
+        await fixture.service.pause();
+        backend.completeSourceLoad(0);
+        await _drainEvents();
+        expect(backend.playing, isFalse);
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.paused);
+        expect(fixture.service.currentSnapshot.wantsToPlay, isFalse);
       } finally {
         await fixture.dispose();
       }
@@ -2031,6 +2341,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   bool blockNextLoopMode = false;
   bool blockNextSkipSilence = false;
   bool blockNextPlay = false;
+  bool blockNextPause = false;
   bool failBlockedPlay = false;
   Object? blockedPlayFailure;
   int skipSilenceFailuresRemaining = 0;
@@ -2065,6 +2376,8 @@ class _BlockingAudioPlayer extends AudioPlayer {
   Completer<void>? _queuedSkipSilenceWriteRelease;
   final Completer<void> playStarted = Completer<void>();
   final Completer<void> releasePlay = Completer<void>();
+  final Completer<void> pauseStarted = Completer<void>();
+  final Completer<void> releasePause = Completer<void>();
   void Function(Duration position)? onUnindexedSeek;
   void Function(double volume)? onSetVolume;
 
@@ -2260,7 +2573,8 @@ class _BlockingAudioPlayer extends AudioPlayer {
     _states.add(PlayerState(_playing, _processingState));
   }
 
-  void emitBuffering() {
+  void emitBuffering({bool? playing}) {
+    if (playing != null) _playing = playing;
     _processingState = ProcessingState.buffering;
     _states.add(PlayerState(_playing, _processingState));
   }
@@ -2393,6 +2707,11 @@ class _BlockingAudioPlayer extends AudioPlayer {
   Future<void> pause() async {
     _playing = false;
     emitReady();
+    if (blockNextPause) {
+      blockNextPause = false;
+      if (!pauseStarted.isCompleted) pauseStarted.complete();
+      await releasePause.future;
+    }
   }
 
   @override

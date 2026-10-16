@@ -164,6 +164,237 @@ void main() {
   );
 
   test(
+    'finishing LIVE clears its published batch and starts a fresh one',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (query) async =>
+            query == 'sin resultados' ? const [] : [_remoteTrack(query)],
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+
+      harness.service.emit(_playEvent('sin resultados'));
+      harness.service.emit(_playEvent('primera'));
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.first.status ==
+                LiveQueueItemStatus.failed &&
+            harness.player.remotePlayCalls == 1,
+      );
+
+      harness.player.completeLivePlayback();
+
+      expect(harness.liveState.liveQueue, isEmpty);
+      expect(harness.player.stopCalls, 0);
+      expect(harness.player.clearQueueSourceCalls, 0);
+      harness.service.emit(_playEvent('segunda'));
+      await _waitUntil(() => harness.player.remotePlayCalls == 2);
+      expect(harness.liveState.liveQueue.single.remoteTrack?.id, 'segunda');
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'segunda',
+      ]);
+    },
+  );
+
+  test(
+    'finishing LIVE also clears requests that failed after its last queue update',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final laterSearch = Completer<List<TrackInfo>>();
+      final harness = _LiveHarness(
+        search: (query) => query == 'fallida'
+            ? laterSearch.future
+            : Future.value([_remoteTrack(query)]),
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      harness.service.emit(_playEvent('sonando'));
+      await _waitUntil(() => harness.player.remotePlayCalls == 1);
+      harness.service.emit(_playEvent('fallida'));
+      await _waitUntil(() => harness.liveState.liveQueue.length == 2);
+      laterSearch.complete(const []);
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.last.status ==
+            LiveQueueItemStatus.failed,
+      );
+      expect(harness.player.remoteQueueSyncCalls, 0);
+
+      harness.player.completeLivePlayback();
+
+      expect(harness.liveState.liveQueue, isEmpty);
+    },
+  );
+
+  test(
+    'finishing downloaded LIVE clears its batch without deleting library tracks',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final localTrack = LocalTrack(
+        id: 'downloaded-live',
+        title: remoteTrack.title,
+        artist: remoteTrack.artist,
+        filePath: r'C:\music\downloaded-live.m4a',
+        addedAt: DateTime(2026),
+      );
+      final harness = _LiveHarness(
+        search: (_) async => const [remoteTrack],
+        downloadResult: LocalTrackDownloadResult(
+          track: localTrack,
+          remoteTrack: remoteTrack,
+          reusedExisting: true,
+        ),
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      await harness.controller.setSaveRequestsToLibrary(true);
+      harness.service.emit(_playEvent('descargada'));
+      await _waitUntil(() => harness.player.localPlayCalls == 1);
+
+      harness.player.completeLivePlayback();
+
+      expect(harness.liveState.liveQueue, isEmpty);
+      expect(harness.player.lastLocalTrack, same(localTrack));
+      expect(harness.player.stopCalls, 0);
+      await harness.controller.setSaveRequestsToLibrary(false);
+      expect(harness.liveState.saveRequestsToLibrary, isFalse);
+    },
+  );
+
+  test(
+    'finishing LIVE preserves a pending request and its resolution generation',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final laterSearch = Completer<List<TrackInfo>>();
+      final harness = _LiveHarness(
+        search: (query) => query == 'pendiente'
+            ? laterSearch.future
+            : Future.value([_remoteTrack(query)]),
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      harness.service.emit(_playEvent('sonando'));
+      harness.service.emit(_playEvent('pendiente'));
+      await _waitUntil(
+        () =>
+            harness.player.remotePlayCalls == 1 &&
+            harness.liveState.liveQueue.length == 2,
+      );
+      final pendingId = harness.liveState.liveQueue.last.id;
+
+      harness.player.completeLivePlayback();
+
+      expect(harness.liveState.liveQueue.single.id, pendingId);
+      expect(harness.liveState.liveQueue.single.isPending, isTrue);
+      laterSearch.complete([_remoteTrack('nueva')]);
+      await _waitUntil(() => harness.player.remotePlayCalls == 2);
+      expect(harness.liveState.liveQueue.single.id, pendingId);
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'nueva',
+      ]);
+    },
+  );
+
+  test(
+    'requests resolving during restoration wait before interrupting the normal queue',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final laterSearch = Completer<List<TrackInfo>>();
+      final harness = _LiveHarness(
+        search: (query) => query == 'pendiente'
+            ? laterSearch.future
+            : Future.value([_remoteTrack(query)]),
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      harness.service.emit(_playEvent('sonando'));
+      harness.service.emit(_playEvent('pendiente'));
+      await _waitUntil(
+        () =>
+            harness.player.remotePlayCalls == 1 &&
+            harness.liveState.liveQueue.length == 2,
+      );
+
+      harness.player.beginLiveRestoration();
+      laterSearch.complete([_remoteTrack('nueva')]);
+      await _waitUntil(() => harness.liveState.liveQueue.single.isReady);
+      await _pumpEventQueue();
+      expect(harness.player.remotePlayCalls, 1);
+      expect(harness.player.isLiveQueueActive, isFalse);
+
+      harness.player.finishLiveRestoration();
+      await _waitUntil(() => harness.player.remotePlayCalls == 2);
+      expect(harness.player.lastRemoteTrack?.id, 'nueva');
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'nueva',
+      ]);
+      expect(harness.player.isLiveQueueActive, isTrue);
+    },
+  );
+
+  test(
+    'manual LIVE selection waits for restoration and ignores a cleared request',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (query) async => [_remoteTrack(query)],
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      harness.service.emit(_playEvent('sonando'));
+      await _waitUntil(() => harness.player.remotePlayCalls == 1);
+      final completedId = harness.liveState.liveQueue.single.id;
+
+      harness.player.beginLiveRestoration();
+      final selecting = harness.controller.playLiveQueueItem(completedId);
+      await _pumpEventQueue();
+      expect(harness.player.remotePlayCalls, 1);
+      harness.player.finishLiveRestoration();
+      await selecting;
+
+      expect(harness.player.remotePlayCalls, 1);
+      expect(harness.liveState.liveQueue, isEmpty);
+    },
+  );
+
+  test(
+    'finishing a batch preserves ready requests not published to the player yet',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (query) async => [_remoteTrack(query)],
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      harness.service.emit(_playEvent('publicada'));
+      await _waitUntil(() => harness.player.remotePlayCalls == 1);
+
+      harness.player.holdLiveQueueSynchronization();
+      harness.service.emit(_playEvent('lista sin publicar'));
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.every((item) => item.isReady),
+      );
+      await _pumpEventQueue();
+      expect(harness.player.remoteQueueSyncCalls, 0);
+
+      harness.player.beginLiveRestoration();
+      expect(
+        harness.liveState.liveQueue.single.remoteTrack?.id,
+        'lista sin publicar',
+      );
+      harness.player.finishLiveRestoration();
+      await _waitUntil(() => harness.player.remotePlayCalls == 2);
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'lista sin publicar',
+      ]);
+    },
+  );
+
+  test(
     'library LIVE skips a failed download and plays only the next ready track',
     () async {
       SharedPreferences.setMockInitialValues({});
@@ -572,7 +803,214 @@ void main() {
   );
 
   test(
-    'a late LIVE request advances past an exhausted remote without reopening it',
+    'LIVE consumes its remote requests then resumes the interrupted queue and position',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final liveService = _FakeTikTokLiveCommandService();
+      final playerService = _LiveAppendPlayerService();
+      final resolver = _LiveAppendAudioResolver(
+        source: AudioStreamSource.innerTube,
+        succeeds: (_, _) => true,
+      );
+      final repository = _SearchMusicRepository(
+        (query) async => [_remoteTrack(query)],
+      );
+      final container = ProviderContainer(
+        overrides: [
+          tiktokLiveCommandServiceProvider.overrideWithValue(liveService),
+          searchTracksProvider.overrideWithValue(SearchTracks(repository)),
+          playerServiceProvider.overrideWithValue(playerService),
+          audioStreamResolverProvider.overrideWithValue(resolver),
+          remotePlaybackCacheProvider.overrideWithValue(
+            RemotePlaybackCache(policy: RemotePlaybackCachePolicy.disabled),
+          ),
+          settingsControllerProvider.overrideWith(
+            _LiveAppendSettingsController.new,
+          ),
+          playbackHistorySinkProvider.overrideWithValue(
+            const _NoopPlaybackHistorySink(),
+          ),
+        ],
+      );
+      addTearDown(() async {
+        container.dispose();
+        await liveService.close();
+        await playerService.close();
+      });
+      await container.read(playerControllerProvider.future);
+      await container.read(tiktokLiveControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      final normal = [_remoteTrack('normal-a'), _remoteTrack('normal-b')];
+      await controller.playRemote(
+        normal.first,
+        queue: normal,
+        queueSourceId: 'normal-queue',
+      );
+      await controller.seek(const Duration(seconds: 42));
+
+      liveService.emit(_playEvent('live-a'));
+      liveService.emit(_playEvent('live-b'));
+      await _waitUntil(
+        () =>
+            container.read(playbackQueueProvider).entries.length == 2 &&
+            controller.isLiveQueueActive &&
+            container
+                .read(tiktokLiveControllerProvider)
+                .requireValue
+                .liveQueue
+                .every((item) => item.isReady),
+      );
+      expect(playerService.currentSnapshot.trackId, 'live-a');
+      playerService.completeCurrent();
+      await _waitUntil(() => playerService.currentSnapshot.trackId == 'live-b');
+      playerService.completeCurrent();
+      await _waitUntil(
+        () =>
+            !controller.isLiveQueueActive &&
+            playerService.currentSnapshot.trackId == 'normal-a',
+      );
+      await controller.waitForLiveQueueRestoration();
+      expect(
+        playerService.currentSnapshot.position,
+        const Duration(seconds: 42),
+      );
+
+      expect(
+        container.read(tiktokLiveControllerProvider).requireValue.liveQueue,
+        isEmpty,
+      );
+      expect(
+        container.read(playbackQueueProvider).entries.map((item) => item.title),
+        normal.map((track) => track.title),
+      );
+      expect(container.read(playbackQueueProvider).currentIndex, 0);
+      expect(playerService.playedRemoteIds, [
+        'normal-a',
+        'live-a',
+        'live-b',
+        'normal-a',
+      ]);
+      await controller.playNext();
+      expect(playerService.currentSnapshot.trackId, 'normal-b');
+    },
+  );
+
+  test(
+    'a LIVE request resolved during real restoration waits and preserves the original return queue',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final liveService = _FakeTikTokLiveCommandService();
+      final playerService = _LiveAppendPlayerService();
+      final resolver = _LiveAppendAudioResolver(
+        source: AudioStreamSource.innerTube,
+        succeeds: (_, _) => true,
+      );
+      final repository = _SearchMusicRepository(
+        (query) async => [_remoteTrack(query)],
+      );
+      final container = ProviderContainer(
+        overrides: [
+          tiktokLiveCommandServiceProvider.overrideWithValue(liveService),
+          searchTracksProvider.overrideWithValue(SearchTracks(repository)),
+          playerServiceProvider.overrideWithValue(playerService),
+          audioStreamResolverProvider.overrideWithValue(resolver),
+          remotePlaybackCacheProvider.overrideWithValue(
+            RemotePlaybackCache(policy: RemotePlaybackCachePolicy.disabled),
+          ),
+          settingsControllerProvider.overrideWith(
+            _LiveAppendSettingsController.new,
+          ),
+          playbackHistorySinkProvider.overrideWithValue(
+            const _NoopPlaybackHistorySink(),
+          ),
+        ],
+      );
+      final restorationGate = Completer<void>();
+      addTearDown(() async {
+        if (!restorationGate.isCompleted) restorationGate.complete();
+        container.dispose();
+        await liveService.close();
+        await playerService.close();
+      });
+      await container.read(playerControllerProvider.future);
+      await container.read(tiktokLiveControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      final normal = [_remoteTrack('normal-a'), _remoteTrack('normal-b')];
+      await controller.playRemote(normal.first, queue: normal);
+      await controller.seek(const Duration(seconds: 42));
+      liveService.emit(_playEvent('live-a'));
+      await _waitUntil(() => playerService.currentSnapshot.trackId == 'live-a');
+      playerService.remotePlayGates['normal-a'] = restorationGate.future;
+
+      playerService.completeCurrent();
+      await _waitUntil(
+        () =>
+            !controller.isLiveQueueActive &&
+            container
+                .read(tiktokLiveControllerProvider)
+                .requireValue
+                .liveQueue
+                .isEmpty &&
+            !playerService.remotePlayGates.containsKey('normal-a'),
+      );
+      liveService.emit(_playEvent('live-b'));
+      await _waitUntil(
+        () =>
+            container
+                .read(tiktokLiveControllerProvider)
+                .requireValue
+                .liveQueue
+                .singleOrNull
+                ?.isReady ==
+            true,
+      );
+      await _pumpEventQueue();
+      expect(playerService.playedRemoteIds, ['normal-a', 'live-a']);
+      expect(controller.isLiveQueueActive, isFalse);
+
+      restorationGate.complete();
+      await _waitUntil(() => playerService.currentSnapshot.trackId == 'live-b');
+      expect(playerService.playedRemoteIds, [
+        'normal-a',
+        'live-a',
+        'normal-a',
+        'live-b',
+      ]);
+      expect(
+        container
+            .read(tiktokLiveControllerProvider)
+            .requireValue
+            .liveQueue
+            .single
+            .remoteTrack
+            ?.id,
+        'live-b',
+      );
+
+      playerService.completeCurrent();
+      await _waitUntil(
+        () =>
+            !controller.isLiveQueueActive &&
+            playerService.currentSnapshot.trackId == 'normal-a',
+      );
+      await controller.waitForLiveQueueRestoration();
+      expect(
+        playerService.currentSnapshot.position,
+        const Duration(seconds: 42),
+      );
+      expect(
+        container.read(playbackQueueProvider).entries.map((entry) => entry.id),
+        normal.map((track) => track.id),
+      );
+      expect(
+        container.read(tiktokLiveControllerProvider).requireValue.liveQueue,
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'a terminally failed LIVE batch is cleared before a later request starts',
     () async {
       SharedPreferences.setMockInitialValues({});
       final liveService = _FakeTikTokLiveCommandService();
@@ -638,9 +1076,14 @@ void main() {
       playerService.failCurrent('HTTP 503 while travelling');
       await _waitUntil(
         () =>
-            container.read(playerControllerProvider).hasError &&
             primary.callsFor('live-a') == 3 &&
-            fallback.callsFor('live-a') == 3,
+            fallback.callsFor('live-a') == 3 &&
+            container
+                .read(tiktokLiveControllerProvider)
+                .requireValue
+                .liveQueue
+                .isEmpty &&
+            !playerController.isLiveQueueActive,
       );
 
       expect(playerController.publicRemoteStarts, ['live-a']);
@@ -651,23 +1094,20 @@ void main() {
       ]);
 
       liveService.emit(_playEvent('live-b'));
-      await _waitUntil(
-        () =>
-            playerController.remoteQueueSyncCalls == 1 &&
-            playerService.playedRemoteIds.length == 2,
-      );
+      await _waitUntil(() => playerService.playedRemoteIds.length == 2);
 
       final live = container.read(tiktokLiveControllerProvider).requireValue;
-      expect(live.liveQueue, hasLength(2));
+      expect(live.liveQueue, hasLength(1));
       expect(live.liveQueue.every((item) => item.isReady), isTrue);
-      expect(playerController.publicRemoteStarts, ['live-a']);
-      expect(playerController.remoteQueueSyncCalls, 1);
+      expect(live.liveQueue.single.remoteTrack?.id, 'live-b');
+      expect(playerController.publicRemoteStarts, ['live-a', 'live-b']);
+      expect(playerController.remoteQueueSyncCalls, 0);
       expect(primary.callsFor('live-a'), 3);
       expect(fallback.callsFor('live-a'), 3);
       expect(primary.callsFor('live-b'), 1);
       expect(fallback.callsFor('live-b'), 0);
       expect(playerService.playedRemoteIds, ['live-a', 'live-b']);
-      expect(container.read(playbackQueueProvider).currentIndex, 1);
+      expect(container.read(playbackQueueProvider).currentIndex, 0);
       expect(
         container.read(playerControllerProvider).requireValue.trackId,
         'live-b',
@@ -1078,6 +1518,44 @@ class _RecordingPlayerController extends PlayerController {
   int stopCalls = 0;
   int clearQueueSourceCalls = 0;
   bool _liveQueueActive = false;
+  final _liveCompletionListeners = <void Function()>[];
+  Completer<void>? _liveRestoration;
+
+  @override
+  void addLiveQueueCompletionListener(void Function() listener) {
+    _liveCompletionListeners.add(listener);
+  }
+
+  @override
+  void removeLiveQueueCompletionListener(void Function() listener) {
+    _liveCompletionListeners.remove(listener);
+  }
+
+  @override
+  Future<void> waitForLiveQueueRestoration() =>
+      _liveRestoration?.future ?? Future<void>.value();
+
+  void holdLiveQueueSynchronization() {
+    _liveRestoration ??= Completer<void>();
+  }
+
+  void beginLiveRestoration() {
+    holdLiveQueueSynchronization();
+    _liveQueueActive = false;
+    for (final listener in List.of(_liveCompletionListeners)) {
+      listener();
+    }
+  }
+
+  void finishLiveRestoration() {
+    _liveRestoration?.complete();
+    _liveRestoration = null;
+  }
+
+  void completeLivePlayback() {
+    beginLiveRestoration();
+    finishLiveRestoration();
+  }
 
   @override
   bool get isLiveQueueActive => _liveQueueActive;
@@ -1276,6 +1754,7 @@ class _LiveAppendPlayerService extends PlayerService {
   final _snapshots = StreamController<PlayerSnapshot>.broadcast();
   PlayerSnapshot _snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   final List<String> playedRemoteIds = [];
+  final Map<String, Future<void>> remotePlayGates = {};
 
   @override
   Stream<PlayerSnapshot> get snapshotStream => _snapshots.stream;
@@ -1288,6 +1767,8 @@ class _LiveAppendPlayerService extends PlayerService {
 
   @override
   Future<void> playRemote(TrackInfo track) async {
+    final gate = remotePlayGates.remove(track.id);
+    if (gate != null) await gate;
     playedRemoteIds.add(track.id);
     _snapshot = PlayerSnapshot(
       status: PlayerStatus.playing,
@@ -1305,6 +1786,14 @@ class _LiveAppendPlayerService extends PlayerService {
     _snapshot = _snapshot.copyWith(
       status: PlayerStatus.failed,
       errorMessage: message,
+    );
+    _snapshots.add(_snapshot);
+  }
+
+  void completeCurrent() {
+    _snapshot = _snapshot.copyWith(
+      status: PlayerStatus.completed,
+      position: _snapshot.duration ?? _snapshot.position,
     );
     _snapshots.add(_snapshot);
   }

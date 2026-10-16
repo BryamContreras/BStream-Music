@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 
+import '../../../core/utils/background_work.dart';
 import '../innertube_search_service.dart';
 import 'ejs_solver.dart';
 import 'innertube_client_profile.dart';
@@ -861,16 +861,14 @@ class InnerTubePlaybackService {
             statusCode: raw.statusCode,
           );
         }
-        final decoded = jsonDecode(raw.body);
-        if (decoded is! Map) {
-          throw const InnerTubeClientResponseException(
-            'The player endpoint returned an invalid JSON object.',
-          );
-        }
-        return parser.parse(
-          Map<String, dynamic>.from(decoded),
-          clientId: profile.key,
+        final result = await parseJsonInBackground(
+          raw.body,
+          _PlaybackResponseParseJob(parser, profile.key).parse,
         );
+        // Parsing can now await a worker. A rapid skip must still discard a
+        // stale response before resolving formats, caches or retry fallbacks.
+        _ensureCurrent(shouldContinue);
+        return result;
       } catch (error) {
         lastError = error;
         if (attempt + 1 >= maxRequestAttempts || !_isRetryable(error)) rethrow;
@@ -1437,6 +1435,21 @@ class InnerTubePlaybackService {
       await _ejsSolver?.dispose();
       await _poTokenProvider?.dispose();
     }
+  }
+}
+
+final class _PlaybackResponseParseJob {
+  const _PlaybackResponseParseJob(this.parser, this.clientId);
+  final InnerTubePlayerResponseParser parser;
+  final String clientId;
+
+  InnerTubeParsedPlayerResponse parse(Object? decoded) {
+    if (decoded is! Map) {
+      throw const InnerTubeClientResponseException(
+        'The player endpoint returned an invalid JSON object.',
+      );
+    }
+    return parser.parse(Map<String, dynamic>.from(decoded), clientId: clientId);
   }
 }
 

@@ -104,11 +104,16 @@ class YouTubeMusicAccountResponse {
   YouTubeMusicAccountResponse({
     required this.statusCode,
     required this.body,
+    this.bodyByteCount = 0,
     Map<String, String> headers = const <String, String>{},
   }) : headers = Map<String, String>.unmodifiable(headers);
 
   final int statusCode;
   final Object? body;
+
+  /// Encoded response size, used to keep heavy model parsing off the UI
+  /// isolate. Optional for transports that only provide decoded fixtures.
+  final int bodyByteCount;
   final Map<String, String> headers;
 
   @override

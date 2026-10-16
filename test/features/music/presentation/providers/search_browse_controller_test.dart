@@ -91,6 +91,245 @@ void main() {
     },
   );
 
+  test('shares an in-flight category page across offscreen visits', () async {
+    final pending = Completer<InnerTubeMoodGenrePage>();
+    final page = InnerTubeMoodGenrePage(sections: []);
+    final source = _FakeMoodGenreSearch(
+      sections: [],
+      moodLookup: (_) => pending.future,
+    );
+    final container = _container(source);
+    final provider = searchBrowseCategoryPageProvider(_category('pending'));
+    final first = container.listen(provider, (_, _) {});
+    await container.pump();
+    expect(source.moodCalls, 1);
+
+    first.close();
+    await container.pump();
+    final next = container.listen(provider, (_, _) {});
+    addTearDown(next.close);
+    await container.pump();
+    expect(source.moodCalls, 1);
+
+    pending.complete(page);
+    expect(await container.read(provider.future), same(page));
+    next.close();
+    await container.pump();
+    expect(await container.read(provider.future), same(page));
+    expect(
+      source.moodCalls,
+      1,
+      reason: 'successful pages keep the timed cache',
+    );
+  });
+
+  test(
+    'the temporary page hold ends when its successful cache expires',
+    () async {
+      final page = InnerTubeMoodGenrePage(sections: []);
+      final source = _FakeMoodGenreSearch(sections: [], moodPage: page);
+      final container = _container(
+        source,
+        remoteCacheDuration: const Duration(milliseconds: 5),
+      );
+      final provider = searchBrowseCategoryPageProvider(_category('expires'));
+      final first = container.listen(provider, (_, _) {});
+      expect(await container.read(provider.future), same(page));
+      first.close();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await container.pump();
+
+      final next = container.listen(provider, (_, _) {});
+      addTearDown(next.close);
+      expect(await container.read(provider.future), same(page));
+      expect(source.moodCalls, 2);
+    },
+  );
+
+  test('a failed in-flight page is not retained after leaving', () async {
+    final pending = Completer<InnerTubeMoodGenrePage>();
+    final page = InnerTubeMoodGenrePage(sections: []);
+    var attempts = 0;
+    final source = _FakeMoodGenreSearch(
+      sections: [],
+      moodLookup: (_) => ++attempts == 1 ? pending.future : Future.value(page),
+    );
+    final container = _container(source);
+    final provider = searchBrowseCategoryPageProvider(_category('retry'));
+    final first = container.listen(provider, (_, _) {});
+    final failed = expectLater(
+      container.read(provider.future),
+      throwsA(isA<StateError>()),
+    );
+    await container.pump();
+    first.close();
+    await container.pump();
+    pending.completeError(StateError('temporary network failure'));
+    await failed;
+    await container.pump();
+
+    final next = container.listen(provider, (_, _) {});
+    addTearDown(next.close);
+    expect(await container.read(provider.future), same(page));
+    expect(source.moodCalls, 2);
+  });
+
+  test('leaving a pending page does not start its cover lookup', () async {
+    final pending = Completer<InnerTubeMoodGenrePage>();
+    final source = _FakeMoodGenreSearch(
+      sections: [],
+      moodLookup: (_) => pending.future,
+      collectionSongs: {
+        'VLpending': [_song('pending0001', 'Pending')],
+      },
+    );
+    final container = _container(source);
+    final category = _category('pending-cover');
+    final provider = searchBrowseCategoryArtworkProvider(category);
+    final first = container.listen(provider, (_, _) {});
+    await container.pump();
+    expect(source.moodCalls, 1);
+    first.close();
+    await container.pump();
+
+    pending.complete(_collectionPage('VLpending'));
+    await container.read(searchBrowseCategoryPageProvider(category).future);
+    await container.pump();
+    expect(source.collectionCalls, isEmpty);
+
+    final next = container.listen(provider, (_, _) {});
+    addTearDown(next.close);
+    expect(
+      await container.read(provider.future),
+      'https://img.test/pending0001.jpg',
+    );
+    expect(source.moodCalls, 1);
+    expect(source.collectionCalls, ['VLpending']);
+  });
+
+  test(
+    'shares an in-flight cover collection across offscreen visits',
+    () async {
+      final pending = Completer<List<InnerTubeSong>>();
+      final started = Completer<void>();
+      final source = _FakeMoodGenreSearch(
+        sections: [],
+        moodPage: _collectionPage('VLcover'),
+        collectionLookup: (_) {
+          if (!started.isCompleted) started.complete();
+          return pending.future;
+        },
+      );
+      final container = _container(source);
+      final provider = searchBrowseCategoryArtworkProvider(_category('cover'));
+      final first = container.listen(provider, (_, _) {});
+      await started.future.timeout(const Duration(seconds: 5));
+      expect(source.collectionCalls, ['VLcover']);
+      first.close();
+      await container.pump();
+      final next = container.listen(provider, (_, _) {});
+      addTearDown(next.close);
+      await container.pump();
+      expect(source.collectionCalls, ['VLcover']);
+
+      pending.complete([_song('cover000001', 'Cover')]);
+      expect(
+        await container.read(provider.future),
+        'https://img.test/cover000001.jpg',
+      );
+      next.close();
+      await container.pump();
+      expect(
+        await container.read(provider.future),
+        'https://img.test/cover000001.jpg',
+      );
+      expect(source.moodCalls, 1);
+      expect(source.collectionCalls, ['VLcover']);
+    },
+  );
+
+  test(
+    'drops an offscreen cover while its collection is still queued',
+    () async {
+      final pending = Completer<InnerTubeMoodGenrePage>();
+      final source = _FakeMoodGenreSearch(
+        sections: [],
+        moodLookup: (target) => target.params == 'queued-cover'
+            ? Future.value(_collectionPage('VLqueued'))
+            : pending.future,
+      );
+      final container = _container(source);
+      final category = _category('queued-cover');
+      await container.read(searchBrowseCategoryPageProvider(category).future);
+      final blockers = [
+        for (final id in ['block-a', 'block-b'])
+          container.listen(
+            searchBrowseCategoryPageProvider(_category(id)),
+            (_, _) {},
+          ),
+      ];
+      for (final blocker in blockers) {
+        addTearDown(blocker.close);
+      }
+      await container.pump();
+      expect(source.moodCalls, 3);
+
+      final cover = container.listen(
+        searchBrowseCategoryArtworkProvider(category),
+        (_, _) {},
+      );
+      await Future<void>.delayed(Duration.zero);
+      await container.pump();
+      expect(source.collectionCalls, isEmpty);
+      cover.close();
+      await container.pump();
+      pending.complete(InnerTubeMoodGenrePage(sections: []));
+      await container.pump();
+      await Future<void>.delayed(Duration.zero);
+      expect(source.collectionCalls, isEmpty);
+    },
+  );
+
+  test(
+    'a failed cover lookup falls back but can retry on the next visit',
+    () async {
+      final pending = Completer<List<InnerTubeSong>>();
+      final started = Completer<void>();
+      var attempts = 0;
+      final source = _FakeMoodGenreSearch(
+        sections: [],
+        moodPage: _collectionPage('VLretry'),
+        collectionLookup: (_) {
+          if (!started.isCompleted) started.complete();
+          return ++attempts == 1
+              ? pending.future
+              : Future.value([_song('retry000001', 'Recovered')]);
+        },
+      );
+      final container = _container(source);
+      final category = _category('retry-cover');
+      final provider = searchBrowseCategoryArtworkProvider(category);
+      final first = container.listen(provider, (_, _) {});
+      final initial = container.read(provider.future);
+      await started.future.timeout(const Duration(seconds: 5));
+      expect(source.collectionCalls, ['VLretry']);
+      first.close();
+      await container.pump();
+      pending.completeError(StateError('temporary collection failure'));
+      expect(await initial, 'https://img.test/VLretry.jpg');
+      await container.pump();
+
+      final next = container.listen(provider, (_, _) {});
+      addTearDown(next.close);
+      expect(
+        await container.read(provider.future),
+        'https://img.test/retry000001.jpg',
+      );
+      expect(source.moodCalls, 1, reason: 'the successful page stays cached');
+      expect(source.collectionCalls, ['VLretry', 'VLretry']);
+    },
+  );
+
   test('keeps localized YouTube categories and their opaque targets', () async {
     final source = _FakeMoodGenreSearch(
       sections: <InnerTubeMoodGenreSection>[
@@ -646,6 +885,7 @@ Future<List<TrackInfo>> _waitForTracks(
 ProviderContainer _container(
   _FakeMoodGenreSearch source, {
   _MemorySearchBrowseCatalogCache? catalogCache,
+  Duration? remoteCacheDuration,
 }) {
   final artworkCache = _MemorySearchBrowseCategoryArtworkCache();
   final container = ProviderContainer(
@@ -658,6 +898,10 @@ ProviderContainer _container(
         catalogCache ?? _MemorySearchBrowseCatalogCache(),
       ),
       searchBrowseCategoryArtworkCacheProvider.overrideWithValue(artworkCache),
+      if (remoteCacheDuration != null)
+        remoteDetailTracksCacheDurationProvider.overrideWithValue(
+          remoteCacheDuration,
+        ),
     ],
   );
   addTearDown(container.dispose);
@@ -712,6 +956,33 @@ InnerTubeSong _song(
   thumbnailUrl: 'https://img.test/$videoId.jpg',
 );
 
+SearchBrowseCategory _category(String id) => SearchBrowseCategory(
+  id: id,
+  title: id,
+  searchQuery: id,
+  target: InnerTubeBrowseTarget(
+    browseId: 'FEmusic_moods_and_genres_category',
+    params: id,
+  ),
+);
+
+InnerTubeMoodGenrePage _collectionPage(String browseId) =>
+    InnerTubeMoodGenrePage(
+      sections: [
+        InnerTubeHomeSection(
+          title: 'Collections',
+          items: [
+            InnerTubeHomeCollection(
+              title: browseId,
+              browseId: browseId,
+              kind: InnerTubeHomeCollectionKind.playlist,
+              thumbnailUrl: 'https://img.test/$browseId.jpg',
+            ),
+          ],
+        ),
+      ],
+    );
+
 final class _FakeMoodGenreSearch
     implements
         YouTubeMusicSearch,
@@ -730,6 +1001,7 @@ final class _FakeMoodGenreSearch
     this.lookupFailures = const <String>{},
     this.durationLookup,
     this.moodLookup,
+    this.collectionLookup,
   });
 
   final List<InnerTubeMoodGenreSection> sections;
@@ -743,6 +1015,7 @@ final class _FakeMoodGenreSearch
   final Future<Duration?> Function(String videoId)? durationLookup;
   final Future<InnerTubeMoodGenrePage> Function(InnerTubeBrowseTarget)?
   moodLookup;
+  final Future<List<InnerTubeSong>> Function(String browseId)? collectionLookup;
   final List<String> collectionCalls = <String>[];
   final List<int> collectionLimits = <int>[];
   final List<String> trackLookupCalls = <String>[];
@@ -788,6 +1061,7 @@ final class _FakeMoodGenreSearch
   }) async {
     collectionCalls.add(browseId);
     collectionLimits.add(limit);
+    if (collectionLookup != null) return collectionLookup!(browseId);
     return collectionSongs[browseId] ?? const <InnerTubeSong>[];
   }
 

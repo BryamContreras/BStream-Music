@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
+import 'package:bstream_music/core/utils/background_work.dart';
+import 'package:bstream_music/features/music/data/parsers/lrc_parser.dart';
 import 'package:bstream_music/features/music/domain/entities/lyrics.dart';
 import 'package:bstream_music/services/lyrics/lrclib_lyrics_service.dart';
 import 'package:bstream_music/services/lyrics/lrclib_request_pacing.dart';
@@ -54,6 +57,51 @@ void main() {
     final LyricsService service = createService();
     expect(service, isA<LrclibLyricsService>());
   });
+
+  test(
+    'large lyric responses prepare timelines once outside the UI isolate',
+    () async {
+      final events = ReceivePort();
+      final names = <String?>[];
+      final subscription = events.listen((name) => names.add(name as String?));
+      final service = LrclibLyricsService(
+        userAgent: 'BStream lyrics worker test',
+        transport: transport,
+        parser: _ObservedLrcParser(events.sendPort),
+      );
+      addTearDown(service.dispose);
+      try {
+        transport.enqueue(
+          _jsonResponse(200, [
+            _record(
+              id: 1,
+              trackName: 'Song',
+              artistName: 'Artist',
+              syncedLyrics: '[00:01.00] ${'a' * backgroundParsingThreshold}',
+            ),
+          ]),
+        );
+        final result = await service.searchLyricsByTitle(
+          'Song',
+          context: const LyricsLookup(title: 'Song', artist: 'Artist'),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(result, hasLength(1));
+        expect(
+          result.single.document.lines.single.timestamp,
+          const Duration(seconds: 1),
+        );
+        expect(
+          names,
+          ['BStream background work'],
+          reason: 'Scoring and presenting a candidate must reuse its timeline.',
+        );
+      } finally {
+        await subscription.cancel();
+        events.close();
+      }
+    },
+  );
 
   test(
     'default manual search skips empty titles and forwards context',
@@ -3040,6 +3088,17 @@ LrclibResponse _jsonResponse(
     body: jsonEncode(body),
     headers: headers,
   );
+}
+
+class _ObservedLrcParser extends LrcParser {
+  const _ObservedLrcParser(this.events);
+  final SendPort events;
+
+  @override
+  List<LyricLine> parse(String? source) {
+    events.send(Isolate.current.debugName);
+    return super.parse(source);
+  }
 }
 
 class _FakeTransport implements LrclibTransport {

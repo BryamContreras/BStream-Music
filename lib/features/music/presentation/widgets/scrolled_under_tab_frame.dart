@@ -329,18 +329,22 @@ class _ScrolledUnderTabFrameState extends State<ScrolledUnderTabFrame> {
         onNotification: _handleMetricsNotification,
         child: NotificationListener<ScrollNotification>(
           onNotification: _handleScrollNotification,
-          child: CustomScrollView(
-            key: widget.scrollKey,
-            scrollCacheExtent: widget.scrollCacheExtent,
-            keyboardDismissBehavior: widget.hidePinnedFooterOnScroll
-                ? ScrollViewKeyboardDismissBehavior.onDrag
-                : ScrollViewKeyboardDismissBehavior.manual,
-            // The first sliver paints last, keeping pinned chrome above rows.
-            paintOrder: SliverPaintOrder.firstIsTop,
-            slivers: [
-              if (pinnedHeader != null) PinnedHeaderSliver(child: pinnedHeader),
-              ...widget.slivers,
-            ],
+          child: LiquidGlassMotionScope(
+            motion: _glassScrollMotion,
+            child: CustomScrollView(
+              key: widget.scrollKey,
+              scrollCacheExtent: widget.scrollCacheExtent,
+              keyboardDismissBehavior: widget.hidePinnedFooterOnScroll
+                  ? ScrollViewKeyboardDismissBehavior.onDrag
+                  : ScrollViewKeyboardDismissBehavior.manual,
+              // The first sliver paints last, keeping pinned chrome above rows.
+              paintOrder: SliverPaintOrder.firstIsTop,
+              slivers: [
+                if (pinnedHeader != null)
+                  PinnedHeaderSliver(child: pinnedHeader),
+                ...widget.slivers,
+              ],
+            ),
           ),
         ),
       ),

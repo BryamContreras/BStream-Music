@@ -1,3 +1,4 @@
+import 'package:bstream_music/features/music/presentation/widgets/lyrics_glyph_snapshot.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_text_style_transition.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -118,29 +119,24 @@ void main() {
   testWidgets('rapid changes preserve opacity instead of restarting the fade', (
     tester,
   ) async {
-    List<double> opacity() => tester
-        .widgetList<FadeTransition>(
-          find.descendant(
-            of: find.byType(LyricsTextStyleTransition),
-            matching: find.byType(FadeTransition),
-          ),
-        )
-        .map((fade) => fade.opacity.value)
-        .toList(growable: false);
+    double opacity() => tester
+        .widget<LyricsGlyphSnapshot>(find.byType(LyricsGlyphSnapshot))
+        .opacity!
+        .value;
 
     await tester.pumpWidget(app(active: false, secondary: romanized));
     await tester.pumpWidget(app(active: true, secondary: romanized));
     await tester.pump(const Duration(milliseconds: 180));
     final entering = opacity();
-    expect(entering.last, inExclusiveRange(0, 1));
+    expect(entering, inExclusiveRange(0, 1));
     await tester.pumpWidget(app(active: false, secondary: romanized));
-    expect(opacity().last, closeTo(entering.last, 0.0001));
+    expect(opacity(), closeTo(entering, 0.0001));
     await tester.pump(const Duration(milliseconds: 90));
     final exiting = opacity();
     await tester.pumpWidget(app(active: true, secondary: romanized));
-    expect(opacity().last, closeTo(exiting.last, 0.0001));
+    expect(opacity(), closeTo(exiting, 0.0001));
     await tester.pumpAndSettle();
-    expect(opacity().last, 1);
+    expect(opacity(), 1);
     expect(tester.takeException(), isNull);
   });
 
@@ -195,14 +191,15 @@ void main() {
       await tester.pumpWidget(app(active: false, secondary: romanized));
 
       void expectOnePair() {
-        expect(find.bySemanticsLabel(original), findsOneWidget);
-        expect(find.bySemanticsLabel(romanized), findsOneWidget);
+        expect(find.bySemanticsLabel('$original\n$romanized'), findsOneWidget);
+        expect(find.bySemanticsLabel(original), findsNothing);
+        expect(find.bySemanticsLabel(romanized), findsNothing);
       }
 
       expectOnePair();
       await tester.pumpWidget(app(active: true, secondary: romanized));
-      // The new primary appearance starts with zero opacity. It still supplies
-      // semantics immediately while the outgoing appearance is excluded.
+      // Accessibility belongs to one stable row, independent of the cached
+      // paragraphs' opacity and of which glyph appearance is currently shown.
       expectOnePair();
       await tester.pump(const Duration(milliseconds: 260));
       expectOnePair();

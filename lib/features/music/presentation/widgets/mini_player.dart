@@ -87,6 +87,7 @@ class MiniPlayer extends ConsumerWidget {
     this.backgroundMode = MiniPlayerBackgroundMode.artwork,
     this.liquidGlassBackdropGroupKey,
     this.liquidGlassBackdropMotion,
+    this.liquidGlassBackdropEnvelopeWidth,
     super.key,
   });
 
@@ -96,6 +97,10 @@ class MiniPlayer extends ConsumerWidget {
   final MiniPlayerBackgroundMode backgroundMode;
   final BackdropKey? liquidGlassBackdropGroupKey;
   final ValueListenable<bool>? liquidGlassBackdropMotion;
+
+  /// Stable horizontal filter extent while the visible capsule morphs.
+  /// Unsupported renderers and other background modes keep their native clip.
+  final double? liquidGlassBackdropEnvelopeWidth;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -411,6 +416,9 @@ class MiniPlayer extends ConsumerWidget {
             : BorderRadius.zero,
         backdropGroupKey: liquidGlassBackdropGroupKey,
         backdropMotion: liquidGlassBackdropMotion,
+        backdropEnvelopeWidth: liquidGlassBackdropEnvelopeWidth == null
+            ? null
+            : liquidGlassBackdropEnvelopeWidth! - capsuleMargin.horizontal,
         child: Material(
           key: const ValueKey('mini-player-frame'),
           color: Colors.transparent,
@@ -853,6 +861,7 @@ class _MiniPlayerBackgroundFrame extends StatelessWidget {
     required this.borderRadius,
     required this.backdropGroupKey,
     required this.backdropMotion,
+    this.backdropEnvelopeWidth,
     required this.child,
   });
 
@@ -860,6 +869,7 @@ class _MiniPlayerBackgroundFrame extends StatelessWidget {
   final BorderRadius borderRadius;
   final BackdropKey? backdropGroupKey;
   final ValueListenable<bool>? backdropMotion;
+  final double? backdropEnvelopeWidth;
   final Widget child;
 
   @override
@@ -867,23 +877,51 @@ class _MiniPlayerBackgroundFrame extends StatelessWidget {
     if (!backgroundMode.isLiquidGlass) {
       return child;
     }
-    Widget glass(bool moving, Widget child) => LiquidGlassSurface(
-      key: const ValueKey('mini-player-liquid-glass-background'),
-      borderRadius: borderRadius,
-      blurSigma: 8,
-      intensity: 1,
-      backdropGroupKey: backdropGroupKey,
-      backdropMotion: moving,
-      child: child,
-    );
-    final motion = backdropMotion;
-    if (motion == null) {
-      return glass(false, child);
+    Widget glass(bool moving, Widget child, {Rect? envelope}) =>
+        LiquidGlassSurface(
+          key: const ValueKey('mini-player-liquid-glass-background'),
+          borderRadius: borderRadius,
+          blurSigma: 8,
+          intensity: 1,
+          backdropGroupKey: backdropGroupKey,
+          backdropMotion: moving,
+          backdropEnvelope: envelope,
+          shadowClipInsets: envelope == null
+              ? null
+              : _miniPlayerMarginFor(context, MiniPlayerMode.capsule),
+          child: child,
+        );
+    Widget buildGlass({Rect? envelope}) {
+      final motion = backdropMotion;
+      if (motion == null) return glass(false, child, envelope: envelope);
+      return ValueListenableBuilder<bool>(
+        valueListenable: motion,
+        builder: (context, moving, child) =>
+            glass(moving, child!, envelope: envelope),
+        child: child,
+      );
     }
-    return ValueListenableBuilder<bool>(
-      valueListenable: motion,
-      builder: (context, moving, child) => glass(moving, child!),
-      child: child,
+
+    final envelopeWidth = backdropEnvelopeWidth;
+    if (envelopeWidth == null) return buildGlass();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (!constraints.biggest.isFinite ||
+            envelopeWidth < constraints.maxWidth) {
+          return buildGlass();
+        }
+        return SizedBox.fromSize(
+          size: constraints.biggest,
+          child: buildGlass(
+            envelope: Rect.fromLTWH(
+              (constraints.maxWidth - envelopeWidth) / 2,
+              0,
+              envelopeWidth,
+              constraints.maxHeight,
+            ),
+          ),
+        );
+      },
     );
   }
 }

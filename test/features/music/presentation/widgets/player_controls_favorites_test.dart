@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
 import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
@@ -6,6 +8,7 @@ import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/local_audio_quality_provider.dart';
 import 'package:bstream_music/features/music/presentation/widgets/animated_artwork_motion.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_menu_bottom_sheet.dart';
@@ -15,6 +18,7 @@ import 'package:bstream_music/features/music/presentation/widgets/source_image.d
 import 'package:bstream_music/features/music/presentation/widgets/uniform_playback_slider_track_shape.dart';
 import 'package:bstream_music/features/music/presentation/widgets/wavy_playback_seek_bar.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/player/local_audio_quality_service.dart';
 import 'package:bstream_music/services/sharing/track_share_service.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
 import 'package:flutter/foundation.dart' show ValueListenable, ValueNotifier;
@@ -38,6 +42,644 @@ void main() {
     trackId: trackId,
     duration: Duration(minutes: 3),
     volume: 0.72,
+  );
+
+  const qualityTrack = TrackInfo(
+    id: 'quality0001',
+    title: 'Calidad de audio',
+    artist: 'Artista de prueba',
+    url: 'https://www.youtube.com/watch?v=quality0001',
+    streamUrl: 'https://example.invalid/quality.webm',
+    streamCodec: 'opus',
+    streamMimeType: 'audio/webm',
+    streamExtension: 'webm',
+    streamBitrate: 141000,
+    streamSampleRate: 48000,
+    streamChannels: 2,
+  );
+  const qualitySnapshot = PlayerSnapshot(
+    status: PlayerStatus.paused,
+    title: 'Calidad de audio',
+    artist: 'Artista de prueba',
+    trackId: 'quality0001',
+    sourceUrl: 'https://www.youtube.com/watch?v=quality0001',
+    duration: Duration(minutes: 3),
+    isRemote: true,
+  );
+  const stereoQuality = 'Opus \u00b7 48 kHz \u00b7 141 kbps - Est\u00e9reo';
+
+  for (final style in PlayerStyle.values) {
+    testWidgets('$style quality uses player text color and only tiny shadows', (
+      tester,
+    ) async {
+      _configureView(tester, const Size(390, 820));
+      for (final brightness in Brightness.values) {
+        for (final accent in [AppAccent.red, AppAccent.purple]) {
+          await tester.pumpWidget(
+            _playerHarness(
+              key: ValueKey('quality-foreground-$style-$brightness-$accent'),
+              platform: TargetPlatform.android,
+              snapshot: qualitySnapshot,
+              localTrack: localTrack,
+              playlists: _TestPlaylistsController(),
+              canonicalRemoteTrack: qualityTrack,
+              style: style,
+              showAudioQuality: true,
+              brightness: brightness,
+              accent: accent,
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+          final quality = find.byKey(const ValueKey('player-audio-quality'));
+          final overlay = find.byKey(
+            const ValueKey('player-audio-quality-overlay'),
+          );
+          final textStyle = tester.widget<Text>(quality).style!;
+          expect(
+            textStyle.color,
+            AppColors.playbackSecondaryControlForegroundFor(
+              tester.element(quality),
+            ),
+          );
+          expect(textStyle.color, isNot(accent.seedColor));
+          final shadows = textStyle.shadows!;
+          expect(shadows, hasLength(2));
+          expect(shadows[0].blurRadius, 2);
+          expect(shadows[0].offset, const Offset(0, 1));
+          expect(shadows[1].blurRadius, 4);
+          for (final shadow in shadows) {
+            expect(shadow.color.withValues(alpha: 1), Colors.black);
+          }
+          for (final widgetType in [
+            ShaderMask,
+            BackdropFilter,
+            Opacity,
+            FadeTransition,
+          ]) {
+            expect(
+              find.descendant(of: overlay, matching: find.byType(widgetType)),
+              findsNothing,
+              reason: 'The quality footer must not add $widgetType effects.',
+            );
+          }
+          final gradientBackgrounds = find.descendant(
+            of: overlay,
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is DecoratedBox &&
+                  widget.decoration is BoxDecoration &&
+                  (widget.decoration as BoxDecoration).gradient != null,
+            ),
+          );
+          expect(gradientBackgrounds, findsNothing);
+          expect(tester.takeException(), isNull);
+        }
+      }
+    });
+
+    for (final artworkStyle in PlayerArtworkStyle.values) {
+      testWidgets(
+        '${style.name} ${artworkStyle.name} keeps audio quality centered inside the artwork on compact, landscape and desktop',
+        (tester) async {
+          const viewports = [
+            (TargetPlatform.android, Size(320, 568)),
+            (TargetPlatform.android, Size(740, 360)),
+            (TargetPlatform.iOS, Size(390, 844)),
+            (TargetPlatform.windows, Size(1366, 768)),
+          ];
+          _configureView(tester, viewports.first.$2);
+          for (final (platform, size) in viewports) {
+            tester.view.physicalSize = size;
+            await tester.pumpWidget(
+              _playerHarness(
+                key: ValueKey(
+                  'quality-${style.name}-${artworkStyle.name}-$size',
+                ),
+                platform: platform,
+                snapshot: qualitySnapshot,
+                localTrack: localTrack,
+                playlists: _TestPlaylistsController(),
+                canonicalRemoteTrack: qualityTrack,
+                style: style,
+                artworkStyle: artworkStyle,
+                showAudioQuality: true,
+              ),
+            );
+            await tester.pump(const Duration(milliseconds: 500));
+            await tester.pump();
+
+            final slot = find.byKey(
+              const ValueKey('player-artwork-quality-slot'),
+            );
+            final overlay = find.byKey(
+              const ValueKey('player-audio-quality-overlay'),
+            );
+            final quality = find.byKey(const ValueKey('player-audio-quality'));
+            expect(slot, findsOneWidget, reason: '$style $artworkStyle $size');
+            expect(overlay, findsOneWidget);
+            expect(quality, findsOneWidget);
+            expect(find.text(stereoQuality), findsOneWidget);
+            expect(
+              find.descendant(of: slot, matching: quality),
+              findsOneWidget,
+            );
+            final qualityText = tester.widget<Text>(quality);
+            expect(qualityText.textAlign, TextAlign.center);
+            expect(qualityText.maxLines, 2);
+            final slotRect = tester.getRect(slot);
+            final overlayRect = tester.getRect(overlay);
+            final textRect = tester.getRect(quality);
+            expect(overlayRect.bottom, closeTo(slotRect.bottom, 0.1));
+            expect(overlayRect.top, greaterThanOrEqualTo(slotRect.top - 0.1));
+            expect(textRect.left, greaterThanOrEqualTo(slotRect.left));
+            expect(textRect.right, lessThanOrEqualTo(slotRect.right));
+            expect(textRect.center.dx, closeTo(slotRect.center.dx, 0.1));
+            expect(textRect.top, greaterThan(slotRect.center.dy));
+            expect(textRect.bottom, lessThanOrEqualTo(slotRect.bottom));
+
+            for (final timelineKey in const [
+              'player-timeline',
+              'apple-player-timeline',
+              'classic-vinyl-player-timeline',
+            ]) {
+              expect(
+                find.descendant(
+                  of: find.byKey(ValueKey(timelineKey)),
+                  matching: quality,
+                ),
+                findsNothing,
+                reason: 'Quality belongs to the artwork, not $timelineKey',
+              );
+            }
+            expect(tester.takeException(), isNull, reason: '$size');
+          }
+        },
+      );
+    }
+  }
+
+  testWidgets(
+    'audio quality is hidden by default and toggles without reopening the player',
+    (tester) async {
+      _configureView(tester, const Size(390, 820));
+      final settings = _PlayerFontSettingsController(PlayerFont.lora);
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: qualitySnapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          canonicalRemoteTrack: qualityTrack,
+          settingsController: settings,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      final quality = find.byKey(const ValueKey('player-audio-quality'));
+      expect(quality, findsNothing);
+      expect(
+        find.byKey(const ValueKey('player-audio-quality-overlay')),
+        findsNothing,
+      );
+
+      await settings.setShowAudioQuality(true);
+      await tester.pump();
+      expect(find.text(stereoQuality), findsOneWidget);
+      expect(
+        tester
+            .widget<MarqueeText>(
+              find.byKey(const ValueKey('player-track-title')),
+            )
+            .style
+            ?.fontFamily,
+        'Lora',
+      );
+      await settings.setShowAudioQuality(false);
+      await tester.pump();
+      expect(quality, findsNothing);
+      expect(find.byType(PlayerPanel), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final downloaded in [false, true]) {
+    testWidgets(
+      '${downloaded ? 'downloaded' : 'local'} artwork quality reads actual file metadata once',
+      (tester) async {
+        _configureView(tester, const Size(390, 820));
+        final fileTrack = localTrack.copyWith(
+          id: 'local-quality-${downloaded ? 'download' : 'import'}',
+          filePath: '/tmp/local-quality.m4a',
+          sourceUrl: downloaded
+              ? 'https://www.youtube.com/watch?v=quality0001'
+              : null,
+          isExternal: !downloaded,
+        );
+        final fileSnapshot = snapshot.copyWith(
+          trackId: fileTrack.id,
+          sourceUrl: fileTrack.filePath,
+          isRemote: false,
+          isExternal: !downloaded,
+        );
+        final player = _TestPlayerController(
+          fileSnapshot,
+          localTrack: fileTrack,
+        );
+        final calls = <String>[];
+        var fingerprints = 0;
+        final service = LocalAudioQualityService(
+          fingerprintLoader: (_) async {
+            fingerprints++;
+            return 'stable';
+          },
+          loader: (source) async {
+            calls.add(source);
+            return const LocalAudioQuality(
+              codec: 'aac',
+              mimeType: 'audio/mp4',
+              sampleRate: 44100,
+              bitrate: 256000,
+              channels: 2,
+            );
+          },
+        );
+        addTearDown(service.dispose);
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.android,
+            snapshot: fileSnapshot,
+            localTrack: fileTrack,
+            playlists: _TestPlaylistsController(),
+            playerController: player,
+            showAudioQuality: true,
+            localAudioQualityService: service,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump();
+        expect(
+          find.text('AAC · 44.1 kHz · 256 kbps - Estéreo'),
+          findsOneWidget,
+        );
+        expect(
+          calls.map((source) => source.replaceAll('\\', '/').split('/').last),
+          ['local-quality.m4a'],
+        );
+        final originalFingerprints = fingerprints;
+        final initialTextElement = tester.element(
+          find.byKey(const ValueKey('player-audio-quality')),
+        );
+        for (var second = 1; second <= 12; second++) {
+          player.emit(
+            fileSnapshot.copyWith(position: Duration(seconds: second)),
+          );
+          await tester.pump(const Duration(milliseconds: 80));
+        }
+        expect(calls, hasLength(1));
+        expect(fingerprints, originalFingerprints);
+        expect(
+          tester.element(find.byKey(const ValueKey('player-audio-quality'))),
+          same(initialTextElement),
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('disabled local quality does not start metadata requests', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+    final fileSnapshot = snapshot.copyWith(sourceUrl: localTrack.filePath);
+    final player = _TestPlayerController(fileSnapshot, localTrack: localTrack);
+    final settings = _PlayerFontSettingsController(defaultPlayerFont);
+    final pending = Completer<LocalAudioQuality?>();
+    var calls = 0;
+    var fingerprints = 0;
+    final service = LocalAudioQualityService(
+      fingerprintLoader: (_) async {
+        fingerprints++;
+        return 'stable';
+      },
+      loader: (_) {
+        calls++;
+        return pending.future;
+      },
+    );
+    addTearDown(service.dispose);
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: fileSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playerController: player,
+        settingsController: settings,
+        localAudioQualityService: service,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(calls, 0);
+    expect(fingerprints, 0);
+    await settings.setShowAudioQuality(true);
+    await tester.pump();
+    await tester.pump();
+    expect(calls, 1);
+    await settings.setShowAudioQuality(false);
+    await tester.pump();
+    pending.complete(
+      const LocalAudioQuality(
+        codec: 'aac',
+        sampleRate: 44100,
+        bitrate: 256000,
+        channels: 2,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('player-audio-quality')), findsNothing);
+    expect(calls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('late local metadata never replaces the newly selected track', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+    final first = localTrack.copyWith(filePath: '/tmp/first-quality.m4a');
+    final second = localTrack.copyWith(
+      id: 'second-quality',
+      title: 'Segunda canción',
+      filePath: '/tmp/second-quality.flac',
+    );
+    final firstSnapshot = snapshot.copyWith(sourceUrl: first.filePath);
+    final secondSnapshot = snapshot.copyWith(
+      title: second.title,
+      trackId: second.id,
+      sourceUrl: second.filePath,
+    );
+    final firstPending = Completer<LocalAudioQuality?>();
+    final secondPending = Completer<LocalAudioQuality?>();
+    final calls = <String>[];
+    final service = LocalAudioQualityService(
+      fingerprintLoader: (_) async => 'stable',
+      loader: (source) {
+        calls.add(source);
+        return source.replaceAll('\\', '/').endsWith('/first-quality.m4a')
+            ? firstPending.future
+            : secondPending.future;
+      },
+    );
+    addTearDown(service.dispose);
+    final player = _TestPlayerController(firstSnapshot, localTrack: first);
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: firstSnapshot,
+        localTrack: first,
+        playlists: _TestPlaylistsController(),
+        playerController: player,
+        showAudioQuality: true,
+        localAudioQualityService: service,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    expect(
+      calls.map((source) => source.replaceAll('\\', '/').split('/').last),
+      ['first-quality.m4a'],
+    );
+    player.localTrack = second;
+    player.emit(secondSnapshot);
+    await tester.pump();
+    await tester.pump();
+    expect(
+      calls.map((source) => source.replaceAll('\\', '/').split('/').last),
+      ['first-quality.m4a', 'second-quality.flac'],
+    );
+    firstPending.complete(
+      const LocalAudioQuality(
+        codec: 'aac',
+        sampleRate: 44100,
+        bitrate: 256000,
+        channels: 2,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('AAC · 44.1 kHz · 256 kbps - Estéreo'), findsNothing);
+    secondPending.complete(
+      const LocalAudioQuality(
+        codec: 'flac',
+        sampleRate: 96000,
+        bitrate: 1500000,
+        channels: 2,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('FLAC · 96 kHz · 1500 kbps - Estéreo'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unavailable local metadata keeps an honest container fallback', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(390, 820));
+    final fileSnapshot = snapshot.copyWith(sourceUrl: localTrack.filePath);
+    final service = LocalAudioQualityService(
+      fingerprintLoader: (_) async => 'stable',
+      loader: (_) async => null,
+    );
+    addTearDown(service.dispose);
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.android,
+        snapshot: fileSnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playerController: _TestPlayerController(
+          fileSnapshot,
+          localTrack: localTrack,
+        ),
+        showAudioQuality: true,
+        localAudioQualityService: service,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    final quality = tester.widget<Text>(
+      find.byKey(const ValueKey('player-audio-quality')),
+    );
+    expect(quality.data, 'M4A');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'audio quality follows the active source and omits unknown or loading details',
+    (tester) async {
+      _configureView(tester, const Size(390, 820));
+      final controller = _TestPlayerController(
+        qualitySnapshot,
+        canonicalRemoteTrack: qualityTrack,
+      );
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: qualitySnapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          playerController: controller,
+          showAudioQuality: true,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text(stereoQuality), findsOneWidget);
+
+      controller.emit(qualitySnapshot.copyWith(status: PlayerStatus.loading));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('player-audio-quality')), findsNothing);
+
+      final nextSnapshot = qualitySnapshot.copyWith(
+        title: 'Segunda fuente',
+        trackId: 'quality0002',
+        sourceUrl: 'https://www.youtube.com/watch?v=quality0002',
+      );
+      controller.emit(nextSnapshot);
+      await tester.pump();
+      expect(find.text(stereoQuality), findsNothing);
+      expect(find.byKey(const ValueKey('player-audio-quality')), findsNothing);
+
+      controller.canonicalRemoteTrack = qualityTrack.copyWith(
+        id: 'quality0002',
+        title: 'Segunda fuente',
+        url: 'https://www.youtube.com/watch?v=quality0002',
+        streamCodec: 'aac',
+        streamSampleRate: 44100,
+        streamBitrate: 256000,
+        streamChannels: 1,
+      );
+      controller.emit(
+        nextSnapshot.copyWith(position: const Duration(seconds: 1)),
+      );
+      await tester.pump();
+      expect(
+        find.text('AAC \u00b7 44.1 kHz \u00b7 256 kbps - Mono'),
+        findsOneWidget,
+      );
+      expect(find.text(stereoQuality), findsNothing);
+
+      controller.canonicalRemoteTrack = const TrackInfo(
+        id: 'quality0002',
+        title: 'Segunda fuente',
+        artist: 'Artista de prueba',
+        url: 'https://www.youtube.com/watch?v=quality0002',
+      );
+      controller.emit(
+        nextSnapshot.copyWith(position: const Duration(seconds: 2)),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('player-audio-quality')), findsNothing);
+      expect(find.textContaining('48 kHz'), findsNothing);
+      expect(find.textContaining('Est\u00e9reo'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'audio quality uses the prepared source of a native queued track',
+    (tester) async {
+      _configureView(tester, const Size(390, 820));
+      const catalogTrack = TrackInfo(
+        id: 'quality0001',
+        title: 'Calidad de audio',
+        artist: 'Artista de prueba',
+        url: 'https://www.youtube.com/watch?v=quality0001',
+      );
+      final controller = _TestPlayerController(
+        qualitySnapshot,
+        canonicalRemoteTrack: catalogTrack,
+        preparedAudioSource: RemotePlaybackSource(
+          track: qualityTrack,
+          uri: Uri.parse(qualityTrack.streamUrl!),
+          queueEntryId: 'quality-prepared-entry',
+        ),
+      );
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: qualitySnapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          playerController: controller,
+          showAudioQuality: true,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text(stereoQuality), findsOneWidget);
+      controller.emit(
+        qualitySnapshot.copyWith(
+          trackId: 'another-source',
+          sourceUrl: 'https://www.youtube.com/watch?v=other-source',
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('player-audio-quality')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'audio quality never guesses between conflicting current and prepared formats',
+    (tester) async {
+      _configureView(tester, const Size(390, 820));
+      final aac = qualityTrack.copyWith(
+        streamUrl: 'https://example.invalid/new-source.m4a',
+        streamCodec: 'aac',
+        streamMimeType: 'audio/mp4',
+        streamExtension: 'm4a',
+        streamSampleRate: 44100,
+        streamBitrate: 256000,
+        streamChannels: 1,
+      );
+      final sameFacts = qualityTrack.copyWith(
+        streamUrl: 'https://example.invalid/refreshed-source.webm',
+      );
+      final cases = [
+        (current: qualityTrack, prepared: aac, visible: false),
+        (current: aac, prepared: qualityTrack, visible: false),
+        (current: qualityTrack, prepared: sameFacts, visible: true),
+      ];
+      for (final (index, sample) in cases.indexed) {
+        final controller = _TestPlayerController(
+          qualitySnapshot,
+          canonicalRemoteTrack: sample.current,
+          preparedAudioSource: RemotePlaybackSource(
+            track: sample.prepared,
+            uri: Uri.parse(sample.prepared.streamUrl!),
+            queueEntryId: 'quality-prepared-entry',
+          ),
+        );
+        await tester.pumpWidget(
+          _playerHarness(
+            key: ValueKey('conflicting-quality-$index'),
+            platform: TargetPlatform.android,
+            snapshot: qualitySnapshot,
+            localTrack: localTrack,
+            playlists: _TestPlaylistsController(),
+            playerController: controller,
+            showAudioQuality: true,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(
+          find.byKey(const ValueKey('player-audio-quality')),
+          sample.visible ? findsOneWidget : findsNothing,
+        );
+        if (sample.visible) expect(find.text(stereoQuality), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+    },
   );
 
   // Artwork presentation modes belong to the two cover-based layouts. The
@@ -1912,11 +2554,6 @@ void main() {
       Brightness.dark,
     );
 
-    await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
-    await tester.pump();
-
     final queueRail = find.byKey(const ValueKey('desktop-playback-queue-rail'));
     expect(queueRail, findsOneWidget);
     expect(
@@ -3018,7 +3655,9 @@ void main() {
           ),
         );
         await tester.pump(const Duration(milliseconds: 500));
-        await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+        if (platform != TargetPlatform.windows) {
+          await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+        }
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
         final heart = find.byKey(const ValueKey('queue-favorite-toggle'));
@@ -3289,8 +3928,17 @@ void main() {
     final switcher = find.byKey(
       const ValueKey('desktop-playback-queue-switcher'),
     );
+    expect(rail, findsOneWidget);
+    expect(tester.getSize(switcher).width, closeTo(400, 0.1));
+
+    await tester.tap(toggle);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump();
+
     expect(rail, findsNothing);
     expect(tester.getSize(switcher).width, closeTo(0, 0.1));
+    expect(tester.takeException(), isNull);
 
     await tester.tap(toggle);
     await tester.pump();
@@ -3301,15 +3949,6 @@ void main() {
     expect(tester.getSize(rail).width, closeTo(400, 0.1));
     expect(tester.getRect(rail).right, lessThanOrEqualTo(1280));
     expect(tester.getRect(rail).bottom, lessThanOrEqualTo(720));
-    expect(tester.takeException(), isNull);
-
-    await tester.tap(toggle);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
-    await tester.pump();
-
-    expect(rail, findsNothing);
-    expect(tester.getSize(switcher).width, closeTo(0, 0.1));
     expect(find.byKey(const ValueKey('apple-player-layout')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -4024,7 +4663,16 @@ void main() {
       ]) {
         expect(find.byKey(ValueKey(key)), findsOneWidget);
       }
-      expect(find.text('Cancion oculta 12'), findsOneWidget);
+      final playerSurface = find.byKey(
+        const ValueKey('desktop-player-surface'),
+      );
+      expect(
+        find.descendant(
+          of: playerSurface,
+          matching: find.text('Cancion oculta 12'),
+        ),
+        findsOneWidget,
+      );
 
       controller.emit(
         const PlayerSnapshot(
@@ -4044,8 +4692,20 @@ void main() {
         find.byKey(const ValueKey('player-header-artist-action')),
         findsNWidgets(2),
       );
-      expect(find.text('Cancion oculta 12'), findsOneWidget);
-      expect(find.text('Cancion visible siguiente'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: playerSurface,
+          matching: find.text('Cancion oculta 12'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: playerSurface,
+          matching: find.text('Cancion visible siguiente'),
+        ),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -5073,13 +5733,16 @@ Widget _playerHarness({
   ValueListenable<bool>? trackTransitionsEnabledListenable,
   PlayerStyle style = defaultPlayerStyle,
   PlayerFont? playerFont,
+  bool showAudioQuality = false,
+  _PlayerFontSettingsController? settingsController,
   PlayerArtworkStyle artworkStyle = defaultPlayerArtworkStyle,
   bool animatedArtworkEnabled = false,
   SurfaceBackgroundMode backgroundMode = SurfaceBackgroundMode.accent,
   Brightness brightness = Brightness.dark,
+  AppAccent accent = AppAccent.blue,
+  LocalAudioQualityService? localAudioQualityService,
   PlaybackQueueState? playbackQueue,
 }) {
-  const accent = AppAccent.blue;
   final scheme = ColorScheme.fromSeed(
     seedColor: accent.seedColor,
     brightness: brightness,
@@ -5088,6 +5751,10 @@ Widget _playerHarness({
   return ProviderScope(
     key: key,
     overrides: [
+      if (localAudioQualityService != null)
+        localPlaybackAudioQualityServiceProvider.overrideWithValue(
+          localAudioQualityService,
+        ),
       playerControllerProvider.overrideWith(
         () =>
             playerController ??
@@ -5097,9 +5764,14 @@ Widget _playerHarness({
             ),
       ),
       playlistsControllerProvider.overrideWith(() => playlists),
-      if (playerFont != null)
+      if (playerFont != null || showAudioQuality || settingsController != null)
         settingsControllerProvider.overrideWith(
-          () => _PlayerFontSettingsController(playerFont),
+          () =>
+              settingsController ??
+              _PlayerFontSettingsController(
+                playerFont ?? defaultPlayerFont,
+                showAudioQuality: showAudioQuality,
+              ),
         ),
       if (playbackQueue != null)
         playbackQueueProvider.overrideWith(
@@ -5124,7 +5796,7 @@ Widget _playerHarness({
         platform: platform,
         colorScheme: scheme,
         extensions: <ThemeExtension<dynamic>>[
-          const AppAccentTheme(accent: accent),
+          AppAccentTheme(accent: accent),
           AppSurfaceTheme(backgroundMode: backgroundMode),
         ],
       ),
@@ -5160,16 +5832,24 @@ Widget _playerHarness({
 }
 
 class _PlayerFontSettingsController extends SettingsController {
-  _PlayerFontSettingsController(this.font);
+  _PlayerFontSettingsController(this.font, {this.showAudioQuality = false});
 
   final PlayerFont font;
+  final bool showAudioQuality;
 
   @override
   Future<SettingsState> build() async => SettingsState(
     downloadDirectory: '/tmp/BStream-Music',
     language: AppLanguage.spanish,
     playerFont: font,
+    showAudioQuality: showAudioQuality,
   );
+
+  @override
+  Future<void> setShowAudioQuality(bool enabled) async {
+    final current = state.asData?.value ?? await future;
+    state = AsyncData(current.copyWith(showAudioQuality: enabled));
+  }
 }
 
 class _TestPlaybackQueueNotifier extends PlaybackQueueNotifier {
@@ -5384,10 +6064,17 @@ class _TestTrackShareService implements TrackShareService {
 }
 
 class _TestPlayerController extends PlayerController {
-  _TestPlayerController(this.snapshot, {this.canonicalRemoteTrack});
+  _TestPlayerController(
+    this.snapshot, {
+    this.canonicalRemoteTrack,
+    this.preparedAudioSource,
+    this.localTrack,
+  });
 
   final PlayerSnapshot snapshot;
-  final TrackInfo? canonicalRemoteTrack;
+  TrackInfo? canonicalRemoteTrack;
+  final RemotePlaybackSource? preparedAudioSource;
+  LocalTrack? localTrack;
   int seekCalls = 0;
   Duration? lastSeek;
   int volumeCalls = 0;
@@ -5436,6 +6123,18 @@ class _TestPlayerController extends PlayerController {
   TrackInfo? currentRemoteTrackFor(String sourceUrl) {
     final track = canonicalRemoteTrack;
     return track?.url == sourceUrl ? track : null;
+  }
+
+  @override
+  LocalTrack? currentLocalTrackFor(String? trackId) {
+    final track = localTrack;
+    return track?.id == trackId ? track : null;
+  }
+
+  @override
+  RemotePlaybackSource? preparedAudioSourceFor(String sourceUrl) {
+    final source = preparedAudioSource;
+    return source?.track.url == sourceUrl ? source : null;
   }
 }
 

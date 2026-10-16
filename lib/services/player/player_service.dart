@@ -10,6 +10,7 @@ const _unsetPlayerSnapshotValue = Object();
 class PlayerSnapshot {
   const PlayerSnapshot({
     required this.status,
+    this.playWhenReady,
     this.title,
     this.artist,
     this.album,
@@ -28,6 +29,13 @@ class PlayerSnapshot {
   });
 
   final PlayerStatus status;
+
+  /// Playback intent is independent of whether a source is currently audible.
+  /// A bounded automatic load/recovery can still be playing from the system
+  /// media session's perspective. Null keeps legacy backends compatible.
+  final bool? playWhenReady;
+
+  bool get wantsToPlay => playWhenReady ?? status == PlayerStatus.playing;
   final String? title;
   final String? artist;
   final String? album;
@@ -46,6 +54,7 @@ class PlayerSnapshot {
 
   PlayerSnapshot copyWith({
     PlayerStatus? status,
+    Object? playWhenReady = _unsetPlayerSnapshotValue,
     Object? title = _unsetPlayerSnapshotValue,
     Object? artist = _unsetPlayerSnapshotValue,
     Object? album = _unsetPlayerSnapshotValue,
@@ -64,6 +73,9 @@ class PlayerSnapshot {
   }) {
     return PlayerSnapshot(
       status: status ?? this.status,
+      playWhenReady: identical(playWhenReady, _unsetPlayerSnapshotValue)
+          ? this.playWhenReady
+          : playWhenReady as bool?,
       title: identical(title, _unsetPlayerSnapshotValue)
           ? this.title
           : title as String?,

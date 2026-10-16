@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -12,6 +13,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
+import '../../../../core/widgets/horizontal_shelf_scroll_behavior.dart';
 import '../../../../core/widgets/marquee_text.dart';
 import '../../../../core/widgets/liquid_glass_surface.dart';
 import '../../../../core/utils/image_source.dart';
@@ -43,6 +45,7 @@ import '../widgets/playlist_actions.dart';
 import '../widgets/scrolled_under_tab_frame.dart';
 import '../widgets/settings_panel.dart';
 import '../widgets/source_image.dart';
+import '../widgets/surface_detail_app_bar.dart';
 import '../widgets/youtube_music_account_button.dart';
 import 'artist_profile_page.dart';
 import 'remote_collection_detail_page.dart';
@@ -112,6 +115,7 @@ class _HomePageState extends ConsumerState<HomePage>
   static const _bottomNavigationShowTravel = 12.0;
 
   late int _selectedIndex;
+  int _profileTabRequestId = 0;
   final List<int> _viewHistory = [];
   final LibraryNavigationController _libraryNavigationController =
       LibraryNavigationController();
@@ -130,6 +134,9 @@ class _HomePageState extends ConsumerState<HomePage>
   // Keep it out of the sibling group during that transient overlap.
   final BackdropKey _liquidGlassMiniPlayerBackdropKey = BackdropKey();
   final ValueNotifier<bool> _liquidGlassChromeMoving = ValueNotifier(false);
+  final GlassScrollMotionNotifier _liquidGlassBrowsingMotion =
+      GlassScrollMotionNotifier();
+  bool _liquidGlassGeometryMoving = false;
   Timer? _liquidGlassChromeSettleTimer;
   Timer? _playerTransitionSettleTimer;
   bool _playerTransitionActive = false;
@@ -155,10 +162,20 @@ class _HomePageState extends ConsumerState<HomePage>
   int _bottomNavigationScrollDirection = 0;
   bool _bottomNavigationUserScrollActive = false;
   bool _bottomNavigationIgnoringOverscroll = false;
+  _PersistentCurrentViews? _retainedCurrentViews;
+
+  Widget _retainCurrentViews(_PersistentCurrentViews next) {
+    final previous = _retainedCurrentViews;
+    if (previous != null && previous.configuration == next.configuration) {
+      return previous;
+    }
+    return _retainedCurrentViews = next;
+  }
 
   @override
   void initState() {
     super.initState();
+    _liquidGlassBrowsingMotion.addListener(_updateLiquidGlassBackdropMotion);
     WidgetsBinding.instance.addObserver(this);
     final lifecycle = WidgetsBinding.instance.lifecycleState;
     _appForeground =
@@ -589,6 +606,13 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   void _setLiquidGlassChromeMoving(bool moving) {
+    _liquidGlassGeometryMoving = moving;
+    _updateLiquidGlassBackdropMotion();
+  }
+
+  void _updateLiquidGlassBackdropMotion() {
+    final moving =
+        _liquidGlassGeometryMoving || _liquidGlassBrowsingMotion.value;
     if (_liquidGlassChromeMoving.value != moving) {
       _liquidGlassChromeMoving.value = moving;
     }
@@ -675,6 +699,7 @@ class _HomePageState extends ConsumerState<HomePage>
       return false;
     }
 
+    _liquidGlassBrowsingMotion.handleNotification(notification);
     final metrics = notification.metrics;
     if (notification is ScrollStartNotification) {
       // Pointer-signal scrolling announces its UserScroll direction just
@@ -766,6 +791,22 @@ class _HomePageState extends ConsumerState<HomePage>
       return;
     }
 
+    // Profile-only markers distinguish the first newly built tab frame from
+    // the end of the decorative lens animation. Release builds omit this.
+    final profileRequestId = kProfileMode ? ++_profileTabRequestId : 0;
+    if (kProfileMode) {
+      developer.Timeline.instantSync(
+        'BStream.tab.request',
+        arguments: {
+          'requestId': profileRequestId,
+          'from': _selectedIndex,
+          'to': index,
+        },
+      );
+    }
+
+    _liquidGlassBrowsingMotion.reset();
+
     final leavingPlayer = _isPlayerSelected && index != _playerIndex;
     final enteringPlayer = !_isPlayerSelected && index == _playerIndex;
     final revealsBottomNavigation =
@@ -811,6 +852,19 @@ class _HomePageState extends ConsumerState<HomePage>
       }
       _resetBottomNavigationScrollIntent();
     });
+    if (kProfileMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        developer.Timeline.instantSync(
+          'BStream.tab.firstBuildComplete',
+          arguments: {
+            'requestId': profileRequestId,
+            'to': index,
+            'stillSelected': _selectedIndex == index,
+          },
+        );
+      });
+    }
     if (chromeTransitionDuration != null) {
       _scheduleLiquidGlassChromeSettled(chromeTransitionDuration);
     }
@@ -984,6 +1038,8 @@ class _HomePageState extends ConsumerState<HomePage>
     _desktopPlaybackShortcutFocus.dispose();
     _liquidGlassChromeSettleTimer?.cancel();
     _playerTransitionSettleTimer?.cancel();
+    _liquidGlassBrowsingMotion.removeListener(_updateLiquidGlassBackdropMotion);
+    _liquidGlassBrowsingMotion.dispose();
     _liquidGlassChromeMoving.dispose();
     super.dispose();
   }
@@ -1249,10 +1305,20 @@ class _HomePageState extends ConsumerState<HomePage>
     final detachedSearchDestination = useLiquidBottomNavigation
         ? destinationAt(_searchIndex)
         : null;
+    final liquidNavigationGeometryCompact = !_bottomNavigationRevealed;
+    // Keep the offscreen filter allocation stable while the visible lens
+    // morphs. Other mini-player materials retain their original shell clip.
+    final stableMiniGlassEnvelope =
+        useLiquidBottomNavigation &&
+        miniPlayerAppearance.backgroundMode.isLiquidGlass &&
+        !_playerTransitionActive &&
+        !_isPlayerSelected &&
+        miniPlayerMode == MiniPlayerMode.capsule &&
+        Theme.of(context).platform == TargetPlatform.android;
     final liquidBottomNavigationCollapsed =
         showBottomNavigation &&
         useLiquidBottomNavigation &&
-        !_bottomNavigationRevealed;
+        liquidNavigationGeometryCompact;
     // Non-Liquid surfaces are always present. Liquid Glass keeps its shell
     // mounted as well; its content compacts around the mini player instead of
     // fading a flat menu in and out.
@@ -1260,7 +1326,7 @@ class _HomePageState extends ConsumerState<HomePage>
     final miniPlayerNavigationOffset =
         useLiquidBottomNavigation &&
             !useSideNavigation &&
-            !_bottomNavigationRevealed
+            liquidNavigationGeometryCompact
         ? bottomNavigationBaseHeight
         : 0.0;
     final liquidNavigationHeight = _BottomNavigation.liquidContentHeight(
@@ -1307,250 +1373,237 @@ class _HomePageState extends ConsumerState<HomePage>
           extendBody: !useSideNavigation && _usesMobileNavigation,
           body: SafeArea(
             bottom: false,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: Theme.of(context).brightness == Brightness.dark
-                      ? const [
-                          Color(0xFF050705),
-                          Color(0xFF030403),
-                          Color(0xFF070907),
-                        ]
-                      : const [
-                          Color(0xFFF5F8F6),
-                          Color(0xFFFFFFFF),
-                          Color(0xFFEFF7F1),
-                        ],
+            // BrowsingTabBackground always starts with its own opaque base,
+            // including the photo path. Painting another full-window gradient
+            // below it only adds overdraw and cannot affect the visible result.
+            child: Stack(
+              key: const ValueKey('shell-content-stack'),
+              fit: StackFit.expand,
+              children: [
+                SizedBox.expand(
+                  key: const ValueKey('shell-background-browsing'),
+                  child: BrowsingTabBackground(
+                    showCustomPhoto:
+                        _selectedIndex == _homeIndex ||
+                        _selectedIndex == _searchIndex ||
+                        _selectedIndex == _localIndex ||
+                        _selectedIndex == _libraryIndex ||
+                        _selectedIndex == _settingsIndex,
+                  ),
                 ),
-              ),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  SizedBox.expand(
-                    key: const ValueKey('shell-background-browsing'),
-                    child: BrowsingTabBackground(
-                      showCustomPhoto:
-                          _selectedIndex == _homeIndex ||
-                          _selectedIndex == _searchIndex ||
-                          _selectedIndex == _localIndex ||
-                          _selectedIndex == _libraryIndex ||
-                          _selectedIndex == _settingsIndex,
-                    ),
+                PlaybackPageVisibilityTransition(
+                  fadeKey: const ValueKey(
+                    'shell-player-background-fade-transition',
                   ),
-                  PlaybackPageVisibilityTransition(
-                    fadeKey: const ValueKey(
-                      'shell-player-background-fade-transition',
-                    ),
-                    slideKey: const ValueKey(
-                      'shell-player-background-slide-transition',
-                    ),
-                    repaintBoundaryKey: const ValueKey(
-                      'shell-player-background-repaint-boundary',
-                    ),
-                    visible: _isPlayerSelected,
-                    duration: playerTransitionDuration,
-                    reverseDuration: playerReverseTransitionDuration,
-                    animateInitialEntry: false,
-                    // The browsing background below this layer already fills
-                    // the shell. Keep only the transition marker here: a
-                    // second identical gradient forced an unnecessary
-                    // full-screen paint during every player entrance.
-                    child: const SizedBox.expand(
-                      key: ValueKey('shell-background-player'),
-                    ),
+                  slideKey: const ValueKey(
+                    'shell-player-background-slide-transition',
                   ),
-                  SafeArea(
-                    top: false,
-                    bottom: false,
-                    child: Row(
-                      children: [
-                        if (useSideNavigation)
-                          _SideNavigation(
-                            selectedIndex: _selectedIndex,
-                            dimPlaybackBackground: _isPlayerSelected,
-                            transitionDuration: shellTransitionDuration,
-                            onSelected: _selectIndex,
-                            destinations: destinations,
-                          ),
-                        Expanded(
-                          child: ClipRect(
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                Positioned.fill(
-                                  child:
-                                      NotificationListener<ScrollNotification>(
-                                        onNotification: _handleBrowsingScroll,
-                                        child: _PersistentCurrentViews(
-                                          selectedIndex: _selectedIndex,
-                                          homeIndex: _homeIndex,
-                                          searchIndex: _searchIndex,
-                                          localIndex: _localIndex,
-                                          playerIndex: _playerIndex,
-                                          libraryIndex: _libraryIndex,
-                                          settingsIndex: _settingsIndex,
-                                          viewportBottomPadding:
-                                              browsingViewportBottomPadding,
-                                          contentBottomPadding:
-                                              browsingContentBottomPadding,
-                                          playerTransitionDuration:
-                                              playerTransitionDuration,
-                                          playerReverseTransitionDuration:
-                                              playerReverseTransitionDuration,
-                                          playerTransitionActive:
-                                              _playerTransitionActive,
-                                          libraryNavigationController:
-                                              _libraryNavigationController,
-                                          localMusicNavigationController:
-                                              _localMusicNavigationController,
-                                          settingsNavigationController:
-                                              _settingsNavigationController,
-                                          playerStyle: playerStyle,
-                                          playerArtworkStyle:
-                                              playerArtworkStyle,
-                                          animatedArtworkEnabled:
-                                              animatedArtworkEnabled,
-                                          spotifyCanvasEnabled:
-                                              spotifyCanvasEnabled,
-                                          appleAnimatedArtworkEnabled:
-                                              appleAnimatedArtworkEnabled,
-                                          onOpenPlayer: _openPlayer,
-                                          onCollapsePlayer: _handleSystemBack,
-                                          onOpenSearch: _openSearch,
-                                          onAddRemoteTracksToPlaylist:
-                                              _addRemoteTracksToPlaylist,
-                                        ),
-                                      ),
-                                ),
-                                if (!useSideNavigation)
-                                  Positioned(
-                                    left: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    child: _ShellVisibilityTransition(
-                                      key: const ValueKey(
-                                        'bottom-navigation-shell-transition',
-                                      ),
-                                      clipKey: const ValueKey(
-                                        'bottom-navigation-shell-clip',
-                                      ),
-                                      opacityKey: const ValueKey(
-                                        'bottom-navigation-shell-opacity',
-                                      ),
-                                      visible: bottomNavigationVisible,
-                                      duration: chromeVisibilityDuration,
-                                      hiddenTranslation: const Offset(0, 1),
-                                      preserveBackdropMaterial:
-                                          useLiquidBottomNavigation,
-                                      child: _BottomNavigation(
-                                        selectedIndex: _selectedIndex,
-                                        onDestinationSelected:
-                                            selectBottomNavigationDestination,
-                                        onExpandLiquidNavigation: () =>
-                                            _setBottomNavigationRevealed(true),
-                                        destinations:
-                                            bottomNavigationDestinations,
-                                        detachedSearchDestination:
-                                            detachedSearchDestination,
-                                        liquidGlass: useLiquidBottomNavigation,
-                                        liquidCollapsed:
-                                            liquidBottomNavigationCollapsed,
-                                        backdropGroupKey:
-                                            _liquidGlassChromeBackdropKey,
-                                        backdropMotion:
-                                            _liquidGlassChromeMoving,
-                                        transitionDuration:
-                                            shellTransitionDuration,
-                                        glassyCompact: _usesMobileNavigation,
-                                        systemBottomInset: systemBottomInset,
-                                      ),
+                  repaintBoundaryKey: const ValueKey(
+                    'shell-player-background-repaint-boundary',
+                  ),
+                  visible: _isPlayerSelected,
+                  duration: playerTransitionDuration,
+                  reverseDuration: playerReverseTransitionDuration,
+                  animateInitialEntry: false,
+                  // The browsing background below this layer already fills
+                  // the shell. Keep only the transition marker here: a
+                  // second identical gradient forced an unnecessary
+                  // full-screen paint during every player entrance.
+                  child: const SizedBox.expand(
+                    key: ValueKey('shell-background-player'),
+                  ),
+                ),
+                SafeArea(
+                  top: false,
+                  bottom: false,
+                  child: Row(
+                    children: [
+                      if (useSideNavigation)
+                        _SideNavigation(
+                          selectedIndex: _selectedIndex,
+                          dimPlaybackBackground: _isPlayerSelected,
+                          transitionDuration: shellTransitionDuration,
+                          onSelected: _selectIndex,
+                          destinations: destinations,
+                        ),
+                      Expanded(
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Positioned.fill(
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: _handleBrowsingScroll,
+                                  // Chrome compacts at the start of a
+                                  // scroll gesture. Reuse the browsing
+                                  // subtree when none of its inputs
+                                  // changed: rebuilding every retained
+                                  // tab here also rebuilt offscreen Home
+                                  // shelves inside the scroll's layout.
+                                  child: _retainCurrentViews(
+                                    _PersistentCurrentViews(
+                                      selectedIndex: _selectedIndex,
+                                      homeIndex: _homeIndex,
+                                      searchIndex: _searchIndex,
+                                      localIndex: _localIndex,
+                                      playerIndex: _playerIndex,
+                                      libraryIndex: _libraryIndex,
+                                      settingsIndex: _settingsIndex,
+                                      viewportBottomPadding:
+                                          browsingViewportBottomPadding,
+                                      contentBottomPadding:
+                                          browsingContentBottomPadding,
+                                      playerTransitionDuration:
+                                          playerTransitionDuration,
+                                      playerReverseTransitionDuration:
+                                          playerReverseTransitionDuration,
+                                      playerTransitionActive:
+                                          _playerTransitionActive,
+                                      libraryNavigationController:
+                                          _libraryNavigationController,
+                                      localMusicNavigationController:
+                                          _localMusicNavigationController,
+                                      settingsNavigationController:
+                                          _settingsNavigationController,
+                                      playerStyle: playerStyle,
+                                      playerArtworkStyle: playerArtworkStyle,
+                                      animatedArtworkEnabled:
+                                          animatedArtworkEnabled,
+                                      spotifyCanvasEnabled:
+                                          spotifyCanvasEnabled,
+                                      appleAnimatedArtworkEnabled:
+                                          appleAnimatedArtworkEnabled,
+                                      onOpenPlayer: _openPlayer,
+                                      onCollapsePlayer: _handleSystemBack,
+                                      onOpenSearch: _openSearch,
+                                      onAddRemoteTracksToPlaylist:
+                                          _addRemoteTracksToPlaylist,
                                     ),
                                   ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    // Keep the layout bounds around the complete vertical
-                    // travel. A paint-only translation outside a box whose
-                    // bottom stayed above the navigation looked correct, but
-                    // taps on the compact mini player were rejected by that
-                    // ancestor and reached the browsing content underneath.
-                    bottom: bottomNavigationHeight - bottomNavigationBaseHeight,
-                    child: AnimatedPadding(
-                      key: const ValueKey('mini-player-horizontal-inset'),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: collapsedMiniPlayerHorizontalInset,
-                      ),
-                      duration: shellTransitionDuration,
-                      curve: Curves.easeOutCubic,
-                      child: SizedBox(
-                        height: miniPlayerHeight + bottomNavigationBaseHeight,
-                        child: Align(
-                          alignment: Alignment.topCenter,
-                          child: TweenAnimationBuilder<double>(
-                            key: const ValueKey(
-                              'mini-player-navigation-offset',
-                            ),
-                            tween: Tween<double>(
-                              end: miniPlayerNavigationOffset,
-                            ),
-                            duration: shellTransitionDuration,
-                            curve: Curves.easeOutCubic,
-                            builder: (context, offset, child) =>
-                                Transform.translate(
-                                  key: const ValueKey(
-                                    'mini-player-shell-position',
+                                ),
+                              ),
+                              if (!useSideNavigation)
+                                Positioned(
+                                  left: 0,
+                                  right: 0,
+                                  bottom: 0,
+                                  child: _ShellVisibilityTransition(
+                                    key: const ValueKey(
+                                      'bottom-navigation-shell-transition',
+                                    ),
+                                    clipKey: const ValueKey(
+                                      'bottom-navigation-shell-clip',
+                                    ),
+                                    opacityKey: const ValueKey(
+                                      'bottom-navigation-shell-opacity',
+                                    ),
+                                    visible: bottomNavigationVisible,
+                                    duration: chromeVisibilityDuration,
+                                    hiddenTranslation: const Offset(0, 1),
+                                    preserveBackdropMaterial:
+                                        useLiquidBottomNavigation,
+                                    child: _BottomNavigation(
+                                      selectedIndex: _selectedIndex,
+                                      onDestinationSelected:
+                                          selectBottomNavigationDestination,
+                                      onExpandLiquidNavigation: () =>
+                                          _setBottomNavigationRevealed(true),
+                                      destinations:
+                                          bottomNavigationDestinations,
+                                      detachedSearchDestination:
+                                          detachedSearchDestination,
+                                      liquidGlass: useLiquidBottomNavigation,
+                                      liquidCollapsed:
+                                          liquidBottomNavigationCollapsed,
+                                      backdropGroupKey:
+                                          _liquidGlassChromeBackdropKey,
+                                      backdropMotion: _liquidGlassChromeMoving,
+                                      transitionDuration:
+                                          shellTransitionDuration,
+                                      glassyCompact: _usesMobileNavigation,
+                                      systemBottomInset: systemBottomInset,
+                                    ),
                                   ),
-                                  offset: Offset(0, offset),
-                                  child: child,
                                 ),
-                            child: _ShellVisibilityTransition(
-                              key: const ValueKey(
-                                'mini-player-shell-transition',
-                              ),
-                              clipKey: const ValueKey('mini-player-shell-clip'),
-                              opacityKey: const ValueKey(
-                                'mini-player-shell-opacity',
-                              ),
-                              visible: !_isPlayerSelected,
-                              duration: chromeVisibilityDuration,
-                              hiddenTranslation:
-                                  miniPlayerAppearance
-                                      .backgroundMode
-                                      .isLiquidGlass
-                                  ? const Offset(0, 1)
-                                  : const Offset(0, 0.36),
-                              hiddenScale: 0.94,
-                              preserveBackdropMaterial: miniPlayerAppearance
-                                  .backgroundMode
-                                  .isLiquidGlass,
-                              translationKey: const ValueKey(
-                                'mini-player-shell-translation',
-                              ),
-                              scaleKey: const ValueKey(
-                                'mini-player-shell-scale',
-                              ),
-                              child: SizedBox(
-                                height: miniPlayerHeight,
-                                child: MiniPlayer(
-                                  mode: miniPlayerMode,
-                                  backgroundMode:
-                                      miniPlayerAppearance.backgroundMode,
-                                  liquidGlassBackdropGroupKey:
-                                      _liquidGlassMiniPlayerBackdropKey,
-                                  liquidGlassBackdropMotion:
-                                      _liquidGlassChromeMoving,
-                                  onOpenPlayer: _openPlayer,
-                                  onOpenLyrics: _openLyrics,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  // Keep the layout bounds around the complete vertical
+                  // travel. A paint-only translation outside a box whose
+                  // bottom stayed above the navigation looked correct, but
+                  // taps on the compact mini player were rejected by that
+                  // ancestor and reached the browsing content underneath.
+                  bottom: bottomNavigationHeight - bottomNavigationBaseHeight,
+                  child: AnimatedPadding(
+                    key: const ValueKey('mini-player-horizontal-inset'),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: collapsedMiniPlayerHorizontalInset,
+                    ),
+                    duration: shellTransitionDuration,
+                    curve: Curves.easeOutCubic,
+                    child: SizedBox(
+                      height: miniPlayerHeight + bottomNavigationBaseHeight,
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: TweenAnimationBuilder<double>(
+                          key: const ValueKey('mini-player-navigation-offset'),
+                          tween: Tween<double>(end: miniPlayerNavigationOffset),
+                          duration: shellTransitionDuration,
+                          curve: Curves.easeOutCubic,
+                          builder: (context, offset, child) =>
+                              Transform.translate(
+                                key: const ValueKey(
+                                  'mini-player-shell-position',
                                 ),
+                                offset: Offset(0, offset),
+                                child: child,
+                              ),
+                          child: _ShellVisibilityTransition(
+                            key: const ValueKey('mini-player-shell-transition'),
+                            clipKey: const ValueKey('mini-player-shell-clip'),
+                            opacityKey: const ValueKey(
+                              'mini-player-shell-opacity',
+                            ),
+                            visible: !_isPlayerSelected,
+                            duration: chromeVisibilityDuration,
+                            hiddenTranslation:
+                                miniPlayerAppearance
+                                    .backgroundMode
+                                    .isLiquidGlass
+                                ? const Offset(0, 1)
+                                : const Offset(0, 0.36),
+                            hiddenScale: 0.94,
+                            preserveBackdropMaterial: miniPlayerAppearance
+                                .backgroundMode
+                                .isLiquidGlass,
+                            fixedHorizontalClipWidth: stableMiniGlassEnvelope
+                                ? width
+                                : null,
+                            translationKey: const ValueKey(
+                              'mini-player-shell-translation',
+                            ),
+                            scaleKey: const ValueKey('mini-player-shell-scale'),
+                            child: SizedBox(
+                              height: miniPlayerHeight,
+                              child: MiniPlayer(
+                                mode: miniPlayerMode,
+                                backgroundMode:
+                                    miniPlayerAppearance.backgroundMode,
+                                liquidGlassBackdropGroupKey:
+                                    _liquidGlassMiniPlayerBackdropKey,
+                                liquidGlassBackdropMotion:
+                                    _liquidGlassChromeMoving,
+                                liquidGlassBackdropEnvelopeWidth:
+                                    stableMiniGlassEnvelope ? width : null,
+                                onOpenPlayer: _openPlayer,
+                                onOpenLyrics: _openLyrics,
                               ),
                             ),
                           ),
@@ -1558,8 +1611,8 @@ class _HomePageState extends ConsumerState<HomePage>
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1580,6 +1633,7 @@ class _ShellVisibilityTransition extends StatelessWidget {
     this.translationKey,
     this.scaleKey,
     this.preserveBackdropMaterial = false,
+    this.fixedHorizontalClipWidth,
     super.key,
   });
 
@@ -1593,6 +1647,7 @@ class _ShellVisibilityTransition extends StatelessWidget {
   final Key? translationKey;
   final Key? scaleKey;
   final bool preserveBackdropMaterial;
+  final double? fixedHorizontalClipWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -1622,6 +1677,9 @@ class _ShellVisibilityTransition extends StatelessWidget {
             );
             return ClipRect(
               key: clipKey,
+              clipper: fixedHorizontalClipWidth == null
+                  ? null
+                  : _FixedHorizontalShellClipper(fixedHorizontalClipWidth!),
               // Keep Liquid Glass out of an Opacity save layer: fading the
               // complete BackdropFilter also fades its sampled background and
               // makes the material look like a flat overlay. Its full-height
@@ -1642,6 +1700,20 @@ class _ShellVisibilityTransition extends StatelessWidget {
       ),
     );
   }
+}
+
+class _FixedHorizontalShellClipper extends CustomClipper<Rect> {
+  const _FixedHorizontalShellClipper(this.width);
+
+  final double width;
+
+  @override
+  Rect getClip(Size size) =>
+      Rect.fromLTWH((size.width - width) / 2, 0, width, size.height);
+
+  @override
+  bool shouldReclip(_FixedHorizontalShellClipper oldClipper) =>
+      width != oldClipper.width;
 }
 
 class _AppDestination {
@@ -1764,27 +1836,15 @@ class _BottomNavigation extends StatelessWidget {
                 child: navigationItems,
               ),
       );
-      final mainGlass = ValueListenableBuilder<bool>(
-        valueListenable: backdropMotion,
-        child: DecoratedBox(
-          key: const ValueKey('bottom-navigation-surface'),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceChromeFor(context),
-            borderRadius: radius,
-          ),
-          child: SizedBox(
-            key: const ValueKey('bottom-navigation-content'),
-            child: mainContent,
-          ),
-        ),
-        builder: (context, moving, child) => LiquidGlassSurface(
-          key: const ValueKey('bottom-navigation-glass'),
+      final mainGlassContent = DecoratedBox(
+        key: const ValueKey('bottom-navigation-surface'),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceChromeFor(context),
           borderRadius: radius,
-          blurSigma: 8,
-          intensity: 1,
-          backdropGroupKey: backdropGroupKey,
-          backdropMotion: moving,
-          child: child!,
+        ),
+        child: SizedBox(
+          key: const ValueKey('bottom-navigation-content'),
+          child: mainContent,
         ),
       );
       return AnimatedPadding(
@@ -1812,13 +1872,37 @@ class _BottomNavigation extends StatelessWidget {
                 tween: Tween<double>(end: liquidCollapsed ? 0 : 1),
                 duration: transitionDuration,
                 curve: Curves.easeOutCubic,
-                child: mainGlass,
-                builder: (context, value, mainGlass) {
+                child: mainGlassContent,
+                builder: (context, value, mainGlassContent) {
                   final mainWidth = lerpDouble(
                     collapsedMainWidth,
                     expandedMainWidth,
                     value,
                   )!;
+                  final rtl = Directionality.of(context) == TextDirection.rtl;
+                  final envelope =
+                      glassyCompact && theme.platform == TargetPlatform.android
+                      ? Rect.fromLTWH(
+                          rtl ? mainWidth - expandedMainWidth : 0,
+                          0,
+                          expandedMainWidth,
+                          liquidHeight,
+                        )
+                      : null;
+                  final mainGlass = ValueListenableBuilder<bool>(
+                    valueListenable: backdropMotion,
+                    child: mainGlassContent,
+                    builder: (context, moving, child) => LiquidGlassSurface(
+                      key: const ValueKey('bottom-navigation-glass'),
+                      borderRadius: radius,
+                      blurSigma: 8,
+                      intensity: 1,
+                      backdropGroupKey: backdropGroupKey,
+                      backdropEnvelope: envelope,
+                      backdropMotion: moving,
+                      child: child!,
+                    ),
+                  );
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1834,17 +1918,22 @@ class _BottomNavigation extends StatelessWidget {
                         const SizedBox(width: 8),
                         SizedBox.square(
                           dimension: liquidHeight,
-                          child: LiquidGlassSurface(
-                            key: const ValueKey(
-                              'bottom-navigation-search-glass',
-                            ),
-                            borderRadius: BorderRadius.circular(
-                              liquidHeight / 2,
-                            ),
-                            blurSigma: 8,
-                            intensity: 1,
-                            backdropGroupKey: backdropGroupKey,
-                            backdropMotion: false,
+                          child: ValueListenableBuilder<bool>(
+                            valueListenable: backdropMotion,
+                            builder: (context, moving, child) =>
+                                LiquidGlassSurface(
+                                  key: const ValueKey(
+                                    'bottom-navigation-search-glass',
+                                  ),
+                                  borderRadius: BorderRadius.circular(
+                                    liquidHeight / 2,
+                                  ),
+                                  blurSigma: 8,
+                                  intensity: 1,
+                                  backdropGroupKey: backdropGroupKey,
+                                  backdropMotion: moving,
+                                  child: child!,
+                                ),
                             child: DecoratedBox(
                               key: const ValueKey(
                                 'bottom-navigation-search-surface',
@@ -1990,23 +2079,31 @@ class _LiquidNavigationSelectionLayerState
       builder: (context, constraints) {
         final slotWidth = constraints.maxWidth / widget.itemCount;
         final ordinal = _lastVisibleOrdinal.clamp(0, widget.itemCount - 1);
+        final compatibleBlendMode =
+            Theme.of(context).platform == TargetPlatform.android;
+        final paintedLens = CustomPaint(
+          key: const ValueKey('bottom-navigation-selection-lens'),
+          painter: _LiquidNavigationSelectionPainter(
+            brightness: colors.brightness,
+            accent: colors.primary,
+            highContrast: highContrast,
+            useCompatibleBlendMode: compatibleBlendMode,
+          ),
+          child: const SizedBox.expand(),
+        );
         final lens = AnimatedOpacity(
           key: const ValueKey('bottom-navigation-selection-lens-opacity'),
           opacity: widget.selectedOrdinal >= 0 ? 1 : 0,
           duration: fadeDuration,
           curve: Curves.easeOutCubic,
           child: IgnorePointer(
-            child: CustomPaint(
-              key: const ValueKey('bottom-navigation-selection-lens'),
-              painter: _LiquidNavigationSelectionPainter(
-                brightness: colors.brightness,
-                accent: colors.primary,
-                highContrast: highContrast,
-                useCompatibleBlendMode:
-                    Theme.of(context).platform == TargetPlatform.android,
-              ),
-              child: const SizedBox.expand(),
-            ),
+            // Android's src-over optics can retain the complete shadow and
+            // gradients while only their composited position changes. Other
+            // platforms retain direct paint: soft-light depends on the live
+            // destination and must not be cached against transparent pixels.
+            child: compatibleBlendMode
+                ? RepaintBoundary(child: paintedLens)
+                : paintedLens,
           ),
         );
         return Stack(
@@ -2024,17 +2121,29 @@ class _LiquidNavigationSelectionLayerState
                 child: lens,
               )
             else
-              AnimatedPositioned(
+              TweenAnimationBuilder<({double left, double width})>(
                 key: const ValueKey(
                   'bottom-navigation-selection-lens-position',
                 ),
+                tween: _LiquidNavigationLensTween(
+                  end: (
+                    left: slotWidth * ordinal + 3,
+                    width: math.max(0, slotWidth - 6),
+                  ),
+                ),
                 duration: travelDuration,
                 curve: Curves.easeOutQuart,
-                left: slotWidth * ordinal + 3,
-                top: 2,
-                bottom: 2,
-                width: math.max(0, slotWidth - 6),
                 child: lens,
+                builder: (context, geometry, child) => Positioned(
+                  left: 0,
+                  top: 2,
+                  bottom: 2,
+                  width: geometry.width,
+                  child: Transform.translate(
+                    offset: Offset(geometry.left, 0),
+                    child: child,
+                  ),
+                ),
               ),
             widget.child,
           ],
@@ -2042,6 +2151,18 @@ class _LiquidNavigationSelectionLayerState
       },
     );
   }
+}
+
+class _LiquidNavigationLensTween extends Tween<({double left, double width})> {
+  _LiquidNavigationLensTween({required super.end});
+
+  @override
+  ({double left, double width}) lerp(double t) => (
+    left: lerpDouble(begin!.left, end!.left, t)!,
+    // lerpDouble returns equal endpoints verbatim. A translation must never
+    // acquire tiny width rounding changes that would relayout its parent.
+    width: lerpDouble(begin!.width, end!.width, t)!,
+  );
 }
 
 class _LiquidNavigationSelectionPainter extends CustomPainter {
@@ -2642,6 +2763,36 @@ class _PersistentCurrentViews extends StatefulWidget {
   final VoidCallback onOpenSearch;
   final AddRemoteTracksToPlaylist onAddRemoteTracksToPlaylist;
 
+  // Compare inputs, not widgets or descendants. Inherited themes/locales and
+  // Riverpod updates still reach each page normally, while chrome-only shell
+  // updates can keep the exact same child widget instance.
+  Object get configuration => (
+    selectedIndex,
+    homeIndex,
+    searchIndex,
+    localIndex,
+    playerIndex,
+    libraryIndex,
+    settingsIndex,
+    viewportBottomPadding,
+    contentBottomPadding,
+    playerTransitionDuration,
+    playerReverseTransitionDuration,
+    playerTransitionActive,
+    libraryNavigationController,
+    localMusicNavigationController,
+    settingsNavigationController,
+    playerStyle,
+    playerArtworkStyle,
+    animatedArtworkEnabled,
+    spotifyCanvasEnabled,
+    appleAnimatedArtworkEnabled,
+    onOpenPlayer,
+    onCollapsePlayer,
+    onOpenSearch,
+    onAddRemoteTracksToPlaylist,
+  );
+
   @override
   State<_PersistentCurrentViews> createState() =>
       _PersistentCurrentViewsState();
@@ -2649,6 +2800,11 @@ class _PersistentCurrentViews extends StatefulWidget {
 
 class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
   late final Set<int> _visitedIndexes = {widget.selectedIndex};
+  final _homeContent = _PersistentViewContentCache();
+  final _searchContent = _PersistentViewContentCache();
+  final _localContent = _PersistentViewContentCache();
+  final _libraryContent = _PersistentViewContentCache();
+  final _settingsContent = _PersistentViewContentCache();
   late final bool _playerWasInitialDestination;
   late bool _playerVisuallyCoversBrowsing =
       widget.selectedIndex == widget.playerIndex;
@@ -2759,10 +2915,17 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               widget.homeIndex,
             ),
             bottomPadding: widget.viewportBottomPadding,
-            child: _HomeView(
-              bottomContentPadding: widget.contentBottomPadding,
-              onOpenPlayer: widget.onOpenPlayer,
-              onAddRemoteTracksToPlaylist: widget.onAddRemoteTracksToPlaylist,
+            child: _homeContent.resolve(
+              (
+                widget.contentBottomPadding,
+                widget.onOpenPlayer,
+                widget.onAddRemoteTracksToPlaylist,
+              ),
+              () => _HomeView(
+                bottomContentPadding: widget.contentBottomPadding,
+                onOpenPlayer: widget.onOpenPlayer,
+                onAddRemoteTracksToPlaylist: widget.onAddRemoteTracksToPlaylist,
+              ),
             ),
           ),
         if (_visitedIndexes.contains(widget.searchIndex))
@@ -2774,11 +2937,19 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               widget.searchIndex,
             ),
             bottomPadding: widget.viewportBottomPadding,
-            child: SearchView(
-              active: widget.selectedIndex == widget.searchIndex,
-              bottomContentPadding: widget.contentBottomPadding,
-              onOpenPlayer: widget.onOpenPlayer,
-              onAddToPlaylist: widget.onAddRemoteTracksToPlaylist,
+            child: _searchContent.resolve(
+              (
+                widget.selectedIndex == widget.searchIndex,
+                widget.contentBottomPadding,
+                widget.onOpenPlayer,
+                widget.onAddRemoteTracksToPlaylist,
+              ),
+              () => SearchView(
+                active: widget.selectedIndex == widget.searchIndex,
+                bottomContentPadding: widget.contentBottomPadding,
+                onOpenPlayer: widget.onOpenPlayer,
+                onAddToPlaylist: widget.onAddRemoteTracksToPlaylist,
+              ),
             ),
           ),
         if (_visitedIndexes.contains(widget.localIndex))
@@ -2790,10 +2961,17 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               widget.localIndex,
             ),
             bottomPadding: widget.viewportBottomPadding,
-            child: LocalMusicPanel(
-              bottomContentPadding: widget.contentBottomPadding,
-              onOpenPlayer: widget.onOpenPlayer,
-              navigationController: widget.localMusicNavigationController,
+            child: _localContent.resolve(
+              (
+                widget.contentBottomPadding,
+                widget.onOpenPlayer,
+                widget.localMusicNavigationController,
+              ),
+              () => LocalMusicPanel(
+                bottomContentPadding: widget.contentBottomPadding,
+                onOpenPlayer: widget.onOpenPlayer,
+                navigationController: widget.localMusicNavigationController,
+              ),
             ),
           ),
         if (_visitedIndexes.contains(widget.libraryIndex))
@@ -2805,10 +2983,17 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               widget.libraryIndex,
             ),
             bottomPadding: widget.viewportBottomPadding,
-            child: LibraryPanel(
-              bottomContentPadding: widget.contentBottomPadding,
-              onOpenPlayer: widget.onOpenPlayer,
-              navigationController: widget.libraryNavigationController,
+            child: _libraryContent.resolve(
+              (
+                widget.contentBottomPadding,
+                widget.onOpenPlayer,
+                widget.libraryNavigationController,
+              ),
+              () => LibraryPanel(
+                bottomContentPadding: widget.contentBottomPadding,
+                onOpenPlayer: widget.onOpenPlayer,
+                navigationController: widget.libraryNavigationController,
+              ),
             ),
           ),
         if (_visitedIndexes.contains(widget.settingsIndex))
@@ -2820,10 +3005,17 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               widget.settingsIndex,
             ),
             bottomPadding: widget.viewportBottomPadding,
-            child: SettingsPanel(
-              bottomContentPadding: widget.contentBottomPadding,
-              active: widget.selectedIndex == widget.settingsIndex,
-              navigationController: widget.settingsNavigationController,
+            child: _settingsContent.resolve(
+              (
+                widget.contentBottomPadding,
+                widget.selectedIndex == widget.settingsIndex,
+                widget.settingsNavigationController,
+              ),
+              () => SettingsPanel(
+                bottomContentPadding: widget.contentBottomPadding,
+                active: widget.selectedIndex == widget.settingsIndex,
+                navigationController: widget.settingsNavigationController,
+              ),
             ),
           ),
         // The player is the transition foreground. Keeping it last lets the
@@ -2858,6 +3050,22 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
           ),
       ],
     );
+  }
+}
+
+/// Retains only the latest constructor configuration for one browsing page.
+/// Reusing its widget skips parent-driven rebuilds during a tab transition;
+/// provider, Theme and MediaQuery dependencies still notify its Element.
+class _PersistentViewContentCache {
+  Object? _configuration;
+  Widget? _content;
+
+  Widget resolve(Object configuration, Widget Function() create) {
+    if (_content == null || _configuration != configuration) {
+      _configuration = configuration;
+      _content = create();
+    }
+    return _content!;
   }
 }
 
@@ -3148,89 +3356,101 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
               ? (expandedCards ? 196 : 172)
               : (expandedCards ? 228 : 200),
         ),
-        child: ListView.separated(
-          // Keep several cards ready for a fling without mounting nearly an
-          // entire twelve-item shelf on a narrow phone.
-          scrollCacheExtent: expandedCards
-              ? const ScrollCacheExtent.pixels(760)
-              : const ScrollCacheExtent.pixels(480),
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          scrollDirection: Axis.horizontal,
-          itemCount: section.items.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 10),
-          itemBuilder: (context, index) {
-            final item = section.items[index];
-            return switch (item) {
-              HomeRecommendationTrackItem() => _RecommendedTrackCard(
-                track: item.track,
-                localArtworkSource: _localArtworkSourceForRecommendation(item),
-                fallbackArtworkSource: _fallbackArtworkSourceForRecommendation(
+        child: HorizontalShelfScroll(
+          child: ListView.separated(
+            // Keep several cards ready for a fling without mounting nearly an
+            // entire twelve-item shelf on a narrow phone.
+            scrollCacheExtent: expandedCards
+                ? const ScrollCacheExtent.pixels(760)
+                : const ScrollCacheExtent.pixels(480),
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            scrollDirection: Axis.horizontal,
+            itemCount: section.items.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final item = section.items[index];
+              return switch (item) {
+                HomeRecommendationTrackItem() => _trackCard(
                   item,
-                ),
-                width: cardWidth,
-                onTap: _trackTap(item, ref),
-              ),
-              HomeRecommendationCollectionItem(:final collection) =>
-                _RecommendedCollectionCard(
-                  collection: collection,
-                  strings: strings,
+                  ref,
                   width: cardWidth,
-                  onOpenPlayer: onOpenPlayer,
-                  onAddRemoteTracksToPlaylist: onAddRemoteTracksToPlaylist,
                 ),
-              HomeRecommendationArtistItem(:final artist) =>
-                _RecommendedArtistCard(
-                  artist: artist,
-                  width: cardWidth,
-                  onTap: () {
-                    final request = (
-                      artistBrowseId: artist.browseId,
-                      artistName: artist.name,
-                      artistThumbnailUrl: artist.thumbnailUrl,
-                    );
-                    // Start the browse request before the route transition;
-                    // the short-lived provider cache lets the destination
-                    // attach to the same in-flight operation.
-                    unawaited(
-                      ref
-                          .read(artistProfileProvider(request).future)
-                          .then<void>(
-                            (_) {},
-                            onError: (Object _, StackTrace _) {},
+                HomeRecommendationCollectionItem(:final collection) =>
+                  _RecommendedCollectionCard(
+                    collection: collection,
+                    strings: strings,
+                    width: cardWidth,
+                    onOpenPlayer: onOpenPlayer,
+                    onAddRemoteTracksToPlaylist: onAddRemoteTracksToPlaylist,
+                  ),
+                HomeRecommendationArtistItem(:final artist) =>
+                  _RecommendedArtistCard(
+                    artist: artist,
+                    width: cardWidth,
+                    onTap: () {
+                      final request = (
+                        artistBrowseId: artist.browseId,
+                        artistName: artist.name,
+                        artistThumbnailUrl: artist.thumbnailUrl,
+                      );
+                      // Start the browse request before the route transition;
+                      // the short-lived provider cache lets the destination
+                      // attach to the same in-flight operation.
+                      unawaited(
+                        ref
+                            .read(artistProfileProvider(request).future)
+                            .then<void>(
+                              (_) {},
+                              onError: (Object _, StackTrace _) {},
+                            ),
+                      );
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => ArtistProfilePage(
+                            artistBrowseId: artist.browseId,
+                            artistName: artist.name,
+                            artistThumbnailUrl: artist.thumbnailUrl,
+                            seedVideoId: artist.seedVideoId,
+                            onOpenPlayer: onOpenPlayer,
                           ),
-                    );
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => ArtistProfilePage(
-                          artistBrowseId: artist.browseId,
-                          artistName: artist.name,
-                          artistThumbnailUrl: artist.thumbnailUrl,
-                          seedVideoId: artist.seedVideoId,
-                          onOpenPlayer: onOpenPlayer,
                         ),
-                      ),
-                    );
-                  },
-                ),
-            };
-          },
+                      );
+                    },
+                  ),
+              };
+            },
+          ),
         ),
       ),
     );
   }
 
-  VoidCallback? _trackTap(HomeRecommendationTrackItem selected, WidgetRef ref) {
-    final localTrack = _localTrackForRecommendation(selected);
+  Widget _trackCard(
+    HomeRecommendationTrackItem item,
+    WidgetRef ref, {
+    required double width,
+  }) {
+    // Resolve the local entry once per mounted card. The cover, fallback and
+    // tap handler all refer to the same library snapshot.
+    final localTrack = _localTrackForRecommendation(item);
+    return _RecommendedTrackCard(
+      track: item.track,
+      localArtworkSource: _firstHomeArtworkSource([localTrack?.thumbnailPath]),
+      fallbackArtworkSource: _fallbackArtworkSourceForRecommendation(
+        item,
+        localTrack,
+      ),
+      width: width,
+      onTap: _trackTap(item, ref, localTrack: localTrack),
+    );
+  }
+
+  VoidCallback? _trackTap(
+    HomeRecommendationTrackItem selected,
+    WidgetRef ref, {
+    required LocalTrack? localTrack,
+  }) {
     if (section.personalizedKind != null) {
-      final recommendationQueue = section.items
-          .whereType<HomeRecommendationTrackItem>()
-          .map(
-            (item) => RecommendationPlaybackItem(
-              track: item.track,
-              localTrack: _localTrackForRecommendation(item),
-            ),
-          )
-          .toList(growable: false);
       final selectedPlayback = RecommendationPlaybackItem(
         track: selected.track,
         localTrack: localTrack,
@@ -3239,6 +3459,18 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
           section.queueSourceId ??
           'personalized-home:${section.personalizedKind!.name}';
       return () {
+        // Scrolling only needs artwork and a callback. Constructing this
+        // complete queue per visible card repeatedly scanned every shelf item
+        // and the local library even when no song was selected.
+        final recommendationQueue = section.items
+            .whereType<HomeRecommendationTrackItem>()
+            .map(
+              (item) => RecommendationPlaybackItem(
+                track: item.track,
+                localTrack: _localTrackForRecommendation(item),
+              ),
+            )
+            .toList(growable: false);
         final player = ref.read(playerControllerProvider.notifier);
         RecommendationQueueExtender? queueExtender;
         final service = ref.read(youtubeMusicSearchProvider);
@@ -3315,17 +3547,10 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
     return null;
   }
 
-  String? _localArtworkSourceForRecommendation(
-    HomeRecommendationTrackItem item,
-  ) {
-    final localTrack = _localTrackForRecommendation(item);
-    return _firstHomeArtworkSource([localTrack?.thumbnailPath]);
-  }
-
   String? _fallbackArtworkSourceForRecommendation(
     HomeRecommendationTrackItem item,
+    LocalTrack? localTrack,
   ) {
-    final localTrack = _localTrackForRecommendation(item);
     return _firstHomeArtworkSource([
       localTrack?.thumbnailUrl,
       localTrack?.catalogThumbnailUrl,
@@ -3383,22 +3608,24 @@ class _HomeRecentSection extends StatelessWidget {
               cardWidth: cardWidth,
               minimumHeight: expandedCards ? 228 : 200,
             ),
-            child: ListView.separated(
-              scrollCacheExtent: expandedCards
-                  ? const ScrollCacheExtent.pixels(760)
-                  : const ScrollCacheExtent.pixels(480),
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              scrollDirection: Axis.horizontal,
-              itemCount: tracks.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 10),
-              itemBuilder: (context, index) {
-                final track = tracks[index];
-                return _RecentTrackCard(
-                  track: track,
-                  width: cardWidth,
-                  onTap: () => onTrackSelected(track, tracks),
-                );
-              },
+            child: HorizontalShelfScroll(
+              child: ListView.separated(
+                scrollCacheExtent: expandedCards
+                    ? const ScrollCacheExtent.pixels(760)
+                    : const ScrollCacheExtent.pixels(480),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                scrollDirection: Axis.horizontal,
+                itemCount: tracks.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 10),
+                itemBuilder: (context, index) {
+                  final track = tracks[index];
+                  return _RecentTrackCard(
+                    track: track,
+                    width: cardWidth,
+                    onTap: () => onTrackSelected(track, tracks),
+                  );
+                },
+              ),
             ),
           );
         },

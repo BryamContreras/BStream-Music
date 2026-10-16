@@ -22,6 +22,8 @@ uniform float u_radius_bottom_left;
 uniform float u_saturation;
 uniform float u_edge_gain;
 uniform float u_edge_mode;
+// Opt-in fixed-envelope mode owns the contour; native clipped lenses use 0.
+uniform float u_shape_mask;
 uniform sampler2D u_backdrop;
 
 out vec4 frag_color;
@@ -46,9 +48,13 @@ float rounded_rect_distance(
     float radius
 ) {
   vec2 corner = abs(centered) - (half_size - vec2(radius));
-  float outside = length(max(corner, 0.0)) - radius;
-  float inside = min(max(corner.x, corner.y), 0.0);
-  return outside + inside;
+  // Only the rounded corners need a Euclidean distance. Along a straight
+  // side and throughout the interior, the same SDF is the larger component
+  // minus the radius. Strict comparisons also preserve both zero boundaries.
+  if (corner.x > 0.0 && corner.y > 0.0) {
+    return length(corner) - radius;
+  }
+  return max(corner.x, corner.y) - radius;
 }
 
 vec2 safe_normalize(vec2 value) {
@@ -96,8 +102,21 @@ float circle_map(float value) {
 
 void main() {
   vec2 coordinate = FlutterFragCoord().xy;
-  vec2 surface_size = min(max(u_surface_size_px, vec2(1.0)), u_size);
+  // The input can be a clipped portion of the real lens (for example while
+  // a page slides past the viewport). Keep optical geometry independent of
+  // that texture extent; sample_backdrop already clamps texture coordinates.
+  vec2 surface_size = max(u_surface_size_px, vec2(1.0));
   vec2 local_coordinate = coordinate - u_surface_origin_px;
+  // A composed backdrop may supply a window-sized input texture even for a
+  // small capsule. Its clipped-away exterior is not another refractive rim:
+  // skip all optical work there. Keep two physical pixels for clip AA and
+  // fractional positioning; every visible pixel still uses the full lens.
+  const float clip_gutter = 2.0;
+  if (any(lessThan(local_coordinate, vec2(-clip_gutter))) ||
+      any(greaterThan(local_coordinate, surface_size + vec2(clip_gutter)))) {
+    frag_color = vec4(0.0);
+    return;
+  }
   // Build the lens in this widget's local coordinate space while retaining
   // the backing texture coordinates for sampling.
   vec2 half_size = surface_size * 0.5;
@@ -108,33 +127,49 @@ void main() {
   float refraction_amount = u_amount_ratio * minimum_size;
 
   float signed_distance;
-  vec2 shape_normal;
   if (u_edge_mode > 0.5) {
     signed_distance = local_coordinate.y - surface_size.y;
-    shape_normal = vec2(0.0, 1.0);
   } else {
     signed_distance = rounded_rect_distance(centered, half_size, radius);
-    float gradient_radius = min(
-        radius * 1.5,
-        min(half_size.x, half_size.y)
-    );
-    shape_normal = rounded_rect_normal(centered, half_size, gradient_radius);
+  }
+
+  // Coordinates and the SDF are physical pixels, so this transition remains
+  // one device pixel at every density. Apply to premultiplied RGBA together:
+  // transparent envelope pixels must preserve the unfiltered backdrop.
+  float shape_coverage = u_shape_mask > 0.5
+      ? clamp(0.5 - signed_distance, 0.0, 1.0)
+      : 1.0;
+  if (shape_coverage <= 0.0) {
+    frag_color = vec4(0.0);
+    return;
   }
 
   float inside_distance = max(-signed_distance, 0.0);
   if (inside_distance >= refraction_height) {
-    frag_color = sample_material(coordinate);
+    frag_color = sample_material(coordinate) * shape_coverage;
     return;
+  }
+
+  // Most pixels are in the calm centre. Compute edge normals only for the
+  // pixels that actually refract; this leaves the optical result unchanged.
+  vec2 shape_normal;
+  if (u_edge_mode > 0.5) {
+    shape_normal = vec2(0.0, 1.0);
+  } else {
+    float gradient_radius = min(radius * 1.5, min(half_size.x, half_size.y));
+    shape_normal = rounded_rect_normal(centered, half_size, gradient_radius);
   }
 
   float lens_progress = 1.0 - inside_distance / refraction_height;
   // backdrop passes a negative refraction amount: the outward normal therefore
   // samples inward and produces the thick, rounded glass edge seen in Echo.
   float distance_amount = -circle_map(lens_progress) * refraction_amount;
-  vec2 radial = safe_normalize(centered);
-  vec2 direction = safe_normalize(
-      shape_normal + u_depth_effect * radial
-  );
+  vec2 direction = shape_normal;
+  if (u_depth_effect > 0.0) {
+    direction = safe_normalize(
+        shape_normal + u_depth_effect * safe_normalize(centered)
+    );
+  }
   vec2 refracted = coordinate + distance_amount * direction;
 
   float quadrant = (centered.x * centered.y) /
@@ -144,20 +179,23 @@ void main() {
 
   // Echo's seven spectral taps keep the reflected backdrop color luminous at
   // both the upper and lower contours without painting a broad white bloom.
-  vec4 red = sample_material(refracted + dispersed);
-  vec4 orange = sample_material(refracted + dispersed * (2.0 / 3.0));
-  vec4 yellow = sample_material(refracted + dispersed * (1.0 / 3.0));
   vec4 green = sample_material(refracted);
-  vec4 cyan = sample_material(refracted - dispersed * (1.0 / 3.0));
-  vec4 blue = sample_material(refracted - dispersed * (2.0 / 3.0));
-  vec4 purple = sample_material(refracted - dispersed);
-
-  vec4 color = vec4(0.0);
-  color.r = red.r / 3.5 + orange.r / 3.5 + yellow.r / 3.5 + purple.r / 7.0;
-  color.g = orange.g / 7.0 + yellow.g / 3.5 + green.g / 3.5 + cyan.g / 3.5;
-  color.b = cyan.b / 3.0 + blue.b / 3.0 + purple.b / 3.0;
-  color.a = (red.a + orange.a + yellow.a + green.a + cyan.a + blue.a +
-      purple.a) / 7.0;
+  vec4 color = green;
+  // Integrated headers use zero dispersion. All seven taps would then read
+  // the exact same texel and their weights sum to one in every channel.
+  if (u_chromatic_aberration > 0.0) {
+    vec4 red = sample_material(refracted + dispersed);
+    vec4 orange = sample_material(refracted + dispersed * (2.0 / 3.0));
+    vec4 yellow = sample_material(refracted + dispersed * (1.0 / 3.0));
+    vec4 cyan = sample_material(refracted - dispersed * (1.0 / 3.0));
+    vec4 blue = sample_material(refracted - dispersed * (2.0 / 3.0));
+    vec4 purple = sample_material(refracted - dispersed);
+    color.r = red.r / 3.5 + orange.r / 3.5 + yellow.r / 3.5 + purple.r / 7.0;
+    color.g = orange.g / 7.0 + yellow.g / 3.5 + green.g / 3.5 + cyan.g / 3.5;
+    color.b = cyan.b / 3.0 + blue.b / 3.0 + purple.b / 3.0;
+    color.a = (red.a + orange.a + yellow.a + green.a + cyan.a + blue.a +
+        purple.a) / 7.0;
+  }
   // Build the bevel from the undispersed, inward sample. The broad shoulder
   // and compact outer lip both inherit the local backdrop hue; there is no
   // fixed white specular, so blue, amber and red artwork keep those colours
@@ -190,5 +228,5 @@ void main() {
   // headroom retains hue while avoiding clipped, chalky rims.
   vec3 headroom = max(vec3(0.0), vec3(1.0) - color.rgb);
   color.rgb += min(reflected_lift, headroom * 0.68);
-  frag_color = clamp(color, 0.0, 1.0);
+  frag_color = clamp(color, 0.0, 1.0) * shape_coverage;
 }

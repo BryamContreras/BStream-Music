@@ -95,6 +95,8 @@ class AudioStreamResolution {
     this.formatId,
     this.codec,
     this.bitrate,
+    this.sampleRate,
+    this.channels,
     this.clientProfileKey,
     this.expiresAt,
   });
@@ -126,6 +128,12 @@ class AudioStreamResolution {
   /// Bitrate in bits per second of the selected audio format, if reported.
   final int? bitrate;
 
+  /// Sample rate in hertz of the selected audio format, if reported.
+  final int? sampleRate;
+
+  /// Number of audio channels of the selected format, if reported.
+  final int? channels;
+
   /// Exact InnerTube client profile that produced the signed media URL.
   final String? clientProfileKey;
 
@@ -149,6 +157,8 @@ class AudioStreamResolution {
       formatId: formatId,
       codec: codec,
       bitrate: bitrate,
+      sampleRate: sampleRate,
+      channels: channels,
       clientProfileKey: clientProfileKey,
       expiresAt: expiresAt,
     );
@@ -170,6 +180,8 @@ class AudioStreamResolution {
       formatId: track.streamFormatId,
       codec: track.streamCodec,
       bitrate: track.streamBitrate,
+      sampleRate: track.streamSampleRate,
+      channels: track.streamChannels,
       clientProfileKey: track.streamClientProfileKey,
     );
   }

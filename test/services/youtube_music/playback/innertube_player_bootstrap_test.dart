@@ -73,6 +73,20 @@ void main() {
   });
 
   test(
+    'large watch pages preserve coherent bootstrap and cached identity',
+    () async {
+      final transport = _BootstrapTransport(padding: 65536);
+      final source = InnerTubePlayerBootstrapper(transport: transport);
+      final value = await source.load('dQw4w9WgXcQ');
+      expect(value.visitorData, 'visitor-1');
+      expect(value.signatureTimestamp, 20348);
+      expect(value.playerUrl?.host, 'www.youtube.com');
+      expect(await source.load('dQw4w9WgXcQ'), same(value));
+      expect(transport.requests, hasLength(1));
+    },
+  );
+
+  test(
     'invalidate prevents an older in-flight load from repopulating cache',
     () async {
       final transport = _ControlledBootstrapTransport();
@@ -107,6 +121,8 @@ final class _BootstrapRequest {
 }
 
 final class _BootstrapTransport implements InnerTubeTransport {
+  _BootstrapTransport({this.padding = 0});
+  final int padding;
   final List<_BootstrapRequest> requests = <_BootstrapRequest>[];
 
   @override
@@ -120,6 +136,7 @@ final class _BootstrapTransport implements InnerTubeTransport {
     return InnerTubeHttpResponse(
       statusCode: 200,
       body:
+          '${' ' * padding}'
           '{"VISITOR_DATA":"visitor-${requests.length}",'
           '"STS":20348,'
           '"PLAYER_JS_URL":"/s/player/abcd/base.js"'

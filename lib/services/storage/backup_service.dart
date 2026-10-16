@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../core/utils/background_work.dart';
 import 'backup_restore_transaction.dart';
 import 'library_operation_coordinator.dart';
 import 'local_database_service.dart';
@@ -190,52 +191,11 @@ class BackupService {
         await _databaseService.initialize();
       }
 
-      final databaseSnapshot = File(
-        p.join(snapshotRoot.path, 'database', AppConstants.databaseName),
+      // Async file I/O does not move ZIP compression off the UI isolate.
+      // The worker sees only snapshot/output paths, never the live database.
+      await runBackgroundWork<void>(
+        _BackupArchiveWriter(snapshotRoot.path, destination.path).write,
       );
-      final encoder = ZipFileEncoder();
-      encoder.create(destination.path, level: ZipFileEncoder.gzip);
-      var closed = false;
-      try {
-        encoder.addArchiveFile(
-          ArchiveFile.string(
-            'manifest.json',
-            jsonEncode({
-              'app': AppConstants.appName,
-              'schema': 1,
-              'database': AppConstants.databaseName,
-              'exportedAt': DateTime.now().toIso8601String(),
-            }),
-          ),
-        );
-        if (await databaseSnapshot.exists()) {
-          await encoder.addFile(
-            databaseSnapshot,
-            'database/${AppConstants.databaseName}',
-            ZipFileEncoder.gzip,
-          );
-        }
-        for (final folder in const ['audio', 'thumbnails']) {
-          final directory = Directory(p.join(snapshotRoot.path, folder));
-          if (await directory.exists()) {
-            await encoder.addDirectory(
-              directory,
-              includeDirName: true,
-              level: ZipFileEncoder.store,
-            );
-          }
-        }
-        await encoder.close();
-        closed = true;
-      } finally {
-        if (!closed) {
-          try {
-            await encoder.close();
-          } catch (_) {
-            // Preserve the original export error.
-          }
-        }
-      }
     } finally {
       if (await snapshotRoot.exists()) {
         await snapshotRoot.delete(recursive: true);
@@ -638,6 +598,62 @@ Future<void> _validateBackupManifest(Directory extractedRoot) async {
     rethrow;
   } catch (error) {
     throw FormatException('El manifiesto del respaldo no es válido.', error);
+  }
+}
+
+class _BackupArchiveWriter {
+  const _BackupArchiveWriter(this.snapshotPath, this.destinationPath);
+
+  final String snapshotPath;
+  final String destinationPath;
+
+  Future<void> write() async {
+    final databaseSnapshot = File(
+      p.join(snapshotPath, 'database', AppConstants.databaseName),
+    );
+    final encoder = ZipFileEncoder();
+    encoder.create(destinationPath, level: ZipFileEncoder.gzip);
+    var closed = false;
+    try {
+      encoder.addArchiveFile(
+        ArchiveFile.string(
+          'manifest.json',
+          jsonEncode({
+            'app': AppConstants.appName,
+            'schema': 1,
+            'database': AppConstants.databaseName,
+            'exportedAt': DateTime.now().toIso8601String(),
+          }),
+        ),
+      );
+      if (await databaseSnapshot.exists()) {
+        await encoder.addFile(
+          databaseSnapshot,
+          'database/${AppConstants.databaseName}',
+          ZipFileEncoder.gzip,
+        );
+      }
+      for (final folder in const ['audio', 'thumbnails']) {
+        final directory = Directory(p.join(snapshotPath, folder));
+        if (await directory.exists()) {
+          await encoder.addDirectory(
+            directory,
+            includeDirName: true,
+            level: ZipFileEncoder.store,
+          );
+        }
+      }
+      await encoder.close();
+      closed = true;
+    } finally {
+      if (!closed) {
+        try {
+          await encoder.close();
+        } catch (_) {
+          // Preserve the original export error.
+        }
+      }
+    }
   }
 }
 

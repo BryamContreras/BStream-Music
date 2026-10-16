@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
+import '../../core/utils/background_work.dart';
 import '../player/visual_load_diagnostics.dart';
 import '../visual_track_identity.dart';
 
@@ -380,9 +380,11 @@ class AppleAnimatedArtworkResolver {
   static Future<Map<String, dynamic>?> _requestJson(Uri uri) async {
     final text = await _requestText(uri);
     if (text == null) return null;
-    final data = jsonDecode(text);
-    return data is Map<String, dynamic> ? data : null;
+    return parseJsonInBackground(text, _jsonMap);
   }
+
+  static Map<String, dynamic>? _jsonMap(Object? value) =>
+      value is Map<String, dynamic> ? value : null;
 
   static Future<String?> _requestText(Uri uri) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
@@ -402,7 +404,7 @@ class AppleAnimatedArtworkResolver {
         bytes.addAll(chunk);
         if (bytes.length > 256 * 1024) return null;
       }
-      return utf8.decode(bytes);
+      return await decodeUtf8InBackground(bytes);
     } finally {
       client.close(force: true);
     }

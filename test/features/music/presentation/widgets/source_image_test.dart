@@ -10,6 +10,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('artwork opacity is applied directly and updates in place', (
+    tester,
+  ) async {
+    Widget artwork(double opacity) => MaterialApp(
+      home: SourceImage(
+        source: 'https://example.invalid/tinted-cover.jpg',
+        opacity: opacity,
+        fallback: const SizedBox.shrink(),
+      ),
+    );
+    await tester.pumpWidget(artwork(0.72));
+    expect(tester.widget<Image>(find.byType(Image)).opacity?.value, 0.72);
+    expect(find.byType(Opacity), findsNothing);
+    await tester.pumpWidget(artwork(1));
+    expect(tester.widget<Image>(find.byType(Image)).opacity, isNull);
+  });
+
   testWidgets('player keeps the mini preview until its complete cover decodes', (
     tester,
   ) async {

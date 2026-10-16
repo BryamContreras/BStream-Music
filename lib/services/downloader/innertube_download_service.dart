@@ -111,6 +111,12 @@ final class InnerTubeDownloadService
       streamSource: 'innerTube',
       streamFormatId: resolved.format.itag.toString(),
       streamCodec: resolved.codec,
+      streamBitrate:
+          resolved.format.isAudioOnly && resolved.format.effectiveBitrate > 0
+          ? resolved.format.effectiveBitrate
+          : null,
+      streamSampleRate: resolved.format.audioSampleRate,
+      streamChannels: resolved.format.audioChannels,
       streamClientProfileKey: resolved.profile.key,
       httpHeaders: resolved.headers,
     );

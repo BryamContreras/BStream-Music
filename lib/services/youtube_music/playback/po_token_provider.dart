@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
+import '../../../core/utils/background_work.dart';
 import '../innertube_transport.dart';
 import 'headless_inappwebview_runtime.dart';
 import 'javascript_runtime.dart';
@@ -377,7 +378,13 @@ class BotGuardPoTokenProvider {
         'YouTube visitorData returned HTTP ${response.statusCode}.',
       );
     }
-    return BotGuardResponseParser.parseVisitorData(response.body);
+    final visitorData = await transformInBackground(
+      response.body,
+      BotGuardResponseParser.parseVisitorData,
+      inputSize: response.body.length,
+    );
+    _throwIfCancelled(shouldContinue);
+    return visitorData;
   }
 
   Future<_BotGuardGenerator> _ensureGenerator(
@@ -568,10 +575,15 @@ class BotGuardPoTokenProvider {
           'YouTube homepage returned HTTP ${response.statusCode}.',
         );
       }
-      homepageClientVersion = BotGuardResponseParser.tryParseWebClientVersion(
+      final page = await transformInBackground(
         response.body,
+        _parseBotGuardHomepage,
+        inputSize: response.body.length,
       );
-      return BotGuardResponseParser.parseHomepage(response.body);
+      _throwIfCancelled(shouldContinue);
+      homepageClientVersion = page.clientVersion;
+      if (page.error != null) throw page.error!;
+      return page.bootstrap!;
     } catch (error) {
       if (error is PoTokenCancelledException || !_canContinue(shouldContinue)) {
         rethrow;
@@ -635,6 +647,12 @@ class BotGuardPoTokenProvider {
         'YouTube attestation endpoint returned HTTP ${response.statusCode}.',
       );
     }
+    final challenge = await transformInBackground(
+      response.body,
+      BotGuardResponseParser.parseAttestation,
+      inputSize: response.body.length,
+    );
+    _throwIfCancelled(shouldContinue);
     return BotGuardBootstrap(
       visitorData: visitorData,
       eventId: '',
@@ -642,7 +660,7 @@ class BotGuardPoTokenProvider {
         'VISITOR_DATA': visitorData,
         'INNERTUBE_CONTEXT': context,
       },
-      challenge: BotGuardResponseParser.parseAttestation(response.body),
+      challenge: challenge,
       source: BotGuardBootstrapSource.attestationFallback,
     );
   }
@@ -915,6 +933,28 @@ class BotGuardIntegrityToken {
 
   bool get hasIntegrityToken => bytes != null;
   bool get usesWebsafeFallback => bytes == null;
+}
+
+class _ParsedBotGuardHomepage {
+  const _ParsedBotGuardHomepage(this.clientVersion, this.bootstrap, this.error);
+  final String? clientVersion;
+  final BotGuardBootstrap? bootstrap;
+  final Object? error;
+}
+
+_ParsedBotGuardHomepage _parseBotGuardHomepage(String raw) {
+  final version = BotGuardResponseParser.tryParseWebClientVersion(raw);
+  try {
+    return _ParsedBotGuardHomepage(
+      version,
+      BotGuardResponseParser.parseHomepage(raw),
+      null,
+    );
+  } catch (error) {
+    // Keep the fresh web client version even when the page lacks a challenge,
+    // just as the original synchronous fallback did.
+    return _ParsedBotGuardHomepage(version, null, error);
+  }
 }
 
 class BotGuardResponseParser {

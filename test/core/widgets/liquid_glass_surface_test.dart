@@ -65,15 +65,23 @@ void main() {
       final shadowLayer = tester.widget<CustomPaint>(
         find.byKey(LiquidGlassSurface.shadowKey),
       );
+      expect(shadowLayer.child, isNull);
+      expect(shadowLayer.isComplex, isTrue);
       expect(
-        shadowLayer.child,
-        isA<ClipRRect>(),
-        reason:
-            'Exterior depth must wrap the continuously clipped sheet instead '
-            'of darkening the translucent center.',
+        find.descendant(
+          of: find.byKey(LiquidGlassSurface.shadowKey),
+          matching: find.byType(BackdropFilter),
+        ),
+        findsNothing,
+        reason: 'Static shadows must be cacheable independently of live glass.',
       );
       final materialStack = tester.widget<Stack>(
-        find.descendant(of: surface, matching: find.byType(Stack)).first,
+        find
+            .descendant(
+              of: find.byType(ClipRRect).first,
+              matching: find.byType(Stack),
+            )
+            .first,
       );
       expect(materialStack.children, hasLength(4));
       expect(
@@ -555,64 +563,66 @@ void main() {
     expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
   });
 
-  testWidgets('android retains its shared capture throughout motion', (
-    tester,
-  ) async {
-    final sharedBackdrop = BackdropKey();
-    await tester.pumpWidget(
-      _harness(
-        platform: TargetPlatform.android,
-        backdropGroupKey: sharedBackdrop,
-        child: const Text('Android'),
-      ),
-    );
+  for (final mobilePlatform in [TargetPlatform.android, TargetPlatform.iOS]) {
+    testWidgets('$mobilePlatform keeps full blur throughout motion', (
+      tester,
+    ) async {
+      final sharedBackdrop = BackdropKey();
+      await tester.pumpWidget(
+        _harness(
+          platform: mobilePlatform,
+          backdropGroupKey: sharedBackdrop,
+          child: const Text('Android'),
+        ),
+      );
 
-    final restingMaterial = tester.widget<BackdropFilter>(
-      find.byKey(LiquidGlassSurface.backdropKey),
-    );
-    final restingFilter = restingMaterial.filter;
-    expect(find.byType(BackdropFilter), findsOneWidget);
-    expect(restingMaterial.backdropGroupKey, same(sharedBackdrop));
-    expect(restingMaterial.enabled, isTrue);
-    expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
+      final restingMaterial = tester.widget<BackdropFilter>(
+        find.byKey(LiquidGlassSurface.backdropKey),
+      );
+      final restingFilter = restingMaterial.filter;
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(restingMaterial.backdropGroupKey, same(sharedBackdrop));
+      expect(restingMaterial.enabled, isTrue);
+      expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
 
-    await tester.pumpWidget(
-      _harness(
-        platform: TargetPlatform.android,
-        backdropGroupKey: sharedBackdrop,
-        backdropMotion: true,
-        child: const Text('Android con bounds móviles'),
-      ),
-    );
-    final movingMaterial = tester.widget<BackdropFilter>(
-      find.byKey(LiquidGlassSurface.backdropKey),
-    );
-    expect(find.byType(BackdropFilter), findsOneWidget);
-    expect(movingMaterial.backdropGroupKey, same(sharedBackdrop));
-    expect(movingMaterial.enabled, isTrue);
-    expect(identical(movingMaterial.filter, restingFilter), isFalse);
-    expect(
-      movingMaterial.filter.toString(),
-      contains('blur(4.0, 4.0'),
-      reason: 'Mobile motion uses the lighter transient blur.',
-    );
-    expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
+      await tester.pumpWidget(
+        _harness(
+          platform: mobilePlatform,
+          backdropGroupKey: sharedBackdrop,
+          backdropMotion: true,
+          child: const Text('Android con bounds móviles'),
+        ),
+      );
+      final movingMaterial = tester.widget<BackdropFilter>(
+        find.byKey(LiquidGlassSurface.backdropKey),
+      );
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(movingMaterial.backdropGroupKey, same(sharedBackdrop));
+      expect(movingMaterial.enabled, isTrue);
+      expect(identical(movingMaterial.filter, restingFilter), isTrue);
+      expect(
+        movingMaterial.filter.toString(),
+        contains('blur(22.0, 22.0'),
+        reason: 'Scrolling must not lower the material blur quality.',
+      );
+      expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
 
-    await tester.pumpWidget(
-      _harness(
-        platform: TargetPlatform.android,
-        backdropGroupKey: sharedBackdrop,
-        child: const Text('Android otra vez en reposo'),
-      ),
-    );
-    final settledMaterial = tester.widget<BackdropFilter>(
-      find.byKey(LiquidGlassSurface.backdropKey),
-    );
-    expect(find.byType(BackdropFilter), findsOneWidget);
-    expect(settledMaterial.backdropGroupKey, same(sharedBackdrop));
-    expect(settledMaterial.enabled, isTrue);
-    expect(identical(settledMaterial.filter, restingFilter), isTrue);
-  });
+      await tester.pumpWidget(
+        _harness(
+          platform: mobilePlatform,
+          backdropGroupKey: sharedBackdrop,
+          child: const Text('Android otra vez en reposo'),
+        ),
+      );
+      final settledMaterial = tester.widget<BackdropFilter>(
+        find.byKey(LiquidGlassSurface.backdropKey),
+      );
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(settledMaterial.backdropGroupKey, same(sharedBackdrop));
+      expect(settledMaterial.enabled, isTrue);
+      expect(identical(settledMaterial.filter, restingFilter), isTrue);
+    });
+  }
 
   testWidgets(
     'grouped sheets reuse one native blur without separate rim captures',

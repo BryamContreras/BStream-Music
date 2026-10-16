@@ -93,12 +93,21 @@ class AppSurfaceInput extends StatelessWidget {
       return child;
     }
     if (mode.isLiquidGlass) {
-      return LiquidGlassSurface(
+      Widget glass(bool moving, Widget child) => LiquidGlassSurface(
         borderRadius: BorderRadius.circular(borderRadius),
         blurSigma: 10,
         intensity: 0.9,
+        backdropMotion: moving,
         child: child,
       );
+      final motion = LiquidGlassMotionScope.maybeOf(context);
+      return motion == null
+          ? glass(false, child)
+          : ValueListenableBuilder<bool>(
+              valueListenable: motion,
+              child: child,
+              builder: (context, moving, child) => glass(moving, child!),
+            );
     }
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
