@@ -947,6 +947,20 @@ void main() {
       final background = tester.widget<SourceImage>(
         find.byKey(const ValueKey('remote-collection-background-image')),
       );
+      final header = find.byKey(const ValueKey('remote-collection-header'));
+      final photo = find.byKey(
+        const ValueKey('remote-collection-background-photo'),
+      );
+      expect(find.descendant(of: header, matching: photo), findsOneWidget);
+      expect(tester.getRect(photo), tester.getRect(header));
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('remote-collection-artwork-underlay')),
+          matching: find.byType(SourceImage),
+        ),
+        findsNothing,
+        reason: 'The album or mix list inherits color without a cover image.',
+      );
       final foreground = tester.widget<ProportionalArtwork>(
         find.descendant(
           of: find.byKey(const ValueKey('remote-collection-artwork')),

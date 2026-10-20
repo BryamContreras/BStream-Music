@@ -2177,6 +2177,42 @@ void main() {
     },
   );
 
+  testWidgets('desktop player follows the app theme for every style', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(1200, 820));
+    for (final platform in [
+      TargetPlatform.windows,
+      TargetPlatform.macOS,
+      TargetPlatform.linux,
+    ]) {
+      for (final style in PlayerStyle.values) {
+        for (final brightness in Brightness.values) {
+          await tester.pumpWidget(
+            _playerHarness(
+              key: ValueKey('desktop-theme-$platform-$style-$brightness'),
+              platform: platform,
+              snapshot: snapshot,
+              localTrack: localTrack,
+              playlists: _TestPlaylistsController(),
+              style: style,
+              brightness: brightness,
+              playerFont: PlayerFont.lora,
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+          final title = find.byKey(const ValueKey('player-track-title'));
+          final context = tester.element(title);
+          expect(Theme.of(context).brightness, brightness);
+          expect(Theme.of(context).colorScheme.brightness, brightness);
+          expect(tester.widget<MarqueeText>(title).style?.fontFamily, 'Lora');
+          expect(tester.takeException(), isNull);
+        }
+      }
+    }
+  });
+
   testWidgets('the chosen font reaches all three full player styles', (
     tester,
   ) async {
@@ -2551,7 +2587,7 @@ void main() {
       Theme.of(
         tester.element(find.byKey(const ValueKey('apple-player-layout'))),
       ).brightness,
-      Brightness.dark,
+      Brightness.light,
     );
 
     final queueRail = find.byKey(const ValueKey('desktop-playback-queue-rail'));
@@ -2559,7 +2595,7 @@ void main() {
     expect(
       Theme.of(tester.element(queueRail)).brightness,
       Brightness.light,
-      reason: 'the desktop rail is a sibling of the dark player surface',
+      reason: 'the desktop rail and player follow the surrounding light theme',
     );
     expect(tester.takeException(), isNull);
   });

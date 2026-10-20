@@ -228,7 +228,15 @@ class BStreamMusicApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       title: AppConstants.appName,
       locale: Locale(language.code),
-      supportedLocales: const [Locale('es'), Locale('en')],
+      supportedLocales: const [
+        Locale('es'),
+        Locale('en'),
+        Locale('pt'),
+        Locale('fr'),
+        Locale('ko'),
+        Locale('zh'),
+        Locale('ja'),
+      ],
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,

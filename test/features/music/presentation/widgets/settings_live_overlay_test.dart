@@ -238,7 +238,7 @@ void main() {
     expect(client.stopCalls, 1);
   });
 
-  testWidgets('Windows keeps the overlay disabled before LIVE connects', (
+  testWidgets('Windows can start the local overlay before LIVE connects', (
     tester,
   ) async {
     tester.view
@@ -286,9 +286,17 @@ void main() {
     final overlaySwitch = find.byKey(
       const ValueKey('tiktok-live-overlay-switch'),
     );
-    expect(tester.widget<Switch>(overlaySwitch).onChanged, isNull);
-    expect(find.textContaining('Conecta un LIVE'), findsOneWidget);
-    expect(client.startCalls, 0);
+    expect(tester.widget<Switch>(overlaySwitch).onChanged, isNotNull);
+
+    await tester.tap(overlaySwitch);
+    await tester.pumpAndSettle();
+
+    expect(client.startCalls, 1);
+    expect(client.published, isNotEmpty);
+    expect(
+      find.byKey(const ValueKey('tiktok-live-overlay-copy-url')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Windows shows a concise permission error for the overlay', (

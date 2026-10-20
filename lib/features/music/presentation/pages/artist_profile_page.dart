@@ -180,11 +180,9 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
         children: [
           RepaintBoundary(
             key: const ValueKey('artist-profile-artwork-underlay'),
-            child: ArtworkGradientHeaderBackground(
+            child: ArtworkColorPageBackground(
               artworkSource: profile.artist.thumbnailUrl,
-              cacheWidth: 640,
               keyPrefix: 'artist-profile',
-              extendColorThroughContent: true,
             ),
           ),
           NotificationListener<ScrollNotification>(
@@ -265,6 +263,13 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
             key: const ValueKey('artist-profile-header'),
             child: Stack(
               children: [
+                Positioned.fill(
+                  child: ArtworkGradientHeaderBackground(
+                    artworkSource: profile.artist.thumbnailUrl,
+                    cacheWidth: 640,
+                    keyPrefix: 'artist-profile',
+                  ),
+                ),
                 _ArtistHeader(
                   profile: profile,
                   radioLabel: strings.artistMix,
@@ -362,6 +367,7 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
                       queue: tracks,
                       queueSourceId: 'artist:${widget.artistBrowseId}:popular',
                       onOpenPlayer: _returnToPlayer,
+                      surfaceOpacity: 0.52,
                     ),
                   ),
                 );

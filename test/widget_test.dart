@@ -4608,7 +4608,7 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-      202,
+      210,
     );
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     final recentCard = find.byKey(const ValueKey('home-recent-card'));
@@ -4762,7 +4762,7 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-      232,
+      240,
     );
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -5008,6 +5008,63 @@ void main() {
     tester.widget<InkWell>(artistOpen).onTap!();
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
     expect(find.byType(ArtistProfilePage), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop recommendation shelves avoid text overflow', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final sections = [
+      HomeRecommendationSection.items(
+        title: 'Prueba de tarjetas',
+        items: const [
+          HomeRecommendationTrackItem(
+            TrackInfo(
+              id: 'long-track',
+              title: '夜に駆ける 君の声を聞かせて 長いタイトルのテスト',
+              artist: 'YOASOBI y otros artistas invitados',
+              url: 'https://www.youtube.com/watch?v=longtrack',
+            ),
+          ),
+          HomeRecommendationArtistItem(
+            HomeRecommendationArtist(
+              name: 'Artista con un nombre bastante largo para dos líneas',
+              browseId: 'UClong-artist',
+              thumbnailUrl: 'https://example.invalid/long-artist.jpg',
+            ),
+          ),
+          HomeRecommendationCollectionItem(
+            HomeRecommendationCollection(
+              title: 'Mix recomendado con un nombre largo de prueba',
+              browseId: 'VLlong-mix',
+              kind: HomeRecommendationCollectionKind.mix,
+            ),
+          ),
+        ],
+      ),
+    ];
+
+    await tester.pumpWidget(_testApp(homeRecommendations: sections));
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(
+      find.byKey(const ValueKey('home-recommendation-long-track')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('home-artist-UClong-artist')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('home-collection-VLlong-mix')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -6835,6 +6892,22 @@ void main() {
     );
     expect(
       find.textContaining('álbumes, mixes y resultados de búsqueda'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+        'mejoras en la interfaz para ofrecer más rendimiento y fluidez',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('fondos de álbumes, mixes y artistas ahora heredan'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+        'compatible con portugués, francés, coreano, chino y japonés',
+      ),
       findsOneWidget,
     );
     expect(

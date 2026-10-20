@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ViewFlipper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_backdrop"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:animateFirstView="true"
+    android:autoStart="false"
+    android:background="@drawable/bstream_widget_clip_outline"
+    android:clipToOutline="true"
+    android:contentDescription="@null"
+    android:inAnimation="@anim/bstream_widget_fade_in"
+    android:outAnimation="@anim/bstream_widget_fade_out">
+
+    <ImageView
+        android:id="@+id/widget_backdrop_first"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY" />
+
+    <ImageView
+        android:id="@+id/widget_backdrop_second"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY" />
+</ViewFlipper>

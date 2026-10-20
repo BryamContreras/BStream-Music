@@ -90,7 +90,10 @@ class MainActivity : AudioServiceActivity() {
         ).also { channel -> channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "update" -> {
-                    BStreamMusicWidget.update(this, call.arguments as? Map<*, *> ?: emptyMap<String, Any>())
+                    val data = call.arguments as? Map<*, *> ?: emptyMap<String, Any>()
+                    // Serialize metadata and covers, including bitmap rendering,
+                    // without doing disk or image work on the Android UI thread.
+                    widgetArtworkExecutor.execute { BStreamMusicWidget.update(this, data) }
                     result.success(null)
                 }
                 "updateArtwork" -> {
@@ -204,7 +207,7 @@ class MainActivity : AudioServiceActivity() {
     private fun handleHomeWidgetActionIntent(intent: Intent?): Boolean {
         if (intent?.action != ACTION_HOME_WIDGET_CONTROL) return false
         val action = intent.getStringExtra(EXTRA_HOME_WIDGET_ACTION)
-            ?.takeIf { it in HOME_WIDGET_ACTIONS }
+            ?.takeIf(::isValidHomeWidgetAction)
             ?: return false
         val channel = homeWidgetChannel
         if (channel == null || !homeWidgetActionHandlerReady) {
@@ -228,6 +231,13 @@ class MainActivity : AudioServiceActivity() {
             )
         }
         return true
+    }
+
+    private fun isValidHomeWidgetAction(action: String): Boolean {
+        if (action in HOME_WIDGET_ACTIONS) return true
+        if (!action.startsWith(HOME_WIDGET_QUEUE_PREFIX)) return false
+        val index = action.removePrefix(HOME_WIDGET_QUEUE_PREFIX).toIntOrNull() ?: return false
+        return index >= 0
     }
 
     override fun onRequestPermissionsResult(
@@ -765,6 +775,7 @@ class MainActivity : AudioServiceActivity() {
     companion object {
         const val ACTION_HOME_WIDGET_CONTROL = "com.bstream.bstream_music.HOME_WIDGET_CONTROL"
         const val EXTRA_HOME_WIDGET_ACTION = "home_widget_action"
+        const val HOME_WIDGET_QUEUE_PREFIX = "queue:"
         private val HOME_WIDGET_ACTIONS = setOf("repeat", "favorite")
         private const val FILE_EXPORT_CHANNEL = "bstream_music/file_export"
         private const val SCREEN_CHANNEL = "bstream_music/screen"

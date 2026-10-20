@@ -10,6 +10,7 @@ class SearchInput extends StatefulWidget {
     required this.clearTooltip,
     this.onChanged,
     this.onFocusChanged,
+    this.onKeyEvent,
     this.onCleared,
     this.initialText = '',
     this.compact = false,
@@ -24,6 +25,7 @@ class SearchInput extends StatefulWidget {
   final String clearTooltip;
   final ValueChanged<String>? onChanged;
   final void Function(bool hasFocus, String text)? onFocusChanged;
+  final KeyEventResult Function(FocusNode node, KeyEvent event)? onKeyEvent;
   final VoidCallback? onCleared;
   final String initialText;
   final bool compact;
@@ -36,7 +38,7 @@ class SearchInput extends StatefulWidget {
 
 class _SearchInputState extends State<SearchInput> {
   late final TextEditingController _controller;
-  final _focusNode = FocusNode();
+  late final FocusNode _focusNode;
   bool _hadText = false;
   bool _synchronizingInitialText = false;
 
@@ -44,10 +46,14 @@ class _SearchInputState extends State<SearchInput> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.initialText);
+    _focusNode = FocusNode(onKeyEvent: _handleKeyEvent);
     _hadText = _controller.text.isNotEmpty;
     _controller.addListener(_handleTextChanged);
     _focusNode.addListener(_handleFocusChanged);
   }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) =>
+      widget.onKeyEvent?.call(node, event) ?? KeyEventResult.ignored;
 
   @override
   void didUpdateWidget(covariant SearchInput oldWidget) {

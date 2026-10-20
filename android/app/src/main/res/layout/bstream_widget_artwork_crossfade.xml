@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ViewFlipper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_artwork"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:animateFirstView="true"
+    android:autoStart="false"
+    android:background="@drawable/bstream_widget_artwork_background"
+    android:clipToOutline="true"
+    android:contentDescription="@string/widget_artwork_description"
+    android:inAnimation="@anim/bstream_widget_fade_in"
+    android:outAnimation="@anim/bstream_widget_fade_out">
+
+    <ImageView
+        android:id="@+id/widget_artwork_first"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop" />
+
+    <ImageView
+        android:id="@+id/widget_artwork_second"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop" />
+</ViewFlipper>

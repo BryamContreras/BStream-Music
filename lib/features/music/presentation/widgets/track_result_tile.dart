@@ -34,6 +34,7 @@ class TrackResultTile extends ConsumerStatefulWidget {
     this.onPlayTrack,
     this.preferCatalogArtwork = true,
     this.selectionScope,
+    this.surfaceOpacity = 1,
     super.key,
   });
 
@@ -44,6 +45,9 @@ class TrackResultTile extends ConsumerStatefulWidget {
   final Future<void> Function(TrackInfo track)? onPlayTrack;
   final bool preferCatalogArtwork;
   final Object? selectionScope;
+
+  /// Multiplies the shared card fill opacity for local presentation contexts.
+  final double surfaceOpacity;
 
   @override
   ConsumerState<TrackResultTile> createState() => _TrackResultTileState();
@@ -88,7 +92,10 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
     final identity = track.id.trim().isNotEmpty ? track.id : track.url;
     final colors = Theme.of(context).colorScheme;
     final borderRadius = BorderRadius.circular(appCardRadius);
-    final baseColor = AppColors.cardSurfaceFor(context);
+    final cardSurface = AppColors.cardSurfaceFor(context);
+    final baseColor = cardSurface.withValues(
+      alpha: cardSurface.a * widget.surfaceOpacity.clamp(0.0, 1.0).toDouble(),
+    );
     final surfaceColor = selected
         ? Color.alphaBlend(colors.primary.withValues(alpha: 0.13), baseColor)
         : isCurrent || _hovered

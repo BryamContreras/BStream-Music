@@ -9,4 +9,6 @@
     <string name="widget_repeat_all">Repeat queue</string>
     <string name="widget_repeat_one">Repeat song</string>
     <string name="widget_favorite">Favorites</string>
+    <string name="widget_queue_title">Playback queue</string>
+    <string name="widget_queue_empty">No songs in the queue</string>
 </resources>

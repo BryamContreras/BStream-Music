@@ -85,6 +85,96 @@ void main() {
     ]);
   });
 
+  test('overlay follows the active normal or LIVE playback queue', () async {
+    final client = _FakeOverlayClient();
+    final player = _FakePlayerController();
+    final container = _overlayContainer(
+      client,
+      live: _FakeLiveController([_item(0), _item(1)]),
+      player: player,
+      artworkLoader: (_) async => 'data:image/png;base64,bm9ybWFs',
+    );
+    addTearDown(container.dispose);
+    final subscription = container.listen(
+      liveOverlayControllerProvider,
+      (_, _) {},
+      fireImmediately: true,
+    );
+    addTearDown(subscription.close);
+    await _flushMicrotasks();
+
+    container
+        .read(playbackQueueProvider.notifier)
+        .replace(const <PlaybackQueueEntry>[
+          PlaybackQueueEntry(
+            id: 'normal-0',
+            title: 'Normal anterior',
+            artist: 'Artista 0',
+            isRemote: true,
+          ),
+          PlaybackQueueEntry(
+            id: 'normal-1',
+            title: 'Normal actual',
+            artist: 'Artista 1',
+            thumbnailUrl: 'https://img.test/normal.jpg',
+            isRemote: true,
+          ),
+          PlaybackQueueEntry(
+            id: 'normal-2',
+            title: 'Normal siguiente',
+            artist: 'Artista 2',
+            isRemote: true,
+          ),
+        ], 1);
+    player.publish(
+      const PlayerSnapshot(
+        status: PlayerStatus.playing,
+        trackId: 'normal-1',
+        isRemote: true,
+      ),
+      liveQueueActive: false,
+    );
+    await _flushMicrotasks();
+    await container.read(liveOverlayControllerProvider.notifier).start();
+
+    var items = (client.published.last['items']! as List<Object?>)
+        .cast<Map<String, Object>>();
+    expect(items.map((item) => item['id']), ['normal-1', 'normal-2']);
+    expect(items.first['status'], 'playing');
+    await _flushMicrotasks();
+    items = (client.published.last['items']! as List<Object?>)
+        .cast<Map<String, Object>>();
+    expect(items.first['artwork'], 'data:image/png;base64,bm9ybWFs');
+
+    player.publish(
+      const PlayerSnapshot(
+        status: PlayerStatus.playing,
+        trackId: 'track-0',
+        isRemote: true,
+      ),
+      liveQueueActive: true,
+    );
+    await _flushMicrotasks();
+    items = (client.published.last['items']! as List<Object?>)
+        .cast<Map<String, Object>>();
+    expect(items.map((item) => item['id']), ['request-0', 'request-1']);
+
+    player.publish(
+      const PlayerSnapshot(
+        status: PlayerStatus.paused,
+        trackId: 'normal-1',
+        isRemote: true,
+      ),
+      liveQueueActive: false,
+    );
+    await _flushMicrotasks();
+    items = (client.published.last['items']! as List<Object?>)
+        .cast<Map<String, Object>>();
+    expect(items.map((item) => item['id']), ['normal-1', 'normal-2']);
+    expect(items.first['status'], 'paused');
+    expect(items.first['artwork'], 'data:image/png;base64,bm9ybWFs');
+  });
+
   test(
     'starts local HTTP, publishes localized queue/progress, and stops',
     () async {
@@ -597,7 +687,7 @@ class _FakeLiveController extends TikTokLiveController {
 }
 
 class _FakePlayerController extends PlayerController {
-  bool _liveQueueActive = false;
+  bool _liveQueueActive = true;
 
   @override
   bool get isLiveQueueActive => _liveQueueActive;

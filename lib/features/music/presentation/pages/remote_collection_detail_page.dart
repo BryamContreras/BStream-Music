@@ -124,10 +124,6 @@ class _RemoteCollectionDetailPageState
     final bottomContentPadding = underlayMiniPlayer
         ? miniPlayerHeight + MediaQuery.viewPaddingOf(context).bottom
         : 0.0;
-    final pageBackgroundCacheWidth = MediaQuery.sizeOf(context).width >= 720
-        ? 640
-        : 512;
-
     final scaffold = Scaffold(
       key: const ValueKey('remote-collection-detail'),
       extendBody: underlayMiniPlayer,
@@ -172,11 +168,9 @@ class _RemoteCollectionDetailPageState
         children: [
           RepaintBoundary(
             key: const ValueKey('remote-collection-artwork-underlay'),
-            child: ArtworkGradientHeaderBackground(
+            child: ArtworkColorPageBackground(
               artworkSource: resolvedArtworkSource,
-              cacheWidth: pageBackgroundCacheWidth,
               keyPrefix: 'remote-collection',
-              extendColorThroughContent: true,
             ),
           ),
           CustomScrollView(
@@ -239,6 +233,7 @@ class _RemoteCollectionDetailPageState
                               queue: visibleTracks,
                               queueSourceId: widget.queueSourceId,
                               onOpenPlayer: () => _openPlayer(context),
+                              surfaceOpacity: 0.52,
                             ),
                           ),
                         ),
@@ -543,6 +538,13 @@ class _CollectionHeader extends StatelessWidget {
           key: const ValueKey('remote-collection-header'),
           child: Stack(
             children: [
+              Positioned.fill(
+                child: ArtworkGradientHeaderBackground(
+                  artworkSource: artworkSource,
+                  cacheWidth: artworkCacheWidth,
+                  keyPrefix: 'remote-collection',
+                ),
+              ),
               Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 1080),

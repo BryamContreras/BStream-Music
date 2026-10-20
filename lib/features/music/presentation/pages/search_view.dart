@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -57,6 +58,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
   bool _focusInputAfterClear = false;
   bool _searchInputFocused = false;
   String _draftQuery = '';
+  int _selectedSuggestionIndex = 0;
   List<String> _suggestions = const <String>[];
   final Map<String, List<String>> _suggestionCache = <String, List<String>>{};
   Timer? _suggestionTimer;
@@ -71,6 +73,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
       _cancelPendingSuggestions();
       _searchInputFocused = false;
       _suggestions = const <String>[];
+      _selectedSuggestionIndex = 0;
     }
   }
 
@@ -97,6 +100,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
       setState(() {
         _searchInputFocused = false;
         _suggestions = const <String>[];
+        _selectedSuggestionIndex = 0;
       });
     }
   }
@@ -109,6 +113,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
     setState(() {
       _draftQuery = text;
       _suggestions = cached ?? const <String>[];
+      _selectedSuggestionIndex = 0;
     });
     if (!widget.active ||
         !_searchInputFocused ||
@@ -146,7 +151,10 @@ class _SearchViewState extends ConsumerState<SearchView> {
       while (_suggestionCache.length > _suggestionCacheCapacity) {
         _suggestionCache.remove(_suggestionCache.keys.first);
       }
-      setState(() => _suggestions = suggestions);
+      setState(() {
+        _suggestions = suggestions;
+        _selectedSuggestionIndex = 0;
+      });
     } on Object {
       // The typed query remains selectable when suggestions are unavailable.
     }
@@ -158,6 +166,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
       _searchInputFocused = false;
       _draftQuery = query;
       _suggestions = const <String>[];
+      _selectedSuggestionIndex = 0;
     });
     FocusManager.instance.primaryFocus?.unfocus();
     unawaited(ref.read(searchControllerProvider.notifier).submit(query));
@@ -169,6 +178,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
       _focusInputAfterClear = true;
       _draftQuery = '';
       _suggestions = const <String>[];
+      _selectedSuggestionIndex = 0;
     });
     ref.read(searchControllerProvider.notifier).clear();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -197,6 +207,57 @@ class _SearchViewState extends ConsumerState<SearchView> {
     );
   }
 
+  List<String> _visibleSuggestionsForDraft() {
+    final query = _draftQuery.trim();
+    if (query.isEmpty) return const <String>[];
+    final visible = <String>[query];
+    final seen = <String>{query.toLowerCase()};
+    for (final suggestion in _suggestions) {
+      final normalized = suggestion.trim();
+      if (normalized.isEmpty || !seen.add(normalized.toLowerCase())) continue;
+      visible.add(normalized);
+      if (visible.length == 8) break;
+    }
+    return visible;
+  }
+
+  KeyEventResult _handleSuggestionKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_searchInputFocused || _draftQuery.trim().isEmpty) {
+      return KeyEventResult.ignored;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final visible = _visibleSuggestionsForDraft();
+    if (visible.isEmpty) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      setState(() {
+        _selectedSuggestionIndex = (_selectedSuggestionIndex + 1).clamp(
+          0,
+          visible.length - 1,
+        );
+      });
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      setState(() {
+        _selectedSuggestionIndex = (_selectedSuggestionIndex - 1).clamp(
+          0,
+          visible.length - 1,
+        );
+      });
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      final index = _selectedSuggestionIndex.clamp(0, visible.length - 1);
+      _submitSearch(visible[index]);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final results = ref.watch(searchControllerProvider);
@@ -222,6 +283,9 @@ class _SearchViewState extends ConsumerState<SearchView> {
         widget.active &&
         _searchInputFocused &&
         _draftQuery.trim().isNotEmpty;
+    final visibleSuggestions = showSuggestions
+        ? _visibleSuggestionsForDraft()
+        : const <String>[];
     final strings = ref.watch(appStringsProvider);
     final languageCode = strings.appLanguage.code;
     if (_browseCatalogLanguageCode != languageCode) {
@@ -304,6 +368,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
                 clearTooltip: strings.clearSearch,
                 onChanged: _handleDraftChanged,
                 onFocusChanged: _handleInputFocusChanged,
+                onKeyEvent: _handleSuggestionKeyEvent,
                 onSubmitted: _submitSearch,
                 onCleared: _clearSearch,
               ),
@@ -337,6 +402,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
                       clearTooltip: strings.clearSearch,
                       onChanged: _handleDraftChanged,
                       onFocusChanged: _handleInputFocusChanged,
+                      onKeyEvent: _handleSuggestionKeyEvent,
                       onSubmitted: _submitSearch,
                       onCleared: _clearSearch,
                     ),
@@ -390,8 +456,8 @@ class _SearchViewState extends ConsumerState<SearchView> {
           ),
         if (showSuggestions)
           _SearchSuggestionsSliver(
-            query: _draftQuery.trim(),
-            suggestions: _suggestions,
+            visible: visibleSuggestions,
+            selectedIndex: _selectedSuggestionIndex,
             onSelected: _submitSearch,
           )
         else
@@ -419,49 +485,46 @@ class _SearchViewState extends ConsumerState<SearchView> {
 
 class _SearchSuggestionsSliver extends StatelessWidget {
   const _SearchSuggestionsSliver({
-    required this.query,
-    required this.suggestions,
+    required this.visible,
+    required this.selectedIndex,
     required this.onSelected,
   });
 
-  final String query;
-  final List<String> suggestions;
+  final List<String> visible;
+  final int selectedIndex;
   final ValueChanged<String> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    final visible = <String>[query];
-    final seen = <String>{query.toLowerCase()};
-    for (final suggestion in suggestions) {
-      final normalized = suggestion.trim();
-      if (normalized.isEmpty || !seen.add(normalized.toLowerCase())) {
-        continue;
-      }
-      visible.add(normalized);
-      if (visible.length == 8) break;
-    }
-
     return SliverList(
       delegate: SliverChildBuilderDelegate(
-        (context, index) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: Material(
-            type: MaterialType.transparency,
-            child: ListTile(
-              key: ValueKey('search-suggestion-$index'),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-              leading: const Icon(Icons.search_rounded, size: 22),
-              title: Text(
-                visible[index],
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: AppColors.contentTitleFor(context),
-                  fontWeight: FontWeight.w600,
+        // A desktop pointer-down outside the field normally dismisses focus.
+        // Keep suggestions in its tap region until the row's click completes.
+        (context, index) => TextFieldTapRegion(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Material(
+              type: MaterialType.transparency,
+              child: ListTile(
+                key: ValueKey('search-suggestion-$index'),
+                selected: index == selectedIndex,
+                selectedTileColor: Theme.of(
+                  context,
+                ).colorScheme.primary.withValues(alpha: 0.14),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                leading: const Icon(Icons.search_rounded, size: 22),
+                title: Text(
+                  visible[index],
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: AppColors.contentTitleFor(context),
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
+                trailing: const Icon(Icons.arrow_forward_rounded, size: 20),
+                onTap: () => onSelected(visible[index]),
               ),
-              trailing: const Icon(Icons.arrow_forward_rounded, size: 20),
-              onTap: () => onSelected(visible[index]),
             ),
           ),
         ),

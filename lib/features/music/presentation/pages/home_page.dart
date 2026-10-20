@@ -4146,7 +4146,10 @@ double _homeShelfHeight(
       _singleLineTextHeight(context, theme.textTheme.bodySmall);
   final artworkExtent = cardWidth - 16;
   final requiredHeight = 16 + artworkExtent + 8 + 2 + textHeight;
-  return math.max(minimumHeight, requiredHeight.ceilToDouble());
+  // Leave a little breathing room for Flutter's actual font metrics and
+  // accessibility scaling. Fredoka's line box can be a few pixels taller than
+  // TextPainter's measured glyph height, which otherwise clips the last row.
+  return math.max(minimumHeight, requiredHeight.ceilToDouble() + 8);
 }
 
 double _singleLineTextHeight(BuildContext context, TextStyle? style) {

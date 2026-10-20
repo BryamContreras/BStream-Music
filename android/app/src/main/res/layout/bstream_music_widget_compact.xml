@@ -11,14 +11,10 @@
         android:layout_gravity="center_vertical"
         android:background="@drawable/bstream_widget_background">
 
-    <ImageView
-        android:id="@+id/widget_backdrop"
+    <include
+        layout="@layout/bstream_widget_backdrop_crossfade"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@drawable/bstream_widget_background"
-        android:clipToOutline="true"
-        android:contentDescription="@null"
-        android:scaleType="fitXY" />
+        android:layout_height="match_parent" />
 
     <LinearLayout
         android:id="@+id/widget_card"
@@ -30,14 +26,10 @@
         android:paddingTop="0dp"
         android:paddingBottom="0dp">
 
-        <ImageView
-            android:id="@+id/widget_artwork"
+        <include
+            layout="@layout/bstream_widget_artwork_crossfade"
             android:layout_width="66dp"
-            android:layout_height="66dp"
-            android:background="@drawable/bstream_widget_artwork_background"
-            android:clipToOutline="true"
-            android:contentDescription="@string/widget_artwork_description"
-            android:scaleType="centerCrop" />
+            android:layout_height="66dp" />
 
         <LinearLayout
             android:layout_width="0dp"

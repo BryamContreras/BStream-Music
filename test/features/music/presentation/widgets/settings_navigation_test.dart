@@ -594,7 +594,10 @@ void main() {
       final navigationController = SettingsNavigationController();
       addTearDown(navigationController.dispose);
       await tester.pumpWidget(
-        _settingsHarness(navigationController: navigationController),
+        _settingsHarness(
+          navigationController: navigationController,
+          platform: width >= 1200 ? TargetPlatform.windows : null,
+        ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
@@ -606,6 +609,9 @@ void main() {
         const ValueKey('show-audio-quality-switch'),
       );
       final artwork = find.byKey(const ValueKey('animated-artwork-toggle'));
+      if (width >= 1200) {
+        expect(tester.getSize(quality).width, greaterThan(1200));
+      }
       expect(tester.widget<Switch>(qualitySwitch).value, isFalse);
       expect(
         tester.getTopLeft(quality).dy,
@@ -1305,6 +1311,12 @@ void main() {
       final english = find.byKey(
         const ValueKey('settings-language-option-english'),
       );
+      for (final language in AppLanguage.values) {
+        expect(
+          find.byKey(ValueKey('settings-language-option-${language.name}')),
+          findsOneWidget,
+        );
+      }
       expect(dialog, findsOneWidget);
       expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
       expect(find.byKey(const ValueKey('settings-detail-back')), findsNothing);
@@ -1337,6 +1349,22 @@ void main() {
         find.descendant(
           of: find.byKey(const ValueKey('settings-card-language')),
           matching: find.text('English'),
+        ),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(languageCard);
+      await tester.tap(languageCard);
+      await tester.pumpAndSettle();
+      final portuguese = find.byKey(
+        const ValueKey('settings-language-option-portuguese'),
+      );
+      await tester.ensureVisible(portuguese);
+      await tester.tap(portuguese);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('settings-card-language')),
+          matching: find.text('Português'),
         ),
         findsOneWidget,
       );
@@ -1806,7 +1834,7 @@ void main() {
         await tester.ensureVisible(preview);
         await tester.pumpAndSettle();
         final previewRect = tester.getRect(preview);
-        final expectedWidth = layout.size.width == 320 ? 296.0 : 520.0;
+        final expectedWidth = layout.size.width - 24;
         expect(previewRect.width, closeTo(expectedWidth, 0.1));
 
         for (final slot in const ['previous', 'active', 'next']) {
@@ -2808,6 +2836,7 @@ Widget _settingsHarness({
   bool active = true,
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
   SettingsController Function()? settingsControllerBuilder,
+  TargetPlatform? platform,
 }) {
   return ProviderScope(
     overrides: [
@@ -2818,6 +2847,7 @@ Widget _settingsHarness({
     ],
     child: MaterialApp(
       theme: ThemeData(
+        platform: platform,
         extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
       ),
       builder: disableAnimations

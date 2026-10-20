@@ -160,6 +160,12 @@ final homeScreenWidgetSyncProvider = Provider<void>((ref) {
     onAction: (action) async {
       await ref.read(playerControllerProvider.future);
       final player = ref.read(playerControllerProvider.notifier);
+      final queueSelection = RegExp(r'^queue:(\d+)$').firstMatch(action);
+      if (queueSelection != null) {
+        final index = int.tryParse(queueSelection.group(1)!);
+        if (index != null) await player.playQueueIndex(index);
+        return;
+      }
       switch (action) {
         case 'toggle':
           await player.togglePlayPause();
@@ -188,6 +194,19 @@ final homeScreenWidgetSyncProvider = Provider<void>((ref) {
     final isFavorite =
         currentTrackId != null &&
         ref.read(favoriteTrackIdsProvider).contains(currentTrackId);
+    final playbackQueue = ref.read(playbackQueueProvider);
+    var currentQueueIndex = playbackQueue.currentIndex;
+    final focusedEntry =
+        currentQueueIndex >= 0 &&
+            currentQueueIndex < playbackQueue.entries.length
+        ? playbackQueue.entries[currentQueueIndex]
+        : null;
+    if (currentTrackId != null && focusedEntry?.id != currentTrackId) {
+      final snapshotIndex = playbackQueue.entries.indexWhere(
+        (entry) => entry.id == currentTrackId,
+      );
+      if (snapshotIndex >= 0) currentQueueIndex = snapshotIndex;
+    }
     widgetSync.publish(
       trackId: hasTrack ? snapshot?.trackId : null,
       title: hasTrack ? snapshot?.title : null,
@@ -198,6 +217,23 @@ final homeScreenWidgetSyncProvider = Provider<void>((ref) {
       repeatMode: snapshot?.repeatMode.name ?? 'off',
       accentColor: accent.seedColor.toARGB32(),
       languageCode: language.code,
+      queue: playbackQueue.entries
+          .asMap()
+          .entries
+          .map(
+            (queueItem) => <String, String>{
+              'queueIndex': '${queueItem.key}',
+              'id': queueItem.value.logicalEntryId?.trim().isNotEmpty == true
+                  ? queueItem.value.logicalEntryId!.trim()
+                  : queueItem.value.id,
+              'title': queueItem.value.title,
+              'artist': queueItem.value.artist,
+              if (queueItem.value.thumbnailUrl?.trim().isNotEmpty == true)
+                'artworkUrl': queueItem.value.thumbnailUrl!.trim(),
+            },
+          )
+          .toList(growable: false),
+      currentQueueIndex: currentQueueIndex,
     );
   }
 
@@ -223,6 +259,7 @@ final homeScreenWidgetSyncProvider = Provider<void>((ref) {
     (_, _) => publish(),
   );
   ref.listen(favoriteTrackIdsProvider, (_, _) => publish());
+  ref.listen(playbackQueueProvider, (_, _) => publish());
   ref.onDispose(widgetSync.dispose);
 });
 

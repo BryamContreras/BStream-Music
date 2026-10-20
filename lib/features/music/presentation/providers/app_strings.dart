@@ -9,8 +9,17 @@ import 'mini_player_mode.dart';
 import 'player_artwork_style.dart';
 import 'player_style.dart';
 import 'player_font.dart';
+import 'app_strings_translation_catalog.dart';
 
-enum AppLanguage { spanish, english }
+enum AppLanguage {
+  spanish,
+  english,
+  portuguese,
+  french,
+  korean,
+  chinese,
+  japanese,
+}
 
 String systemFontNameForPlatform(AppPlatformType platform) =>
     switch (platform) {
@@ -24,16 +33,31 @@ extension AppLanguageLabel on AppLanguage {
   String get label => switch (this) {
     AppLanguage.spanish => 'Español',
     AppLanguage.english => 'English',
+    AppLanguage.portuguese => 'Português',
+    AppLanguage.french => 'Français',
+    AppLanguage.korean => '한국어',
+    AppLanguage.chinese => '简体中文',
+    AppLanguage.japanese => '日本語',
   };
 
   String get code => switch (this) {
     AppLanguage.spanish => 'es',
     AppLanguage.english => 'en',
+    AppLanguage.portuguese => 'pt',
+    AppLanguage.french => 'fr',
+    AppLanguage.korean => 'ko',
+    AppLanguage.chinese => 'zh',
+    AppLanguage.japanese => 'ja',
   };
 
   static AppLanguage fromCode(String? code) {
     return switch (code) {
       'en' => AppLanguage.english,
+      'pt' => AppLanguage.portuguese,
+      'fr' => AppLanguage.french,
+      'ko' => AppLanguage.korean,
+      'zh' => AppLanguage.chinese,
+      'ja' => AppLanguage.japanese,
       _ => AppLanguage.spanish,
     };
   }
@@ -46,7 +70,11 @@ class AppStrings {
 
   bool get isEnglish => appLanguage == AppLanguage.english;
 
-  String choose(String es, String en) => isEnglish ? en : es;
+  String choose(String es, String en) {
+    if (appLanguage == AppLanguage.spanish) return es;
+    if (isEnglish) return en;
+    return translateAppString(en, appLanguage.code) ?? en;
+  }
 
   String get audioOutput => choose('Salida Multimedia', 'Media output');
   String get thisPhone => choose('Este teléfono', 'This phone');
@@ -260,7 +288,7 @@ class AppStrings {
   String get clearSearch => choose('Limpiar búsqueda', 'Clear search');
   String get searchTitle => choose('Búsqueda', 'Search');
   String get player => choose('Reproductor', 'Player');
-  String get localTab => 'Local';
+  String get localTab => choose('Local', 'Local');
   String get localMusic => choose('Música local', 'Local music');
   String get allLocalSongs => choose('Todas las canciones', 'All songs');
   String get localMusicFolders => choose('Carpetas', 'Folders');
@@ -1193,13 +1221,13 @@ class AppStrings {
   String get liveOverlayResolving => choose('BUSCANDO', 'SEARCHING');
   String get liveOverlayLoading => choose('CARGANDO', 'LOADING');
   String get liveOverlayConnectFirst => choose(
-    'Conecta un LIVE para comenzar a mostrar la cola.',
-    'Connect a LIVE to start showing the queue.',
+    'Activa la fuente web local cuando quieras; no necesitas conectar un LIVE.',
+    'Enable the local browser source whenever you want; no LIVE connection is required.',
   );
   String get liveOverlayInactive => choose(
-    'Activa una fuente web transparente con la canción actual y 4 más. '
+    'Activa una fuente web transparente con la cola activa. No necesitas estar conectado a un LIVE. '
         'La primera vez Windows pedirá permiso para configurar su dominio local.',
-    'Enable a transparent browser source with the current song and 4 more. '
+    'Enable a transparent browser source with the active queue. No LIVE connection is required. '
         'The first time, Windows will request permission to configure its local domain.',
   );
   String liveOverlayActive(String url) => choose(
@@ -1426,6 +1454,10 @@ class AppStrings {
   );
 
   String songCount(int count) {
+    if (appLanguage != AppLanguage.spanish && !isEnglish) {
+      final english = count == 1 ? '$count song' : '$count songs';
+      return translateAppString(english, appLanguage.code) ?? english;
+    }
     if (isEnglish) {
       return '$count ${count == 1 ? 'song' : 'songs'}';
     }
@@ -1441,6 +1473,11 @@ class AppStrings {
   }
 
   String playbackQueueSummary(int count) {
+    if (appLanguage != AppLanguage.spanish && !isEnglish) {
+      final english =
+          'Playback Queue - $count ${count == 1 ? 'Song' : 'Songs'}';
+      return translateAppString(english, appLanguage.code) ?? english;
+    }
     if (isEnglish) {
       return 'Playback Queue - $count ${count == 1 ? 'Song' : 'Songs'}';
     }
@@ -1449,6 +1486,10 @@ class AppStrings {
   }
 
   String liveQueueSummary(int total, int ready, int pending) {
+    if (appLanguage != AppLanguage.spanish && !isEnglish) {
+      final english = '$total requests - $ready ready - $pending pending';
+      return translateAppString(english, appLanguage.code) ?? english;
+    }
     if (isEnglish) {
       return '$total requests - $ready ready - $pending pending';
     }
@@ -1456,6 +1497,12 @@ class AppStrings {
   }
 
   String exitPressesRemaining(int remaining) {
+    if (appLanguage != AppLanguage.spanish && !isEnglish) {
+      final english = remaining == 1
+          ? 'Press once to exit.'
+          : 'Press $remaining more times to exit.';
+      return translateAppString(english, appLanguage.code) ?? english;
+    }
     if (isEnglish) {
       return 'Press ${remaining == 1 ? 'once' : '$remaining more times'} to exit.';
     }
@@ -1463,6 +1510,12 @@ class AppStrings {
   }
 
   String downloadLabel(String label, String title, int queuedCount) {
+    if (appLanguage != AppLanguage.spanish && !isEnglish) {
+      final english = queuedCount <= 0
+          ? '$label: $title'
+          : '$label: $title - $queuedCount queued';
+      return translateAppString(english, appLanguage.code) ?? english;
+    }
     if (queuedCount <= 0) {
       return '$label: $title';
     }

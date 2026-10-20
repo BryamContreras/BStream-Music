@@ -520,10 +520,19 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         }
 
         final surroundingTheme = Theme.of(context);
-        final playerTheme = alwaysDarkPlaybackTheme(
-          surroundingTheme,
-          fontFamily: playerFont.fontFamily,
-        );
+        final playerTheme = mobile
+            ? alwaysDarkPlaybackTheme(
+                surroundingTheme,
+                fontFamily: playerFont.fontFamily,
+              )
+            : surroundingTheme.copyWith(
+                textTheme: surroundingTheme.textTheme.apply(
+                  fontFamily: playerFont.fontFamily,
+                ),
+                primaryTextTheme: surroundingTheme.primaryTextTheme.apply(
+                  fontFamily: playerFont.fontFamily,
+                ),
+              );
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -533,7 +542,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
               child: _PlayerSurroundingTheme(
                 data: surroundingTheme,
                 child: Theme(
-                  key: const ValueKey('player-always-dark-theme'),
+                  key: const ValueKey('player-playback-theme'),
                   data: playerTheme,
                   child: Builder(
                     builder: (context) =>

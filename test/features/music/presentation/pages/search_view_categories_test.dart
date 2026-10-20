@@ -19,7 +19,9 @@ import 'package:bstream_music/services/youtube_music/innertube_search_service.da
 import 'package:bstream_music/services/youtube_music/search_browse_catalog_cache.dart';
 import 'package:bstream_music/services/youtube_music/search_browse_artwork_cache.dart';
 import 'package:flutter/material.dart' hide SearchController;
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
@@ -900,6 +902,108 @@ void main() {
     expect(controller.submittedQueries, <String>['Taylor Swift']);
     expect(find.byKey(const ValueKey('search-suggestion-0')), findsNothing);
   });
+
+  testWidgets('keyboard arrows select suggestions and Enter searches them', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1100, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final controller = _RecordingSearchController(SearchState());
+    final suggestions = _RecordingSuggestionSearch();
+
+    await tester.pumpWidget(
+      _searchApp(
+        controller: controller,
+        suggestionsService: suggestions,
+        platform: TargetPlatform.windows,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'taylor');
+    await tester.pump(const Duration(milliseconds: 310));
+    suggestions.complete('taylor', ['Taylor Swift', 'Taylor Swift live']);
+    await tester.pumpAndSettle();
+
+    expect(find.text('taylor'), findsNWidgets(2));
+    expect(find.text('Taylor Swift'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    final selectedSuggestion = tester.widget<ListTile>(
+      find.byKey(const ValueKey('search-suggestion-1')),
+    );
+    expect(selectedSuggestion.selected, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      tester
+          .widget<ListTile>(find.byKey(const ValueKey('search-suggestion-2')))
+          .selected,
+      isTrue,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+
+    expect(controller.submittedQueries, ['Taylor Swift']);
+    expect(find.byKey(const ValueKey('search-suggestion-0')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final platform in [
+    TargetPlatform.windows,
+    TargetPlatform.macOS,
+    TargetPlatform.linux,
+  ]) {
+    testWidgets('mouse selects a suggestion on $platform across frames', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1100, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      final controller = _RecordingSearchController(SearchState());
+      final suggestions = _RecordingSuggestionSearch();
+      await tester.pumpWidget(
+        _searchApp(
+          controller: controller,
+          suggestionsService: suggestions,
+          platform: platform,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'taylor');
+      await tester.pump(const Duration(milliseconds: 310));
+      suggestions.complete('taylor', ['Taylor Swift']);
+      await tester.pumpAndSettle();
+
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.down(tester.getCenter(find.text('Taylor Swift')));
+      await tester.pump();
+      expect(find.text('Taylor Swift'), findsOneWidget);
+      expect(controller.submittedQueries, isEmpty);
+      await mouse.up();
+      // The fake search intentionally keeps the results in their loading state.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(controller.submittedQueries, ['Taylor Swift']);
+      expect(find.byKey(const ValueKey('search-suggestion-0')), findsNothing);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'Taylor Swift',
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('ignores suggestions from an older typed query', (tester) async {
     tester.view.physicalSize = const Size(400, 800);

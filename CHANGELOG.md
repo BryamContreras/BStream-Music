@@ -10,10 +10,14 @@
 - Added app-wide font customization.
 - Added multi-selection in albums, mixes, and search results, with actions to
   add the selected songs to a playlist or download them.
+- Added Portuguese, French, Korean, Chinese, and Japanese language support.
 
 ### Changed
 
 - Optimized animated artwork performance.
+- Improved interface performance and smoothness.
+- Album, mix, and artist backgrounds now inherit a subtle gradient from their
+  cover artwork.
 
 ## 1.2.8+128 — 2026-09-17
 

@@ -1,4 +1,5 @@
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/widgets/app_background_photo.dart';
 import 'package:bstream_music/features/music/presentation/widgets/artwork_gradient_header_background.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_gradient_background.dart';
@@ -10,6 +11,94 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      '$brightness detail body fades artwork color into its surface',
+      (tester) async {
+        const artwork = 'https://img.test/detail.jpg';
+        const tint = Color(0xFF4DDDB5);
+        var requests = 0;
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              artworkSurfaceColorProvider(artwork).overrideWith((ref) async {
+                requests++;
+                return tint;
+              }),
+            ],
+            child: MaterialApp(
+              theme: ThemeData(brightness: brightness),
+              home: Scaffold(
+                body: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    const ArtworkColorPageBackground(
+                      artworkSource: artwork,
+                      keyPrefix: 'detail-body',
+                    ),
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: 180,
+                      child: ArtworkGradientHeaderBackground(
+                        artworkSource: artwork,
+                        cacheWidth: 512,
+                        keyPrefix: 'detail-header',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final body = find.byKey(const ValueKey('detail-body-background-color'));
+        final surface = Theme.of(tester.element(body)).colorScheme.surface;
+        final bodyDecoration =
+            tester.widget<DecoratedBox>(body).decoration as BoxDecoration;
+        final bodyGradient = bodyDecoration.gradient! as LinearGradient;
+        final dark = brightness == Brightness.dark;
+        final artworkTone = HSLColor.fromColor(tint);
+        Color expectedTone(double lightness, double opacity) =>
+            Color.alphaBlend(
+              artworkTone
+                  .withLightness(lightness)
+                  .toColor()
+                  .withValues(alpha: opacity),
+              surface,
+            );
+        final expectedColors = [
+          expectedTone(dark ? 0.66 : 0.88, dark ? 0.58 : 0.32),
+          expectedTone(dark ? 0.52 : 0.72, dark ? 0.44 : 0.24),
+          expectedTone(dark ? 0.38 : 0.56, dark ? 0.31 : 0.16),
+          expectedTone(dark ? 0.26 : 0.40, dark ? 0.22 : 0.09),
+        ];
+        expect(bodyGradient.colors, expectedColors);
+        expect(bodyGradient.stops, [0, 0.36, 0.72, 1]);
+        expect(bodyGradient.colors.first, isNot(surface));
+        expect(bodyGradient.colors.first, isNot(bodyGradient.colors.last));
+        expect(
+          find.descendant(of: body, matching: find.byType(SourceImage)),
+          findsNothing,
+        );
+        final headerGradient =
+            tester
+                    .widget<DecoratedBox>(
+                      find.byKey(
+                        const ValueKey('detail-header-background-overlay'),
+                      ),
+                    )
+                    .decoration
+                as BoxDecoration;
+        expect(headerGradient.gradient!.colors.last, expectedColors.first);
+        expect(requests, 1, reason: 'Header and body share the same lookup.');
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('custom photo appears only on opted-in browsing tabs', (
     tester,
   ) async {

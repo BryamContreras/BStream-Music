@@ -7,6 +7,7 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/youtube_music/account/youtube_music_account.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
@@ -185,6 +186,20 @@ void main() {
       expect(
         find.byKey(const ValueKey('artist-profile-background-overlay')),
         findsOneWidget,
+      );
+      final header = find.byKey(const ValueKey('artist-profile-header'));
+      final photo = find.byKey(
+        const ValueKey('artist-profile-background-photo'),
+      );
+      expect(find.descendant(of: header, matching: photo), findsOneWidget);
+      expect(tester.getRect(photo), tester.getRect(header));
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('artist-profile-artwork-underlay')),
+          matching: find.byType(SourceImage),
+        ),
+        findsNothing,
+        reason: 'Below the artist header only the artwork color is painted.',
       );
       expect(
         find.byKey(const ValueKey('artist-profile-loading')),

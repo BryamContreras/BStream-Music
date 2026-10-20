@@ -14,6 +14,7 @@ struct NowPlayingEntry: TimelineEntry {
   let accent: Color
   let backdrop: Color
   let cover: UIImage?
+  let coverIdentity: String
 }
 
 struct NowPlayingProvider: TimelineProvider {
@@ -21,7 +22,7 @@ struct NowPlayingProvider: TimelineProvider {
     NowPlayingEntry(date: Date(), title: "Sin reproducción", artist: "Toca para abrir",
                     isPlaying: false, isFavorite: false, repeatMode: "off",
                     accent: .white,
-                    backdrop: Color(red: 0.07, green: 0.12, blue: 0.17), cover: nil)
+                    backdrop: Color(red: 0.07, green: 0.12, blue: 0.17), cover: nil, coverIdentity: "")
   }
 
   func getSnapshot(in context: Context, completion: @escaping (NowPlayingEntry) -> Void) {
@@ -58,7 +59,8 @@ struct NowPlayingProvider: TimelineProvider {
       repeatMode: defaults?.string(forKey: "repeatMode") ?? "off",
       accent: accent,
       backdrop: artworkTone(cover) ?? Color(red: 0.07, green: 0.12, blue: 0.17),
-      cover: cover
+      cover: cover,
+      coverIdentity: defaults?.string(forKey: "coverFile") ?? ""
     )
   }
 }
@@ -144,11 +146,13 @@ private struct NowPlayingWidgetView: View {
     LinearGradient(colors: [entry.backdrop,
                             Color(red: 0.025, green: 0.035, blue: 0.06)],
                    startPoint: .topLeading, endPoint: .bottomTrailing)
+      .id(entry.coverIdentity)
+      .transition(.opacity.animation(.easeInOut(duration: 0.24)))
   }
 
   private var small: some View {
     VStack(alignment: .leading, spacing: 7) {
-      ArtworkView(cover: entry.cover).frame(maxWidth: .infinity, maxHeight: .infinity)
+      artwork.frame(maxWidth: .infinity, maxHeight: .infinity)
       Text("\(entry.title) · \(entry.artist)")
         .font(.system(size: 13, weight: .bold)).lineLimit(1)
         .foregroundColor(.white)
@@ -159,7 +163,7 @@ private struct NowPlayingWidgetView: View {
 
   private var medium: some View {
     HStack(spacing: 12) {
-      ArtworkView(cover: entry.cover).frame(width: 70, height: 70)
+      artwork.frame(width: 70, height: 70)
       VStack(alignment: .leading, spacing: 9) {
         Text("\(entry.title) · \(entry.artist)")
           .font(.system(size: 14, weight: .bold)).lineLimit(1)
@@ -202,7 +206,7 @@ private struct NowPlayingWidgetView: View {
     VStack(spacing: 12) {
       Spacer(minLength: 0)
       HStack(spacing: 12) {
-        ArtworkView(cover: entry.cover).frame(width: 92, height: 92)
+        artwork.frame(width: 92, height: 92)
         VStack(alignment: .leading, spacing: 4) {
           Text("BStream Music")
             .font(.system(size: 13)).lineLimit(1)
@@ -247,6 +251,12 @@ private struct NowPlayingWidgetView: View {
     .padding(.bottom, 2)
   }
 
+  private var artwork: some View {
+    ArtworkView(cover: entry.cover)
+      .id(entry.coverIdentity)
+      .transition(.opacity.animation(.easeInOut(duration: 0.24)))
+  }
+
   private func control(
     _ symbol: String,
     action name: String,
@@ -256,7 +266,10 @@ private struct NowPlayingWidgetView: View {
   ) -> some View {
     Link(destination: action(name)) {
       Image(systemName: symbol)
-        .font(.system(size: height >= 50 ? 27 : 23, weight: .bold))
+        .font(.system(
+          size: name == "repeat" || name == "favorite" ? 20 : (height >= 50 ? 27 : 23),
+          weight: .bold
+        ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundColor(tint)
         .background(

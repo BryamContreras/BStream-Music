@@ -34,6 +34,13 @@ import 'youtube_music_settings_account_card.dart';
 typedef DownloadDirectoryPicker =
     Future<String?> Function({String? dialogTitle, String? initialDirectory});
 
+double _settingsContentMaxWidth(BuildContext context, double compactWidth) {
+  final desktopLayout =
+      AppPlatform.isDesktop &&
+      Theme.of(context).platform != TargetPlatform.android;
+  return desktopLayout ? double.infinity : compactWidth;
+}
+
 final downloadDirectoryPickerProvider = Provider<DownloadDirectoryPicker>((
   ref,
 ) {
@@ -261,6 +268,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onBack: _goBack,
       );
       if (_route != _SettingsRoute.root) {
+        final desktopLayout =
+            AppPlatform.isDesktop &&
+            Theme.of(context).platform != TargetPlatform.android;
         return ScrolledUnderTabFrame(
           surfaceKey: ValueKey('settings-detail-header-surface-${_route.name}'),
           scrollKey: ValueKey('settings-detail-scroll-${_route.name}'),
@@ -276,9 +286,14 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               sliver: SliverToBoxAdapter(
                 child: Align(
                   alignment: Alignment.topLeft,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 760),
-                    child: body,
+                  child: SizedBox(
+                    width: desktopLayout ? double.infinity : null,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: desktopLayout ? double.infinity : 760,
+                      ),
+                      child: body,
+                    ),
                   ),
                 ),
               ),
@@ -572,9 +587,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                   key: const ValueKey('settings-card-language'),
                   icon: Icons.language_rounded,
                   title: strings.language,
-                  subtitle: state.language == AppLanguage.spanish
-                      ? strings.spanish
-                      : strings.english,
+                  subtitle: state.language.label,
                   onTap: () => _chooseLanguage(
                     currentLanguage: state.language,
                     strings: strings,
@@ -1880,8 +1893,8 @@ class _AboutApplicationSettings extends StatelessWidget {
             "What's new in ${AppConstants.appVersion}",
           ),
           subtitle: strings.choose(
-            'Widget, fondos personalizados, fuentes y selección múltiple',
-            'Widget, custom backgrounds, fonts, and multi-selection',
+            'Widget, personalización, rendimiento, idiomas y más',
+            'Widget, customization, performance, languages, and more',
           ),
           onTap: () => _showWhatsNew(context),
         ),
@@ -1906,13 +1919,16 @@ class _AboutApplicationSettings extends StatelessWidget {
   }
 
   Future<void> _showWhatsNew(BuildContext context) async {
-    final highlights = strings.isEnglish
+    final legacyHighlights = strings.isEnglish
         ? const <String>[
             'The player widget is now available for your home screen.',
             'Personalize the app background with an image from your gallery.',
             'You can now change the font throughout the app.',
             'Animated artwork performance has been optimized.',
             'Select multiple songs in albums, mixes, and search results to add them to a playlist or download them.',
+            'Interface performance and smoothness have been improved.',
+            'Album, mix, and artist pages now inherit colors from their cover art.',
+            'Portuguese, French, Korean, Chinese, and Japanese are now supported.',
           ]
         : const <String>[
             'Ya está disponible el widget del reproductor para la pantalla de inicio.',
@@ -1920,7 +1936,25 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Ahora puedes cambiar la fuente de toda la aplicación.',
             'Se optimizó el rendimiento de los artworks animados.',
             'Selecciona varias canciones en álbumes, mixes y resultados de búsqueda para añadirlas a una playlist o descargarlas.',
+            'Se hicieron mejoras en la interfaz para ofrecer más rendimiento y fluidez.',
+            'Los fondos de álbumes, mixes y artistas ahora heredan los tonos de sus portadas.',
+            'La aplicación ahora es compatible con portugués, francés, coreano, chino y japonés.',
           ];
+    const englishHighlights = <String>[
+      'The player widget is now available for your home screen.',
+      'Personalize the app background with an image from your gallery.',
+      'You can now change the font throughout the app.',
+      'Animated artwork performance has been optimized.',
+      'Select multiple songs in albums, mixes, and search results to add them to a playlist or download them.',
+      'Interface performance and smoothness have been improved.',
+      'Album, mix, and artist pages now inherit colors from their cover art.',
+      'Portuguese, French, Korean, Chinese, and Japanese are now supported.',
+    ];
+    final highlights = List<String>.generate(
+      englishHighlights.length,
+      (index) =>
+          strings.choose(legacyHighlights[index], englishHighlights[index]),
+    );
     await showAppDialog<void>(
       context: context,
       builder: (dialogContext) => AppAlertDialog(
@@ -1995,21 +2029,19 @@ class _LanguageSelectorDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SettingsDialogOption(
-              key: const ValueKey('settings-language-option-spanish'),
-              selected: language == AppLanguage.spanish,
-              icon: Icons.language_rounded,
-              label: strings.spanish,
-              onTap: () => Navigator.of(context).pop(AppLanguage.spanish),
-            ),
-            const SizedBox(height: 8),
-            _SettingsDialogOption(
-              key: const ValueKey('settings-language-option-english'),
-              selected: language == AppLanguage.english,
-              icon: Icons.translate_rounded,
-              label: strings.english,
-              onTap: () => Navigator.of(context).pop(AppLanguage.english),
-            ),
+            for (var index = 0; index < AppLanguage.values.length; index++) ...[
+              if (index > 0) const SizedBox(height: 8),
+              _SettingsDialogOption(
+                key: ValueKey(
+                  'settings-language-option-${AppLanguage.values[index].name}',
+                ),
+                selected: language == AppLanguage.values[index],
+                icon: Icons.language_rounded,
+                label: AppLanguage.values[index].label,
+                onTap: () =>
+                    Navigator.of(context).pop(AppLanguage.values[index]),
+              ),
+            ],
           ],
         ),
       ),
@@ -2809,7 +2841,9 @@ class _AppearanceSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
+      constraints: BoxConstraints(
+        maxWidth: _settingsContentMaxWidth(context, 520),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3199,7 +3233,9 @@ class _LyricsAppearanceSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
+      constraints: BoxConstraints(
+        maxWidth: _settingsContentMaxWidth(context, 520),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4896,7 +4932,9 @@ class _TikTokLiveSettings extends StatelessWidget {
     };
 
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 760),
+      constraints: BoxConstraints(
+        maxWidth: _settingsContentMaxWidth(context, 760),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -5073,21 +5111,15 @@ class _LiveOverlayServerControl extends ConsumerWidget {
     }
 
     final overlay = ref.watch(liveOverlayControllerProvider);
-    final live = ref.watch(tiktokLiveControllerProvider).value;
     final strings = ref.watch(appStringsProvider);
-    final connected = live?.isConnected ?? false;
     final canStop = overlay.isActive;
     final canStart =
-        connected &&
         !overlay.isBusy &&
         !overlay.isActive &&
         overlay.status != LiveOverlayStatus.unsupported;
     final canToggle = canStop || canStart;
     final subtitle = switch (overlay.status) {
-      LiveOverlayStatus.inactive =>
-        connected
-            ? strings.liveOverlayInactive
-            : strings.liveOverlayConnectFirst,
+      LiveOverlayStatus.inactive => strings.liveOverlayInactive,
       LiveOverlayStatus.starting => strings.liveOverlayStarting,
       LiveOverlayStatus.active =>
         overlay.error ??
@@ -5326,7 +5358,9 @@ class _PathField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 760),
+      constraints: BoxConstraints(
+        maxWidth: _settingsContentMaxWidth(context, 760),
+      ),
       child: Row(
         children: [
           Expanded(

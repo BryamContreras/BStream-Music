@@ -41,11 +41,46 @@ final class BStreamWidgetActionRelay {
   private var castPlugin: BStreamCastPlugin?
   private let widgetGroup = "group.com.bstream.bstreamMusic"
   private let widgetKind = "BStreamNowPlaying"
+  private let widgetArtworkQueue = DispatchQueue(label: "com.bstream.homeWidget.artwork", qos: .utility)
 
   private func widgetCoverName(_ trackId: String) -> String {
     let digest = SHA256.hash(data: Data(trackId.utf8))
     let prefix = digest.prefix(10).map { String(format: "%02x", $0) }.joined()
     return "now_playing_\(prefix).jpg"
+  }
+
+  // Runs on widgetArtworkQueue; the visible filename only changes after a
+  // complete atomic write and a fresh check against the active song.
+  private func saveWidgetCover(_ bytes: Data, trackId: String, defaults: UserDefaults, container: URL) {
+    guard defaults.string(forKey: "trackId") == trackId else { return }
+    let coverName = widgetCoverName(trackId)
+    do {
+      try bytes.write(to: container.appendingPathComponent(coverName), options: .atomic)
+    } catch { return }
+    DispatchQueue.main.async {
+      guard defaults.string(forKey: "trackId") == trackId else {
+        self.removeObsoleteWidgetCover(coverName, defaults: defaults, container: container)
+        return
+      }
+      let previous = defaults.string(forKey: "coverFile")
+      defaults.set(coverName, forKey: "coverFile")
+      defaults.set(true, forKey: "hasCover")
+      if #available(iOS 14.0, *) {
+        WidgetCenter.shared.reloadTimelines(ofKind: self.widgetKind)
+      }
+      if let previous, previous != coverName {
+        self.removeObsoleteWidgetCover(previous, defaults: defaults, container: container)
+      }
+    }
+  }
+
+  private func removeObsoleteWidgetCover(_ filename: String, defaults: UserDefaults, container: URL) {
+    widgetArtworkQueue.async {
+      // A rapid return to the same song may already be preparing this file.
+      guard defaults.string(forKey: "coverFile") != filename,
+            self.widgetCoverName(defaults.string(forKey: "trackId") ?? "") != filename else { return }
+      try? FileManager.default.removeItem(at: container.appendingPathComponent(filename))
+    }
   }
 
   override func application(
@@ -111,7 +146,8 @@ final class BStreamWidgetActionRelay {
           return
         }
         let trackId = data["trackId"] as? String ?? ""
-        if defaults.string(forKey: "trackId") != trackId {
+        // Retain the last complete cover until its replacement is ready.
+        if trackId.isEmpty {
           defaults.set(false, forKey: "hasCover")
           if let previous = defaults.string(forKey: "coverFile"),
              let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: self.widgetGroup) {
@@ -138,9 +174,8 @@ final class BStreamWidgetActionRelay {
           result(nil)
           return
         }
-        let coverName = self.widgetCoverName(data["trackId"] as? String ?? "")
-        let destination = container.appendingPathComponent(coverName)
-        DispatchQueue.global(qos: .utility).async {
+        self.widgetArtworkQueue.async {
+          guard defaults.string(forKey: "trackId") == data["trackId"] as? String else { return }
           let source = URL(fileURLWithPath: path)
           let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
           if let imageSource = CGImageSourceCreateWithURL(source as CFURL, options as CFDictionary),
@@ -150,16 +185,7 @@ final class BStreamWidgetActionRelay {
                kCGImageSourceCreateThumbnailWithTransform: true,
              ] as CFDictionary),
              let bytes = UIImage(cgImage: thumbnail).jpegData(compressionQuality: 0.84) {
-            try? bytes.write(to: destination, options: .atomic)
-            DispatchQueue.main.async {
-              if defaults.string(forKey: "trackId") == data["trackId"] as? String {
-                defaults.set(coverName, forKey: "coverFile")
-                defaults.set(true, forKey: "hasCover")
-                if #available(iOS 14.0, *) {
-                  WidgetCenter.shared.reloadTimelines(ofKind: self.widgetKind)
-                }
-              }
-            }
+            self.saveWidgetCover(bytes, trackId: data["trackId"] as? String ?? "", defaults: defaults, container: container)
           }
         }
         result(nil)
@@ -172,21 +198,11 @@ final class BStreamWidgetActionRelay {
           result(nil)
           return
         }
-        let coverName = self.widgetCoverName(data["trackId"] as? String ?? "")
-        let destination = container.appendingPathComponent(coverName)
-        DispatchQueue.global(qos: .utility).async {
+        self.widgetArtworkQueue.async {
+          guard defaults.string(forKey: "trackId") == data["trackId"] as? String else { return }
           if let image = UIImage(data: encoded.data),
              let bytes = image.jpegData(compressionQuality: 0.84) {
-            try? bytes.write(to: destination, options: .atomic)
-            DispatchQueue.main.async {
-              if defaults.string(forKey: "trackId") == data["trackId"] as? String {
-                defaults.set(coverName, forKey: "coverFile")
-                defaults.set(true, forKey: "hasCover")
-                if #available(iOS 14.0, *) {
-                  WidgetCenter.shared.reloadTimelines(ofKind: self.widgetKind)
-                }
-              }
-            }
+            self.saveWidgetCover(bytes, trackId: data["trackId"] as? String ?? "", defaults: defaults, container: container)
           }
         }
         result(nil)

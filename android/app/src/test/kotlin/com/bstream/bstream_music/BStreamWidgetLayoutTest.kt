@@ -23,7 +23,10 @@ class BStreamWidgetLayoutTest {
         assertEquals(BStreamWidgetLayout.LARGE, BStreamWidgetLayout.forSize(339, 165))
         assertEquals(BStreamWidgetLayout.LARGE, BStreamWidgetLayout.forSize(250, 320))
         assertEquals(BStreamWidgetLayout.EXPANDED, BStreamWidgetLayout.forSize(340, 165))
-        assertEquals(BStreamWidgetLayout.EXPANDED, BStreamWidgetLayout.forSize(430, 320))
+        assertEquals(BStreamWidgetLayout.EXPANDED, BStreamWidgetLayout.forSize(430, 220))
+        assertEquals(BStreamWidgetLayout.EXPANDED, BStreamWidgetLayout.forSize(430, 249))
+        assertEquals(BStreamWidgetLayout.QUEUE, BStreamWidgetLayout.forSize(340, 250))
+        assertEquals(BStreamWidgetLayout.QUEUE, BStreamWidgetLayout.forSize(430, 320))
     }
 
     @Test
@@ -32,5 +35,6 @@ class BStreamWidgetLayoutTest {
         assertFalse(BStreamWidgetLayout.COMPACT.hasSeparateMetadata)
         assertTrue(BStreamWidgetLayout.LARGE.hasSeparateMetadata)
         assertTrue(BStreamWidgetLayout.EXPANDED.hasSeparateMetadata)
+        assertTrue(BStreamWidgetLayout.QUEUE.hasSeparateMetadata)
     }
 }

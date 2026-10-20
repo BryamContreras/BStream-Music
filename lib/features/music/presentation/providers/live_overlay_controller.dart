@@ -296,6 +296,7 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
   var _latestAppearance = const LiveOverlayAppearance();
   var _liveQueue = const <LiveQueueItem>[];
   PlayerSnapshot? _playback;
+  var _playbackQueue = const PlaybackQueueState();
   var _accent = AppAccent.white;
   var _style = LiveWidgetStyle.classic;
   var _strings = const AppStrings(AppLanguage.spanish);
@@ -315,6 +316,7 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
     _liveQueue =
         ref.read(tiktokLiveControllerProvider).value?.liveQueue ?? const [];
     _playback = ref.read(playerControllerProvider).value;
+    _playbackQueue = ref.read(playbackQueueProvider);
     _rebuildQueue(publish: false);
 
     ref.listen<AsyncValue<TikTokLiveState>>(tiktokLiveControllerProvider, (
@@ -328,6 +330,10 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
     });
     ref.listen<AsyncValue<PlayerSnapshot>>(playerControllerProvider, (_, next) {
       _playback = next.value;
+      _rebuildQueue();
+    });
+    ref.listen<PlaybackQueueState>(playbackQueueProvider, (_, next) {
+      _playbackQueue = next;
       _rebuildQueue();
     });
     ref.listen<AppAccent>(liveOverlayAccentProvider, (_, next) {
@@ -415,19 +421,24 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
   }
 
   void _rebuildQueue({bool publish = true}) {
+    final isLiveQueueActive = ref
+        .read(playerControllerProvider.notifier)
+        .isLiveQueueActive;
     if (_currentLiveItemId != null &&
         !_liveQueue.any((item) => item.id == _currentLiveItemId)) {
       _currentLiveItemId = null;
     }
-    final selection = selectLiveOverlayQueue(
-      _liveQueue,
-      playback: _playback,
-      isLiveQueueActive: ref
-          .read(playerControllerProvider.notifier)
-          .isLiveQueueActive,
-      previousCurrentItemId: _currentLiveItemId,
-    );
-    _currentLiveItemId = selection.currentItemId;
+    final selection = isLiveQueueActive
+        ? selectLiveOverlayQueue(
+            _liveQueue,
+            playback: _playback,
+            isLiveQueueActive: true,
+            previousCurrentItemId: _currentLiveItemId,
+          )
+        : selectPlaybackOverlayQueue(_playbackQueue, playback: _playback);
+    if (isLiveQueueActive) {
+      _currentLiveItemId = selection.currentItemId;
+    }
     final next = List<LiveOverlayQueueEntry>.unmodifiable(
       selection.entries.map((entry) {
         final source = entry.artworkSource;
@@ -688,6 +699,51 @@ LiveOverlayQueueSelection selectLiveOverlayQueue(
   return LiveOverlayQueueSelection(
     entries: entries,
     currentItemId: currentItemId,
+  );
+}
+
+LiveOverlayQueueSelection selectPlaybackOverlayQueue(
+  PlaybackQueueState queue, {
+  PlayerSnapshot? playback,
+}) {
+  final items = queue.entries;
+  if (items.isEmpty) {
+    return const LiveOverlayQueueSelection(entries: <LiveOverlayQueueEntry>[]);
+  }
+
+  var startIndex = queue.currentIndex;
+  if (startIndex < 0 || startIndex >= items.length) {
+    final trackId = playback?.trackId;
+    startIndex = trackId == null
+        ? 0
+        : items.indexWhere(
+            (item) => item.id == trackId || item.logicalEntryId == trackId,
+          );
+    if (startIndex < 0) startIndex = 0;
+  }
+
+  final current = items[startIndex];
+  final entries = List<LiveOverlayQueueEntry>.unmodifiable(
+    items.skip(startIndex).take(liveOverlayMaximumItems).map((item) {
+      final artwork = item.thumbnailUrl?.trim();
+      return LiveOverlayQueueEntry(
+        id: item.logicalEntryId?.trim().isNotEmpty == true
+            ? item.logicalEntryId!.trim()
+            : item.id,
+        title: item.title,
+        artist: item.artist,
+        status: item.id == current.id
+            ? playback?.status.name ?? 'playing'
+            : 'queued',
+        artworkSource: artwork == null || artwork.isEmpty ? null : artwork,
+      );
+    }),
+  );
+  return LiveOverlayQueueSelection(
+    entries: entries,
+    currentItemId: current.logicalEntryId?.trim().isNotEmpty == true
+        ? current.logicalEntryId!.trim()
+        : current.id,
   );
 }
 
