@@ -9,8 +9,11 @@ Future<T?> showAppMenuBottomSheet<T>({
   required WidgetBuilder builder,
   Color? artworkColor,
   Widget Function(BuildContext, Widget)? surfaceBuilder,
+  bool useRootNavigator = false,
 }) => showModalBottomSheet<T>(
   context: context,
+  useRootNavigator: useRootNavigator,
+  isDismissible: true,
   isScrollControlled: true,
   useSafeArea: true,
   showDragHandle: false,

@@ -300,20 +300,8 @@ class BStreamMusicWidget : AppWidgetProvider() {
                         }
                         setRemoteAdapter(R.id.widget_queue_list, adapterIntent)
                         setEmptyView(R.id.widget_queue_list, R.id.widget_queue_empty)
-                        val queueClickIntent = Intent(context, MainActivity::class.java).apply {
-                            action = MainActivity.ACTION_HOME_WIDGET_CONTROL
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        }
-                        val mutableFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            PendingIntent.FLAG_MUTABLE
-                        } else 0
-                        val queueClickTemplate = PendingIntent.getActivity(
-                            context,
-                            9100 + appWidgetId,
-                            queueClickIntent,
-                            PendingIntent.FLAG_UPDATE_CURRENT or mutableFlag,
+                        val queueClickTemplate = BStreamWidgetPlaybackReceiver.queueClickTemplate(
+                            context, appWidgetId,
                         )
                         setPendingIntentTemplate(R.id.widget_queue_list, queueClickTemplate)
                         if (focusQueue) setScrollPosition(R.id.widget_queue_list, 0)

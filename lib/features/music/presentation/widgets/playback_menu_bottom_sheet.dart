@@ -64,9 +64,11 @@ final playbackMenuArtworkColorProvider = Provider.autoDispose<Color?>((ref) {
 Future<T?> showPlaybackMenuBottomSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
+  bool useRootNavigator = false,
 }) => showAppMenuBottomSheet<T>(
   context: context,
   builder: builder,
+  useRootNavigator: useRootNavigator,
   surfaceBuilder: (_, child) => Consumer(
     builder: (context, ref, _) {
       final artwork = ref.watch(playbackMenuArtworkProvider);

@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/widgets/app_background_photo.dart';
@@ -6,6 +8,7 @@ import 'package:bstream_music/features/music/presentation/widgets/playback_gradi
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -97,6 +100,89 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+  }
+
+  for (final brightness in Brightness.values) {
+    testWidgets('$brightness detail header has no visible bottom seam', (
+      tester,
+    ) async {
+      const artwork = 'https://img.test/detail-seam.jpg';
+      for (final headerHeight in [180.0, 420.0, 420.6]) {
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              artworkSurfaceColorProvider(
+                artwork,
+              ).overrideWith((ref) async => const Color(0xFF4DDDB5)),
+            ],
+            child: MaterialApp(
+              theme: ThemeData(brightness: brightness),
+              home: Scaffold(
+                body: Align(
+                  alignment: Alignment.topLeft,
+                  child: RepaintBoundary(
+                    key: const ValueKey('detail-seam-capture'),
+                    child: SizedBox(
+                      width: 320,
+                      height: 540,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          const ArtworkColorPageBackground(
+                            artworkSource: artwork,
+                            keyPrefix: 'seam-body',
+                          ),
+                          Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            height: headerHeight,
+                            child: const ArtworkGradientHeaderBackground(
+                              artworkSource: artwork,
+                              cacheWidth: 512,
+                              keyPrefix: 'seam-header',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(const ValueKey('detail-seam-capture')),
+        );
+        final pixels = (await tester.runAsync(() async {
+          final image = await boundary.toImage(pixelRatio: 2.8125);
+          try {
+            return await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+          } finally {
+            image.dispose();
+          }
+        }))!;
+        final edge = (headerHeight * 2.8125).round();
+        for (var row = edge - 3; row <= edge + 3; row++) {
+          final above = ((row - 1) * 900 + 450) * 4;
+          final below = (row * 900 + 450) * 4;
+          for (var channel = 0; channel < 3; channel++) {
+            expect(
+              (pixels.getUint8(above + channel) -
+                      pixels.getUint8(below + channel))
+                  .abs(),
+              lessThanOrEqualTo(2),
+              reason:
+                  'The photo must fade into the actual page tone at '
+                  '$headerHeight px, without a color jump or fractional fringe.',
+            );
+          }
+        }
+        expect(tester.takeException(), isNull);
+      }
+    });
   }
 
   testWidgets('custom photo appears only on opted-in browsing tabs', (

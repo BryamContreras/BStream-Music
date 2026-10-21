@@ -28,47 +28,76 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
     final surfaceColors = _artworkSurfaceColors(context, ref, source);
     return ClipRect(
       key: ValueKey('$keyPrefix-background-photo'),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          ColoredBox(
-            key: ValueKey('$keyPrefix-background-fallback'),
-            color: surfaceColors.top,
-          ),
-          if (source != null && source.isNotEmpty)
-            ExcludeSemantics(
-              child: ImageFiltered(
-                key: ValueKey('$keyPrefix-background-blur'),
-                imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                child: Transform.scale(
-                  scale: 1.16,
-                  child: SourceImage(
-                    key: ValueKey('$keyPrefix-background-image'),
-                    source: source,
-                    fit: BoxFit.cover,
-                    // Foreground and background share the bounded image cache.
-                    cacheWidth: cacheWidth,
-                    fallback: const SizedBox.expand(),
+      // Reveal the existing page gradient instead of ending on a fixed color.
+      // This stays continuous at every header height and while it scrolls.
+      // Only the bounded, cached header background needs the static mask.
+      child: ShaderMask(
+        key: ValueKey('$keyPrefix-background-fade'),
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) => const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white,
+            Colors.white,
+            Color(0xE8FFFFFF),
+            Color(0xA6FFFFFF),
+            Color(0x47FFFFFF),
+            Color(0x0FFFFFFF),
+            Color(0x00FFFFFF),
+          ],
+          stops: [0, 0.28, 0.5, 0.68, 0.84, 0.96, 1],
+        ).createShader(bounds),
+        // Keep painted pixels inside the mask even when the physical bottom
+        // falls between device pixels. Filtered content can otherwise leave a
+        // one-pixel fringe outside the mask on mobile renderers.
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 1),
+          child: ClipRect(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ColoredBox(
+                  key: ValueKey('$keyPrefix-background-fallback'),
+                  color: surfaceColors.top,
+                ),
+                if (source != null && source.isNotEmpty)
+                  ExcludeSemantics(
+                    child: ImageFiltered(
+                      key: ValueKey('$keyPrefix-background-blur'),
+                      imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                      child: Transform.scale(
+                        scale: 1.16,
+                        child: SourceImage(
+                          key: ValueKey('$keyPrefix-background-image'),
+                          source: source,
+                          fit: BoxFit.cover,
+                          // Foreground and background share the bounded image cache.
+                          cacheWidth: cacheWidth,
+                          fallback: const SizedBox.expand(),
+                        ),
+                      ),
+                    ),
+                  ),
+                DecoratedBox(
+                  key: ValueKey('$keyPrefix-background-overlay'),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        colors.surface.withValues(alpha: isDark ? 0.58 : 0.64),
+                        colors.surface.withValues(alpha: isDark ? 0.76 : 0.82),
+                        surfaceColors.top,
+                      ],
+                      stops: const [0, 0.54, 1],
+                    ),
                   ),
                 ),
-              ),
-            ),
-          DecoratedBox(
-            key: ValueKey('$keyPrefix-background-overlay'),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  colors.surface.withValues(alpha: isDark ? 0.58 : 0.64),
-                  colors.surface.withValues(alpha: isDark ? 0.76 : 0.82),
-                  surfaceColors.top,
-                ],
-                stops: const [0, 0.54, 1],
-              ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

@@ -118,7 +118,7 @@ class _FrameRateTicker extends Ticker {
 }
 
 /// Titles created on different frames converge on the same wake-up instead of
-/// interleaving several 30 Hz clocks into a screen-wide 120 Hz workload.
+/// interleaving several bounded clocks into a screen-wide 120 Hz workload.
 class _TickerFrameBatch {
   _TickerFrameBatch(this.delay);
 

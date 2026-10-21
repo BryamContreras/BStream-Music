@@ -449,6 +449,14 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
                     ),
             ),
           ),
+          if (!mobileLayout)
+            Positioned(
+              top: math.max(viewPadding.top, mediaPadding.top) + 12,
+              right: systemRightInset + 12,
+              // Anchor the desktop controls to the viewport, not the centered,
+              // width-limited lyrics panel (including on ultrawide displays).
+              child: _buildLyricsToolbar(mobileLayout: false),
+            ),
           if (!mobileLayout && showBottomMiniPlayer)
             Positioned(
               left: systemLeftInset,
@@ -473,7 +481,9 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
     required Widget content,
     required bool mobileLayout,
   }) {
-    final strings = ref.watch(appStringsProvider);
+    if (!mobileLayout) {
+      return content;
+    }
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -482,29 +492,34 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
           alignment: Alignment.bottomRight,
           child: Padding(
             padding: const EdgeInsets.only(bottom: 8, right: 12),
-            child: Row(
-              key: const ValueKey('lyrics-overlay-toolbar'),
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (!mobileLayout)
-                  _LyricsRoundButton(
-                    buttonKey: const ValueKey('lyrics-exit-button'),
-                    icon: Icons.close_rounded,
-                    tooltip: strings.choose('Salir de Letras', 'Exit Lyrics'),
-                    onPressed: () =>
-                        unawaited(Navigator.of(context).maybePop()),
-                  ),
-                if (!mobileLayout) const SizedBox(width: 8),
-                _LyricsRoundButton(
-                  buttonKey: const ValueKey('lyrics-settings-button'),
-                  icon: Icons.settings_rounded,
-                  tooltip: strings.lyricsSettings,
-                  onPressed: _showLyricsSettings,
-                ),
-              ],
-            ),
+            child: _buildLyricsToolbar(mobileLayout: true),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildLyricsToolbar({required bool mobileLayout}) {
+    final strings = ref.watch(appStringsProvider);
+    return Row(
+      key: const ValueKey('lyrics-overlay-toolbar'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _LyricsRoundButton(
+          buttonKey: const ValueKey('lyrics-settings-button'),
+          icon: Icons.settings_rounded,
+          tooltip: strings.lyricsSettings,
+          onPressed: _showLyricsSettings,
+        ),
+        if (!mobileLayout) ...[
+          const SizedBox(width: 8),
+          _LyricsRoundButton(
+            buttonKey: const ValueKey('lyrics-exit-button'),
+            icon: Icons.close_rounded,
+            tooltip: strings.choose('Salir de Letras', 'Exit Lyrics'),
+            onPressed: () => unawaited(Navigator.of(context).maybePop()),
+          ),
+        ],
       ],
     );
   }
@@ -513,6 +528,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
     unawaited(
       showPlaybackMenuBottomSheet<void>(
         context: context,
+        useRootNavigator: true,
         builder: (_) => const _LyricsSettingsMenu(),
       ),
     );
@@ -2886,6 +2902,41 @@ class _LyricsSettingsMenu extends ConsumerWidget {
               ),
             ],
             const SizedBox(height: 16),
+            const Divider(),
+            Text(
+              strings.lyricsAlignment,
+              style: TextStyle(color: foreground, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<LyricsTextAlignment>(
+                key: const ValueKey('lyrics-menu-alignment-options'),
+                selected: {
+                  settings?.lyricsTextAlignment ?? LyricsTextAlignment.normal,
+                },
+                segments: [
+                  ButtonSegment(
+                    value: LyricsTextAlignment.normal,
+                    icon: const Icon(Icons.format_align_left_rounded),
+                    label: Text(strings.normalLyricsAlignment),
+                  ),
+                  ButtonSegment(
+                    value: LyricsTextAlignment.centered,
+                    icon: const Icon(Icons.format_align_center_rounded),
+                    label: Text(strings.centeredLyricsAlignment),
+                  ),
+                ],
+                onSelectionChanged: settings == null
+                    ? null
+                    : (selection) => unawaited(
+                        settingsController.setLyricsTextAlignment(
+                          selection.first,
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(height: 12),
             const Divider(),
             SwitchListTile(
               key: const ValueKey('lyrics-menu-romanization-toggle'),

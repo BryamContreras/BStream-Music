@@ -1368,7 +1368,16 @@ void main() {
           find.byKey(const ValueKey('lyrics-settings-button')),
         );
         expect(gear.size, const Size(48, 48));
-        expect(gear.right, closeTo(320 - 12, .1));
+        if (platform == TargetPlatform.windows) {
+          final exit = tester.getRect(
+            find.byKey(const ValueKey('lyrics-exit-button')),
+          );
+          expect(gear.top, 12);
+          expect(exit.right, closeTo(320 - 12, .1));
+          expect(exit.left - gear.right, 8);
+        } else {
+          expect(gear.right, closeTo(320 - 12, .1));
+        }
         await _openLyricsSettings(tester);
         expect(
           find.byKey(const ValueKey('lyrics-offset-control')),
@@ -1419,6 +1428,97 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     });
+  }
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+    testWidgets('lyrics menu changes alignment on ${platform.name}', (
+      tester,
+    ) async {
+      tester.view.physicalSize = platform == TargetPlatform.android
+          ? const Size(360, 800)
+          : const Size(1000, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final container = await _pumpLyricsPage(
+        tester,
+        player: _FakePlayerService(lookupSnapshot),
+        lyrics: _FakeLyricsService(syncedDocument),
+        platform: platform,
+      );
+      await _openLyricsSettings(tester);
+
+      final alignment = find.byKey(
+        const ValueKey('lyrics-menu-alignment-options'),
+      );
+      await tester.ensureVisible(alignment);
+      expect(
+        tester.widget<SegmentedButton<LyricsTextAlignment>>(alignment).selected,
+        {LyricsTextAlignment.normal},
+      );
+
+      await tester.tap(
+        find.descendant(of: alignment, matching: find.text('Centered')),
+      );
+      await _settleLyricsAnimations(tester);
+      expect(
+        container.read(settingsControllerProvider).value?.lyricsTextAlignment,
+        LyricsTextAlignment.centered,
+      );
+
+      await tester.tap(
+        find.descendant(of: alignment, matching: find.text('Normal')),
+      );
+      await _settleLyricsAnimations(tester);
+      expect(
+        container.read(settingsControllerProvider).value?.lyricsTextAlignment,
+        LyricsTextAlignment.normal,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'dismissing lyrics menu outside restores input on ${platform.name}',
+      (tester) async {
+        tester.view.physicalSize = platform == TargetPlatform.android
+            ? const Size(360, 800)
+            : const Size(1000, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        await _pumpLyricsPage(
+          tester,
+          player: _FakePlayerService(lookupSnapshot),
+          lyrics: _FakeLyricsService(syncedDocument),
+          platform: platform,
+        );
+        await _openLyricsSettings(tester);
+        expect(
+          find.byKey(const ValueKey('lyrics-settings-menu')),
+          findsOneWidget,
+        );
+
+        await tester.tapAt(const Offset(16, 16));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('lyrics-settings-menu')),
+          findsNothing,
+        );
+
+        final gear = find.byKey(const ValueKey('lyrics-settings-button'));
+        await tester.tap(gear);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('lyrics-settings-menu')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const ValueKey('lyrics-settings-close')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
 
   testWidgets('menu translation and romanization are mutually exclusive', (
@@ -1569,7 +1669,10 @@ void main() {
       findsOneWidget,
     );
     expect(count, 1);
-    await tester.tap(find.byKey(const ValueKey('lyrics-translation-retry')));
+    final retry = find.byKey(const ValueKey('lyrics-translation-retry'));
+    await tester.ensureVisible(retry);
+    await tester.pump();
+    await tester.tap(retry);
     await _settleLyricsAnimations(tester);
     expect(count, 2);
   });
@@ -1781,7 +1884,7 @@ void main() {
 
       final exitRect = tester.getRect(exit);
       final offsetRect = tester.getRect(offsetControl);
-      expect(offsetRect.left - exitRect.right, inInclusiveRange(8, 10));
+      expect(exitRect.left - offsetRect.right, inInclusiveRange(8, 10));
       expect(exitRect.center.dy, closeTo(offsetRect.center.dy, 0.1));
       expect(_iconButtonBackground(tester, exit), Colors.transparent);
       final expandedCompanionWidth = tester.getSize(companionWidth).width;
@@ -2856,52 +2959,80 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'lyrics keep only the exit and settings buttons below the content',
-    (tester) async {
-      tester.view
-        ..physicalSize = const Size(960, 800)
-        ..devicePixelRatio = 1;
-      addTearDown(() {
+  for (final platform in [
+    TargetPlatform.windows,
+    TargetPlatform.linux,
+    TargetPlatform.macOS,
+  ]) {
+    testWidgets(
+      '$platform lyrics anchor settings then exit to the viewport top right',
+      (tester) async {
         tester.view
-          ..resetPhysicalSize()
-          ..resetDevicePixelRatio();
-      });
-      await _pumpLyricsPage(
-        tester,
-        player: _FakePlayerService(lookupSnapshot),
-        lyrics: _FakeLyricsService(syncedDocument),
-        platform: TargetPlatform.windows,
-      );
+          ..physicalSize = const Size(960, 800)
+          ..devicePixelRatio = 1;
+        addTearDown(() {
+          tester.view
+            ..resetPhysicalSize()
+            ..resetDevicePixelRatio();
+        });
+        await _pumpLyricsPage(
+          tester,
+          player: _FakePlayerService(lookupSnapshot),
+          lyrics: _FakeLyricsService(syncedDocument),
+          platform: platform,
+        );
 
-      final toolbar = find.byKey(const ValueKey('lyrics-overlay-toolbar'));
-      final exit = find.byKey(const ValueKey('lyrics-exit-button'));
-      final offset = find.byKey(const ValueKey('lyrics-settings-button'));
-      expect(find.byKey(const ValueKey('lyrics-offset-control')), findsNothing);
-      expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
-      expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
-      expect(
-        find.byKey(const ValueKey('lyrics-playback-companion')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('lyrics-companion-timeline')),
-        findsOneWidget,
-      );
-      expect(toolbar, findsOneWidget);
-      expect(find.descendant(of: toolbar, matching: exit), findsOneWidget);
-      expect(find.descendant(of: toolbar, matching: offset), findsOneWidget);
-      expect(
-        tester.getRect(offset).left - tester.getRect(exit).right,
-        inInclusiveRange(8, 10),
-      );
-      expect(
-        find.byKey(const ValueKey('lyrics-playback-control')),
-        findsNothing,
-      );
-      expect(tester.getRect(toolbar).bottom, lessThanOrEqualTo(800 - 8 + 0.1));
-    },
-  );
+        final toolbar = find.byKey(const ValueKey('lyrics-overlay-toolbar'));
+        final exit = find.byKey(const ValueKey('lyrics-exit-button'));
+        final offset = find.byKey(const ValueKey('lyrics-settings-button'));
+        expect(
+          find.byKey(const ValueKey('lyrics-offset-control')),
+          findsNothing,
+        );
+        expect(find.byKey(const ValueKey('mini-player-frame')), findsNothing);
+        expect(find.byKey(const ValueKey('lyrics-player-dock')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('lyrics-playback-companion')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('lyrics-companion-timeline')),
+          findsOneWidget,
+        );
+        expect(toolbar, findsOneWidget);
+        expect(find.descendant(of: toolbar, matching: exit), findsOneWidget);
+        expect(find.descendant(of: toolbar, matching: offset), findsOneWidget);
+        expect(
+          tester.getRect(exit).left - tester.getRect(offset).right,
+          inInclusiveRange(8, 10),
+        );
+        expect(
+          find.byKey(const ValueKey('lyrics-playback-control')),
+          findsNothing,
+        );
+        for (final width in [960.0, 1920.0, 2560.0]) {
+          tester.view.physicalSize = Size(width, 800);
+          await _pumpAnimatedLyrics(tester);
+          expect(tester.getRect(toolbar).top, 12);
+          expect(tester.getRect(toolbar).right, width - 12);
+          expect(tester.getRect(exit).left - tester.getRect(offset).right, 8);
+          expect(tester.takeException(), isNull);
+        }
+        await tester.tap(offset);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('lyrics-settings-menu')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const ValueKey('lyrics-settings-close')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('lyrics-settings-menu')),
+          findsNothing,
+        );
+      },
+    );
+  }
 
   testWidgets('slide animation interpolates when the active line changes', (
     tester,

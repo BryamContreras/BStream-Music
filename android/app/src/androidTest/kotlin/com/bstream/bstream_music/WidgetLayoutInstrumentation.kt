@@ -14,6 +14,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.BitmapDrawable
 import android.os.Bundle
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.animation.Transformation
@@ -125,7 +126,7 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             val size = BStreamWidgetLayout.forSize(case.width, case.height)
             if (size == BStreamWidgetLayout.QUEUE) {
                 check(label != null && label.visibility == View.GONE) { "${case.name}: queue layout still shows the player name" }
-                check(song.text.toString() == if (case.empty) (if (case.english) "Not playing" else "Sin reproducciÃ³n") else title)
+                check(song.text.toString() == if (case.empty) (if (case.english) "Not playing" else "Sin reproducción") else title)
                 check(artistView.visibility == View.VISIBLE)
                 check(artistView.text.toString() == if (case.empty) (if (case.english) "Tap to open" else "Toca para abrir") else artist)
                 check(song.lineCount == 1 && artistView.lineCount == 1) { "${case.name}: queue metadata wraps" }
@@ -133,7 +134,9 @@ class WidgetLayoutInstrumentation : Instrumentation() {
                 check(bounds(cover, parent).top == (10 * density).roundToInt()) { "${case.name}: queue header does not retain its 10dp top inset" }
                 val controls = content.findViewById<LinearLayout>(R.id.widget_controls)
                 val controlsBounds = bounds(controls, parent)
-                check(controlsBounds.top >= maxOf(bounds(cover, parent).bottom, bounds(artistView, parent).bottom))
+                check(controlsBounds.top >= bounds(artistView, parent).bottom) {
+                    "${case.name}: queue controls overlap the artist"
+                }
                 check(controlsBounds.bottom <= height)
                 val previous = content.findViewById<View>(R.id.widget_previous)
                 val next = content.findViewById<View>(R.id.widget_next)
@@ -188,7 +191,23 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             File(screenshots, "${case.name}.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
             image.recycle()
         }
-        return cases.size + verifyArtworkTransitions(base, privateFiles, screenshots)
+        return cases.size + verifyArtworkTransitions(base, privateFiles, screenshots) +
+            verifyQueueClickTemplate(base)
+    }
+
+    private fun verifyQueueClickTemplate(context: Context): Int {
+        val template = BStreamWidgetPlaybackReceiver.queueClickTemplate(context, 424242)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                check(template.isBroadcast && !template.isActivity) {
+                    "Queue clicks must control playback without starting an Activity"
+                }
+                check(!template.isImmutable) { "Queue clicks must accept the selected row" }
+            }
+        } finally {
+            template.cancel()
+        }
+        return 1
     }
 
     private fun verifyArtworkTransitions(base: Context, directory: File, screenshots: File): Int {

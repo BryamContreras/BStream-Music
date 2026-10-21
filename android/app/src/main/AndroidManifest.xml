@@ -40,6 +40,9 @@
             android:name=".BStreamMusicQueueWidgetService"
             android:exported="true"
             android:permission="android.permission.BIND_REMOTEVIEWS" />
+        <receiver
+            android:name=".BStreamWidgetPlaybackReceiver"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:label="BStream Music"

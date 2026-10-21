@@ -10,6 +10,7 @@ import 'core/startup/app_startup_coordinator.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
 import 'core/widgets/liquid_glass_surface.dart';
+import 'core/widgets/desktop_window_shortcuts.dart';
 import 'features/music/presentation/pages/home_page.dart';
 import 'features/music/presentation/providers/music_providers.dart';
 import 'services/player/notification_artwork_service.dart';
@@ -259,8 +260,11 @@ class BStreamMusicApp extends ConsumerWidget {
         iconButtonSize: iconButtonSize,
         textButtonHeight: textButtonHeight,
       ),
-      builder: (context, child) =>
-          ScrollNotificationObserver(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => DesktopWindowShortcuts(
+        child: ScrollNotificationObserver(
+          child: child ?? const SizedBox.shrink(),
+        ),
+      ),
       home: HomePage(checkForUpdatesOnStartup: checkForUpdatesOnStartup),
     );
   }
