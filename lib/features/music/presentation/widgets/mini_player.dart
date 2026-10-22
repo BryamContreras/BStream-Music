@@ -882,7 +882,8 @@ class _MiniPlayerBackgroundFrame extends StatelessWidget {
           key: const ValueKey('mini-player-liquid-glass-background'),
           borderRadius: borderRadius,
           blurSigma: 8,
-          intensity: 1,
+          intensity: LiquidGlassSurface.chromeIntensity,
+          materialOpacity: LiquidGlassSurface.chromeOpacity,
           backdropGroupKey: backdropGroupKey,
           backdropMotion: moving,
           backdropEnvelope: envelope,
@@ -1410,16 +1411,17 @@ class _MiniProgressState extends ConsumerState<_MiniProgress> {
 
   @override
   Widget build(BuildContext context) {
-    final timeline = ref.watch(
-      playerControllerProvider.select((player) {
-        final snapshot = player.value;
-        return (
-          position: snapshot?.position ?? Duration.zero,
-          duration: snapshot?.duration,
-          isPlaying: snapshot?.status == PlayerStatus.playing,
-        );
-      }),
-    );
+    final timelineProvider = playerControllerProvider.select((player) {
+      final snapshot = player.value;
+      return (
+        position: snapshot?.position ?? Duration.zero,
+        duration: snapshot?.duration,
+        isPlaying: snapshot?.status == PlayerStatus.playing,
+      );
+    });
+    final timeline = TickerMode.valuesOf(context).enabled
+        ? ref.watch(timelineProvider)
+        : ref.read(timelineProvider);
     final progressColor = AppColors.downloadAccentFor(context);
     final strings = ref.watch(appStringsProvider);
     final duration = timeline.duration;
@@ -1594,11 +1596,15 @@ class _MiniPositionText extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final seconds = ref.watch(
-      playerControllerProvider.select(
-        (player) => player.value?.position.inSeconds ?? 0,
-      ),
+    final positionProvider = playerControllerProvider.select(
+      (player) => player.value?.position.inSeconds ?? 0,
     );
+    // Retain the last view while the complete mini is offscreen, but do not
+    // rebuild hidden text for every native playback-position notification.
+    // TickerMode becoming active rebuilds this consumer with the latest time.
+    final seconds = TickerMode.valuesOf(context).enabled
+        ? ref.watch(positionProvider)
+        : ref.read(positionProvider);
     return _MiniTimeText(
       duration: Duration(seconds: seconds),
       alignment: Alignment.centerRight,
@@ -1688,18 +1694,19 @@ class _MiniArtworkProgressRing extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final timeline = ref.watch(
-      playerControllerProvider.select((player) {
-        final snapshot = player.value;
-        return (
-          progress: miniArtworkRingProgress(
-            snapshot?.position ?? Duration.zero,
-            snapshot?.duration,
-          ),
-          isPlaying: snapshot?.status == PlayerStatus.playing,
-        );
-      }),
-    );
+    final timelineProvider = playerControllerProvider.select((player) {
+      final snapshot = player.value;
+      return (
+        progress: miniArtworkRingProgress(
+          snapshot?.position ?? Duration.zero,
+          snapshot?.duration,
+        ),
+        isPlaying: snapshot?.status == PlayerStatus.playing,
+      );
+    });
+    final timeline = TickerMode.valuesOf(context).enabled
+        ? ref.watch(timelineProvider)
+        : ref.read(timelineProvider);
     return RepaintBoundary(
       child: DecorativeProgressTransition(
         key: const ValueKey('mini-player-artwork-progress-animation'),

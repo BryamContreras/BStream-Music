@@ -82,6 +82,34 @@ void main() {
     expect(normalCalculation, greaterThan(calmReturn));
   });
 
+  test('only the droplet bends the interior using the existing growth', () {
+    final shader = File(
+      'shaders/liquid_glass_refraction.frag',
+    ).readAsStringSync();
+    final source = File(
+      'lib/core/widgets/liquid_glass_surface.dart',
+    ).readAsStringSync();
+    final main = shader.substring(shader.indexOf('void main()'));
+    final interior = main.indexOf('if (u_lens_bulge > 0.0)');
+    final calm = main.indexOf('if (inside_distance >= refraction_height)');
+    expect(interior, greaterThan(0));
+    expect(calm, greaterThan(interior));
+    expect(main, contains('sample_material(material_coordinate)'));
+    expect(
+      main,
+      contains('vec2 refracted = material_coordinate + distance_amount'),
+    );
+    expect(source, contains('..setFloat(18, 0.025 + 0.275 * activity)'));
+    expect(source, contains('..setFloat(7, 0.025 + 0.155 * activity)'));
+    expect(source, contains('(config.scale - 1) / (config.maxScale - 1)'));
+    final sheet = source.substring(
+      source.indexOf('ui.ImageFilter _materialFilter'),
+    );
+    expect(sheet, contains('..setFloat(18, 0)'));
+    // Curvature reuses the current sample; it must not add any fetches.
+    expect(main.substring(interior, calm), isNot(contains('sample_material(')));
+  });
+
   test('zero dispersion keeps one sample and spectral mode keeps seven', () {
     final source = File(
       'shaders/liquid_glass_refraction.frag',

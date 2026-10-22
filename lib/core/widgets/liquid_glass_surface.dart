@@ -54,7 +54,9 @@ class LiquidGlassSurface extends StatelessWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(24)),
     this.blurSigma = 8,
     this.intensity = 1,
+    this.materialOpacity = 1,
     this.clipBehavior = Clip.antiAlias,
+    this.allowContentOverflow = false,
     this.backdropGroupKey,
     this.backdropEnvelope,
     this.shadowClipInsets,
@@ -63,7 +65,12 @@ class LiquidGlassSurface extends StatelessWidget {
     this.perimeterOpticsEnabled = true,
     this.edgeTreatment = LiquidGlassEdgeTreatment.perimeter,
   }) : assert(blurSigma >= 0 && blurSigma <= 80),
-       assert(intensity >= 0 && intensity <= 2);
+       assert(intensity >= 0 && intensity <= 2),
+       assert(materialOpacity >= 0 && materialOpacity <= 1);
+
+  /// Shared optical density for the floating navigation and mini player.
+  static const chromeIntensity = 1.16;
+  static const chromeOpacity = 0.68;
 
   /// Stable key for the bounded [BackdropFilter].
   static const backdropKey = ValueKey<String>('liquid-glass-backdrop');
@@ -113,6 +120,11 @@ class LiquidGlassSurface extends StatelessWidget {
   );
 
   final Widget child;
+
+  /// Paints the content above the clipped material, allowing a navigation
+  /// lens to swell beyond its capsule without enlarging the backdrop filter.
+  /// The blur, refraction and tint keep their original bounded extent.
+  final bool allowContentOverflow;
   final BorderRadiusGeometry borderRadius;
 
   /// Sigma for the backdrop blur. It is always clipped to this surface.
@@ -120,6 +132,10 @@ class LiquidGlassSurface extends StatelessWidget {
 
   /// Scales only neutral optical depth and highlights.
   final double intensity;
+
+  /// Opacity of the tint, painted highlights and shadows, independently of
+  /// refractive strength. Text and icons retain their original contrast.
+  final double materialOpacity;
 
   final Clip clipBehavior;
 
@@ -211,10 +227,11 @@ class LiquidGlassSurface extends StatelessWidget {
     // controls contrast without bleaching the refracted backdrop color.
     const baseTintAlpha = 0.4;
     final surfaceTintAlpha =
-        (baseTintAlpha * intensity * (highContrast ? 1.16 : 1.0)).clamp(
-          0.0,
-          0.52,
-        );
+        (baseTintAlpha *
+                intensity *
+                materialOpacity *
+                (highContrast ? 1.16 : 1.0))
+            .clamp(0.0, 0.52);
     final disableAnimations =
         MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final opticalMotionDuration = disableAnimations
@@ -236,7 +253,7 @@ class LiquidGlassSurface extends StatelessWidget {
           ),
         ),
       ),
-      RepaintBoundary(child: child),
+      if (!allowContentOverflow) RepaintBoundary(child: child),
       if (hasOpticalEdge)
         Positioned.fill(
           child: IgnorePointer(
@@ -252,7 +269,7 @@ class LiquidGlassSurface extends StatelessWidget {
                     treatment: resolvedEdgeTreatment,
                     textDirection: textDirection,
                     brightness: brightness,
-                    intensity: intensity,
+                    intensity: intensity * materialOpacity,
                     highContrast: highContrast,
                     motion: motion,
                     // Impeller's Windows OpenGL backend can replay a
@@ -324,7 +341,18 @@ class LiquidGlassSurface extends StatelessWidget {
             ],
           );
     if (!isFloatingSheet) {
-      return RepaintBoundary(child: sheet);
+      return RepaintBoundary(
+        child: allowContentOverflow
+            ? Stack(
+                fit: StackFit.passthrough,
+                clipBehavior: Clip.none,
+                children: [
+                  sheet,
+                  RepaintBoundary(child: child),
+                ],
+              )
+            : sheet,
+      );
     }
     final shadow = RepaintBoundary(
       child: CustomPaint(
@@ -334,7 +362,7 @@ class LiquidGlassSurface extends StatelessWidget {
           borderRadius: borderRadius,
           textDirection: textDirection,
           brightness: brightness,
-          intensity: intensity,
+          intensity: intensity * materialOpacity,
           highContrast: highContrast,
         ),
       ),
@@ -360,6 +388,7 @@ class LiquidGlassSurface extends StatelessWidget {
             ),
           ),
           sheet,
+          if (allowContentOverflow) RepaintBoundary(child: child),
         ],
       ),
     );
@@ -478,6 +507,255 @@ class _LiquidGlassEnvelopeGateState extends State<_LiquidGlassEnvelopeGate> {
       );
     },
   );
+}
+
+/// A real, tightly bounded backdrop lens. It reuses the surface shader but
+/// applies no additional blur. Only the small maximum lens extent is captured;
+/// growth changes shader geometry instead of scaling a live backdrop texture.
+class LiquidGlassRefractiveLens extends StatefulWidget {
+  const LiquidGlassRefractiveLens({
+    super.key,
+    required this.baseSize,
+    required this.scale,
+    this.maxScale = 1.22,
+    this.enabled = true,
+  }) : assert(scale >= 1 && scale <= maxScale);
+
+  static const backdropKey = ValueKey('liquid-glass-refractive-selection');
+  final Size baseSize;
+  final double scale;
+  final double maxScale;
+  final bool enabled;
+
+  @override
+  State<LiquidGlassRefractiveLens> createState() =>
+      _LiquidGlassRefractiveLensState();
+}
+
+class _LiquidGlassRefractiveLensState extends State<LiquidGlassRefractiveLens> {
+  ui.FragmentShader? _shader;
+
+  @override
+  void initState() {
+    super.initState();
+    final program = _LiquidGlassShaderProgram.program;
+    if (program != null) {
+      _prepare(program);
+    } else {
+      _LiquidGlassShaderProgram.ensureLoaded().then((program) {
+        if (!mounted || program == null) return;
+        setState(() => _prepare(program));
+      });
+    }
+  }
+
+  void _prepare(ui.FragmentProgram program) {
+    ui.FragmentShader? shader;
+    try {
+      shader = program.fragmentShader();
+      // Most optical parameters are fixed. Bounds, rim strength and interior
+      // curvature follow the same growth animation at scene composition.
+      shader
+        ..setFloat(6, 0.23)
+        ..setFloat(7, 0.025)
+        ..setFloat(8, 0.86)
+        ..setFloat(9, 0.035)
+        ..setFloat(10, 0.5)
+        ..setFloat(11, 0.5)
+        ..setFloat(12, 0.5)
+        ..setFloat(13, 0.5)
+        ..setFloat(14, 1.02)
+        ..setFloat(15, 1.12)
+        ..setFloat(16, 0)
+        ..setFloat(17, 1)
+        ..setFloat(18, 0);
+      ui.ImageFilter.shader(shader);
+      _shader = shader;
+    } on Object {
+      shader?.dispose();
+    }
+  }
+
+  @override
+  void dispose() {
+    _shader?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shader = _shader;
+    if (!widget.enabled || shader == null || widget.baseSize.isEmpty) {
+      return const SizedBox.expand();
+    }
+    return _RefractiveLensHost(
+      key: LiquidGlassRefractiveLens.backdropKey,
+      shader: shader,
+      baseSize: widget.baseSize,
+      scale: widget.scale,
+      maxScale: widget.maxScale,
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+    );
+  }
+}
+
+class _RefractiveLensHost extends LeafRenderObjectWidget {
+  const _RefractiveLensHost({
+    super.key,
+    required this.shader,
+    required this.baseSize,
+    required this.scale,
+    required this.maxScale,
+    required this.devicePixelRatio,
+  });
+
+  final ui.FragmentShader shader;
+  final Size baseSize;
+  final double scale;
+  final double maxScale;
+  final double devicePixelRatio;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderRefractiveLens()..update(this);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderRefractiveLens renderObject,
+  ) => renderObject.update(this);
+}
+
+class _RenderRefractiveLens extends RenderBox {
+  _RefractiveLensHost? _configuration;
+  final _composition = LayerHandle<_RefractiveLensCompositionLayer>();
+  final _clip = LayerHandle<_RefractiveLensClipLayer>();
+  final _backdrop = LayerHandle<BackdropFilterLayer>();
+  Rect? _lastBounds;
+  bool debugIsRefracting = false;
+
+  void update(_RefractiveLensHost configuration) {
+    final previous = _configuration;
+    if (previous != null &&
+        previous.shader == configuration.shader &&
+        previous.baseSize == configuration.baseSize &&
+        previous.scale == configuration.scale &&
+        previous.maxScale == configuration.maxScale &&
+        previous.devicePixelRatio == configuration.devicePixelRatio) {
+      return;
+    }
+    _configuration = configuration;
+    _lastBounds = null;
+    markNeedsPaint();
+  }
+
+  @override
+  bool get isRepaintBoundary => true;
+
+  @override
+  bool get alwaysNeedsCompositing => true;
+
+  @override
+  void performLayout() => size = constraints.constrain(
+    Size(
+      _configuration!.baseSize.width * _configuration!.maxScale + 2,
+      _configuration!.baseSize.height * _configuration!.maxScale + 2,
+    ),
+  );
+
+  void _resolve() {
+    if (!attached || !hasSize || size.isEmpty) return;
+    final config = _configuration!;
+    final base = config.baseSize;
+    // The fixed viewport has a 1dp AA gutter and is anchored like the cached
+    // selection paint: horizontal centre, slightly biased upward vertically.
+    final local = Rect.fromLTWH(
+      1 + base.width * (config.maxScale - config.scale) / 2,
+      1 + base.height * (config.maxScale - config.scale) * 0.7,
+      base.width * config.scale,
+      base.height * config.scale,
+    );
+    final logical = MatrixUtils.transformRect(getTransformTo(null), local);
+    final bounds = Rect.fromLTRB(
+      logical.left * config.devicePixelRatio,
+      logical.top * config.devicePixelRatio,
+      logical.right * config.devicePixelRatio,
+      logical.bottom * config.devicePixelRatio,
+    );
+    if (bounds == _lastBounds) return;
+    _lastBounds = bounds;
+    try {
+      // Reuse the existing growth animation for optical pressure too. The
+      // resting droplet stays subtle; movement bends the interior backdrop
+      // visibly, then settles without another ticker or rebuilding the tabs.
+      final activity = config.maxScale > 1
+          ? ((config.scale - 1) / (config.maxScale - 1)).clamp(0.0, 1.0)
+          : 0.0;
+      config.shader
+        ..setFloat(2, bounds.width)
+        ..setFloat(3, bounds.height)
+        ..setFloat(4, bounds.left)
+        ..setFloat(5, bounds.top)
+        // The backdrop now includes text. Keep its resting baseline readable;
+        // the full refractive rim returns as the droplet swells and travels.
+        ..setFloat(7, 0.025 + 0.155 * activity)
+        ..setFloat(18, 0.025 + 0.275 * activity);
+      _backdrop.layer!.filter = ui.ImageFilter.shader(config.shader);
+      debugIsRefracting = true;
+    } on Object {
+      debugIsRefracting = false;
+      _backdrop.layer!.filter = const ui.ColorFilter.mode(
+        Color(0x00000000),
+        BlendMode.src,
+      );
+    }
+    // This resolver runs after the normal scene-dirty traversal. Invalidate
+    // the fixed clip too so it cannot retain a previous filter snapshot.
+    _clip.layer!.invalidateResolvedChild();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    _composition.layer ??= _RefractiveLensCompositionLayer(_resolve);
+    _clip.layer ??= _RefractiveLensClipLayer();
+    _clip.layer!.clipRect = offset & size;
+    _backdrop.layer ??= BackdropFilterLayer(
+      filter: const ui.ColorFilter.mode(Color(0x00000000), BlendMode.src),
+    );
+    _lastBounds = null;
+    context.pushLayer(_composition.layer!, (context, offset) {
+      context.pushLayer(_clip.layer!, (context, offset) {
+        context.pushLayer(_backdrop.layer!, (context, offset) {}, offset);
+      }, offset);
+    }, offset);
+  }
+
+  @override
+  void dispose() {
+    _composition.layer?.resolve = null;
+    _composition.layer = null;
+    _clip.layer = null;
+    _backdrop.layer = null;
+    super.dispose();
+  }
+}
+
+class _RefractiveLensCompositionLayer extends ContainerLayer {
+  _RefractiveLensCompositionLayer(this.resolve);
+  VoidCallback? resolve;
+
+  @override
+  bool get alwaysNeedsAddToScene => true;
+
+  @override
+  void addToScene(ui.SceneBuilder builder) {
+    resolve?.call();
+    addChildrenToScene(builder);
+  }
+}
+
+class _RefractiveLensClipLayer extends ClipRectLayer {
+  void invalidateResolvedChild() => markNeedsAddToScene();
 }
 
 /// A localized, hover-only glass droplet for one tab or control.
@@ -866,7 +1144,8 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
           ..setFloat(14, (1 + 0.3 * widget.intensity).clamp(1.0, 1.44))
           ..setFloat(15, (1 + 0.42 * widget.intensity).clamp(1.0, 1.5))
           ..setFloat(16, embedded ? 1 : 0)
-          ..setFloat(17, widget.lensBounds == null ? 0 : 1);
+          ..setFloat(17, widget.lensBounds == null ? 0 : 1)
+          ..setFloat(18, 0);
         final lens = ui.ImageFilter.shader(shader);
         _cachedRefractionFilter = boundedBackdrop
             ? lens

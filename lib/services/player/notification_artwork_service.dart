@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/utils/bounded_byte_stream.dart';
+import '../../core/utils/cached_artwork_image_provider.dart';
 import '../../core/utils/image_source.dart';
 
 typedef NotificationArtworkCacheDirectoryProvider =
@@ -19,6 +20,9 @@ typedef NotificationArtworkCacheDirectoryProvider =
 typedef NotificationArtworkServerBinder = Future<HttpServer> Function();
 typedef DeviceAudioArtworkLoader =
     Future<Uint8List?> Function(String audioUri, int targetWidth);
+typedef NotificationArtworkSourceFileLookup =
+    Future<File?> Function(String source);
+typedef _NotificationArtworkInput = ({Uint8List bytes, bool fromSharedCache});
 
 /// Supplies square, center-cropped artwork to mobile system media controls.
 ///
@@ -31,10 +35,10 @@ class NotificationArtworkService {
     NotificationArtworkCacheDirectoryProvider? cacheDirectoryProvider,
     NotificationArtworkServerBinder? serverBinder,
     DeviceAudioArtworkLoader? deviceAudioArtworkLoader,
-    // High-density lock screens can request artwork near the physical width
-    // of the display. Keep enough detail for those surfaces instead of making
-    // the system upscale the smaller notification thumbnail.
-    this.outputSize = 1280,
+    NotificationArtworkSourceFileLookup? sourceFileLookup,
+    // AudioServiceConfig caps both dimensions at 320. Full-player artwork uses
+    // its original displayArtwork source, independently of this derivative.
+    this.outputSize = 320,
     this.maximumCacheEntries = 128,
     this.maximumRegisteredSources = 512,
     this.maximumConcurrentWork = 2,
@@ -52,7 +56,8 @@ class NotificationArtworkService {
            cacheDirectoryProvider ?? _defaultCacheDirectory,
        _serverBinder = serverBinder ?? _bindLoopbackServer,
        _deviceAudioArtworkLoader =
-           deviceAudioArtworkLoader ?? _loadDeviceAudioArtwork;
+           deviceAudioArtworkLoader ?? _loadDeviceAudioArtwork,
+       _sourceFileLookup = sourceFileLookup ?? _defaultSourceFileLookup;
 
   static final NotificationArtworkService instance =
       NotificationArtworkService();
@@ -64,6 +69,7 @@ class NotificationArtworkService {
   final NotificationArtworkCacheDirectoryProvider _cacheDirectoryProvider;
   final NotificationArtworkServerBinder _serverBinder;
   final DeviceAudioArtworkLoader _deviceAudioArtworkLoader;
+  final NotificationArtworkSourceFileLookup _sourceFileLookup;
   final int outputSize;
   final int maximumCacheEntries;
   final int maximumRegisteredSources;
@@ -222,7 +228,19 @@ class NotificationArtworkService {
     }
   }
 
-  Future<File?> _resolveArtwork(String key, String source) async {
+  Future<File?> _resolveArtwork(String key, String source) {
+    final pending = _inFlight[key];
+    if (pending != null) return pending;
+    late final Future<File?> request;
+    request = _resolveCachedArtwork(key, source).whenComplete(() {
+      if (identical(_inFlight[key], request)) _inFlight.remove(key);
+    });
+    _inFlight[key] = request;
+    return request;
+  }
+
+  Future<File?> _resolveCachedArtwork(String key, String source) async {
+    if (_disposed) return null;
     final directory = await _cacheDirectoryProvider();
     await directory.create(recursive: true);
     final target = File(p.join(directory.path, '$key.jpg'));
@@ -230,24 +248,14 @@ class NotificationArtworkService {
       return target;
     }
 
-    final pending = _inFlight[key];
-    if (pending != null) {
-      return pending;
-    }
-
-    late final Future<File?> generation;
-    generation = _withWorkPermit(() => _generateArtwork(source, target))
-        .whenComplete(() {
-          if (identical(_inFlight[key], generation)) {
-            _inFlight.remove(key);
-          }
-        });
-    _inFlight[key] = generation;
-    return generation;
+    return _withWorkPermit(() => _generateArtwork(source, target));
   }
 
-  Future<T> _withWorkPermit<T>(Future<T> Function() operation) async {
+  Future<File?> _withWorkPermit(Future<File?> Function() operation) async {
     if (_activeWork >= maximumConcurrentWork) {
+      // A rapid sequence of replaced notifications must not retain an
+      // unbounded queue. Existing source fallback remains available above.
+      if (_workWaiters.length >= maximumRegisteredSources) return null;
       final waiter = Completer<void>();
       _workWaiters.add(waiter);
       await waiter.future;
@@ -256,6 +264,7 @@ class NotificationArtworkService {
     }
 
     try {
+      if (_disposed) return null;
       return await operation();
     } finally {
       if (_workWaiters.isNotEmpty) {
@@ -271,20 +280,38 @@ class NotificationArtworkService {
   Future<File?> _generateArtwork(String source, File target) async {
     File? temporary;
     try {
-      final bytes = await _loadSourceBytes(source);
-      if (bytes == null || bytes.isEmpty) {
+      final input = await _loadSourceBytes(source);
+      if (_disposed || input == null || input.bytes.isEmpty) {
         return null;
       }
 
       temporary = File(
         '${target.path}.${DateTime.now().microsecondsSinceEpoch}.tmp.jpg',
       );
-      final transformInput = bytes;
+      final transformInput = input.bytes;
       final transformSize = outputSize;
-      final encoded = await Isolate.run(
-        () => _centerCropJpeg(transformInput, transformSize),
+      final allowUpscale = !input.fromSharedCache;
+      var encoded = await Isolate.run(
+        () => _centerCropJpeg(
+          transformInput,
+          transformSize,
+          allowUpscale: allowUpscale,
+        ),
       );
-      if (encoded == null || encoded.isEmpty) {
+      if (!_disposed &&
+          encoded == null &&
+          input.fromSharedCache &&
+          isNetworkImageSource(source)) {
+        // A cached card rendition may be smaller than the system artwork, or
+        // contain a truncated frame. Fetch a suitable source before fallback.
+        final fresh = await _loadNetworkBytes(source, skipSharedCache: true);
+        if (!_disposed && fresh != null && fresh.bytes.isNotEmpty) {
+          encoded = await Isolate.run(
+            () => _centerCropJpeg(fresh.bytes, transformSize),
+          );
+        }
+      }
+      if (_disposed || encoded == null || encoded.isEmpty) {
         return null;
       }
       await temporary.writeAsBytes(encoded, flush: true);
@@ -312,11 +339,15 @@ class NotificationArtworkService {
     }
   }
 
-  Future<Uint8List?> _loadSourceBytes(String source) async {
+  Future<_NotificationArtworkInput?> _loadSourceBytes(String source) async {
     final deviceAudioUri = deviceAudioUriFromArtworkSource(source);
     if (deviceAudioUri != null) {
       try {
-        return await _deviceAudioArtworkLoader(deviceAudioUri, outputSize);
+        final bytes = await _deviceAudioArtworkLoader(
+          deviceAudioUri,
+          outputSize,
+        );
+        return bytes == null ? null : (bytes: bytes, fromSharedCache: false);
       } catch (_) {
         return null;
       }
@@ -326,7 +357,12 @@ class NotificationArtworkService {
     }
 
     final file = imageFileFromSource(source);
-    if (file == null || !await file.exists()) {
+    final bytes = file == null ? null : await _readSourceFile(file);
+    return bytes == null ? null : (bytes: bytes, fromSharedCache: false);
+  }
+
+  Future<Uint8List?> _readSourceFile(File file) async {
+    if (!await file.exists()) {
       return null;
     }
     final length = await file.length();
@@ -369,25 +405,47 @@ class NotificationArtworkService {
     }
   }
 
-  Future<Uint8List?> _loadNetworkBytes(String source) async {
+  Future<_NotificationArtworkInput?> _loadNetworkBytes(
+    String source, {
+    bool skipSharedCache = false,
+  }) async {
+    final candidates = <String>{
+      ?sizedGoogleArtworkSource(source, outputSize),
+      ...artworkSourceCandidates(source),
+    };
+    // Reuse the compressed source already held by the shared display cache.
+    // getFileFromCache never starts a second request or waits for a cold CDN.
+    for (final candidate in skipSharedCache ? <String>[] : candidates) {
+      if (_disposed) return null;
+      try {
+        final cached = await _sourceFileLookup(candidate);
+        final bytes = cached == null ? null : await _readSourceFile(cached);
+        if (bytes != null && bytes.isNotEmpty) {
+          return (bytes: bytes, fromSharedCache: true);
+        }
+      } catch (_) {
+        // Missing/stale display-cache files must not prevent network fallback.
+      }
+    }
     final client = HttpClient()..connectionTimeout = sourceIdleTimeout;
     try {
-      for (final candidate in artworkSourceCandidates(source)) {
+      for (final candidate in candidates) {
+        if (_disposed) return null;
         final uri = Uri.tryParse(candidate);
         if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
           continue;
         }
         try {
-          final request = await client.getUrl(uri);
+          final request = await client.getUrl(uri).timeout(sourceIdleTimeout);
           request.headers
             ..set(
               HttpHeaders.userAgentHeader,
               'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36',
             )
             ..set(HttpHeaders.acceptHeader, 'image/*,*/*;q=0.8');
-          final response = await request.close();
+          final response = await request.close().timeout(sourceIdleTimeout);
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            await response.drain<void>();
+            await response.drain<void>().timeout(sourceIdleTimeout);
             continue;
           }
           final bytes = await collectBoundedByteStream(
@@ -400,7 +458,7 @@ class NotificationArtworkService {
             totalTimeout: sourceTotalTimeout,
           );
           if (bytes.isNotEmpty) {
-            return Uint8List.fromList(bytes);
+            return (bytes: Uint8List.fromList(bytes), fromSharedCache: false);
           }
         } catch (_) {
           // Try the next stable YouTube artwork variant when available.
@@ -499,6 +557,9 @@ class NotificationArtworkService {
     return Directory(p.join(root.path, 'notification-artwork'));
   }
 
+  static Future<File?> _defaultSourceFileLookup(String source) async =>
+      (await BStreamArtworkCacheManager().getFileFromCache(source))?.file;
+
   static Future<Uint8List?> _loadDeviceAudioArtwork(
     String audioUri,
     int targetWidth,
@@ -518,28 +579,53 @@ class NotificationArtworkService {
   }
 }
 
-Uint8List? _centerCropJpeg(Uint8List bytes, int outputSize) {
-  final decoded = image.decodeImage(bytes);
-  if (decoded == null || decoded.width <= 0 || decoded.height <= 0) {
+Uint8List? _centerCropJpeg(
+  Uint8List bytes,
+  int outputSize, {
+  bool allowUpscale = true,
+}) {
+  try {
+    final decoder = image.findDecoderForData(bytes);
+    final info = decoder?.startDecode(bytes);
+    if (decoder == null ||
+        info == null ||
+        info.width <= 0 ||
+        info.height <= 0 ||
+        info.width > 8192 ||
+        info.height > 8192 ||
+        info.width * info.height > 24000000 ||
+        (!allowUpscale && min(info.width, info.height) < outputSize)) {
+      return null;
+    }
+    final decoded = decoder.decodeFrame(0);
+    if (decoded == null) return null;
+    final orientation = decoded.exif.imageIfd.orientation;
+    final oriented = orientation != null && orientation != 1
+        ? image.bakeOrientation(decoded)
+        : decoded;
+    final side = min(oriented.width, oriented.height);
+    final cropped = oriented.width == oriented.height
+        ? oriented
+        : image.copyCrop(
+            oriented,
+            x: (oriented.width - side) ~/ 2,
+            y: (oriented.height - side) ~/ 2,
+            width: side,
+            height: side,
+          );
+    final resized = image.copyResize(
+      cropped,
+      width: outputSize,
+      height: outputSize,
+      interpolation: image.Interpolation.cubic,
+    );
+    return image.encodeJpg(
+      resized,
+      quality: NotificationArtworkService._jpegQuality,
+    );
+  } catch (_) {
+    // Optional malformed artwork must still allow the bounded fresh-source
+    // retry, or the original-source fallback, without failing playback.
     return null;
   }
-  final oriented = image.bakeOrientation(decoded);
-  final side = min(oriented.width, oriented.height);
-  final cropped = image.copyCrop(
-    oriented,
-    x: (oriented.width - side) ~/ 2,
-    y: (oriented.height - side) ~/ 2,
-    width: side,
-    height: side,
-  );
-  final resized = image.copyResize(
-    cropped,
-    width: outputSize,
-    height: outputSize,
-    interpolation: image.Interpolation.cubic,
-  );
-  return image.encodeJpg(
-    resized,
-    quality: NotificationArtworkService._jpegQuality,
-  );
 }

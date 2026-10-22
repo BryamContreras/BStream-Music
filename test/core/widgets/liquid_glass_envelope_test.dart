@@ -103,7 +103,9 @@ void main() {
       expect(shader, contains('clamp(0.5 - signed_distance, 0.0, 1.0)'));
       expect(
         shader,
-        contains('frag_color = sample_material(coordinate) * shape_coverage;'),
+        contains(
+          'frag_color = sample_material(material_coordinate) * shape_coverage;',
+        ),
       );
       expect(
         shader,

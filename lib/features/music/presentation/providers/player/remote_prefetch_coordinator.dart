@@ -160,11 +160,17 @@ class RemotePrefetchCoordinator {
   RemotePrefetchCoordinator({
     DateTime Function()? clock,
     this.maxAutomaticRetries = 2,
+    this.additionalWarmupDelay = const Duration(seconds: 20),
   }) : _clock = clock ?? DateTime.now,
-       assert(maxAutomaticRetries >= 0);
+       assert(maxAutomaticRetries >= 0),
+       assert(additionalWarmupDelay >= Duration.zero);
 
   final DateTime Function() _clock;
   final int maxAutomaticRetries;
+
+  /// Native URLs and NEXT remain immediate. Only optional full-file transfers
+  /// for the second/third successor wait, leaving the audible stream room.
+  final Duration additionalWarmupDelay;
   String? _signature;
   String? _failedSignature;
   DateTime? _retryAfter;
@@ -172,12 +178,15 @@ class RemotePrefetchCoordinator {
   int _generation = 0;
   bool _disposed = false;
   Timer? _retryTimer;
+  Timer? _warmupDelayTimer;
+  Completer<bool>? _warmupDelayCompletion;
   Future<void> _serviceMutationTail = Future<void>.value();
 
   String? get signature => _signature;
 
   void invalidate() {
     _generation++;
+    _cancelWarmupDelay();
     _retryTimer?.cancel();
     _retryTimer = null;
     _signature = null;
@@ -201,6 +210,7 @@ class RemotePrefetchCoordinator {
       _retryAfter = null;
     }
     _generation++;
+    _cancelWarmupDelay();
     _retryTimer?.cancel();
     _retryTimer = null;
     _signature = signature;
@@ -212,6 +222,7 @@ class RemotePrefetchCoordinator {
   void invalidateIfCurrent(String signature) {
     if (_signature == signature) {
       _generation++;
+      _cancelWarmupDelay();
       _retryTimer?.cancel();
       _retryTimer = null;
       _signature = null;
@@ -351,6 +362,39 @@ class RemotePrefetchCoordinator {
     var completed = true;
     final preparedSources = <RemotePlaybackSource>[];
     final warmups = <({int sourceIndex, TrackInfo track})>[];
+    Future<bool>? immediateWarmup;
+    var sourcesFinalized = false;
+
+    Future<bool> warmAndPublish(
+      ({int sourceIndex, TrackInfo track}) warmup,
+    ) async {
+      try {
+        if (!current()) return false;
+        final cached = await warmResolved(warmup.track);
+        if (!current() || cached == null) return false;
+        if (nativeService != null) {
+          final previous = preparedSources[warmup.sourceIndex];
+          preparedSources[warmup.sourceIndex] = RemotePlaybackSource(
+            track: previous.track,
+            uri: cached.uri,
+            queueEntryId: previous.queueEntryId,
+            isOnlyLogicalQueueItem: previous.isOnlyLogicalQueueItem,
+          );
+          onSourcePrepared?.call(preparedSources[warmup.sourceIndex]);
+          await _mutateServiceIfCurrent(
+            current,
+            () => nativeService.updateRemoteQueue(
+              List<RemotePlaybackSource>.unmodifiable(preparedSources),
+              finalize: sourcesFinalized,
+            ),
+          );
+        }
+        return current();
+      } catch (_) {
+        return false;
+      }
+    }
+
     for (final entry in upcoming) {
       try {
         final existing = cacheEnabled ? await cachedFile(entry.track) : null;
@@ -382,11 +426,17 @@ class RemotePrefetchCoordinator {
           await _mutateServiceIfCurrent(
             current,
             () => nativeService.updateRemoteQueue(
-              preparedSources,
+              List<RemotePlaybackSource>.unmodifiable(preparedSources),
               finalize: false,
             ),
           );
           if (!current()) return;
+        }
+        if (preparedSources.length == 1 && warmups.isNotEmpty) {
+          // Start NEXT's full transfer now. A slow later resolver or optional
+          // standby deck must not hold it behind the rest of the lookahead.
+          // Publishing uses the same service gate and immutable snapshots.
+          immediateWarmup = warmAndPublish(warmups.first);
         }
         if (preparedSources.length == 1 && crossfadePreparer != null) {
           await _mutateServiceIfCurrent(
@@ -411,10 +461,12 @@ class RemotePrefetchCoordinator {
         preparedSources.length == upcoming.length &&
         current()) {
       try {
-        await _mutateServiceIfCurrent(
-          current,
-          () => nativeService.updateRemoteQueue(preparedSources),
-        );
+        await _mutateServiceIfCurrent(current, () async {
+          await nativeService.updateRemoteQueue(
+            List<RemotePlaybackSource>.unmodifiable(preparedSources),
+          );
+          sourcesFinalized = true;
+        });
       } catch (_) {
         completed = false;
       }
@@ -423,32 +475,24 @@ class RemotePrefetchCoordinator {
     for (final warmup in warmups) {
       try {
         if (!current()) return;
-        // Fill the immediate next song first. Do not start three full transfers
-        // while the audible track is also trying to buffer on the same link.
-        final cached = await warmResolved(warmup.track);
-        if (!current()) {
-          return;
-        }
-        if (cached == null) {
-          completed = false;
+        if (warmup.sourceIndex == 0) {
+          final warmed = await (immediateWarmup ?? warmAndPublish(warmup));
+          if (!current()) return;
+          if (!warmed) {
+            completed = false;
+            break;
+          }
           continue;
         }
-        if (nativeService != null) {
-          final previous = preparedSources[warmup.sourceIndex];
-          preparedSources[warmup.sourceIndex] = RemotePlaybackSource(
-            track: previous.track,
-            uri: cached.uri,
-            queueEntryId: previous.queueEntryId,
-            isOnlyLogicalQueueItem: previous.isOnlyLogicalQueueItem,
-          );
-          onSourcePrepared?.call(preparedSources[warmup.sourceIndex]);
-          await _mutateServiceIfCurrent(
-            current,
-            () => nativeService.updateRemoteQueue(preparedSources),
-          );
-          if (!current()) {
-            return;
-          }
+        // Retry a failed NEXT/native preparation on its normal backoff, rather
+        // than waiting through optional transfers before scheduling the retry.
+        if (!completed || retentionFailed) break;
+        if (!await _waitForAdditionalWarmup(current)) return;
+        final warmed = await warmAndPublish(warmup);
+        if (!current()) return;
+        if (!warmed) {
+          completed = false;
+          break;
         }
       } catch (_) {
         completed = false;
@@ -469,6 +513,33 @@ class RemotePrefetchCoordinator {
       _failedSignature = null;
       _retryAfter = null;
       _failureCount = 0;
+    }
+  }
+
+  Future<bool> _waitForAdditionalWarmup(bool Function() isCurrent) {
+    if (additionalWarmupDelay == Duration.zero) {
+      return Future<bool>.value(isCurrent());
+    }
+    if (!isCurrent()) return Future<bool>.value(false);
+    _cancelWarmupDelay();
+    final completion = Completer<bool>();
+    _warmupDelayCompletion = completion;
+    _warmupDelayTimer = Timer(additionalWarmupDelay, () {
+      if (!identical(_warmupDelayCompletion, completion)) return;
+      _warmupDelayTimer = null;
+      _warmupDelayCompletion = null;
+      completion.complete(isCurrent());
+    });
+    return completion.future;
+  }
+
+  void _cancelWarmupDelay() {
+    _warmupDelayTimer?.cancel();
+    _warmupDelayTimer = null;
+    final completion = _warmupDelayCompletion;
+    _warmupDelayCompletion = null;
+    if (completion != null && !completion.isCompleted) {
+      completion.complete(false);
     }
   }
 

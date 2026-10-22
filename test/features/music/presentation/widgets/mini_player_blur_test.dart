@@ -517,7 +517,7 @@ void main() {
 
         expect(liquidGlass, findsOneWidget);
         expect(tester.widget<LiquidGlassSurface>(liquidGlass).blurSigma, 8);
-        expect(tester.widget<LiquidGlassSurface>(liquidGlass).intensity, 1);
+        expect(tester.widget<LiquidGlassSurface>(liquidGlass).intensity, 1.16);
         expect(
           tester.widget<LiquidGlassSurface>(liquidGlass).adaptiveEdgeEnabled,
           isTrue,
@@ -811,6 +811,57 @@ void main() {
         find.byKey(const ValueKey('mini-player-artwork-progress-ring')),
       );
       expect(ring.value, closeTo(0.5, 0.001));
+    },
+  );
+
+  testWidgets(
+    'hidden mini stops position rebuilds and resumes at latest time',
+    (tester) async {
+      _configureView(tester, const Size(360, 200));
+      const initial = PlayerSnapshot(
+        status: PlayerStatus.playing,
+        title: 'Progreso retenido',
+        artist: 'BStream Music',
+        trackId: 'hidden-mini-progress',
+        position: Duration(seconds: 45),
+        duration: Duration(minutes: 3),
+      );
+      final controller = _TestPlayerController(snapshot: initial);
+      Widget harness(bool enabled) => _miniPlayerHarness(
+        mode: MiniPlayerMode.capsule,
+        backgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+        playerController: controller,
+        tickersEnabled: enabled,
+      );
+      final ringFinder = find.byKey(
+        const ValueKey('mini-player-artwork-progress-ring'),
+      );
+      await tester.pumpWidget(harness(true));
+      await tester.pump();
+      expect(
+        tester.widget<CircularProgressIndicator>(ringFinder).value,
+        closeTo(0.25, 0.001),
+      );
+      await tester.pumpWidget(harness(false));
+      await tester.pumpAndSettle();
+      final hiddenRing = tester.widget<CircularProgressIndicator>(ringFinder);
+      controller.emit(initial.copyWith(position: const Duration(seconds: 90)));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        tester.widget<CircularProgressIndicator>(ringFinder),
+        same(hiddenRing),
+        reason:
+            'Position notifications must not rebuild a completely hidden mini.',
+      );
+      await tester.pumpWidget(harness(true));
+      await tester.pump();
+      expect(
+        tester.widget<CircularProgressIndicator>(ringFinder).value,
+        closeTo(0.5, 0.001),
+        reason: 'Showing the mini must use the current playback position.',
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -1432,6 +1483,7 @@ Widget _miniPlayerHarness({
   VoidCallback? onOpenPlayer,
   List<LocalTrack> localTracks = const <LocalTrack>[],
   bool disableAnimations = false,
+  bool tickersEnabled = true,
 }) {
   final controller = playerController ?? _TestPlayerController();
   return ProviderScope(
@@ -1460,10 +1512,13 @@ Widget _miniPlayerHarness({
           alignment: Alignment.topCenter,
           child: SizedBox(
             height: constrainedHeight,
-            child: MiniPlayer(
-              mode: mode,
-              backgroundMode: backgroundMode,
-              onOpenPlayer: onOpenPlayer,
+            child: TickerMode(
+              enabled: tickersEnabled,
+              child: MiniPlayer(
+                mode: mode,
+                backgroundMode: backgroundMode,
+                onOpenPlayer: onOpenPlayer,
+              ),
             ),
           ),
         ),

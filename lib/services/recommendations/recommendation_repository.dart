@@ -94,22 +94,8 @@ class LocalDatabaseRecommendationRepository
   }
 
   @override
-  Future<Set<String>> getLibraryTrackKeys() async {
-    return coordinator.runWithGate(() async {
-      final tracks = await database.getLocalTracks();
-      final keys = <String>{};
-      for (final track in tracks) {
-        final id = track.id.trim();
-        if (id.isNotEmpty) {
-          keys.add(id);
-        }
-        final sourceId = track.sourceId?.trim();
-        if (sourceId != null && sourceId.isNotEmpty) {
-          keys.add(sourceId);
-        }
-      }
-      return Set<String>.unmodifiable(keys);
-    });
+  Future<Set<String>> getLibraryTrackKeys() {
+    return coordinator.runWithGate(database.getLocalTrackIdentityKeys);
   }
 
   @override

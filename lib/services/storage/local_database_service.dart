@@ -389,6 +389,24 @@ class LocalDatabaseService {
     return rows.map(LocalTrackModel.fromMap).toList(growable: false);
   }
 
+  /// Identities needed to exclude library tracks from recommendations. Avoid
+  /// sorting the library or decoding artwork, artists and every track model.
+  Future<Set<String>> getLocalTrackIdentityKeys() async {
+    final db = await database;
+    final rows = await db.query(
+      'local_tracks',
+      columns: const <String>['id', 'source_id'],
+    );
+    final keys = <String>{};
+    for (final row in rows) {
+      for (final column in const <String>['id', 'source_id']) {
+        final key = row[column]?.toString().trim();
+        if (key != null && key.isNotEmpty) keys.add(key);
+      }
+    }
+    return Set<String>.unmodifiable(keys);
+  }
+
   /// Persists the complete visible library order. Unordered/new downloads are
   /// left at the end until the user explicitly reorders the list again.
   Future<void> reorderLocalTracks(List<String> orderedTrackIds) async {

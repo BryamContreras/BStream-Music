@@ -788,6 +788,57 @@ void main() {
   );
 
   test(
+    'leaving the category cancels the paced duration batches after initial rows',
+    () async {
+      const target = InnerTubeBrowseTarget(
+        browseId: 'FEmusic_moods_and_genres_category',
+        params: 'opaque-paced-duration',
+      );
+      final songs = <InnerTubeSong>[
+        for (var index = 0; index < 16; index++)
+          _song(
+            'paced${index.toString().padLeft(6, '0')}',
+            'Song $index',
+            duration: null,
+          ),
+      ];
+      final source = _FakeMoodGenreSearch(
+        sections: const <InnerTubeMoodGenreSection>[],
+        moodPage: InnerTubeMoodGenrePage(
+          sections: <InnerTubeHomeSection>[
+            InnerTubeHomeSection(title: 'Songs', songs: songs),
+          ],
+        ),
+        durationLookup: (_) async => const Duration(minutes: 3),
+      );
+      final container = ProviderContainer(
+        overrides: [youtubeMusicSearchProvider.overrideWithValue(source)],
+      );
+      const category = SearchBrowseCategory(
+        id: 'paced-duration',
+        title: 'Durations',
+        searchQuery: 'paced durations',
+        target: target,
+      );
+      final initialRows = await _waitForTracks(
+        container,
+        searchBrowseCategoryTracksProvider(category),
+        (tracks) => tracks.where((track) => track.duration != null).length == 8,
+      );
+      expect(
+        initialRows.map((track) => track.id),
+        songs.map((song) => song.videoId),
+      );
+      container.dispose();
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(
+        source.trackLookupCalls,
+        songs.take(8).map((song) => song.videoId),
+      );
+    },
+  );
+
+  test(
     'stops duration enrichment after the active batch is disposed',
     () async {
       const target = InnerTubeBrowseTarget(

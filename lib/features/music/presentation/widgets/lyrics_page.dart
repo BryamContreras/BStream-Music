@@ -3563,17 +3563,14 @@ double _measureTextHeight({
   required TextScaler textScaler,
   required TextDirection textDirection,
   required Locale? locale,
-}) {
-  final painter = TextPainter(
-    text: TextSpan(text: text, style: style),
-    textDirection: textDirection,
-    textScaler: textScaler,
-    locale: locale,
-  )..layout(maxWidth: maxWidth);
-  final height = painter.height;
-  painter.dispose();
-  return height;
-}
+}) => measureLyricsParagraphHeight(
+  text: text,
+  style: style,
+  maxWidth: maxWidth,
+  textDirection: textDirection,
+  textScaler: textScaler,
+  locale: locale,
+);
 
 String? _displayedRomanization(String originalText, String? romanizedText) {
   final trimmed = romanizedText?.trim();

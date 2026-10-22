@@ -24,6 +24,9 @@ uniform float u_edge_gain;
 uniform float u_edge_mode;
 // Opt-in fixed-envelope mode owns the contour; native clipped lenses use 0.
 uniform float u_shape_mask;
+// Only the navigation droplet opts into a broad convex interior. Other glass
+// surfaces keep zero, retaining their original calm centre and optical cost.
+uniform float u_lens_bulge;
 uniform sampler2D u_backdrop;
 
 out vec4 frag_color;
@@ -145,8 +148,18 @@ void main() {
   }
 
   float inside_distance = max(-signed_distance, 0.0);
+  vec2 material_coordinate = coordinate;
+  if (u_lens_bulge > 0.0) {
+    // Bend the actual backdrop throughout the droplet, not just its rim.
+    // The elliptical falloff keeps its centre stable and fades displacement
+    // smoothly into the existing perimeter lens. No extra texture sample,
+    // capture, blur or time-driven noise is needed as the droplet travels.
+    vec2 normalized_position = centered / max(half_size, vec2(0.5));
+    float convex_falloff = max(1.0 - dot(normalized_position, normalized_position), 0.0);
+    material_coordinate -= centered * u_lens_bulge * convex_falloff * convex_falloff;
+  }
   if (inside_distance >= refraction_height) {
-    frag_color = sample_material(coordinate) * shape_coverage;
+    frag_color = sample_material(material_coordinate) * shape_coverage;
     return;
   }
 
@@ -170,7 +183,7 @@ void main() {
         shape_normal + u_depth_effect * safe_normalize(centered)
     );
   }
-  vec2 refracted = coordinate + distance_amount * direction;
+  vec2 refracted = material_coordinate + distance_amount * direction;
 
   float quadrant = (centered.x * centered.y) /
       max(half_size.x * half_size.y, 1.0);

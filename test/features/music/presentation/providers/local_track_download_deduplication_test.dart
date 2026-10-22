@@ -617,6 +617,95 @@ void main() {
     );
 
     test(
+      'reuses full-frame validation only for an unchanged stored cover',
+      () async {
+        var validations = 0;
+        final fixture = await _DownloadFixture.create(
+          thumbnailValidator: (bytes) async {
+            validations++;
+            return image.decodeImage(bytes) == null ? null : '.png';
+          },
+        );
+        addTearDown(fixture.dispose);
+        final artwork = File(
+          p.join(fixture.tempDirectory.path, 'unchanged.png'),
+        );
+        await artwork.writeAsBytes(_validArtworkBytes);
+        final local = LocalTrack(
+          id: 'unchanged-art-track',
+          title: 'Unchanged artwork',
+          artist: 'Artist',
+          filePath: p.join(fixture.tempDirectory.path, 'audio.m4a'),
+          addedAt: DateTime(2026),
+          sourceUrl: 'https://catalog.example/tracks/unchanged',
+          thumbnailUrl: 'https://images.example/art.png',
+          thumbnailPath: artwork.path,
+        );
+
+        expect(await fixture.helper.repairStoredArtwork([local]), 0);
+        expect(await fixture.helper.repairStoredArtwork([local]), 0);
+        expect(validations, 1);
+
+        await artwork.setLastModified(DateTime.utc(2030));
+        expect(await fixture.helper.repairStoredArtwork([local]), 0);
+        expect(validations, 2);
+        expect(fixture.musicRepository.downloadCalls, 0);
+      },
+    );
+
+    for (final mutation in ['corrupt', 'delete']) {
+      test(
+        'repairs a previously validated cover after $mutation without touching audio',
+        () async {
+          late File cached;
+          final fixture = await _DownloadFixture.create(
+            artworkCacheFileLookup: (_) async => cached,
+          );
+          addTearDown(fixture.dispose);
+          final artwork = File(
+            p.join(fixture.tempDirectory.path, 'changed.png'),
+          );
+          cached = File(p.join(fixture.tempDirectory.path, 'cached.png'));
+          final audio = File(p.join(fixture.tempDirectory.path, 'audio.m4a'));
+          await artwork.writeAsBytes(_validArtworkBytes);
+          await cached.writeAsBytes(_validArtworkBytes);
+          await audio.writeAsBytes([4, 3, 2, 1]);
+          final local = LocalTrack(
+            id: 'changed-art-track',
+            title: 'Changed artwork',
+            artist: 'Artist',
+            filePath: audio.path,
+            addedAt: DateTime(2026),
+            sourceUrl: 'https://catalog.example/tracks/changed',
+            thumbnailUrl: 'https://images.example/art.png',
+            thumbnailPath: artwork.path,
+          );
+          fixture.libraryRepository.localTracks.add(local);
+          expect(await fixture.helper.repairStoredArtwork([local]), 0);
+          if (mutation == 'delete') {
+            await artwork.delete();
+          } else {
+            // Same length and file path, but an invalid PNG frame. A successful
+            // validation from the previous pass must not mask this replacement.
+            final damaged = List<int>.of(_validArtworkBytes);
+            damaged.fillRange(8, damaged.length, 0);
+            await artwork.writeAsBytes(damaged, flush: true);
+            await artwork.setLastModified(DateTime.utc(2030));
+          }
+
+          expect(await fixture.helper.repairStoredArtwork([local]), 1);
+          final repaired = fixture.libraryRepository.localTracks.single;
+          expect(
+            await File(repaired.thumbnailPath!).readAsBytes(),
+            _validArtworkBytes,
+          );
+          expect(await audio.readAsBytes(), [4, 3, 2, 1]);
+          expect(fixture.musicRepository.downloadCalls, 0);
+        },
+      );
+    }
+
+    test(
       'rolls back newly downloaded audio and artwork when persistence fails',
       () async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -1044,6 +1133,7 @@ class _DownloadFixture {
     TrackInfo? resolvedInfo,
     bool failSavingLocalTrack = false,
     ArtworkCacheFileLookup? artworkCacheFileLookup,
+    LocalTrackThumbnailValidator? thumbnailValidator,
   }) async {
     final tempDirectory = await Directory.systemTemp.createTemp(
       'bstream-download-dedupe-',
@@ -1067,6 +1157,13 @@ class _DownloadFixture {
         artworkCacheFileLookupProvider.overrideWithValue(
           artworkCacheFileLookup ?? (_) async => null,
         ),
+        if (thumbnailValidator != null)
+          localTrackDownloadHelperProvider.overrideWith(
+            (ref) => LocalTrackDownloadHelper(
+              ref,
+              thumbnailValidator: thumbnailValidator,
+            ),
+          ),
       ],
     );
     return _DownloadFixture._(

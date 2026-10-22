@@ -1685,6 +1685,9 @@ void main() {
         isFalse,
       );
       expect(miniGlass.backdropGroupKey, isNotNull);
+      expect(navigationGlass.materialOpacity, lessThan(1));
+      expect(miniGlass.materialOpacity, navigationGlass.materialOpacity);
+      expect(searchGlass.materialOpacity, navigationGlass.materialOpacity);
       expect(
         navigationMaterial.backdropGroupKey,
         same(searchMaterial.backdropGroupKey),
@@ -1714,9 +1717,28 @@ void main() {
           matching: find.byType(BackdropFilter),
         ),
         findsNothing,
+        reason: 'The cached highlight remains separate from the live lens.',
+      );
+      expect(find.byType(LiquidGlassRefractiveLens), findsOneWidget);
+      final selectionStack = tester.widget<Stack>(
+        find.byKey(const ValueKey('bottom-navigation-selection-stack')),
+      );
+      expect(
+        selectionStack.children.first.key,
+        const ValueKey('bottom-navigation-refracted-controls'),
         reason:
-            'The selected tab lens must add paint-only depth without a second '
-            'backdrop capture.',
+            'Paint the controls before the live backdrop lens so the droplet '
+            'refracts their glyphs rather than leaving an undistorted overlay.',
+      );
+      expect(
+        find.byKey(const ValueKey('bottom-navigation-refracted-controls')),
+        findsOneWidget,
+        reason: 'Retain one interactive row, not a duplicated image or labels.',
+      );
+      expect(
+        find.byKey(LiquidGlassRefractiveLens.backdropKey),
+        findsNothing,
+        reason: 'The widget-test renderer safely retains painted feedback.',
       );
       final selectionPaint = tester.widget<CustomPaint>(selectionLens);
       final selectionRecorder = _SuperellipsePaintRecordingCanvas();
@@ -1997,6 +2019,11 @@ void main() {
         reason: 'The complete lens paint must be retained during travel.',
       );
       expect(boundary.debugLayer, same(retainedLayer));
+      final scale = tester.widget<Transform>(
+        find.byKey(const ValueKey('bottom-navigation-selection-lens-scale')),
+      );
+      expect(scale.transform.storage[0], greaterThan(1));
+      expect(scale.transform.storage[0], lessThanOrEqualTo(1.221));
       final interrupted = tester.getCenter(lens).dx;
       await tester.tap(destination(0));
       await tester.pump();
@@ -2012,12 +2039,177 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 400));
       expect(tester.getCenter(lens).dx, closeTo(start, 0.01));
+      expect(
+        tester
+            .widget<Transform>(
+              find.byKey(
+                const ValueKey('bottom-navigation-selection-lens-scale'),
+              ),
+            )
+            .transform
+            .storage[0],
+        closeTo(1, 0.000001),
+      );
       tester.platformDispatcher.accessibilityFeaturesTestValue =
           const FakeAccessibilityFeatures(disableAnimations: true);
       await tester.pump();
       await tester.tap(destination(4));
       await tester.pump();
       expect(tester.getCenter(lens).dx, closeTo(end, 0.01));
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
+    'liquid navigation previews a held tab and scrubs without loading intermediate tabs',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            const SettingsState(
+              downloadDirectory: '/tmp/BStream-Music',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+              miniPlayerBackgroundMode: MiniPlayerBackgroundMode.liquidGlass,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump(const Duration(milliseconds: 400));
+      final lens = find.byKey(
+        const ValueKey('bottom-navigation-selection-lens'),
+      );
+      Finder destination(int index) =>
+          find.byKey(ValueKey('bottom-navigation-item-$index'));
+      bool selected(int index) => tester
+          .widget<Semantics>(
+            find.byKey(
+              ValueKey('bottom-navigation-primary-destination-$index'),
+            ),
+          )
+          .properties
+          .selected!;
+
+      // Holding previews immediately, without changing the active page.
+      final held = await tester.startGesture(tester.getCenter(destination(4)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(selected(0), isTrue);
+      expect(selected(4), isFalse);
+      expect(
+        tester.getCenter(lens).dx,
+        closeTo(tester.getCenter(destination(4)).dx, 0.01),
+      );
+      expect(
+        tester
+            .widget<Transform>(
+              find.byKey(
+                const ValueKey('bottom-navigation-selection-lens-scale'),
+              ),
+            )
+            .transform
+            .storage[0],
+        closeTo(1.22, 0.000001),
+      );
+      final material = find.byKey(const ValueKey('bottom-navigation-glass'));
+      expect(
+        tester.getRect(lens).height,
+        greaterThan(tester.getSize(material).height),
+      );
+      expect(
+        find.ancestor(of: lens, matching: find.byType(ClipRRect)),
+        findsNothing,
+        reason: 'The larger lens must extend beyond the clipped backdrop.',
+      );
+      final shell = find.byKey(const ValueKey('bottom-navigation-shell-clip'));
+      final shellClip = tester
+          .widget<ClipRect>(shell)
+          .clipper!
+          .getClip(tester.getSize(shell))
+          .shift(tester.getTopLeft(shell));
+      expect(tester.getRect(lens).top, greaterThanOrEqualTo(shellClip.top));
+      expect(tester.getRect(lens).bottom, lessThanOrEqualTo(shellClip.bottom));
+      await held.cancel();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(selected(0), isTrue);
+      expect(
+        tester.getCenter(lens).dx,
+        closeTo(tester.getCenter(destination(0)).dx, 0.01),
+      );
+
+      // Holding the enlarged optical layer must not replace or cancel the
+      // original InkWell's gesture recognizer, even across a long press.
+      final longHeld = await tester.startGesture(
+        tester.getCenter(destination(4)),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 3));
+      expect(selected(0), isTrue);
+      await longHeld.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(selected(4), isTrue);
+      await tester.tap(destination(0));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(selected(0), isTrue);
+
+      final drag = await tester.startGesture(tester.getCenter(destination(0)));
+      for (final index in [2, 3, 4]) {
+        final point = tester.getCenter(destination(index));
+        await drag.moveTo(point);
+        await tester.pump();
+        expect(tester.getCenter(lens).dx, closeTo(point.dx, 0.01));
+        expect(selected(0), isTrue);
+        expect(selected(index), isFalse);
+        if (index == 2) {
+          double growth() => tester
+              .widget<Transform>(
+                find.byKey(
+                  const ValueKey('bottom-navigation-selection-lens-scale'),
+                ),
+              )
+              .transform
+              .storage[0];
+          expect(growth(), lessThan(1.22));
+          await tester.pump(const Duration(milliseconds: 16));
+          expect(growth(), greaterThan(1));
+          expect(growth(), lessThan(1.22));
+        }
+      }
+      await drag.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(selected(4), isTrue);
+      expect(
+        tester.getCenter(lens).dx,
+        closeTo(tester.getCenter(destination(4)).dx, 0.01),
+      );
+
+      // Moving out of the menu vertically cancels rather than opening a tab.
+      final cancelled = await tester.startGesture(
+        tester.getCenter(destination(4)),
+      );
+      await cancelled.moveTo(tester.getCenter(destination(0)));
+      await tester.pump();
+      await cancelled.moveBy(const Offset(0, -100));
+      await cancelled.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(selected(4), isTrue);
       expect(tester.takeException(), isNull);
       debugDefaultTargetPlatformOverride = null;
     },
@@ -3532,6 +3724,9 @@ void main() {
     final initialBottomHeight = tester.getSize(bottomClip).height;
     expect(initialMiniHeight, greaterThan(0));
     expect(initialBottomHeight, greaterThan(0));
+    bool miniClocksEnabled() =>
+        TickerMode.valuesOf(tester.element(find.byType(MiniPlayer))).enabled;
+    expect(miniClocksEnabled(), isTrue);
     final prewarmedPlayer = find.byKey(const ValueKey('player-view'));
     expect(prewarmedPlayer, findsOneWidget);
     final playerFade = find.byKey(
@@ -3634,6 +3829,11 @@ void main() {
     );
     expect(shellOpacity('mini-player-shell-opacity'), inExclusiveRange(0, 1));
     expect(
+      miniClocksEnabled(),
+      isTrue,
+      reason: 'The visible mini keeps its animations during the exit.',
+    );
+    expect(
       shellOpacity('bottom-navigation-shell-opacity'),
       inExclusiveRange(0, 1),
     );
@@ -3651,6 +3851,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 160));
 
     expect(shellOpacity('mini-player-shell-opacity'), 0);
+    expect(
+      miniClocksEnabled(),
+      isFalse,
+      reason: 'The fully hidden mini must not tick behind the full player.',
+    );
     expect(shellOpacity('bottom-navigation-shell-opacity'), 0);
     expect(slotOpacity(home), 0);
     expect(controlsSlideTranslation(), Offset.zero);
@@ -3673,6 +3878,11 @@ void main() {
 
     // Reverse begins immediately, exactly like popping the Lyrics route.
     expect(slotOpacity(home), 1);
+    expect(
+      miniClocksEnabled(),
+      isTrue,
+      reason: 'The mini resumes before its first visible return frame.',
+    );
     expect(controlsSlideTranslation(), Offset.zero);
     expect(playerFadeOpacity(), 1);
 

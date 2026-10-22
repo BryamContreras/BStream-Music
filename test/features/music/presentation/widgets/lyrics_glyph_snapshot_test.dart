@@ -328,6 +328,57 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'identical painted alpha does not request another glyph repaint',
+    (tester) async {
+      final opacity = AnimationController(vsync: tester, value: 1);
+      addTearDown(opacity.dispose);
+      await tester.pumpWidget(
+        app(
+          child: LyricsGlyphSnapshot(
+            enabled: true,
+            width: 80,
+            height: 40,
+            revision: 0,
+            opacity: opacity,
+            child: const Text('Line'),
+          ),
+        ),
+      );
+      expect(tester.binding.hasScheduledFrame, isFalse);
+      opacity.value = 0.9999;
+      expect(tester.binding.hasScheduledFrame, isFalse);
+      opacity.value = 0.99;
+      expect(tester.binding.hasScheduledFrame, isTrue);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'memory pressure releases and recaptures the unchanged paragraph',
+    (tester) async {
+      final painter = _RecordingPainter();
+      await tester.pumpWidget(
+        app(
+          child: LyricsGlyphSnapshot(
+            enabled: true,
+            width: 80,
+            height: 40,
+            revision: 0,
+            child: CustomPaint(painter: painter),
+          ),
+        ),
+      );
+      expect(painter.paintCount, 1);
+      tester.binding.handleMemoryPressure();
+      expect(controller(tester).allowSnapshotting, isTrue);
+      await tester.pump();
+      expect(painter.paintCount, 2);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 class _RecordingPainter extends CustomPainter {

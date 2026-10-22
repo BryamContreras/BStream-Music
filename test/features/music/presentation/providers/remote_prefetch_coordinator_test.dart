@@ -10,7 +10,9 @@ void main() {
   test(
     'duplicate position snapshots do not repeat cache retention or warmups',
     () async {
-      final coordinator = RemotePrefetchCoordinator();
+      final coordinator = RemotePrefetchCoordinator(
+        additionalWarmupDelay: Duration.zero,
+      );
       var warmups = 0;
       var retentions = 0;
       for (var i = 0; i < 5; i++) {
@@ -50,7 +52,9 @@ void main() {
     () async {
       final gates = List.generate(3, (_) => Completer<File?>());
       final started = <String>[];
-      final coordinator = RemotePrefetchCoordinator();
+      final coordinator = RemotePrefetchCoordinator(
+        additionalWarmupDelay: Duration.zero,
+      );
       final operation = _prepare(coordinator, (track) {
         started.add(track.id);
         return gates[int.parse(track.id) - 1].future;
@@ -82,6 +86,108 @@ void main() {
     await operation;
     expect(started, ['1']);
   });
+
+  testWidgets(
+    'NEXT downloads and publishes while a later resolver is blocked',
+    (tester) async {
+      final fixture = _RetryFixture(
+        additionalWarmupDelay: const Duration(seconds: 20),
+      );
+      addTearDown(fixture.coordinator.dispose);
+      final later = Completer<TrackInfo>();
+      fixture.blockedSecondResolution = later;
+      final operation = fixture.prepare();
+      await tester.pump();
+
+      expect(fixture.resolved, ['1', '2']);
+      expect(fixture.warmed, ['1']);
+      expect(fixture.crossfades, ['1']);
+      expect(fixture.player.updates.last.single.track.id, '1');
+      expect(fixture.player.updates.last.single.uri.scheme, 'file');
+      expect(fixture.player.finalizations, everyElement(isFalse));
+
+      fixture.coordinator.invalidate();
+      later.complete(fixture.plan.upcoming[1].track);
+      await operation;
+      expect(fixture.warmed, ['1']);
+    },
+  );
+
+  testWidgets(
+    'later full transfers wait after NEXT while native URLs are ready',
+    (tester) async {
+      final fixture = _RetryFixture(
+        additionalWarmupDelay: const Duration(seconds: 20),
+      );
+      addTearDown(fixture.coordinator.dispose);
+      final operation = fixture.prepare();
+      await tester.pump();
+      expect(fixture.resolved, ['1', '2', '3']);
+      expect(fixture.warmed, ['1']);
+      expect(fixture.player.updates.last, hasLength(3));
+      expect(fixture.player.updates.last.first.uri.scheme, 'file');
+      expect(fixture.player.updates.last.skip(1).map((s) => s.uri.scheme), [
+        'https',
+        'https',
+      ]);
+
+      await tester.pump(const Duration(seconds: 19));
+      expect(fixture.warmed, ['1']);
+      await tester.pump(const Duration(seconds: 1));
+      expect(fixture.warmed, ['1', '2']);
+      await tester.pump(const Duration(seconds: 20));
+      await operation;
+      expect(fixture.warmed, ['1', '2', '3']);
+      expect(
+        fixture.player.updates.last.map((s) => s.uri.scheme),
+        everyElement('file'),
+      );
+    },
+  );
+
+  for (final dispose in [false, true]) {
+    testWidgets(
+      '${dispose ? 'dispose' : 'invalidate'} cancels later transfers',
+      (tester) async {
+        final fixture = _RetryFixture(
+          additionalWarmupDelay: const Duration(seconds: 20),
+        );
+        addTearDown(fixture.coordinator.dispose);
+        final operation = fixture.prepare();
+        await tester.pump();
+        expect(fixture.warmed, ['1']);
+        final updates = fixture.player.updates.length;
+        if (dispose) {
+          fixture.coordinator.dispose();
+        } else {
+          fixture.coordinator.invalidate();
+        }
+        await operation;
+        await tester.pump(const Duration(minutes: 1));
+        expect(fixture.warmed, ['1']);
+        expect(fixture.player.updates, hasLength(updates));
+      },
+    );
+  }
+
+  testWidgets(
+    'failed NEXT cache retries without waiting for optional transfers',
+    (tester) async {
+      final fixture = _RetryFixture(
+        additionalWarmupDelay: const Duration(seconds: 20),
+      )..remainingWarmFailures = 1;
+      addTearDown(fixture.coordinator.dispose);
+      await fixture.prepare();
+      expect(fixture.warmed, ['1']);
+      expect(fixture.player.updates.last, hasLength(3));
+
+      fixture.advance(const Duration(seconds: 5));
+      await tester.pump(const Duration(seconds: 5));
+      expect(fixture.warmed, ['1', '1']);
+      fixture.coordinator.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets(
     'cache off still prepares only the next native source without cache I/O',
@@ -396,8 +502,14 @@ RemotePrefetchPlan _plan({int generation = 1}) {
 }
 
 class _RetryFixture {
-  _RetryFixture({this.cacheEnabled = true}) {
-    coordinator = RemotePrefetchCoordinator(clock: () => now);
+  _RetryFixture({
+    this.cacheEnabled = true,
+    Duration additionalWarmupDelay = Duration.zero,
+  }) {
+    coordinator = RemotePrefetchCoordinator(
+      clock: () => now,
+      additionalWarmupDelay: additionalWarmupDelay,
+    );
   }
 
   final bool cacheEnabled;
@@ -407,6 +519,7 @@ class _RetryFixture {
   DateTime now = DateTime.utc(2026);
   bool current = true;
   int remainingFailures = 0;
+  int remainingWarmFailures = 0;
   int cacheReads = 0;
   int cacheRetentions = 0;
   final resolved = <String>[];
@@ -415,6 +528,7 @@ class _RetryFixture {
   final crossfades = <String?>[];
   final prepared = <String>[];
   Completer<TrackInfo>? blockedResolution;
+  Completer<TrackInfo>? blockedSecondResolution;
   Completer<void>? blockedStandby;
   Completer<void>? blockedRetention;
 
@@ -435,6 +549,10 @@ class _RetryFixture {
     },
     warmResolved: (track) async {
       warmed.add(track.id);
+      if (remainingWarmFailures > 0) {
+        remainingWarmFailures--;
+        return null;
+      }
       return File('unused-${track.id}.m4a').absolute;
     },
     resolve: (track, shouldContinue) async {
@@ -443,6 +561,11 @@ class _RetryFixture {
       if (remainingFailures > 0) {
         remainingFailures--;
         throw const SocketException('Slow connection');
+      }
+      if (track.id == '2' && blockedSecondResolution != null) {
+        final blocked = blockedSecondResolution!;
+        blockedSecondResolution = null;
+        return blocked.future;
       }
       final blocked = blockedResolution;
       blockedResolution = null;
@@ -469,6 +592,7 @@ class _RetryFixture {
 class _NativePlayer implements PlayerService, NativeRemoteQueuePlayer {
   int remainingFailures = 0;
   final updates = <List<RemotePlaybackSource>>[];
+  final finalizations = <bool>[];
 
   @override
   Future<void> updateRemoteQueue(
@@ -480,6 +604,7 @@ class _NativePlayer implements PlayerService, NativeRemoteQueuePlayer {
       throw const SocketException('Native source preparation failed');
     }
     updates.add(List.of(upcoming));
+    finalizations.add(finalize);
   }
 
   @override

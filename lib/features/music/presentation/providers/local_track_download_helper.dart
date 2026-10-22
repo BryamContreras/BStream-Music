@@ -7,6 +7,8 @@ final localTrackDownloadHelperProvider = Provider<LocalTrackDownloadHelper>((
 });
 
 typedef ArtworkCacheFileLookup = Future<File?> Function(String source);
+typedef LocalTrackThumbnailValidator =
+    Future<String?> Function(Uint8List bytes);
 
 final artworkCacheFileLookupProvider = Provider<ArtworkCacheFileLookup>((ref) {
   final cache = BStreamArtworkCacheManager();
@@ -28,7 +30,13 @@ class LocalTrackDownloadResult {
 }
 
 class LocalTrackDownloadHelper {
-  LocalTrackDownloadHelper(Ref ref) : _ref = ref;
+  LocalTrackDownloadHelper(
+    Ref ref, {
+    @visibleForTesting LocalTrackThumbnailValidator? thumbnailValidator,
+  }) : _ref = ref,
+       // Keep the test injection named without exposing the stored callback.
+       // ignore: prefer_initializing_formals
+       _thumbnailValidator = thumbnailValidator;
 
   static const _maxThumbnailBytes = 10 * 1024 * 1024;
   static const _thumbnailIdleTimeout = Duration(seconds: 10);
@@ -36,8 +44,11 @@ class LocalTrackDownloadHelper {
   static const _thumbnailCandidateTimeout = Duration(seconds: 20);
   static const _thumbnailSaveBudget = Duration(seconds: 45);
   static const _maximumParallelDownloads = 3;
+  static const _maximumValidatedThumbnailFiles = 4096;
 
   final Ref _ref;
+  final LocalTrackThumbnailValidator? _thumbnailValidator;
+  final Map<String, (int, DateTime, DateTime)> _validatedThumbnailFiles = {};
   final Map<String, Future<LocalTrackDownloadResult>> _inFlight = {};
   final Map<String, Future<LocalTrackDownloadResult>> _resolvedInFlight = {};
   final Map<String, bool Function()> _cancellationProbes = {};
@@ -72,6 +83,14 @@ class LocalTrackDownloadHelper {
   }
 
   Future<int> _repairStoredArtwork(List<LocalTrack> tracks) async {
+    final retainedPaths = <String>{
+      for (final track in tracks)
+        if (track.thumbnailPath?.trim() case final path? when path.isNotEmpty)
+          p.normalize(p.absolute(path)),
+    };
+    _validatedThumbnailFiles.removeWhere(
+      (path, _) => !retainedPaths.contains(path),
+    );
     if (tracks.isEmpty) {
       return 0;
     }
@@ -814,17 +833,39 @@ class LocalTrackDownloadHelper {
   }
 
   Future<bool> _isUsableThumbnailFile(String path) async {
+    final key = p.normalize(p.absolute(path));
     try {
       final file = File(path);
-      if (!await file.exists()) {
+      final before = await file.stat();
+      if (before.type != FileSystemEntityType.file ||
+          before.size <= 0 ||
+          before.size > _maxThumbnailBytes) {
+        _validatedThumbnailFiles.remove(key);
         return false;
       }
-      final length = await file.length();
-      if (length <= 0 || length > _maxThumbnailBytes) {
+      final fingerprint = (before.size, before.modified, before.changed);
+      if (_validatedThumbnailFiles.remove(key) == fingerprint) {
+        _validatedThumbnailFiles[key] = fingerprint;
+        return true;
+      }
+      if (await _thumbnailExtension(await file.readAsBytes()) == null) {
         return false;
       }
-      return await _thumbnailExtension(await file.readAsBytes()) != null;
+      // A file can be replaced during an asynchronous decode. Only remember
+      // validation when it still describes the same complete source bytes.
+      final after = await file.stat();
+      if (after.type != FileSystemEntityType.file ||
+          (after.size, after.modified, after.changed) != fingerprint) {
+        return false;
+      }
+      _validatedThumbnailFiles[key] = fingerprint;
+      while (_validatedThumbnailFiles.length >
+          _maximumValidatedThumbnailFiles) {
+        _validatedThumbnailFiles.remove(_validatedThumbnailFiles.keys.first);
+      }
+      return true;
     } catch (_) {
+      _validatedThumbnailFiles.remove(key);
       return false;
     }
   }
@@ -1212,6 +1253,7 @@ class LocalTrackDownloadHelper {
   ) async {
     final baseName = _identityFileName(track, identityDigest, digestLength: 16);
     final file = File(p.join(directory.path, '$baseName$extension'));
+    _validatedThumbnailFiles.remove(p.normalize(p.absolute(file.path)));
     final createdNewFile = !await file.exists();
     final replacedBytes = createdNewFile ? null : await file.readAsBytes();
     final partial = File(_thumbnailPartialPath(file.path, 'write'));
@@ -1420,7 +1462,8 @@ class LocalTrackDownloadHelper {
       // Decode away from the UI/raster threads. Invoking a Flutter GPU codec
       // from post-frame library maintenance can race Android surface startup,
       // while the CPU decoder verifies the complete frame safely.
-      return await compute(_validatedThumbnailExtension, data);
+      return await (_thumbnailValidator?.call(data) ??
+          compute(_validatedThumbnailExtension, data));
     } catch (_) {
       // A matching filename or magic prefix is insufficient: truncated image
       // data would otherwise become the permanent local-first cover.

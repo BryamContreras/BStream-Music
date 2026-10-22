@@ -439,20 +439,18 @@ class _LyricsOriginalParagraphMetrics {
     required this.widthBasis,
     required this.textAlign,
   }) {
-    double height(TextStyle style) {
-      final painter = TextPainter(
-        text: TextSpan(text: text, style: style),
-        textAlign: textAlign,
-        textDirection: textDirection,
-        textScaler: textScaler,
-        locale: locale,
-        textHeightBehavior: heightBehavior,
-        textWidthBasis: widthBasis,
-      )..layout(minWidth: width, maxWidth: width);
-      final height = painter.height;
-      painter.dispose();
-      return height;
-    }
+    double height(TextStyle style) => measureLyricsParagraphHeight(
+      text: text,
+      style: style,
+      minWidth: width,
+      maxWidth: width,
+      textAlign: textAlign,
+      textDirection: textDirection,
+      textScaler: textScaler,
+      locale: locale,
+      textHeightBehavior: heightBehavior,
+      textWidthBasis: widthBasis,
+    );
 
     activeHeight = height(activeStyle);
     inactiveHeight =

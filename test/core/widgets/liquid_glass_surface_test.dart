@@ -7,6 +7,43 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'material opacity preserves refraction strength in $brightness',
+      (tester) async {
+        Widget surface(double opacity) => _harness(
+          child: const Text('Legible'),
+          brightness: brightness,
+          intensity: LiquidGlassSurface.chromeIntensity,
+          materialOpacity: opacity,
+        );
+        double tintAlpha() =>
+            (tester
+                        .widget<DecoratedBox>(
+                          find.byKey(LiquidGlassSurface.surfaceTintKey),
+                        )
+                        .decoration
+                    as BoxDecoration)
+                .color!
+                .a;
+        await tester.pumpWidget(surface(1));
+        final opaqueTint = tintAlpha();
+        final originalShadow = _paintShadow(tester).first.color.a;
+        await tester.pumpWidget(surface(LiquidGlassSurface.chromeOpacity));
+        expect(tintAlpha(), lessThan(opaqueTint));
+        expect(_paintShadow(tester).first.color.a, lessThan(originalShadow));
+        expect(
+          tester
+              .widget<LiquidGlassSurface>(find.byType(LiquidGlassSurface))
+              .intensity,
+          LiquidGlassSurface.chromeIntensity,
+        );
+        expect(find.text('Legible'), findsOneWidget);
+        expect(find.byType(BackdropFilter), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
   testWidgets(
     'static surface uses a continuous clip with neutral bounded optics',
     (tester) async {
@@ -945,6 +982,7 @@ Widget _harness({
   required Widget child,
   double blurSigma = 22,
   double intensity = 1,
+  double materialOpacity = 1,
   BackdropKey? backdropGroupKey,
   bool adaptiveEdgeEnabled = true,
   bool backdropMotion = false,
@@ -962,6 +1000,7 @@ Widget _harness({
     child: LiquidGlassSurface(
       blurSigma: blurSigma,
       intensity: intensity,
+      materialOpacity: materialOpacity,
       backdropGroupKey: backdropGroupKey,
       adaptiveEdgeEnabled: adaptiveEdgeEnabled,
       backdropMotion: backdropMotion,

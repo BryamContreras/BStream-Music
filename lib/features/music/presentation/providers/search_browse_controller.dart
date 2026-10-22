@@ -417,6 +417,8 @@ class _SearchBrowseRequests {
 final searchBrowseCategoryTracksProvider = StreamProvider.autoDispose
     .family<List<TrackInfo>, SearchBrowseCategory>((ref, category) async* {
       final search = ref.watch(youtubeMusicSearchProvider);
+      final durationPacer = _BrowseDurationPacer();
+      ref.onDispose(durationPacer.dispose);
       List<TrackInfo>? initialTracks;
       final target = category.target;
       if (target != null && search is YouTubeMusicMoodsAndGenres) {
@@ -447,6 +449,7 @@ final searchBrowseCategoryTracksProvider = StreamProvider.autoDispose
         initialTracks,
         _browseDurationLookup(search),
         shouldContinue: () => ref.mounted,
+        waitForNextBatch: durationPacer.wait,
       )) {
         if (!ref.mounted) return;
         yield enriched;
@@ -541,10 +544,13 @@ Future<Duration?> Function(String videoId)? _browseDurationLookup(
 /// Some compact mood shelves intentionally omit their duration column. The
 /// initial list is already visible while this stream fills every missing value
 /// in small batches, retaining browse titles, artists, artwork and ordering.
+/// Initial rows go first; later batches yield briefly so optional metadata
+/// requests do not arrive as one burst alongside playback and initial layout.
 Stream<List<TrackInfo>> _enrichBrowseTrackDurations(
   List<TrackInfo> tracks,
   Future<Duration?> Function(String videoId)? lookup, {
   required bool Function() shouldContinue,
+  required Future<bool> Function() waitForNextBatch,
 }) async* {
   if (lookup == null) return;
   final missingIndexes = <int>[
@@ -557,6 +563,9 @@ Stream<List<TrackInfo>> _enrichBrowseTrackDurations(
   const batchSize = 4;
   for (var offset = 0; offset < missingIndexes.length; offset += batchSize) {
     if (!shouldContinue()) return;
+    if (offset >= batchSize * 2) {
+      if (!await waitForNextBatch() || !shouldContinue()) return;
+    }
     final batch = missingIndexes.skip(offset).take(batchSize).toList();
     final durations = await Future.wait(
       batch.map((index) => _resolveBrowseDuration(lookup, tracks[index].id)),
@@ -571,6 +580,37 @@ Stream<List<TrackInfo>> _enrichBrowseTrackDurations(
       changed = true;
     }
     if (changed) yield List<TrackInfo>.unmodifiable(List.of(enriched));
+  }
+}
+
+/// A disposed category releases its pending metadata pause immediately. The
+/// currently running transport batch retains its existing cancellation policy.
+class _BrowseDurationPacer {
+  Timer? _timer;
+  Completer<bool>? _completion;
+  bool _disposed = false;
+
+  Future<bool> wait() {
+    if (_disposed) return Future<bool>.value(false);
+    final completion = Completer<bool>();
+    _completion = completion;
+    _timer = Timer(const Duration(milliseconds: 200), () {
+      _timer = null;
+      _completion = null;
+      completion.complete(!_disposed);
+    });
+    return completion.future;
+  }
+
+  void dispose() {
+    _disposed = true;
+    _timer?.cancel();
+    _timer = null;
+    final completion = _completion;
+    _completion = null;
+    if (completion != null && !completion.isCompleted) {
+      completion.complete(false);
+    }
   }
 }
 

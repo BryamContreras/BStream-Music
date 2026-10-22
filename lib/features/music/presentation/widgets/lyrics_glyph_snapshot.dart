@@ -129,6 +129,14 @@ class _LyricsGlyphSnapshotState extends State<LyricsGlyphSnapshot>
   }
 
   @override
+  void didHaveMemoryPressure() {
+    // Release the optional raster immediately. An active line can capture the
+    // unchanged paragraph again on its next paint; detached/hidden lines stay
+    // uncaptured under the existing policy.
+    _controller.clear();
+  }
+
+  @override
   void deactivate() {
     _attached = false;
     // The controller synchronously releases a retained raster, even if the
@@ -209,16 +217,27 @@ class _LyricsGlyphSnapshotState extends State<LyricsGlyphSnapshot>
 /// FadeTransition at zero opacity, this does not skip the entering glyph capture.
 class _GlyphSnapshotPainter extends SnapshotPainter {
   _GlyphSnapshotPainter(this._opacity) {
-    _opacity?.addListener(notifyListeners);
+    _lastNotifiedAlpha = _alpha;
+    _opacity?.addListener(_onOpacityChanged);
   }
 
   Animation<double>? _opacity;
+  late int _lastNotifiedAlpha;
 
   set opacity(Animation<double>? value) {
     if (identical(value, _opacity)) return;
-    _opacity?.removeListener(notifyListeners);
+    _opacity?.removeListener(_onOpacityChanged);
     _opacity = value;
-    _opacity?.addListener(notifyListeners);
+    _opacity?.addListener(_onOpacityChanged);
+    _onOpacityChanged();
+  }
+
+  void _onOpacityChanged() {
+    final alpha = _alpha;
+    // Both the captured and live paint paths use this same 8-bit alpha. A
+    // curved animation can emit several endpoint ticks with identical pixels.
+    if (alpha == _lastNotifiedAlpha) return;
+    _lastNotifiedAlpha = alpha;
     notifyListeners();
   }
 
@@ -269,7 +288,7 @@ class _GlyphSnapshotPainter extends SnapshotPainter {
 
   @override
   void dispose() {
-    _opacity?.removeListener(notifyListeners);
+    _opacity?.removeListener(_onOpacityChanged);
     super.dispose();
   }
 }

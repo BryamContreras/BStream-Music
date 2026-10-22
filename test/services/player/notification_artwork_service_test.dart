@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -61,8 +62,8 @@ void main() {
       final firstBytes = await _get(uri);
       final first = image.decodeJpg(firstBytes);
       expect(first, isNotNull);
-      expect(first!.width, 1280);
-      expect(first.height, 1280);
+      expect(first!.width, 320);
+      expect(first.height, 320);
       _expectGreen(first.getPixel(0, 160));
       _expectGreen(first.getPixel(160, 160));
       _expectGreen(first.getPixel(319, 160));
@@ -140,6 +141,7 @@ void main() {
     final service = NotificationArtworkService(
       cacheDirectoryProvider: () async =>
           Directory('${root.path}${Platform.pathSeparator}notification-cache'),
+      outputSize: 1280,
       deviceAudioArtworkLoader: (audioUri, targetWidth) async {
         requests++;
         expect(audioUri, 'ipod-library://item/item.m4a?id=42');
@@ -168,6 +170,162 @@ void main() {
     expect(decoded.height, 1280);
     expect(requests, 1);
   });
+
+  test('applies JPEG EXIF rotation before the square center crop', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'bstream-notification-artwork-',
+    );
+    final fixture = image.Image(width: 80, height: 40);
+    for (final pixel in fixture) {
+      pixel.setRgb(pixel.x < 40 ? 255 : 0, pixel.x < 40 ? 0 : 255, 0);
+    }
+    fixture.exif.imageIfd.orientation = 6;
+    final source = File('${root.path}/rotated.jpg');
+    await source.writeAsBytes(image.encodeJpg(fixture, quality: 100));
+    final service = NotificationArtworkService(
+      cacheDirectoryProvider: () async => Directory('${root.path}/derivatives'),
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await root.delete(recursive: true);
+    });
+    await service.initialize();
+
+    final generated = image.decodeJpg(
+      await _get(service.uriFor(source.path)!),
+    )!;
+
+    expect(generated.width, 320);
+    final top = generated.getPixel(160, 40);
+    expect(top.r, greaterThan(220));
+    expect(top.g, lessThan(30));
+    _expectGreen(generated.getPixel(160, 280));
+  });
+
+  test(
+    'reuses a compressed display-cache cover without a CDN request',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'bstream-notification-artwork-',
+      );
+      final source = await _writeLandscapeFixture(root);
+      final lookups = <String>[];
+      final service = NotificationArtworkService(
+        cacheDirectoryProvider: () async =>
+            Directory('${root.path}/derivatives'),
+        sourceFileLookup: (sourceUrl) async {
+          lookups.add(sourceUrl);
+          return source;
+        },
+      );
+      addTearDown(() async {
+        await service.dispose();
+        await root.delete(recursive: true);
+      });
+      await service.initialize();
+
+      final bytes = await _get(
+        service.uriFor('https://example.invalid/art.png')!,
+      );
+
+      expect(image.decodeJpg(bytes)!.width, 320);
+      expect(lookups, ['https://example.invalid/art.png']);
+    },
+  );
+
+  test('coalesces concurrent artwork loads before directory lookup', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'bstream-notification-artwork-',
+    );
+    final fixture = await _writeLandscapeFixture(root);
+    final bytes = await fixture.readAsBytes();
+    final started = Completer<void>();
+    final release = Completer<void>();
+    var sourceLoads = 0;
+    var directoryLookups = 0;
+    final service = NotificationArtworkService(
+      cacheDirectoryProvider: () async {
+        directoryLookups++;
+        return Directory('${root.path}/derivatives');
+      },
+      deviceAudioArtworkLoader: (_, width) async {
+        sourceLoads++;
+        expect(width, 320);
+        if (!started.isCompleted) started.complete();
+        await release.future;
+        return bytes;
+      },
+    );
+    addTearDown(() async {
+      if (!release.isCompleted) release.complete();
+      await service.dispose();
+      await root.delete(recursive: true);
+    });
+    await service.initialize();
+    final uri = service.uriFor(
+      deviceAudioArtworkSourceForUri('ipod-library://item/item.m4a?id=42'),
+    )!;
+    final requests = List.generate(4, (_) => _get(uri));
+    await started.future;
+    release.complete();
+    final results = await Future.wait(requests);
+
+    expect(sourceLoads, 1);
+    expect(directoryLookups, 1);
+    for (final result in results) {
+      expect(result, orderedEquals(results.first));
+    }
+  });
+
+  for (final cachedSource in ['corrupt', 'undersized']) {
+    test(
+      'retries the CDN when a shared compressed cover is $cachedSource',
+      () async {
+        final root = await Directory.systemTemp.createTemp(
+          'bstream-notification-artwork-',
+        );
+        final fixture = await _writeLandscapeFixture(root);
+        final bytes = await fixture.readAsBytes();
+        final corrupt = File('${root.path}/corrupt.png');
+        await corrupt.writeAsBytes(
+          cachedSource == 'corrupt'
+              ? [1, 2, 3]
+              : image.encodePng(
+                  image.Image(width: 16, height: 16)
+                    ..clear(image.ColorRgb8(0, 0, 255)),
+                ),
+        );
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        var networkRequests = 0;
+        server.listen((request) async {
+          networkRequests++;
+          request.response.headers.contentType = ContentType('image', 'png');
+          request.response.add(bytes);
+          await request.response.close();
+        });
+        final service = NotificationArtworkService(
+          cacheDirectoryProvider: () async =>
+              Directory('${root.path}/derivatives'),
+          sourceFileLookup: (_) async => corrupt,
+        );
+        addTearDown(() async {
+          await service.dispose();
+          await server.close(force: true);
+          await root.delete(recursive: true);
+        });
+        await service.initialize();
+        final source =
+            'http://${server.address.address}:${server.port}/art.png';
+
+        final generated = image.decodeJpg(await _get(service.uriFor(source)!));
+
+        expect(generated!.width, 320);
+        expect(generated.height, 320);
+        _expectGreen(generated.getPixel(160, 160));
+        expect(networkRequests, 1);
+      },
+    );
+  }
 
   test(
     'bounds registered queue artwork to the configured recent set',

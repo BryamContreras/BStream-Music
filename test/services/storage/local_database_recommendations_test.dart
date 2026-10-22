@@ -32,6 +32,37 @@ void main() {
     });
 
     test(
+      'library identity keys preserve IDs, aliases and deduplication',
+      () async {
+        final db = await service.database;
+        for (final entry in <(String, String?)>[
+          (' local-a ', ' video-id '),
+          ('local-b', 'video-id'),
+          ('local-only', null),
+          ('local-blank', '  '),
+        ]) {
+          await db.insert('local_tracks', {
+            'id': entry.$1,
+            'source_id': entry.$2,
+            'title': 'Title',
+            'artist': 'Artist',
+            'file_path': '/unused/audio.m4a',
+            'added_at': '2026-10-22T00:00:00.000Z',
+          });
+        }
+        final keys = await service.getLocalTrackIdentityKeys();
+        expect(keys, {
+          'local-a',
+          'local-b',
+          'local-only',
+          'local-blank',
+          'video-id',
+        });
+        expect(() => keys.add('mutated'), throwsUnsupportedError);
+      },
+    );
+
+    test(
       'upserts a playback session and aggregates top and recent seeds',
       () async {
         final startedAt = DateTime.utc(2026, 8, 20, 12);

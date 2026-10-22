@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent, ScrollDirection;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1499,7 +1500,13 @@ class _HomePageState extends ConsumerState<HomePage>
                                     ),
                                     visible: bottomNavigationVisible,
                                     duration: chromeVisibilityDuration,
-                                    hiddenTranslation: const Offset(0, 1),
+                                    hiddenTranslation: Offset(
+                                      0,
+                                      useLiquidBottomNavigation ? 1.2 : 1,
+                                    ),
+                                    clipTopOutset: useLiquidBottomNavigation
+                                        ? 10
+                                        : 0,
                                     preserveBackdropMaterial:
                                         useLiquidBottomNavigation,
                                     child: _BottomNavigation(
@@ -1634,6 +1641,7 @@ class _ShellVisibilityTransition extends StatelessWidget {
     this.scaleKey,
     this.preserveBackdropMaterial = false,
     this.fixedHorizontalClipWidth,
+    this.clipTopOutset = 0,
     super.key,
   });
 
@@ -1648,6 +1656,7 @@ class _ShellVisibilityTransition extends StatelessWidget {
   final Key? scaleKey;
   final bool preserveBackdropMaterial;
   final double? fixedHorizontalClipWidth;
+  final double clipTopOutset;
 
   @override
   Widget build(BuildContext context) {
@@ -1672,14 +1681,22 @@ class _ShellVisibilityTransition extends StatelessWidget {
                 // rim while the sheet is moving.
                 scaleY: preserveBackdropMaterial ? 1 : scale,
                 alignment: Alignment.bottomCenter,
-                child: child,
+                // Keep every visible exit frame (and the live material)
+                // unchanged. Once the sheet has completely left its clip,
+                // its retained marquee/progress clocks must not request
+                // frames behind the full player. This does not mute any
+                // browsing text that is visible underneath Liquid Glass.
+                child: TickerMode(enabled: visible || value > 0, child: child!),
               ),
             );
             return ClipRect(
               key: clipKey,
-              clipper: fixedHorizontalClipWidth == null
+              clipper: fixedHorizontalClipWidth == null && clipTopOutset == 0
                   ? null
-                  : _FixedHorizontalShellClipper(fixedHorizontalClipWidth!),
+                  : _ShellBoundsClipper(
+                      fixedHorizontalClipWidth,
+                      topOutset: clipTopOutset,
+                    ),
               // Keep Liquid Glass out of an Opacity save layer: fading the
               // complete BackdropFilter also fades its sampled background and
               // makes the material look like a flat overlay. Its full-height
@@ -1702,18 +1719,23 @@ class _ShellVisibilityTransition extends StatelessWidget {
   }
 }
 
-class _FixedHorizontalShellClipper extends CustomClipper<Rect> {
-  const _FixedHorizontalShellClipper(this.width);
+class _ShellBoundsClipper extends CustomClipper<Rect> {
+  const _ShellBoundsClipper(this.width, {this.topOutset = 0});
 
-  final double width;
-
-  @override
-  Rect getClip(Size size) =>
-      Rect.fromLTWH((size.width - width) / 2, 0, width, size.height);
+  final double? width;
+  final double topOutset;
 
   @override
-  bool shouldReclip(_FixedHorizontalShellClipper oldClipper) =>
-      width != oldClipper.width;
+  Rect getClip(Size size) => Rect.fromLTWH(
+    (size.width - (width ?? size.width)) / 2,
+    -topOutset,
+    width ?? size.width,
+    size.height + topOutset,
+  );
+
+  @override
+  bool shouldReclip(_ShellBoundsClipper oldClipper) =>
+      width != oldClipper.width || topOutset != oldClipper.topOutset;
 }
 
 class _AppDestination {
@@ -1797,6 +1819,7 @@ class _BottomNavigation extends StatelessWidget {
         switchOutCurve: Curves.easeInCubic,
         layoutBuilder: (currentChild, previousChildren) => Stack(
           fit: StackFit.expand,
+          clipBehavior: Clip.none,
           children: <Widget>[...previousChildren, ?currentChild],
         ),
         child: liquidCollapsed
@@ -1833,6 +1856,8 @@ class _BottomNavigation extends StatelessWidget {
                 ),
                 itemCount: destinations.length,
                 transitionDuration: transitionDuration,
+                onOrdinalSelected: (ordinal) =>
+                    onDestinationSelected(destinations[ordinal].index),
                 child: navigationItems,
               ),
       );
@@ -1896,10 +1921,12 @@ class _BottomNavigation extends StatelessWidget {
                       key: const ValueKey('bottom-navigation-glass'),
                       borderRadius: radius,
                       blurSigma: 8,
-                      intensity: 1,
+                      intensity: LiquidGlassSurface.chromeIntensity,
+                      materialOpacity: LiquidGlassSurface.chromeOpacity,
                       backdropGroupKey: backdropGroupKey,
                       backdropEnvelope: envelope,
                       backdropMotion: moving,
+                      allowContentOverflow: true,
                       child: child!,
                     ),
                   );
@@ -1929,7 +1956,9 @@ class _BottomNavigation extends StatelessWidget {
                                     liquidHeight / 2,
                                   ),
                                   blurSigma: 8,
-                                  intensity: 1,
+                                  intensity: LiquidGlassSurface.chromeIntensity,
+                                  materialOpacity:
+                                      LiquidGlassSurface.chromeOpacity,
                                   backdropGroupKey: backdropGroupKey,
                                   backdropMotion: moving,
                                   child: child!,
@@ -2018,11 +2047,9 @@ class _BottomNavigation extends StatelessWidget {
 
 /// One persistent convex lens shared by the navigation items.
 ///
-/// It is deliberately paint-only: nesting another [BackdropFilter] inside the
-/// main capsule would sample the already filtered sheet and can create the
-/// mismatched caps that Android previously showed. The outer surface shader
-/// supplies the backdrop-coloured light; this layer adds selection depth and
-/// moves as a single piece between slots.
+/// The painted highlights remain cached while a tightly clipped, real
+/// refractive lens samples both the backdrop and navigation controls. Its fixed
+/// maximum viewport avoids resizing a live texture during the growth animation.
 class _LiquidNavigationSelectionLayer extends StatefulWidget {
   const _LiquidNavigationSelectionLayer({
     super.key,
@@ -2030,12 +2057,14 @@ class _LiquidNavigationSelectionLayer extends StatefulWidget {
     required this.itemCount,
     required this.transitionDuration,
     required this.child,
+    this.onOrdinalSelected,
   });
 
   final int selectedOrdinal;
   final int itemCount;
   final Duration transitionDuration;
   final Widget child;
+  final ValueChanged<int>? onOrdinalSelected;
 
   @override
   State<_LiquidNavigationSelectionLayer> createState() =>
@@ -2043,13 +2072,76 @@ class _LiquidNavigationSelectionLayer extends StatefulWidget {
 }
 
 class _LiquidNavigationSelectionLayerState
-    extends State<_LiquidNavigationSelectionLayer> {
+    extends State<_LiquidNavigationSelectionLayer>
+    with SingleTickerProviderStateMixin {
+  static const _activeScale = 1.22;
   late int _lastVisibleOrdinal;
+  late final AnimationController _pressGrowth;
+  final _dragOrdinal = ValueNotifier<double?>(null);
+  int? _pointer;
+  int? _pressedOrdinal;
+  bool _dragging = false;
+
+  @override
+  void dispose() {
+    _pressGrowth.dispose();
+    _dragOrdinal.dispose();
+    super.dispose();
+  }
+
+  void _beginInteraction(PointerDownEvent event, double slotWidth) {
+    if (_pointer != null ||
+        widget.onOrdinalSelected == null ||
+        event.buttons != kPrimaryButton) {
+      return;
+    }
+    setState(() {
+      _pointer = event.pointer;
+      _pressedOrdinal = (event.localPosition.dx / slotWidth).floor().clamp(
+        0,
+        widget.itemCount - 1,
+      );
+    });
+    if (widget.transitionDuration != Duration.zero) _pressGrowth.forward();
+  }
+
+  void _updateDrag(Offset position, double slotWidth) {
+    if (_pointer == null) return;
+    _dragging = true;
+    // Only the small transform subtree observes pointer motion. The tabs,
+    // labels, glass shader and retained lens paint do not rebuild per event.
+    _dragOrdinal.value = (position.dx / slotWidth - 0.5).clamp(
+      0.0,
+      widget.itemCount - 1.0,
+    );
+  }
+
+  void _endInteraction({bool commit = false}) {
+    if (_pointer == null) return;
+    final ordinal = commit && _dragging ? _dragOrdinal.value?.round() : null;
+    setState(() {
+      _pointer = null;
+      _pressedOrdinal = null;
+      _dragging = false;
+      _dragOrdinal.value = null;
+    });
+    if (widget.transitionDuration == Duration.zero) {
+      _pressGrowth.value = 0;
+    } else {
+      _pressGrowth.reverse();
+    }
+    if (ordinal != null) widget.onOrdinalSelected?.call(ordinal);
+  }
 
   @override
   void initState() {
     super.initState();
     _lastVisibleOrdinal = math.max(0, widget.selectedOrdinal);
+    _pressGrowth = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 140),
+      reverseDuration: const Duration(milliseconds: 180),
+    );
   }
 
   @override
@@ -2058,6 +2150,15 @@ class _LiquidNavigationSelectionLayerState
     if (widget.selectedOrdinal >= 0) {
       _lastVisibleOrdinal = widget.selectedOrdinal;
     }
+    if (widget.itemCount != oldWidget.itemCount ||
+        widget.onOrdinalSelected == null) {
+      _pointer = null;
+      _pressedOrdinal = null;
+      _dragging = false;
+      _dragOrdinal.value = null;
+      _pressGrowth.value = 0;
+    }
+    if (widget.transitionDuration == Duration.zero) _pressGrowth.value = 0;
   }
 
   @override
@@ -2078,9 +2179,14 @@ class _LiquidNavigationSelectionLayerState
     return LayoutBuilder(
       builder: (context, constraints) {
         final slotWidth = constraints.maxWidth / widget.itemCount;
-        final ordinal = _lastVisibleOrdinal.clamp(0, widget.itemCount - 1);
-        final compatibleBlendMode =
-            Theme.of(context).platform == TargetPlatform.android;
+        final ordinal = (_pressedOrdinal ?? _lastVisibleOrdinal).clamp(
+          0,
+          widget.itemCount - 1,
+        );
+        final compatibleBlendMode = switch (Theme.of(context).platform) {
+          TargetPlatform.android || TargetPlatform.windows => true,
+          _ => false,
+        };
         final paintedLens = CustomPaint(
           key: const ValueKey('bottom-navigation-selection-lens'),
           painter: _LiquidNavigationSelectionPainter(
@@ -2093,11 +2199,11 @@ class _LiquidNavigationSelectionLayerState
         );
         final lens = AnimatedOpacity(
           key: const ValueKey('bottom-navigation-selection-lens-opacity'),
-          opacity: widget.selectedOrdinal >= 0 ? 1 : 0,
+          opacity: widget.selectedOrdinal >= 0 || _pointer != null ? 1 : 0,
           duration: fadeDuration,
           curve: Curves.easeOutCubic,
           child: IgnorePointer(
-            // Android's src-over optics can retain the complete shadow and
+            // Src-over optics can retain the complete shadow and
             // gradients while only their composited position changes. Other
             // platforms retain direct paint: soft-light depends on the live
             // destination and must not be cached against transparent pixels.
@@ -2106,9 +2212,47 @@ class _LiquidNavigationSelectionLayerState
                 : paintedLens,
           ),
         );
-        return Stack(
+        Widget refractedLens(Size base, double scale, Widget highlight) =>
+            Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: -base.width * (_activeScale - 1) / 2 - 1,
+                  top: -base.height * (_activeScale - 1) * 0.7 - 1,
+                  width: base.width * _activeScale + 2,
+                  height: base.height * _activeScale + 2,
+                  child: IgnorePointer(
+                    child: LiquidGlassRefractiveLens(
+                      baseSize: base,
+                      scale: scale,
+                      maxScale: _activeScale,
+                      enabled: widget.selectedOrdinal >= 0 || _pointer != null,
+                    ),
+                  ),
+                ),
+                Transform.scale(
+                  key: const ValueKey('bottom-navigation-selection-lens-scale'),
+                  scale: scale,
+                  alignment: const Alignment(0, 0.4),
+                  child: highlight,
+                ),
+              ],
+            );
+        final selection = Stack(
+          key: const ValueKey('bottom-navigation-selection-stack'),
           fit: StackFit.expand,
+          clipBehavior: Clip.none,
           children: [
+            // Paint the controls once, before the live lens, so its backdrop
+            // includes their actual glyphs. Only pixels covered by the droplet
+            // are refracted; the rest of the row and its hit targets stay put.
+            // Do not repaint a second, undistorted copy above the filter.
+            ClipRRect(
+              key: const ValueKey('bottom-navigation-refracted-controls'),
+              borderRadius: BorderRadius.circular(34),
+              child: widget.child,
+            ),
             if (widget.itemCount == 1)
               Positioned(
                 key: const ValueKey(
@@ -2118,50 +2262,126 @@ class _LiquidNavigationSelectionLayerState
                 top: 2,
                 right: 3,
                 bottom: 2,
-                child: lens,
+                child: refractedLens(
+                  Size(
+                    math.max(0, constraints.maxWidth - 6),
+                    math.max(0, constraints.maxHeight - 4),
+                  ),
+                  1,
+                  lens,
+                ),
               )
             else
-              TweenAnimationBuilder<({double left, double width})>(
-                key: const ValueKey(
-                  'bottom-navigation-selection-lens-position',
-                ),
-                tween: _LiquidNavigationLensTween(
-                  end: (
-                    left: slotWidth * ordinal + 3,
-                    width: math.max(0, slotWidth - 6),
-                  ),
-                ),
-                duration: travelDuration,
-                curve: Curves.easeOutQuart,
+              ValueListenableBuilder<double?>(
+                valueListenable: _dragOrdinal,
                 child: lens,
-                builder: (context, geometry, child) => Positioned(
-                  left: 0,
-                  top: 2,
-                  bottom: 2,
-                  width: geometry.width,
-                  child: Transform.translate(
-                    offset: Offset(geometry.left, 0),
-                    child: child,
-                  ),
-                ),
+                builder: (context, dragOrdinal, child) =>
+                    TweenAnimationBuilder<
+                      ({double left, double width, double scale})
+                    >(
+                      key: const ValueKey(
+                        'bottom-navigation-selection-lens-position',
+                      ),
+                      tween: _LiquidNavigationLensTween(
+                        animateGrowth: !reducedMotion,
+                        end: (
+                          left: slotWidth * (dragOrdinal ?? ordinal) + 3,
+                          width: math.max(0, slotWidth - 6),
+                          scale: 1,
+                        ),
+                      ),
+                      duration: dragOrdinal != null
+                          ? Duration.zero
+                          : travelDuration,
+                      curve: Curves.easeOutQuart,
+                      child: child,
+                      builder: (context, geometry, child) => Positioned(
+                        left: 0,
+                        top: 2,
+                        bottom: 2,
+                        width: geometry.width,
+                        child: Transform.translate(
+                          offset: Offset(geometry.left, 0),
+                          child: AnimatedBuilder(
+                            animation: _pressGrowth,
+                            child: child,
+                            builder: (context, child) => refractedLens(
+                              Size(
+                                geometry.width,
+                                math.max(0, constraints.maxHeight - 4),
+                              ),
+                              // Position follows the finger immediately;
+                              // growth settles independently so starting a
+                              // fast drag never snaps to the larger size.
+                              math.max(
+                                geometry.scale,
+                                1 +
+                                    Curves.easeOutCubic.transform(
+                                          _pressGrowth.value,
+                                        ) *
+                                        (_activeScale - 1),
+                              ),
+                              child!,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
               ),
-            widget.child,
           ],
+        );
+        if (widget.onOrdinalSelected == null || slotWidth <= 0) {
+          return selection;
+        }
+        return Listener(
+          onPointerDown: (event) => _beginInteraction(event, slotWidth),
+          onPointerUp: (event) {
+            if (event.pointer != _pointer) return;
+            _endInteraction(
+              commit:
+                  event.localPosition.dy >= -12 &&
+                  event.localPosition.dy <= constraints.maxHeight + 12,
+            );
+          },
+          onPointerCancel: (event) {
+            if (event.pointer == _pointer) _endInteraction();
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragStart: (details) =>
+                _updateDrag(details.localPosition, slotWidth),
+            onHorizontalDragUpdate: (details) =>
+                _updateDrag(details.localPosition, slotWidth),
+            onHorizontalDragCancel: _endInteraction,
+            child: selection,
+          ),
         );
       },
     );
   }
 }
 
-class _LiquidNavigationLensTween extends Tween<({double left, double width})> {
-  _LiquidNavigationLensTween({required super.end});
+class _LiquidNavigationLensTween
+    extends Tween<({double left, double width, double scale})> {
+  _LiquidNavigationLensTween({required super.end, required this.animateGrowth});
+
+  final bool animateGrowth;
 
   @override
-  ({double left, double width}) lerp(double t) => (
+  ({double left, double width, double scale}) lerp(double t) => (
     left: lerpDouble(begin!.left, end!.left, t)!,
     // lerpDouble returns equal endpoints verbatim. A translation must never
     // acquire tiny width rounding changes that would relayout its parent.
     width: lerpDouble(begin!.width, end!.width, t)!,
+    // A composited swell during travel; no extra blur, paint or layout.
+    scale: math.max(
+      lerpDouble(begin!.scale, end!.scale, t)!,
+      animateGrowth && (begin!.left - end!.left).abs() > 0.5
+          ? 1 +
+                math.sin(math.pi * t) *
+                    (_LiquidNavigationSelectionLayerState._activeScale - 1)
+          : 1,
+    ),
   );
 }
 
@@ -2182,7 +2402,10 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final dark = brightness == Brightness.dark;
-    final contrast = highContrast ? 1.25 : 1.0;
+    final contrast =
+        (highContrast ? 1.25 : 1.0) *
+        LiquidGlassSurface.chromeOpacity *
+        LiquidGlassSurface.chromeIntensity;
     final opticalBlendMode = useCompatibleBlendMode
         ? BlendMode.srcOver
         : BlendMode.softLight;
@@ -2207,10 +2430,10 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            Colors.white.withValues(alpha: dark ? 0.1 : 0.16),
+            Colors.white.withValues(alpha: dark ? 0.15 : 0.2),
             Colors.transparent,
             Colors.black.withValues(alpha: dark ? 0.11 : 0.065),
-            Colors.white.withValues(alpha: dark ? 0.045 : 0.07),
+            Colors.white.withValues(alpha: dark ? 0.075 : 0.1),
           ],
           stops: const [0, 0.3, 0.72, 1],
         ).createShader(bounds),
@@ -2225,9 +2448,9 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            Colors.white.withValues(alpha: dark ? 0.52 : 0.64),
-            accent.withValues(alpha: dark ? 0.09 : 0.07),
-            Colors.white.withValues(alpha: dark ? 0.3 : 0.42),
+            Colors.white.withValues(alpha: dark ? 0.66 : 0.74),
+            accent.withValues(alpha: dark ? 0.14 : 0.1),
+            Colors.white.withValues(alpha: dark ? 0.42 : 0.52),
           ],
           stops: const [0, 0.5, 1],
         ).createShader(bounds),
