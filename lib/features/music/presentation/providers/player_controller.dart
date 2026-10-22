@@ -35,6 +35,10 @@ class _SuspendedLivePlayback {
 }
 
 class PlayerController extends AsyncNotifier<PlayerSnapshot> {
+  PlayerController({RemotePrefetchCoordinator? remotePrefetchCoordinator})
+    : _remotePrefetch =
+          remotePrefetchCoordinator ?? RemotePrefetchCoordinator();
+
   static const _playlistQueueSourcePrefix = 'playlist:';
   static const downloadedLibraryQueueSourceId = 'library:downloads';
   static const String liveQueueSourceId = 'tiktok-live';
@@ -107,7 +111,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   QualifiedPlaybackHistoryTracker? _playbackHistoryTracker;
   LocalDatabaseShutdownRegistration? _playbackHistoryShutdownRegistration;
   bool _recommendationHistorySuspended = false;
-  final RemotePrefetchCoordinator _remotePrefetch = RemotePrefetchCoordinator();
+  final RemotePrefetchCoordinator _remotePrefetch;
   final Map<String, RemotePlaybackSource> _preparedRemoteAudioSources = {};
 
   Future<void> _crossfadeConfigurationTail = Future<void>.value();

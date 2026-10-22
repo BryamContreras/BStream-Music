@@ -5747,6 +5747,13 @@ ProviderContainer _container(
   final catalogDatabase = _FakeCatalogDatabase(resolvedRepository);
   return ProviderContainer(
     overrides: [
+      playerControllerProvider.overrideWith(
+        () => PlayerController(
+          remotePrefetchCoordinator: RemotePrefetchCoordinator(
+            additionalWarmupDelay: Duration.zero,
+          ),
+        ),
+      ),
       playerServiceProvider.overrideWithValue(player),
       databaseServiceProvider.overrideWithValue(catalogDatabase),
       settingsControllerProvider.overrideWith(
