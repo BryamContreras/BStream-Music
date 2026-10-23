@@ -103,14 +103,7 @@ jobs:
           emulator-options: >-
             -no-snapshot-save -no-window -gpu swiftshader_indirect
             -noaudio -no-boot-anim -camera-back none
+          # This action executes each script line in a separate shell.
           script: |
-            flutter drive \
-              --driver=test_driver/integration_test.dart \
-              --target=integration_test/crossfade_native_test.dart \
-              -d emulator-5554 \
-              --no-dds
-            flutter drive \
-              --driver=test_driver/integration_test.dart \
-              --target=integration_test/skip_silence_native_test.dart \
-              -d emulator-5554 \
-              --no-dds
+            flutter drive --driver=test_driver/integration_test.dart --target=integration_test/crossfade_native_test.dart -d emulator-5554 --no-dds
+            flutter drive --driver=test_driver/integration_test.dart --target=integration_test/skip_silence_native_test.dart -d emulator-5554 --no-dds

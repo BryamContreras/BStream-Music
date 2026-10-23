@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:bstream_music/core/constants/app_constants.dart';
@@ -74,6 +75,34 @@ void main() {
       nightlyWorkflow,
       isNot(contains('youtube_explode_playback_test.dart')),
     );
+  });
+
+  test('Android emulator runner receives complete single-line commands', () {
+    final workflow = File(
+      '.github/workflows/nightly-smoke.yml',
+    ).readAsStringSync();
+    // android-emulator-runner executes each script line in its own shell;
+    // backslash continuations would invoke flutter with a target named "\\".
+    final commands = const LineSplitter()
+        .convert(workflow)
+        .skipWhile((line) => line.trim() != 'script: |')
+        .skip(1)
+        .takeWhile((line) => line.startsWith('            ') || line.isEmpty)
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+
+    expect(commands, hasLength(2));
+    for (final (index, target) in [
+      'crossfade_native_test.dart',
+      'skip_silence_native_test.dart',
+    ].indexed) {
+      expect(
+        commands[index],
+        'flutter drive --driver=test_driver/integration_test.dart '
+        '--target=integration_test/$target -d emulator-5554 --no-dds',
+      );
+    }
   });
 
   test('release packaging is hermetic and declares Linux secure storage', () {
