@@ -555,11 +555,14 @@ class _ClassicVinylControls extends ConsumerWidget {
             snapshot.title ?? strings.noPlayback,
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
               color: AppColors.playbackTitleFor(context),
-              fontSize: compact
-                  ? (smallPhone ? 24 : 21)
-                  : roomy
-                  ? 28
-                  : 25,
+              fontSize: _playerMetadataFontSize(
+                context,
+                compact
+                    ? (smallPhone ? 24 : 21)
+                    : roomy
+                    ? 28
+                    : 25,
+              ),
               fontWeight: FontWeight.w900,
               height: 1.08,
             ),
@@ -581,11 +584,14 @@ class _ClassicVinylControls extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: secondary,
-                        fontSize: compact
-                            ? (smallPhone ? 17 : 15)
-                            : roomy
-                            ? 18
-                            : 17,
+                        fontSize: _playerMetadataFontSize(
+                          context,
+                          compact
+                              ? (smallPhone ? 17 : 15)
+                              : roomy
+                              ? 18
+                              : 17,
+                        ),
                         fontWeight: FontWeight.w700,
                       ),
                     ),

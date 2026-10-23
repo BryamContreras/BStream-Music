@@ -3566,7 +3566,7 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
     );
     final cardWidth = artistOnly
         ? (expandedCards ? 156.0 : 132.0)
-        : (expandedCards ? 186.0 : 156.0);
+        : (expandedCards ? 196.0 : 164.0);
     return _HomeSection(
       key: ValueKey('home-recommendations-section-${section.title}'),
       title: section.title,
@@ -3577,7 +3577,7 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
           cardWidth: cardWidth,
           minimumHeight: artistOnly
               ? (expandedCards ? 196 : 172)
-              : (expandedCards ? 228 : 200),
+              : (expandedCards ? 238 : 208),
         ),
         child: HorizontalShelfScroll(
           child: ListView.separated(
@@ -3697,11 +3697,22 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
         final player = ref.read(playerControllerProvider.notifier);
         RecommendationQueueExtender? queueExtender;
         final service = ref.read(youtubeMusicSearchProvider);
-        final link = const BStreamTrackLinkCodec().tryFromTrack(selected.track);
-        if (service is YouTubeMusicRelated && link != null) {
+        final seedVideoId = _radioSeedVideoId(
+          selectedPlayback,
+          recommendationQueue,
+        );
+        if (service is YouTubeMusicRelated && seedVideoId != null) {
           queueExtender = buildRelatedRadioQueueExtender(
             related: service as YouTubeMusicRelated,
-            seedVideoId: link.videoId,
+            seedVideoId: seedVideoId,
+            initialQueue: recommendationQueue,
+          );
+        } else if (service is YouTubeMusicRelated &&
+            section.isContinueListening) {
+          queueExtender = buildMetadataRelatedRadioQueueExtender(
+            search: service,
+            related: service as YouTubeMusicRelated,
+            selected: selectedPlayback,
             initialQueue: recommendationQueue,
           );
         }
@@ -3753,6 +3764,36 @@ class _HomeRemoteRecommendationSection extends ConsumerWidget {
       onOpenPlayer();
       unawaited(playFuture);
     };
+  }
+
+  String? _radioSeedVideoId(
+    RecommendationPlaybackItem selected,
+    List<RecommendationPlaybackItem> queue,
+  ) {
+    final selectedSeed = relatedRadioVideoId(selected);
+    if (selectedSeed != null || !section.isContinueListening) {
+      return selectedSeed;
+    }
+
+    // Continue can mix imported local files and catalog songs. An imported
+    // selection must not disable radio for the entire queue. Use the nearest
+    // linked song, preferring the next one at the same distance, while the
+    // selected local file remains the item that actually starts playback.
+    final selectedIndex = queue.indexWhere(
+      (item) => item.track.id == selected.track.id,
+    );
+    if (selectedIndex < 0) return null;
+    for (var distance = 1; distance < queue.length; distance++) {
+      for (final index in [
+        selectedIndex + distance,
+        selectedIndex - distance,
+      ]) {
+        if (index < 0 || index >= queue.length) continue;
+        final seed = relatedRadioVideoId(queue[index]);
+        if (seed != null) return seed;
+      }
+    }
+    return null;
   }
 
   LocalTrack? _localTrackForRecommendation(HomeRecommendationTrackItem item) {
@@ -3815,7 +3856,7 @@ class _HomeRecentSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final expandedCards = MediaQuery.sizeOf(context).width >= 700;
-    final cardWidth = expandedCards ? 186.0 : 156.0;
+    final cardWidth = expandedCards ? 196.0 : 164.0;
     return _HomeSection(
       title: strings.recentlyPlayed,
       child: history.when(
@@ -3829,7 +3870,7 @@ class _HomeRecentSection extends StatelessWidget {
             height: _homeShelfHeight(
               context,
               cardWidth: cardWidth,
-              minimumHeight: expandedCards ? 228 : 200,
+              minimumHeight: expandedCards ? 238 : 208,
             ),
             child: HorizontalShelfScroll(
               child: ListView.separated(

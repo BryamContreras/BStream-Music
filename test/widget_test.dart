@@ -4814,11 +4814,11 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
-      156,
+      164,
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-      210,
+      218,
     );
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     final recentCard = find.byKey(const ValueKey('home-recent-card'));
@@ -4968,11 +4968,11 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-card'))).width,
-      186,
+      196,
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('home-recent-shelf'))).height,
-      240,
+      250,
     );
     expect(find.byKey(const ValueKey('home-playlist-shelf')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -5457,6 +5457,7 @@ void main() {
     (tester) async {
       _configureMobileHomeViewport(tester);
       final player = _RecordingHomePlayerController();
+      final related = _FakeRecommendationRelatedSearch();
       final repository = _homeCardsRepository();
       final feed = PersonalizedRecommendationFeed(
         generatedAt: DateTime.utc(2026),
@@ -5488,6 +5489,7 @@ void main() {
           libraryRepository: repository,
           playerController: player,
           personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+          youtubeMusicSearch: related,
         ),
       );
       await tester.pump(const Duration(seconds: 1));
@@ -5532,6 +5534,198 @@ void main() {
       );
       expect(player.lastRecommendationQueue?[1].localTrack, isNull);
       expect(player.remotePlayCalls, 0);
+      expect(related.nextVideoIds, ['RemoteNext1']);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Continue listening uses the nearest catalog song when its selected local file has no video id',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final player = _RecordingHomePlayerController();
+      final related = _FakeRecommendationRelatedSearch();
+      final repository = _homeCardsRepository();
+      final feed = PersonalizedRecommendationFeed(
+        generatedAt: DateTime.utc(2026),
+        sections: [
+          PersonalizedRecommendationSection(
+            kind: PersonalizedSectionKind.continueListening,
+            title: 'Continue',
+            items: [
+              PersonalizedTrackItem(
+                trackId: 'VideoPrev01',
+                videoId: 'VideoPrev01',
+                title: 'Anterior',
+                artists: const ['Artista remoto'],
+              ),
+              PersonalizedTrackItem(
+                trackId: 'home-card-track',
+                title: 'Cancion local',
+                artists: const ['Artista local'],
+                source: PlaybackEventSource.local,
+              ),
+              PersonalizedTrackItem(
+                trackId: 'VideoNext01',
+                videoId: 'VideoNext01',
+                title: 'Siguiente',
+                artists: const ['Artista remoto'],
+              ),
+            ],
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          libraryRepository: repository,
+          playerController: player,
+          personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+          youtubeMusicSearch: related,
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      final selected = find.byKey(
+        const ValueKey('home-recommendation-home-card-track'),
+      );
+      await tester.ensureVisible(selected);
+      await tester.tap(selected);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(player.localPlayCalls, 1);
+      expect(player.lastLocalTrack?.id, 'home-card-track');
+      expect(player.remotePlayCalls, 0);
+      expect(related.nextVideoIds, ['VideoNext01']);
+      expect(
+        player.lastSyncedRecommendationQueue?.map((item) => item.track.id),
+        ['VideoPrev01', 'home-card-track', 'VideoNext01', 'NextSong001'],
+      );
+      expect(
+        player.lastSyncedRecommendationQueue?[1].localTrack?.id,
+        'home-card-track',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Continue listening grows a local-only queue through one metadata lookup',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final player = _RecordingHomePlayerController();
+      final related = _FakeRecommendationRelatedSearch(
+        searchResults: [
+          InnerTubeSong(
+            videoId: 'VideoSeed01',
+            title: 'Cancion local',
+            artists: const ['Artista local'],
+          ),
+        ],
+      );
+      final feed = PersonalizedRecommendationFeed(
+        generatedAt: DateTime.utc(2026),
+        sections: [
+          PersonalizedRecommendationSection(
+            kind: PersonalizedSectionKind.continueListening,
+            title: 'Continue',
+            items: [
+              PersonalizedTrackItem(
+                trackId: 'home-card-track',
+                title: 'Cancion local',
+                artists: const ['Artista local'],
+                source: PlaybackEventSource.local,
+              ),
+            ],
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          libraryRepository: _homeCardsRepository(),
+          playerController: player,
+          personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+          youtubeMusicSearch: related,
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(related.searchQueries, isEmpty);
+      expect(related.nextVideoIds, isEmpty);
+      final selected = find.byKey(
+        const ValueKey('home-recommendation-home-card-track'),
+      );
+      await tester.ensureVisible(selected);
+      await tester.tap(selected);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(player.localPlayCalls, 1);
+      expect(player.lastLocalTrack?.id, 'home-card-track');
+      expect(player.remotePlayCalls, 0);
+      expect(related.searchQueries, ['Cancion local Artista local']);
+      expect(related.nextVideoIds, ['VideoSeed01']);
+      expect(
+        player.lastSyncedRecommendationQueue?.map((item) => item.track.id),
+        ['home-card-track', 'NextSong001'],
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Continue listening recovers the downloaded video identity from the library',
+    (tester) async {
+      _configureMobileHomeViewport(tester);
+      final player = _RecordingHomePlayerController();
+      final related = _FakeRecommendationRelatedSearch();
+      final repository = _homeCardsRepository();
+      repository.localTracks[0] = repository.localTracks[0].copyWith(
+        sourceUrl: 'https://www.youtube.com/watch?v=VideoSeed01',
+      );
+      final feed = PersonalizedRecommendationFeed(
+        generatedAt: DateTime.utc(2026),
+        sections: [
+          PersonalizedRecommendationSection(
+            kind: PersonalizedSectionKind.continueListening,
+            title: 'Continue',
+            items: [
+              PersonalizedTrackItem(
+                trackId: 'home-card-track',
+                title: 'Cancion descargada',
+                artists: const ['Artista'],
+                source: PlaybackEventSource.downloaded,
+              ),
+            ],
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _testApp(
+          libraryRepository: repository,
+          playerController: player,
+          personalizedHomeFeedSource: _StaticPersonalizedHomeFeedSource(feed),
+          youtubeMusicSearch: related,
+        ),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      final selected = find.byKey(
+        const ValueKey('home-recommendation-home-card-track'),
+      );
+      await tester.ensureVisible(selected);
+      await tester.tap(selected);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(player.localPlayCalls, 1);
+      expect(player.lastLocalTrack?.id, 'home-card-track');
+      expect(player.remotePlayCalls, 0);
+      expect(related.nextVideoIds, ['VideoSeed01']);
+      expect(
+        player.lastSyncedRecommendationQueue?.map((item) => item.track.id),
+        ['home-card-track', 'NextSong001'],
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -8142,7 +8336,7 @@ void main() {
     'android back closes two-track selection without leaving downloads',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      tester.view.physicalSize = const Size(360, 900);
+      tester.view.physicalSize = const Size(320, 900);
       tester.view.devicePixelRatio = 1;
       addTearDown(() {
         debugDefaultTargetPlatformOverride = null;
@@ -8199,6 +8393,35 @@ void main() {
         find.byKey(const ValueKey('selection-check-selection-b')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const ValueKey('library-selection-add-to-playlist')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('library-selection-delete')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('library-selection-menu')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('library-selection-add-to-playlist')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('library-selection-delete')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('library-selection-download')),
+        findsNothing,
+        reason: 'Downloaded songs do not need another download action.',
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('library-selection-toolbar')),
+        findsOneWidget,
+      );
 
       expect(navigationController.canPop, isTrue);
       await tester.binding.handlePopRoute();
@@ -8253,6 +8476,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await _selectLibraryTracks(tester, ['add-a', 'add-b']);
 
+    await tester.tap(find.byKey(const ValueKey('library-selection-menu')));
+    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const ValueKey('library-selection-add-to-playlist')),
     );
@@ -8315,6 +8540,8 @@ void main() {
     await tester.pump();
     await _selectLibraryTracks(tester, ['remove-a', 'remove-c']);
 
+    await tester.tap(find.byKey(const ValueKey('library-selection-menu')));
+    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const ValueKey('library-selection-remove-from-playlist')),
     );
@@ -8440,6 +8667,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await _selectLibraryTracks(tester, ['delete-a', 'delete-b']);
 
+    await tester.tap(find.byKey(const ValueKey('library-selection-menu')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('library-selection-delete')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -10677,7 +10906,11 @@ final class _FakeYouTubeMusicTrackLookup
 
 final class _FakeRecommendationRelatedSearch
     implements YouTubeMusicSearch, YouTubeMusicRelated {
+  _FakeRecommendationRelatedSearch({this.searchResults = const []});
+
+  final List<InnerTubeSong> searchResults;
   final List<String> nextVideoIds = <String>[];
+  final List<String> searchQueries = <String>[];
 
   @override
   Future<InnerTubeNextPage> getNext(
@@ -10734,7 +10967,10 @@ final class _FakeRecommendationRelatedSearch
   Future<List<InnerTubeSong>> searchSongs(
     String query, {
     int limit = 20,
-  }) async => const [];
+  }) async {
+    searchQueries.add(query);
+    return searchResults;
+  }
 }
 
 final class _StalledYouTubeMusicTrackLookup

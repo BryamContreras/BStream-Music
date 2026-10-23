@@ -883,13 +883,13 @@ class _ReleaseShelf extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 700;
-    final cardWidth = wide ? 176.0 : 148.0;
+    final cardWidth = wide ? 186.0 : 156.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _SectionTitle(title: title),
         SizedBox(
-          height: wide ? 238 : 210,
+          height: wide ? 248 : 218,
           child: HorizontalShelfScroll(
             child: ListView.separated(
               scrollCacheExtent: const ScrollCacheExtent.pixels(760),

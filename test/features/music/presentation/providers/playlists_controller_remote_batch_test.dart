@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
+import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist_entry.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
@@ -8,8 +11,128 @@ import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
+  test(
+    'removing playlist selections preserves downloaded files and library records',
+    () async {
+      sqfliteFfiInit();
+      final directory = await Directory.systemTemp.createTemp(
+        'bstream-selection-removal-',
+      );
+      final database = _DiskCatalogDatabase('${directory.path}/library.db');
+      addTearDown(() async {
+        await database.close();
+        await directory.delete(recursive: true);
+      });
+      final audio = File('${directory.path}/saved.m4a');
+      await audio.writeAsBytes([1, 2, 3]);
+      final now = DateTime.utc(2026, 10, 23);
+      await database.saveLocalTrack(
+        LocalTrack(
+          id: 'saved-local',
+          title: 'Saved song',
+          artist: 'Artist',
+          filePath: audio.path,
+          addedAt: now,
+        ),
+      );
+      final playlist = await database.createCatalogPlaylist(
+        id: 'selected-playlist',
+        name: 'Selected',
+        now: now,
+      );
+      await database.appendCatalogEntry(
+        playlistId: playlist.id,
+        entryId: 'saved-entry',
+        localTrackId: 'saved-local',
+        track: CatalogTrack.local(
+          localTrackId: 'saved-local',
+          title: 'Saved song',
+        ),
+        now: now,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          databaseServiceProvider.overrideWithValue(database),
+          playerControllerProvider.overrideWith(_InactivePlayerController.new),
+          youtubeMusicPlaylistSyncControllerProvider.overrideWith(
+            _RecordingPlaylistSyncController.new,
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      await container.read(playlistsControllerProvider.future);
+      expect(
+        await container
+            .read(playlistsControllerProvider.notifier)
+            .removeCatalogEntries(playlist.id, ['saved-entry']),
+        1,
+      );
+      expect(
+        (await database.getCatalogPlaylist(playlist.id))!.entries,
+        isEmpty,
+      );
+      expect((await database.getLocalTracks()).single.id, 'saved-local');
+      expect(await audio.readAsBytes(), [1, 2, 3]);
+    },
+  );
+
+  test(
+    'batch removal preserves unselected duplicate occurrences and syncs once',
+    () async {
+      final database = _MemoryCatalogDatabase();
+      final now = DateTime.utc(2026, 10, 23);
+      for (final (entryId, videoId) in [
+        ('occurrence-a', 'abcdefghijk'),
+        ('occurrence-b', 'abcdefghijk'),
+        ('other', 'lmnopqrstuv'),
+      ]) {
+        await database.appendCatalogEntry(
+          playlistId: database.playlist.id,
+          entryId: entryId,
+          track: CatalogTrack.youtube(videoId: videoId, title: videoId),
+          now: now,
+        );
+      }
+      final sync = _RecordingPlaylistSyncController();
+      final container = ProviderContainer(
+        overrides: [
+          databaseServiceProvider.overrideWithValue(database),
+          playerControllerProvider.overrideWith(_InactivePlayerController.new),
+          youtubeMusicPlaylistSyncControllerProvider.overrideWith(() => sync),
+        ],
+      );
+      addTearDown(container.dispose);
+      await container.read(playlistsControllerProvider.future);
+      final removed = await container
+          .read(playlistsControllerProvider.notifier)
+          .removeCatalogEntries(database.playlist.id, [
+            'occurrence-b',
+            'other',
+            'other',
+            'missing',
+          ]);
+      expect(removed, 2);
+      expect(
+        database.entries
+            .where((entry) => !entry.isDeleted)
+            .map((entry) => entry.id),
+        ['occurrence-a'],
+      );
+      expect(database.tombstonedEntryIds, ['occurrence-b', 'other']);
+      expect(sync.requests, 1);
+      expect(
+        await container
+            .read(playlistsControllerProvider.notifier)
+            .removeCatalogEntries(database.playlist.id, ['other']),
+        0,
+      );
+      expect(sync.requests, 1);
+    },
+  );
+
   test(
     'bulk remote playlist import is catalog-only and deduplicates video ids',
     () async {
@@ -81,6 +204,13 @@ void main() {
   );
 }
 
+class _DiskCatalogDatabase extends LocalDatabaseService {
+  _DiskCatalogDatabase(this.path);
+  final String path;
+  @override
+  Future<String> databasePath() async => path;
+}
+
 class _MemoryCatalogDatabase extends LocalDatabaseService {
   _MemoryCatalogDatabase()
     : playlist = Playlist(
@@ -93,6 +223,21 @@ class _MemoryCatalogDatabase extends LocalDatabaseService {
 
   final Playlist playlist;
   final List<PlaylistEntry> entries = [];
+  final List<String> tombstonedEntryIds = [];
+
+  @override
+  Future<void> tombstoneCatalogEntry({
+    required String playlistId,
+    required String entryId,
+    required DateTime now,
+  }) async {
+    final index = entries.indexWhere(
+      (entry) => entry.id == entryId && entry.playlistId == playlistId,
+    );
+    if (index < 0) return;
+    entries[index] = entries[index].copyWith(deletedAt: now);
+    tombstonedEntryIds.add(entryId);
+  }
 
   @override
   Future<List<Playlist>> getCatalogPlaylists({

@@ -35,6 +35,7 @@ void main() {
     double width = 336,
     double textScale = 1,
     bool reducedMotion = false,
+    TextAlign textAlign = TextAlign.start,
   }) => MaterialApp(
     home: MediaQuery(
       data: MediaQueryData(
@@ -55,7 +56,7 @@ void main() {
               activeStyle: activeStyle,
               inactiveStyle: inactiveStyle,
               secondaryFontSize: 16.8,
-              textAlign: TextAlign.start,
+              textAlign: textAlign,
               contentKey: const ValueKey('pair'),
             ),
           ),
@@ -63,6 +64,42 @@ void main() {
       ),
     ),
   );
+
+  for (final active in [false, true]) {
+    testWidgets(
+      'alignment refreshes hit testing for retained ${active ? 'active' : 'inactive'} paragraphs',
+      (tester) async {
+        await tester.pumpWidget(app(active: active, secondary: romanized));
+        for (final alignment in [TextAlign.center, TextAlign.start]) {
+          await tester.pumpWidget(
+            app(active: active, secondary: romanized, textAlign: alignment),
+          );
+          final paragraphs = tester
+              .renderObjectList<RenderParagraph>(find.byType(RichText))
+              .where(
+                (paragraph) =>
+                    paragraph.text.toPlainText() == original ||
+                    paragraph.text.toPlainText() == romanized,
+              )
+              .toList();
+          expect(paragraphs, isNotEmpty);
+          // Probe even the zero-opacity endpoint: paint may legitimately skip
+          // it, but a cached paragraph must never break pointer dispatch.
+          for (final paragraph in paragraphs) {
+            expect(paragraph.textAlign, alignment);
+            expect(
+              () => paragraph.hitTest(
+                BoxHitTestResult(),
+                position: paragraph.size.center(Offset.zero),
+              ),
+              returnsNormally,
+            );
+          }
+          expect(tester.takeException(), isNull);
+        }
+      },
+    );
+  }
 
   for (final sample in [
     (name: 'romanization', text: romanized),

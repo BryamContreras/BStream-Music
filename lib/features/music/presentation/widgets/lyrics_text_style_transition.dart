@@ -115,12 +115,19 @@ class _LyricsTextStyleTransitionState extends State<LyricsTextStyleTransition>
     return primary
         ? Text(
             text,
+            // Alignment only marks RenderParagraph for paint. An invisible
+            // crossfade endpoint or retained glyph raster may skip that paint,
+            // leaving its TextPainter invalid when the next pointer is tested.
+            // Recreate the paragraph only for alignment changes so it receives
+            // an initial layout even while covered by the options menu.
+            key: ValueKey(widget.textAlign),
             style: resolvedStyle,
             textAlign: widget.textAlign,
             textHeightBehavior: heightBehavior,
             textWidthBasis: defaults.textWidthBasis,
           )
         : RichText(
+            key: ValueKey(widget.textAlign),
             text: TextSpan(text: text, style: resolvedStyle),
             textAlign: widget.textAlign,
             textScaler: MediaQuery.textScalerOf(context),

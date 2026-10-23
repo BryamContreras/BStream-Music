@@ -615,8 +615,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     await ref.read(tiktokLiveCommandServiceProvider).disconnect();
     final current = await future;
     final player = ref.read(playerControllerProvider.notifier);
-    if (player.isLiveQueueActive) {
-      await player.clearQueueSource(PlayerController.liveQueueSourceId);
+    final liveWasActive = player.isLiveQueueActive;
+    await player.clearQueueSource(PlayerController.liveQueueSourceId);
+    if (liveWasActive) {
       await player.stop();
     }
     state = AsyncData(
@@ -637,11 +638,9 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     state = AsyncData(
       current.copyWith(liveQueue: const [], message: 'Cola LIVE limpia.'),
     );
-    if (liveWasActive) {
-      await player.clearQueueSource(PlayerController.liveQueueSourceId);
-      if (stopPlayback) {
-        await player.stop();
-      }
+    await player.clearQueueSource(PlayerController.liveQueueSourceId);
+    if (liveWasActive && stopPlayback) {
+      await player.stop();
     }
   }
 
@@ -668,6 +667,13 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
       _revokedPlayingReadyIndex = removed.saveToLibrary
           ? remaining.where((item) => item.localTrack != null).length
           : remaining.where((item) => item.remoteTrack != null).length;
+    } else if (removed.isReady && !player.isLiveQueueActive) {
+      final removedReadyIndex = removed.saveToLibrary
+          ? current.readyTracks.length - 1
+          : current.readyRemoteTracks.length - 1;
+      // Retire this occurrence before another request can reuse the same
+      // video's id and accidentally inherit its interrupted seek position.
+      player.removeInterruptedLiveQueueItemAt(removedReadyIndex);
     }
     _cancelScheduledLiveQueueItem(removed.id);
     state = AsyncData(current.copyWith(liveQueue: remaining));
@@ -1150,17 +1156,13 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     final playerState = ref.read(playerControllerProvider).value;
     final currentTrackId = playerState?.trackId;
     final currentIsLiveTrack =
+        player.isLiveQueueActive &&
         currentTrackId != null &&
         readyTracks.any((track) => track.id == currentTrackId);
     if (!_liveQueueActivated || !currentIsLiveTrack) {
       _liveQueueActivated = true;
       _recordPublishedLiveQueueItems(current);
-      await player.playLocal(
-        readyTracks.first,
-        queue: readyTracks,
-        useNativeQueue: false,
-        queueSourceId: PlayerController.liveQueueSourceId,
-      );
+      await player.resumeLocalLiveQueue(readyTracks);
       _throwIfLivePlaybackFailed();
       return;
     }
@@ -1190,19 +1192,17 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
     }
 
     final playerState = ref.read(playerControllerProvider).value;
-    final currentIsLiveTrack = readyTracks.any(
-      (track) => _snapshotMatchesRemoteTrack(playerState, track),
-    );
     final player = ref.read(playerControllerProvider.notifier);
+    final currentIsLiveTrack =
+        player.isLiveQueueActive &&
+        readyTracks.any(
+          (track) => _snapshotMatchesRemoteTrack(playerState, track),
+        );
 
     if (!_liveQueueActivated || !currentIsLiveTrack) {
       _liveQueueActivated = true;
       _recordPublishedLiveQueueItems(current);
-      await player.playRemote(
-        readyTracks.first,
-        queue: readyTracks,
-        queueSourceId: PlayerController.liveQueueSourceId,
-      );
+      await player.resumeRemoteLiveQueue(readyTracks);
       _throwIfLivePlaybackFailed();
       return;
     }

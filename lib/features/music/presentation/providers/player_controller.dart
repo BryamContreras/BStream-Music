@@ -2,6 +2,18 @@ part of 'music_providers.dart';
 
 enum _LocalPlaybackAttempt { played, unavailable, cancelled }
 
+class _InterruptedLiveQueuePlayback {
+  const _InterruptedLiveQueuePlayback({
+    required this.items,
+    required this.index,
+    required this.position,
+  });
+
+  final List<_QueueItem> items;
+  final int index;
+  final Duration position;
+}
+
 class _SuspendedLivePlayback {
   const _SuspendedLivePlayback({
     required this.items,
@@ -80,6 +92,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   String? _activeLocalQueueSourceId;
   String? _activeRemoteQueueSourceId;
   _SuspendedLivePlayback? _suspendedLivePlayback;
+  _InterruptedLiveQueuePlayback? _interruptedLiveQueuePlayback;
   final Set<VoidCallback> _liveQueueCompletionListeners = {};
   Completer<void>? _liveQueueRestoration;
 
@@ -361,6 +374,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       _cancelPlaybackRecoveryTimer();
       _liveQueueCompletionListeners.clear();
       _suspendedLivePlayback = null;
+      _interruptedLiveQueuePlayback = null;
       final restoration = _liveQueueRestoration;
       _liveQueueRestoration = null;
       if (restoration != null && !restoration.isCompleted) {
@@ -374,6 +388,18 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   void _prepareQueueSourceTransition(String? sourceId) {
+    final wasLive = isLiveQueueActive;
+    final restoring = _liveQueueRestoration != null;
+    if (sourceId != liveQueueSourceId && wasLive && !restoring) {
+      final saved = _captureQueuePlayback();
+      _interruptedLiveQueuePlayback = saved == null
+          ? null
+          : _InterruptedLiveQueuePlayback(
+              items: saved.items,
+              index: saved.index,
+              position: saved.snapshot.position,
+            );
+    }
     _resumePlaybackPosition = null;
     _pendingLiveRestorePosition = null;
     final restoration = _liveQueueRestoration;
@@ -384,44 +410,166 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     }
     if (sourceId != liveQueueSourceId) {
       // Choosing a different queue explicitly supersedes the automatic return.
+      final previousNormal = _suspendedLivePlayback;
+      if (wasLive && previousNormal != null) {
+        _shuffleEnabled = previousNormal.shuffleEnabled;
+        _repeatMode = previousNormal.repeatMode;
+      }
       _suspendedLivePlayback = null;
       return;
     }
+    // An explicit LIVE selection wins over a saved cursor. Automatic re-entry
+    // takes its own copy before starting this transition.
+    _interruptedLiveQueuePlayback = null;
     if (!isLiveQueueActive) {
-      var snapshot =
-          state.value ?? ref.read(playerServiceProvider).currentSnapshot;
-      final nativeSnapshot = ref.read(playerServiceProvider).currentSnapshot;
-      final remote = _playingRemoteTrack;
-      final nativeMatches = remote != null
-          ? _snapshotBelongsToTrack(nativeSnapshot, remote) ||
-                _isCachedRemoteSnapshot(nativeSnapshot, remote)
-          : _snapshotMatchesCurrentLocal(nativeSnapshot);
-      if (nativeMatches) {
-        snapshot = snapshot.copyWith(position: nativeSnapshot.position);
-      }
-      final recommendations = _recommendationExtension.suspend();
-      _suspendedLivePlayback = _queueIndex >= 0 && _queueIndex < _queue.length
-          ? _SuspendedLivePlayback(
-              items: List<_QueueItem>.unmodifiable(_queue),
-              index: _queueIndex,
-              snapshot: snapshot,
-              useNativeLocalQueue: _useNativeLocalQueue,
-              activePlaybackIsRemote: _activePlaybackIsRemote,
-              localSourceId: _activeLocalQueueSourceId,
-              remoteSourceId: _activeRemoteQueueSourceId,
-              previousRemoteTrack: _previousRemoteTrackForCache,
-              shuffleEnabled: _shuffleEnabled,
-              repeatMode: _repeatMode,
-              playedIndices: _shufflePlayedIndices,
-              shufflePlan: _shufflePlan,
-              recommendations: recommendations,
-            )
-          : null;
+      _suspendedLivePlayback = _captureQueuePlayback(
+        recommendations: _recommendationExtension.suspend(),
+      );
     }
     // Requests are FIFO and finite even if the interrupted radio was shuffled
     // or repeating. Those preferences belong to the saved normal queue.
     _shuffleEnabled = false;
     _repeatMode = PlaybackRepeatMode.off;
+  }
+
+  _SuspendedLivePlayback? _captureQueuePlayback({
+    RecommendationQueueExtensionSnapshot? recommendations,
+  }) {
+    if (_queueIndex < 0 || _queueIndex >= _queue.length) return null;
+    var snapshot =
+        state.value ?? ref.read(playerServiceProvider).currentSnapshot;
+    final native = ref.read(playerServiceProvider).currentSnapshot;
+    final remote = _playingRemoteTrack;
+    final nativeMatches = remote != null
+        ? _snapshotBelongsToTrack(native, remote) ||
+              _isCachedRemoteSnapshot(native, remote)
+        : _snapshotMatchesCurrentLocal(native);
+    if (nativeMatches) snapshot = snapshot.copyWith(position: native.position);
+    final pending = _pendingLiveRestorePosition;
+    if (pending?.requestId == _playRequestId) {
+      snapshot = snapshot.copyWith(position: pending!.position);
+    } else if (_resumeNeedsReload && _resumePlaybackPosition != null) {
+      snapshot = snapshot.copyWith(position: _resumePlaybackPosition);
+    }
+    return _SuspendedLivePlayback(
+      items: List<_QueueItem>.unmodifiable(_queue),
+      index: _queueIndex,
+      snapshot: snapshot,
+      useNativeLocalQueue: _useNativeLocalQueue,
+      activePlaybackIsRemote: _activePlaybackIsRemote,
+      localSourceId: _activeLocalQueueSourceId,
+      remoteSourceId: _activeRemoteQueueSourceId,
+      previousRemoteTrack: _previousRemoteTrackForCache,
+      shuffleEnabled: _shuffleEnabled,
+      repeatMode: _repeatMode,
+      playedIndices: _shufflePlayedIndices,
+      shufflePlan: _shufflePlan,
+      recommendations: recommendations,
+    );
+  }
+
+  /// Re-enters LIVE after a request is appended, retaining the interrupted
+  /// request and its position. Explicit row selections use playRemote instead.
+  Future<void> resumeRemoteLiveQueue(List<TrackInfo> tracks) async {
+    if (tracks.isEmpty) return;
+    final target = _liveQueueResumeTarget(
+      tracks.map(_QueueItem.remote).toList(growable: false),
+    );
+    final operation = _startRemoteQueue(
+      tracks[target.index],
+      queue: tracks,
+      initialQueueIndex: target.index,
+      queueSourceId: liveQueueSourceId,
+    );
+    await _restoreLivePosition(operation, target.position);
+  }
+
+  Future<void> resumeLocalLiveQueue(List<LocalTrack> tracks) async {
+    if (tracks.isEmpty) return;
+    final target = _liveQueueResumeTarget(
+      tracks.map(_QueueItem.local).toList(growable: false),
+    );
+    final operation = _startLocalQueue(
+      tracks[target.index],
+      queue: tracks,
+      initialQueueIndex: target.index,
+      useNativeQueue: false,
+      queueSourceId: liveQueueSourceId,
+    );
+    await _restoreLivePosition(operation, target.position);
+  }
+
+  /// Retires a revoked request even while the normal queue is active. A later
+  /// request for the same video is a fresh occurrence, with no old seek offset.
+  void removeInterruptedLiveQueueItemAt(int index) {
+    final saved = _interruptedLiveQueuePlayback;
+    if (saved == null || index < 0 || index >= saved.items.length) return;
+    final items = List<_QueueItem>.of(saved.items)..removeAt(index);
+    _interruptedLiveQueuePlayback = _InterruptedLiveQueuePlayback(
+      items: List<_QueueItem>.unmodifiable(items),
+      index: index < saved.index ? saved.index - 1 : saved.index,
+      position: index == saved.index ? Duration.zero : saved.position,
+    );
+  }
+
+  ({int index, Duration position}) _liveQueueResumeTarget(
+    List<_QueueItem> items,
+  ) {
+    final saved = _interruptedLiveQueuePlayback;
+    if (saved == null) return (index: 0, position: Duration.zero);
+    // Preserve the occurrence too: several viewers may request the same song.
+    int matchingOccurrence(int oldIndex) {
+      final item = saved.items[oldIndex];
+      final ordinal = saved.items
+          .take(oldIndex + 1)
+          .where((entry) => _sameQueueRepresentation(entry, item))
+          .length;
+      var seen = 0;
+      for (var i = 0; i < items.length; i++) {
+        if (_sameQueueRepresentation(items[i], item) && ++seen == ordinal) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    for (var i = saved.index; i < saved.items.length; i++) {
+      final index = matchingOccurrence(i);
+      if (index >= 0) {
+        return (
+          index: index,
+          position: i == saved.index ? saved.position : Duration.zero,
+        );
+      }
+    }
+    // A removed final request yields to a new request appended in its place.
+    return (
+      index: math.min(saved.index, items.length - 1),
+      position: Duration.zero,
+    );
+  }
+
+  Future<void> _restoreLivePosition(
+    Future<void> operation,
+    Duration position,
+  ) async {
+    final requestId = _playRequestId;
+    _pendingLiveRestorePosition = (requestId: requestId, position: position);
+    try {
+      await operation;
+      if (!_disposed &&
+          _isCurrentPlayRequest(requestId) &&
+          isLiveQueueActive &&
+          !_userPaused &&
+          state.value?.status != PlayerStatus.failed &&
+          position > Duration.zero) {
+        await seek(position);
+      }
+    } finally {
+      if (_pendingLiveRestorePosition?.requestId == requestId) {
+        _pendingLiveRestorePosition = null;
+      }
+    }
   }
 
   Future<void> _finishLiveQueue() {
@@ -432,6 +580,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _liveQueueRestoration = completion;
     final suspended = _suspendedLivePlayback;
     _suspendedLivePlayback = null;
+    _interruptedLiveQueuePlayback = null;
     final requestId = _playRequestId;
     final navigationGeneration = _queueNavigationGeneration;
     // Cleanup is synchronous. New requests may resolve while restoration is
@@ -523,24 +672,6 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _recommendationExtension.restore(saved.recommendations);
     _publishPlaybackQueue();
 
-    if (!saved.snapshot.wantsToPlay) {
-      _releasePlaybackIntent();
-      _userPaused = true;
-      _resumeNeedsReload = true;
-      _resumePlaybackPosition = saved.snapshot.position;
-      final requestId = _playRequestId;
-      await ref.read(playerServiceProvider).stop();
-      if (!_disposed && _isCurrentPlayRequest(requestId)) {
-        state = AsyncData(
-          saved.snapshot.copyWith(
-            playWhenReady: false,
-            volume: ref.read(playerServiceProvider).currentSnapshot.volume,
-          ),
-        );
-      }
-      return;
-    }
-
     final operation = _playQueueItem(
       _queue[_queueIndex],
       automaticTransition: true,
@@ -582,8 +713,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
   bool get _hasLivePlaybackContinuation =>
       isLiveQueueActive &&
-      (_queueIndex + 1 < _queue.length ||
-          _suspendedLivePlayback?.snapshot.wantsToPlay == true);
+      (_queueIndex + 1 < _queue.length || _suspendedLivePlayback != null);
 
   void _updateTerminalPlaybackIntent() {
     if (!_userPaused && !_explicitlyStopped && _hasLivePlaybackContinuation) {
@@ -668,8 +798,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   bool get _canContinueAfterCompletion {
     if (_queueIndex < 0 || _queueIndex >= _queue.length) return false;
     if (isLiveQueueActive) {
-      return _queueIndex + 1 < _queue.length ||
-          _suspendedLivePlayback?.snapshot.wantsToPlay == true;
+      return _queueIndex + 1 < _queue.length || _suspendedLivePlayback != null;
     }
     return _repeatMode != PlaybackRepeatMode.off ||
         (_shuffleEnabled
@@ -892,6 +1021,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     TrackInfo track, {
     List<TrackInfo>? queue,
     String? queueSourceId,
+  }) => _startRemoteQueue(track, queue: queue, queueSourceId: queueSourceId);
+
+  Future<void> _startRemoteQueue(
+    TrackInfo track, {
+    List<TrackInfo>? queue,
+    String? queueSourceId,
+    int? initialQueueIndex,
   }) async {
     _prepareQueueSourceTransition(queueSourceId);
     _resetQueueNavigation();
@@ -910,6 +1046,12 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       (item) =>
           item.url == track.url || (track.id.isNotEmpty && item.id == track.id),
     );
+    if (initialQueueIndex != null &&
+        initialQueueIndex >= 0 &&
+        initialQueueIndex < normalizedQueue.length &&
+        _sameLogicalRemoteTrack(normalizedQueue[initialQueueIndex], track)) {
+      _queueIndex = initialQueueIndex;
+    }
     if (_queueIndex < 0) {
       normalizedQueue.insert(0, track);
       _queueIndex = 0;
@@ -2671,6 +2813,19 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     List<LocalTrack>? queue,
     bool useNativeQueue = true,
     String? queueSourceId,
+  }) => _startLocalQueue(
+    track,
+    queue: queue,
+    useNativeQueue: useNativeQueue,
+    queueSourceId: queueSourceId,
+  );
+
+  Future<void> _startLocalQueue(
+    LocalTrack track, {
+    List<LocalTrack>? queue,
+    bool useNativeQueue = true,
+    String? queueSourceId,
+    int? initialQueueIndex,
   }) async {
     _prepareQueueSourceTransition(queueSourceId);
     _resetQueueNavigation();
@@ -2688,6 +2843,12 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     if (queue != null && queue.isNotEmpty) {
       _queue = List.unmodifiable(queue.map(_QueueItem.local));
       _queueIndex = _queue.indexWhere((item) => item.local?.id == track.id);
+      if (initialQueueIndex != null &&
+          initialQueueIndex >= 0 &&
+          initialQueueIndex < _queue.length &&
+          _queue[initialQueueIndex].local?.id == track.id) {
+        _queueIndex = initialQueueIndex;
+      }
       if (_queueIndex < 0) {
         _queue = List.unmodifiable([
           _QueueItem.local(track),
@@ -2944,6 +3105,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   /// left to the caller so `clearLiveQueue(stopPlayback: false)` keeps its
   /// existing behavior.
   Future<bool> clearQueueSource(String sourceId) async {
+    if (sourceId == liveQueueSourceId) {
+      _interruptedLiveQueuePlayback = null;
+    }
     final localMatches = _activeLocalQueueSourceId == sourceId;
     final remoteMatches = _activeRemoteQueueSourceId == sourceId;
     if (!localMatches && !remoteMatches) {
@@ -3767,13 +3931,22 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       }
     }
     if (index < 0) {
-      index = _queue.indexWhere(
-        (item) =>
-            item.local?.id == trackId ||
-            item.remote?.id == trackId ||
-            item.remote?.url == trackId ||
-            item.id == trackId,
-      );
+      bool matches(_QueueItem item) =>
+          item.local?.id == trackId ||
+          item.remote?.id == trackId ||
+          item.remote?.url == trackId ||
+          item.id == trackId;
+      // Controller-managed players may report only a track identity. Keep an
+      // explicitly selected duplicate occurrence until a durable native entry
+      // id identifies another one; indexWhere would jump to its first copy.
+      if ((queueEntryId == null || queueEntryId.isEmpty) &&
+          _queueIndex >= 0 &&
+          _queueIndex < _queue.length &&
+          matches(_queue[_queueIndex])) {
+        _markCurrentQueueIndexPlayed();
+        return false;
+      }
+      index = _queue.indexWhere(matches);
     }
     if (index < 0) {
       return false;

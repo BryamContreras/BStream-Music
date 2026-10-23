@@ -1008,6 +1008,8 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
   Object? _filterConfigSignature;
   ImageFilterConfig? _positionAwareFilterConfig;
   _LiquidGlassMaterialResolver? _desktopMaterialResolver;
+  Animation<double>? _routeSecondaryAnimation;
+  bool _routeGeometryRefreshScheduled = false;
 
   @override
   void initState() {
@@ -1032,7 +1034,39 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final animation = ModalRoute.of(context)?.secondaryAnimation;
+    if (identical(animation, _routeSecondaryAnimation)) return;
+    _routeSecondaryAnimation?.removeStatusListener(_handleRouteTransition);
+    _routeSecondaryAnimation = animation;
+    animation?.addStatusListener(_handleRouteTransition);
+  }
+
+  void _handleRouteTransition(AnimationStatus status) {
+    if (status != AnimationStatus.dismissed || _routeGeometryRefreshScheduled) {
+      return;
+    }
+    _routeGeometryRefreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _routeGeometryRefreshScheduled = false;
+      if (!mounted ||
+          _routeSecondaryAnimation?.status != AnimationStatus.dismissed) {
+        return;
+      }
+      // Mobile route transitions transform the retained page without painting
+      // its glass again. The native filter may therefore still contain the
+      // shader bounds from a scaled/translated frame when the route returns.
+      // Repaint once after the final transform is installed so the existing
+      // position-aware resolver uses the complete, restored surface. This
+      // neither rebuilds the controls nor introduces a ticker or idle frames.
+      context.findRenderObject()?.markNeedsPaint();
+    });
+  }
+
+  @override
   void dispose() {
+    _routeSecondaryAnimation?.removeStatusListener(_handleRouteTransition);
     _fragmentShader?.dispose();
     super.dispose();
   }

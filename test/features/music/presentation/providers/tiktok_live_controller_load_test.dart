@@ -270,8 +270,19 @@ class _ControlledSearchRepository implements MusicRepository {
 
 class _RecordingPlayerController extends PlayerController {
   int remotePlayCalls = 0;
+  String? _sourceId;
   TrackInfo? firstRemoteTrack;
   List<TrackInfo>? lastRemoteQueue;
+
+  @override
+  bool get isLiveQueueActive => _sourceId == PlayerController.liveQueueSourceId;
+
+  @override
+  Future<void> resumeRemoteLiveQueue(List<TrackInfo> tracks) => playRemote(
+    tracks.first,
+    queue: tracks,
+    queueSourceId: PlayerController.liveQueueSourceId,
+  );
 
   @override
   Future<PlayerSnapshot> build() async {
@@ -285,6 +296,7 @@ class _RecordingPlayerController extends PlayerController {
     String? queueSourceId,
   }) async {
     remotePlayCalls++;
+    _sourceId = queueSourceId;
     firstRemoteTrack ??= track;
     lastRemoteQueue = queue == null ? null : List.unmodifiable(queue);
     state = AsyncData(

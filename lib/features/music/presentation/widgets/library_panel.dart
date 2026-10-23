@@ -50,6 +50,8 @@ enum _TrackMenuAction {
   removeFromPlaylist,
 }
 
+enum _TrackSelectionAction { addToPlaylist, download, remove }
+
 enum _PlaylistMenuAction {
   downloadAll,
   cancelDownloads,
@@ -393,6 +395,28 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                               onBack: _goRoot,
                               onOpenPlayer: widget.onOpenPlayer,
                               playlist: playlist,
+                              selectedEntryIds: _selectedTrackIds,
+                              selectionBusy: _selectionActionInProgress,
+                              onSelectEntry: _selectTrack,
+                              onToggleEntry: _toggleTrackSelection,
+                              onClearSelection: _clearTrackSelection,
+                              onAddSelected: (context) =>
+                                  _addSelectedCatalogItems(
+                                    context,
+                                    playlist,
+                                    allItems,
+                                  ),
+                              onDownloadSelected: (context) =>
+                                  _downloadSelectedCatalogItems(
+                                    context,
+                                    allItems,
+                                  ),
+                              onRemoveSelected: (context) =>
+                                  _removeSelectedCatalogItems(
+                                    context,
+                                    playlist,
+                                    allItems,
+                                  ),
                               onReorderEntries: (entryIds) => ref
                                   .read(playlistsControllerProvider.notifier)
                                   .reorderCatalogPlaylist(
@@ -779,6 +803,148 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
         })
         .toList(growable: false);
   }
+
+  List<_CatalogDisplayItem> _selectedCatalogItems(
+    List<_CatalogDisplayItem> items,
+  ) => items
+      .where((item) => _selectedTrackIds.contains(item.entry.id))
+      .toList(growable: false);
+
+  Future<void> _runCatalogSelectionAction(
+    Future<void> Function() action,
+  ) async {
+    if (_selectionActionInProgress) return;
+    setState(() => _selectionActionInProgress = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _selectionActionInProgress = false);
+    }
+  }
+
+  Future<void> _addSelectedCatalogItems(
+    BuildContext context,
+    Playlist playlist,
+    List<_CatalogDisplayItem> items,
+  ) => _runCatalogSelectionAction(() async {
+    final selected = _selectedCatalogItems(items);
+    final destination = await _pickDestinationPlaylist(
+      context,
+      ref,
+      excludePlaylistId: playlist.id,
+    );
+    if (destination == null || !mounted) return;
+    final controller = ref.read(playlistsControllerProvider.notifier);
+    var added = await controller.addTracksToPlaylist(
+      destination,
+      selected.map((item) => item.localTrack?.id).whereType<String>(),
+    );
+    added += await controller.addRemoteTracksToPlaylist(
+      destination,
+      selected
+          .where((item) => item.localTrack == null)
+          .map((item) => item.playback?.remoteTrack)
+          .whereType<TrackInfo>(),
+    );
+    if (!mounted) return;
+    _clearTrackSelection();
+    final strings = ref.read(appStringsProvider);
+    ScaffoldMessenger.of(this.context).showSnackBar(
+      SnackBar(
+        content: Text(
+          added == 0
+              ? strings.songsAlreadyInPlaylist
+              : strings.songsAddedToPlaylist(added),
+        ),
+      ),
+    );
+  });
+
+  Future<void> _downloadSelectedCatalogItems(
+    BuildContext context,
+    List<_CatalogDisplayItem> items,
+  ) => _runCatalogSelectionAction(() async {
+    final selected = _selectedCatalogItems(items);
+    // The shared queue checks local file availability, in-flight tasks and
+    // video identity, so existing downloads and repeated occurrences are safe.
+    final tracks = selected
+        .map(
+          (item) =>
+              item.playback?.remoteTrack ??
+              (item.localTrack == null
+                  ? null
+                  : _remoteTrackInfoForLocal(item.localTrack!)),
+        )
+        .whereType<TrackInfo>();
+    final queued = await ref
+        .read(downloadControllerProvider.notifier)
+        .downloadTracks(tracks);
+    if (!mounted) return;
+    _clearTrackSelection();
+    ScaffoldMessenger.of(this.context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ref.read(appStringsProvider).songsQueuedForDownload(queued),
+        ),
+      ),
+    );
+  });
+
+  Future<void> _removeSelectedCatalogItems(
+    BuildContext context,
+    Playlist playlist,
+    List<_CatalogDisplayItem> items,
+  ) => _runCatalogSelectionAction(() async {
+    final selected = _selectedCatalogItems(items);
+    if (selected.isEmpty) return;
+    final strings = ref.read(appStringsProvider);
+    final label = playlist.isFavorites
+        ? strings.removeFromFavorites
+        : strings.removeFromPlaylist;
+    final confirmed = await showAppDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AppAlertDialog(
+        title: Text(label),
+        content: Text(
+          strings.removeSelectedSongs(
+            selected.length,
+            favorites: playlist.isFavorites,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.cancel),
+          ),
+          FilledButton.icon(
+            key: const ValueKey('library-selection-confirm-remove'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.playlist_remove_rounded),
+            label: Text(label),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final removed = await ref
+        .read(playlistsControllerProvider.notifier)
+        .removeCatalogEntries(
+          playlist.id,
+          selected.map((item) => item.entry.id),
+        );
+    if (!mounted) return;
+    _clearTrackSelection();
+    ScaffoldMessenger.of(this.context).showSnackBar(
+      SnackBar(
+        content: Text(
+          strings.songsRemovedFromPlaylist(
+            removed,
+            favorites: playlist.isFavorites,
+          ),
+        ),
+      ),
+    );
+  });
 
   List<_CatalogDisplayItem> _filteredCatalogItems(
     List<_CatalogDisplayItem> items,
@@ -1568,6 +1734,14 @@ class _CatalogTrackListView extends ConsumerWidget {
     required this.onOpenPlayer,
     required this.playlist,
     required this.onReorderEntries,
+    required this.selectedEntryIds,
+    required this.selectionBusy,
+    required this.onSelectEntry,
+    required this.onToggleEntry,
+    required this.onClearSelection,
+    required this.onAddSelected,
+    required this.onDownloadSelected,
+    required this.onRemoveSelected,
   });
 
   final double bottomContentPadding;
@@ -1580,25 +1754,46 @@ class _CatalogTrackListView extends ConsumerWidget {
   final VoidCallback onOpenPlayer;
   final Playlist playlist;
   final Future<void> Function(List<String> orderedEntryIds) onReorderEntries;
+  final Set<String> selectedEntryIds;
+  final bool selectionBusy;
+  final ValueChanged<String> onSelectEntry;
+  final ValueChanged<String> onToggleEntry;
+  final VoidCallback onClearSelection;
+  final Future<void> Function(BuildContext) onAddSelected;
+  final Future<void> Function(BuildContext) onDownloadSelected;
+  final Future<void> Function(BuildContext) onRemoveSelected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
+    final selectionActive = selectedEntryIds.isNotEmpty;
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('library-detail-header-surface'),
       pinnedFooterSurfaceKey: const ValueKey('library-filter-region-surface'),
       pinnedFooterHasOwnSurface: true,
       hidePinnedFooterOnScroll: true,
       scrollKey: const ValueKey('library-catalog-track-scroll'),
-      header: _DetailHeader(
-        key: const ValueKey('library-detail-header'),
-        title: title,
-        subtitle: subtitle,
-        onBack: onBack,
-        trailing: playlist.isFavorites
-            ? null
-            : _PlaylistMenu(playlist: playlist, onBack: onBack),
-      ),
+      header: selectionActive
+          ? _TrackSelectionToolbar(
+              key: const ValueKey('library-selection-toolbar'),
+              count: selectedEntryIds.length,
+              removesFromPlaylist: true,
+              favorites: playlist.isFavorites,
+              busy: selectionBusy,
+              onClose: onClearSelection,
+              onAddToPlaylist: () => onAddSelected(context),
+              onDownload: () => onDownloadSelected(context),
+              onDelete: () => onRemoveSelected(context),
+            )
+          : _DetailHeader(
+              key: const ValueKey('library-detail-header'),
+              title: title,
+              subtitle: subtitle,
+              onBack: onBack,
+              trailing: playlist.isFavorites
+                  ? null
+                  : _PlaylistMenu(playlist: playlist, onBack: onBack),
+            ),
       pinnedFooter: _LibraryFilterSurface(
         controller: filterController,
         hintText: strings.filterSongs,
@@ -1620,7 +1815,7 @@ class _CatalogTrackListView extends ConsumerWidget {
           : <Widget>[
               SliverPadding(
                 padding: EdgeInsets.only(bottom: bottomContentPadding + 12),
-                sliver: filterController.text.trim().isEmpty
+                sliver: filterController.text.trim().isEmpty && !selectionActive
                     ? SliverReorderableList(
                         itemCount: items.length,
                         onReorderItem: (oldIndex, newIndex) async {
@@ -1655,6 +1850,9 @@ class _CatalogTrackListView extends ConsumerWidget {
                               queueItems: queueItems,
                               playlist: playlist,
                               onOpenPlayer: onOpenPlayer,
+                              selectionActive: false,
+                              selected: false,
+                              onLongPress: () => onSelectEntry(item.entry.id),
                               reorderHandle: _LibraryReorderHandle(
                                 index: index,
                               ),
@@ -1674,6 +1872,15 @@ class _CatalogTrackListView extends ConsumerWidget {
                             queueItems: queueItems,
                             playlist: playlist,
                             onOpenPlayer: onOpenPlayer,
+                            selectionActive: selectionActive,
+                            selected: selectedEntryIds.contains(
+                              items[index].entry.id,
+                            ),
+                            onLongPress: () =>
+                                onSelectEntry(items[index].entry.id),
+                            onSelectionTap: selectionActive
+                                ? () => onToggleEntry(items[index].entry.id)
+                                : null,
                           ),
                         ),
                       ),
@@ -1689,6 +1896,10 @@ class _CatalogTrackTile extends ConsumerStatefulWidget {
     required this.queueItems,
     required this.playlist,
     required this.onOpenPlayer,
+    required this.selectionActive,
+    required this.selected,
+    required this.onLongPress,
+    this.onSelectionTap,
     this.reorderHandle,
     super.key,
   });
@@ -1697,6 +1908,10 @@ class _CatalogTrackTile extends ConsumerStatefulWidget {
   final List<_CatalogDisplayItem> queueItems;
   final Playlist playlist;
   final VoidCallback onOpenPlayer;
+  final bool selectionActive;
+  final bool selected;
+  final VoidCallback onLongPress;
+  final VoidCallback? onSelectionTap;
   final Widget? reorderHandle;
 
   @override
@@ -1741,7 +1956,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
       colors.primary.withValues(alpha: 0.13),
       baseColor,
     );
-    final resolvedSurfaceColor = isCurrent
+    final resolvedSurfaceColor = widget.selected || isCurrent
         ? activeColor
         : _hovered
         ? Color.alphaBlend(colors.onSurface.withValues(alpha: 0.075), baseColor)
@@ -1751,18 +1966,18 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
       onExit: (_) => setState(() => _hovered = false),
       child: AppCardGradientBorder(
         solidInLiquidGlass: true,
-        emphasized: isCurrent || _hovered,
-        width: isCurrent || _hovered ? 1.4 : 1,
+        emphasized: widget.selected || isCurrent || _hovered,
+        width: widget.selected || isCurrent || _hovered ? 1.4 : 1,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           decoration: BoxDecoration(
             color: resolvedSurfaceColor,
             borderRadius: borderRadius,
             border: Border.all(
-              color: isCurrent || _hovered
+              color: widget.selected || isCurrent || _hovered
                   ? colors.primary
                   : appListCardBorder(context, solidInLiquidGlass: true),
-              width: isCurrent || _hovered ? 1.4 : 1,
+              width: widget.selected || isCurrent || _hovered ? 1.4 : 1,
             ),
           ),
           child: Material(
@@ -1772,6 +1987,7 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
               minVerticalPadding: 7,
               contentPadding: _libraryOverviewContentPadding,
               horizontalTitleGap: 10,
+              selected: widget.selectionActive ? widget.selected : false,
               shape: RoundedRectangleBorder(borderRadius: borderRadius),
               leading: Stack(
                 children: <Widget>[
@@ -1836,94 +2052,116 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
                     ),
                 ],
               ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  ?widget.reorderHandle,
-                  TrackPlayButton(
-                    key: ValueKey(
-                      'library-catalog-play-${widget.item.entry.id}',
-                    ),
-                    tooltip: widget.item.isPlayable
-                        ? isPlaying
-                              ? strings.pause
-                              : strings.play
-                        : strings.choose(
-                            'Canción no disponible en YouTube Music',
-                            'Song unavailable on YouTube Music',
-                          ),
-                    isPlaying: isPlaying,
-                    onPressed: widget.item.isPlayable ? _togglePlayback : null,
-                  ),
-                  SizedBox(
-                    width: 36,
-                    height: 44,
-                    child: GlassPopupMenuButton<_TrackMenuAction>(
-                      key: ValueKey(
-                        'library-catalog-menu-${widget.item.entry.id}',
-                      ),
-                      tooltip: strings.moreOptions,
-                      padding: EdgeInsets.zero,
-                      iconSize: menuIconSize,
-                      child: Center(
-                        child: Icon(
-                          Icons.more_vert_rounded,
-                          size: menuIconSize,
-                          color: menuIconColor,
+              trailing: widget.selectionActive
+                  ? SizedBox(
+                      width: 44,
+                      child: Icon(
+                        widget.selected
+                            ? Icons.check_circle_rounded
+                            : Icons.circle_outlined,
+                        key: ValueKey(
+                          'library-catalog-selection-${widget.item.entry.id}',
                         ),
+                        color: widget.selected
+                            ? colors.primary
+                            : colors.onSurfaceVariant,
                       ),
-                      onSelected: (action) => _handleAction(context, action),
-                      itemBuilder: (context) {
-                        final entries = <PopupMenuEntry<_TrackMenuAction>>[];
-                        final remote = widget.item.playback?.remoteTrack;
-                        if (remote != null &&
-                            (!isDownloaded || canCancelDownload)) {
-                          entries.add(
-                            PopupMenuItem<_TrackMenuAction>(
-                              value: _TrackMenuAction.download,
-                              child: _trackMenuItem(
-                                context,
-                                canCancelDownload
-                                    ? Icons.close_rounded
-                                    : Icons.download_rounded,
-                                canCancelDownload
-                                    ? strings.cancelDownload
-                                    : strings.download,
-                              ),
-                            ),
-                          );
-                        }
-                        if (widget.item.isPlayable) {
-                          entries.add(
-                            PopupMenuItem<_TrackMenuAction>(
-                              value: _TrackMenuAction.addToPlaylist,
-                              child: _trackMenuItem(
-                                context,
-                                Icons.playlist_add_rounded,
-                                strings.addToPlaylist,
-                              ),
-                            ),
-                          );
-                        }
-                        entries.add(
-                          PopupMenuItem<_TrackMenuAction>(
-                            value: _TrackMenuAction.removeFromPlaylist,
-                            child: _trackMenuItem(
-                              context,
-                              Icons.playlist_remove_rounded,
-                              widget.playlist.isFavorites
-                                  ? strings.removeFromFavorites
-                                  : strings.removeFromPlaylist,
-                            ),
+                    )
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        ?widget.reorderHandle,
+                        TrackPlayButton(
+                          key: ValueKey(
+                            'library-catalog-play-${widget.item.entry.id}',
                           ),
-                        );
-                        return entries;
-                      },
+                          tooltip: widget.item.isPlayable
+                              ? isPlaying
+                                    ? strings.pause
+                                    : strings.play
+                              : strings.choose(
+                                  'Canción no disponible en YouTube Music',
+                                  'Song unavailable on YouTube Music',
+                                ),
+                          isPlaying: isPlaying,
+                          onPressed: widget.item.isPlayable
+                              ? _togglePlayback
+                              : null,
+                        ),
+                        SizedBox(
+                          width: 36,
+                          height: 44,
+                          child: GlassPopupMenuButton<_TrackMenuAction>(
+                            key: ValueKey(
+                              'library-catalog-menu-${widget.item.entry.id}',
+                            ),
+                            tooltip: strings.moreOptions,
+                            padding: EdgeInsets.zero,
+                            iconSize: menuIconSize,
+                            child: Center(
+                              child: Icon(
+                                Icons.more_vert_rounded,
+                                size: menuIconSize,
+                                color: menuIconColor,
+                              ),
+                            ),
+                            onSelected: (action) =>
+                                _handleAction(context, action),
+                            itemBuilder: (context) {
+                              final entries =
+                                  <PopupMenuEntry<_TrackMenuAction>>[];
+                              final remote = widget.item.playback?.remoteTrack;
+                              if (remote != null &&
+                                  (!isDownloaded || canCancelDownload)) {
+                                entries.add(
+                                  PopupMenuItem<_TrackMenuAction>(
+                                    value: _TrackMenuAction.download,
+                                    child: _trackMenuItem(
+                                      context,
+                                      canCancelDownload
+                                          ? Icons.close_rounded
+                                          : Icons.download_rounded,
+                                      canCancelDownload
+                                          ? strings.cancelDownload
+                                          : strings.download,
+                                    ),
+                                  ),
+                                );
+                              }
+                              if (widget.item.isPlayable) {
+                                entries.add(
+                                  PopupMenuItem<_TrackMenuAction>(
+                                    value: _TrackMenuAction.addToPlaylist,
+                                    child: _trackMenuItem(
+                                      context,
+                                      Icons.playlist_add_rounded,
+                                      strings.addToPlaylist,
+                                    ),
+                                  ),
+                                );
+                              }
+                              entries.add(
+                                PopupMenuItem<_TrackMenuAction>(
+                                  value: _TrackMenuAction.removeFromPlaylist,
+                                  child: _trackMenuItem(
+                                    context,
+                                    Icons.playlist_remove_rounded,
+                                    widget.playlist.isFavorites
+                                        ? strings.removeFromFavorites
+                                        : strings.removeFromPlaylist,
+                                  ),
+                                ),
+                              );
+                              return entries;
+                            },
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-              onTap: widget.item.isPlayable ? _openOrPlay : null,
+              onTap:
+                  widget.onSelectionTap ??
+                  (widget.item.isPlayable ? _openOrPlay : null),
+              onLongPress: widget.onLongPress,
             ),
           ),
         ),
@@ -2238,6 +2476,7 @@ class _TrackSelectionToolbar extends ConsumerWidget {
     required this.onClose,
     required this.onAddToPlaylist,
     required this.onDelete,
+    this.onDownload,
     super.key,
   });
 
@@ -2248,11 +2487,11 @@ class _TrackSelectionToolbar extends ConsumerWidget {
   final VoidCallback onClose;
   final VoidCallback onAddToPlaylist;
   final VoidCallback onDelete;
+  final VoidCallback? onDownload;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final colors = Theme.of(context).colorScheme;
     return SizedBox(
       height: 48,
       child: Row(
@@ -2276,33 +2515,66 @@ class _TrackSelectionToolbar extends ConsumerWidget {
               ),
             ),
           ),
-          IconButton(
-            key: const ValueKey('library-selection-add-to-playlist'),
-            tooltip: strings.addToPlaylist,
-            onPressed: busy ? null : onAddToPlaylist,
-            color: colors.primary,
-            icon: const Icon(Icons.playlist_add_rounded),
-          ),
-          IconButton(
-            key: ValueKey(
-              removesFromPlaylist
-                  ? 'library-selection-remove-from-playlist'
-                  : 'library-selection-delete',
-            ),
-            tooltip: removesFromPlaylist
-                ? (favorites
-                      ? strings.removeFromFavorites
-                      : strings.removeFromPlaylist)
-                : strings.deleteSelectedSongs,
-            onPressed: busy ? null : onDelete,
-            color: removesFromPlaylist ? colors.primary : colors.error,
+          GlassPopupMenuButton<_TrackSelectionAction>(
+            key: const ValueKey('library-selection-menu'),
+            tooltip: strings.moreOptions,
+            enabled: !busy,
             icon: Icon(
-              removesFromPlaylist
-                  ? (favorites
-                        ? Icons.favorite_border_rounded
-                        : Icons.playlist_remove_rounded)
-                  : Icons.delete_outline_rounded,
+              Icons.more_vert_rounded,
+              color: AppColors.menuIconFor(context),
             ),
+            onSelected: (action) {
+              switch (action) {
+                case _TrackSelectionAction.addToPlaylist:
+                  onAddToPlaylist();
+                case _TrackSelectionAction.download:
+                  onDownload?.call();
+                case _TrackSelectionAction.remove:
+                  onDelete();
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                key: const ValueKey('library-selection-add-to-playlist'),
+                value: _TrackSelectionAction.addToPlaylist,
+                child: _trackMenuItem(
+                  context,
+                  Icons.playlist_add_rounded,
+                  strings.addToPlaylist,
+                ),
+              ),
+              if (onDownload != null)
+                PopupMenuItem(
+                  key: const ValueKey('library-selection-download'),
+                  value: _TrackSelectionAction.download,
+                  child: _trackMenuItem(
+                    context,
+                    Icons.download_rounded,
+                    strings.download,
+                  ),
+                ),
+              PopupMenuItem(
+                key: ValueKey(
+                  removesFromPlaylist
+                      ? 'library-selection-remove-from-playlist'
+                      : 'library-selection-delete',
+                ),
+                value: _TrackSelectionAction.remove,
+                child: _trackMenuItem(
+                  context,
+                  removesFromPlaylist
+                      ? (favorites
+                            ? Icons.favorite_border_rounded
+                            : Icons.playlist_remove_rounded)
+                      : Icons.delete_outline_rounded,
+                  removesFromPlaylist
+                      ? (favorites
+                            ? strings.removeFromFavorites
+                            : strings.removeFromPlaylist)
+                      : strings.deleteSelectedSongs,
+                ),
+              ),
+            ],
           ),
         ],
       ),

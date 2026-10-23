@@ -3171,13 +3171,13 @@ void main() {
           final title = tester.widget<MarqueeText>(
             find.byKey(const ValueKey('player-track-title')),
           );
-          expect(title.style?.fontSize, closeTo(22.75, 0.1));
+          expect(title.style?.fontSize, closeTo(22.25, 0.1));
         }
         if (viewport == const Size(820, 390)) {
           final title = tester.widget<MarqueeText>(
             find.byKey(const ValueKey('player-track-title')),
           );
-          expect(title.style?.fontSize, closeTo(21, 0.1));
+          expect(title.style?.fontSize, closeTo(19.74, 0.1));
         }
         expect(tester.takeException(), isNull, reason: '$viewport');
       }
@@ -3672,6 +3672,95 @@ void main() {
     TargetPlatform.windows,
   ]) {
     testWidgets(
+      '$platform queue metadata scrolls long titles and artists on one line',
+      (tester) async {
+        _configureView(
+          tester,
+          platform == TargetPlatform.windows
+              ? const Size(1000, 700)
+              : const Size(320, 568),
+        );
+        const title =
+            'A long song title with several versions and additional featured performers';
+        const artist =
+            'First artist, Second artist, Third artist and Fourth featured artist';
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: platform,
+            snapshot: snapshot.copyWith(title: title, artist: artist),
+            localTrack: localTrack,
+            playlists: _TestPlaylistsController(),
+            style: PlayerStyle.appleMusic,
+            playbackQueue: const PlaybackQueueState(
+              entries: [
+                PlaybackQueueEntry(
+                  id: trackId,
+                  title: title,
+                  artist: artist,
+                  isRemote: false,
+                ),
+              ],
+              currentIndex: 0,
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        if (platform != TargetPlatform.windows) {
+          await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+        }
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        final titleFinder = find.byKey(const ValueKey('queue-current-title'));
+        final artistFinder = find.byKey(const ValueKey('queue-current-artist'));
+        final heart = find.byKey(const ValueKey('queue-favorite-toggle'));
+        for (final label in [titleFinder, artistFinder]) {
+          final marquee = tester.widget<MarqueeText>(label);
+          expect(
+            find.descendant(of: label, matching: find.byType(Flow)),
+            findsOneWidget,
+          );
+          expect(
+            tester
+                .widget<Text>(
+                  find.descendant(of: label, matching: find.byType(Text)),
+                )
+                .maxLines,
+            1,
+          );
+          expect(
+            tester.getSize(label).height,
+            lessThan(marquee.style!.fontSize! * 1.8),
+            reason: 'long metadata must not increase the header to two lines',
+          );
+          expect(
+            tester.getRect(label).right,
+            lessThanOrEqualTo(tester.getRect(heart).left),
+          );
+        }
+        final titleText = find.descendant(
+          of: titleFinder,
+          matching: find.byType(Text),
+        );
+        final artistText = find.descendant(
+          of: artistFinder,
+          matching: find.byType(Text),
+        );
+        final titleStart = tester.getTopLeft(titleText).dx;
+        final artistStart = tester.getTopLeft(artistText).dx;
+        await tester.pump(const Duration(seconds: 2));
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(tester.getTopLeft(titleText).dx, lessThan(titleStart));
+        expect(tester.getTopLeft(artistText).dx, lessThan(artistStart));
+        expect(tester.getSize(heart), const Size(48, 48));
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
       '$platform queue heart toggles the current track and metadata is larger',
       (tester) async {
         _configureView(
@@ -3709,14 +3798,18 @@ void main() {
         );
         expect(
           tester
-              .widget<Text>(find.byKey(const ValueKey('queue-current-title')))
+              .widget<MarqueeText>(
+                find.byKey(const ValueKey('queue-current-title')),
+              )
               .style
               ?.fontSize,
           16,
         );
         expect(
           tester
-              .widget<Text>(find.byKey(const ValueKey('queue-current-artist')))
+              .widget<MarqueeText>(
+                find.byKey(const ValueKey('queue-current-artist')),
+              )
               .style
               ?.fontSize,
           14,
@@ -4031,6 +4124,51 @@ void main() {
     _expectTransparentPrimaryControl(tester, mobile: false);
     expect(tester.takeException(), isNull);
   });
+
+  for (final style in PlayerStyle.values) {
+    testWidgets(
+      '$style gently reduces compact metadata and preserves accessibility scaling',
+      (tester) async {
+        _configureView(tester, const Size(480, 900));
+        Widget harness() => _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: snapshot,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          style: style,
+        );
+        double titleSize() => tester
+            .widget<MarqueeText>(
+              find.byKey(const ValueKey('player-track-title')),
+            )
+            .style!
+            .fontSize!;
+        double artistSize() => tester
+            .widget<Text>(find.byKey(const ValueKey('player-track-artist')))
+            .style!
+            .fontSize!;
+        await tester.pumpWidget(harness());
+        await tester.pump(const Duration(milliseconds: 500));
+        final roomyTitle = titleSize();
+        final roomyArtist = artistSize();
+        tester.view.physicalSize = const Size(320, 568);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        final compactTitle = titleSize();
+        final compactArtist = artistSize();
+        expect(compactTitle, lessThan(roomyTitle));
+        expect(compactArtist, lessThan(roomyArtist));
+        expect(compactTitle, greaterThanOrEqualTo(18));
+        expect(compactArtist, greaterThanOrEqualTo(13));
+        tester.platformDispatcher.textScaleFactorTestValue = 2;
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        final title = find.byKey(const ValueKey('player-track-title'));
+        expect(MediaQuery.textScalerOf(tester.element(title)).scale(16), 32);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets('320x568 player keeps text scale 3 controls reachable', (
     tester,

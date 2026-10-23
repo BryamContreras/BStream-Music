@@ -257,6 +257,38 @@ class PlaylistsController extends AsyncNotifier<List<Playlist>> {
     _requestYouTubeMusicSync();
   }
 
+  /// Removes occurrences from this playlist without deleting their audio or
+  /// library records. Entry identity preserves duplicate remote occurrences.
+  Future<int> removeCatalogEntries(
+    String playlistId,
+    Iterable<String> entryIds,
+  ) async {
+    final requested = entryIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (requested.isEmpty) return 0;
+    final database = ref.read(databaseServiceProvider);
+    final catalog = await database.getCatalogPlaylist(playlistId);
+    if (catalog == null) return 0;
+    final matches = catalog.entries
+        .where((entry) => !entry.isDeleted && requested.contains(entry.id))
+        .toList(growable: false);
+    if (matches.isEmpty) return 0;
+    final now = DateTime.now();
+    for (final entry in matches) {
+      await database.tombstoneCatalogEntry(
+        playlistId: playlistId,
+        entryId: entry.id,
+        now: now,
+      );
+    }
+    await _reloadCatalogState();
+    await _syncActivePlaybackQueueById(playlistId);
+    _requestYouTubeMusicSync();
+    return matches.length;
+  }
+
   Future<void> reorderCatalogPlaylist(
     String playlistId,
     List<String> orderedEntryIds,

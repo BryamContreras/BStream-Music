@@ -13,6 +13,7 @@ import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:bstream_music/services/downloader/fallback_audio_resolver.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -890,10 +891,208 @@ void main() {
         'live-b',
         'normal-a',
       ]);
+      expect(playerService.currentSnapshot.status, PlayerStatus.playing);
+      expect(
+        container.read(playerControllerProvider).requireValue.wantsToPlay,
+        isTrue,
+      );
       await controller.playNext();
       expect(playerService.currentSnapshot.trackId, 'normal-b');
     },
   );
+
+  for (final saveToLibrary in [false, true]) {
+    final mode = saveToLibrary ? 'downloaded' : 'remote';
+    test(
+      '$mode inactive revoke prevents an identical fresh request inheriting the removed seek position',
+      () async {
+        final harness = _RealLiveHarness(saveToLibrary: saveToLibrary);
+        addTearDown(harness.dispose);
+        await harness.initialize();
+        harness.service.emit(_playEvent('consumed'));
+        harness.service.emit(_playEvent('duplicate'));
+        await _waitUntil(
+          () =>
+              harness.liveState.liveQueue.length == 2 &&
+              harness.liveState.liveQueue.every((item) => item.isReady) &&
+              harness.queue.entries.length == 2,
+        );
+        await harness.player.playNext();
+        await harness.player.seek(const Duration(seconds: 19));
+        await harness.player.playRemote(_remoteTrack('manual-normal'));
+        await harness.live.revokeLastLiveQueueItem();
+        expect(harness.liveState.liveQueue, hasLength(1));
+        expect(harness.backend.currentSnapshot.trackId, 'manual-normal');
+
+        harness.service.emit(_playEvent('duplicate'));
+        await _waitUntil(
+          () =>
+              harness.player.isLiveQueueActive &&
+              harness.liveState.liveQueue.length == 2 &&
+              harness.liveState.liveQueue.every((item) => item.isReady) &&
+              harness.backend.currentSnapshot.trackId == 'duplicate',
+        );
+        await _pumpEventQueue();
+        expect(harness.queue.currentIndex, 1);
+        expect(harness.backend.currentSnapshot.position, Duration.zero);
+        expect(harness.backend.currentSnapshot.status, PlayerStatus.playing);
+      },
+    );
+
+    test(
+      '$mode LIVE resumes its interrupted cursor on !play and returns to the new normal queue',
+      () async {
+        final harness = _RealLiveHarness(saveToLibrary: saveToLibrary);
+        addTearDown(harness.dispose);
+        await harness.initialize();
+        await harness.player.playRemote(_remoteTrack('original-normal'));
+        await harness.player.seek(const Duration(seconds: 42));
+
+        harness.service.emit(_playEvent('live-a'));
+        harness.service.emit(_playEvent('live-b'));
+        await _waitUntil(
+          () =>
+              harness.liveState.liveQueue.length == 2 &&
+              harness.liveState.liveQueue.every((item) => item.isReady) &&
+              harness.queue.entries.length == 2,
+        );
+        await harness.player.playNext();
+        await harness.player.seek(const Duration(seconds: 19));
+        expect(harness.backend.currentSnapshot.trackId, 'live-b');
+
+        // The same video in an unrelated normal queue must not be mistaken
+        // for the LIVE source just because its metadata matches a request.
+        final replacement = [
+          _remoteTrack('replacement-first'),
+          _remoteTrack('live-b'),
+          _remoteTrack('replacement-last'),
+        ];
+        await harness.player.playRemote(
+          replacement[1],
+          queue: replacement,
+          queueSourceId: 'replacement-normal',
+        );
+        await harness.player.seek(const Duration(seconds: 8));
+        expect(harness.player.isLiveQueueActive, isFalse);
+        expect(harness.liveState.liveQueue, hasLength(2));
+
+        harness.service.emit(_playEvent('live-c'));
+        await _waitUntil(
+          () =>
+              harness.player.isLiveQueueActive &&
+              harness.queue.entries.length == 3 &&
+              harness.backend.currentSnapshot.trackId == 'live-b' &&
+              harness.backend.currentSnapshot.position ==
+                  const Duration(seconds: 19),
+        );
+        expect(harness.queue.currentIndex, 1);
+        expect(harness.queue.entries.map((item) => item.id), [
+          'live-a',
+          'live-b',
+          'live-c',
+        ]);
+        expect(harness.backend.currentSnapshot.status, PlayerStatus.playing);
+
+        harness.backend.completeCurrent();
+        await _waitUntil(
+          () => harness.backend.currentSnapshot.trackId == 'live-c',
+        );
+        harness.backend.completeCurrent();
+        await _waitUntil(() => !harness.player.isLiveQueueActive);
+        await harness.player.waitForLiveQueueRestoration();
+        expect(harness.liveState.liveQueue, isEmpty);
+        expect(harness.backend.currentSnapshot.trackId, 'live-b');
+        expect(
+          harness.backend.currentSnapshot.position,
+          const Duration(seconds: 8),
+        );
+        expect(harness.backend.currentSnapshot.status, PlayerStatus.playing);
+        expect(harness.queue.currentIndex, 1);
+        expect(
+          harness.queue.entries.map((item) => item.id),
+          replacement.map((track) => track.id),
+        );
+        expect(
+          harness.backend.playedRemoteIds.where(
+            (id) => id == 'original-normal',
+          ),
+          hasLength(1),
+        );
+      },
+    );
+  }
+
+  test(
+    'LIVE completion actively resumes a previously paused normal song',
+    () async {
+      final harness = _RealLiveHarness();
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      await harness.player.playRemote(_remoteTrack('paused-normal'));
+      await harness.player.seek(const Duration(seconds: 31));
+      await harness.player.pause();
+      harness.service.emit(_playEvent('live-a'));
+      await _waitUntil(
+        () => harness.backend.currentSnapshot.trackId == 'live-a',
+      );
+      harness.backend.completeCurrent();
+      await _waitUntil(() => !harness.player.isLiveQueueActive);
+      await harness.player.waitForLiveQueueRestoration();
+      expect(harness.liveState.liveQueue, isEmpty);
+      expect(harness.backend.currentSnapshot.trackId, 'paused-normal');
+      expect(
+        harness.backend.currentSnapshot.position,
+        const Duration(seconds: 31),
+      );
+      expect(harness.backend.currentSnapshot.status, PlayerStatus.playing);
+      expect(
+        harness.container
+            .read(playerControllerProvider)
+            .requireValue
+            .wantsToPlay,
+        isTrue,
+      );
+    },
+  );
+
+  for (final disconnect in [false, true]) {
+    test(
+      '${disconnect ? 'disconnect' : 'clear LIVE'} discards an inactive LIVE cursor without stopping normal playback',
+      () async {
+        final harness = _RealLiveHarness();
+        addTearDown(harness.dispose);
+        await harness.initialize();
+        harness.service.emit(_playEvent('live-a'));
+        await _waitUntil(
+          () => harness.backend.currentSnapshot.trackId == 'live-a',
+        );
+        await harness.player.seek(const Duration(seconds: 19));
+        await harness.player.playRemote(_remoteTrack('manual-normal'));
+        await harness.player.seek(const Duration(seconds: 8));
+        if (disconnect) {
+          await harness.live.disconnect();
+        } else {
+          await harness.live.clearLiveQueue();
+        }
+        expect(harness.liveState.liveQueue, isEmpty);
+        expect(harness.backend.currentSnapshot.trackId, 'manual-normal');
+        expect(harness.backend.currentSnapshot.status, PlayerStatus.playing);
+        expect(
+          harness.backend.currentSnapshot.position,
+          const Duration(seconds: 8),
+        );
+
+        harness.service.emit(_playEvent('live-a'));
+        await _waitUntil(
+          () =>
+              harness.player.isLiveQueueActive &&
+              harness.liveState.liveQueue.singleOrNull?.isReady == true &&
+              harness.backend.currentSnapshot.trackId == 'live-a',
+        );
+        expect(harness.backend.currentSnapshot.position, Duration.zero);
+      },
+    );
+  }
 
   test(
     'a LIVE request resolved during real restoration waits and preserves the original return queue',
@@ -1368,6 +1567,83 @@ Future<void> _pumpEventQueue() async {
   }
 }
 
+class _RealLiveHarness {
+  _RealLiveHarness({bool saveToLibrary = false}) {
+    SharedPreferences.setMockInitialValues({
+      'tiktokLive.saveRequestsToLibrary': saveToLibrary,
+    });
+    final repository = _SearchMusicRepository(
+      (query) async => [_remoteTrack(query)],
+    );
+    container = ProviderContainer(
+      overrides: [
+        tiktokLiveCommandServiceProvider.overrideWithValue(service),
+        searchTracksProvider.overrideWithValue(SearchTracks(repository)),
+        playerServiceProvider.overrideWithValue(backend),
+        audioStreamResolverProvider.overrideWithValue(
+          _LiveAppendAudioResolver(
+            source: AudioStreamSource.innerTube,
+            succeeds: (_, _) => true,
+          ),
+        ),
+        remotePlaybackCacheProvider.overrideWithValue(
+          RemotePlaybackCache(policy: RemotePlaybackCachePolicy.disabled),
+        ),
+        settingsControllerProvider.overrideWith(
+          _LiveAppendSettingsController.new,
+        ),
+        playbackHistorySinkProvider.overrideWithValue(
+          const _NoopPlaybackHistorySink(),
+        ),
+        localTrackFileProbeProvider.overrideWithValue(
+          (_) async => LocalTrackFileAvailability.present,
+        ),
+        localTrackDownloadHelperProvider.overrideWith(
+          (ref) => _CountingLocalTrackDownloadHelper(
+            ref,
+            download: (track) async => LocalTrackDownloadResult(
+              track: LocalTrack(
+                id: track.id,
+                title: track.title,
+                artist: track.artist,
+                filePath: 'C:/bstream-live-test/${track.id}.m4a',
+                addedAt: DateTime(2026),
+                sourceUrl: track.url,
+                duration: track.duration,
+              ),
+              remoteTrack: track,
+              reusedExisting: false,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  final service = _FakeTikTokLiveCommandService();
+  final backend = _LiveAppendPlayerService();
+  late final ProviderContainer container;
+
+  PlayerController get player =>
+      container.read(playerControllerProvider.notifier);
+  TikTokLiveController get live =>
+      container.read(tiktokLiveControllerProvider.notifier);
+  TikTokLiveState get liveState =>
+      container.read(tiktokLiveControllerProvider).requireValue;
+  PlaybackQueueState get queue => container.read(playbackQueueProvider);
+
+  Future<void> initialize() async {
+    await container.read(playerControllerProvider.future);
+    await container.read(tiktokLiveControllerProvider.future);
+  }
+
+  Future<void> dispose() async {
+    container.dispose();
+    await service.close();
+    await backend.close();
+  }
+}
+
 class _LiveHarness {
   _LiveHarness({
     required Future<List<TrackInfo>> Function(String) search,
@@ -1434,6 +1710,9 @@ class _FakeTikTokLiveCommandService extends TikTokLiveCommandService {
   Stream<TikTokLiveEvent> get events => _events.stream;
 
   void emit(TikTokLiveEvent event) => _events.add(event);
+
+  @override
+  Future<void> disconnect() async {}
 
   Future<void> close() => _events.close();
 }
@@ -1566,6 +1845,21 @@ class _RecordingPlayerController extends PlayerController {
   }
 
   @override
+  Future<void> resumeRemoteLiveQueue(List<TrackInfo> tracks) => playRemote(
+    tracks.first,
+    queue: tracks,
+    queueSourceId: PlayerController.liveQueueSourceId,
+  );
+
+  @override
+  Future<void> resumeLocalLiveQueue(List<LocalTrack> tracks) => playLocal(
+    tracks.first,
+    queue: tracks,
+    useNativeQueue: false,
+    queueSourceId: PlayerController.liveQueueSourceId,
+  );
+
+  @override
   Future<void> playRemote(
     TrackInfo track, {
     List<TrackInfo>? queue,
@@ -1687,6 +1981,12 @@ class _TrackingLivePlayerController extends PlayerController {
   int remoteQueueSyncCalls = 0;
 
   @override
+  Future<void> resumeRemoteLiveQueue(List<TrackInfo> tracks) {
+    publicRemoteStarts.add(tracks.first.id);
+    return super.resumeRemoteLiveQueue(tracks);
+  }
+
+  @override
   Future<void> playRemote(
     TrackInfo track, {
     List<TrackInfo>? queue,
@@ -1800,12 +2100,20 @@ class _LiveAppendPlayerService extends PlayerService {
 
   @override
   Future<void> playLocal(LocalTrack track) async {
-    throw UnsupportedError('Local playback is not expected.');
+    _snapshot = PlayerSnapshot(
+      status: PlayerStatus.playing,
+      title: track.title,
+      artist: track.artist,
+      trackId: track.id,
+      sourceUrl: track.filePath,
+      duration: track.duration,
+    );
+    _snapshots.add(_snapshot);
   }
 
   @override
   Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
-    throw UnsupportedError('Local playback is not expected.');
+    await playLocal(tracks[initialIndex]);
   }
 
   @override
@@ -1815,10 +2123,16 @@ class _LiveAppendPlayerService extends PlayerService {
   ) async {}
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async {
+    _snapshot = _snapshot.copyWith(status: PlayerStatus.paused);
+    _snapshots.add(_snapshot);
+  }
 
   @override
-  Future<void> resume() async {}
+  Future<void> resume() async {
+    _snapshot = _snapshot.copyWith(status: PlayerStatus.playing);
+    _snapshots.add(_snapshot);
+  }
 
   @override
   Future<void> togglePlayPause() async {}
@@ -1832,6 +2146,7 @@ class _LiveAppendPlayerService extends PlayerService {
   @override
   Future<void> seek(Duration position) async {
     _snapshot = _snapshot.copyWith(position: position);
+    _snapshots.add(_snapshot);
   }
 
   @override

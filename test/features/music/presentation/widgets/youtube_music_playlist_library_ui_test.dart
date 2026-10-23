@@ -7,6 +7,7 @@ import 'package:bstream_music/features/music/domain/entities/download_result.dar
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist_entry.dart';
+import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
@@ -20,6 +21,204 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('playlist multi-selection removes only selected occurrences', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    await tester.pumpWidget(
+      _libraryHarness(fixture: fixture, controller: controller),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+    await tester.longPress(
+      find.byKey(const ValueKey('library-catalog-entry-occurrence-a')),
+    );
+    await _pumpLibrary(tester);
+
+    expect(
+      find.byKey(const ValueKey('library-selection-toolbar')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('library-catalog-play-occurrence-b')),
+      findsNothing,
+    );
+    await _openSelectionMenu(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('library-selection-remove-from-playlist')),
+    );
+    await _pumpLibrary(tester);
+    // Cancelling preserves both the selection and playlist entries.
+    await tester.tap(find.text('Cancelar'));
+    await _pumpLibrary(tester);
+    expect(controller.removedEntryIds, isEmpty);
+    await tester.tap(
+      find.byKey(const ValueKey('library-catalog-entry-occurrence-b')),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('library-catalog-entry-occurrence-a')),
+    );
+    await _pumpLibrary(tester);
+    await _openSelectionMenu(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('library-selection-remove-from-playlist')),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('library-selection-confirm-remove')),
+    );
+    await _pumpLibrary(tester);
+
+    expect(controller.removedEntryIds, ['occurrence-b']);
+    expect(
+      find.byKey(const ValueKey('library-selection-toolbar')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playlist selected downloads use the existing batch queue', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    final downloads = _RecordingSelectionDownloads();
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        downloads: downloads,
+      ),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+    await tester.longPress(
+      find.byKey(const ValueKey('library-catalog-entry-occurrence-a')),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('library-catalog-entry-occurrence-b')),
+    );
+    await _pumpLibrary(tester);
+    await _openSelectionMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('library-selection-download')));
+    await _pumpLibrary(tester);
+
+    expect(downloads.selectedTracks, hasLength(2));
+    expect(
+      downloads.selectedTracks.map((track) => track.id),
+      everyElement('duplicate-video'),
+    );
+    expect(
+      find.byKey(const ValueKey('library-selection-toolbar')),
+      findsNothing,
+    );
+    expect(controller.removedEntryIds, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final scenario in [
+    (platform: TargetPlatform.android, size: const Size(320, 700)),
+    (platform: TargetPlatform.windows, size: const Size(1200, 800)),
+  ]) {
+    testWidgets(
+      '${scenario.platform} playlist selection uses an overflow menu at ${scenario.size.width}px',
+      (tester) async {
+        tester.view.physicalSize = scenario.size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final fixture = _remoteCatalogFixture();
+        final controller = _RecordingPlaylistsController(
+          playlist: fixture.playlist,
+        );
+        await tester.pumpWidget(
+          _libraryHarness(
+            fixture: fixture,
+            controller: controller,
+            platform: scenario.platform,
+          ),
+        );
+        await _pumpLibrary(tester);
+        await tester.tap(
+          find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+        );
+        await _pumpLibrary(tester);
+        await tester.longPress(
+          find.byKey(const ValueKey('library-catalog-entry-occurrence-a')),
+        );
+        await _pumpLibrary(tester);
+        expect(
+          find.byKey(const ValueKey('library-selection-count')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-close')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-add-to-playlist')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-download')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-remove-from-playlist')),
+          findsNothing,
+        );
+        await _openSelectionMenu(tester);
+        expect(
+          find.byKey(const ValueKey('glass-popup-menu-surface')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-add-to-playlist')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-download')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-remove-from-playlist')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+        // Dismissing the popup must retain selection and leave the toolbar usable.
+        await tester.tapAt(Offset(4, scenario.size.height - 4));
+        await _pumpLibrary(tester);
+        expect(
+          find.byKey(const ValueKey('library-selection-toolbar')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('library-selection-download')),
+          findsNothing,
+        );
+        await tester.tap(find.byKey(const ValueKey('library-selection-close')));
+        await _pumpLibrary(tester);
+        expect(
+          find.byKey(const ValueKey('library-catalog-play-occurrence-a')),
+          findsOneWidget,
+        );
+      },
+    );
+  }
+
   testWidgets(
     'playlist picker uses imported remote artwork and returns the local id',
     (tester) async {
@@ -750,6 +949,11 @@ Future<void> _pumpLibrary(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> _openSelectionMenu(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('library-selection-menu')));
+  await _pumpLibrary(tester);
+}
+
 Widget _libraryHarness({
   required _RemoteCatalogFixture fixture,
   required _RecordingPlaylistsController controller,
@@ -762,6 +966,7 @@ Widget _libraryHarness({
   YouTubeMusicMakePlaylistUnlistedForSharing? makeUnlisted,
   DownloadController? downloads,
   PlayerController? playerController,
+  TargetPlatform platform = TargetPlatform.android,
 }) {
   return ProviderScope(
     overrides: [
@@ -799,7 +1004,7 @@ Widget _libraryHarness({
       ),
     ],
     child: MaterialApp(
-      theme: ThemeData(platform: TargetPlatform.android),
+      theme: ThemeData(platform: platform),
       home: Scaffold(body: LibraryPanel(onOpenPlayer: () {})),
     ),
   );
@@ -822,6 +1027,18 @@ class _PresetDownloadController extends DownloadController {
   }
 }
 
+class _RecordingSelectionDownloads extends DownloadController {
+  final selectedTracks = <TrackInfo>[];
+  @override
+  Map<String, DownloadTaskState> build() => const {};
+
+  @override
+  Future<int> downloadTracks(Iterable<TrackInfo> tracks) async {
+    selectedTracks.addAll(tracks);
+    return 1;
+  }
+}
+
 class _RecordingPlaylistsController extends PlaylistsController {
   _RecordingPlaylistsController({
     required this.playlist,
@@ -834,6 +1051,17 @@ class _RecordingPlaylistsController extends PlaylistsController {
   final Playlist playlist;
   final PlaylistDeleteOptions deleteOptions;
   final List<PlaylistDeleteScope> deleteScopes = <PlaylistDeleteScope>[];
+  final List<String> removedEntryIds = <String>[];
+
+  @override
+  Future<int> removeCatalogEntries(
+    String playlistId,
+    Iterable<String> entryIds,
+  ) async {
+    expect(playlistId, playlist.id);
+    removedEntryIds.addAll(entryIds);
+    return entryIds.length;
+  }
 
   @override
   Future<List<Playlist>> build() async => <Playlist>[playlist];

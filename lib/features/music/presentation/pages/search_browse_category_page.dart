@@ -321,7 +321,7 @@ class _BrowseShelfState extends ConsumerState<_BrowseShelf> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 700;
-        final cardWidth = wide ? 186.0 : 156.0;
+        final cardWidth = wide ? 196.0 : 164.0;
         final scaler = MediaQuery.textScalerOf(context);
         final textHeight =
             scaler.scale(15) * 1.25 * 2 + scaler.scale(12) * 1.3 * 2;

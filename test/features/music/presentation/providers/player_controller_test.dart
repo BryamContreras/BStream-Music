@@ -289,8 +289,167 @@ void main() {
       },
     );
 
+    for (final downloaded in [false, true]) {
+      test(
+        'LIVE resumes the same duplicate occurrence (downloaded=$downloaded)',
+        () async {
+          final player = _FakePlayerService();
+          final container = _container(player);
+          addTearDown(container.dispose);
+          await container.read(playerControllerProvider.future);
+          final controller = container.read(playerControllerProvider.notifier);
+          final live = [
+            _queuedRemoteTrack('duplicate'),
+            _queuedRemoteTrack('duplicate'),
+            _queuedRemoteTrack('later'),
+          ];
+          final local = [_track(21), _track(21), _track(22)];
+          if (downloaded) {
+            await controller.playLocal(
+              local.first,
+              queue: local,
+              useNativeQueue: false,
+              queueSourceId: PlayerController.liveQueueSourceId,
+            );
+          } else {
+            await controller.playRemote(
+              live.first,
+              queue: live,
+              queueSourceId: PlayerController.liveQueueSourceId,
+            );
+          }
+          await controller.playQueueIndex(1);
+          await controller.seek(const Duration(seconds: 19));
+          await controller.playRemote(_queuedRemoteTrack('manual-normal'));
+          await controller.seek(const Duration(seconds: 8));
+          if (downloaded) {
+            await controller.resumeLocalLiveQueue([...local, _track(23)]);
+          } else {
+            await controller.resumeRemoteLiveQueue([
+              ...live,
+              _queuedRemoteTrack('appended'),
+            ]);
+          }
+          expect(controller.isLiveQueueActive, isTrue);
+          expect(container.read(playbackQueueProvider).currentIndex, 1);
+          expect(player.lastSeekPosition, const Duration(seconds: 19));
+          await controller.playNext();
+          expect(container.read(playbackQueueProvider).currentIndex, 2);
+          await controller.playNext();
+          expect(container.read(playbackQueueProvider).currentIndex, 3);
+          await controller.playNext();
+          expect(controller.isLiveQueueActive, isFalse);
+          expect(player.playedRemote.last.id, 'manual-normal');
+          expect(player.lastSeekPosition, const Duration(seconds: 8));
+          expect(
+            container.read(playerControllerProvider).value?.wantsToPlay,
+            isTrue,
+          );
+        },
+      );
+    }
+
     test(
-      'a paused normal queue stays paused and supports a deferred seek on return',
+      'an explicit LIVE row selection overrides its interrupted cursor',
+      () async {
+        final player = _FakePlayerService();
+        final container = _container(player);
+        addTearDown(container.dispose);
+        await container.read(playerControllerProvider.future);
+        final controller = container.read(playerControllerProvider.notifier);
+        final live = [
+          _queuedRemoteTrack('explicit-a'),
+          _queuedRemoteTrack('explicit-b'),
+        ];
+        await controller.resumeRemoteLiveQueue(live);
+        await controller.playNext();
+        await controller.seek(const Duration(seconds: 19));
+        await controller.playRemote(_queuedRemoteTrack('outside-explicit'));
+        await controller.playRemote(
+          live.first,
+          queue: live,
+          queueSourceId: PlayerController.liveQueueSourceId,
+        );
+        expect(container.read(playbackQueueProvider).currentIndex, 0);
+        expect(player.currentSnapshot.position, Duration.zero);
+        await controller.playNext();
+        expect(player.currentSnapshot.trackId, live.last.id);
+        expect(player.currentSnapshot.position, Duration.zero);
+      },
+    );
+
+    test(
+      'pausing a slow LIVE re-entry preserves its interrupted seek position',
+      () async {
+        final player = _BlockingRemotePlayerService();
+        final container = _container(player);
+        addTearDown(container.dispose);
+        await container.read(playerControllerProvider.future);
+        final controller = container.read(playerControllerProvider.notifier);
+        final live = _queuedRemoteTrack('slow-live-entry');
+        await controller.resumeRemoteLiveQueue([live]);
+        await controller.seek(const Duration(seconds: 19));
+        await controller.playRemote(_queuedRemoteTrack('outside-slow-live'));
+        player.block(live.id);
+        final resume = controller.resumeRemoteLiveQueue([live]);
+        await _waitUntil(
+          () =>
+              player.startedRemoteIds.where((id) => id == live.id).length == 2,
+        );
+        await controller.pause();
+        expect(
+          container.read(playerControllerProvider).value?.position,
+          const Duration(seconds: 19),
+        );
+        player.release(live.id);
+        await resume;
+        expect(
+          container.read(playerControllerProvider).value?.wantsToPlay,
+          isFalse,
+        );
+        await controller.resume();
+        expect(player.lastSeekPosition, const Duration(seconds: 19));
+      },
+    );
+
+    for (final pauseFirst in [false, true]) {
+      test(
+        'a second manual exit during slow LIVE re-entry keeps the original cursor (paused=$pauseFirst)',
+        () async {
+          final player = _BlockingRemotePlayerService();
+          final container = _container(player);
+          addTearDown(container.dispose);
+          await container.read(playerControllerProvider.future);
+          final controller = container.read(playerControllerProvider.notifier);
+          final live = _queuedRemoteTrack('twice-interrupted-live');
+          await controller.resumeRemoteLiveQueue([live]);
+          await controller.seek(const Duration(seconds: 19));
+          await controller.playRemote(_queuedRemoteTrack('outside-first'));
+          player.block(live.id);
+          final resume = controller.resumeRemoteLiveQueue([live]);
+          await _waitUntil(
+            () =>
+                player.startedRemoteIds.where((id) => id == live.id).length ==
+                2,
+          );
+          if (pauseFirst) await controller.pause();
+          await controller.playRemote(_queuedRemoteTrack('outside-second'));
+          player.release(live.id);
+          await resume;
+          await controller.resumeRemoteLiveQueue([
+            live,
+            _queuedRemoteTrack('after-interrupted'),
+          ]);
+          expect(player.lastSeekPosition, const Duration(seconds: 19));
+          await controller.playNext();
+          await controller.playNext();
+          expect(player.playedRemote.last.id, 'outside-second');
+        },
+      );
+    }
+
+    test(
+      'a previously paused normal queue resumes at its saved position after LIVE',
       () async {
         final player = _FakePlayerService();
         final container = _container(player);
@@ -313,15 +472,18 @@ void main() {
         await controller.waitForLiveQueueRestoration();
         await _flushCompletion();
         final restored = container.read(playerControllerProvider).requireValue;
-        expect(restored.status, PlayerStatus.paused);
+        expect(restored.status, PlayerStatus.playing);
+        expect(restored.wantsToPlay, isTrue);
         expect(restored.trackId, normal.id);
         expect(restored.position, const Duration(seconds: 31));
         expect(player.playedRemote.map((e) => e.id), [
           normal.id,
           'paused-request',
+          normal.id,
         ]);
         await controller.seek(const Duration(seconds: 45));
-        expect(player.lastSeekPosition, const Duration(seconds: 31));
+        expect(player.lastSeekPosition, const Duration(seconds: 45));
+        await controller.pause();
         await controller.resume();
         await _flushCompletion();
         expect(player.playedRemote.last.id, normal.id);
@@ -1363,9 +1525,11 @@ void main() {
     },
   );
 
-  test(
-    'personalized queue grows in the background before reaching its end',
-    () async {
+  for (final sourceId in [
+    'personalized-home:becauseYouListened',
+    'personalized-home:continueListening',
+  ]) {
+    test('$sourceId grows in the background on its penultimate song', () async {
       final player = _FakePlayerService();
       final container = _container(player);
       addTearDown(container.dispose);
@@ -1384,11 +1548,11 @@ void main() {
       await container
           .read(playerControllerProvider.notifier)
           .playRecommendation(
-            RecommendationPlaybackItem(track: tracks[3]),
+            RecommendationPlaybackItem(track: tracks[5]),
             queue: tracks
                 .map((track) => RecommendationPlaybackItem(track: track))
                 .toList(growable: false),
-            queueSourceId: 'personalized-home:becauseYouListened',
+            queueSourceId: sourceId,
             queueExtender: () async {
               extensionCalls++;
               return expanded
@@ -1401,63 +1565,63 @@ void main() {
       );
 
       expect(extensionCalls, 1);
-      expect(container.read(playbackQueueProvider).currentIndex, 3);
+      expect(container.read(playbackQueueProvider).currentIndex, 5);
       expect(
         container.read(playbackQueueProvider).entries.map((entry) => entry.id),
         expanded.map((track) => track.id),
       );
-      expect(player.playedRemote.map((track) => track.id), ['because-3']);
-    },
-  );
+      expect(player.playedRemote.map((track) => track.id), ['because-5']);
+    });
 
-  test(
-    'Next at the end waits for personalized growth instead of wrapping',
-    () async {
-      final player = _FakePlayerService();
-      final container = _container(player);
-      addTearDown(container.dispose);
-      final seed = _queuedRemoteTrack('end-seed');
-      final next = _queuedRemoteTrack('end-next');
-      final extension = Completer<List<RecommendationPlaybackItem>>();
-      var extensionCalls = 0;
+    test(
+      '$sourceId Next at the end waits for growth instead of wrapping',
+      () async {
+        final player = _FakePlayerService();
+        final container = _container(player);
+        addTearDown(container.dispose);
+        final seed = _queuedRemoteTrack('end-seed');
+        final next = _queuedRemoteTrack('end-next');
+        final extension = Completer<List<RecommendationPlaybackItem>>();
+        var extensionCalls = 0;
 
-      await container.read(playerControllerProvider.future);
-      final controller = container.read(playerControllerProvider.notifier);
-      await controller.playRecommendation(
-        RecommendationPlaybackItem(track: seed),
-        queue: [RecommendationPlaybackItem(track: seed)],
-        queueSourceId: 'personalized-home:becauseYouListened',
-        queueExtender: () {
-          extensionCalls++;
-          return extension.future;
-        },
-      );
-      await _waitUntil(() => extensionCalls == 1);
+        await container.read(playerControllerProvider.future);
+        final controller = container.read(playerControllerProvider.notifier);
+        await controller.playRecommendation(
+          RecommendationPlaybackItem(track: seed),
+          queue: [RecommendationPlaybackItem(track: seed)],
+          queueSourceId: sourceId,
+          queueExtender: () {
+            extensionCalls++;
+            return extension.future;
+          },
+        );
+        await _waitUntil(() => extensionCalls == 1);
 
-      final skip = controller.playNext();
-      await _flushCompletion();
-      expect(container.read(playbackQueueProvider).currentIndex, 0);
+        final skip = controller.playNext();
+        await _flushCompletion();
+        expect(container.read(playbackQueueProvider).currentIndex, 0);
 
-      extension.complete([
-        RecommendationPlaybackItem(track: seed),
-        RecommendationPlaybackItem(track: next),
-      ]);
-      await skip;
+        extension.complete([
+          RecommendationPlaybackItem(track: seed),
+          RecommendationPlaybackItem(track: next),
+        ]);
+        await skip;
 
-      expect(
-        extensionCalls,
-        2,
-        reason:
-            'The in-flight page is shared by Next; a second sequential request '
-            'is allowed only after playback reaches the newly appended end.',
-      );
-      expect(container.read(playbackQueueProvider).currentIndex, 1);
-      expect(player.playedRemote.map((track) => track.id), [
-        'end-seed',
-        'end-next',
-      ]);
-    },
-  );
+        expect(
+          extensionCalls,
+          2,
+          reason:
+              'The in-flight page is shared by Next; a second sequential request '
+              'is allowed only after playback reaches the newly appended end.',
+        );
+        expect(container.read(playbackQueueProvider).currentIndex, 1);
+        expect(player.playedRemote.map((track) => track.id), [
+          'end-seed',
+          'end-next',
+        ]);
+      },
+    );
+  }
 
   test(
     'a late recommendation page cannot replace a newer queue with the same source id',

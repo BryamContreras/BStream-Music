@@ -49,6 +49,15 @@ import 'wavy_playback_seek_bar.dart';
 
 part 'classic_vinyl_player_layout.dart';
 
+double _playerMetadataFontSize(BuildContext context, double fontSize) {
+  final size = MediaQuery.sizeOf(context);
+  final narrow = ((430 - size.width) / 110).clamp(0.0, 1.0);
+  final short = ((760 - size.height) / 192).clamp(0.0, 1.0);
+  // Compact layouts already reclaim spacing and artwork area. Ease the text
+  // down by at most 6% as well, while preserving the user's text scaler.
+  return fontSize * (1 - 0.06 * math.max(narrow, short));
+}
+
 final _spotifyCanvasResolverProvider = Provider<SpotifyCanvasResolver>(
   (ref) => SpotifyCanvasResolver(),
 );
@@ -1965,7 +1974,10 @@ class _AppleMusicControls extends ConsumerWidget {
         style: Theme.of(context).textTheme.titleLarge?.copyWith(
           color: foreground,
           fontWeight: FontWeight.w800,
-          fontSize: lerpDouble(24, 21, compactness),
+          fontSize: _playerMetadataFontSize(
+            context,
+            lerpDouble(24, 21, compactness)!,
+          ),
           height: tightLandscape ? 1 : null,
         ),
       ),
@@ -1989,7 +2001,10 @@ class _AppleMusicControls extends ConsumerWidget {
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: secondary,
               fontWeight: FontWeight.w600,
-              fontSize: lerpDouble(18, 16, compactness),
+              fontSize: _playerMetadataFontSize(
+                context,
+                lerpDouble(18, 16, compactness)!,
+              ),
               height: tightLandscape ? 1 : null,
             ),
           ),
@@ -2830,7 +2845,7 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 10, 12),
+                padding: const EdgeInsets.fromLTRB(16, 20, 10, 12),
                 child: Column(
                   children: [
                     Row(
@@ -2868,13 +2883,11 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
+                              MarqueeText(
                                 currentTitle?.trim().isNotEmpty == true
                                     ? currentTitle!
                                     : strings.noPlayback,
                                 key: const ValueKey('queue-current-title'),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.titleSmall
                                     ?.copyWith(
                                       fontSize: 16,
@@ -2886,11 +2899,9 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
                               ),
                               if (currentArtist?.trim().isNotEmpty == true) ...[
                                 const SizedBox(height: 2),
-                                Text(
+                                MarqueeText(
                                   currentArtist!,
                                   key: const ValueKey('queue-current-artist'),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(
                                         fontSize: 14,
@@ -4165,12 +4176,18 @@ class _PlayerControls extends ConsumerWidget {
       Theme.of(context).platform,
     );
     final titleStyle = Theme.of(context).textTheme.headlineMedium?.copyWith(
-      fontSize: lerpDouble(compact ? 28 : 42, compact ? 24 : 34, compactness),
+      fontSize: _playerMetadataFontSize(
+        context,
+        lerpDouble(compact ? 28 : 42, compact ? 24 : 34, compactness)!,
+      ),
       fontWeight: FontWeight.w900,
       color: AppColors.playbackTitleFor(context),
     );
     final artistStyle = Theme.of(context).textTheme.titleLarge?.copyWith(
-      fontSize: lerpDouble(compact ? 18 : 26, compact ? 16 : 21, compactness),
+      fontSize: _playerMetadataFontSize(
+        context,
+        lerpDouble(compact ? 18 : 26, compact ? 16 : 21, compactness)!,
+      ),
       fontWeight: FontWeight.w800,
       color: AppColors.contentSubtitleFor(context),
     );

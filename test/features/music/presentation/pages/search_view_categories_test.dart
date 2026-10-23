@@ -652,7 +652,7 @@ void main() {
           tester
               .getSize(find.byKey(const ValueKey('browse-item-Lo-fi Loft')))
               .width,
-          closeTo(width < 700 ? 156.0 : 186.0, 0.5),
+          closeTo(width < 700 ? 164.0 : 196.0, 0.5),
         );
         expect(tester.takeException(), isNull);
         await tester.tap(find.byKey(const ValueKey('browse-item-Lo-fi Loft')));

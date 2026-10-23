@@ -1430,7 +1430,119 @@ void main() {
     });
   }
 
-  for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+  for (final platform in [
+    TargetPlatform.android,
+    TargetPlatform.iOS,
+    TargetPlatform.windows,
+  ]) {
+    for (final closeWithButton in [false, true]) {
+      testWidgets(
+        'alignment then ${closeWithButton ? 'close button' : 'barrier'} keeps lyrics interactive on ${platform.name}',
+        (tester) async {
+          tester.view.physicalSize = platform == TargetPlatform.android
+              ? const Size(360, 800)
+              : const Size(1000, 800);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final player = _FakePlayerService(lookupSnapshot);
+          final container = await _pumpLyricsPage(
+            tester,
+            player: player,
+            lyrics: _FakeLyricsService(syncedDocument),
+            platform: platform,
+            openAsRoute: true,
+          );
+          final pageBarrierCount = find
+              .byWidgetPredicate((widget) => widget is ModalBarrier)
+              .evaluate()
+              .length;
+          for (final alignment in [
+            LyricsTextAlignment.centered,
+            LyricsTextAlignment.normal,
+          ]) {
+            await _openLyricsSettings(tester);
+            final options = find.byKey(
+              const ValueKey('lyrics-menu-alignment-options'),
+            );
+            await tester.ensureVisible(options);
+            await tester.tap(
+              find.descendant(
+                of: options,
+                matching: find.text(
+                  alignment == LyricsTextAlignment.centered
+                      ? 'Centered'
+                      : 'Normal',
+                ),
+              ),
+            );
+            await tester.pump();
+            expect(
+              container
+                  .read(settingsControllerProvider)
+                  .value
+                  ?.lyricsTextAlignment,
+              alignment,
+            );
+            if (closeWithButton) {
+              await tester.tap(
+                find.byKey(const ValueKey('lyrics-settings-close')),
+              );
+            } else {
+              await tester.tapAt(const Offset(16, 16));
+            }
+            await _settleLyricsAnimations(tester);
+            expect(
+              find.byKey(const ValueKey('lyrics-settings-menu')),
+              findsNothing,
+            );
+            expect(
+              find.byWidgetPredicate((widget) => widget is ModalBarrier),
+              findsNWidgets(pageBarrierCount),
+            );
+            final gear = find.byKey(const ValueKey('lyrics-settings-button'));
+            expect(gear.hitTestable(), findsOneWidget);
+            final transport = find
+                .byWidgetPredicate(
+                  (widget) =>
+                      widget is IconButton &&
+                      (widget.key ==
+                              const ValueKey('lyrics-playback-control') ||
+                          widget.key ==
+                              const ValueKey(
+                                'lyrics-companion-primary-control',
+                              )),
+                )
+                .hitTestable();
+            expect(transport, findsOneWidget);
+            final previousPlaybackTaps = player.pauseCalls + player.resumeCalls;
+            await tester.tap(transport);
+            await tester.pump();
+            expect(
+              player.pauseCalls + player.resumeCalls,
+              previousPlaybackTaps + 1,
+            );
+            await tester.tap(find.text('Second line').first);
+            await _settleLyricsAnimations(tester);
+            expect(player.seekPositions.last, const Duration(seconds: 2));
+            await _openLyricsSettings(tester);
+            await tester.tap(
+              find.byKey(const ValueKey('lyrics-offset-increase')),
+            );
+            await tester.pump();
+            expect(find.text('+0.50 s'), findsOneWidget);
+            await tester.tap(find.byKey(const ValueKey('lyrics-offset-reset')));
+            await tester.pump();
+            await tester.tap(
+              find.byKey(const ValueKey('lyrics-settings-close')),
+            );
+            await _settleLyricsAnimations(tester);
+            expect(tester.takeException(), isNull);
+          }
+        },
+      );
+    }
+
     testWidgets('lyrics menu changes alignment on ${platform.name}', (
       tester,
     ) async {
@@ -4463,6 +4575,7 @@ Future<ProviderContainer> _pumpLyricsPage(
   bool deriveAppStringsFromSettings = false,
   PlayerStyle playerStyle = defaultPlayerStyle,
   Duration Function()? monotonicClock,
+  bool openAsRoute = false,
 }) async {
   final settingsController = _FakeLyricsSettingsController(
     lyricsTextAlignment,
@@ -4522,14 +4635,30 @@ Future<ProviderContainer> _pumpLyricsPage(
           ),
           child: child!,
         ),
-        home: LyricsPage(
-          presentationChrome: presentationChrome,
-          monotonicClock: monotonicClock,
-        ),
+        home: openAsRoute
+            ? Builder(
+                builder: (context) => Scaffold(
+                  body: TextButton(
+                    key: const ValueKey('open-lyrics-route-for-test'),
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).push(buildLyricsPageRoute(context)),
+                    child: const Text('Open Lyrics'),
+                  ),
+                ),
+              )
+            : LyricsPage(
+                presentationChrome: presentationChrome,
+                monotonicClock: monotonicClock,
+              ),
       ),
     ),
   );
   await _settleLyricsAnimations(tester);
+  if (openAsRoute) {
+    await tester.tap(find.byKey(const ValueKey('open-lyrics-route-for-test')));
+    await _settleLyricsAnimations(tester);
+  }
   return container;
 }
 
@@ -4801,6 +4930,7 @@ class _FakePlayerService implements PlayerService {
       StreamController<PlayerSnapshot>.broadcast(sync: true);
   final List<Duration> seekPositions = [];
   int pauseCalls = 0;
+  int resumeCalls = 0;
   int togglePlayPauseCalls = 0;
   PlayerSnapshot _snapshot;
 
@@ -4847,7 +4977,9 @@ class _FakePlayerService implements PlayerService {
   ) async {}
 
   @override
-  Future<void> resume() async {}
+  Future<void> resume() async {
+    resumeCalls++;
+  }
 
   @override
   Future<void> seek(Duration position) async {

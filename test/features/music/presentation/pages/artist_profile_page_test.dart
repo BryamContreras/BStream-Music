@@ -16,6 +16,57 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final width in [320.0, 1000.0]) {
+    testWidgets('artist square release cards grow subtly at width $width', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      final service = _ArtistProfileService()
+        ..profileAlbums = [
+          InnerTubeAlbum(
+            browseId: 'MPREtestRelease',
+            title: 'A longer release title',
+            artists: const ['Artista de prueba'],
+            year: '2026',
+            type: 'Album',
+          ),
+        ];
+      await tester.pumpWidget(
+        _artistProfileApp(
+          service: service,
+          player: _RecordingPlayerController(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final card = find.byKey(const ValueKey('artist-release-MPREtestRelease'));
+      final image = find.descendant(
+        of: card,
+        matching: find.byType(SourceImage),
+      );
+      final cardSize = tester.getSize(card);
+      final imageSize = tester.getSize(image);
+      expect(cardSize.width, width < 700 ? 156 : 186);
+      expect(imageSize.width, cardSize.width - 8);
+      expect(imageSize.height, imageSize.width);
+      final subtitle = find.descendant(
+        of: card,
+        matching: find.text('Album • 2026'),
+      );
+      expect(subtitle, findsOneWidget);
+      expect(
+        tester.getBottomLeft(subtitle).dy,
+        lessThan(tester.getBottomLeft(card).dy),
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('artist app bar respects every surface background mode', (
     tester,
   ) async {
@@ -669,6 +720,7 @@ class _ArtistProfileService
   int profileCalls = 0;
   Completer<InnerTubeArtistProfile>? profileBlocker;
   List<InnerTubeSong> profilePopularSongs = const <InnerTubeSong>[];
+  List<InnerTubeAlbum> profileAlbums = const <InnerTubeAlbum>[];
   List<InnerTubeSong> artistPlaySongs = const <InnerTubeSong>[];
   String? profilePlayPlaylistId;
   Object? artistPlayError;
@@ -701,7 +753,7 @@ class _ArtistProfileService
       radioPlaylistId: 'RDEMartistRadio123',
       radioSeedVideoId: 'radioSeed01',
       popularSongs: profilePopularSongs,
-      albums: const <InnerTubeAlbum>[],
+      albums: profileAlbums,
       singles: const <InnerTubeAlbum>[],
     );
   }
