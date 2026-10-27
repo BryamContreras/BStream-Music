@@ -27,6 +27,7 @@ import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../providers/local_audio_quality_provider.dart';
 import '../providers/playback_visual_cache_provider.dart';
+import '../providers/spotify_canvas_provider.dart';
 import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
 import 'animated_artwork_motion.dart';
@@ -57,15 +58,6 @@ double _playerMetadataFontSize(BuildContext context, double fontSize) {
   // down by at most 6% as well, while preserving the user's text scaler.
   return fontSize * (1 - 0.06 * math.max(narrow, short));
 }
-
-final _spotifyCanvasResolverProvider = Provider<SpotifyCanvasResolver>(
-  (ref) => SpotifyCanvasResolver(),
-);
-
-final _spotifyCanvasUrlProvider = FutureProvider.autoDispose
-    .family<Uri?, SpotifyCanvasTrack>(
-      (ref, track) => ref.read(_spotifyCanvasResolverProvider).resolve(track),
-    );
 
 final _appleAnimatedArtworkResolverProvider =
     Provider<AppleAnimatedArtworkResolver>(
@@ -366,11 +358,8 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         snapshot.status != PlayerStatus.failed &&
         AppPlatform.current != AppPlatformType.linux &&
         AppPlatform.current != AppPlatformType.unsupported;
-    final spotifyCanvasUrl =
-        widget.spotifyCanvasEnabled &&
-            remoteArtworkAllowed &&
-            (snapshot.duration ?? Duration.zero) > Duration.zero
-        ? ref.watch(_spotifyCanvasUrlProvider(canvasTrack)).value
+    final spotifyCanvasUrl = widget.spotifyCanvasEnabled && remoteArtworkAllowed
+        ? ref.watch(spotifyCanvasUrlProvider(canvasTrack)).value
         : null;
     final appleArtworkTrack = AppleAnimatedArtworkTrack(
       title: snapshot.title ?? '',

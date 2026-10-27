@@ -456,6 +456,13 @@ jobs:
           flutter clean
           flutter pub get --enforce-lockfile
 
+      - name: Test Windows Spotify Canvas lookup
+        run: >-
+          flutter test
+          test/features/music/presentation/providers/spotify_canvas_provider_test.dart
+          test/features/music/presentation/widgets/player_canvas_lookup_test.dart
+          test/services/spotify_canvas/spotify_canvas_resolver_test.dart
+
       - name: Build Windows release
         run: flutter build windows --release
 
