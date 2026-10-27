@@ -31,6 +31,9 @@ import '../../../../services/downloader/innertube_audio_resolver.dart';
 import '../../../../services/downloader/innertube_download_service.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
+import '../../../../services/lyrics/better_lyrics_service.dart';
+import '../../../../services/lyrics/fallback_lyrics_service.dart';
+import '../../../../services/lyrics/youlyplus_lyrics_service.dart';
 import '../../../../services/lyrics/lyrics_romanization_service.dart';
 import '../../../../services/lyrics/lyrics_translation_service.dart';
 import '../../../../services/media_session/desktop_media_session.dart';
@@ -43,6 +46,7 @@ import '../../../../services/recommendations/recommendations.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/sharing/incoming_track_link_service.dart';
 import '../../../../services/sharing/track_share_service.dart';
+import '../../../../services/sharing/playlist_csv_share_service.dart';
 import '../../../../services/sharing/youtube_music_playlist_share_service.dart';
 import '../../../../services/sharing/youtube_music_link.dart';
 import '../../../../services/storage/backup_service.dart';
@@ -82,6 +86,7 @@ import '../../domain/entities/catalog_track.dart';
 import '../../domain/entities/playlist_entry.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/lyrics.dart';
+import '../../domain/entities/lyrics_provider.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/track_info.dart';
 import '../../domain/entities/search_result.dart';
@@ -132,6 +137,7 @@ export 'player/remote_playback_source_factory.dart';
 export 'player/remote_prefetch_coordinator.dart';
 export 'player/remote_playback_retry_coordinator.dart';
 export '../../domain/entities/lyrics_romanization_language.dart';
+export '../../domain/entities/lyrics_provider.dart';
 
 part 'app_strings_provider.dart';
 part 'download_controller.dart';
@@ -336,6 +342,12 @@ final youtubeMusicPlaylistShareServiceProvider =
       return const SharePlusYouTubeMusicPlaylistShareService();
     });
 
+final playlistCsvShareServiceProvider = Provider<PlaylistCsvShareService>((
+  ref,
+) {
+  return const SharePlusPlaylistCsvShareService();
+});
+
 final incomingTrackLinkServiceProvider = Provider<IncomingTrackLinkService>((
   ref,
 ) {
@@ -407,16 +419,75 @@ final incomingYouTubeMusicLinkProvider = StreamProvider<YouTubeMusicLink>((
   }
 });
 
-final lyricsServiceProvider = Provider<LyricsService>((ref) {
+const _lyricsUserAgent =
+    '${AppConstants.appName}/${AppConstants.appVersion} '
+    '(https://github.com/BryamContreras/BStream-Music)';
+
+int _lyricsProviderMask(SettingsState settings) => settings
+    .enabledLyricsProviders
+    .fold<int>(0, (mask, value) => mask | (1 << value.index));
+
+// Wait for persisted settings without querying defaults first. The selected
+// Future stays stable when alignment, romanization or another setting changes.
+final _lyricsProviderConfiguration = settingsControllerProvider.selectAsync(
+  _lyricsProviderMask,
+);
+
+// A small value signature avoids restarting lyrics/network work when an
+// unrelated setting (alignment, romanization, theme, etc.) changes.
+final _enabledLyricsProvidersMaskProvider = Provider<int?>((ref) {
+  return ref.watch(
+    settingsControllerProvider.select((settings) {
+      final value = settings.value;
+      return value == null ? null : _lyricsProviderMask(value);
+    }),
+  );
+});
+
+final lrclibLyricsServiceProvider = Provider.autoDispose<LyricsService>((ref) {
   final service = LrclibLyricsService(
-    userAgent:
-        '${AppConstants.appName}/${AppConstants.appVersion} '
-        '(https://github.com/BryamContreras/BStream-Music)',
-    // This short cache exists only in RAM. It avoids querying LRCLIB again when
-    // returning to the lyrics screen, keeps only a small recent working set,
-    // and is discarded when the app closes.
+    userAgent: _lyricsUserAgent,
+    // Recent documents remain in RAM while this provider is enabled. Disabling
+    // it disposes its client and cancels pending network work too.
     cacheTtl: const Duration(minutes: 15),
     maxCacheEntries: 24,
+  );
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+final youLyPlusLyricsServiceProvider = Provider.autoDispose<LyricsService>((
+  ref,
+) {
+  final service = YouLyPlusLyricsService(userAgent: _lyricsUserAgent);
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+final betterLyricsServiceProvider = Provider.autoDispose<LyricsService>((ref) {
+  final service = BetterLyricsService(userAgent: _lyricsUserAgent);
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+final lyricsServiceProvider = Provider<LyricsService>((ref) {
+  final mask = ref.watch(_enabledLyricsProvidersMaskProvider) ?? 0;
+  final providers = <LyricsService>[];
+  // Declaration order is the priority, not the order in which toggles were
+  // selected. Inactive providers are neither constructed nor queried.
+  for (final provider in LyricsProvider.values) {
+    if (mask & (1 << provider.index) == 0) continue;
+    providers.add(switch (provider) {
+      LyricsProvider.lrclib => ref.watch(lrclibLyricsServiceProvider),
+      LyricsProvider.youLyPlus => ref.watch(youLyPlusLyricsServiceProvider),
+      LyricsProvider.betterLyrics => ref.watch(betterLyricsServiceProvider),
+    });
+  }
+  final service = FallbackLyricsService(
+    providers: providers,
+    // Riverpod owns the clients, keeping enabled providers' small caches alive
+    // across selection changes without retaining disabled clients.
+    disposeProviders: false,
   );
   ref.onDispose(service.dispose);
   return service;
@@ -500,23 +571,29 @@ final currentPlaybackPositionProvider = playerControllerProvider.select(
 );
 
 final lyricsProvider = FutureProvider.autoDispose
-    .family<LyricsDocument?, LyricsLookup>((ref, lookup) {
+    .family<LyricsDocument?, LyricsLookup>((ref, lookup) async {
+      await ref.watch(_lyricsProviderConfiguration);
+      if (!ref.mounted) return null;
       return ref.watch(lyricsServiceProvider).findLyrics(lookup);
-    });
+    }, retry: (_, _) => null);
 
 final similarLyricsProvider = FutureProvider.autoDispose
-    .family<List<LyricsCandidate>, LyricsLookup>((ref, lookup) {
+    .family<List<LyricsCandidate>, LyricsLookup>((ref, lookup) async {
+      await ref.watch(_lyricsProviderConfiguration);
+      if (!ref.mounted) return const [];
       return ref.watch(lyricsServiceProvider).findSimilarLyrics(lookup);
-    });
+    }, retry: (_, _) => null);
 
 typedef ManualLyricsSearch = ({String title, LyricsLookup context});
 
 final manualLyricsSearchProvider = FutureProvider.autoDispose
-    .family<List<LyricsCandidate>, ManualLyricsSearch>((ref, request) {
+    .family<List<LyricsCandidate>, ManualLyricsSearch>((ref, request) async {
+      await ref.watch(_lyricsProviderConfiguration);
+      if (!ref.mounted) return const [];
       return ref
           .watch(lyricsServiceProvider)
           .searchLyricsByTitle(request.title, context: request.context);
-    });
+    }, retry: (_, _) => null);
 
 final _currentLyricsSelectionIdentityProvider = playerControllerProvider.select(
   (player) {
@@ -534,7 +611,7 @@ final _currentLyricsSelectionIdentityProvider = playerControllerProvider.select(
   },
 );
 
-/// Keeps an explicitly chosen LRCLIB result only for the current song and
+/// Keeps an explicitly chosen provider result only for the current song and
 /// only in memory. It survives closing/reopening the lyrics route, while a
 /// track change immediately discards it.
 final selectedLyricsControllerProvider =
@@ -564,6 +641,11 @@ class SelectedLyricsController extends Notifier<LyricsDocument?> {
       if (previous != next && state != null) {
         state = null;
       }
+    });
+    ref.listen<int?>(_enabledLyricsProvidersMaskProvider, (previous, next) {
+      // A manual result must not bypass a newly disabled provider. Recompute
+      // against the new selection, even when the current song stays the same.
+      if (next != null && previous != next && state != null) state = null;
     });
     return null;
   }

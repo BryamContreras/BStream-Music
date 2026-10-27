@@ -20,7 +20,7 @@ void main() {
       expect(stopped.playing, isFalse);
     });
 
-    test('publishes previous, pause and next as compact actions', () {
+    test('publishes transport actions without a stop button', () {
       final state = buildAudioServicePlaybackState(
         _state(PlayerStatus.playing, queueLength: 2),
       );
@@ -29,13 +29,10 @@ void main() {
         MediaAction.skipToPrevious,
         MediaAction.pause,
         MediaAction.skipToNext,
-        MediaAction.stop,
       ]);
       expect(state.androidCompactActionIndices, const [0, 1, 2]);
       expect(
-        state.androidCompactActionIndices!.map(
-          (index) => state.controls[index].action,
-        ),
+        state.controls.map((control) => control.action),
         isNot(contains(MediaAction.stop)),
       );
     });
@@ -45,7 +42,6 @@ void main() {
 
       expect(state.controls.map((control) => control.action), const [
         MediaAction.play,
-        MediaAction.stop,
       ]);
       expect(state.androidCompactActionIndices, const [0]);
     });

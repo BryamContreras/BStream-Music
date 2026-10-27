@@ -21,7 +21,7 @@
         android:orientation="vertical"
         android:paddingHorizontal="12dp"
         android:paddingTop="2dp"
-        android:paddingBottom="10dp">
+        android:paddingBottom="16dp">
 
         <LinearLayout
             android:id="@+id/widget_metadata"

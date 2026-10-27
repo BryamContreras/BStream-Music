@@ -107,6 +107,208 @@ void main() {
     }
   });
 
+  testWidgets(
+    'a sharper cached cover retains the decoded cover while its new file loads',
+    (tester) async {
+      const remote =
+          'https://lh3.googleusercontent.com/current-cover=w120-h120-l90-rj';
+      final directory = Directory.systemTemp.createTempSync(
+        'bstream-cover-upgrade-',
+      );
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox.shrink());
+        PaintingBinding.instance.imageCache
+          ..clear()
+          ..clearLiveImages();
+        directory.deleteSync(recursive: true);
+      });
+      final png = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      );
+      final previewFile = File('${directory.path}/preview.png')
+        ..writeAsBytesSync(png);
+      final sharpFile = File('${directory.path}/sharp.png')
+        ..writeAsBytesSync(png);
+
+      Widget scoped(int revision, String path) => MaterialApp(
+        home: PlaybackArtworkCacheScope(
+          revision: revision,
+          tracksSource: (source) => source == remote,
+          localPathFor: (_) => path,
+          child: const SourceImage(
+            source: remote,
+            cacheWidth: 1280,
+            fallback: Text('waiting for cover'),
+          ),
+        ),
+      );
+      Image cachedCover() => tester
+          .widgetList<Image>(find.byType(Image))
+          .singleWhere(
+            (image) =>
+                image.image is ResizeImage &&
+                (image.image as ResizeImage).imageProvider is FileImage,
+          );
+
+      await tester.pumpWidget(scoped(1, previewFile.path));
+      final previousCover = cachedCover();
+      final context = tester.element(find.byType(SourceImage));
+      const decodedPrevious = Text('decoded preview cover');
+      expect(
+        previousCover.frameBuilder!(context, decodedPrevious, 0, false),
+        same(decodedPrevious),
+      );
+
+      await tester.pumpWidget(scoped(2, sharpFile.path));
+      final sharperCover = cachedCover();
+      final sharperProvider = sharperCover.image as ResizeImage;
+      expect(sharperProvider.width, 1280);
+      expect(
+        (sharperProvider.imageProvider as FileImage).file.path,
+        sharpFile.path,
+      );
+      expect(sharperCover.image, isNot(previousCover.image));
+      expect(sharperCover.gaplessPlayback, isTrue);
+      // Image's gapless playback retains the decoded predecessor until the
+      // replacement emits a frame. Do not hide it behind a smaller preview.
+      expect(
+        sharperCover.frameBuilder!(context, decodedPrevious, null, false),
+        same(decodedPrevious),
+      );
+      const decodedSharp = Text('decoded sharp cover');
+      expect(
+        sharperCover.frameBuilder!(context, decodedSharp, 0, false),
+        same(decodedSharp),
+      );
+
+      // A decode failure replaces the retained image with the preview. A
+      // later file must not assume that the full-size image is still mounted.
+      expect(
+        sharperCover.errorBuilder!(
+          context,
+          StateError('bad cached cover'),
+          null,
+        ),
+        isA<Image>(),
+      );
+      await tester.pumpWidget(scoped(3, previewFile.path));
+      expect(
+        cachedCover().frameBuilder!(context, decodedSharp, null, false),
+        isA<Image>(),
+      );
+    },
+  );
+
+  testWidgets('a new track does not retain the previous track cached cover', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync(
+      'bstream-cover-next-track-',
+    );
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      directory.deleteSync(recursive: true);
+    });
+    final coverFile = File('${directory.path}/cover.png')
+      ..writeAsBytesSync(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        ),
+      );
+    Widget scoped(int revision, String source) => MaterialApp(
+      home: PlaybackArtworkCacheScope(
+        revision: revision,
+        tracksSource: (_) => true,
+        localPathFor: (_) => coverFile.path,
+        child: SourceImage(
+          source: source,
+          cacheWidth: 1280,
+          fallback: const Text('waiting for next cover'),
+        ),
+      ),
+    );
+    Image cachedCover() => tester
+        .widgetList<Image>(find.byType(Image))
+        .singleWhere(
+          (image) =>
+              image.image is ResizeImage &&
+              (image.image as ResizeImage).imageProvider is FileImage,
+        );
+    await tester.pumpWidget(
+      scoped(1, 'https://example.invalid/previous-cover.jpg'),
+    );
+    final context = tester.element(find.byType(SourceImage));
+    const previousPixels = Text('previous song pixels');
+    cachedCover().frameBuilder!(context, previousPixels, 0, false);
+
+    const nextSource = 'https://example.invalid/next-cover.jpg';
+    await tester.pumpWidget(scoped(2, nextSource));
+    final pendingPreview =
+        cachedCover().frameBuilder!(context, previousPixels, null, false)
+            as Image;
+    final previewProvider = pendingPreview.image as ResizeImage;
+    expect(previewProvider.width, 256);
+    expect(
+      (previewProvider.imageProvider as CachedArtworkImageProvider).url,
+      nextSource,
+    );
+  });
+
+  testWidgets('showing the player again waits for its cached cover frame', (
+    tester,
+  ) async {
+    const remote = 'https://example.invalid/reopened-cover.jpg';
+    final directory = Directory.systemTemp.createTempSync(
+      'bstream-cover-reopen-',
+    );
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      directory.deleteSync(recursive: true);
+    });
+    final coverFile = File('${directory.path}/cover.png')
+      ..writeAsBytesSync(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        ),
+      );
+    Widget scoped(bool visible) => MaterialApp(
+      home: PlaybackArtworkCacheScope(
+        revision: 0,
+        tracksSource: (_) => true,
+        localPathFor: (_) => coverFile.path,
+        allowNetworkPreviews: visible,
+        child: const SourceImage(
+          source: remote,
+          fallback: Text('hidden cover'),
+        ),
+      ),
+    );
+    Image cachedCover() => tester
+        .widgetList<Image>(find.byType(Image))
+        .singleWhere(
+          (image) =>
+              image.image is ResizeImage &&
+              (image.image as ResizeImage).imageProvider is FileImage,
+        );
+    await tester.pumpWidget(scoped(true));
+    final context = tester.element(find.byType(SourceImage));
+    const previousPixels = Text('disposed image pixels');
+    cachedCover().frameBuilder!(context, previousPixels, 0, false);
+    await tester.pumpWidget(scoped(false));
+    expect(find.byType(Image), findsNothing);
+    await tester.pumpWidget(scoped(true));
+    expect(
+      cachedCover().frameBuilder!(context, previousPixels, null, false),
+      isA<Image>(),
+    );
+  });
+
   testWidgets('full player reuses the mini preview for downloaded covers', (
     tester,
   ) async {

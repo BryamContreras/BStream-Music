@@ -1,5 +1,22 @@
 # Third-party notices
 
+## Online lyrics services
+
+BStream Music can query the separately operated Better Lyrics, LyricsPlus,
+and LRCLIB services, in that priority order. LyricsPlus is the backend used by
+the separate YouLy+ browser extension. Provider attribution accompanies the displayed
+lyrics. Responses are retained only in a small in-memory cache; lyrics and the
+providers' server code are not bundled with the application.
+
+- Better Lyrics: <https://better-lyrics.boidu.dev> and <https://docs.betterlyrics.org/>
+- LyricsPlus: <https://github.com/ibratabian17/LyricsPlus>
+- LRCLIB: <https://lrclib.net/docs>
+
+Better Lyrics' public TTML API availability depends on its cached catalog.
+When TTML is unavailable, BStream can try Better Lyrics' documented public
+Kugou endpoint within the same bounded lookup. BStream does not embed private
+API keys or bypass the service's authentication.
+
 ## Google Cast sender SDKs
 
 BStream Music integrates the official Google Cast sender SDKs for Android

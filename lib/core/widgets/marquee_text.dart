@@ -96,7 +96,7 @@ class _MarqueeTextState extends State<MarqueeText> with WidgetsBindingObserver {
       _scrollNotificationObserver = observer;
     }
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
-    _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    _reducedMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     _vsync.setDisplayRefreshRate(View.of(context).display.refreshRate);
     _vsync.enabled = _tickerEnabled && _appActive;
     _syncScrollObservation();

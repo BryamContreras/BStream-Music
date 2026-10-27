@@ -42,6 +42,20 @@ class WidgetLayoutInstrumentation : Instrumentation() {
                 cases = verifyLayouts()
             } catch (error: Throwable) {
                 failure = error
+            } finally {
+                try {
+                    // Queue/artwork fixtures intentionally exercise update()
+                    // against the real launcher provider; restore its host
+                    // view from the app's untouched production preferences.
+                    BStreamMusicWidget.refresh(
+                        targetContext,
+                        queueChanged = true,
+                        focusQueue = true,
+                    )
+                } catch (restoreError: Throwable) {
+                    if (failure == null) failure = restoreError
+                    else failure?.addSuppressed(restoreError)
+                }
             }
         }
         val result = Bundle()
@@ -64,8 +78,9 @@ class WidgetLayoutInstrumentation : Instrumentation() {
         }
         artwork.recycle()
         val cases = listOf(
-            Case("compact-small", 250, 56),
-            Case("compact-wide", 370, 56),
+            Case("compact-small", 250, 64),
+            Case("compact-wide", 370, 64),
+            Case("compact-tall-small", 250, 79),
             Case("compact", 280, 80),
             Case("compact-high", 370, 149),
             Case("large-narrow", 250, 150),
@@ -161,12 +176,27 @@ class WidgetLayoutInstrumentation : Instrumentation() {
                 check(bounds(label, parent).bottom <= bounds(song, parent).top)
                 check(bounds(song, parent).bottom <= bounds(artistView, parent).top)
                 val cover = content.findViewById<View>(R.id.widget_artwork)
+                if (size == BStreamWidgetLayout.LARGE) {
+                    check(bounds(cover, parent).width() >= (84 * density).roundToInt()) {
+                        "${case.name}: intermediate artwork did not use its available size"
+                    }
+                }
                 val controls = content.findViewById<LinearLayout>(R.id.widget_controls)
                 val controlsBounds = bounds(controls, parent)
                 check(controlsBounds.top >= maxOf(bounds(cover, parent).bottom, bounds(artistView, parent).bottom)) { "${case.name}: controls overlap header" }
                 check(controlsBounds.bottom <= height) { "${case.name}: controls clipped vertically" }
-                if (size == BStreamWidgetLayout.EXPANDED) {
-                    check(height - controlsBounds.bottom <= (10 * density).roundToInt()) { "${case.name}: controls float above the bottom edge" }
+                if (size == BStreamWidgetLayout.LARGE || size == BStreamWidgetLayout.EXPANDED) {
+                    val expectedBottomInset = when (size) {
+                        BStreamWidgetLayout.LARGE -> if (case.fontScale > 1f) 8 else 14
+                        else -> if (case.fontScale > 1f) 10 else 16
+                    }
+                    val card = content.findViewById<View>(R.id.widget_card)
+                    check(card.paddingBottom == (expectedBottomInset * density).roundToInt()) {
+                        "${case.name}: unexpected controls bottom inset ${card.paddingBottom}px"
+                    }
+                    check(height - controlsBounds.bottom <= (expectedBottomInset * density).roundToInt()) {
+                        "${case.name}: controls float above the bottom edge"
+                    }
                 }
                 val first = content.findViewById<View>(R.id.widget_repeat)
                 val last = content.findViewById<View>(R.id.widget_favorite)
@@ -174,6 +204,22 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             } else {
                 check(label == null && artistView.visibility == View.GONE) { "${case.name}: compact layout changed" }
                 check(song.text.toString().contains(title) && song.text.toString().contains(artist))
+                if (size == BStreamWidgetLayout.COMPACT_SMALL) {
+                    val surface = content.findViewById<View>(R.id.widget_surface)
+                    val cover = content.findViewById<View>(R.id.widget_artwork)
+                    val surfaceHeight = bounds(surface, parent).height()
+                    check(surfaceHeight >= (60 * density).roundToInt()) {
+                        "${case.name}: compact widget surface is ${surfaceHeight / density}dp, expected at least 60dp"
+                    }
+                    check(bounds(cover, parent).height() >= (50 * density).roundToInt()) {
+                        "${case.name}: compact artwork did not grow with its surface"
+                    }
+                } else if (size == BStreamWidgetLayout.COMPACT) {
+                    val cover = content.findViewById<View>(R.id.widget_artwork)
+                    check(bounds(cover, parent).height() >= (72 * density).roundToInt()) {
+                        "${case.name}: regular compact artwork did not grow"
+                    }
+                }
             }
             val ids = listOf(R.id.widget_repeat, R.id.widget_previous, R.id.widget_play_pause, R.id.widget_next, R.id.widget_favorite)
             var previousRight = -1
@@ -192,7 +238,8 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             image.recycle()
         }
         return cases.size + verifyArtworkTransitions(base, privateFiles, screenshots) +
-            verifyQueueClickTemplate(base)
+            verifyQueueClickTemplate(base) + verifyQueueRowPresentation(base, privateFiles, screenshots) +
+            verifyQueueHistoryPresentation(base, privateFiles)
     }
 
     private fun verifyQueueClickTemplate(context: Context): Int {
@@ -207,6 +254,88 @@ class WidgetLayoutInstrumentation : Instrumentation() {
         } finally {
             template.cancel()
         }
+        return 1
+    }
+
+    private fun verifyQueueHistoryPresentation(base: Context, directory: File): Int {
+        val context = FixtureContext(base, directory)
+        val queue = org.json.JSONArray()
+        listOf(
+            listOf("previous-2", "2", "Anterior 2", "false"),
+            listOf("previous-1", "3", "Anterior 1", "false"),
+            listOf("current", "4", "Reproduciendo ahora", "true"),
+            listOf("next", "5", "Siguiente", "false"),
+        ).forEach { (id, index, title, current) ->
+            queue.put(
+                org.json.JSONObject()
+                    .put("id", id)
+                    .put("queueIndex", index.toInt())
+                    .put("title", title)
+                    .put("artist", "Artista")
+                    .put("isCurrent", current.toBoolean()),
+            )
+        }
+        context.getSharedPreferences("bstream_home_widget", Context.MODE_PRIVATE)
+            .edit().clear().putString("queueJson", queue.toString()).commit()
+        val factory = QueueFactory(context)
+        factory.onCreate()
+        factory.onDataSetChanged()
+        val density = context.resources.displayMetrics.density
+        val current = factory.getViewAt(2)?.apply(context, FrameLayout(context))
+            ?: error("Queue factory did not create the current row after playback history")
+        check(current.findViewById<TextView>(R.id.widget_queue_item_title).text.toString() == "Reproduciendo ahora")
+        check(current.findViewById<View>(R.id.widget_queue_item_playing_indicator).visibility == View.VISIBLE)
+        val rowContainer = current.findViewById<View>(R.id.widget_queue_item_playing_indicator).parent as LinearLayout
+        check(rowContainer.paddingEnd == (14 * density).roundToInt()) {
+            "The queue indicator must have the additional 6dp right inset"
+        }
+        for (position in listOf(0, 1, 3)) {
+            val row = factory.getViewAt(position)?.apply(context, FrameLayout(context))
+                ?: error("Queue row $position is missing")
+            check(row.findViewById<View>(R.id.widget_queue_item_playing_indicator).visibility == View.GONE) {
+                "Only the current track should show the active marker"
+            }
+        }
+        factory.onDestroy()
+        return 1
+    }
+
+    private fun verifyQueueRowPresentation(base: Context, directory: File, screenshots: File): Int {
+        val context = FixtureContext(base, directory)
+        val prefs = context.getSharedPreferences("bstream_home_widget", Context.MODE_PRIVATE)
+        prefs.edit().clear()
+            .putInt("accent", Color.rgb(68, 138, 255))
+            .putString(
+                "queueJson",
+                """[{"id":"current","queueIndex":0,"title":"Reproduciendo ahora","artist":"Artista actual","artworkPath":""},{"id":"next","queueIndex":1,"title":"Siguiente canción","artist":"Artista siguiente","artworkPath":""}]""",
+            )
+            .commit()
+        val factory = QueueFactory(context)
+        factory.onCreate()
+        factory.onDataSetChanged()
+        val density = context.resources.displayMetrics.density
+        val width = (370 * density).roundToInt()
+        val height = (72 * density).roundToInt()
+        val active = factory.getViewAt(0)?.apply(context, FrameLayout(context))
+            ?: error("Queue factory did not create the current song row")
+        active.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+        active.layout(0, 0, width, height)
+        check(active.findViewById<View>(R.id.widget_queue_item_playing_indicator).visibility == View.VISIBLE) {
+            "Current queue row must show its playing indicator"
+        }
+        check(active.background != null) { "Current queue row must use the active rounded surface" }
+        check(active.findViewById<TextView>(R.id.widget_queue_item_title).text.toString() == "Reproduciendo ahora")
+        val image = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        active.draw(Canvas(image))
+        File(screenshots, "queue-current-row.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        image.recycle()
+
+        val inactive = factory.getViewAt(1)?.apply(context, FrameLayout(context))
+            ?: error("Queue factory did not create the next song row")
+        check(inactive.findViewById<View>(R.id.widget_queue_item_playing_indicator).visibility == View.GONE) {
+            "Inactive queue rows must hide the playing indicator"
+        }
+        factory.onDestroy()
         return 1
     }
 

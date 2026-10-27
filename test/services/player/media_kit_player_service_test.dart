@@ -8,6 +8,59 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 
 void main() {
+  for (final playingFirst in [true, false]) {
+    test(
+      'native EOF never publishes pause (${playingFirst ? 'playing' : 'completed'} first)',
+      () async {
+        final backend = _FakeMediaKitBackend();
+        final service = MediaKitPlayerService(backend: backend);
+        addTearDown(service.dispose);
+        final play = service.playRemote(_track('terminal'));
+        await _waitUntil(() => backend.openCalls.isNotEmpty);
+        backend.completeOpen(0);
+        await play;
+        await _drainEvents();
+        final statuses = <PlayerStatus>[];
+        final subscription = service.snapshotStream.listen(
+          (snapshot) => statuses.add(snapshot.status),
+        );
+        addTearDown(subscription.cancel);
+
+        // media_kit sets state.completed before publishing either stream.
+        backend.completed = true;
+        if (playingFirst) {
+          backend.emitPlaying(false);
+          await _drainEvents();
+          backend.emitCompleted();
+        } else {
+          backend.emitCompleted();
+          await _drainEvents();
+          backend.emitPlaying(false);
+        }
+        await _drainEvents();
+
+        expect(statuses, contains(PlayerStatus.completed));
+        expect(statuses, isNot(contains(PlayerStatus.paused)));
+        expect(service.currentSnapshot.status, PlayerStatus.completed);
+      },
+    );
+  }
+
+  test('a genuine native pause remains a pause rather than EOF', () async {
+    final backend = _FakeMediaKitBackend();
+    final service = MediaKitPlayerService(backend: backend);
+    addTearDown(service.dispose);
+    final play = service.playRemote(_track('pause'));
+    await _waitUntil(() => backend.openCalls.isNotEmpty);
+    backend.completeOpen(0);
+    await play;
+    backend.emitPlaying(false);
+    await _drainEvents();
+
+    expect(backend.completed, isFalse);
+    expect(service.currentSnapshot.status, PlayerStatus.paused);
+  });
+
   test(
     'a hung open cannot block a newer selection or overwrite it late',
     () async {
@@ -913,6 +966,8 @@ class _OpenCall {
 }
 
 class _FakeMediaKitBackend implements MediaKitPlayerBackend {
+  @override
+  bool completed = false;
   final positions = StreamController<Duration>.broadcast();
   final durations = StreamController<Duration>.broadcast();
   final volumes = StreamController<double>.broadcast();
@@ -966,6 +1021,7 @@ class _FakeMediaKitBackend implements MediaKitPlayerBackend {
 
   @override
   Future<void> open(Media media, {required bool play}) {
+    completed = false;
     final call = _OpenCall(media, session, play: play);
     openCalls.add(call);
     return call.completer.future;

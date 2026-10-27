@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bstream_music/core/theme/app_dialog.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
@@ -11,9 +12,11 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/library_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/playlist_artwork_mosaic.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playlist_picker_dialog.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/sharing/playlist_csv_share_service.dart';
 import 'package:bstream_music/services/sharing/youtube_music_playlist_share_service.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_models.dart';
 import 'package:flutter/material.dart';
@@ -309,7 +312,7 @@ void main() {
     },
   );
 
-  testWidgets('library collage uses nine catalog covers in two rows of four', (
+  testWidgets('library collage uses four catalog covers in a square grid', (
     tester,
   ) async {
     final fixture = _multiArtworkCatalogFixture();
@@ -339,7 +342,8 @@ void main() {
         .toList(growable: false);
     final sources = images.map((image) => image.source).toList(growable: false);
 
-    expect(sources, hasLength(9));
+    expect(sources, hasLength(4));
+    expect(sources.toSet(), hasLength(4));
     expect(
       sources.every(
         (source) =>
@@ -359,32 +363,254 @@ void main() {
       ),
       isTrue,
     );
-    for (var row = 0; row < 2; row++) {
-      final secondaryRow = find.descendant(
-        of: cover,
-        matching: find.byKey(ValueKey('playlist-cover-secondary-row-$row')),
-      );
-      expect(secondaryRow, findsOneWidget);
-      expect(
-        tester
-            .widgetList<SourceImage>(
-              find.descendant(
-                of: secondaryRow,
-                matching: find.byType(SourceImage),
-              ),
-            )
-            .where(
-              (image) =>
-                  image.source?.startsWith(
-                    'https://img.test/local-album-cover-',
-                  ) ??
-                  false,
-            ),
-        hasLength(4),
-      );
-    }
+    final cells = artwork.evaluate().toList(growable: false);
+    final rectangles = cells
+        .map((cell) => tester.getRect(find.byWidget(cell.widget)))
+        .toList(growable: false);
+    expect(rectangles.map((rect) => rect.top).toSet(), hasLength(2));
+    expect(rectangles.map((rect) => rect.left).toSet(), hasLength(2));
+    expect(rectangles.map((rect) => rect.size).toSet(), hasLength(1));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'playlist detail retains its cover selection while filtering and rotates on return',
+    (tester) async {
+      final fixture = _multiArtworkCatalogFixture();
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      await tester.pumpWidget(
+        _libraryHarness(fixture: fixture, controller: controller),
+      );
+      await _pumpLibrary(tester);
+
+      final coverKey = ValueKey(
+        'library-playlist-artwork-${fixture.playlist.id}',
+      );
+      final heroKey = ValueKey('library-playlist-hero-${fixture.playlist.id}');
+      final initialSources = _artworkSources(tester, coverKey);
+      expect(initialSources, hasLength(4));
+
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+
+      expect(_artworkSources(tester, heroKey), initialSources);
+      expect(
+        find.byKey(const ValueKey('library-playlist-background-color')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('library-playlist-background-photo')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('library-playlist-background-fade')),
+        findsOneWidget,
+      );
+
+      await _openPlaylistSearch(tester, fixture.playlist.id);
+      await tester.enterText(find.byType(TextField), 'No matching songs');
+      await _pumpLibrary(tester);
+      expect(_artworkSources(tester, heroKey), initialSources);
+      await tester.enterText(find.byType(TextField), '');
+      await _pumpLibrary(tester);
+      expect(_artworkSources(tester, heroKey), initialSources);
+
+      final header = find.byKey(const ValueKey('library-detail-header'));
+      await tester.tap(
+        find.descendant(
+          of: header,
+          matching: find.byIcon(Icons.arrow_back_rounded),
+        ),
+      );
+      await _pumpLibrary(tester);
+      expect(find.byType(TextField), findsNothing);
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('library-detail-header')),
+          matching: find.byIcon(Icons.arrow_back_rounded),
+        ),
+      );
+      await _pumpLibrary(tester);
+
+      final refreshedSources = _artworkSources(tester, coverKey);
+      expect(refreshedSources, hasLength(4));
+      expect(refreshedSources.first, isNot(initialSources.first));
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+      expect(_artworkSources(tester, heroKey), refreshedSources);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'empty playlist detail shows its cover fallback and remains usable',
+    (tester) async {
+      final source = _remoteCatalogFixture();
+      final fixture = _RemoteCatalogFixture(
+        now: source.now,
+        playlist: source.playlist,
+        catalog: CatalogPlaylist(
+          playlist: source.playlist,
+          entries: const <PlaylistEntry>[],
+        ),
+      );
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      await tester.pumpWidget(
+        _libraryHarness(fixture: fixture, controller: controller),
+      );
+      await _pumpLibrary(tester);
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+
+      final hero = find.byKey(
+        ValueKey('library-playlist-hero-${fixture.playlist.id}'),
+      );
+      expect(hero, findsOneWidget);
+      expect(
+        find.descendant(of: hero, matching: find.byType(SourceImage)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: hero,
+          matching: find.byIcon(Icons.queue_music_rounded),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('library-detail-header')),
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+      );
+      await _pumpLibrary(tester);
+      expect(
+        find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'playlist hero remains scrollable on narrow screens with large text and after rotation',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 700);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final source = _multiArtworkCatalogFixture();
+      final playlist = source.playlist.copyWith(
+        name:
+            'Una playlist con un nombre muy largo para escuchar todos los días',
+      );
+      final fixture = _RemoteCatalogFixture(
+        now: source.now,
+        playlist: playlist,
+        catalog: CatalogPlaylist(
+          playlist: playlist,
+          entries: source.catalog.entries,
+        ),
+        libraryTracks: source.libraryTracks,
+      );
+      final controller = _RecordingPlaylistsController(playlist: playlist);
+      await tester.pumpWidget(
+        _libraryHarness(
+          fixture: fixture,
+          controller: controller,
+          textScale: 1.6,
+        ),
+      );
+      await _pumpLibrary(tester);
+      await tester.tap(find.byKey(ValueKey('library-playlist-${playlist.id}')));
+      await _pumpLibrary(tester);
+      await _openPlaylistSearch(tester, playlist.id);
+      final heroKey = ValueKey('library-playlist-hero-${playlist.id}');
+      final sources = _artworkSources(tester, heroKey);
+      expect(sources, hasLength(4));
+      expect(tester.takeException(), isNull);
+
+      tester.view.physicalSize = const Size(700, 320);
+      await _pumpLibrary(tester);
+      expect(_artworkSources(tester, heroKey), sources);
+      expect(tester.takeException(), isNull);
+
+      final scroll = find.byKey(const ValueKey('library-catalog-track-scroll'));
+      await tester.dragUntilVisible(
+        find.byKey(const ValueKey('library-catalog-entry-entry-8')),
+        scroll,
+        const Offset(0, -180),
+      );
+      await _pumpLibrary(tester);
+      expect(
+        find
+            .byKey(const ValueKey('library-catalog-entry-entry-8'))
+            .hitTestable(),
+        findsOneWidget,
+      );
+      await tester.drag(scroll, const Offset(0, 2000));
+      await _pumpLibrary(tester);
+      expect(find.byType(TextField).hitTestable(), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'Artista 8');
+      await _pumpLibrary(tester);
+      expect(tester.takeException(), isNull);
+      expect(_artworkSources(tester, heroKey), sources);
+    },
+  );
+
+  testWidgets(
+    'legacy local-only playlist keeps matching list and detail covers',
+    (tester) async {
+      final source = _multiArtworkCatalogFixture();
+      final fixture = _RemoteCatalogFixture(
+        now: source.now,
+        playlist: source.playlist,
+        catalog: CatalogPlaylist(
+          playlist: source.playlist,
+          entries: const <PlaylistEntry>[],
+        ),
+        libraryTracks: source.libraryTracks,
+      );
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      await tester.pumpWidget(
+        _libraryHarness(fixture: fixture, controller: controller),
+      );
+      await _pumpLibrary(tester);
+      final sources = _artworkSources(
+        tester,
+        ValueKey('library-playlist-artwork-${fixture.playlist.id}'),
+      );
+      expect(sources, hasLength(4));
+      await tester.tap(
+        find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      );
+      await _pumpLibrary(tester);
+      expect(
+        _artworkSources(
+          tester,
+          ValueKey('library-playlist-hero-${fixture.playlist.id}'),
+        ),
+        sources,
+      );
+      expect(
+        find.byKey(const ValueKey('library-track-local-0')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'remote playlist song menu offers download and add-to-playlist actions',
@@ -512,6 +738,7 @@ void main() {
         find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
       );
       await tester.pumpAndSettle();
+      await _chooseUrlShare(tester);
 
       expect(shareService.remotePlaylistId, 'PLremote123');
       expect(shareService.playlistName, 'Viaje importado');
@@ -530,6 +757,7 @@ void main() {
       final pendingBindings =
           Completer<Map<String, YouTubeMusicShareablePlaylistBinding>>();
       final visibilityChange = _RecordingVisibilityChange();
+      var bindingsReads = 0;
       await tester.pumpWidget(
         _libraryHarness(
           fixture: fixture,
@@ -537,6 +765,7 @@ void main() {
           shareableBindingsFuture: pendingBindings.future,
           authenticated: true,
           makeUnlisted: visibilityChange.call,
+          onBindingsRead: () => bindingsReads++,
         ),
       );
       await _pumpLibrary(tester);
@@ -559,6 +788,7 @@ void main() {
       expect(find.text('Renombrar playlist'), findsOneWidget);
       expect(find.text('Eliminar playlist'), findsOneWidget);
       expect(visibilityChange.calls, 0);
+      expect(bindingsReads, 0);
       expect(find.byKey(const Key('playlist-share-preparing')), findsNothing);
       expect(tester.takeException(), isNull);
       pendingBindings.complete(
@@ -614,6 +844,7 @@ void main() {
         find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
       );
       await tester.pumpAndSettle();
+      await _chooseUrlShare(tester);
 
       expect(find.byKey(const Key('playlist-share-make-unlisted')), findsOne);
       expect(shareService.remotePlaylistId, isNull);
@@ -678,6 +909,7 @@ void main() {
         find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
       );
       await tester.pumpAndSettle();
+      await _chooseUrlShare(tester);
       await tester.tap(find.byKey(const Key('playlist-share-make-unlisted')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
@@ -742,6 +974,7 @@ void main() {
       find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
     );
     await tester.pumpAndSettle();
+    await _chooseUrlShare(tester);
     await tester.tap(find.byKey(const Key('playlist-share-private-cancel')));
     await tester.pumpAndSettle();
 
@@ -750,13 +983,159 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('local playlist menu does not expose sharing', (tester) async {
+  testWidgets('logged-out playlist menu shares CSV without reading YouTube', (
+    tester,
+  ) async {
     final fixture = _remoteCatalogFixture();
     final controller = _RecordingPlaylistsController(
       playlist: fixture.playlist,
     );
+    final csvService = _RecordingPlaylistCsvShareService();
+    final urlService = _RecordingPlaylistShareService();
+    final sync = _RecordingPlaylistSyncController();
+    var bindingsReads = 0;
     await tester.pumpWidget(
-      _libraryHarness(fixture: fixture, controller: controller),
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        playlistCsvShareService: csvService,
+        playlistShareService: urlService,
+        playlistSyncController: sync,
+        onBindingsRead: () => bindingsReads++,
+      ),
+    );
+    await _pumpLibrary(tester);
+
+    await _openPlaylistShare(tester, fixture.playlist.id);
+
+    expect(find.byKey(const Key('playlist-share-format-dialog')), findsNothing);
+    expect(csvService.playlists, hasLength(1));
+    expect(csvService.playlists.single.playlist.id, fixture.playlist.id);
+    expect(
+      csvService.playlists.single.entries.map((entry) => entry.id),
+      fixture.catalog.entries.map((entry) => entry.id),
+    );
+    expect(csvService.title, isNotEmpty);
+    expect(csvService.sharePositionOrigin, isNotNull);
+    expect(urlService.remotePlaylistId, isNull);
+    expect(bindingsReads, 0);
+    expect(sync.buildCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('logged-in playlist can share CSV without a YouTube binding', (
+    tester,
+  ) async {
+    final fixture = _multiArtworkCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    final csvService = _RecordingPlaylistCsvShareService();
+    final urlService = _RecordingPlaylistShareService();
+    final sync = _RecordingPlaylistSyncController();
+    var bindingsReads = 0;
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        authenticated: true,
+        playlistCsvShareService: csvService,
+        playlistShareService: urlService,
+        playlistSyncController: sync,
+        onBindingsRead: () => bindingsReads++,
+      ),
+    );
+    await _pumpLibrary(tester);
+
+    await _openPlaylistShare(tester, fixture.playlist.id);
+
+    final dialog = find.byKey(const Key('playlist-share-format-dialog'));
+    expect(dialog, findsOneWidget);
+    expect(tester.widget(dialog), isA<AppAlertDialog>());
+    expect(find.byKey(const Key('playlist-share-csv')), findsOneWidget);
+    expect(find.byKey(const Key('playlist-share-url')), findsOneWidget);
+    expect(csvService.playlists, isEmpty);
+    expect(bindingsReads, 0);
+
+    await tester.tap(find.byKey(const Key('playlist-share-csv')));
+    await tester.pumpAndSettle();
+
+    expect(csvService.playlists, hasLength(1));
+    expect(csvService.playlists.single.playlist.id, fixture.playlist.id);
+    expect(
+      csvService.playlists.single.entries.map((entry) => entry.id),
+      fixture.catalog.entries.map((entry) => entry.id),
+    );
+    expect(csvService.localTracks, fixture.libraryTracks);
+    expect(urlService.remotePlaylistId, isNull);
+    expect(bindingsReads, 0);
+    expect(sync.buildCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('cancelling playlist share format performs no share or lookup', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    final csvService = _RecordingPlaylistCsvShareService();
+    final urlService = _RecordingPlaylistShareService();
+    final visibilityChange = _RecordingVisibilityChange();
+    final sync = _RecordingPlaylistSyncController();
+    var bindingsReads = 0;
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        authenticated: true,
+        playlistCsvShareService: csvService,
+        playlistShareService: urlService,
+        playlistSyncController: sync,
+        makeUnlisted: visibilityChange.call,
+        onBindingsRead: () => bindingsReads++,
+      ),
+    );
+    await _pumpLibrary(tester);
+
+    await _openPlaylistShare(tester, fixture.playlist.id);
+    await tester.tap(find.byKey(const Key('playlist-share-format-cancel')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('playlist-share-format-dialog')), findsNothing);
+    expect(csvService.playlists, isEmpty);
+    expect(urlService.remotePlaylistId, isNull);
+    expect(visibilityChange.calls, 0);
+    expect(bindingsReads, 0);
+    expect(sync.buildCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('favorites offers CSV and disables URL sharing', (tester) async {
+    final fixture = _remoteCatalogFixture(
+      playlistId: Playlist.favoritesId,
+      playlistName: 'Favoritos',
+    );
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    final csvService = _RecordingPlaylistCsvShareService();
+    final urlService = _RecordingPlaylistShareService();
+    final visibilityChange = _RecordingVisibilityChange();
+    final sync = _RecordingPlaylistSyncController();
+    var bindingsReads = 0;
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        authenticated: true,
+        playlistCsvShareService: csvService,
+        playlistShareService: urlService,
+        playlistSyncController: sync,
+        makeUnlisted: visibilityChange.call,
+        onBindingsRead: () => bindingsReads++,
+      ),
     );
     await _pumpLibrary(tester);
 
@@ -771,11 +1150,86 @@ void main() {
         matching: find.byIcon(Icons.more_vert_rounded),
       ),
     );
-    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
 
-    expect(find.text('Compartir playlist'), findsNothing);
+    expect(find.text('Renombrar playlist'), findsNothing);
+    expect(find.text('Eliminar playlist'), findsNothing);
+    await tester.tap(
+      find.byKey(ValueKey('playlist-share-${fixture.playlist.id}')),
+    );
+    await tester.pumpAndSettle();
+
+    final urlChoice = tester.widget<ListTile>(
+      find.byKey(const Key('playlist-share-url')),
+    );
+    expect(urlChoice.enabled, isFalse);
+    await tester.tap(find.byKey(const Key('playlist-share-url')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('playlist-share-format-dialog')),
+      findsOneWidget,
+    );
+    expect(csvService.playlists, isEmpty);
+    expect(urlService.remotePlaylistId, isNull);
+    expect(bindingsReads, 0);
+    await tester.tap(find.byKey(const Key('playlist-share-csv')));
+    await tester.pumpAndSettle();
+
+    expect(csvService.playlists, hasLength(1));
+    expect(csvService.playlists.single.playlist.id, Playlist.favoritesId);
+    expect(urlService.remotePlaylistId, isNull);
+    expect(visibilityChange.calls, 0);
+    expect(bindingsReads, 0);
+    expect(sync.buildCalls, 0);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'unsynchronized URL sharing explains availability without changes',
+    (tester) async {
+      final fixture = _remoteCatalogFixture();
+      final controller = _RecordingPlaylistsController(
+        playlist: fixture.playlist,
+      );
+      final csvService = _RecordingPlaylistCsvShareService();
+      final urlService = _RecordingPlaylistShareService();
+      final visibilityChange = _RecordingVisibilityChange();
+      final sync = _RecordingPlaylistSyncController();
+      var bindingsReads = 0;
+      await tester.pumpWidget(
+        _libraryHarness(
+          fixture: fixture,
+          controller: controller,
+          authenticated: true,
+          playlistCsvShareService: csvService,
+          playlistShareService: urlService,
+          playlistSyncController: sync,
+          makeUnlisted: visibilityChange.call,
+          onBindingsRead: () => bindingsReads++,
+        ),
+      );
+      await _pumpLibrary(tester);
+
+      await _openPlaylistShare(tester, fixture.playlist.id);
+      expect(bindingsReads, 0);
+      await _chooseUrlShare(tester);
+
+      expect(
+        find.text(
+          const AppStrings(AppLanguage.spanish).playlistShareUrlUnavailable,
+        ),
+        findsOneWidget,
+      );
+      expect(bindingsReads, 1);
+      expect(csvService.playlists, isEmpty);
+      expect(urlService.remotePlaylistId, isNull);
+      expect(visibilityChange.calls, 0);
+      expect(sync.buildCalls, 0);
+      expect(controller.deleteScopes, isEmpty);
+      expect(controller.removedEntryIds, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'linked playlist local-only action never requests YouTube deletion',
@@ -909,6 +1363,125 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('playlist menu search clears before closing and handles back', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final controller = _RecordingPlaylistsController(
+      playlist: fixture.playlist,
+    );
+    final navigation = LibraryNavigationController();
+    addTearDown(navigation.dispose);
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: controller,
+        navigationController: navigation,
+      ),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+
+    expect(find.byType(TextField), findsNothing);
+    final header = find.byKey(const ValueKey('library-detail-header'));
+    await tester.tap(
+      find.descendant(
+        of: header,
+        matching: find.byIcon(Icons.more_vert_rounded),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final searchItem = find.byKey(
+      ValueKey('playlist-search-${fixture.playlist.id}'),
+    );
+    final downloadItem = find.byKey(
+      ValueKey('playlist-download-all-${fixture.playlist.id}'),
+    );
+    expect(searchItem, findsOneWidget);
+    expect(
+      tester.getTopLeft(searchItem).dy,
+      lessThan(tester.getTopLeft(downloadItem).dy),
+    );
+    await tester.tap(searchItem);
+    await _pumpLibrary(tester);
+    expect(find.byType(TextField), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'no match');
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('library-filter-clear-or-close')),
+    );
+    await _pumpLibrary(tester);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '',
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('library-filter-clear-or-close')),
+    );
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump();
+    expect(find.byType(TextField), findsNothing);
+
+    await _openPlaylistSearch(tester, fixture.playlist.id);
+    expect(navigation.canPop, isTrue);
+    expect(navigation.maybePop(), isTrue);
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump();
+    expect(find.byType(TextField), findsNothing);
+    expect(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('library-catalog-track-scroll')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playlist play button starts the full catalog queue', (
+    tester,
+  ) async {
+    final fixture = _remoteCatalogFixture();
+    final playlists = _RecordingPlaylistsController(playlist: fixture.playlist);
+    final player = _RecordingPlaybackPlayerController();
+    var openedPlayer = false;
+    await tester.pumpWidget(
+      _libraryHarness(
+        fixture: fixture,
+        controller: playlists,
+        playerController: player,
+        onOpenPlayer: () => openedPlayer = true,
+      ),
+    );
+    await _pumpLibrary(tester);
+    await tester.tap(
+      find.byKey(ValueKey('library-playlist-${fixture.playlist.id}')),
+    );
+    await _pumpLibrary(tester);
+    final playButton = find.byKey(
+      ValueKey('library-play-all-${fixture.playlist.id}'),
+    );
+    expect(
+      find.descendant(of: playButton, matching: find.text('Reproducir')),
+      findsOneWidget,
+    );
+    await tester.tap(playButton);
+    await _pumpLibrary(tester);
+
+    expect(player.playedPlaylistId, fixture.playlist.id);
+    expect(player.playedQueue, hasLength(2));
+    expect(player.playedQueue.first.entryId, 'occurrence-a');
+    expect(openedPlayer, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _openDeleteDialog(WidgetTester tester, String playlistId) async {
@@ -949,9 +1522,56 @@ Future<void> _pumpLibrary(WidgetTester tester) async {
   await tester.pump();
 }
 
+List<String?> _artworkSources(WidgetTester tester, Key artworkKey) {
+  final artwork = find.byKey(artworkKey);
+  final mosaic = tester.widget<Widget>(artwork) is PlaylistArtworkMosaic
+      ? artwork
+      : find.descendant(
+          of: artwork,
+          matching: find.byType(PlaylistArtworkMosaic),
+        );
+  return tester
+      .widget<PlaylistArtworkMosaic>(mosaic)
+      .sources
+      .map((source) => source.source)
+      .toList(growable: false);
+}
+
 Future<void> _openSelectionMenu(WidgetTester tester) async {
   await tester.tap(find.byKey(const ValueKey('library-selection-menu')));
   await _pumpLibrary(tester);
+}
+
+Future<void> _openPlaylistSearch(WidgetTester tester, String playlistId) async {
+  final header = find.byKey(const ValueKey('library-detail-header'));
+  await tester.tap(
+    find.descendant(of: header, matching: find.byIcon(Icons.more_vert_rounded)),
+  );
+  await tester.pumpAndSettle();
+  final searchItem = find.byKey(ValueKey('playlist-search-$playlistId'));
+  expect(searchItem, findsOneWidget);
+  await tester.tap(searchItem);
+  await _pumpLibrary(tester);
+}
+
+Future<void> _openPlaylistShare(WidgetTester tester, String playlistId) async {
+  await tester.tap(find.byKey(ValueKey('library-playlist-$playlistId')));
+  await _pumpLibrary(tester);
+  final header = find.byKey(const ValueKey('library-detail-header'));
+  await tester.tap(
+    find.descendant(of: header, matching: find.byIcon(Icons.more_vert_rounded)),
+  );
+  await tester.pumpAndSettle();
+  final shareItem = find.byKey(ValueKey('playlist-share-$playlistId'));
+  expect(shareItem, findsOneWidget);
+  await tester.tap(shareItem);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _chooseUrlShare(WidgetTester tester) async {
+  expect(find.byKey(const Key('playlist-share-format-dialog')), findsOneWidget);
+  await tester.tap(find.byKey(const Key('playlist-share-url')));
+  await tester.pumpAndSettle();
 }
 
 Widget _libraryHarness({
@@ -962,11 +1582,17 @@ Widget _libraryHarness({
   Future<Map<String, YouTubeMusicShareablePlaylistBinding>>?
   shareableBindingsFuture,
   bool authenticated = false,
+  PlaylistCsvShareService? playlistCsvShareService,
   YouTubeMusicPlaylistShareService? playlistShareService,
+  _RecordingPlaylistSyncController? playlistSyncController,
+  VoidCallback? onBindingsRead,
   YouTubeMusicMakePlaylistUnlistedForSharing? makeUnlisted,
   DownloadController? downloads,
   PlayerController? playerController,
+  LibraryNavigationController? navigationController,
+  VoidCallback? onOpenPlayer,
   TargetPlatform platform = TargetPlatform.android,
+  double textScale = 1,
 }) {
   return ProviderScope(
     overrides: [
@@ -984,13 +1610,21 @@ Widget _libraryHarness({
       ),
       if (downloads != null)
         downloadControllerProvider.overrideWith(() => downloads),
-      youtubeMusicShareablePlaylistBindingDetailsProvider.overrideWith(
-        (ref) => shareableBindingsFuture ?? Future.value(shareableBindings),
+      youtubeMusicShareablePlaylistBindingDetailsProvider.overrideWith((ref) {
+        onBindingsRead?.call();
+        return shareableBindingsFuture ?? Future.value(shareableBindings);
+      }),
+      youtubeMusicPlaylistSyncControllerProvider.overrideWith(
+        () => playlistSyncController ?? _RecordingPlaylistSyncController(),
       ),
-      if (authenticated)
-        youtubeMusicAuthControllerProvider.overrideWith(
-          _AuthenticatedYouTubeMusicAuthController.new,
-        ),
+      youtubeMusicAuthControllerProvider.overrideWith(
+        () => authenticated
+            ? _AuthenticatedYouTubeMusicAuthController()
+            : _LoggedOutYouTubeMusicAuthController(),
+      ),
+      playlistCsvShareServiceProvider.overrideWithValue(
+        playlistCsvShareService ?? _RecordingPlaylistCsvShareService(),
+      ),
       if (makeUnlisted != null)
         youtubeMusicMakePlaylistUnlistedForSharingProvider.overrideWithValue(
           makeUnlisted,
@@ -1005,7 +1639,20 @@ Widget _libraryHarness({
     ],
     child: MaterialApp(
       theme: ThemeData(platform: platform),
-      home: Scaffold(body: LibraryPanel(onOpenPlayer: () {})),
+      builder: textScale == 1
+          ? null
+          : (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
+      home: Scaffold(
+        body: LibraryPanel(
+          onOpenPlayer: onOpenPlayer ?? () {},
+          navigationController: navigationController,
+        ),
+      ),
     ),
   );
 }
@@ -1101,6 +1748,21 @@ class _MutablePlayerController extends PlayerController {
   }
 }
 
+class _RecordingPlaybackPlayerController extends _IdlePlayerController {
+  List<CatalogPlaybackItem> playedQueue = const <CatalogPlaybackItem>[];
+  String? playedPlaylistId;
+
+  @override
+  Future<void> playCatalogPlaylist(
+    CatalogPlaybackItem selected, {
+    required List<CatalogPlaybackItem> queue,
+    required String playlistId,
+  }) async {
+    playedQueue = queue;
+    playedPlaylistId = playlistId;
+  }
+}
+
 class _AuthenticatedYouTubeMusicAuthController
     extends YouTubeMusicAuthController {
   @override
@@ -1112,6 +1774,46 @@ class _AuthenticatedYouTubeMusicAuthController
       displayName: 'Test account',
     ),
   );
+}
+
+class _LoggedOutYouTubeMusicAuthController extends YouTubeMusicAuthController {
+  @override
+  YouTubeMusicAuthState build() => const YouTubeMusicAuthState(
+    phase: YouTubeMusicAuthPhase.anonymous,
+    generation: 1,
+  );
+}
+
+class _RecordingPlaylistSyncController
+    extends YouTubeMusicPlaylistSyncController {
+  int buildCalls = 0;
+
+  @override
+  YouTubeMusicPlaylistSyncState build() {
+    buildCalls++;
+    return const YouTubeMusicPlaylistSyncState();
+  }
+}
+
+class _RecordingPlaylistCsvShareService implements PlaylistCsvShareService {
+  final playlists = <CatalogPlaylist>[];
+  List<LocalTrack>? localTracks;
+  String? title;
+  Rect? sharePositionOrigin;
+
+  @override
+  Future<void> sharePlaylist({
+    required CatalogPlaylist playlist,
+    required List<LocalTrack> localTracks,
+    required String title,
+    String? subject,
+    Rect? sharePositionOrigin,
+  }) async {
+    playlists.add(playlist);
+    this.localTracks = List<LocalTrack>.of(localTracks);
+    this.title = title;
+    this.sharePositionOrigin = sharePositionOrigin;
+  }
 }
 
 class _RecordingPlaylistShareService
@@ -1182,11 +1884,14 @@ class _RemoteCatalogFixture {
 
 const _remoteThumbnail = 'https://i.ytimg.com/vi/duplicate-video/hqdefault.jpg';
 
-_RemoteCatalogFixture _remoteCatalogFixture() {
+_RemoteCatalogFixture _remoteCatalogFixture({
+  String playlistId = 'imported-playlist',
+  String playlistName = 'Viaje importado',
+}) {
   final now = DateTime.utc(2026, 8, 22);
   final playlist = Playlist(
-    id: 'imported-playlist',
-    name: 'Viaje importado',
+    id: playlistId,
+    name: playlistName,
     trackIds: const <String>[],
     createdAt: now,
     updatedAt: now,

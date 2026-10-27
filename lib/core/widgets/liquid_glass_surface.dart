@@ -1335,8 +1335,6 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
           devicePixelRatio,
           borderRadius,
           MediaQuery.sizeOf(context),
-          MediaQuery.viewInsetsOf(context),
-          MediaQuery.paddingOf(context),
           _surfaceBoundsInPhysicalPixels(
             fallbackSize: size,
             devicePixelRatio: devicePixelRatio,

@@ -74,6 +74,7 @@ class _SourceImageState extends State<SourceImage> {
   String? _localSource;
   Future<bool>? _localExists;
   Animation<double>? _imageOpacity;
+  String? _decodedPlaybackSource;
 
   @override
   void initState() {
@@ -87,6 +88,7 @@ class _SourceImageState extends State<SourceImage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.opacity != widget.opacity) _updateImageOpacity();
     if (oldWidget.source != widget.source) {
+      _decodedPlaybackSource = null;
       _prepareLocalSource();
     }
   }
@@ -119,11 +121,13 @@ class _SourceImageState extends State<SourceImage> {
     final fallback = _resolvedFallback(normalized);
     final playbackCache = PlaybackArtworkCacheScope.maybeOf(context);
     if (normalized == null || normalized.isEmpty) {
+      _decodedPlaybackSource = null;
       return fallback;
     }
     if (isNetworkImageSource(normalized)) {
       if (playbackCache?.tracksSource(normalized) == true) {
         if (!playbackCache!.allowNetworkPreviews) {
+          _decodedPlaybackSource = null;
           return fallback;
         }
         final cachedPath = playbackCache.localPathFor(normalized);
@@ -138,7 +142,10 @@ class _SourceImageState extends State<SourceImage> {
           fallback: fallback,
           cacheWidth: 256,
         );
-        if (cachedPath == null) return preview;
+        if (cachedPath == null) {
+          _decodedPlaybackSource = null;
+          return preview;
+        }
         return Image.file(
           File(cachedPath),
           fit: widget.fit,
@@ -146,11 +153,24 @@ class _SourceImageState extends State<SourceImage> {
           opacity: _imageOpacity,
           cacheWidth: widget.cacheWidth,
           gaplessPlayback: true,
-          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
-              wasSynchronouslyLoaded || frame != null ? child : preview,
-          errorBuilder: (_, _, _) => preview,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+            if (wasSynchronouslyLoaded || frame != null) {
+              _decodedPlaybackSource = normalized;
+              return child;
+            }
+            // A better rendition changes the file-provider key, but gapless
+            // playback still has the previous decoded rendition of this same
+            // cover. Keep those pixels rather than briefly downgrading to the
+            // mini player's 256 px preview while the new file decodes.
+            return _decodedPlaybackSource == normalized ? child : preview;
+          },
+          errorBuilder: (_, _, _) {
+            _decodedPlaybackSource = null;
+            return preview;
+          },
         );
       }
+      _decodedPlaybackSource = null;
       final sizedSource =
           sizedGoogleArtworkSource(normalized, widget.cacheWidth) ?? normalized;
       return _networkArtworkForSource(

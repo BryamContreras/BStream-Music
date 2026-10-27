@@ -490,6 +490,26 @@ class AppStrings {
     'Personaliza la animación, alineación y romanización.',
     'Customize lyrics animation, alignment, and romanization.',
   );
+  String get lyricsProviders =>
+      choose('Proveedores de letras', 'Lyrics providers');
+  String get lyricsProvidersHint => choose(
+    'Activa los proveedores que quieras consultar. Orden de búsqueda: Better Lyrics → LyricsPlus → LRCLIB.',
+    'Enable the providers you want to use. Search order: Better Lyrics → LyricsPlus → LRCLIB.',
+  );
+  String get lyricsProvidersFallbackHint => choose(
+    'Solo se consultan los proveedores activos. Si no hay letra sincronizada, se prueba el siguiente, incluso si el resultado es instrumental. La letra sin sincronizar se conserva como último recurso.',
+    'Only enabled providers are queried. If synchronized lyrics are unavailable, the next provider is tried, including instrumental results. Unsynchronized lyrics are kept as a last resort.',
+  );
+  String get noLyricsProvidersEnabled =>
+      choose('Ningún proveedor activo', 'No providers enabled');
+  String get lyricsProvidersDisabledHint => choose(
+    'No hay proveedores activos. La búsqueda automática de letras está desactivada.',
+    'No providers are enabled. Automatic lyrics lookup is disabled.',
+  );
+  String get betterLyricsAvailabilityHint => choose(
+    'TTML depende de su caché pública; si no está disponible, se prueba Kugou.',
+    'TTML depends on its public cache; if unavailable, Kugou is tried.',
+  );
   String get lyricsAnimation => choose('Animación', 'Animation');
   String get lyricsAnimationSmooth => choose('Suave', 'Smooth');
   String get lyricsAnimationSlide => choose('Deslizar', 'Slide');
@@ -528,6 +548,8 @@ class AppStrings {
   String get retry => choose('Reintentar', 'Retry');
   String get lyricsSource =>
       choose('Letras proporcionadas por LRCLIB', 'Lyrics provided by LRCLIB');
+  String lyricsSourceForProvider(String provider) =>
+      lyricsSource.replaceAll('LRCLIB', provider);
   String get tapLyricsToSeek => choose(
     'Toca una línea para ir a ese momento.',
     'Tap a line to seek to that moment.',
@@ -545,6 +567,25 @@ class AppStrings {
   String get sharedSong => choose('Canción compartida', 'Shared song');
   String get sharePlaylist => choose('Compartir playlist', 'Share playlist');
   String get sharePlaylistTitle => sharePlaylist;
+  String get sharePlaylistCsv => choose('Archivo .csv', 'CSV file');
+  String get sharePlaylistYouTubeMusicUrl =>
+      choose('URL de YouTube Music', 'YouTube Music URL');
+  String get sharePlaylistCsvDescription => choose(
+    'Comparte la lista de canciones de esta playlist, sin archivos de audio.',
+    'Share a list of the songs in this playlist, without audio files.',
+  );
+  String get sharePlaylistUrlDescription => choose(
+    'Comparte el enlace de esta playlist sincronizada con YouTube Music.',
+    'Share the link to this playlist synced with YouTube Music.',
+  );
+  String get playlistShareUrlUnavailable => choose(
+    'Sincroniza esta playlist con YouTube Music para compartir su URL.',
+    'Sync this playlist with YouTube Music first to share its URL.',
+  );
+  String get favoritesPlaylistUrlUnavailable => choose(
+    'Los favoritos de YouTube Music no tienen un enlace público. Compártelos como CSV.',
+    'YouTube Music favorites do not have a public link. Share them as CSV.',
+  );
   String sharePlaylistMessage(String name) => choose(
     'Escucha mi playlist "$name" en YouTube Music.',
     'Listen to my "$name" playlist on YouTube Music.',
@@ -708,6 +749,7 @@ class AppStrings {
   String get cancel => choose('Cancelar', 'Cancel');
   String get name => choose('Nombre', 'Name');
   String get filterSongs => choose('Filtrar canciones', 'Filter songs');
+  String get searchPlaylistSongs => choose('Buscar canción', 'Search songs');
   String get reorderSong =>
       choose('Mantén y arrastra para reordenar', 'Drag to reorder');
   String get noSongsToShow =>
@@ -825,8 +867,8 @@ class AppStrings {
   String get importFromCsv =>
       choose('Importar desde archivo .csv', 'Import from a .csv file');
   String get importCsvSummary => choose(
-    'Combina listas y metadatos; tras confirmar, descargará las canciones.',
-    'Merge lists and metadata; after confirmation, songs will be downloaded.',
+    'Combina listas, favoritos y metadatos sin descargar audio.',
+    'Merge lists, favorites, and metadata without downloading audio.',
   );
   String get exportLocalBackup =>
       choose('Exportar respaldo local', 'Export local backup');
@@ -840,8 +882,7 @@ class AppStrings {
     'Compatible con MetroList, Harmony y formatos comunes; no incluye audio.',
     'Compatible with MetroList, Harmony, and common formats; no audio included.',
   );
-  String get csvImportTitle =>
-      choose('Importar y descargar canciones', 'Import and download songs');
+  String get csvImportTitle => choose('Importar canciones', 'Import songs');
   String csvImportPreview({
     required int tracks,
     required int playlists,
@@ -851,43 +892,42 @@ class AppStrings {
     'Se encontraron $tracks canciones y $playlists playlists. '
         'Se omitirán $invalid filas inválidas y se combinarán $duplicates '
         'filas repetidas. '
-        'Las canciones existentes se reutilizarán; las faltantes se '
-        'descargarán en paralelo con un límite seguro.',
+        'Se combinarán listas, favoritos y metadatos sin descargar audio. '
+        'Las canciones existentes se reutilizarán.',
     '$tracks songs and $playlists playlists were found. $invalid invalid '
         'rows will be skipped and $duplicates repeated rows will be merged. '
-        'Existing songs '
-        'will be reused; missing songs will be downloaded in parallel with a '
-        'safe limit.',
+        'Lists, favorites, and metadata will be merged without downloading '
+        'audio. Existing songs will be reused.',
   );
   String get csvImportDataNotice => choose(
-    'La descarga puede consumir datos y almacenamiento. Puedes detener la '
-        'importación después de las descargas activas.',
-    'Downloads may use data and storage. You can stop the import after the '
-        'active downloads finish.',
+    'La búsqueda de metadatos puede usar la conexión a Internet. Puedes '
+        'descargar las canciones más adelante.',
+    'Metadata lookup may use your Internet connection. You can download '
+        'songs later.',
   );
-  String get importAndDownload =>
-      choose('Importar y descargar', 'Import and download');
   String get csvImporting =>
       choose('Importando biblioteca', 'Importing library');
   String csvImportProgress(int processed, int total) =>
       choose('$processed de $total canciones', '$processed of $total songs');
-  String get stopAfterCurrent =>
-      choose('Detener después de las activas', 'Stop after active downloads');
+  String get stopAfterCurrent => choose(
+    'Detener después de las importaciones activas',
+    'Stop after active imports',
+  );
   String get csvStopRequested => choose(
-    'Se detendrá al terminar las descargas activas.',
-    'The import will stop after the active downloads finish.',
+    'Se detendrá al terminar las importaciones activas.',
+    'The import will stop after the active imports finish.',
   );
   String get csvImportCompleted =>
       choose('Importación terminada', 'Import complete');
   String csvImportResult({
-    required int downloaded,
+    required int imported,
     required int reused,
     required int failed,
     required int playlists,
   }) => choose(
-    '$downloaded descargadas, $reused reutilizadas, $failed con error y '
+    '$imported importadas, $reused reutilizadas, $failed con error y '
         '$playlists playlists actualizadas.',
-    '$downloaded downloaded, $reused reused, $failed failed, and $playlists '
+    '$imported imported, $reused reused, $failed failed, and $playlists '
         'playlists updated.',
   );
   String get csvImportCancelled => choose(

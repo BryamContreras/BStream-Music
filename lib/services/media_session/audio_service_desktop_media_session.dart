@@ -18,12 +18,12 @@ PlaybackState buildAudioServicePlaybackState(DesktopMediaSessionState state) {
     if (state.hasPrevious) MediaControl.skipToPrevious,
     wantsToPlay ? MediaControl.pause : MediaControl.play,
     if (state.hasNext) MediaControl.skipToNext,
-    MediaControl.stop,
   ];
-  final compactActions = <int>[
-    for (var index = 0; index < controls.length; index++)
-      if (controls[index].action != MediaAction.stop) index,
-  ].take(3).toList(growable: false);
+  final compactActions = List<int>.generate(
+    controls.length.clamp(0, 3),
+    (index) => index,
+    growable: false,
+  );
 
   return PlaybackState(
     controls: controls,

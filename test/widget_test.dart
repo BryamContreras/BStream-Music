@@ -8312,7 +8312,7 @@ void main() {
     navigationController.openPlaylist('persistent-playlist');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump();
-    expect(find.text('Filtrar canciones'), findsOneWidget);
+    expect(find.text('Filtrar canciones'), findsNothing);
 
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
     await tester.pump();
@@ -8320,7 +8320,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump();
 
-    expect(find.text('Filtrar canciones'), findsOneWidget);
+    expect(find.text('Filtrar canciones'), findsNothing);
     expect(find.text('Cancion de playlist'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('library-track-play-playlist-route-track')),

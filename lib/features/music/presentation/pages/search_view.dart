@@ -383,9 +383,9 @@ class _SearchViewState extends ConsumerState<SearchView> {
             curve: Curves.easeOutCubic,
             padding: EdgeInsets.fromLTRB(
               0,
-              showHeading ? appTabFirstSectionTopGap : 10,
+              showHeading ? appTabFirstSectionTopGap : 4,
               0,
-              14,
+              10,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -410,7 +410,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
                 if (searchState.hasQuery &&
                     !showSuggestions &&
                     !selection.active) ...[
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 6),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: _SearchCategoryTabs(
@@ -1807,35 +1807,23 @@ class _SearchCategoryTabs extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final textScaler = MediaQuery.textScalerOf(context);
-    final textDirection = Directionality.of(context);
-    final labelStyle =
-        (Theme.of(context).textTheme.labelLarge ?? const TextStyle()).copyWith(
-          fontWeight: FontWeight.w800,
-        );
-    final tabWidths = <double>[
-      for (final category in categories)
-        _naturalTabWidth(
-          label: _categoryLabel(strings, category),
-          style: labelStyle,
-          textScaler: textScaler,
-          textDirection: textDirection,
-        ),
-    ];
+    final scaledLabelHeight = textScaler.scale(13);
+    final cardHeight = (scaledLabelHeight + 43).clamp(58.0, 82.0).toDouble();
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 6.0;
-        final spacingWidth = categories.length > 1
-            ? spacing * (categories.length - 1)
-            : 0.0;
-        final naturalWidth = tabWidths.fold<double>(
-          spacingWidth,
-          (total, width) => total + width,
-        );
-        final extraWidthPerTab =
-            categories.isNotEmpty && constraints.maxWidth > naturalWidth
-            ? (constraints.maxWidth - naturalWidth) / categories.length
-            : 0.0;
+        const spacing = 7.0;
+        // The horizontal rail keeps every label readable at phone widths;
+        // extra-long text scales can still scroll without squeezing the cards.
+        const minimumCardWidth = 126.0;
+        const maximumCardWidth = 168.0;
+        final availableCardWidth = categories.isEmpty
+            ? maximumCardWidth
+            : (constraints.maxWidth - spacing * (categories.length - 1)) /
+                  categories.length;
+        final cardWidth = availableCardWidth
+            .clamp(minimumCardWidth, maximumCardWidth)
+            .toDouble();
 
         return HorizontalShelfScroll(
           child: SingleChildScrollView(
@@ -1847,7 +1835,8 @@ class _SearchCategoryTabs extends StatelessWidget {
                 for (var index = 0; index < categories.length; index++) ...[
                   if (index > 0) const SizedBox(width: spacing),
                   SizedBox(
-                    width: tabWidths[index] + extraWidthPerTab,
+                    width: cardWidth,
+                    height: cardHeight,
                     child: _SearchCategoryTab(
                       category: categories[index],
                       icon: _categoryIcon(categories[index]),
@@ -1864,24 +1853,6 @@ class _SearchCategoryTabs extends StatelessWidget {
         );
       },
     );
-  }
-
-  double _naturalTabWidth({
-    required String label,
-    required TextStyle style,
-    required TextScaler textScaler,
-    required TextDirection textDirection,
-  }) {
-    final painter = TextPainter(
-      text: TextSpan(text: label, style: style),
-      maxLines: 1,
-      textDirection: textDirection,
-      textScaler: textScaler,
-    )..layout();
-
-    // Icon (18), separation (4) and the horizontal breathing room (24).
-    final width = painter.width + 46;
-    return width < 92 ? 92 : width;
   }
 }
 
@@ -1905,16 +1876,11 @@ class _SearchCategoryTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(appNavItemRadius);
+    final radius = BorderRadius.circular(15);
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final motionDuration = disableAnimations
         ? Duration.zero
         : const Duration(milliseconds: 200);
-    final scaledLabelHeight = MediaQuery.textScalerOf(context).scale(14);
-    final tapTargetHeight = (scaledLabelHeight + 20)
-        .clamp(48.0, 80.0)
-        .toDouble();
-    final surfaceHeight = (scaledLabelHeight + 14).clamp(44.0, 74.0).toDouble();
     final contentColor = selected
         ? colors.onPrimaryContainer
         : AppColors.contentTitleFor(context);
@@ -1923,7 +1889,6 @@ class _SearchCategoryTab extends StatelessWidget {
       selected: selected,
       button: true,
       child: SizedBox(
-        height: tapTargetHeight,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -1931,7 +1896,7 @@ class _SearchCategoryTab extends StatelessWidget {
               child: AnimatedContainer(
                 key: ValueKey('search-category-surface-${category.name}'),
                 width: double.infinity,
-                height: surfaceHeight,
+                height: double.infinity,
                 duration: motionDuration,
                 curve: Curves.easeOutCubic,
                 decoration: BoxDecoration(
@@ -1955,9 +1920,13 @@ class _SearchCategoryTab extends StatelessWidget {
                 onTap: selected ? null : () => onSelected(category),
                 child: Center(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 6,
+                    ),
+                    child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         TweenAnimationBuilder<Color?>(
                           duration: motionDuration,
@@ -1972,25 +1941,25 @@ class _SearchCategoryTab extends StatelessWidget {
                             color: color ?? contentColor,
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: AnimatedDefaultTextStyle(
-                            duration: motionDuration,
-                            curve: Curves.easeOutCubic,
-                            style:
-                                (Theme.of(context).textTheme.labelLarge ??
-                                        const TextStyle())
-                                    .copyWith(
-                                      color: contentColor,
-                                      fontWeight: selected
-                                          ? FontWeight.w800
-                                          : FontWeight.w600,
-                                    ),
-                            child: Text(
-                              label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                        const SizedBox(height: 3),
+                        AnimatedDefaultTextStyle(
+                          duration: motionDuration,
+                          curve: Curves.easeOutCubic,
+                          style:
+                              (Theme.of(context).textTheme.labelMedium ??
+                                      const TextStyle())
+                                  .copyWith(
+                                    color: contentColor,
+                                    fontSize: 12,
+                                    fontWeight: selected
+                                        ? FontWeight.w800
+                                        : FontWeight.w600,
+                                  ),
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
                           ),
                         ),
                       ],

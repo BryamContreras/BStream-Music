@@ -21,6 +21,9 @@ abstract interface class MediaKitPlayerBackend {
   Stream<bool> get bufferingStream;
   Stream<bool> get playingStream;
   Stream<bool> get completedStream;
+
+  /// Native EOF state, updated before its playing/completed stream events.
+  bool get completed;
   Stream<String> get errorStream;
   Object? get platform;
 
@@ -165,6 +168,8 @@ class _MediaKitPlayerBackend implements MediaKitPlayerBackend {
   Stream<bool> get playingStream => _playings.stream;
   @override
   Stream<bool> get completedStream => _completions.stream;
+  @override
+  bool get completed => _player.state.completed;
   @override
   Stream<String> get errorStream => _errors.stream;
   @override
@@ -935,7 +940,14 @@ class MediaKitPlayerService implements PlayerService, CrossfadeCapablePlayer {
         }
         if (!playing &&
             (_snapshot.status == PlayerStatus.stopped ||
+                _snapshot.status == PlayerStatus.completed ||
+                player.completed ||
                 _crossfadeRamp != null)) {
+          // Native EOF sets completed before broadcasting playing=false. It
+          // is not a user pause: publishing paused here cancels the queue's
+          // autoplay intent, or invalidates an already scheduled completion
+          // when the two streams arrive in the opposite order. Let the EOF
+          // stream publish the terminal event; genuine pauses still pass.
           return;
         }
         _emit(

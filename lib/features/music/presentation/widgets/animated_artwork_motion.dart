@@ -122,7 +122,7 @@ class _AnimatedArtworkMotionState extends State<AnimatedArtworkMotion>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _reducedMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    _reducedMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
     _vsync.setDisplayRefreshRate(View.of(context).display.refreshRate);
     _vsync.enabled = _tickerEnabled && _appIsActive;

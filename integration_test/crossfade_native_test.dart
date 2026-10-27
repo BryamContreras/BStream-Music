@@ -12,6 +12,56 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('native EOF remains completed without an intermediate pause', (
+    tester,
+  ) async {
+    if (!Platform.isAndroid &&
+        !Platform.isIOS &&
+        !Platform.isWindows &&
+        !Platform.isLinux &&
+        !Platform.isMacOS) {
+      return;
+    }
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream_native_eof_',
+    );
+    final PlayerService service = Platform.isAndroid || Platform.isIOS
+        ? JustAudioPlayerService()
+        : MediaKitPlayerService();
+    final snapshots = <PlayerSnapshot>[];
+    final subscription = service.snapshotStream.listen(snapshots.add);
+    try {
+      const duration = Duration(milliseconds: 900);
+      final file = File('${directory.path}${Platform.pathSeparator}eof.wav');
+      await file.writeAsBytes(_toneWave(duration, frequency: 220));
+      await service.playLocal(
+        _track('native-eof', file.path, duration: duration),
+      );
+      await _waitUntil(
+        () => service.currentSnapshot.status == PlayerStatus.completed,
+        timeout: const Duration(seconds: 12),
+        diagnostic: () =>
+            'Natural EOF: ${snapshots.map((snapshot) => snapshot.status).toList()}',
+      );
+      // Drain trailing playing=false callbacks too: they must not turn EOF
+      // back into a pause before controller-managed queues can advance.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final afterPlaying = snapshots.skipWhile(
+        (snapshot) => snapshot.status != PlayerStatus.playing,
+      );
+      expect(afterPlaying, isNotEmpty);
+      expect(
+        afterPlaying.map((snapshot) => snapshot.status),
+        isNot(contains(PlayerStatus.paused)),
+      );
+      expect(service.currentSnapshot.status, PlayerStatus.completed);
+    } finally {
+      await subscription.cancel();
+      await service.dispose();
+      await directory.delete(recursive: true);
+    }
+  });
+
   testWidgets('native crossfade keeps clock and queue order across handoffs', (
     tester,
   ) async {

@@ -9,7 +9,7 @@ internal enum class BStreamWidgetLayout {
 
     companion object {
         fun forSize(width: Int, height: Int): BStreamWidgetLayout = when {
-            height < 72 -> COMPACT_SMALL
+            height < 80 -> COMPACT_SMALL
             height < 150 -> COMPACT
             // Samsung reports 220dp for a two-row widget. Keep the queue
             // layout for genuinely taller (three-row) widgets only.

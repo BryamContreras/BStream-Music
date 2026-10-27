@@ -3,8 +3,8 @@ import '../../domain/entities/catalog_track.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 
-/// One large cover plus two rows of four secondary covers.
-const int playlistArtworkSourceLimit = 9;
+/// Four equally sized covers form one playlist mosaic.
+const int playlistArtworkSourceLimit = 4;
 
 class PlaylistArtworkSource {
   const PlaylistArtworkSource({required this.source, this.fallbackSource});
@@ -119,14 +119,17 @@ PlaylistArtworkSource? preferredCatalogPlaylistArtworkSource(
   );
 }
 
-/// Returns a deduplicated, daily-stable rotation for a playlist collage.
+/// Returns at most four deduplicated covers for a playlist mosaic.
 ///
-/// The order changes on a later local calendar day, but remains stable during
-/// ordinary rebuilds so artwork does not flicker while scrolling or playing.
+/// [rotationSeed] can represent a visit to the library. Keeping that seed stable
+/// prevents artwork changes during rebuilds; changing it rotates the selection
+/// without a timer or background listener. Callers without a seed retain a
+/// stable selection for the current local calendar day.
 List<PlaylistArtworkSource> rotatingPlaylistArtworkSources({
   required String playlistId,
   required Iterable<PlaylistArtworkSource?> candidates,
   DateTime? now,
+  int? rotationSeed,
   int maximum = playlistArtworkSourceLimit,
 }) {
   if (maximum < 1) {
@@ -152,22 +155,26 @@ List<PlaylistArtworkSource> rotatingPlaylistArtworkSources({
   }
 
   final current = now ?? DateTime.now();
-  final localDay =
+  final rotation =
+      rotationSeed ??
       DateTime.utc(
-        current.year,
-        current.month,
-        current.day,
-      ).millisecondsSinceEpoch ~/
-      Duration.millisecondsPerDay;
+            current.year,
+            current.month,
+            current.day,
+          ).millisecondsSinceEpoch ~/
+          Duration.millisecondsPerDay;
   final primaryIndex =
-      (_stableArtworkHash(playlistId) + localDay) % sources.length;
+      (_stableArtworkHash(playlistId) + rotation) % sources.length;
   final primary = sources.removeAt(primaryIndex);
   _shuffleArtworkSources(
     sources,
-    seed: _stableArtworkHash('$playlistId:$localDay'),
+    seed: _stableArtworkHash('$playlistId:$rotation'),
   );
   return List<PlaylistArtworkSource>.unmodifiable(
-    <PlaylistArtworkSource>[primary, ...sources].take(maximum),
+    <PlaylistArtworkSource>[
+      primary,
+      ...sources,
+    ].take(maximum.clamp(1, playlistArtworkSourceLimit)),
   );
 }
 

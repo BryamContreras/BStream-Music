@@ -122,13 +122,20 @@ class HomeScreenWidgetSync {
           };
         })
         .toList(growable: false);
-    final ordered = <Map<String, String>>[
-      ...indexedQueue.skip(focusedIndex),
-      ...indexedQueue.take(focusedIndex),
-    ].take(100);
+    // Keep the two tracks immediately before playback visible above the
+    // current track, followed by the upcoming queue in its original order.
+    final firstVisibleIndex = (focusedIndex - 2).clamp(0, focusedIndex).toInt();
+    final ordered = indexedQueue
+        .skip(firstVisibleIndex)
+        .take(100)
+        .toList(growable: false);
     return jsonEncode(
       ordered
-          .map((entry) {
+          .asMap()
+          .entries
+          .map((orderedEntry) {
+            final visibleIndex = firstVisibleIndex + orderedEntry.key;
+            final entry = orderedEntry.value;
             String compact(String key, [int maxLength = 160]) {
               final normalized = (entry[key] ?? '')
                   .replaceAll(RegExp(r'\s+'), ' ')
@@ -140,9 +147,10 @@ class HomeScreenWidgetSync {
             final artist = compact('artist');
             final id = compact('id', 256);
             final artworkUrl = (entry['artworkUrl'] ?? '').trim();
-            return <String, String>{
+            return <String, Object>{
               'id': id.isEmpty ? '$title\u0000$artist' : id,
               'queueIndex': entry['queueIndex'] ?? '0',
+              'isCurrent': visibleIndex == focusedIndex,
               'title': title,
               'artist': artist,
               if (artworkUrl.isNotEmpty) 'artworkUrl': artworkUrl,

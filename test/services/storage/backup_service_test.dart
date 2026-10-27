@@ -204,6 +204,7 @@ void main() {
     expect(databaseService.initializeCalls, 1);
     expect(databaseService.rewriteMediaRootCalls, 1);
     expect(databaseService.rewriteMediaRoot, mediaRoot.path);
+    expect(databaseService.rebaseSyncCalls, 1);
     expect(databaseService.recommendationGeneration, 1);
   });
 
@@ -360,6 +361,7 @@ class _FakeDatabaseService extends LocalDatabaseService {
   int initializeCalls = 0;
   int validationCalls = 0;
   int rewriteMediaRootCalls = 0;
+  int rebaseSyncCalls = 0;
   String? rewriteMediaRoot;
   Object? validationError;
   bool failNextInitialize = false;
@@ -400,6 +402,11 @@ class _FakeDatabaseService extends LocalDatabaseService {
     if (error != null) {
       throw error;
     }
+  }
+
+  @override
+  Future<void> rebasePlaylistSyncAfterRestore() async {
+    rebaseSyncCalls++;
   }
 
   @override

@@ -1,183 +1,301 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
-import 'package:bstream_music/features/music/domain/repositories/library_repository.dart';
+import 'package:bstream_music/features/music/domain/repositories/music_repository.dart';
+import 'package:bstream_music/features/music/domain/usecases/search_tracks.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/services/storage/library_csv_service.dart';
+import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(sqfliteFfiInit);
+
+  test('preview parses off-thread and publishes the detected document', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream-csv-preview-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/songs.csv');
+    await file.writeAsString(
+      'Title,Artist,Album,YouTube Video ID\r\nSong,Artist,Album,dQw4w9WgXcQ\r\n',
+    );
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final document = await container
+        .read(libraryCsvTransferControllerProvider.notifier)
+        .preview(file.path);
+
+    expect(document.detectedFormat, LibraryCsvDetectedFormat.metroList);
+    expect(document.tracks.single.youtubeVideoId, 'dQw4w9WgXcQ');
+    final state = container.read(libraryCsvTransferControllerProvider);
+    expect(state.phase, LibraryCsvTransferPhase.completed);
+    expect(state.document, same(document));
+    expect(state.isBusy, isFalse);
+  });
 
   test(
-    'preview parses off-thread and publishes the detected document',
+    'export snapshots downloaded and streaming favorites without losing membership',
     () async {
-      final directory = await Directory.systemTemp.createTemp(
-        'bstream-csv-controller-',
-      );
-      addTearDown(() => directory.delete(recursive: true));
-      final file = File('${directory.path}${Platform.pathSeparator}songs.csv');
-      await file.writeAsString(
-        'Title,Artist,Album,YouTube Video ID\r\n'
-        'Song,Artist,Album,dQw4w9WgXcQ\r\n',
-      );
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
-
-      final document = await container
-          .read(libraryCsvTransferControllerProvider.notifier)
-          .preview(file.path);
-
-      expect(document.detectedFormat, LibraryCsvDetectedFormat.metroList);
-      expect(document.tracks.single.youtubeVideoId, 'dQw4w9WgXcQ');
-      final state = container.read(libraryCsvTransferControllerProvider);
-      expect(state.phase, LibraryCsvTransferPhase.completed);
-      expect(state.document, same(document));
-      expect(state.isBusy, isFalse);
-    },
-  );
-
-  test(
-    'prepareExport snapshots tracks and playlists through the repository',
-    () async {
+      final harness = await _Harness.create();
+      final database = harness.database;
       final now = DateTime.utc(2025, 1, 2);
-      final repository = _MemoryLibraryRepository(
-        tracks: [
-          LocalTrack(
-            id: 'track-1',
-            title: 'Song',
-            artist: 'Artist',
-            filePath: r'C:\music\song.m4a',
-            addedAt: now,
-            sourceId: 'dQw4w9WgXcQ',
-            sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-          ),
-        ],
-        playlists: [
-          Playlist(
-            id: 'playlist-1',
-            name: 'Road trip',
-            trackIds: const ['track-1'],
-            createdAt: now,
-            updatedAt: now,
-          ),
-        ],
+      await database.saveLocalTrack(
+        LocalTrack(
+          id: 'track-1',
+          title: 'Downloaded',
+          artist: 'Artist',
+          filePath: 'C:/music/song.m4a',
+          addedAt: now,
+          sourceId: 'dQw4w9WgXcQ',
+          sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        ),
       );
-      final container = ProviderContainer(
-        overrides: [libraryRepositoryProvider.overrideWithValue(repository)],
+      await database.createCatalogPlaylist(
+        id: 'playlist-1',
+        name: 'Road trip',
+        now: now,
       );
-      addTearDown(container.dispose);
+      await database.appendCatalogEntry(
+        playlistId: 'playlist-1',
+        entryId: 'entry-1',
+        now: now,
+        localTrackId: 'track-1',
+        track: CatalogTrack.youtube(
+          videoId: 'dQw4w9WgXcQ',
+          title: 'Downloaded',
+        ),
+      );
+      await database.createCatalogPlaylist(
+        id: Playlist.favoritesId,
+        name: 'Favoritos',
+        now: now,
+      );
+      await database.appendCatalogEntry(
+        playlistId: Playlist.favoritesId,
+        entryId: 'entry-2',
+        now: now,
+        track: CatalogTrack.youtube(videoId: '9bZkp7q19f0', title: 'Streaming'),
+      );
 
-      final document = await container
-          .read(libraryCsvTransferControllerProvider.notifier)
-          .prepareExport();
+      final document = await harness.controller.prepareExport();
 
-      expect(repository.localTrackReads, 1);
-      expect(repository.playlistReads, 1);
-      expect(document.tracks.single.youtubeVideoId, 'dQw4w9WgXcQ');
-      expect(document.playlistNames, {'Road trip'});
-      expect(document.tracks.single.memberships.single.id, 'playlist-1');
+      expect(document.tracks, hasLength(2));
+      final downloaded = document.tracks.singleWhere(
+        (track) => track.youtubeVideoId == 'dQw4w9WgXcQ',
+      );
+      final streaming = document.tracks.singleWhere(
+        (track) => track.youtubeVideoId == '9bZkp7q19f0',
+      );
+      expect(downloaded.memberships.single.id, 'playlist-1');
+      expect(streaming.memberships.single.id, Playlist.favoritesId);
       expect(
-        container.read(libraryCsvTransferControllerProvider).phase,
+        harness.container.read(libraryCsvTransferControllerProvider).phase,
         LibraryCsvTransferPhase.completed,
       );
     },
   );
 
   test(
-    'requestCancel finishes the active batch and cancels the remainder',
+    'default CSV provider imports favorites without accessing downloader and refreshes catalog',
     () async {
-      final repository = _MemoryLibraryRepository();
-      final download = Completer<LocalTrackDownloadResult>();
-      _ControlledDownloadHelper? helper;
-      final container = ProviderContainer(
-        overrides: [
-          libraryRepositoryProvider.overrideWithValue(repository),
-          localTrackDownloadHelperProvider.overrideWith((ref) {
-            final next = _ControlledDownloadHelper(ref, download.future);
-            helper = next;
-            return next;
-          }),
-        ],
+      final harness = await _Harness.create();
+      final initial = await harness.container.read(
+        catalogPlaylistProvider(Playlist.favoritesId).future,
       );
-      addTearDown(container.dispose);
-      final document = LibraryCsvDocument(
-        tracks: const [
+      expect(initial, isNull);
+      const document = LibraryCsvDocument(
+        tracks: [
           LibraryCsvTrack(
             rowNumber: 2,
-            title: 'First',
+            title: 'Song',
             artist: 'Artist',
             youtubeVideoId: 'dQw4w9WgXcQ',
-          ),
-          LibraryCsvTrack(
-            rowNumber: 3,
-            title: 'Second',
-            artist: 'Artist',
-            youtubeVideoId: '9bZkp7q19f0',
-          ),
-          LibraryCsvTrack(
-            rowNumber: 4,
-            title: 'Third',
-            artist: 'Artist',
-            youtubeVideoId: 'J---aiyznGQ',
-          ),
-          LibraryCsvTrack(
-            rowNumber: 5,
-            title: 'Fourth',
-            artist: 'Artist',
-            youtubeVideoId: 'M7lc1UVf-VE',
+            memberships: [
+              LibraryCsvMembership(
+                name: 'Favoritos',
+                id: Playlist.favoritesId,
+                position: 1,
+              ),
+            ],
           ),
         ],
-        detectedFormat: LibraryCsvDetectedFormat.metroList,
+        detectedFormat: LibraryCsvDetectedFormat.bstream,
+        defaultPlaylistName: 'songs',
+        hasPlaylistColumn: true,
+      );
+
+      final result = await harness.controller.importDocument(document);
+
+      expect(result.imported, 1);
+      expect(await harness.database.getLocalTracks(), isEmpty);
+      final favorites = await harness.container.read(
+        catalogPlaylistProvider(Playlist.favoritesId).future,
+      );
+      expect(favorites!.entries.single.videoId, 'dQw4w9WgXcQ');
+      expect(favorites.entries.single.localTrackId, isNull);
+      await harness.container.read(playlistsControllerProvider.future);
+      expect(
+        harness.container.read(favoriteTrackIdsProvider),
+        contains('dQw4w9WgXcQ'),
+      );
+      expect(harness.sync.automaticRequests, 1);
+
+      await harness.controller.importDocument(document);
+      expect(
+        (await harness.database.getCatalogPlaylist(
+          Playlist.favoritesId,
+        ))!.entries,
+        hasLength(1),
+      );
+      expect(await harness.database.getLocalTracks(), isEmpty);
+    },
+  );
+
+  test(
+    'requestCancel finishes active metadata searches and preserves completed entries',
+    () async {
+      final release = Completer<void>();
+      final queries = <String>[];
+      const ids = {
+        'First': 'dQw4w9WgXcQ',
+        'Second': '9bZkp7q19f0',
+        'Third': 'J---aiyznGQ',
+        'Fourth': 'M7lc1UVf-VE',
+      };
+      final harness = await _Harness.create(
+        search: (query) async {
+          queries.add(query);
+          await release.future;
+          final title = query.split(' ').first;
+          return [
+            TrackInfo(
+              id: ids[title]!,
+              title: title,
+              artist: 'Artist',
+              url: 'https://www.youtube.com/watch?v=${ids[title]}',
+            ),
+          ];
+        },
+      );
+      final document = LibraryCsvDocument(
+        tracks: [
+          for (final title in ids.keys)
+            LibraryCsvTrack(
+              rowNumber: ids.keys.toList().indexOf(title) + 2,
+              title: title,
+              artist: 'Artist',
+            ),
+        ],
+        detectedFormat: LibraryCsvDetectedFormat.generic,
         defaultPlaylistName: 'songs',
         hasPlaylistColumn: false,
       );
-      final controller = container.read(
-        libraryCsvTransferControllerProvider.notifier,
-      );
 
-      final operation = controller.importDocument(document);
-      await _waitUntil(() => helper?.calls == 3);
-      controller.requestCancel();
+      final operation = harness.controller.importDocument(document);
+      await _waitUntil(() => queries.length == 3);
+      harness.controller.requestCancel();
       expect(
-        container.read(libraryCsvTransferControllerProvider).cancelRequested,
+        harness.container
+            .read(libraryCsvTransferControllerProvider)
+            .cancelRequested,
         isTrue,
       );
-      download.complete(
-        LocalTrackDownloadResult(
-          track: LocalTrack(
-            id: 'local-1',
-            title: 'First',
-            artist: 'Artist',
-            filePath: r'C:\music\first.webm',
-            addedAt: DateTime.utc(2025),
-          ),
-          remoteTrack: const TrackInfo(
-            id: 'dQw4w9WgXcQ',
-            title: 'First',
-            artist: 'Artist',
-            url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-          ),
-          reusedExisting: false,
-        ),
-      );
-
+      release.complete();
       final result = await operation;
 
-      expect(helper!.calls, 3);
+      expect(queries.length, 3);
       expect(result.processed, 3);
-      expect(result.downloaded, 3);
+      expect(result.imported, 3);
+      expect(result.failed, 0);
       expect(result.cancelled, isTrue);
-      final state = container.read(libraryCsvTransferControllerProvider);
+      expect(await harness.database.getLocalTracks(), isEmpty);
+      final playlists = await harness.database.getCatalogPlaylists();
+      expect(
+        (await harness.database.getCatalogPlaylist(
+          playlists.single.id,
+        ))!.entries.map((entry) => entry.videoId),
+        ids.values.take(3),
+      );
+      final state = harness.container.read(
+        libraryCsvTransferControllerProvider,
+      );
       expect(state.phase, LibraryCsvTransferPhase.completed);
       expect(state.result, same(result));
       expect(state.isBusy, isFalse);
     },
   );
+}
+
+class _Harness {
+  _Harness(this.container, this.database, this.sync);
+  final ProviderContainer container;
+  final LocalDatabaseService database;
+  final _SyncSpy sync;
+  LibraryCsvTransferController get controller =>
+      container.read(libraryCsvTransferControllerProvider.notifier);
+
+  static Future<_Harness> create({
+    Future<List<TrackInfo>> Function(String)? search,
+  }) async {
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream-csv-controller-',
+    );
+    final database = _TestDatabase('${directory.path}/library.db');
+    final sync = _SyncSpy();
+    final container = ProviderContainer(
+      overrides: [
+        databaseServiceProvider.overrideWithValue(database),
+        youtubeMusicPlaylistSyncControllerProvider.overrideWith(() => sync),
+        searchTracksProvider.overrideWithValue(
+          SearchTracks(_SearchRepository(search ?? (_) async => const [])),
+        ),
+        localTrackDownloadHelperProvider.overrideWith(
+          (ref) =>
+              throw StateError('CSV import must not access the downloader.'),
+        ),
+      ],
+    );
+    addTearDown(() async {
+      container.dispose();
+      await database.close();
+      await directory.delete(recursive: true);
+    });
+    return _Harness(container, database, sync);
+  }
+}
+
+class _TestDatabase extends LocalDatabaseService {
+  _TestDatabase(this.path);
+  final String path;
+  @override
+  Future<String> databasePath() async => path;
+}
+
+class _SyncSpy extends YouTubeMusicPlaylistSyncController {
+  int automaticRequests = 0;
+  @override
+  YouTubeMusicPlaylistSyncState build() =>
+      const YouTubeMusicPlaylistSyncState();
+  @override
+  void requestAutomaticSync() => automaticRequests++;
+}
+
+class _SearchRepository implements MusicRepository {
+  _SearchRepository(this.onSearch);
+  final Future<List<TrackInfo>> Function(String) onSearch;
+  @override
+  Future<List<TrackInfo>> search(String query) => onSearch(query);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 Future<void> _waitUntil(bool Function() predicate) async {
@@ -186,85 +304,4 @@ Future<void> _waitUntil(bool Function() predicate) async {
     await Future<void>.delayed(Duration.zero);
   }
   fail('The expected asynchronous operation did not start.');
-}
-
-class _ControlledDownloadHelper extends LocalTrackDownloadHelper {
-  _ControlledDownloadHelper(super.ref, this.result);
-
-  final Future<LocalTrackDownloadResult> result;
-  int calls = 0;
-
-  @override
-  Future<LocalTrackDownloadResult> resolveForLibrary(
-    TrackInfo track, {
-    String? taskId,
-    void Function(TrackInfo track)? onResolved,
-    void Function()? onDownloadStarted,
-    bool allowConcurrentDownload = false,
-  }) {
-    calls++;
-    onResolved?.call(track);
-    return result;
-  }
-}
-
-class _MemoryLibraryRepository implements LibraryRepository {
-  _MemoryLibraryRepository({
-    List<LocalTrack> tracks = const [],
-    List<Playlist> playlists = const [],
-  }) : tracks = List.of(tracks),
-       playlists = List.of(playlists);
-
-  final List<LocalTrack> tracks;
-  final List<Playlist> playlists;
-  int localTrackReads = 0;
-  int playlistReads = 0;
-
-  @override
-  Future<List<LocalTrack>> getLocalTracks() async {
-    localTrackReads++;
-    return List.unmodifiable(tracks);
-  }
-
-  @override
-  Future<List<Playlist>> getPlaylists() async {
-    playlistReads++;
-    return List.unmodifiable(playlists);
-  }
-
-  @override
-  Future<void> saveLocalTrack(LocalTrack track) async {
-    tracks.removeWhere((item) => item.id == track.id);
-    tracks.add(track);
-  }
-
-  @override
-  Future<void> savePlaylist(Playlist playlist) async {
-    playlists.removeWhere((item) => item.id == playlist.id);
-    playlists.add(playlist);
-  }
-
-  @override
-  Future<void> deleteLocalTrack(String trackId) async {
-    tracks.removeWhere((track) => track.id == trackId);
-  }
-
-  @override
-  Future<void> deletePlaylist(String playlistId) async {
-    playlists.removeWhere((playlist) => playlist.id == playlistId);
-  }
-
-  @override
-  Future<List<LocalTrack>> getHistory() async => const [];
-
-  @override
-  Future<void> markPlayed(
-    String trackId,
-    DateTime playedAt, {
-    String? playlistId,
-  }) async {}
-
-  @override
-  Future<Set<String>> purgeMissingLocalTracks(List<LocalTrack> tracks) async =>
-      const {};
 }

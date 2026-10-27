@@ -9,21 +9,8 @@ final libraryCsvImportServiceProvider = Provider<LibraryCsvImportService>((
 ) {
   return LibraryCsvImportService(
     ref.watch(libraryRepositoryProvider),
+    CatalogPlaylistRepositoryImpl(ref.watch(databaseServiceProvider)),
     (query) => ref.read(searchTracksProvider).call(query),
-    (track, {required taskId, onResolved}) async {
-      final outcome = await ref
-          .read(localTrackDownloadHelperProvider)
-          .resolveForLibrary(
-            track,
-            taskId: taskId,
-            onResolved: onResolved,
-            allowConcurrentDownload: true,
-          );
-      return LibraryCsvDownloadedTrack(
-        track: outcome.track,
-        reusedExisting: outcome.reusedExisting,
-      );
-    },
     _libraryCsvGate(ref),
     maxConcurrentTracks: 3,
   );
@@ -124,7 +111,14 @@ class LibraryCsvTransferController extends Notifier<LibraryCsvTransferState> {
           );
       ref
         ..invalidate(libraryTracksProvider)
-        ..invalidate(playlistsControllerProvider);
+        ..invalidate(playlistsControllerProvider)
+        ..invalidate(catalogPlaylistsProvider)
+        ..invalidate(catalogPlaylistProvider);
+      if (result.successful > 0) {
+        ref
+            .read(youtubeMusicPlaylistSyncControllerProvider.notifier)
+            .requestAutomaticSync();
+      }
       state = LibraryCsvTransferState(
         phase: LibraryCsvTransferPhase.completed,
         document: document,
@@ -135,7 +129,9 @@ class LibraryCsvTransferController extends Notifier<LibraryCsvTransferState> {
     } catch (error, stackTrace) {
       ref
         ..invalidate(libraryTracksProvider)
-        ..invalidate(playlistsControllerProvider);
+        ..invalidate(playlistsControllerProvider)
+        ..invalidate(catalogPlaylistsProvider)
+        ..invalidate(catalogPlaylistProvider);
       state = LibraryCsvTransferState(
         phase: LibraryCsvTransferPhase.failed,
         document: document,
@@ -161,7 +157,7 @@ class LibraryCsvTransferController extends Notifier<LibraryCsvTransferState> {
           : LibraryCsvImportProgress(
               total: progress.total,
               processed: progress.processed,
-              downloaded: progress.downloaded,
+              imported: progress.imported,
               reused: progress.reused,
               failed: progress.failed,
               currentTitle: progress.currentTitle,
@@ -183,10 +179,17 @@ class LibraryCsvTransferController extends Notifier<LibraryCsvTransferState> {
           .runExclusive(LibraryMaintenancePhase.exportingCsv, () async {
             final repository = ref.read(libraryRepositoryProvider);
             final tracks = await repository.getLocalTracks();
-            final playlists = await repository.getPlaylists();
+            final database = ref.read(databaseServiceProvider);
+            final playlists = await database.getCatalogPlaylists();
+            final catalogs = await Future.wait(
+              playlists.map(
+                (playlist) => database.getCatalogPlaylist(playlist.id),
+              ),
+            );
             return LibraryCsvDocument.fromLibrary(
               tracks: tracks,
               playlists: playlists,
+              catalogPlaylists: catalogs.whereType<CatalogPlaylist>().toList(),
             );
           });
       state = LibraryCsvTransferState(

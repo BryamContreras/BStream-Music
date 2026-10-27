@@ -13,12 +13,16 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
     required this.artworkSource,
     required this.cacheWidth,
     required this.keyPrefix,
+    this.backgroundArtwork,
     super.key,
   });
 
   final String? artworkSource;
   final int cacheWidth;
   final String keyPrefix;
+
+  /// Optional composite artwork; color extraction still shares [artworkSource].
+  final Widget? backgroundArtwork;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -68,14 +72,16 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
                       imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
                       child: Transform.scale(
                         scale: 1.16,
-                        child: SourceImage(
-                          key: ValueKey('$keyPrefix-background-image'),
-                          source: source,
-                          fit: BoxFit.cover,
-                          // Foreground and background share the bounded image cache.
-                          cacheWidth: cacheWidth,
-                          fallback: const SizedBox.expand(),
-                        ),
+                        child:
+                            backgroundArtwork ??
+                            SourceImage(
+                              key: ValueKey('$keyPrefix-background-image'),
+                              source: source,
+                              fit: BoxFit.cover,
+                              // Foreground and background share the bounded image cache.
+                              cacheWidth: cacheWidth,
+                              fallback: const SizedBox.expand(),
+                            ),
                       ),
                     ),
                   ),

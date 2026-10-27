@@ -1386,7 +1386,7 @@ void main() {
         tester
             .getSize(find.byKey(ValueKey('search-category-${category.name}')))
             .height,
-        48,
+        58,
       );
       expect(
         tester
@@ -1394,7 +1394,7 @@ void main() {
               find.byKey(ValueKey('search-category-surface-${category.name}')),
             )
             .height,
-        44,
+        58,
       );
     }
   });
@@ -1450,7 +1450,7 @@ void main() {
       );
       expect(tapTarget.height, greaterThanOrEqualTo(48));
       expect(surface.height, greaterThanOrEqualTo(44));
-      expect(surface.height, lessThan(tapTarget.height));
+      expect(surface.height, closeTo(tapTarget.height, 0.01));
     }
     expect(tester.takeException(), isNull);
 
@@ -1574,7 +1574,7 @@ void main() {
         );
         expect(
           current.left - previous.right,
-          closeTo(6, 0.01),
+          closeTo(7, 0.01),
           reason:
               'category cards should retain their horizontal breathing room',
         );
@@ -1709,7 +1709,7 @@ void main() {
                   .padding
               as EdgeInsets)
           .top,
-      10,
+      4,
     );
     final headerBottom = tester
         .getRect(find.byKey(const ValueKey('search-tab-header-surface')))
@@ -1721,7 +1721,7 @@ void main() {
         .top;
     expect(
       categoriesTop - headerBottom,
-      closeTo(20, 0.01),
+      closeTo(10, 0.01),
       reason: 'filters should sit closer to the active search bar',
     );
 

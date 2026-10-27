@@ -5,8 +5,11 @@ import 'dart:typed_data';
 import 'package:csv/csv.dart';
 import 'package:path/path.dart' as p;
 
+import '../../features/music/domain/entities/catalog_playlist.dart';
+import '../../features/music/domain/entities/catalog_track.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/playlist.dart';
+import '../../features/music/domain/entities/playlist_entry.dart';
 
 enum LibraryCsvProfile { bstream, metroList, harmony, soundiiz }
 
@@ -152,9 +155,41 @@ class LibraryCsvDocument {
   factory LibraryCsvDocument.fromLibrary({
     required List<LocalTrack> tracks,
     required List<Playlist> playlists,
+    List<CatalogPlaylist> catalogPlaylists = const [],
   }) {
+    final activeCatalogs = catalogPlaylists
+        .where((catalog) => catalog.playlist.deletedAt == null)
+        .toList(growable: false);
+    final catalogPlaylistIds = {
+      for (final catalog in catalogPlaylists) catalog.playlist.id,
+    };
+    final catalogVideoIds = <String, String>{};
+    for (final catalog in activeCatalogs) {
+      for (final entry in catalog.entries.where((entry) => !entry.isDeleted)) {
+        final localId = entry.localTrackId;
+        final videoId = _catalogVideoId(entry);
+        if (localId != null && videoId != null) {
+          catalogVideoIds[localId] = videoId;
+        }
+      }
+    }
+    final localKeys = <String, String>{
+      for (final track in tracks)
+        track.id: switch (_youtubeVideoId(track.sourceId) ??
+            _youtubeVideoId(track.sourceUrl) ??
+            catalogVideoIds[track.id]) {
+          final String videoId => 'youtube:$videoId',
+          null => 'local:${track.id}',
+        },
+    };
     final memberships = <String, List<LibraryCsvMembership>>{};
-    for (final playlist in playlists) {
+    // Legacy track IDs are a downloaded-only projection. The catalog retains
+    // the full playlist order, including songs without a local file.
+    for (final playlist in playlists.where(
+      (playlist) =>
+          playlist.deletedAt == null &&
+          !catalogPlaylistIds.contains(playlist.id),
+    )) {
       for (var index = 0; index < playlist.trackIds.length; index++) {
         memberships
             .putIfAbsent(playlist.trackIds[index], () => [])
@@ -167,15 +202,54 @@ class LibraryCsvDocument {
             );
       }
     }
-    return LibraryCsvDocument(
-      tracks: [
-        for (var index = 0; index < tracks.length; index++)
-          _trackFromLocal(
-            tracks[index],
-            index + 2,
-            memberships[tracks[index].id] ?? const [],
+    final exported = <String, LibraryCsvTrack>{};
+    void addTrack(String key, LibraryCsvTrack track) {
+      final existing = exported[key];
+      exported[key] = existing == null
+          ? track.copyWith(
+              memberships: _exportMemberships([], track.memberships),
+            )
+          : _mergeExportTracks(existing, track);
+    }
+
+    for (final track in tracks) {
+      addTrack(
+        localKeys[track.id]!,
+        _trackFromLocal(
+          track,
+          exported.length + 2,
+          memberships[track.id] ?? const [],
+        ),
+      );
+    }
+    for (final catalog in activeCatalogs) {
+      for (final entry in catalog.entries.where((entry) => !entry.isDeleted)) {
+        final videoId = _catalogVideoId(entry);
+        final localId =
+            entry.localTrackId ??
+            (entry.track.provider == CatalogProvider.local
+                ? entry.track.providerId
+                : null);
+        final key = videoId != null
+            ? 'youtube:$videoId'
+            : localKeys[localId] ??
+                  (localId == null ? entry.track.key : 'local:$localId');
+        addTrack(
+          key,
+          _trackFromCatalog(
+            entry,
+            exported.length + 2,
+            LibraryCsvMembership(
+              name: catalog.playlist.name,
+              position: entry.position + 1,
+              id: catalog.playlist.id,
+            ),
           ),
-      ],
+        );
+      }
+    }
+    return LibraryCsvDocument(
+      tracks: List.unmodifiable(exported.values),
       detectedFormat: LibraryCsvDetectedFormat.bstream,
       defaultPlaylistName: 'BStream Music',
       hasPlaylistColumn: true,
@@ -694,9 +768,75 @@ LibraryCsvTrack _trackFromLocal(
         : 'https://www.youtube.com/watch?v=$videoId',
     duration: track.duration,
     thumbnailUrl: track.thumbnailUrl ?? track.catalogThumbnailUrl,
-    sourceUri: track.sourceUrl,
+    sourceUri: track.sourceUrl ?? 'local:${track.id}',
     addedAt: track.addedAt,
     memberships: List.unmodifiable(memberships),
+  );
+}
+
+String? _catalogVideoId(PlaylistEntry entry) =>
+    _youtubeVideoId(entry.videoId) ?? _youtubeVideoId(entry.track.sourceUrl);
+
+LibraryCsvTrack _trackFromCatalog(
+  PlaylistEntry entry,
+  int rowNumber,
+  LibraryCsvMembership membership,
+) {
+  final track = entry.track;
+  final videoId = _catalogVideoId(entry);
+  return LibraryCsvTrack(
+    rowNumber: rowNumber,
+    title: track.title,
+    artist: track.artists.firstOrNull ?? '',
+    artists: track.artists,
+    album: track.album,
+    youtubeVideoId: videoId,
+    youtubeUrl: videoId == null
+        ? null
+        : 'https://www.youtube.com/watch?v=$videoId',
+    duration: track.duration,
+    thumbnailUrl: track.thumbnailUrl,
+    sourceUri: track.sourceUrl ?? track.key,
+    addedAt: entry.createdAt,
+    memberships: [membership],
+  );
+}
+
+LibraryCsvTrack _mergeExportTracks(
+  LibraryCsvTrack first,
+  LibraryCsvTrack next,
+) {
+  String? value(String? preferred, String? fallback) =>
+      preferred == null || preferred.trim().isEmpty ? fallback : preferred;
+  return LibraryCsvTrack(
+    rowNumber: first.rowNumber,
+    title: value(first.title, next.title) ?? '',
+    artist: value(first.artist, next.artist) ?? '',
+    artists: first.artists.isEmpty ? next.artists : first.artists,
+    album: value(first.album, next.album),
+    youtubeVideoId: first.youtubeVideoId ?? next.youtubeVideoId,
+    youtubeUrl: first.youtubeUrl ?? next.youtubeUrl,
+    duration: first.duration ?? next.duration,
+    thumbnailUrl: value(first.thumbnailUrl, next.thumbnailUrl),
+    isrc: value(first.isrc, next.isrc),
+    sourceUri: value(first.sourceUri, next.sourceUri),
+    addedAt: first.addedAt ?? next.addedAt,
+    memberships: _exportMemberships(first.memberships, next.memberships),
+  );
+}
+
+List<LibraryCsvMembership> _exportMemberships(
+  List<LibraryCsvMembership> first,
+  List<LibraryCsvMembership> next,
+) {
+  var hasFavorites = false;
+  return List.unmodifiable(
+    _mergeMemberships(first, next).where((membership) {
+      if (membership.id != Playlist.favoritesId) return true;
+      if (hasFavorites) return false;
+      hasFavorites = true;
+      return true;
+    }),
   );
 }
 

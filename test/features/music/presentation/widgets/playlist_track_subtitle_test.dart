@@ -203,7 +203,7 @@ void main() {
   testWidgets(
     'catalog playlist marks remote and unusable hybrid occurrences only',
     (tester) async {
-      tester.view.physicalSize = const Size(320, 568);
+      tester.view.physicalSize = const Size(400, 900);
       tester.view.devicePixelRatio = 1;
       addTearDown(() {
         tester.view.resetPhysicalSize();

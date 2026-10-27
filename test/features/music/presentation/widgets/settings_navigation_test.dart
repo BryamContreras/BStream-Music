@@ -1622,6 +1622,243 @@ void main() {
     tester.platformDispatcher.clearTextScaleFactorTestValue();
   });
 
+  test('lyrics provider settings have translations in every app language', () {
+    const english = AppStrings(AppLanguage.english);
+    for (final language in AppLanguage.values) {
+      final strings = AppStrings(language);
+      final values = [
+        strings.lyricsProviders,
+        strings.lyricsProvidersHint,
+        strings.lyricsProvidersFallbackHint,
+        strings.noLyricsProvidersEnabled,
+        strings.lyricsProvidersDisabledHint,
+        strings.betterLyricsAvailabilityHint,
+      ];
+      expect(values.every((value) => value.trim().isNotEmpty), isTrue);
+      expect(
+        strings.lyricsProvidersHint,
+        contains('Better Lyrics → LyricsPlus → LRCLIB'),
+      );
+      for (final provider in LyricsProvider.values) {
+        final attribution = strings.lyricsSourceForProvider(provider.label);
+        expect(attribution, contains(provider.label));
+        expect(
+          attribution,
+          strings.lyricsSource.replaceAll('LRCLIB', provider.label),
+        );
+      }
+      if (language != AppLanguage.english) {
+        expect(strings.lyricsProviders, isNot(english.lyricsProviders));
+        expect(strings.lyricsProvidersHint, isNot(english.lyricsProvidersHint));
+        expect(
+          strings.lyricsProvidersFallbackHint,
+          isNot(english.lyricsProvidersFallbackHint),
+        );
+        expect(
+          strings.noLyricsProvidersEnabled,
+          isNot(english.noLyricsProvidersEnabled),
+        );
+        expect(
+          strings.lyricsProvidersDisabledHint,
+          isNot(english.lyricsProvidersDisabledHint),
+        );
+        expect(
+          strings.betterLyricsAvailabilityHint,
+          isNot(english.betterLyricsAvailabilityHint),
+        );
+      }
+    }
+  });
+
+  testWidgets(
+    'lyrics providers are first, persist independent toggles, and return to lyrics',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      _configureView(tester, const Size(430, 900));
+      final navigationController = SettingsNavigationController();
+      addTearDown(navigationController.dispose);
+      await tester.pumpWidget(
+        _settingsHarness(
+          navigationController: navigationController,
+          settingsControllerBuilder: _PersistingCrossfadeSettingsController.new,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final lyricsCard = find.byKey(
+        const ValueKey('settings-card-lyrics-appearance'),
+      );
+      await _ensureSettingsVisible(tester, lyricsCard);
+      await tester.tap(lyricsCard);
+      await tester.pumpAndSettle();
+
+      final providersCard = find.byKey(
+        const ValueKey('settings-card-lyrics-providers'),
+      );
+      final animation = find.byKey(const ValueKey('lyrics-animation-options'));
+      expect(providersCard, findsOneWidget);
+      expect(
+        tester.getBottomLeft(providersCard).dy,
+        lessThan(tester.getTopLeft(animation).dy),
+      );
+      expect(find.text('Better Lyrics · LyricsPlus · LRCLIB'), findsOneWidget);
+
+      await tester.tap(providersCard);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('settings-detail-lyricsProviders')),
+        findsOneWidget,
+      );
+      expect(find.text('Proveedores de letras'), findsOneWidget);
+      final providerToggles = find.byType(SwitchListTile);
+      expect(
+        tester
+            .widgetList<SwitchListTile>(providerToggles)
+            .map((toggle) => (toggle.title! as Text).data),
+        ['Better Lyrics', 'LyricsPlus', 'LRCLIB'],
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('lyrics-provider-toggle-betterLyrics')),
+          matching: find.text(
+            const AppStrings(AppLanguage.spanish).betterLyricsAvailabilityHint,
+          ),
+        ),
+        findsOneWidget,
+      );
+      for (final provider in LyricsProvider.values) {
+        final toggle = find.byKey(
+          ValueKey('lyrics-provider-toggle-${provider.name}'),
+        );
+        expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+      }
+
+      const strings = AppStrings(AppLanguage.spanish);
+      expect(find.text(strings.lyricsProvidersDisabledHint), findsOneWidget);
+      expect(find.text(strings.lyricsProvidersFallbackHint), findsNothing);
+      final preferences = await SharedPreferences.getInstance();
+      expect(preferences.getStringList('settings.enabledLyricsProviders'), []);
+
+      final youLyPlus = find.byKey(
+        const ValueKey('lyrics-provider-toggle-youLyPlus'),
+      );
+      await tester.tap(youLyPlus);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(youLyPlus).value, isTrue);
+      expect(preferences.getStringList('settings.enabledLyricsProviders'), [
+        'youLyPlus',
+      ]);
+      expect(find.text(strings.lyricsProvidersFallbackHint), findsOneWidget);
+
+      expect(navigationController.maybePop(), isTrue);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('settings-detail-lyrics')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: providersCard, matching: find.text('LyricsPlus')),
+        findsOneWidget,
+      );
+      await tester.tap(providersCard);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(youLyPlus).value, isTrue);
+      expect(
+        tester
+            .widget<SwitchListTile>(
+              find.byKey(const ValueKey('lyrics-provider-toggle-lrclib')),
+            )
+            .value,
+        isFalse,
+      );
+      await tester.tap(find.byKey(const ValueKey('settings-detail-back')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('settings-detail-lyrics')),
+        findsOneWidget,
+      );
+      expect(navigationController.maybePop(), isTrue);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'lyrics providers fit compact text scaling and full desktop width',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+        tester.platformDispatcher.clearTextScaleFactorTestValue();
+        debugDefaultTargetPlatformOverride = null;
+      });
+
+      for (final layout in const [
+        (
+          size: Size(320, 720),
+          platform: TargetPlatform.android,
+          textScale: 2.0,
+        ),
+        (
+          size: Size(1400, 900),
+          platform: TargetPlatform.windows,
+          textScale: 1.0,
+        ),
+      ]) {
+        tester.view.physicalSize = layout.size;
+        tester.platformDispatcher.textScaleFactorTestValue = layout.textScale;
+        debugDefaultTargetPlatformOverride = layout.platform;
+        final navigationController = SettingsNavigationController();
+        addTearDown(navigationController.dispose);
+        await tester.pumpWidget(
+          _settingsHarness(
+            navigationController: navigationController,
+            platform: layout.platform,
+            language: AppLanguage.french,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final lyricsCard = find.byKey(
+          const ValueKey('settings-card-lyrics-appearance'),
+        );
+        await _ensureSettingsVisible(tester, lyricsCard);
+        await tester.tap(lyricsCard);
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('settings-card-lyrics-providers')),
+        );
+        await tester.pumpAndSettle();
+
+        final providersCard = find.byKey(
+          const ValueKey('lyrics-providers-card'),
+        );
+        await tester.ensureVisible(providersCard);
+        await tester.pumpAndSettle();
+        final cardRect = tester.getRect(providersCard);
+        expect(cardRect.left, closeTo(12, 0.1));
+        expect(cardRect.width, closeTo(layout.size.width - 24, 0.1));
+        for (final provider in LyricsProvider.values) {
+          expect(
+            find.byKey(ValueKey('lyrics-provider-toggle-${provider.name}')),
+            findsOneWidget,
+          );
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      }
+      debugDefaultTargetPlatformOverride = null;
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+    },
+  );
+
   testWidgets('lyrics appearance offers animation, alignment, and preview', (
     tester,
   ) async {
@@ -2596,7 +2833,7 @@ void main() {
     },
   );
 
-  testWidgets('CSV import previews before downloading and reports completion', (
+  testWidgets('CSV import previews metadata merge and reports completion', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
@@ -2633,7 +2870,19 @@ void main() {
     await tester.tap(importCsv);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('csv-import-preview')), findsOneWidget);
+    expect(find.text('Importar canciones'), findsOneWidget);
     expect(find.textContaining('1 canciones'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('csv-import-preview')),
+        matching: find.textContaining('sin descargar audio'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('descargar las canciones más adelante'),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const ValueKey('csv-import-preview-confirm')));
     await tester.pumpAndSettle();
@@ -2642,7 +2891,7 @@ void main() {
       find.byKey(const ValueKey('csv-import-progress-dialog')),
       findsOneWidget,
     );
-    expect(find.textContaining('1 descargadas'), findsOneWidget);
+    expect(find.textContaining('1 importadas'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('csv-import-close')));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -2753,6 +3002,50 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('IME frames resize the viewport without rebuilding the shell', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    _configureView(tester, const Size(400, 900));
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpWidget(_homeHarness());
+    await tester.pumpAndSettle();
+    final content = find.byKey(const ValueKey('shell-content-stack'));
+    final fullHeight = tester.getSize(content).height;
+    var shellBuilds = 0;
+    final previousObserver = debugOnRebuildDirtyWidget;
+    debugOnRebuildDirtyWidget = (element, builtOnce) {
+      previousObserver?.call(element, builtOnce);
+      if (element.widget is HomePage) shellBuilds++;
+    };
+    addTearDown(() => debugOnRebuildDirtyWidget = previousObserver);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 30);
+    await tester.pump();
+    final openingBuilds = shellBuilds;
+    expect(openingBuilds, greaterThan(0));
+    for (final bottom in [100.0, 200.0, 300.0]) {
+      tester.view.viewInsets = FakeViewPadding(bottom: bottom);
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(shellBuilds, openingBuilds);
+    expect(tester.getSize(content).height, fullHeight - 300);
+
+    for (final bottom in [200.0, 100.0, 30.0]) {
+      tester.view.viewInsets = FakeViewPadding(bottom: bottom);
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(shellBuilds, openingBuilds);
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+    expect(shellBuilds, openingBuilds + 1);
+    expect(tester.getSize(content).height, fullHeight);
+    expect(tester.takeException(), isNull);
+    debugOnRebuildDirtyWidget = previousObserver;
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('main tab transition respects reduced motion', (tester) async {
     await tester.pumpWidget(_homeHarness(disableAnimations: true));
     await tester.pumpAndSettle();
@@ -2837,11 +3130,13 @@ Widget _settingsHarness({
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
   SettingsController Function()? settingsControllerBuilder,
   TargetPlatform? platform,
+  AppLanguage language = AppLanguage.spanish,
 }) {
   return ProviderScope(
     overrides: [
       ..._providerOverrides(
         settingsControllerBuilder: settingsControllerBuilder,
+        language: language,
       ),
       ...overrides,
     ],
@@ -2909,12 +3204,13 @@ final class _EmptyIncomingTrackLinkService implements IncomingTrackLinkService {
 
 List<Override> _providerOverrides({
   SettingsController Function()? settingsControllerBuilder,
+  AppLanguage language = AppLanguage.spanish,
 }) {
   return [
     settingsControllerProvider.overrideWith(
       settingsControllerBuilder ?? _FixedSettingsController.new,
     ),
-    appStringsProvider.overrideWithValue(const AppStrings(AppLanguage.spanish)),
+    appStringsProvider.overrideWithValue(AppStrings(language)),
     tiktokLiveControllerProvider.overrideWith(_IdleTikTokLiveController.new),
     youtubeMusicSessionStoreProvider.overrideWithValue(
       const _AnonymousYouTubeMusicSessionStore(),
@@ -3170,7 +3466,7 @@ class _ImmediateCsvTransferController extends LibraryCsvTransferController {
     const result = LibraryCsvImportResult(
       total: 1,
       processed: 1,
-      downloaded: 1,
+      imported: 1,
       reused: 0,
       failed: 0,
       playlistsUpdated: 1,

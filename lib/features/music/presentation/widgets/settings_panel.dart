@@ -139,6 +139,7 @@ enum _SettingsRoute {
   appearance,
   liveWidget,
   lyrics,
+  lyricsProviders,
   storage,
   live,
   about,
@@ -392,9 +393,11 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       return;
     }
     setState(() {
-      _route = _route == _SettingsRoute.liveWidget
-          ? _SettingsRoute.appearance
-          : _SettingsRoute.root;
+      _route = switch (_route) {
+        _SettingsRoute.liveWidget => _SettingsRoute.appearance,
+        _SettingsRoute.lyricsProviders => _SettingsRoute.lyrics,
+        _ => _SettingsRoute.root,
+      };
     });
     widget.navigationController?._routeChanged();
   }
@@ -405,6 +408,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       _SettingsRoute.appearance => strings.appearance,
       _SettingsRoute.liveWidget => strings.liveWidget,
       _SettingsRoute.lyrics => strings.lyricsAppearance,
+      _SettingsRoute.lyricsProviders => strings.lyricsProviders,
       _SettingsRoute.storage => strings.storage,
       _SettingsRoute.live => strings.liveConnection,
       _SettingsRoute.about => strings.aboutApplication,
@@ -488,6 +492,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
             .setLiveWidgetStyle(style),
       ),
       _SettingsRoute.lyrics => _LyricsAppearanceSettings(
+        enabledProviders: state.enabledLyricsProviders,
+        onOpenProviders: () => _openRoute(_SettingsRoute.lyricsProviders),
         animationStyle: state.lyricsAnimationStyle,
         alignment: state.lyricsTextAlignment,
         romanizationEnabled: state.lyricsRomanizationEnabled,
@@ -505,6 +511,13 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onRomanizationLanguagesChanged: (languages) => ref
             .read(settingsControllerProvider.notifier)
             .setLyricsRomanizationLanguages(languages),
+      ),
+      _SettingsRoute.lyricsProviders => _LyricsProvidersSettings(
+        enabledProviders: state.enabledLyricsProviders,
+        strings: strings,
+        onChanged: (provider, enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .toggleLyricsProvider(provider, enabled),
       ),
       _SettingsRoute.storage => _StorageSettings(
         strings: strings,
@@ -1388,7 +1401,7 @@ class _CsvImportPreviewDialog extends StatelessWidget {
         FilledButton(
           key: const ValueKey('csv-import-preview-confirm'),
           onPressed: onConfirm,
-          child: Text(strings.importAndDownload),
+          child: Text(strings.importData),
         ),
       ],
     );
@@ -1522,7 +1535,7 @@ class _CsvImportProgressDialogState
           const SizedBox(height: 12),
           Text(
             widget.strings.csvImportResult(
-              downloaded: result.downloaded,
+              imported: result.imported,
               reused: result.reused,
               failed: result.failed,
               playlists: result.playlistsUpdated,
@@ -3208,6 +3221,8 @@ class _MiniPlayerStyleIconPainter extends CustomPainter {
 
 class _LyricsAppearanceSettings extends StatelessWidget {
   const _LyricsAppearanceSettings({
+    required this.enabledProviders,
+    required this.onOpenProviders,
     required this.animationStyle,
     required this.alignment,
     required this.romanizationEnabled,
@@ -3219,6 +3234,8 @@ class _LyricsAppearanceSettings extends StatelessWidget {
     required this.onRomanizationLanguagesChanged,
   });
 
+  final Set<LyricsProvider> enabledProviders;
+  final VoidCallback onOpenProviders;
   final LyricsAnimationStyle animationStyle;
   final LyricsTextAlignment alignment;
   final bool romanizationEnabled;
@@ -3239,6 +3256,19 @@ class _LyricsAppearanceSettings extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _SettingsEntryCard(
+            key: const ValueKey('settings-card-lyrics-providers'),
+            icon: Icons.library_music_rounded,
+            title: strings.lyricsProviders,
+            subtitle: enabledProviders.isEmpty
+                ? strings.noLyricsProvidersEnabled
+                : LyricsProvider.values
+                      .where(enabledProviders.contains)
+                      .map((provider) => provider.label)
+                      .join(' · '),
+            onTap: onOpenProviders,
+          ),
+          const SizedBox(height: 22),
           Text(
             strings.lyricsAnimation,
             style: Theme.of(
@@ -3395,6 +3425,79 @@ class _LyricsAppearanceSettings extends StatelessWidget {
             romanizationEnabled: romanizationEnabled,
             romanizationLanguages: romanizationLanguages,
             strings: strings,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LyricsProvidersSettings extends StatelessWidget {
+  const _LyricsProvidersSettings({
+    required this.enabledProviders,
+    required this.strings,
+    required this.onChanged,
+  });
+
+  final Set<LyricsProvider> enabledProviders;
+  final AppStrings strings;
+  final void Function(LyricsProvider provider, bool enabled) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: _settingsContentMaxWidth(context, 520),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            strings.lyricsProvidersHint,
+            style: appListCardSubtitleStyle(context),
+          ),
+          const SizedBox(height: 16),
+          Material(
+            key: const ValueKey('lyrics-providers-card'),
+            color: AppColors.cardSurfaceFor(context),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(appCardRadius),
+              side: BorderSide(
+                color: AppColors.cardBorderFor(
+                  context,
+                  solidInLiquidGlass: true,
+                ),
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                for (final provider in LyricsProvider.values) ...[
+                  if (provider != LyricsProvider.values.first)
+                    const Divider(height: 1),
+                  SwitchListTile.adaptive(
+                    key: ValueKey('lyrics-provider-toggle-${provider.name}'),
+                    title: Text(provider.label),
+                    subtitle: provider == LyricsProvider.betterLyrics
+                        ? Text(
+                            strings.betterLyricsAvailabilityHint,
+                            style: appListCardSubtitleStyle(context),
+                          )
+                        : null,
+                    value: enabledProviders.contains(provider),
+                    onChanged: (enabled) => onChanged(provider, enabled),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            enabledProviders.isEmpty
+                ? strings.lyricsProvidersDisabledHint
+                : strings.lyricsProvidersFallbackHint,
+            key: const ValueKey('lyrics-providers-status'),
+            style: appListCardSubtitleStyle(context),
           ),
         ],
       ),

@@ -52,15 +52,20 @@ import 'artist_profile_page.dart';
 import 'remote_collection_detail_page.dart';
 import 'search_view.dart';
 
-double _shellSystemBottomInset(BuildContext context) {
-  final mediaQuery = MediaQuery.of(context);
+double _shellSystemBottomInset(
+  BuildContext context, {
+  required bool keyboardVisible,
+}) {
   // When Scaffold has already resized its body above the IME, the body's
   // bottom edge is the keyboard edge. Reserving viewPadding again leaves a
   // visible strip between the mini player and the bottom navigation.
-  if (mediaQuery.viewInsets.bottom > 0) {
+  if (keyboardVisible) {
     return 0;
   }
-  return math.max(mediaQuery.viewPadding.bottom, mediaQuery.padding.bottom);
+  return math.max(
+    MediaQuery.viewPaddingOf(context).bottom,
+    MediaQuery.paddingOf(context).bottom,
+  );
 }
 
 bool _supportsNavigationHover(BuildContext context) =>
@@ -163,6 +168,8 @@ class _HomePageState extends ConsumerState<HomePage>
   int _bottomNavigationScrollDirection = 0;
   bool _bottomNavigationUserScrollActive = false;
   bool _bottomNavigationIgnoringOverscroll = false;
+  FlutterView? _view;
+  bool _keyboardVisible = false;
   _PersistentCurrentViews? _retainedCurrentViews;
 
   Widget _retainCurrentViews(_PersistentCurrentViews next) {
@@ -561,14 +568,33 @@ class _HomePageState extends ConsumerState<HomePage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final viewInsetBottom = MediaQuery.viewInsetsOf(context).bottom;
+    _view = View.of(context);
+    _keyboardVisible = _view!.viewInsets.bottom > 0;
+    _resetChromeForViewportChange();
+  }
+
+  @override
+  void didChangeMetrics() {
+    final keyboardVisible = (_view?.viewInsets.bottom ?? 0) > 0;
+    if (!mounted || keyboardVisible == _keyboardVisible) return;
+    // The Scaffold still follows every native IME inset, keeping focused
+    // fields and chrome above the keyboard. The shell only needs to know
+    // whether it is open: rebuilding all its retained tabs for each of the
+    // keyboard's intermediate animation frames repeats unrelated work.
+    setState(() {
+      _keyboardVisible = keyboardVisible;
+      _resetChromeForViewportChange();
+    });
+  }
+
+  void _resetChromeForViewportChange() {
     _resetBottomNavigationScrollIntent();
     _bottomNavigationUserScrollActive = false;
     _bottomNavigationIgnoringOverscroll = false;
     _liquidGlassChromeSettleTimer?.cancel();
     _liquidGlassChromeSettleTimer = null;
     _setLiquidGlassChromeMoving(false);
-    if (viewInsetBottom > 0) {
+    if (_keyboardVisible) {
       // Keep the mini player attached to the navigation while the IME changes
       // the usable viewport. Revealing both pieces of chrome also keeps the
       // focused field reachable above the keyboard.
@@ -696,7 +722,7 @@ class _HomePageState extends ConsumerState<HomePage>
         usesSideNavigation ||
         notification.depth != 0 ||
         notification.metrics.axis != Axis.vertical ||
-        MediaQuery.viewInsetsOf(context).bottom > 0) {
+        _keyboardVisible) {
       return false;
     }
 
@@ -1164,7 +1190,10 @@ class _HomePageState extends ConsumerState<HomePage>
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesMobileNavigation;
     final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
-    final systemBottomInset = _shellSystemBottomInset(context);
+    final systemBottomInset = _shellSystemBottomInset(
+      context,
+      keyboardVisible: _keyboardVisible,
+    );
     final defaultMode = defaultMiniPlayerModeForPlatform(
       Theme.of(context).platform,
     );

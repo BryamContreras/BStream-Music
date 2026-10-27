@@ -4,6 +4,7 @@ import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/youtube_music_account_button.dart';
+import 'package:bstream_music/services/storage/library_operation_coordinator.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_account_client.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_models.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_session_store.dart';
@@ -374,6 +375,78 @@ void main() {
     manual.complete(_successfulResult(importedRemoteCount: 2));
     await _pumpUntil(tester, () => manualCompleted);
     expect(manualResult?.importedRemoteCount, 2);
+  });
+
+  testWidgets('restore waits until an active sync finishes', (tester) async {
+    final maintenance = LibraryOperationCoordinator();
+    addTearDown(maintenance.dispose);
+    final startup = Completer<PlaylistAccountSyncResult>();
+    final coordinator = _RecordingSyncCoordinator((_, _) => startup.future);
+    final container = _container(
+      store: _MemorySessionStore(value: _credential()),
+      coordinator: coordinator,
+      maintenanceCoordinator: maintenance,
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(_accountButtonHost(container));
+    await _pumpUntil(tester, () => coordinator.triggers.length == 1);
+
+    var restoreEntered = false;
+    final restored = maintenance.runExclusive(
+      LibraryMaintenancePhase.preparingRestore,
+      () async => restoreEntered = true,
+    );
+    await tester.pump();
+    expect(restoreEntered, isFalse);
+
+    startup.complete(_successfulResult());
+    await _pumpUntil(tester, () => restoreEntered);
+    await restored;
+    expect(maintenance.phase, LibraryMaintenancePhase.idle);
+  });
+
+  testWidgets('queued sync reads the library only after restore finishes', (
+    tester,
+  ) async {
+    final maintenance = LibraryOperationCoordinator();
+    addTearDown(maintenance.dispose);
+    final releaseRestore = Completer<void>();
+    var restoreEntered = false;
+    var libraryRestored = false;
+    final restore = maintenance.runExclusive(
+      LibraryMaintenancePhase.preparingRestore,
+      () async {
+        restoreEntered = true;
+        await releaseRestore.future;
+        libraryRestored = true;
+      },
+    );
+    await _pumpUntil(tester, () => restoreEntered);
+    final coordinator = _RecordingSyncCoordinator((_, _) async {
+      expect(libraryRestored, isTrue);
+      return _successfulResult();
+    });
+    final container = _container(
+      store: _MemorySessionStore(value: _credential()),
+      coordinator: coordinator,
+      maintenanceCoordinator: maintenance,
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(_accountButtonHost(container));
+    await _pumpUntil(
+      tester,
+      () =>
+          container
+              .read(youtubeMusicPlaylistSyncControllerProvider)
+              .consentStatus ==
+          YouTubeMusicPlaylistSyncConsentStatus.granted,
+    );
+    await tester.pump();
+    expect(coordinator.triggers, isEmpty);
+
+    releaseRestore.complete();
+    await restore;
+    await _pumpUntil(tester, () => coordinator.triggers.length == 1);
   });
 
   testWidgets('a deferred result retries once and success clears the retry', (
@@ -1060,12 +1133,17 @@ ProviderContainer _container({
   YouTubeMusicAccountClient? accountClient,
   PlaylistSyncConsentStore? consentStore,
   PlaylistSyncStore? syncStore,
+  LibraryOperationCoordinator? maintenanceCoordinator,
   ytm_account.YouTubeMusicPlaylistVisibilityAccount? playlistVisibilityAccount,
   List<Duration> retryBackoff = const <Duration>[Duration(seconds: 1)],
 }) {
   final playlists = _RecordingPlaylistsController();
   return ProviderContainer(
     overrides: [
+      if (maintenanceCoordinator != null)
+        libraryOperationCoordinatorProvider.overrideWithValue(
+          maintenanceCoordinator,
+        ),
       youtubeMusicSessionStoreProvider.overrideWithValue(store),
       youtubeMusicPlaylistSyncConsentStoreProvider.overrideWithValue(
         consentStore ?? _MemoryConsentStore(grantedAccounts: {'test-channel'}),

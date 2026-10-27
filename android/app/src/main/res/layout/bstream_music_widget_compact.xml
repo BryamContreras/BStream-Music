@@ -28,8 +28,8 @@
 
         <include
             layout="@layout/bstream_widget_artwork_crossfade"
-            android:layout_width="66dp"
-            android:layout_height="66dp" />
+            android:layout_width="72dp"
+            android:layout_height="72dp" />
 
         <LinearLayout
             android:layout_width="0dp"
@@ -44,7 +44,7 @@
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:fontFamily="sans-serif-medium"
-                android:layout_marginTop="7dp"
+                android:layout_marginTop="4dp"
                 android:maxLines="1"
                 android:textColor="#FFFFFFFF"
                 android:textSize="15sp" />

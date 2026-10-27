@@ -1,6 +1,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:bstream_music/features/music/domain/entities/catalog_playlist.dart';
+import 'package:bstream_music/features/music/domain/entities/catalog_track.dart';
+import 'package:bstream_music/features/music/domain/entities/local_track.dart';
+import 'package:bstream_music/features/music/domain/entities/playlist.dart';
+import 'package:bstream_music/features/music/domain/entities/playlist_entry.dart';
 import 'package:bstream_music/services/storage/library_csv_service.dart';
 import 'package:csv/csv.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -276,6 +281,330 @@ void main() {
   });
 
   group('exports interoperable and safe documents', () {
+    test('round-trips metadata-only catalog songs and playlist identities', () {
+      final now = DateTime.utc(2026, 10, 26);
+      final song = CatalogTrack.youtube(
+        videoId: 'Abcdefghijk',
+        title: 'Imported song',
+        artists: ['Singer', 'Guest'],
+        album: 'Imported album',
+        duration: const Duration(minutes: 4, seconds: 5),
+        thumbnailUrl: 'https://img.example/imported.jpg',
+        sourceUrl: 'https://music.youtube.com/watch?v=Abcdefghijk',
+      );
+      CatalogPlaylist catalog(String id, String name, int position) {
+        return CatalogPlaylist(
+          playlist: Playlist(
+            id: id,
+            name: name,
+            trackIds: const [],
+            createdAt: now,
+            updatedAt: now,
+          ),
+          entries: [
+            PlaylistEntry(
+              id: '$id-entry',
+              playlistId: id,
+              track: song,
+              position: position,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          ],
+        );
+      }
+
+      final original = LibraryCsvDocument.fromLibrary(
+        tracks: const [],
+        playlists: const [],
+        catalogPlaylists: [
+          catalog(Playlist.favoritesId, 'Favoritas', 0),
+          catalog('imported-one', 'Same name', 4),
+          catalog('imported-two', 'Same name', 2),
+        ],
+      );
+      final restored = service.importBytes(
+        LibraryCsvInput(
+          bytes: service.exportDocument(original, LibraryCsvProfile.bstream),
+          fileName: 'metadata-only.csv',
+        ),
+      );
+
+      expect(restored.playlistCount, 3);
+      final exported = restored.tracks.single;
+      expect(exported.youtubeVideoId, song.youtubeVideoId);
+      expect(exported.title, song.title);
+      expect(exported.artists, song.artists);
+      expect(exported.album, song.album);
+      expect(exported.duration, song.duration);
+      expect(exported.thumbnailUrl, song.thumbnailUrl);
+      expect(exported.sourceUri, song.sourceUrl);
+      expect(exported.memberships.map((entry) => entry.id), [
+        Playlist.favoritesId,
+        'imported-one',
+        'imported-two',
+      ]);
+      expect(exported.memberships.map((entry) => entry.position), [1, 5, 3]);
+    });
+
+    test(
+      'merges streamed downloads without duplicating favorite membership',
+      () {
+        final now = DateTime.utc(2026, 10, 26);
+        final download = LocalTrack(
+          id: 'download',
+          title: 'Downloaded song',
+          artist: 'Singer',
+          filePath: 'song.m4a',
+          addedAt: now,
+          sourceId: 'Abcdefghijk',
+        );
+        final playlist = Playlist(
+          id: Playlist.favoritesId,
+          name: 'Favoritas',
+          trackIds: ['download'],
+          createdAt: now,
+          updatedAt: now,
+        );
+        PlaylistEntry entry(String id, String videoId, int position) {
+          return PlaylistEntry(
+            id: id,
+            playlistId: playlist.id,
+            track: CatalogTrack.youtube(
+              videoId: videoId,
+              title: 'Catalog song',
+              artists: ['Singer'],
+              album: 'Catalog album',
+            ),
+            position: position,
+            createdAt: now,
+            updatedAt: now,
+          );
+        }
+
+        final document = LibraryCsvDocument.fromLibrary(
+          tracks: [
+            download,
+            download.copyWith(id: 'second-download'),
+          ],
+          playlists: [playlist],
+          catalogPlaylists: [
+            CatalogPlaylist(
+              playlist: playlist,
+              entries: [
+                entry('stream-only', 'abcdefghijk', 0),
+                entry('downloaded', 'Abcdefghijk', 1),
+                entry('duplicate-favorite', 'Abcdefghijk', 2),
+              ],
+            ),
+          ],
+        );
+        final restored = service.importBytes(
+          LibraryCsvInput(
+            bytes: service.exportDocument(document, LibraryCsvProfile.bstream),
+            fileName: 'favorites.csv',
+          ),
+        );
+
+        expect(restored.tracks, hasLength(2));
+        expect(restored.duplicateRowCount, 0);
+        expect(restored.playlistCount, 1);
+        final shared = restored.tracks.singleWhere(
+          (track) => track.youtubeVideoId == 'Abcdefghijk',
+        );
+        expect(shared.title, download.title);
+        expect(shared.album, 'Catalog album');
+        expect(shared.memberships.single.id, Playlist.favoritesId);
+        expect(shared.memberships.single.position, 2);
+        expect(
+          restored.tracks
+              .singleWhere((track) => track.youtubeVideoId == 'abcdefghijk')
+              .memberships
+              .single
+              .position,
+          1,
+        );
+      },
+    );
+
+    test(
+      'retains distinct local identities and merges catalog local copies',
+      () {
+        final now = DateTime.utc(2026, 10, 26);
+        final first = LocalTrack(
+          id: 'local-one',
+          title: 'Same title',
+          artist: 'Artist',
+          filePath: 'first.mp3',
+          addedAt: now,
+        );
+        final playlist = Playlist(
+          id: 'local-playlist',
+          name: 'Local collection',
+          trackIds: ['local-one', 'local-two'],
+          createdAt: now,
+          updatedAt: now,
+        );
+        final document = LibraryCsvDocument.fromLibrary(
+          tracks: [
+            first,
+            first.copyWith(id: 'local-two', filePath: 'second.mp3'),
+          ],
+          playlists: [playlist],
+          catalogPlaylists: [
+            CatalogPlaylist(
+              playlist: playlist,
+              entries: [
+                for (var index = 0; index < 2; index++)
+                  PlaylistEntry(
+                    id: 'entry-$index',
+                    playlistId: playlist.id,
+                    track: CatalogTrack.local(
+                      localTrackId: playlist.trackIds[index],
+                      title: 'Same title',
+                      artists: ['Artist'],
+                    ),
+                    position: index,
+                    createdAt: now,
+                    updatedAt: now,
+                  ),
+              ],
+            ),
+          ],
+        );
+        final restored = service.importBytes(
+          LibraryCsvInput(
+            bytes: service.exportDocument(document, LibraryCsvProfile.bstream),
+            fileName: 'local.csv',
+          ),
+        );
+
+        expect(restored.tracks, hasLength(2));
+        expect(restored.tracks.map((track) => track.sourceUri), [
+          'local:local-one',
+          'local:local-two',
+        ]);
+        expect(
+          restored.tracks.map((track) => track.memberships.single.position),
+          [1, 2],
+        );
+      },
+    );
+
+    test(
+      'uses a catalog video identity when the download lacks source metadata',
+      () {
+        final now = DateTime.utc(2026, 10, 26);
+        final playlist = Playlist(
+          id: 'catalog-playlist',
+          name: 'Catalog',
+          trackIds: ['download'],
+          createdAt: now,
+          updatedAt: now,
+        );
+        final document = LibraryCsvDocument.fromLibrary(
+          tracks: [
+            LocalTrack(
+              id: 'download',
+              title: 'Downloaded title',
+              artist: 'Singer',
+              filePath: 'song.m4a',
+              addedAt: now,
+            ),
+          ],
+          playlists: [playlist],
+          catalogPlaylists: [
+            CatalogPlaylist(
+              playlist: playlist,
+              entries: [
+                PlaylistEntry(
+                  id: 'matched-entry',
+                  playlistId: playlist.id,
+                  track: CatalogTrack.youtube(
+                    videoId: 'Abcdefghijk',
+                    title: 'Catalog title',
+                  ),
+                  localTrackId: 'download',
+                  position: 3,
+                  createdAt: now,
+                  updatedAt: now,
+                ),
+              ],
+            ),
+          ],
+        );
+
+        expect(document.tracks, hasLength(1));
+        expect(document.tracks.single.youtubeVideoId, 'Abcdefghijk');
+        expect(document.tracks.single.memberships.single.position, 4);
+      },
+    );
+
+    test('preserves legacy memberships while excluding catalog tombstones', () {
+      final now = DateTime.utc(2026, 10, 26);
+      Playlist playlist(String id) => Playlist(
+        id: id,
+        name: id,
+        trackIds: ['download'],
+        createdAt: now,
+        updatedAt: now,
+      );
+      final catalog = playlist('catalog');
+      final deleted = playlist('deleted').copyWith(deletedAt: now);
+      PlaylistEntry entry(String id, int position) => PlaylistEntry(
+        id: id,
+        playlistId: catalog.id,
+        track: CatalogTrack.youtube(videoId: 'Abcdefghijk', title: 'Song'),
+        position: position,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final original = LibraryCsvDocument.fromLibrary(
+        tracks: [
+          LocalTrack(
+            id: 'download',
+            title: 'Song',
+            artist: 'Artist',
+            filePath: 'song.mp3',
+            sourceId: 'Abcdefghijk',
+            addedAt: now,
+          ),
+        ],
+        playlists: [playlist('legacy'), catalog, playlist('deleted')],
+        catalogPlaylists: [
+          CatalogPlaylist(
+            playlist: catalog,
+            entries: [
+              entry('first', 1),
+              entry('duplicate', 1),
+              entry('second-occurrence', 3),
+              entry('removed', 4).copyWith(deletedAt: now),
+            ],
+          ),
+          CatalogPlaylist(
+            playlist: deleted,
+            entries: [entry('deleted-song', 0)],
+          ),
+        ],
+      );
+      final restored = service.importBytes(
+        LibraryCsvInput(
+          bytes: service.exportDocument(original, LibraryCsvProfile.bstream),
+          fileName: 'memberships.csv',
+        ),
+      );
+
+      expect(restored.tracks.single.memberships.map((entry) => entry.id), [
+        'legacy',
+        'catalog',
+        'catalog',
+      ]);
+      expect(
+        restored.tracks.single.memberships.map((entry) => entry.position),
+        [1, 2, 4],
+      );
+    });
+
     test('writes the exact header for every supported profile', () {
       final document = _sampleDocument();
       const expectedHeaders = <LibraryCsvProfile, List<String>>{

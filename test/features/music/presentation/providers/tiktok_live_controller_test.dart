@@ -12,10 +12,12 @@ import 'package:bstream_music/features/music/presentation/providers/music_provid
 import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:bstream_music/services/downloader/fallback_audio_resolver.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
+import 'package:bstream_music/services/player/media_kit_player_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:media_kit/media_kit.dart' show Media;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -902,6 +904,170 @@ void main() {
   );
 
   for (final saveToLibrary in [false, true]) {
+    for (final completionFirst in [false, true]) {
+      for (final hasNormalQueue in [false, true]) {
+        final mode = saveToLibrary ? 'downloaded' : 'remote';
+        test(
+          '$mode native EOF (completed first=$completionFirst, normal queue=$hasNormalQueue) clears LIVE and restores playback automatically',
+          () async {
+            final native = _LiveMediaKitBackend();
+            final playerService = MediaKitPlayerService(backend: native);
+            final harness = _RealLiveHarness(
+              saveToLibrary: saveToLibrary,
+              playerService: playerService,
+            );
+            addTearDown(() async {
+              await harness.dispose();
+              await playerService.dispose();
+            });
+            await harness.initialize();
+            if (hasNormalQueue) {
+              final normal = [
+                _remoteTrack('native-normal-a'),
+                _remoteTrack('native-normal-b'),
+              ];
+              await harness.player.playRemote(
+                normal.last,
+                queue: normal,
+                queueSourceId: 'native-normal-queue',
+              );
+              await harness.player.seek(const Duration(seconds: 42));
+              // Let the source clock reach the controller before LIVE captures
+              // the interrupted occurrence and its resume position.
+              await _pumpEventQueue();
+            }
+
+            harness.service.emit(_playEvent('native-live-a'));
+            harness.service.emit(_playEvent('native-live-b'));
+            await _waitUntil(
+              () =>
+                  harness.liveState.liveQueue.length == 2 &&
+                  harness.liveState.liveQueue.every((item) => item.isReady) &&
+                  harness.queue.entries.length == 2 &&
+                  playerService.currentSnapshot.trackId == 'native-live-a',
+            );
+            await _pumpEventQueue();
+            native.completeCurrent(completionFirst: completionFirst);
+            await _waitUntil(
+              () => playerService.currentSnapshot.trackId == 'native-live-b',
+            );
+            await _pumpEventQueue();
+            native.completeCurrent(completionFirst: completionFirst);
+            await _waitUntil(() => !harness.player.isLiveQueueActive);
+            await harness.player.waitForLiveQueueRestoration();
+            await _pumpEventQueue();
+
+            expect(harness.liveState.liveQueue, isEmpty);
+            if (hasNormalQueue) {
+              expect(harness.queue.entries.map((entry) => entry.id), [
+                'native-normal-a',
+                'native-normal-b',
+              ]);
+              expect(harness.queue.currentIndex, 1);
+              final restored = harness.container
+                  .read(playerControllerProvider)
+                  .requireValue;
+              expect(restored.trackId, 'native-normal-b');
+              expect(restored.status, PlayerStatus.playing);
+              expect(restored.wantsToPlay, isTrue);
+              expect(restored.position, const Duration(seconds: 42));
+              expect(native.openedSources, hasLength(4));
+            } else {
+              expect(harness.queue.entries, isEmpty);
+              final idle = harness.container
+                  .read(playerControllerProvider)
+                  .requireValue;
+              expect(idle.trackId, isNull);
+              expect(idle.status, PlayerStatus.idle);
+              expect(idle.wantsToPlay, isFalse);
+              expect(native.openedSources, hasLength(2));
+            }
+          },
+        );
+      }
+    }
+  }
+
+  for (final completionFirst in [false, true]) {
+    test(
+      'an explicit selection supersedes native LIVE EOF (completed first=$completionFirst)',
+      () async {
+        final native = _LiveMediaKitBackend();
+        final playerService = MediaKitPlayerService(backend: native);
+        final harness = _RealLiveHarness(playerService: playerService);
+        addTearDown(() async {
+          await harness.dispose();
+          await playerService.dispose();
+        });
+        await harness.initialize();
+        await harness.player.playRemote(_remoteTrack('superseded-normal'));
+        harness.service.emit(_playEvent('superseded-live'));
+        await _waitUntil(
+          () => playerService.currentSnapshot.trackId == 'superseded-live',
+        );
+        await _pumpEventQueue();
+        native.completeCurrent(completionFirst: completionFirst);
+        await harness.player.playRemote(_remoteTrack('manual-choice'));
+        await _pumpEventQueue();
+
+        expect(native.openedSources, hasLength(3));
+        expect(playerService.currentSnapshot.trackId, 'manual-choice');
+        expect(playerService.currentSnapshot.status, PlayerStatus.playing);
+        expect(harness.queue.entries.single.id, 'manual-choice');
+        expect(harness.player.isLiveQueueActive, isFalse);
+      },
+    );
+  }
+
+  for (final action in ['pause', 'stop', 'native pause']) {
+    test(
+      'native EOF respects $action instead of resuming normal playback',
+      () async {
+        final native = _LiveMediaKitBackend();
+        final playerService = MediaKitPlayerService(backend: native);
+        final harness = _RealLiveHarness(playerService: playerService);
+        addTearDown(() async {
+          await harness.dispose();
+          await playerService.dispose();
+        });
+        await harness.initialize();
+        await harness.player.playRemote(_remoteTrack('pause-normal'));
+        await harness.player.seek(const Duration(seconds: 42));
+        await _pumpEventQueue();
+        harness.service.emit(_playEvent('pause-live'));
+        await _waitUntil(
+          () => playerService.currentSnapshot.trackId == 'pause-live',
+        );
+        await _pumpEventQueue();
+        if (action == 'stop') {
+          await harness.player.stop();
+        } else if (action == 'native pause') {
+          await native.pause();
+        } else {
+          await harness.player.pause();
+        }
+        await _pumpEventQueue();
+        native.completeCurrent(completionFirst: false);
+        await _pumpEventQueue();
+
+        expect(native.openedSources, hasLength(2));
+        expect(
+          harness.liveState.liveQueue.single.remoteTrack?.id,
+          'pause-live',
+        );
+        expect(harness.player.isLiveQueueActive, isTrue);
+        expect(
+          harness.container
+              .read(playerControllerProvider)
+              .requireValue
+              .wantsToPlay,
+          isFalse,
+        );
+      },
+    );
+  }
+
+  for (final saveToLibrary in [false, true]) {
     final mode = saveToLibrary ? 'downloaded' : 'remote';
     test(
       '$mode inactive revoke prevents an identical fresh request inheriting the removed seek position',
@@ -1568,7 +1734,7 @@ Future<void> _pumpEventQueue() async {
 }
 
 class _RealLiveHarness {
-  _RealLiveHarness({bool saveToLibrary = false}) {
+  _RealLiveHarness({bool saveToLibrary = false, PlayerService? playerService}) {
     SharedPreferences.setMockInitialValues({
       'tiktokLive.saveRequestsToLibrary': saveToLibrary,
     });
@@ -1579,7 +1745,7 @@ class _RealLiveHarness {
       overrides: [
         tiktokLiveCommandServiceProvider.overrideWithValue(service),
         searchTracksProvider.overrideWithValue(SearchTracks(repository)),
-        playerServiceProvider.overrideWithValue(backend),
+        playerServiceProvider.overrideWithValue(playerService ?? backend),
         audioStreamResolverProvider.overrideWithValue(
           _LiveAppendAudioResolver(
             source: AudioStreamSource.innerTube,
@@ -2048,6 +2214,90 @@ class _LiveAppendAudioResolver implements AudioStreamResolver {
 
   @override
   Future<void> dispose() async {}
+}
+
+/// Emits the two independent native EOF streams instead of manufacturing a
+/// PlayerSnapshot.completed. This exercises the real desktop adapter and the
+/// controller/TikTok cleanup together, including either stream delivery order.
+class _LiveMediaKitBackend implements MediaKitPlayerBackend {
+  final _positions = StreamController<Duration>.broadcast();
+  final _durations = StreamController<Duration>.broadcast();
+  final _volumes = StreamController<double>.broadcast();
+  final _bufferings = StreamController<bool>.broadcast();
+  final _playings = StreamController<bool>.broadcast();
+  final _completions = StreamController<bool>.broadcast();
+  final _errors = StreamController<String>.broadcast();
+  final List<String> openedSources = [];
+
+  @override
+  bool completed = false;
+
+  void completeCurrent({required bool completionFirst}) {
+    // media_kit updates Player.state before forwarding either independent
+    // stream event. A playing=false EOF must not masquerade as a user pause.
+    completed = true;
+    if (completionFirst) {
+      _completions.add(true);
+      _playings.add(false);
+    } else {
+      _playings.add(false);
+      _completions.add(true);
+    }
+  }
+
+  @override
+  Stream<Duration> get positionStream => _positions.stream;
+  @override
+  Stream<Duration> get durationStream => _durations.stream;
+  @override
+  Stream<double> get volumeStream => _volumes.stream;
+  @override
+  Stream<bool> get bufferingStream => _bufferings.stream;
+  @override
+  Stream<bool> get playingStream => _playings.stream;
+  @override
+  Stream<bool> get completedStream => _completions.stream;
+  @override
+  Stream<String> get errorStream => _errors.stream;
+  @override
+  Object? get platform => null;
+
+  @override
+  void abandonPendingOperations() {}
+
+  @override
+  Future<void> open(Media media, {required bool play}) async {
+    completed = false;
+    openedSources.add(media.uri);
+  }
+
+  @override
+  Future<void> pause() async => _playings.add(false);
+  @override
+  Future<void> play() async => _playings.add(true);
+  @override
+  Future<void> stop() async => _playings.add(false);
+  @override
+  Future<void> seek(Duration position) async {
+    completed = false;
+    _positions.add(position);
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {}
+
+  @override
+  Future<void> dispose() async {
+    await Future.wait<void>([
+      _positions.close(),
+      _durations.close(),
+      _volumes.close(),
+      _bufferings.close(),
+      _playings.close(),
+      _completions.close(),
+      _errors.close(),
+    ]);
+  }
 }
 
 class _LiveAppendPlayerService extends PlayerService {

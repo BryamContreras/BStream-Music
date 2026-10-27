@@ -7,11 +7,12 @@ import kotlin.test.assertTrue
 
 class BStreamWidgetLayoutTest {
     @Test
-    fun compactSizesRetainTheirExistingLayout() {
+    fun compactSizesUseTheUpdatedHeightThreshold() {
         for (width in listOf(250, 339, 340, 430)) {
             assertEquals(BStreamWidgetLayout.COMPACT_SMALL, BStreamWidgetLayout.forSize(width, 56))
             assertEquals(BStreamWidgetLayout.COMPACT_SMALL, BStreamWidgetLayout.forSize(width, 71))
-            assertEquals(BStreamWidgetLayout.COMPACT, BStreamWidgetLayout.forSize(width, 72))
+            assertEquals(BStreamWidgetLayout.COMPACT_SMALL, BStreamWidgetLayout.forSize(width, 79))
+            assertEquals(BStreamWidgetLayout.COMPACT, BStreamWidgetLayout.forSize(width, 80))
             assertEquals(BStreamWidgetLayout.COMPACT, BStreamWidgetLayout.forSize(width, 149))
         }
     }

@@ -2,36 +2,23 @@ import 'dart:math' as math;
 
 import 'package:uuid/uuid.dart';
 
+import '../../features/music/domain/entities/catalog_track.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/playlist.dart';
+import '../../features/music/domain/entities/playlist_entry.dart';
 import '../../features/music/domain/entities/track_info.dart';
+import '../../features/music/domain/repositories/catalog_playlist_repository.dart';
 import '../../features/music/domain/repositories/library_repository.dart';
 import 'library_csv_service.dart';
 
 typedef LibraryCsvTrackSearch = Future<List<TrackInfo>> Function(String query);
-typedef LibraryCsvTrackDownload =
-    Future<LibraryCsvDownloadedTrack> Function(
-      TrackInfo track, {
-      required String taskId,
-      void Function(TrackInfo resolved)? onResolved,
-    });
 typedef LibraryCsvGate = Future<T> Function<T>(Future<T> Function() operation);
-
-class LibraryCsvDownloadedTrack {
-  const LibraryCsvDownloadedTrack({
-    required this.track,
-    required this.reusedExisting,
-  });
-
-  final LocalTrack track;
-  final bool reusedExisting;
-}
 
 class LibraryCsvImportProgress {
   const LibraryCsvImportProgress({
     required this.total,
     required this.processed,
-    required this.downloaded,
+    required this.imported,
     required this.reused,
     required this.failed,
     required this.currentTitle,
@@ -40,7 +27,7 @@ class LibraryCsvImportProgress {
 
   final int total;
   final int processed;
-  final int downloaded;
+  final int imported;
   final int reused;
   final int failed;
   final String currentTitle;
@@ -67,7 +54,7 @@ class LibraryCsvImportResult {
   const LibraryCsvImportResult({
     required this.total,
     required this.processed,
-    required this.downloaded,
+    required this.imported,
     required this.reused,
     required this.failed,
     required this.playlistsUpdated,
@@ -77,21 +64,21 @@ class LibraryCsvImportResult {
 
   final int total;
   final int processed;
-  final int downloaded;
+  final int imported;
   final int reused;
   final int failed;
   final int playlistsUpdated;
   final bool cancelled;
   final List<LibraryCsvImportFailure> failures;
 
-  int get successful => downloaded + reused;
+  int get successful => imported + reused;
 }
 
 class LibraryCsvImportService {
   LibraryCsvImportService(
     this._repository,
+    this._playlists,
     this._search,
-    this._download,
     this._gate, {
     int maxConcurrentTracks = 3,
   }) : _maxConcurrentTracks = maxConcurrentTracks {
@@ -107,8 +94,8 @@ class LibraryCsvImportService {
   static const maxFailureDetails = 100;
 
   final LibraryRepository _repository;
+  final CatalogPlaylistRepository _playlists;
   final LibraryCsvTrackSearch _search;
-  final LibraryCsvTrackDownload _download;
   final LibraryCsvGate _gate;
   final int _maxConcurrentTracks;
   final Uuid _uuid = const Uuid();
@@ -120,19 +107,19 @@ class LibraryCsvImportService {
   }) async {
     final total = document.tracks.length;
     var processed = 0;
-    var downloaded = 0;
+    var imported = 0;
     var reused = 0;
     var failed = 0;
     final failures = <LibraryCsvImportFailure>[];
     final entryFailures = List<LibraryCsvImportFailure?>.filled(total, null);
-    final outcomes = List<LibraryCsvDownloadedTrack?>.filled(total, null);
+    final outcomes = List<TrackInfo?>.filled(total, null);
     final playlistTracks =
         <
           String,
           ({
             String? id,
             String name,
-            List<({int position, int sourceOrder, String trackId})> items,
+            List<({int position, int sourceOrder})> items,
           })
         >{};
 
@@ -141,7 +128,7 @@ class LibraryCsvImportService {
         LibraryCsvImportProgress(
           total: total,
           processed: processed,
-          downloaded: downloaded,
+          imported: imported,
           reused: reused,
           failed: failed,
           currentTitle: title,
@@ -161,16 +148,12 @@ class LibraryCsvImportService {
         publish(entry.displayTitle);
         try {
           final resolved = await _resolve(entry);
-          final outcome = await _download(
-            resolved,
-            taskId: 'csv-${entry.rowNumber}-${index + 1}',
-          );
-          outcomes[index] = outcome;
-          if (outcome.reusedExisting) {
-            reused++;
-          } else {
-            downloaded++;
+          if (_videoId(resolved.id, resolved.url) == null) {
+            throw const FormatException(
+              'La canción no tiene un ID de YouTube válido.',
+            );
           }
+          outcomes[index] = resolved;
         } on LibraryCsvAmbiguousMatchException catch (error) {
           failed++;
           entryFailures[index] = LibraryCsvImportFailure(
@@ -201,18 +184,30 @@ class LibraryCsvImportService {
       ),
     );
 
-    // Build memberships in source order. Downloads can finish in any order,
-    // but playlist names, ties in positions and deduplication remain exactly
-    // as deterministic as the original sequential importer.
+    // Search may finish out of order. Persist catalog memberships in source
+    // order without involving the audio downloader or the legacy track_ids API.
     for (var index = 0; index < outcomes.length; index++) {
       final outcome = outcomes[index];
       if (outcome == null) continue;
       final entry = document.tracks[index];
-      for (final membership in entry.memberships) {
+      final memberships = entry.memberships
+          .where((item) => item.name.trim().isNotEmpty)
+          .toList();
+      // Rows exported without playlist membership still need a visible home
+      // now that importing them no longer creates a downloaded library file.
+      if (memberships.isEmpty) {
+        memberships.add(
+          LibraryCsvMembership(
+            name: document.defaultPlaylistName,
+            position: index + 1,
+          ),
+        );
+      }
+      for (final membership in memberships) {
         final displayName = membership.name.trim();
         if (displayName.isEmpty) continue;
         final normalizedName = displayName.toLowerCase();
-        final playlistId = membership.id?.trim();
+        final playlistId = _playlistId(membership);
         final bucketKey = playlistId?.isNotEmpty == true
             ? 'id:$playlistId'
             : 'name:$normalizedName';
@@ -221,93 +216,232 @@ class LibraryCsvImportService {
           () => (
             id: playlistId?.isNotEmpty == true ? playlistId : null,
             name: displayName,
-            items: <({int position, int sourceOrder, String trackId})>[],
+            items: <({int position, int sourceOrder})>[],
           ),
         );
-        bucket.items.add((
-          position: membership.position,
-          sourceOrder: index,
-          trackId: outcome.track.id,
-        ));
+        bucket.items.add((position: membership.position, sourceOrder: index));
       }
     }
 
     var playlistsUpdated = 0;
-    for (final playlistEntry in playlistTracks.values) {
-      final orderedIds = playlistEntry.items
-        ..sort((left, right) {
-          final byPosition = left.position.compareTo(right.position);
-          return byPosition != 0
-              ? byPosition
-              : left.sourceOrder.compareTo(right.sourceOrder);
-        });
-      final uniqueIds = <String>[];
-      final seen = <String>{};
-      for (final item in orderedIds) {
-        if (seen.add(item.trackId)) uniqueIds.add(item.trackId);
-      }
-      if (uniqueIds.isEmpty) continue;
-      try {
-        await _gate(() async {
-          final playlists = await _repository.getPlaylists();
-          final normalizedName = playlistEntry.name.toLowerCase();
-          Playlist? existing;
-          for (final candidate in playlists) {
-            final matchesId =
-                playlistEntry.id != null && candidate.id == playlistEntry.id;
-            final matchesName =
-                playlistEntry.id == null &&
-                candidate.name.trim().toLowerCase() == normalizedName;
-            if (matchesId || matchesName) {
-              existing = candidate;
-              break;
-            }
-          }
-          final now = DateTime.now();
-          if (existing == null) {
-            await _repository.savePlaylist(
-              Playlist(
-                id: playlistEntry.id ?? 'csv-${_uuid.v4()}',
+    final persisted = <int>{};
+    final reusedVideoIds = <String>{};
+    if (playlistTracks.isNotEmpty) {
+      await _gate(() async {
+        final localByVideoId = <String, LocalTrack>{};
+        for (final track in await _repository.getLocalTracks()) {
+          final videoId = _videoId(track.sourceId, track.sourceUrl);
+          if (videoId != null) localByVideoId.putIfAbsent(videoId, () => track);
+        }
+        reusedVideoIds.addAll(localByVideoId.keys);
+        for (final playlistEntry in playlistTracks.values) {
+          final ordered = playlistEntry.items
+            ..sort((left, right) {
+              final byPosition = left.position.compareTo(right.position);
+              return byPosition != 0
+                  ? byPosition
+                  : left.sourceOrder.compareTo(right.sourceOrder);
+            });
+          try {
+            reusedVideoIds.addAll(
+              await _mergePlaylist(
+                id: playlistEntry.id,
                 name: playlistEntry.name,
-                trackIds: uniqueIds,
-                createdAt: now,
-                updatedAt: now,
+                tracks: [
+                  for (final item in ordered) outcomes[item.sourceOrder]!,
+                ],
+                localByVideoId: localByVideoId,
               ),
             );
-          } else {
-            final merged = <String>[...existing.trackIds];
-            final known = merged.toSet();
-            for (final id in uniqueIds) {
-              if (known.add(id)) merged.add(id);
-            }
-            await _repository.savePlaylist(
-              existing.copyWith(trackIds: merged, updatedAt: now),
+            persisted.addAll(ordered.map((item) => item.sourceOrder));
+            playlistsUpdated++;
+          } catch (error) {
+            _recordFailure(
+              failures,
+              LibraryCsvImportFailure(
+                rowNumber: 0,
+                title: playlistEntry.name,
+                message: 'No se pudo actualizar la playlist: $error',
+              ),
             );
           }
-        });
-        playlistsUpdated++;
-      } catch (error) {
-        _recordFailure(
-          failures,
-          LibraryCsvImportFailure(
-            rowNumber: 0,
-            title: playlistEntry.name,
-            message: 'No se pudo actualizar la playlist: $error',
-          ),
-        );
-      }
+        }
+      });
     }
+    reused = persisted.where((index) {
+      final track = outcomes[index]!;
+      return reusedVideoIds.contains(_videoId(track.id, track.url));
+    }).length;
+    imported = persisted.length - reused;
+    failed = processed - persisted.length;
+    publish('');
 
     return LibraryCsvImportResult(
       total: total,
       processed: processed,
-      downloaded: downloaded,
+      imported: imported,
       reused: reused,
       failed: failed,
       playlistsUpdated: playlistsUpdated,
       cancelled: isCancellationRequested() && processed < total,
       failures: List.unmodifiable(failures),
     );
+  }
+
+  Future<Set<String>> _mergePlaylist({
+    required String? id,
+    required String name,
+    required List<TrackInfo> tracks,
+    required Map<String, LocalTrack> localByVideoId,
+  }) async {
+    var targetId = id;
+    if (targetId == null) {
+      for (final candidate in await _playlists.getCatalogPlaylists()) {
+        if (!candidate.isFavorites &&
+            candidate.name.trim().toLowerCase() == name.toLowerCase()) {
+          targetId = candidate.id;
+          break;
+        }
+      }
+    }
+    targetId ??= 'csv-${_uuid.v4()}';
+    var existing = await _playlists.getCatalogPlaylist(targetId);
+    if (existing == null) {
+      await _playlists.createCatalogPlaylist(
+        id: targetId,
+        name: name,
+        now: DateTime.now(),
+      );
+    }
+    for (var attempt = 0; attempt < 3; attempt++) {
+      existing = await _playlists.getCatalogPlaylist(targetId);
+      if (existing == null) {
+        throw StateError('La playlist ya no está disponible.');
+      }
+      final now = DateTime.now();
+      final entries = existing.entries
+          .where((entry) => !entry.isDeleted)
+          .toList();
+      final originalEntryCount = entries.length;
+      final byVideo = <String, int>{};
+      final byLocal = <String, int>{};
+      for (var index = 0; index < entries.length; index++) {
+        final entry = entries[index];
+        if (entry.videoId != null) {
+          byVideo.putIfAbsent(entry.videoId!, () => index);
+        }
+        if (entry.localTrackId != null) {
+          byLocal.putIfAbsent(entry.localTrackId!, () => index);
+        }
+      }
+      final reused = <String>{};
+      var changed = false;
+      for (final track in tracks) {
+        final videoId = _videoId(track.id, track.url)!;
+        final local = localByVideoId[videoId];
+        final index =
+            byVideo[videoId] ?? (local == null ? null : byLocal[local.id]);
+        final catalog = CatalogTrack.youtube(
+          videoId: videoId,
+          title: track.title,
+          artists: track.artists.isEmpty
+              ? [if (track.artist.trim().isNotEmpty) track.artist]
+              : track.artists,
+          artistBrowseIds: track.artistBrowseIds,
+          album: track.album,
+          duration: track.duration,
+          thumbnailUrl:
+              track.catalogThumbnailUrl ??
+              track.thumbnailUrl ??
+              'https://i.ytimg.com/vi/$videoId/hqdefault.jpg',
+          sourceUrl: 'https://www.youtube.com/watch?v=$videoId',
+        );
+        if (index != null) {
+          if (index < originalEntryCount) reused.add(videoId);
+          final entry = entries[index];
+          if (entry.track.youtubeVideoId == null ||
+              (entry.localTrackId == null && local != null)) {
+            entries[index] = entry.copyWith(
+              track: entry.track.youtubeVideoId == null ? catalog : entry.track,
+              localTrackId: entry.localTrackId ?? local?.id,
+              updatedAt: now,
+            );
+            changed = true;
+          }
+          byVideo[videoId] = index;
+          continue;
+        }
+        byVideo[videoId] = entries.length;
+        entries.add(
+          PlaylistEntry(
+            id: _uuid.v4(),
+            playlistId: targetId,
+            track: catalog,
+            localTrackId: local?.id,
+            position: entries.length,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+        changed = true;
+      }
+      if (!changed) return reused;
+      try {
+        await _playlists.replaceCatalogEntries(
+          playlistId: targetId,
+          entries: entries,
+          now: now,
+          expectedRevision: existing.playlist.localRevision,
+        );
+        return reused;
+      } on PlaylistRevisionConflict {
+        if (attempt == 2) rethrow;
+      }
+    }
+    throw StateError('La playlist cambió durante la importación.');
+  }
+
+  String? _playlistId(LibraryCsvMembership membership) {
+    final id = membership.id?.trim();
+    if (id == Playlist.favoritesId || id == 'LM' || id == 'VLLM') {
+      return Playlist.favoritesId;
+    }
+    if (id != null && id.isNotEmpty) return id;
+    const favoritesNames = {
+      'favorites',
+      'favourites',
+      'favoritos',
+      'favoritas',
+      'liked songs',
+      'liked music',
+      'tus me gusta',
+      'canciones que te gustan',
+    };
+    return favoritesNames.contains(membership.name.trim().toLowerCase())
+        ? Playlist.favoritesId
+        : null;
+  }
+
+  String? _videoId(String? id, String? url) {
+    final direct = id?.trim();
+    if (direct != null && RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(direct)) {
+      return direct;
+    }
+    final uri = Uri.tryParse(url ?? '');
+    if (uri == null) return null;
+    final host = uri.host.toLowerCase();
+    if (host != 'youtu.be' &&
+        host != 'youtube.com' &&
+        !host.endsWith('.youtube.com')) {
+      return null;
+    }
+    final candidate = host == 'youtu.be' && uri.pathSegments.isNotEmpty
+        ? uri.pathSegments.first
+        : uri.queryParameters['v'];
+    return candidate != null &&
+            RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(candidate)
+        ? candidate
+        : null;
   }
 
   Future<TrackInfo> _resolve(LibraryCsvTrack entry) async {
@@ -357,7 +491,7 @@ class LibraryCsvImportService {
     if (best.score < threshold ||
         (best.score < 0.90 && best.score - secondScore < 0.06)) {
       throw LibraryCsvAmbiguousMatchException(
-        'No hubo una coincidencia suficientemente segura para descargar.',
+        'No hubo una coincidencia suficientemente segura para importar.',
       );
     }
     return best.candidate;

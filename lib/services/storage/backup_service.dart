@@ -259,6 +259,7 @@ class BackupService {
         await transaction.commit();
         await _databaseService.initialize();
         await _databaseService.rewriteLocalTrackMediaRoot(mediaRoot: mediaRoot);
+        await _databaseService.rebasePlaylistSyncAfterRestore();
       } catch (error, stackTrace) {
         Object? rollbackError;
         StackTrace? rollbackStackTrace;

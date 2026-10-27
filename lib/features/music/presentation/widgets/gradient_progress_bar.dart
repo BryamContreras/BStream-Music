@@ -56,7 +56,7 @@ class _GradientProgressBarState extends State<GradientProgressBar>
   @override
   Widget build(BuildContext context) {
     final disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
     return RepaintBoundary(
       child: ClipRRect(
@@ -87,7 +87,7 @@ class _GradientProgressBarState extends State<GradientProgressBar>
     }
 
     final disableAnimations =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     if (disableAnimations) {
       _controller.stop();
       _controller.value = 0.5;

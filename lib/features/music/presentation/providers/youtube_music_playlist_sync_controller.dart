@@ -743,7 +743,14 @@ class YouTubeMusicPlaylistSyncController
     final result = Completer<T>();
     _accountOperationTail = _accountOperationTail.then((_) async {
       try {
-        result.complete(await operation());
+        // A restore replaces the entire database. Keep every account operation
+        // inside the maintenance barrier so a snapshot read before replacement
+        // can never be committed into the restored library.
+        result.complete(
+          await ref
+              .read(libraryOperationCoordinatorProvider)
+              .runWithGate(operation),
+        );
       } on Object catch (error, stackTrace) {
         result.completeError(error, stackTrace);
       }

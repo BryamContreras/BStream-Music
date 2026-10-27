@@ -20,13 +20,14 @@ class BStreamMusicQueueWidgetService : RemoteViewsService() {
         QueueFactory(applicationContext)
 }
 
-private class QueueFactory(private val context: Context) : RemoteViewsService.RemoteViewsFactory {
+internal class QueueFactory(private val context: Context) : RemoteViewsService.RemoteViewsFactory {
     private data class Entry(
         val id: String,
         val queueIndex: Int,
         val title: String,
         val artist: String,
         val artworkPath: String,
+        val isCurrent: Boolean,
     )
 
     private var entries: List<Entry> = emptyList()
@@ -51,6 +52,7 @@ private class QueueFactory(private val context: Context) : RemoteViewsService.Re
                     title = item.optString("title").ifBlank { "—" },
                     artist = item.optString("artist"),
                     artworkPath = item.optString("artworkPath"),
+                    isCurrent = item.optBoolean("isCurrent", false),
                 )
             }
         }.getOrDefault(emptyList())
@@ -66,7 +68,7 @@ private class QueueFactory(private val context: Context) : RemoteViewsService.Re
     override fun getViewAt(position: Int): RemoteViews? {
         val entry = entries.getOrNull(position) ?: return null
         val views = RemoteViews(context.packageName, R.layout.bstream_music_widget_queue_item)
-        val current = position == 0
+        val current = entry.isCurrent || (entries.none { it.isCurrent } && position == 0)
         val styledTitle = SpannableString(entry.title)
         if (current && entry.title.isNotEmpty()) {
             styledTitle.setSpan(StyleSpan(Typeface.BOLD), 0, entry.title.length, 0)
@@ -81,20 +83,29 @@ private class QueueFactory(private val context: Context) : RemoteViewsService.Re
             R.id.widget_queue_item_artist,
             if (current) 0xE0FFFFFF.toInt() else 0xBFC5CCD3.toInt(),
         )
+        if (current) {
+            views.setInt(
+                R.id.widget_queue_item_root,
+                "setBackgroundResource",
+                R.drawable.bstream_widget_queue_item_current,
+            )
+        } else {
+            views.setInt(R.id.widget_queue_item_root, "setBackgroundColor", 0x00000000)
+        }
+        views.setViewVisibility(
+            R.id.widget_queue_item_playing_indicator,
+            if (current) android.view.View.VISIBLE else android.view.View.GONE,
+        )
+        if (current) {
+            views.setInt(R.id.widget_queue_item_playing_indicator, "setColorFilter", accent)
+        }
         val artworkPath = entry.artworkPath.takeIf { it.isNotBlank() }
-            ?: if (position == 0) currentArtworkPath() else null
+            ?: if (current) currentArtworkPath() else null
         val artwork = artworkPath?.let(::loadQueueArtwork)
         if (artwork != null) {
             views.setImageViewBitmap(R.id.widget_queue_item_artwork, artwork)
         } else {
             views.setImageViewResource(R.id.widget_queue_item_artwork, R.mipmap.ic_launcher)
-        }
-        views.setViewVisibility(
-            R.id.widget_queue_item_current_marker,
-            if (current) android.view.View.VISIBLE else android.view.View.GONE,
-        )
-        if (current) {
-            views.setInt(R.id.widget_queue_item_current_marker, "setBackgroundColor", accent)
         }
         val fillInIntent = Intent().putExtra(
             MainActivity.EXTRA_HOME_WIDGET_ACTION,

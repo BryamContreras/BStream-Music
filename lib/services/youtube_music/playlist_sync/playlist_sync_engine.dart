@@ -358,7 +358,9 @@ class PlaylistSyncEngine {
         conflicts: merge.conflicts,
       );
     }
-    final merged = merge.snapshot!;
+    final merged = _isFavoritesKey(key)
+        ? _deduplicateFavoriteItems(merge.snapshot!, local: work.local)
+        : merge.snapshot!;
     final desiredRemote = merged.remoteProjection;
     final isFavorites = _isFavoritesKey(key);
     final remoteMatchesDesired = isFavorites
@@ -1057,6 +1059,48 @@ class PlaylistSyncEngine {
 
   bool _isFavoritesKey(PlaylistSyncKey key) =>
       key.playlistId == 'bstream:favorites';
+
+  PlaylistSyncSnapshot _deduplicateFavoriteItems(
+    PlaylistSyncSnapshot snapshot, {
+    required PlaylistSyncSnapshot local,
+  }) {
+    // Concurrent likes of the same video are one favorite. Ordinary playlist
+    // merging preserves occurrences, so it can otherwise produce two rows
+    // that YouTube's set-based like endpoint can never verify.
+    final localIds = local.items.map((item) => item.localItemId).toSet();
+    final positionByVideo = <String, int>{};
+    final items = <PlaylistSyncItem>[];
+    for (final item in snapshot.items) {
+      final videoId = item.videoId?.trim();
+      if (videoId == null || videoId.isEmpty) {
+        items.add(item);
+        continue;
+      }
+      final position = positionByVideo[videoId];
+      if (position == null) {
+        positionByVideo[videoId] = items.length;
+        items.add(item);
+        continue;
+      }
+      final previous = items[position];
+      final preferItem =
+          (previous.localTrackId == null && item.localTrackId != null) ||
+          (previous.localTrackId == item.localTrackId &&
+              !localIds.contains(previous.localItemId) &&
+              localIds.contains(item.localItemId));
+      if (preferItem) {
+        items[position] = item;
+      }
+    }
+    return PlaylistSyncSnapshot(
+      remotePlaylistId: snapshot.remotePlaylistId,
+      title: snapshot.title,
+      items: items,
+      remoteRevision: snapshot.remoteRevision,
+      isEditable: snapshot.isEditable,
+      privacy: snapshot.privacy,
+    );
+  }
 
   bool _sameFavoriteSet(PlaylistSyncSnapshot left, PlaylistSyncSnapshot right) {
     final leftCounts = _favoriteCounts(left);

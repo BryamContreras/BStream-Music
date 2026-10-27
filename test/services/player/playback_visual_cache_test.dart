@@ -33,7 +33,21 @@ void main() {
   tearDown(() async {
     cache.dispose();
     await server.close(force: true);
-    await directory.delete(recursive: true);
+    // A cancelled asynchronous transfer may still be closing its file handle
+    // on Windows. Retry only that sharing violation, not unrelated failures.
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (true) {
+      try {
+        await directory.delete(recursive: true);
+        break;
+      } on FileSystemException catch (error) {
+        if (error.osError?.errorCode != 32 ||
+            DateTime.now().isAfter(deadline)) {
+          rethrow;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
   });
 
   test(
@@ -216,4 +230,307 @@ void main() {
       expect(cache.videoFileFor('finished', finished), isNotNull);
     },
   );
+
+  Future<File> sharedCover(String name, List<int> bytes) async {
+    final folder = await Directory('${directory.path}/shared').create();
+    return File('${folder.path}/$name').writeAsBytes(bytes);
+  }
+
+  test(
+    'first selected cached catalog cover upgrades without another song',
+    () async {
+      const source =
+          'https://lh3.googleusercontent.com/catalog=w120-h120-l90-rj';
+      final low = await sharedCover('card.jpg', [1, 2, 3]);
+      cache.dispose();
+      cache = PlaybackVisualCache(
+        directory: () async => directory,
+        sharedArtworkLookup: (candidate) async =>
+            candidate == source ? low : null,
+      );
+      final requested = Completer<void>();
+      final release = Completer<void>();
+      final finished = Completer<void>();
+      server.listen((request) async {
+        requestCounts.update(
+          request.uri.path,
+          (count) => count + 1,
+          ifAbsent: () => 1,
+        );
+        requested.complete();
+        await release.future;
+        request.response.headers.contentType = ContentType('image', 'jpeg');
+        request.response.add([4, 5, 6, 7]);
+        await request.response.close();
+        finished.complete();
+      });
+      await HttpOverrides.runWithHttpOverrides(() async {
+        cache.activate(
+          trackKey: 'first-home-song',
+          coverSource: source,
+          videoUrl: null,
+        );
+        await waitFor(() => cache.coverPathFor(source) == low.path);
+        await requested.future.timeout(const Duration(seconds: 5));
+        expect(cache.coverPathFor(source), low.path);
+        final previewRevision = cache.revision;
+        release.complete();
+        await waitFor(() => cache.coverPathFor(source) != low.path);
+        await finished.future;
+        expect(await File(cache.coverPathFor(source)!).readAsBytes(), [
+          4,
+          5,
+          6,
+          7,
+        ]);
+        expect(cache.revision, greaterThan(previewRevision));
+        expect(requestCounts, {'/catalog=w1280-h1280-l90-rj': 1});
+        expect(await low.exists(), isTrue);
+      }, _ArtworkHttpOverrides(server.port));
+    },
+  );
+
+  test(
+    'missing high resolution retains shared preview and bounds retries',
+    () async {
+      const source =
+          'https://lh3.googleusercontent.com/catalog=w120-h120-l90-rj';
+      final low = await sharedCover('card.jpg', [1, 2, 3]);
+      cache.dispose();
+      cache = PlaybackVisualCache(
+        directory: () async => directory,
+        sharedArtworkLookup: (candidate) async =>
+            candidate == source ? low : null,
+      );
+      final responded = Completer<void>();
+      server.listen((request) async {
+        requestCounts.update(
+          request.uri.path,
+          (count) => count + 1,
+          ifAbsent: () => 1,
+        );
+        request.response.statusCode = HttpStatus.notFound;
+        await request.response.close();
+        responded.complete();
+      });
+      await HttpOverrides.runWithHttpOverrides(() async {
+        cache.activate(
+          trackKey: 'first-home-song',
+          coverSource: source,
+          videoUrl: null,
+        );
+        await responded.future.timeout(const Duration(seconds: 5));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        for (var index = 0; index < 8; index++) {
+          cache.activate(
+            trackKey: 'first-home-song',
+            coverSource: source,
+            videoUrl: null,
+          );
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(cache.coverPathFor(source), low.path);
+        expect(requestCounts, {'/catalog=w1280-h1280-l90-rj': 1});
+        expect(await low.exists(), isTrue);
+      }, _ArtworkHttpOverrides(server.port));
+    },
+  );
+
+  test('cached full sized rendition avoids all cover requests', () async {
+    const source = 'https://lh3.googleusercontent.com/catalog=w120-h120-l90-rj';
+    const highSource =
+        'https://lh3.googleusercontent.com/catalog=w1280-h1280-l90-rj';
+    final high = await sharedCover('full.jpg', [4, 5, 6, 7]);
+    cache.dispose();
+    cache = PlaybackVisualCache(
+      directory: () async => directory,
+      sharedArtworkLookup: (candidate) async =>
+          candidate == highSource ? high : null,
+    );
+    server.listen((request) async {
+      requestCounts.update(
+        request.uri.path,
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
+      await request.response.close();
+    });
+    await HttpOverrides.runWithHttpOverrides(() async {
+      cache.activate(
+        trackKey: 'first-home-song',
+        coverSource: source,
+        videoUrl: null,
+      );
+      await waitFor(() => cache.coverPathFor(source) == high.path);
+      cache.activate(
+        trackKey: 'first-home-song',
+        coverSource: source,
+        videoUrl: null,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(requestCounts, isEmpty);
+    }, _ArtworkHttpOverrides(server.port));
+  });
+
+  test(
+    'exact cached YouTube preview does not prevent a sharper rendition',
+    () async {
+      const source = 'https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg';
+      final low = await sharedCover('video-preview.jpg', [1, 2, 3]);
+      cache.dispose();
+      cache = PlaybackVisualCache(
+        directory: () async => directory,
+        sharedArtworkLookup: (candidate) async =>
+            candidate == source ? low : null,
+      );
+      server.listen((request) async {
+        requestCounts.update(
+          request.uri.path,
+          (count) => count + 1,
+          ifAbsent: () => 1,
+        );
+        request.response.headers.contentType = ContentType('image', 'jpeg');
+        request.response.add([7, 8, 9, 10]);
+        await request.response.close();
+      });
+      await HttpOverrides.runWithHttpOverrides(() async {
+        cache.activate(
+          trackKey: 'first-video',
+          coverSource: source,
+          videoUrl: null,
+        );
+        await waitFor(() {
+          final path = cache.coverPathFor(source);
+          return path != null && path != low.path;
+        });
+        expect(requestCounts, {'/vi/abcdefghijk/hq720.jpg': 1});
+        expect(await File(cache.coverPathFor(source)!).readAsBytes(), [
+          7,
+          8,
+          9,
+          10,
+        ]);
+      }, _ArtworkHttpOverrides(server.port));
+    },
+  );
+
+  test(
+    'switching songs cancels preview upgrade without publishing old result',
+    () async {
+      const source =
+          'https://lh3.googleusercontent.com/catalog=w120-h120-l90-rj';
+      final low = await sharedCover('card.jpg', [1, 2, 3]);
+      cache.dispose();
+      cache = PlaybackVisualCache(
+        directory: () async => directory,
+        sharedArtworkLookup: (candidate) async =>
+            candidate == source ? low : null,
+      );
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final finished = Completer<void>();
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType('image', 'jpeg');
+        request.response.add([4, 5]);
+        await request.response.flush();
+        started.complete();
+        await release.future;
+        try {
+          request.response.add([6, 7]);
+          await request.response.close();
+        } catch (_) {}
+        finished.complete();
+      });
+      await HttpOverrides.runWithHttpOverrides(() async {
+        cache.activate(trackKey: 'old', coverSource: source, videoUrl: null);
+        await started.future.timeout(const Duration(seconds: 5));
+        expect(cache.coverPathFor(source), low.path);
+        cache.activate(trackKey: 'new', coverSource: null, videoUrl: null);
+        final revisionAfterSwitch = cache.revision;
+        release.complete();
+        await finished.future.timeout(const Duration(seconds: 5));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(cache.coverPathFor(source), low.path);
+        expect(cache.revision, revisionAfterSwitch);
+        expect(await low.exists(), isTrue);
+        expect(directory.listSync().whereType<File>(), isEmpty);
+      }, _ArtworkHttpOverrides(server.port));
+    },
+  );
+
+  test('hiding the player cancels a cached preview upgrade', () async {
+    const source = 'https://lh3.googleusercontent.com/catalog=w120-h120-l90-rj';
+    final low = await sharedCover('card.jpg', [1, 2, 3]);
+    cache.dispose();
+    cache = PlaybackVisualCache(
+      directory: () async => directory,
+      sharedArtworkLookup: (candidate) async =>
+          candidate == source ? low : null,
+    );
+    final started = Completer<void>();
+    final release = Completer<void>();
+    final finished = Completer<void>();
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType('image', 'jpeg');
+      request.response.add([4, 5]);
+      await request.response.flush();
+      started.complete();
+      await release.future;
+      try {
+        request.response.add([6, 7]);
+        await request.response.close();
+      } catch (_) {}
+      finished.complete();
+    });
+    await HttpOverrides.runWithHttpOverrides(() async {
+      cache.activate(trackKey: 'old', coverSource: source, videoUrl: null);
+      await started.future.timeout(const Duration(seconds: 5));
+      cache.deactivate();
+      final revisionAfterHiding = cache.revision;
+      release.complete();
+      await finished.future.timeout(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(cache.coverPathFor(source), low.path);
+      expect(cache.revision, revisionAfterHiding);
+      expect(await low.exists(), isTrue);
+    }, _ArtworkHttpOverrides(server.port));
+  });
+}
+
+class _ArtworkHttpOverrides extends HttpOverrides {
+  _ArtworkHttpOverrides(this.port);
+
+  final int port;
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      _RoutedArtworkClient(super.createHttpClient(context), port);
+}
+
+class _RoutedArtworkClient implements HttpClient {
+  _RoutedArtworkClient(this.client, this.port);
+
+  final HttpClient client;
+  final int port;
+
+  @override
+  Duration? get connectionTimeout => client.connectionTimeout;
+
+  @override
+  set connectionTimeout(Duration? value) => client.connectionTimeout = value;
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri uri) => client.getUrl(
+    uri.replace(
+      scheme: 'http',
+      host: InternetAddress.loopbackIPv4.address,
+      port: port,
+    ),
+  );
+
+  @override
+  void close({bool force = false}) => client.close(force: force);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

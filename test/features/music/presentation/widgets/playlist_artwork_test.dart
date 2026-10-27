@@ -3,6 +3,9 @@ import 'package:bstream_music/features/music/domain/entities/catalog_track.dart'
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playlist_artwork.dart';
+import 'package:bstream_music/features/music/presentation/widgets/playlist_artwork_mosaic.dart';
+import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -224,5 +227,131 @@ void main() {
     expect(first.toSet(), hasLength(playlistArtworkSourceLimit));
     expect(sameDay, first);
     expect(nextDay, isNot(first));
+  });
+
+  test(
+    'visit seed preserves selection across rebuilds and rotates next visit',
+    () {
+      final candidates = List<PlaylistArtworkSource>.generate(
+        16,
+        (index) => PlaylistArtworkSource(source: 'https://img.test/$index.jpg'),
+      );
+      final first = rotatingPlaylistArtworkSources(
+        playlistId: 'visit-playlist',
+        candidates: candidates,
+        rotationSeed: 812,
+        now: DateTime(2026, 10, 26),
+      );
+      final rebuilt = rotatingPlaylistArtworkSources(
+        playlistId: 'visit-playlist',
+        candidates: candidates,
+        rotationSeed: 812,
+        now: DateTime(2026, 10, 27),
+      );
+      final nextVisit = rotatingPlaylistArtworkSources(
+        playlistId: 'visit-playlist',
+        candidates: candidates,
+        rotationSeed: 813,
+      );
+
+      expect(first, hasLength(4));
+      expect(first.toSet(), hasLength(4));
+      expect(rebuilt, first);
+      expect(nextVisit.first, isNot(first.first));
+      expect(nextVisit, isNot(first));
+    },
+  );
+
+  test(
+    'mosaic selection deduplicates, preserves fallbacks and caps at four',
+    () {
+      final candidates = <PlaylistArtworkSource?>[
+        null,
+        const PlaylistArtworkSource(source: '  '),
+        const PlaylistArtworkSource(
+          source: ' https://img.test/0.jpg ',
+          fallbackSource: ' https://img.test/backup.jpg ',
+        ),
+        const PlaylistArtworkSource(source: 'https://img.test/0.jpg'),
+        for (var index = 1; index < 12; index++)
+          PlaylistArtworkSource(source: 'https://img.test/$index.jpg'),
+      ];
+
+      final covers = rotatingPlaylistArtworkSources(
+        playlistId: 'deduplicated',
+        candidates: candidates,
+        rotationSeed: 1,
+        maximum: 99,
+      );
+      final allCandidates = rotatingPlaylistArtworkSources(
+        playlistId: 'deduplicated',
+        candidates: candidates.take(4),
+        rotationSeed: 1,
+      );
+
+      expect(covers, hasLength(4));
+      expect(covers.map((cover) => cover.source).toSet(), hasLength(4));
+      expect(allCandidates, hasLength(1));
+      expect(allCandidates.single.source, 'https://img.test/0.jpg');
+      expect(
+        allCandidates.single.fallbackSource,
+        'https://img.test/backup.jpg',
+      );
+      expect(
+        rotatingPlaylistArtworkSources(
+          playlistId: 'deduplicated',
+          candidates: candidates,
+          rotationSeed: 1,
+          maximum: 2,
+        ),
+        hasLength(2),
+      );
+    },
+  );
+
+  testWidgets('mosaic fills four equal cells at picker and header sizes', (
+    tester,
+  ) async {
+    final sources = List<PlaylistArtworkSource>.generate(
+      3,
+      (index) => PlaylistArtworkSource(source: '/missing-cover-$index.jpg'),
+    );
+    for (final size in <double>[44, 56, 200]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: PlaylistArtworkMosaic(sources: sources, size: size),
+          ),
+        ),
+      );
+      final images = tester.widgetList<SourceImage>(find.byType(SourceImage));
+      expect(images.map((image) => image.source), <String>[
+        sources[0].source,
+        sources[1].source,
+        sources[2].source,
+        sources[0].source,
+      ]);
+      for (final element in find.byType(SourceImage).evaluate()) {
+        expect(
+          tester.getSize(find.byWidget(element.widget)),
+          Size.square(size / 2),
+        );
+      }
+      expect(tester.takeException(), isNull);
+    }
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: PlaylistArtworkMosaic(
+            sources: sources.take(1).toList(),
+            size: 56,
+          ),
+        ),
+      ),
+    );
+    expect(find.byType(SourceImage), findsOneWidget);
+    expect(tester.getSize(find.byType(SourceImage)), const Size.square(56));
+    expect(tester.takeException(), isNull);
   });
 }

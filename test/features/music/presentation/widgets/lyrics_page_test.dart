@@ -1193,43 +1193,44 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('synced lyrics credit LRCLIB before and after the timeline', (
-    tester,
-  ) async {
-    await _pumpLyricsPage(
-      tester,
-      player: _FakePlayerService(lookupSnapshot),
-      lyrics: _FakeLyricsService(syncedDocument),
-      platform: TargetPlatform.android,
-    );
+  testWidgets(
+    'synced lyrics credit their provider before and after the timeline',
+    (tester) async {
+      await _pumpLyricsPage(
+        tester,
+        player: _FakePlayerService(lookupSnapshot),
+        lyrics: _FakeLyricsService(syncedDocument),
+        platform: TargetPlatform.android,
+      );
 
-    final topSource = find.byKey(const ValueKey('lyrics-source-top'));
-    final bottomSource = find.byKey(const ValueKey('lyrics-source-bottom'));
-    expect(find.text('Lyrics provided by LRCLIB'), findsNWidgets(2));
-    expect(topSource, findsOneWidget);
-    expect(bottomSource, findsOneWidget);
-    final topHint = find.byKey(const ValueKey('lyrics-seek-hint-top'));
-    final bottomHint = find.byKey(const ValueKey('lyrics-seek-hint-bottom'));
-    expect(topHint, findsOneWidget);
-    expect(bottomHint, findsOneWidget);
-    expect(find.text('Tap a line to seek to that moment.'), findsNWidgets(2));
-    expect(
-      tester.getTopLeft(topSource).dy,
-      lessThan(tester.getTopLeft(topHint).dy),
-    );
-    expect(
-      tester.getTopLeft(topHint).dy,
-      lessThan(tester.getTopLeft(find.text('First line')).dy),
-    );
-    expect(
-      tester.getTopLeft(bottomSource).dy,
-      greaterThan(tester.getBottomLeft(find.text('Third line')).dy),
-    );
-    expect(
-      tester.getTopLeft(bottomSource).dy,
-      lessThan(tester.getTopLeft(bottomHint).dy),
-    );
-  });
+      final topSource = find.byKey(const ValueKey('lyrics-source-top'));
+      final bottomSource = find.byKey(const ValueKey('lyrics-source-bottom'));
+      expect(find.text('Lyrics provided by Test provider'), findsNWidgets(2));
+      expect(topSource, findsOneWidget);
+      expect(bottomSource, findsOneWidget);
+      final topHint = find.byKey(const ValueKey('lyrics-seek-hint-top'));
+      final bottomHint = find.byKey(const ValueKey('lyrics-seek-hint-bottom'));
+      expect(topHint, findsOneWidget);
+      expect(bottomHint, findsOneWidget);
+      expect(find.text('Tap a line to seek to that moment.'), findsNWidgets(2));
+      expect(
+        tester.getTopLeft(topSource).dy,
+        lessThan(tester.getTopLeft(topHint).dy),
+      );
+      expect(
+        tester.getTopLeft(topHint).dy,
+        lessThan(tester.getTopLeft(find.text('First line')).dy),
+      );
+      expect(
+        tester.getTopLeft(bottomSource).dy,
+        greaterThan(tester.getBottomLeft(find.text('Third line')).dy),
+      );
+      expect(
+        tester.getTopLeft(bottomSource).dy,
+        lessThan(tester.getTopLeft(bottomHint).dy),
+      );
+    },
+  );
 
   testWidgets(
     'romanized synced lyrics keep playback timing, seek, and live toggle',
@@ -1522,7 +1523,25 @@ void main() {
               player.pauseCalls + player.resumeCalls,
               previousPlaybackTaps + 1,
             );
-            await tester.tap(find.text('Second line').first);
+            final secondLine = find.byKey(const ValueKey('lyrics-line-tile-1'));
+            // The real routed clock can scroll the earlier line out of view
+            // under host load. Transport changes can also start auto-scroll;
+            // Scrollable deliberately ignores taps during DrivenScrollActivity.
+            // Wait for the visible row to settle before testing restored input.
+            await tester.ensureVisible(secondLine);
+            await _settleLyricsAnimations(tester);
+            final timelineScrollable = tester.state<ScrollableState>(
+              find.descendant(
+                of: find.byKey(const ValueKey('synced-lyrics-scroll')),
+                matching: find.byType(Scrollable),
+              ),
+            );
+            expect(
+              timelineScrollable.position.isScrollingNotifier.value,
+              isFalse,
+            );
+            expect(secondLine.hitTestable(), findsOneWidget);
+            await tester.tap(secondLine);
             await _settleLyricsAnimations(tester);
             expect(player.seekPositions.last, const Duration(seconds: 2));
             await _openLyricsSettings(tester);
@@ -3973,6 +3992,51 @@ void main() {
 
     expect(player.seekPositions, [const Duration(milliseconds: 3500)]);
   });
+
+  for (final provider in ['Better Lyrics', 'LyricsPlus', 'LRCLIB']) {
+    testWidgets('lyrics attribution identifies $provider accurately', (
+      tester,
+    ) async {
+      await _pumpLyricsPage(
+        tester,
+        player: _FakePlayerService(lookupSnapshot),
+        lyrics: _FakeLyricsService(
+          LyricsDocument(
+            provider: provider,
+            trackName: syncedDocument.trackName,
+            artistName: syncedDocument.artistName,
+            lines: syncedDocument.lines,
+          ),
+        ),
+        platform: TargetPlatform.android,
+      );
+      expect(find.text('Lyrics provided by $provider'), findsNWidgets(2));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets(
+    'disabling all providers replaces lyrics with the settings explanation',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final container = await _pumpLyricsPage(
+        tester,
+        player: _FakePlayerService(lookupSnapshot),
+        lyrics: _FakeLyricsService(syncedDocument),
+        platform: TargetPlatform.android,
+      );
+      await container
+          .read(settingsControllerProvider.notifier)
+          .setEnabledLyricsProviders({});
+      await _settleLyricsAnimations(tester);
+      expect(
+        find.text(AppStrings(AppLanguage.english).lyricsProvidersDisabledHint),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('synced-lyrics-scroll')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('plain lyrics are used when synchronized lines are unavailable', (
     tester,

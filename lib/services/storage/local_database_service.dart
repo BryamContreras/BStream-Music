@@ -342,6 +342,34 @@ class LocalDatabaseService {
     }
   }
 
+  /// Keeps restored playlist identities, but discards the old synchronization
+  /// history. A backup is a local snapshot, not a fresh request to replay an
+  /// earlier remote removal, deletion, or partially completed mutation.
+  /// The next sync therefore unions current local and remote membership.
+  Future<void> rebasePlaylistSyncAfterRestore() async {
+    final db = await database;
+    await db.transaction((transaction) async {
+      await transaction.delete('ytm_playlist_base_items');
+      await transaction.delete('playlist_sync_intents');
+      await transaction.delete('playlist_sync_conflicts');
+      await transaction.update('ytm_playlist_bindings', <String, Object?>{
+        'base_title': null,
+        'base_snapshot_hash': null,
+        'remote_revision': null,
+        'local_revision_at_base': 0,
+        'last_synced_at': null,
+        'last_remote_seen_at': null,
+        'remote_delete_requested_at': null,
+        'updated_at': _clock().toIso8601String(),
+      });
+      // Occurrence tokens may have been recycled since the backup. Video IDs,
+      // local UUIDs, downloaded files, and playlist membership remain intact.
+      await transaction.update('playlist_items', <String, Object?>{
+        'remote_set_video_id': null,
+      });
+    });
+  }
+
   Future<void> close() async {
     var current = _database;
     final opening = _databaseFuture;

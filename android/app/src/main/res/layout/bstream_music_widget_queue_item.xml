@@ -6,14 +6,8 @@
     android:clickable="true"
     android:focusable="true"
     android:paddingTop="4dp"
-    android:paddingBottom="4dp">
-
-    <TextView
-        android:id="@+id/widget_queue_item_current_marker"
-        android:layout_width="3dp"
-        android:layout_height="match_parent"
-        android:background="@android:color/transparent"
-        android:visibility="gone" />
+    android:paddingBottom="4dp"
+    android:background="@android:color/transparent">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -21,7 +15,7 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="10dp"
-        android:paddingEnd="8dp">
+        android:paddingEnd="14dp">
 
         <ImageView
             android:id="@+id/widget_queue_item_artwork"
@@ -61,5 +55,15 @@
                 android:textColor="#BFC5CCD3"
                 android:textSize="13sp" />
         </LinearLayout>
+
+        <ImageView
+            android:id="@+id/widget_queue_item_playing_indicator"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_marginStart="8dp"
+            android:contentDescription="@null"
+            android:src="@drawable/bstream_widget_queue_playing"
+            android:tint="#FFFFFFFF"
+            android:visibility="gone" />
     </LinearLayout>
 </FrameLayout>

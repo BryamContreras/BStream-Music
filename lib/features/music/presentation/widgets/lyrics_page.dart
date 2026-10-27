@@ -543,6 +543,17 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
     Set<LyricsRomanizationLanguage> lyricsRomanizationLanguages,
   ) {
     final strings = ref.watch(appStringsProvider);
+    if (ref
+            .watch(settingsControllerProvider)
+            .value
+            ?.enabledLyricsProviders
+            .isEmpty ==
+        true) {
+      return _LyricsMessage(
+        icon: Icons.lyrics_outlined,
+        message: strings.lyricsProvidersDisabledHint,
+      );
+    }
     if (lyrics == null) {
       return _LyricsMessage(
         icon: Icons.search_off_rounded,
@@ -552,7 +563,7 @@ class _LyricsPageState extends ConsumerState<LyricsPage>
         onAction: () => setState(() => _showSimilarLyrics = true),
       );
     }
-    final sourceFooter = strings.lyricsSource;
+    final sourceFooter = strings.lyricsSourceForProvider(lyrics.provider);
     if (lyrics.instrumental) {
       return _LyricsMessage(
         icon: Icons.piano_rounded,

@@ -232,6 +232,134 @@ void main() {
       },
     );
 
+    test(
+      'concurrent likes keep one favorite and its downloaded identity',
+      () async {
+        final a = _item('A', localId: 'a', setId: 'set-a');
+        final downloadedB = _item(
+          'B',
+          localId: 'local-b',
+        ).copyWith(localTrackId: 'download-b');
+        const key = PlaylistSyncKey(
+          accountKey: 'account',
+          playlistId: 'bstream:favorites',
+        );
+        final store = _MemoryStore(
+          PlaylistSyncWork(
+            binding: PlaylistSyncBinding(
+              key: key,
+              remotePlaylistId: 'LM',
+              mode: PlaylistSyncMode.automatic,
+              localRevisionAtBase: 1,
+              createdAt: now,
+              updatedAt: now,
+            ),
+            base: _snapshot('Liked Music', <PlaylistSyncItem>[a]),
+            local: _snapshot('Favoritos', <PlaylistSyncItem>[a, downloadedB]),
+            localRevision: 2,
+            localDeleted: false,
+          ),
+        );
+        final gateway = _FakeLikedGateway()
+          ..fetches.add(
+            _snapshot('Liked Music', <PlaylistSyncItem>[
+              _item('B', setId: 'remote-b'),
+              _item('A', setId: 'set-a'),
+            ]),
+          );
+
+        final result = await _engine(store, gateway, now).sync(key);
+
+        expect(result.disposition, PlaylistSyncDisposition.synchronized);
+        expect(gateway.likedMutationCount, 0);
+        expect(gateway.mutationCount, 0);
+        expect(store.work.local.items, hasLength(2));
+        final b = store.work.local.items.singleWhere(
+          (item) => item.videoId == _video('B'),
+        );
+        expect(b.localItemId, 'local-b');
+        expect(b.localTrackId, 'download-b');
+        expect(b.setVideoId, 'remote-b');
+        expect(store.work.intent, isNull);
+      },
+    );
+
+    test(
+      'first link unions imported favorites and preserves local-only files',
+      () async {
+        final downloadedA = _item(
+          'A',
+          localId: 'a',
+        ).copyWith(localTrackId: 'download-a');
+        final localOnly = PlaylistSyncItem(
+          localItemId: 'offline-item',
+          localTrackId: 'offline-file',
+          track: CatalogTrack.local(
+            localTrackId: 'offline-file',
+            title: 'Offline recording',
+          ),
+        );
+        const key = PlaylistSyncKey(
+          accountKey: 'account',
+          playlistId: 'bstream:favorites',
+        );
+        final store = _MemoryStore(
+          PlaylistSyncWork(
+            binding: PlaylistSyncBinding(
+              key: key,
+              remotePlaylistId: 'LM',
+              mode: PlaylistSyncMode.automatic,
+              localRevisionAtBase: 0,
+              createdAt: now,
+              updatedAt: now,
+            ),
+            local: _snapshot('Favoritos', <PlaylistSyncItem>[
+              downloadedA,
+              _item('B', localId: 'imported-b'),
+              localOnly,
+            ]),
+            localRevision: 3,
+            localDeleted: false,
+          ),
+        );
+        final gateway = _FakeLikedGateway()
+          ..fetches.addAll(<PlaylistSyncSnapshot>[
+            _snapshot('Liked Music', <PlaylistSyncItem>[
+              _item('C', setId: 'remote-c'),
+              _item('A', setId: 'remote-a'),
+            ]),
+            _snapshot('Liked Music', <PlaylistSyncItem>[
+              _item('B', setId: 'remote-b'),
+              _item('C', setId: 'remote-c'),
+              _item('A', setId: 'remote-a'),
+            ]),
+          ]);
+
+        final result = await _engine(store, gateway, now).sync(key);
+
+        expect(result.disposition, PlaylistSyncDisposition.synchronized);
+        expect(gateway.likedMutationCount, 1);
+        expect(gateway.mutationCount, 0);
+        expect(
+          gateway.likedDesired!.items.map((item) => item.videoId).toSet(),
+          <String>{_video('A'), _video('B'), _video('C')},
+        );
+        expect(store.work.local.items, hasLength(4));
+        expect(
+          store.work.local.items
+              .singleWhere((item) => item.videoId == _video('A'))
+              .localTrackId,
+          'download-a',
+        );
+        expect(
+          store.work.local.items
+              .singleWhere((item) => item.videoId == null)
+              .localTrackId,
+          'offline-file',
+        );
+      },
+    );
+
     test('Favorites ignore server reordering after a like', () async {
       final a = _item('A', localId: 'a', setId: 'set-a');
       final b = _item('B', localId: 'b', setId: 'set-b');

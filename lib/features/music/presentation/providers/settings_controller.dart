@@ -111,6 +111,7 @@ class SettingsState {
     this.miniPlayerMode = defaultMiniPlayerMode,
     this.miniPlayerBackgroundMode = defaultMiniPlayerBackgroundMode,
     this.lyricsTextAlignment = LyricsTextAlignment.normal,
+    this.enabledLyricsProviders = defaultLyricsProviders,
     this.lyricsAnimationStyle = LyricsAnimationStyle.smooth,
     this.lyricsRomanizationEnabled = false,
     this.lyricsTranslationEnabled = false,
@@ -144,6 +145,7 @@ class SettingsState {
   final MiniPlayerMode miniPlayerMode;
   final MiniPlayerBackgroundMode miniPlayerBackgroundMode;
   final LyricsTextAlignment lyricsTextAlignment;
+  final Set<LyricsProvider> enabledLyricsProviders;
   final LyricsAnimationStyle lyricsAnimationStyle;
   final bool lyricsRomanizationEnabled;
   final bool lyricsTranslationEnabled;
@@ -173,6 +175,7 @@ class SettingsState {
     MiniPlayerMode? miniPlayerMode,
     MiniPlayerBackgroundMode? miniPlayerBackgroundMode,
     LyricsTextAlignment? lyricsTextAlignment,
+    Set<LyricsProvider>? enabledLyricsProviders,
     LyricsAnimationStyle? lyricsAnimationStyle,
     bool? lyricsRomanizationEnabled,
     bool? lyricsTranslationEnabled,
@@ -211,6 +214,8 @@ class SettingsState {
       miniPlayerBackgroundMode:
           miniPlayerBackgroundMode ?? this.miniPlayerBackgroundMode,
       lyricsTextAlignment: lyricsTextAlignment ?? this.lyricsTextAlignment,
+      enabledLyricsProviders:
+          enabledLyricsProviders ?? this.enabledLyricsProviders,
       lyricsAnimationStyle: lyricsAnimationStyle ?? this.lyricsAnimationStyle,
       lyricsRomanizationEnabled:
           lyricsRomanizationEnabled ?? this.lyricsRomanizationEnabled,
@@ -259,6 +264,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _miniPlayerBackgroundModeKey =
       'settings.miniPlayerBackgroundMode';
   static const _lyricsTextAlignmentKey = 'settings.lyricsAlignment';
+  static const _enabledLyricsProvidersKey = 'settings.enabledLyricsProviders';
   static const _lyricsAnimationStyleKey = 'settings.lyricsAnimation';
   static const _lyricsRomanizationEnabledKey =
       'settings.lyricsRomanizationEnabled';
@@ -274,6 +280,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _skipSilenceEnabledKey = 'settings.skipSilenceEnabled';
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
+  Future<void> _enabledLyricsProvidersWriteTail = Future<void>.value();
   Future<void> _animatedArtworkWriteTail = Future<void>.value();
   Future<void> _remoteArtworkWriteTail = Future<void>.value();
   Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
@@ -365,6 +372,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     );
     final lyricsTextAlignment = LyricsTextAlignment.fromCode(
       prefs.getString(_lyricsTextAlignmentKey),
+    );
+    final enabledLyricsProviders = LyricsProvider.fromCodes(
+      prefs.getStringList(_enabledLyricsProvidersKey),
     );
     final storedLyricsAnimationStyle = prefs.getString(
       _lyricsAnimationStyleKey,
@@ -569,6 +579,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       miniPlayerMode: miniPlayerMode,
       miniPlayerBackgroundMode: miniPlayerBackgroundMode,
       lyricsTextAlignment: lyricsTextAlignment,
+      enabledLyricsProviders: enabledLyricsProviders,
       lyricsAnimationStyle: lyricsAnimationStyle,
       lyricsRomanizationEnabled: lyricsRomanizationEnabled,
       lyricsTranslationEnabled: lyricsTranslationEnabled,
@@ -978,6 +989,45 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await prefs.setString(_miniPlayerBackgroundModeKey, mode.code);
     final current = await future;
     state = AsyncData(current.copyWith(miniPlayerBackgroundMode: mode));
+  }
+
+  Future<void> setEnabledLyricsProviders(Set<LyricsProvider> providers) async {
+    final selected = Set<LyricsProvider>.unmodifiable(providers);
+    final loaded = state.asData?.value ?? await future;
+    // Re-read after startup: other pending toggles may already have updated
+    // the state while this invocation was waiting for preferences to load.
+    final current = state.asData?.value ?? loaded;
+    if (current.enabledLyricsProviders.length == selected.length &&
+        current.enabledLyricsProviders.containsAll(selected)) {
+      return;
+    }
+    state = AsyncData(current.copyWith(enabledLyricsProviders: selected));
+    final write = _enabledLyricsProvidersWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_enabledLyricsProvidersKey, [
+        for (final provider in LyricsProvider.values)
+          if (selected.contains(provider)) provider.code,
+      ]);
+    });
+    _enabledLyricsProvidersWriteTail = write.catchError((_) {});
+    await write;
+  }
+
+  Future<void> toggleLyricsProvider(
+    LyricsProvider provider,
+    bool enabled,
+  ) async {
+    final loaded = state.asData?.value ?? await future;
+    final current = state.asData?.value ?? loaded;
+    final selected = current.enabledLyricsProviders.toSet();
+    if (enabled) {
+      selected.add(provider);
+    } else {
+      selected.remove(provider);
+    }
+    await setEnabledLyricsProviders(selected);
   }
 
   Future<void> setLyricsTextAlignment(

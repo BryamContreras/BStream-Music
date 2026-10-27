@@ -89,7 +89,7 @@ void main() {
     expect(updates.last['repeatMode'], 'all');
   });
 
-  test('retains queue indexes while focusing the current song first', () async {
+  test('keeps two played songs before the current queue entry', () async {
     Map<Object?, Object?>? published;
     messenger.setMockMethodCallHandler(channel, (call) async {
       if (call.method == 'update') {
@@ -101,8 +101,8 @@ void main() {
     addTearDown(sync.dispose);
 
     sync.publish(
-      trackId: 'track-b',
-      title: 'B',
+      trackId: 'track-e',
+      title: 'E',
       artist: 'Artist',
       artworkUrl: null,
       isPlaying: true,
@@ -114,21 +114,32 @@ void main() {
         {'id': 'track-a', 'title': 'A', 'artist': 'Artist'},
         {'id': 'track-b', 'title': 'B', 'artist': 'Artist'},
         {'id': 'track-c', 'title': 'C', 'artist': 'Artist'},
+        {'id': 'track-d', 'title': 'D', 'artist': 'Artist'},
+        {'id': 'track-e', 'title': 'E', 'artist': 'Artist'},
+        {'id': 'track-f', 'title': 'F', 'artist': 'Artist'},
       ],
-      currentQueueIndex: 1,
+      currentQueueIndex: 4,
     );
     await Future<void>.delayed(Duration.zero);
 
     final encoded = jsonDecode(published!['queueJson']! as String) as List;
     expect(encoded.map((entry) => entry['id']).toList(), [
-      'track-b',
       'track-c',
-      'track-a',
+      'track-d',
+      'track-e',
+      'track-f',
     ]);
     expect(encoded.map((entry) => entry['queueIndex']).toList(), [
-      '1',
       '2',
-      '0',
+      '3',
+      '4',
+      '5',
+    ]);
+    expect(encoded.map((entry) => entry['isCurrent']).toList(), [
+      false,
+      false,
+      true,
+      false,
     ]);
   });
 

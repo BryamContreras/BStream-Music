@@ -31,6 +31,7 @@ import com.ryanheise.audioservice.AudioService
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
+import kotlin.math.roundToInt
 import org.json.JSONArray
 
 class BStreamMusicWidget : AppWidgetProvider() {
@@ -73,6 +74,7 @@ class BStreamMusicWidget : AppWidgetProvider() {
             val nextQueue = data["queueJson"] as? String ?: previousQueue
             val queueChanged = previousQueue != nextQueue
             val focusChanged = queueFocus(previousQueue) != queueFocus(nextQueue)
+            val currentQueuePosition = queueCurrentPosition(nextQueue)
             prefs.edit()
                 .putString("trackId", trackId)
                 .putString("title", data["title"] as? String ?: "")
@@ -83,6 +85,7 @@ class BStreamMusicWidget : AppWidgetProvider() {
                 .putInt("accent", data["accentColor"] as? Int ?: 0xFFF5F7F5.toInt())
                 .putString("language", data["languageCode"] as? String ?: "es")
                 .putString("queueJson", nextQueue)
+                .putInt("queueCurrentPosition", currentQueuePosition)
                 .apply {
                     // Keep the last complete cover and palette during a track
                     // change. The replacement arrives asynchronously.
@@ -233,6 +236,34 @@ class BStreamMusicWidget : AppWidgetProvider() {
             }
             return RemoteViews(context.packageName, layout).apply {
                 bindArtwork(context, prefs, this, accent, animateArtwork)
+                // Keep the extra lower breathing room at normal text scale. At
+                // accessibility font sizes, restore the previous inset so the
+                // three metadata lines retain enough vertical space.
+                val fontScale = context.resources.configuration.fontScale
+                val density = context.resources.displayMetrics.density
+                when (sizeCategory) {
+                    BStreamWidgetLayout.LARGE -> {
+                        val bottom = if (fontScale > 1f) 8 else 14
+                        setViewPadding(
+                            R.id.widget_card,
+                            (10 * density).roundToInt(),
+                            0,
+                            (10 * density).roundToInt(),
+                            (bottom * density).roundToInt(),
+                        )
+                    }
+                    BStreamWidgetLayout.EXPANDED -> {
+                        val bottom = if (fontScale > 1f) 10 else 16
+                        setViewPadding(
+                            R.id.widget_card,
+                            (12 * density).roundToInt(),
+                            (2 * density).roundToInt(),
+                            (12 * density).roundToInt(),
+                            (bottom * density).roundToInt(),
+                        )
+                    }
+                    else -> Unit
+                }
                 val displayTitle = title.ifEmpty {
                     if (english) "Not playing" else "Sin reproducción"
                 }
@@ -296,7 +327,7 @@ class BStreamMusicWidget : AppWidgetProvider() {
                             // Bump the adapter identity when the collection row
                             // RemoteViews schema changes so launchers discard
                             // rows cached from the previous widget version.
-                            data = Uri.parse("bstream-widget://queue/$appWidgetId/rows-v2")
+                            data = Uri.parse("bstream-widget://queue/$appWidgetId/rows-v4")
                         }
                         setRemoteAdapter(R.id.widget_queue_list, adapterIntent)
                         setEmptyView(R.id.widget_queue_list, R.id.widget_queue_empty)
@@ -304,7 +335,12 @@ class BStreamMusicWidget : AppWidgetProvider() {
                             context, appWidgetId,
                         )
                         setPendingIntentTemplate(R.id.widget_queue_list, queueClickTemplate)
-                        if (focusQueue) setScrollPosition(R.id.widget_queue_list, 0)
+                        if (focusQueue) {
+                            setScrollPosition(
+                                R.id.widget_queue_list,
+                                (prefs.getInt("queueCurrentPosition", 0) - 2).coerceAtLeast(0),
+                            )
+                        }
                     }
                 }
                 setImageViewResource(
@@ -357,8 +393,20 @@ class BStreamMusicWidget : AppWidgetProvider() {
         }
 
         private fun queueFocus(json: String): String = runCatching {
-            JSONArray(json).optJSONObject(0)?.optString("id").orEmpty()
+            val queue = JSONArray(json)
+            val current = (0 until queue.length())
+                .mapNotNull(queue::optJSONObject)
+                .firstOrNull { it.optBoolean("isCurrent", false) }
+                ?: queue.optJSONObject(0)
+            "${current?.optString("queueIndex").orEmpty()}:${current?.optString("id").orEmpty()}"
         }.getOrDefault("")
+
+        private fun queueCurrentPosition(json: String): Int = runCatching {
+            val queue = JSONArray(json)
+            (0 until queue.length()).firstOrNull { index ->
+                queue.optJSONObject(index)?.optBoolean("isCurrent", false) == true
+            } ?: 0
+        }.getOrDefault(0)
 
         private fun notifyQueueChanged(context: Context, manager: AppWidgetManager, id: Int) {
             val options = manager.getAppWidgetOptions(id)

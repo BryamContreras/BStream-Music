@@ -89,6 +89,7 @@ class PlaybackVisualCache extends ChangeNotifier {
       entry.coverFallbackSource = fallbackSource;
       entry.coverFile = null;
       entry.coverFromSharedCache = false;
+      entry.coverComplete = false;
       entry.coverFailedAt = null;
       revision++;
     }
@@ -104,7 +105,7 @@ class PlaybackVisualCache extends ChangeNotifier {
 
     if (source != null &&
         isNetworkImageSource(source) &&
-        entry.coverFile == null &&
+        !entry.coverComplete &&
         entry.coverTransfer == null &&
         _mayRetry(entry.coverFailedAt)) {
       final transfer = _Transfer();
@@ -160,44 +161,66 @@ class PlaybackVisualCache extends ChangeNotifier {
   ) async {
     File? file;
     var fromSharedCache = false;
+    var completedBestRendition = false;
     try {
       final candidates = <String>{
+        ...youtubeThumbnailUpgradeCandidates(source),
         ...artworkDownloadSourceCandidates(source),
         if (fallbackSource != null && isNetworkImageSource(fallbackSource))
           ...artworkDownloadSourceCandidates(fallbackSource),
-      };
+      }.toList(growable: false);
+      int? cachedIndex;
       // The normal app cache may already contain this cover (e.g. from search
-      // or a previous offline session). Reading it must not start a download.
-      for (final candidate in candidates) {
+      // or a previous offline session). A card-sized rendition is a useful
+      // immediate preview, not proof that the full player image is ready.
+      for (var index = 0; index < candidates.length; index++) {
         if (transfer.cancelled) break;
         try {
-          final cached = await _sharedArtworkLookup(candidate);
+          final cached = await _sharedArtworkLookup(candidates[index]);
           if (cached != null &&
               await cached.exists() &&
               await cached.length() > 0) {
             file = cached;
             fromSharedCache = true;
+            cachedIndex = index;
+            _publishCover(
+              entry,
+              source,
+              transfer,
+              cached,
+              fromSharedCache: true,
+            );
             break;
           }
         } catch (_) {
           // A unavailable shared-cache database must not hide a live cover.
         }
       }
-      for (final candidate in candidates) {
-        if (transfer.cancelled || file != null) break;
-        final uri = Uri.tryParse(candidate);
+      // Only try renditions sharper than the cached preview. Do not perform
+      // background work for older songs, and keep the preview visible if the
+      // network is slow, a higher rendition is missing, or a transfer fails.
+      final attempts = cachedIndex ?? candidates.length;
+      for (var index = 0; index < attempts; index++) {
+        if (transfer.cancelled) break;
+        final uri = Uri.tryParse(candidates[index]);
         if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
           continue;
         }
-        file = await _download(
+        final downloaded = await _download(
           entry.key,
           uri,
           'cover',
           _maxCoverBytes,
           transfer,
         );
-        if (file != null) break;
+        if (downloaded != null) {
+          file = downloaded;
+          fromSharedCache = false;
+          completedBestRendition = index == 0;
+          break;
+        }
       }
+      completedBestRendition = completedBestRendition || cachedIndex == 0;
     } catch (_) {
       // A failed cache lookup or request leaves the existing artwork fallback.
     } finally {
@@ -207,20 +230,53 @@ class PlaybackVisualCache extends ChangeNotifier {
             file != null &&
             _entries[entry.key] == entry &&
             entry.coverSource == source) {
-          entry.coverFile = file;
-          entry.coverFromSharedCache = fromSharedCache;
+          entry.coverComplete = completedBestRendition;
+          entry.coverFailedAt = completedBestRendition ? null : DateTime.now();
+          _publishCover(
+            entry,
+            source,
+            transfer,
+            file,
+            fromSharedCache: fromSharedCache,
+            requirePendingTransfer: false,
+          );
           assert(() {
             debugPrint(
               'BStream visual cover ${entry.key}: ${file!.lengthSync()} bytes',
             );
             return true;
           }());
-          _changed();
         } else if (!transfer.cancelled && file == null) {
           entry.coverFailedAt = DateTime.now();
         }
       }
     }
+  }
+
+  void _publishCover(
+    _VisualEntry entry,
+    String source,
+    _Transfer transfer,
+    File file, {
+    required bool fromSharedCache,
+    bool requirePendingTransfer = true,
+  }) {
+    if (_disposed ||
+        transfer.cancelled ||
+        _activeKey != entry.key ||
+        _entries[entry.key] != entry ||
+        entry.coverSource != source ||
+        (requirePendingTransfer && !identical(entry.coverTransfer, transfer))) {
+      return;
+    }
+    if (entry.coverFile?.path == file.path &&
+        entry.coverFromSharedCache == fromSharedCache) {
+      return;
+    }
+    _retireFile(entry.coverFile, owned: !entry.coverFromSharedCache);
+    entry.coverFile = file;
+    entry.coverFromSharedCache = fromSharedCache;
+    _changed();
   }
 
   Future<void> _loadVideo(
@@ -427,6 +483,7 @@ class _VisualEntry {
   String? coverFallbackSource;
   File? coverFile;
   bool coverFromSharedCache = false;
+  bool coverComplete = false;
   DateTime? coverFailedAt;
   Uri? videoUrl;
   File? videoFile;
