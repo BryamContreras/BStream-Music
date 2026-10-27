@@ -8,6 +8,7 @@ import 'package:bstream_music/features/music/presentation/providers/playback_vis
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/services/player/playback_visual_cache.dart';
+import 'package:bstream_music/services/player/fragmented_artwork_mp4.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -21,15 +22,22 @@ import 'package:video_player/video_player.dart';
 /// --dart-define=BSTREAM_CANVAS_TEST_FILE=absolute-path-to-mp4
 /// Add BSTREAM_CANVAS_TEST_LOOKUP=true to exercise the online player pipeline,
 /// and BSTREAM_CANVAS_TEST_UNKNOWN_DURATION=true for missing native metadata.
+/// BSTREAM_CANVAS_TEST_APPLE=true exercises Animated Artwork instead of Canvas.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   const path = String.fromEnvironment('BSTREAM_CANVAS_TEST_FILE');
 
-  testWidgets('cached Spotify Canvas advances and becomes visible on Windows', (
+  testWidgets('cached artwork advances and becomes visible on Windows', (
     tester,
   ) async {
-    final file = File(path);
-    expect(await file.exists(), isTrue);
+    final original = File(path);
+    expect(await original.exists(), isTrue);
+    final fixtureDirectory = await Directory.systemTemp.createTemp(
+      'bstream_native_artwork_',
+    );
+    addTearDown(() => fixtureDirectory.delete(recursive: true));
+    final file = await original.copy('${fixtureDirectory.path}/fixture.mp4');
+    if (_appleArtwork) await repairFragmentedArtworkMp4(file);
     final controller = VideoPlayerController.file(
       file,
       videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
@@ -38,6 +46,7 @@ void main() {
       await controller.initialize().timeout(const Duration(seconds: 12));
       debugPrint('Native Canvas initialized: ${controller.value}');
       expect(controller.value.isInitialized, isTrue);
+      expect(controller.value.duration, greaterThan(Duration.zero));
       expect(isRemoteArtworkVideoSizeAllowed(controller.value.size), isTrue);
       await controller.setVolume(0);
       await controller.setLooping(true);
@@ -63,7 +72,15 @@ void main() {
               height: 600,
               child: RepaintBoundary(
                 key: boundaryKey,
-                child: SpotifyCanvasVideo(url: file.uri, isPlaying: true),
+                child: SpotifyCanvasVideo(
+                  url: file.uri,
+                  isPlaying: true,
+                  startOffset: _appleArtwork
+                      ? const Duration(seconds: 7)
+                      : Duration.zero,
+                  durationHint: _snapshot.duration ?? Duration.zero,
+                  autoFitInsetArtwork: _appleArtwork,
+                ),
               ),
             ),
           ),
@@ -81,6 +98,11 @@ void main() {
       () => video.controller.value.position > Duration.zero,
       () => 'Production Canvas did not advance: ${video.controller.value}',
     );
+    await _waitUntil(
+      tester,
+      () => _videoVisible(tester),
+      () => 'Artwork has a timeline but remains hidden.',
+    );
     await tester.pump(const Duration(milliseconds: 400));
     final opacity = tester.widget<AnimatedOpacity>(
       find
@@ -92,7 +114,7 @@ void main() {
     );
     expect(opacity.opacity, 1);
     expect(video.controller.value.volume, 0);
-    expect(video.controller.value.isLooping, isTrue);
+    expect(video.controller.value.isLooping, !_appleArtwork);
     final boundary =
         boundaryKey.currentContext!.findRenderObject()!
             as RenderRepaintBoundary;
@@ -120,7 +142,7 @@ void main() {
       debugPrint('Native Canvas pixel range: $darkest..$lightest');
       final png = (await frame.toByteData(format: ui.ImageByteFormat.png))!;
       await File(
-        '${file.parent.path}/spotify-canvas-windows-render.png',
+        '${original.parent.path}/windows-${_appleArtwork ? 'artwork' : 'canvas'}-render.png',
       ).writeAsBytes(
         png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
       );
@@ -131,6 +153,27 @@ void main() {
       );
     } finally {
       frame.dispose();
+    }
+    if (_appleArtwork) {
+      final duration = video.controller.value.duration;
+      await video.controller.seekTo(
+        duration - const Duration(milliseconds: 700),
+      );
+      await _waitUntil(
+        tester,
+        () =>
+            video.controller.value.position >
+                const Duration(milliseconds: 7120) &&
+            video.controller.value.position <
+                duration - const Duration(seconds: 2) &&
+            _videoVisible(tester),
+        () => 'Artwork did not resume its loop: ${video.controller.value}',
+      );
+      expect(video.controller.value.isPlaying, isTrue);
+      expect(video.controller.value.hasError, isFalse);
+      debugPrint(
+        'Animated Artwork resumed its loop: ${video.controller.value.position}',
+      );
     }
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -167,7 +210,11 @@ void main() {
                 home: Scaffold(
                   body: PlayerPanel(
                     style: style,
-                    spotifyCanvasEnabled: true,
+                    artworkStyle: _appleArtwork
+                        ? PlayerArtworkStyle.expanded
+                        : defaultPlayerArtworkStyle,
+                    spotifyCanvasEnabled: !_appleArtwork,
+                    appleAnimatedArtworkEnabled: _appleArtwork,
                     animatedArtworkEnabled: false,
                     drawBackground: false,
                     trackTransitionsEnabled: false,
@@ -187,7 +234,9 @@ void main() {
           );
           await _waitUntil(
             tester,
-            () => nativeVideo.controller.value.position > Duration.zero,
+            () =>
+                nativeVideo.controller.value.position > Duration.zero &&
+                _videoVisible(tester),
             () =>
                 'Full player $style Canvas did not advance: ${nativeVideo.controller.value}',
           );
@@ -206,15 +255,27 @@ void main() {
   }, skip: path.isEmpty || !Platform.isWindows);
 }
 
+bool _videoVisible(WidgetTester tester) {
+  final opacity = find.ancestor(
+    of: find.byType(VideoPlayer).first,
+    matching: find.byType(AnimatedOpacity),
+  );
+  return opacity.evaluate().isNotEmpty &&
+      tester.widget<AnimatedOpacity>(opacity.first).opacity == 1;
+}
+
 const _snapshot = PlayerSnapshot(
   status: PlayerStatus.playing,
   title: 'vampire',
   artist: 'Olivia Rodrigo',
+  album: 'GUTS',
   duration: bool.fromEnvironment('BSTREAM_CANVAS_TEST_UNKNOWN_DURATION')
       ? null
       : Duration(seconds: 220),
   trackId: 'native-canvas-fixture',
 );
+
+const _appleArtwork = bool.fromEnvironment('BSTREAM_CANVAS_TEST_APPLE');
 
 class _CanvasPlayer extends PlayerController {
   @override
@@ -226,7 +287,8 @@ class _CanvasSettings extends SettingsController {
   Future<SettingsState> build() async => const SettingsState(
     downloadDirectory: '',
     language: AppLanguage.spanish,
-    spotifyCanvasEnabled: true,
+    spotifyCanvasEnabled: !_appleArtwork,
+    appleAnimatedArtworkEnabled: _appleArtwork,
   );
 }
 

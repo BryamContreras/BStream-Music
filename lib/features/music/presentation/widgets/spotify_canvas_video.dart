@@ -322,14 +322,17 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
         position > firstRenderablePosition) {
       _loopHasAdvancedSinceRestart = true;
     }
-    if (_fastForwardingIntro && position > _effectiveStartOffset) {
+    if (_fastForwardingIntro && position > firstRenderablePosition) {
+      // Keep the same threshold as the reveal below. setPlaybackSpeed can
+      // notify synchronously; stopping before the decode guard would switch
+      // back to fast-forward in that listener and recurse between 1x and 8x.
       _fastForwardingIntro = false;
       _loopFrameCaptureUnavailable = false;
       unawaited(controller.setPlaybackSpeed(1).catchError((_) {}));
     }
     if (_loopFrameCaptureUnavailable &&
         controller.value.isPlaying &&
-        position <= _effectiveStartOffset &&
+        position < _effectiveStartOffset &&
         !_fastForwardingIntro) {
       // If this renderer cannot snapshot its external video texture, keep the
       // moving surface visible and compress the hidden intro to avoid flashing
@@ -351,11 +354,12 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
         _scheduleLoopFrameRelease();
         _synchronizePlayback();
       } else if (_effectiveStartOffset > Duration.zero &&
+          position < _effectiveStartOffset &&
           controller.value.isPlaying &&
           !_fastForwardingIntro) {
         // Fragmented MP4 artwork can be playable but not seekable. If the
         // native player starts at zero after the seek, advance the muted
-        // decoder quickly behind the still cover until it reaches 5 seconds.
+        // decoder behind the still cover until it reaches the requested offset.
         _fastForwardingIntro = true;
         logVisualLoad(
           'video intro seek unavailable; fast-forwarding',

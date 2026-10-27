@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/utils/image_source.dart';
 import '../../core/utils/cached_artwork_image_provider.dart';
+import 'fragmented_artwork_mp4.dart';
 import 'visual_load_diagnostics.dart';
 
 /// A session-only cache for the player, bounded to the current song and the
@@ -384,6 +385,22 @@ class PlaybackVisualCache extends ChangeNotifier {
       await output.close();
       output = null;
       if (transfer.cancelled || received == 0) return null;
+      if (Platform.isWindows &&
+          kind == 'video' &&
+          url.host == 'mvod.itunes.apple.com') {
+        // Apple HLS MP4s can omit their global duration. Media Foundation
+        // otherwise treats them as completed before a frame is displayed.
+        // Prepare only this private, complete .part file, off the UI isolate.
+        final preparationTimer = Stopwatch()..start();
+        if (await repairFragmentedArtworkMp4(partial)) {
+          logVisualLoad(
+            'video Windows timeline repaired',
+            track: trackKey,
+            elapsedMs: preparationTimer.elapsedMilliseconds,
+          );
+        }
+        if (transfer.cancelled) return null;
+      }
       return await partial.rename(target.path);
     } catch (_) {
       return null;
