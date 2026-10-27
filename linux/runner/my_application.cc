@@ -10,9 +10,76 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* csv_channel;
+  FlValue* csv_pending;
+  gboolean csv_ready;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+static void csv_method_call_cb(FlMethodChannel* channel, FlMethodCall* call,
+                               gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* method = fl_method_call_get_name(call);
+  if (g_strcmp0(method, "start") == 0) {
+    self->csv_ready = TRUE;
+    fl_method_call_respond_success(call, self->csv_pending, nullptr);
+    g_clear_pointer(&self->csv_pending, fl_value_unref);
+    self->csv_pending = fl_value_new_list();
+  } else if (g_strcmp0(method, "stop") == 0) {
+    self->csv_ready = FALSE;
+    fl_method_call_respond_success(call, nullptr, nullptr);
+  } else if (g_strcmp0(method, "release") == 0) {
+    // Linux opens the original document and never removes it.
+    fl_method_call_respond_success(call, nullptr, nullptr);
+  } else {
+    fl_method_call_respond_not_implemented(call, nullptr);
+  }
+}
+
+static void csv_accept_file(MyApplication* self, GFile* file) {
+  g_autofree gchar* path = g_file_get_path(file);
+  g_autofree gchar* name = g_file_get_basename(file);
+  if (!path || !name) return;
+  g_autofree gchar* lower = g_ascii_strdown(name, -1);
+  if (!g_str_has_suffix(lower, ".csv")) return;
+  g_autofree gchar* id = g_uuid_string_random();
+  g_autofree gchar* source = g_file_get_uri(file);
+  g_autoptr(FlValue) event = fl_value_new_map();
+  fl_value_set_string_take(event, "id", fl_value_new_string(id));
+  fl_value_set_string_take(event, "path", fl_value_new_string(path));
+  fl_value_set_string_take(event, "name", fl_value_new_string(name));
+  fl_value_set_string_take(event, "source", fl_value_new_string(source));
+  fl_value_set_string_take(event, "temporary", fl_value_new_bool(FALSE));
+  if (!self->csv_ready || !self->csv_channel) {
+    fl_value_append(self->csv_pending, event);
+  } else {
+    fl_method_channel_invoke_method(self->csv_channel, "open", event, nullptr,
+                                    nullptr, nullptr);
+  }
+}
+
+static gint csv_command_line_cb(GApplication* application,
+                                GApplicationCommandLine* command_line,
+                                gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  g_auto(GStrv) arguments =
+      g_application_command_line_get_arguments(command_line, nullptr);
+  const gchar* cwd = g_application_command_line_get_cwd(command_line);
+  for (gchar** argument = arguments + 1; *argument; ++argument) {
+    g_autoptr(GFile) file =
+        g_file_new_for_commandline_arg_and_cwd(*argument, cwd);
+    csv_accept_file(self, file);
+  }
+  return 0;
+}
+
+static void csv_open_cb(GApplication* application, GFile** files, gint count,
+                        gchar* hint, gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  g_application_activate(application);
+  for (gint index = 0; index < count; ++index) csv_accept_file(self, files[index]);
+}
 
 static void window_method_call_cb(FlMethodChannel* channel, FlMethodCall* call,
                                   gpointer user_data) {
@@ -40,6 +107,21 @@ static void window_method_call_cb(FlMethodChannel* channel, FlMethodCall* call,
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+}
+
+static void load_bundled_window_icon() {
+  // Resolve relative to the executable, not the caller's working directory.
+  // The theme name remains registered for installed desktops and Wayland;
+  // this pixbuf supplies the matching window icon for direct X11 launches.
+  g_autofree gchar* executable = g_file_read_link("/proc/self/exe", nullptr);
+  if (!executable) return;
+  g_autofree gchar* directory = g_path_get_dirname(executable);
+  g_autofree gchar* icon_path =
+      g_build_filename(directory, "data", APPLICATION_ID ".png", nullptr);
+  g_autoptr(GError) error = nullptr;
+  if (!gtk_window_set_default_icon_from_file(icon_path, &error)) {
+    g_debug("Bundled window icon unavailable: %s", error->message);
+  }
 }
 
 // GNOME integrates GTK header bars with its window controls. Other desktops,
@@ -120,6 +202,11 @@ static void my_application_activate(GApplication* application) {
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  self->csv_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "bstream_music/incoming_csv", FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(self->csv_channel, csv_method_call_cb,
+                                           self, nullptr);
   g_autoptr(FlMethodChannel) window_channel = fl_method_channel_new(
       fl_engine_get_binary_messenger(fl_view_get_engine(view)),
       "bstream/desktop_window", FL_METHOD_CODEC(codec));
@@ -172,6 +259,7 @@ static void my_application_startup(GApplication* application) {
       TRUE);
 
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
+  load_bundled_window_icon();
 }
 
 // Implements GApplication::shutdown.
@@ -187,6 +275,8 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->csv_channel);
+  g_clear_pointer(&self->csv_pending, fl_value_unref);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
@@ -199,7 +289,12 @@ static void my_application_class_init(MyApplicationClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
 }
 
-static void my_application_init(MyApplication* self) {}
+static void my_application_init(MyApplication* self) {
+  self->csv_pending = fl_value_new_list();
+  self->csv_ready = FALSE;
+  g_signal_connect(self, "command-line", G_CALLBACK(csv_command_line_cb), self);
+  g_signal_connect(self, "open", G_CALLBACK(csv_open_cb), self);
+}
 
 MyApplication* my_application_new() {
   // Set the program name to the application ID, which helps various systems

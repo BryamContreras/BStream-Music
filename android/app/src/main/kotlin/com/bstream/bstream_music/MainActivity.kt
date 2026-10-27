@@ -65,7 +65,8 @@ class MainActivity : AudioServiceActivity() {
             window.decorView.importantForAutofill =
                 View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
-        if (!handleHomeWidgetActionIntent(intent) && !handleExternalAudioIntent(intent)) {
+        if (!IncomingCsvFileBridge.accept(this, intent) &&
+            !handleHomeWidgetActionIntent(intent) && !handleExternalAudioIntent(intent)) {
             handleAppActivationIntent(intent)
             requestNotificationPermissionIfNeeded()
         }
@@ -73,6 +74,7 @@ class MainActivity : AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        IncomingCsvFileBridge.attach(flutterEngine.dartExecutor.binaryMessenger)
 
         audioOutputPlugin?.dispose()
         audioOutputPlugin = AudioOutputPlugin(this, flutterEngine.dartExecutor.binaryMessenger)
@@ -199,7 +201,8 @@ class MainActivity : AudioServiceActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (!handleHomeWidgetActionIntent(intent) && !handleExternalAudioIntent(intent)) {
+        if (!IncomingCsvFileBridge.accept(this, intent) &&
+            !handleHomeWidgetActionIntent(intent) && !handleExternalAudioIntent(intent)) {
             handleAppActivationIntent(intent)
         }
     }

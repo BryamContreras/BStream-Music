@@ -44,6 +44,7 @@ import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
 import '../../../../services/recommendations/recommendations.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
+import '../../../../services/sharing/incoming_csv_file_service.dart';
 import '../../../../services/sharing/incoming_track_link_service.dart';
 import '../../../../services/sharing/track_share_service.dart';
 import '../../../../services/sharing/playlist_csv_share_service.dart';
@@ -352,6 +353,16 @@ final incomingTrackLinkServiceProvider = Provider<IncomingTrackLinkService>((
   ref,
 ) {
   return AppLinksIncomingTrackLinkService();
+});
+
+final incomingCsvFileServiceProvider = Provider<IncomingCsvFileService>((ref) {
+  final service = NativeIncomingCsvFileService();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+final incomingCsvFileProvider = StreamProvider<IncomingCsvFile>((ref) {
+  return ref.watch(incomingCsvFileServiceProvider).files;
 });
 
 final bstreamTrackLinkCodecProvider = Provider<BStreamTrackLinkCodec>((ref) {

@@ -171,6 +171,21 @@ abstract interface class YouTubeMusicArtistProfileLookup {
   });
 }
 
+abstract interface class YouTubeMusicArtistSongsLookup {
+  /// Follows the Songs shelf endpoint verbatim, including its opaque params.
+  Future<InnerTubeArtistSongsDetail> getArtistSongs(
+    InnerTubeBrowseTarget target, {
+    int limit = 1000,
+  });
+}
+
+abstract interface class YouTubeMusicArtistReleaseCatalogLookup {
+  Future<InnerTubeArtistReleaseCatalog> getArtistReleaseCatalog(
+    InnerTubeBrowseTarget target, {
+    int limit = 1000,
+  });
+}
+
 abstract interface class YouTubeMusicPlaylistQueueLookup {
   Future<InnerTubeNextPage> getPlaylistNext(
     String playlistId, {
@@ -195,6 +210,8 @@ class InnerTubeSearchService
         YouTubeMusicRelated,
         YouTubeMusicArtistLookup,
         YouTubeMusicArtistProfileLookup,
+        YouTubeMusicArtistSongsLookup,
+        YouTubeMusicArtistReleaseCatalogLookup,
         YouTubeMusicPlaylistQueueLookup {
   factory InnerTubeSearchService({
     InnerTubeTransport? transport,
@@ -379,6 +396,10 @@ class InnerTubeSearchService
   static const int maxMoodGenrePageSections = 24;
   static const int _maxHomeContinuationRequests = 1;
   static const int maxDetailContinuationRequests = 4;
+  static const int maxArtistSongs = 1000;
+  static const int maxArtistSongsContinuationRequests = 20;
+  static const int maxArtistReleases = 1000;
+  static const int maxArtistReleaseContinuationRequests = 20;
   static const int _artistDurationLookupConcurrency = 3;
   static const int _durationCacheCapacity = 256;
   static const String songsFilter = 'EgWKAQIIAWoMEA4QChADEAQQCRAF';
@@ -1323,6 +1344,172 @@ class InnerTubeSearchService
     return _enrichArtistSongDurations(profile);
   }
 
+  @override
+  Future<InnerTubeArtistSongsDetail> getArtistSongs(
+    InnerTubeBrowseTarget target, {
+    int limit = maxArtistSongs,
+  }) async {
+    _ensureActive();
+    final browseId = target.browseId.trim();
+    final params = target.params.trim();
+    if (!_genericBrowseIdPattern.hasMatch(browseId)) {
+      throw ArgumentError.value(target.browseId, 'target.browseId');
+    }
+    if (params.length > 8192 || _containsControlCharacter(params)) {
+      throw ArgumentError.value(target.params, 'target.params');
+    }
+    if (limit < 1 || limit > maxArtistSongs) {
+      throw RangeError.range(limit, 1, maxArtistSongs, 'limit');
+    }
+    var configuration = await _configuration();
+
+    Future<_ParsedInnerTubeArtistSongsPage> requestPage({
+      String? continuation,
+    }) async {
+      Future<InnerTubeHttpResponse> send() => _requestBrowse(
+        configuration,
+        browseId: continuation == null ? browseId : null,
+        params: continuation == null && params.isNotEmpty ? params : null,
+        continuation: continuation,
+      );
+      var response = await send();
+      if (_needsFreshConfiguration(response.statusCode)) {
+        configuration = await _freshConfiguration();
+        response = await send();
+      }
+      _validateJsonResponse(response);
+      return parseInnerTubeJson(
+        response.body,
+        _InnerTubeArtistSongsResponseParser(_parser).parse,
+      );
+    }
+
+    var page = await requestPage();
+    final advertisedCount = page.totalSongCount;
+    final songs = <InnerTubeSong>[];
+    final seenVideoIds = <String>{};
+    var truncated = false;
+    void addPage(_ParsedInnerTubeArtistSongsPage page) {
+      truncated |= page.truncated;
+      for (final song in page.songs) {
+        if (!seenVideoIds.add(song.videoId)) continue;
+        if (songs.length == limit) {
+          truncated = true;
+          break;
+        }
+        songs.add(song);
+      }
+    }
+
+    addPage(page);
+    var continuation = page.continuation;
+    final requestedTokens = <String>{};
+    while (songs.length < limit &&
+        continuation != null &&
+        requestedTokens.length < maxArtistSongsContinuationRequests &&
+        requestedTokens.add(continuation)) {
+      try {
+        page = await requestPage(continuation: continuation);
+        addPage(page);
+        continuation = page.continuation;
+      } on InnerTubeException {
+        // Keep the playable prefix, explicitly marked as incomplete.
+        break;
+      }
+    }
+    final isComplete = continuation == null && !truncated;
+    return InnerTubeArtistSongsDetail(
+      songs: songs,
+      isComplete: isComplete,
+      totalSongCount: advertisedCount != null && advertisedCount >= songs.length
+          ? advertisedCount
+          : isComplete
+          ? songs.length
+          : null,
+    );
+  }
+
+  @override
+  Future<InnerTubeArtistReleaseCatalog> getArtistReleaseCatalog(
+    InnerTubeBrowseTarget target, {
+    int limit = maxArtistReleases,
+  }) async {
+    _ensureActive();
+    final browseId = target.browseId.trim();
+    final params = target.params.trim();
+    if (!_genericBrowseIdPattern.hasMatch(browseId)) {
+      throw ArgumentError.value(target.browseId, 'target.browseId');
+    }
+    if (params.length > 8192 || _containsControlCharacter(params)) {
+      throw ArgumentError.value(target.params, 'target.params');
+    }
+    if (limit < 1 || limit > maxArtistReleases) {
+      throw RangeError.range(limit, 1, maxArtistReleases, 'limit');
+    }
+
+    var page = await _loadArtistReleaseCatalogPage(
+      browseId: browseId,
+      params: params,
+    );
+    final releases = <InnerTubeAlbum>[];
+    final seenBrowseIds = <String>{};
+    var truncated = false;
+    void addPage(List<InnerTubeAlbum> pageReleases) {
+      for (final release in pageReleases) {
+        if (!seenBrowseIds.add(release.browseId)) continue;
+        if (releases.length == limit) {
+          truncated = true;
+          break;
+        }
+        releases.add(release);
+      }
+    }
+
+    addPage(page.releases);
+    var continuation = page.continuation;
+    final requestedTokens = <String>{};
+    while (releases.length < limit &&
+        continuation != null &&
+        requestedTokens.length < maxArtistReleaseContinuationRequests &&
+        requestedTokens.add(continuation)) {
+      try {
+        page = await _loadArtistReleaseCatalogPage(continuation: continuation);
+      } on InnerTubeException {
+        // Keep the loaded catalog prefix and report it as incomplete.
+        truncated = true;
+        break;
+      }
+      addPage(page.releases);
+      continuation = page.continuation;
+    }
+    if (continuation != null &&
+        (releases.length == limit ||
+            requestedTokens.length >= maxArtistReleaseContinuationRequests ||
+            requestedTokens.contains(continuation))) {
+      truncated = true;
+    }
+    return InnerTubeArtistReleaseCatalog(
+      releases: releases,
+      isComplete: !truncated,
+    );
+  }
+
+  Future<_ParsedInnerTubeArtistReleasePage> _loadArtistReleaseCatalogPage({
+    String? browseId,
+    String? params,
+    String? continuation,
+  }) async {
+    final response = await _loadBrowseResponse(
+      browseId: browseId,
+      params: params,
+      continuation: continuation,
+    );
+    return parseInnerTubeJson(
+      response.body,
+      _InnerTubeArtistReleaseCatalogResponseParser(_albumParser).parse,
+    );
+  }
+
   /// Artist browse shelves commonly omit their duration column even though
   /// the player endpoint exposes an exact `lengthSeconds` for the same ID.
   /// Resolve only missing values, with a small worker pool, and retain every
@@ -1382,6 +1569,9 @@ class InnerTubeSearchService
       radioPlaylistId: profile.radioPlaylistId,
       radioSeedVideoId: profile.radioSeedVideoId,
       isSubscribed: profile.isSubscribed,
+      songsBrowseTarget: profile.songsBrowseTarget,
+      albumsBrowseTarget: profile.albumsBrowseTarget,
+      singlesBrowseTarget: profile.singlesBrowseTarget,
     );
   }
 
@@ -2588,6 +2778,159 @@ class InnerTubeSearchParser {
   }
 }
 
+final class _ParsedInnerTubeArtistSongsPage {
+  const _ParsedInnerTubeArtistSongsPage({
+    required this.songs,
+    required this.continuation,
+    required this.truncated,
+    this.totalSongCount,
+  });
+
+  final List<InnerTubeSong> songs;
+  final String? continuation;
+  final bool truncated;
+  final int? totalSongCount;
+}
+
+final class _ParsedInnerTubeArtistReleasePage {
+  const _ParsedInnerTubeArtistReleasePage({
+    required this.releases,
+    required this.continuation,
+  });
+
+  final List<InnerTubeAlbum> releases;
+  final String? continuation;
+}
+
+final class _InnerTubeArtistReleaseCatalogResponseParser {
+  const _InnerTubeArtistReleaseCatalogResponseParser(this.albumParser);
+
+  final InnerTubeAlbumParser albumParser;
+
+  _ParsedInnerTubeArtistReleasePage parse(Object? payload) {
+    if (payload is! Map) {
+      throw const InnerTubeFormatException(
+        'YouTube Music artist release response must be a JSON object.',
+      );
+    }
+    return _ParsedInnerTubeArtistReleasePage(
+      releases: albumParser.parseCatalog(
+        payload,
+        limit: InnerTubeSearchService.maxArtistReleases,
+      ),
+      continuation: _continuation(payload),
+    );
+  }
+
+  String? _continuation(Object? node) {
+    if (node is Map) {
+      final item = node['continuationItemRenderer'];
+      if (item is Map) {
+        final endpoint = item['continuationEndpoint'];
+        final command = endpoint is Map
+            ? endpoint['continuationCommand']
+            : null;
+        final token = command is Map ? command['token']?.toString() : null;
+        if (token != null) {
+          try {
+            return InnerTubeSearchService._validateContinuation(token);
+          } on ArgumentError {
+            // An invalid token is ignored; the catalog is reported as complete.
+          }
+        }
+      }
+      for (final value in node.values) {
+        final continuation = _continuation(value);
+        if (continuation != null) return continuation;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final continuation = _continuation(value);
+        if (continuation != null) return continuation;
+      }
+    }
+    return InnerTubeSearchService._findContinuationToken(
+      node,
+      containerNames: const <String>['nextContinuationData'],
+    );
+  }
+}
+
+final class _InnerTubeArtistSongsResponseParser {
+  const _InnerTubeArtistSongsResponseParser(this.songParser);
+
+  final InnerTubeSearchParser songParser;
+
+  _ParsedInnerTubeArtistSongsPage parse(Object? payload) {
+    final shelf = _findSongShelf(payload);
+    final songs = songParser._parse(
+      shelf ?? payload,
+      limit: InnerTubeSearchService.maxArtistSongs + 1,
+    );
+    return _ParsedInnerTubeArtistSongsPage(
+      songs: songs.take(InnerTubeSearchService.maxArtistSongs).toList(),
+      continuation: InnerTubeSearchService._homeContinuationToken(
+        shelf ?? payload,
+      ),
+      truncated: songs.length > InnerTubeSearchService.maxArtistSongs,
+      totalSongCount: _findTotalSongCount(payload),
+    );
+  }
+
+  Map<dynamic, dynamic>? _findSongShelf(Object? node) {
+    if (node is Map) {
+      for (final key in const [
+        'musicPlaylistShelfRenderer',
+        'musicShelfRenderer',
+        'musicPlaylistShelfContinuation',
+        'musicShelfContinuation',
+      ]) {
+        final shelf = node[key];
+        if (shelf is Map) return shelf;
+      }
+      for (final value in node.values) {
+        final shelf = _findSongShelf(value);
+        if (shelf != null) return shelf;
+      }
+    } else if (node is List) {
+      for (final value in node) {
+        final shelf = _findSongShelf(value);
+        if (shelf != null) return shelf;
+      }
+    }
+    return null;
+  }
+
+  int? _findTotalSongCount(Object? payload) {
+    final header = _InnerTubeCollectionHeaderParser(
+      songParser,
+    )._findHeader(payload);
+    if (header == null) return null;
+    for (final key in const [
+      'numSongs',
+      'songCount',
+      'numTracks',
+      'trackCount',
+    ]) {
+      final count = int.tryParse(header[key]?.toString() ?? '');
+      if (count != null && count >= 0 && count <= 1000000) return count;
+    }
+    final pattern = RegExp(
+      r'(\d[\d\s.,\u00a0\u202f]*)\s*(?:songs?|canciones?|faixas?|músicas?|titres?|morceaux|곡|首|曲)(?:\b|$)',
+      caseSensitive: false,
+    );
+    for (final key in const ['subtitle', 'secondSubtitle']) {
+      final text = songParser._text(header[key]);
+      if (text == null) continue;
+      final match = pattern.firstMatch(text);
+      if (match == null) continue;
+      final count = int.tryParse(match[1]!.replaceAll(RegExp(r'\D'), ''));
+      if (count != null && count <= 1000000) return count;
+    }
+    return null;
+  }
+}
+
 final class _InnerTubeDetailPage {
   const _InnerTubeDetailPage({required this.header, required this.songs});
 
@@ -2980,6 +3323,19 @@ class InnerTubeAlbumParser {
 
   List<InnerTubeAlbum> parse(Object? payload, {int limit = 20}) {
     _validateSearchLimit(limit);
+    return _parseAlbums(payload, limit: limit);
+  }
+
+  /// Parses a bounded release-catalog page rather than a search result page.
+  List<InnerTubeAlbum> parseCatalog(
+    Object? payload, {
+    int limit = InnerTubeSearchService.maxArtistReleases,
+  }) {
+    _validateArtistReleaseLimit(limit);
+    return _parseAlbums(payload, limit: limit);
+  }
+
+  List<InnerTubeAlbum> _parseAlbums(Object? payload, {required int limit}) {
     if (payload is! Map) {
       throw const InnerTubeFormatException(
         'YouTube Music album search response must be a JSON object.',
@@ -3459,6 +3815,17 @@ class InnerTubeAlbumParser {
     }
   }
 
+  void _validateArtistReleaseLimit(int limit) {
+    if (limit < 1 || limit > InnerTubeSearchService.maxArtistReleases) {
+      throw RangeError.range(
+        limit,
+        1,
+        InnerTubeSearchService.maxArtistReleases,
+        'limit',
+      );
+    }
+  }
+
   void _validateSongLimit(int limit) {
     if (limit < 1 || limit > InnerTubeSearchService.maxDetailResults) {
       throw RangeError.range(
@@ -3582,6 +3949,10 @@ class InnerTubeArtistParser {
 
     final albums = <InnerTubeAlbum>[];
     final singles = <InnerTubeAlbum>[];
+    InnerTubeBrowseTarget? albumsBrowseTarget;
+    InnerTubeBrowseTarget? singlesBrowseTarget;
+    var foundAlbumsShelf = false;
+    var foundSinglesShelf = false;
     final seenBrowseIds = <String>{};
     final relatedArtists = <InnerTubeArtist>[];
     final seenRelatedArtistBrowseIds = <String>{artistBrowseId.trim()};
@@ -3606,6 +3977,24 @@ class InnerTubeArtistParser {
       }
       final title = _carouselShelfTitle(shelf).toLowerCase();
       final releases = _albumParser.parse(shelf, limit: releaseLimit);
+      final isSinglesShelf =
+          _isSinglesSection(title) ||
+          (releases.isNotEmpty &&
+              releases.every((release) => _isSingleType(release.type)));
+      // A short discography may be fully present in its carousel and have no
+      // "more" action. Do not substitute a later Videos/Playlists action (or a
+      // different release shelf) when that category deliberately has no target.
+      if (releases.isNotEmpty) {
+        if (isSinglesShelf) {
+          if (!foundSinglesShelf) {
+            singlesBrowseTarget = _releaseBrowseTarget(shelf);
+            foundSinglesShelf = true;
+          }
+        } else if (!foundAlbumsShelf) {
+          albumsBrowseTarget = _releaseBrowseTarget(shelf);
+          foundAlbumsShelf = true;
+        }
+      }
       for (final release in releases) {
         if (!seenBrowseIds.add(release.browseId)) continue;
         if (_isSinglesSection(title) || _isSingleType(release.type)) {
@@ -3650,6 +4039,11 @@ class InnerTubeArtistParser {
       radioPlaylistId: startRadio?.playlistId ?? _findRadioPlaylistId(payload),
       radioSeedVideoId: startRadio?.videoId ?? _findRadioVideoId(payload),
       isSubscribed: subscription?.isSubscribed,
+      songsBrowseTarget: popularShelf == null
+          ? null
+          : _songsBrowseTarget(popularShelf),
+      albumsBrowseTarget: albumsBrowseTarget,
+      singlesBrowseTarget: singlesBrowseTarget,
       popularSongs: popularSongs,
       albums: albums,
       singles: singles,
@@ -3676,6 +4070,91 @@ class InnerTubeArtistParser {
         final result = _findArtistHeader(value);
         if (result != null) return result;
       }
+    }
+    return null;
+  }
+
+  InnerTubeBrowseTarget? _songsBrowseTarget(Map<dynamic, dynamic> shelf) {
+    InnerTubeBrowseTarget? fromAction(Object? node) {
+      if (node is Map) {
+        final browse = node['browseEndpoint'];
+        if (browse is Map) {
+          final browseId = _songParser._text(browse['browseId']);
+          final rawParams = browse['params'];
+          final params = rawParams == null ? '' : rawParams.toString().trim();
+          if (browseId != null &&
+              InnerTubeSearchService._genericBrowseIdPattern.hasMatch(
+                browseId,
+              ) &&
+              params.length <= 8192 &&
+              !InnerTubeSearchService._containsControlCharacter(params)) {
+            return InnerTubeBrowseTarget(browseId: browseId, params: params);
+          }
+        }
+        for (final value in node.values) {
+          final target = fromAction(value);
+          if (target != null) return target;
+        }
+      } else if (node is List) {
+        for (final value in node) {
+          final target = fromAction(value);
+          if (target != null) return target;
+        }
+      }
+      return null;
+    }
+
+    for (final key in const [
+      'bottomEndpoint',
+      'moreContentButton',
+      'footer',
+      'title',
+    ]) {
+      final target = fromAction(shelf[key]);
+      if (target != null) return target;
+    }
+    return null;
+  }
+
+  InnerTubeBrowseTarget? _releaseBrowseTarget(Map<dynamic, dynamic> shelf) {
+    InnerTubeBrowseTarget? fromAction(Object? node) {
+      if (node is Map) {
+        final browse = node['browseEndpoint'];
+        if (browse is Map) {
+          final browseId = _songParser._text(browse['browseId']);
+          final rawParams = browse['params'];
+          final params = rawParams == null ? '' : rawParams.toString().trim();
+          if (browseId != null &&
+              InnerTubeSearchService._genericBrowseIdPattern.hasMatch(
+                browseId,
+              ) &&
+              params.length <= 8192 &&
+              !InnerTubeSearchService._containsControlCharacter(params)) {
+            return InnerTubeBrowseTarget(browseId: browseId, params: params);
+          }
+        }
+        for (final value in node.values) {
+          final target = fromAction(value);
+          if (target != null) return target;
+        }
+      } else if (node is List) {
+        for (final value in node) {
+          final target = fromAction(value);
+          if (target != null) return target;
+        }
+      }
+      return null;
+    }
+
+    for (final node in <Object?>[
+      shelf['header'],
+      shelf['moreContentButton'],
+      shelf['bottomEndpoint'],
+      shelf['footer'],
+      shelf['title'],
+    ]) {
+      final target = fromAction(node);
+      if (target != null) return target;
     }
     return null;
   }

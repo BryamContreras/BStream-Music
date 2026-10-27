@@ -90,10 +90,17 @@ final class BStreamWidgetActionRelay {
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
+  override func application(_ application: UIApplication, open url: URL,
+                            options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+    if IncomingCsvFileBridge.shared.accept(url) { return true }
+    return super.application(application, open: url, options: options)
+  }
+
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
 
     let audioMessenger = engineBridge.applicationRegistrar.messenger()
+    IncomingCsvFileBridge.shared.attach(messenger: audioMessenger)
     audioOutputPlugin = BStreamAudioOutputPlugin(messenger: audioMessenger)
     localAudioQualityPlugin?.dispose()
     localAudioQualityPlugin = IOSLocalAudioQualityPlugin(messenger: audioMessenger)

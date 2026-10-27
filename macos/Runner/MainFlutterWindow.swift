@@ -16,6 +16,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    IncomingCsvFileBridge.shared.attach(messenger: flutterViewController.engine.binaryMessenger)
     let channel = FlutterMethodChannel(
       name: "bstream/desktop_window",
       binaryMessenger: flutterViewController.engine.binaryMessenger

@@ -75,6 +75,11 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{a
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "{#MyAppUserModelId}"; Tasks: desktopicon
 
 [Registry]
+; Register Open With without taking over a user's existing CSV default.
+Root: HKCU; Subkey: "Software\Classes\.csv\OpenWithProgids"; ValueType: string; ValueName: "BStreamMusic.Csv"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\BStreamMusic.Csv"; ValueType: string; ValueName: ""; ValueData: "CSV playlist"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\BStreamMusic.Csv\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"
+Root: HKCU; Subkey: "Software\Classes\BStreamMusic.Csv\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 Root: HKCU; Subkey: "Software\Classes\bstreammusic"; ValueType: string; ValueName: ""; ValueData: "URL:BStream Music Protocol"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\bstreammusic"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\bstreammusic\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"

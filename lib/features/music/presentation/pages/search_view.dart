@@ -1808,7 +1808,7 @@ class _SearchCategoryTabs extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final textScaler = MediaQuery.textScalerOf(context);
     final scaledLabelHeight = textScaler.scale(13);
-    final cardHeight = (scaledLabelHeight + 43).clamp(58.0, 82.0).toDouble();
+    final cardHeight = (scaledLabelHeight + 46).clamp(60.0, 84.0).toDouble();
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1884,6 +1884,17 @@ class _SearchCategoryTab extends StatelessWidget {
     final contentColor = selected
         ? colors.onPrimaryContainer
         : AppColors.contentTitleFor(context);
+    final surfaceColor = AppColors.cardSurfaceFor(context);
+    final borderColor = AppColors.cardBorderFor(context);
+    final selectedGradient = LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color.lerp(surfaceColor, selectedColor, 0.40)!,
+        Color.lerp(surfaceColor, selectedColor, 0.58)!,
+      ],
+    );
+    final selectedBorderColor = Color.lerp(borderColor, colors.primary, 0.52)!;
 
     return Semantics(
       selected: selected,
@@ -1900,14 +1911,11 @@ class _SearchCategoryTab extends StatelessWidget {
                 duration: motionDuration,
                 curve: Curves.easeOutCubic,
                 decoration: BoxDecoration(
-                  color: selected
-                      ? selectedColor
-                      : AppColors.cardSurfaceFor(context),
+                  color: selected ? null : surfaceColor,
+                  gradient: selected ? selectedGradient : null,
                   borderRadius: radius,
                   border: Border.all(
-                    color: selected
-                        ? colors.primary
-                        : AppColors.cardBorderFor(context),
+                    color: selected ? selectedBorderColor : borderColor,
                   ),
                 ),
               ),
@@ -1921,8 +1929,8 @@ class _SearchCategoryTab extends StatelessWidget {
                 child: Center(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 6,
+                      horizontal: 1,
+                      vertical: 3,
                     ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -1937,7 +1945,7 @@ class _SearchCategoryTab extends StatelessWidget {
                             key: ValueKey(
                               'search-category-icon-${category.name}',
                             ),
-                            size: 18,
+                            size: 20,
                             color: color ?? contentColor,
                           ),
                         ),
@@ -1950,7 +1958,7 @@ class _SearchCategoryTab extends StatelessWidget {
                                       const TextStyle())
                                   .copyWith(
                                     color: contentColor,
-                                    fontSize: 12,
+                                    fontSize: 13,
                                     fontWeight: selected
                                         ? FontWeight.w800
                                         : FontWeight.w600,
@@ -2340,7 +2348,7 @@ class _AlbumResultTileState extends State<_AlbumResultTile> {
           artworkSource: album.thumbnailUrl,
           metadata: metadata,
           fallbackIcon: Icons.album_rounded,
-          useCollectionArtworkForTrackFallback: true,
+          preferCollectionArtworkForTracks: true,
           queueSourceId: 'album:${album.browseId}',
           tracksProvider: searchAlbumTracksProvider(album.browseId),
           emptyMessage: widget.strings.albumWithoutSongs,

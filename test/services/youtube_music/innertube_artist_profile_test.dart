@@ -50,6 +50,12 @@ void main() {
           <String, Object?>{
             'musicShelfRenderer': <String, Object?>{
               'title': _text('Canciones más populares'),
+              'bottomEndpoint': <String, Object?>{
+                'browseEndpoint': <String, Object?>{
+                  'browseId': 'VLOLAKartistSongs',
+                  'params': 'opaque-songs-params',
+                },
+              },
               'contents': <Object?>[
                 _song(
                   videoId: 'popular0001',
@@ -68,10 +74,14 @@ void main() {
               title: 'Álbum Uno',
               type: 'Álbum',
             ),
+            browseId: 'VLartistAlbums',
+            params: 'opaque-albums-params',
           ),
           _releaseShelf(
             title: 'Sencillos',
             release: _release(browseId: 'MPREsingle123', title: 'Sencillo Uno'),
+            browseId: 'VLartistSingles',
+            params: 'opaque-singles-params',
           ),
         ],
       }, artistBrowseId: 'UCartist123');
@@ -88,11 +98,156 @@ void main() {
       expect(profile.radioSeedVideoId, 'radioSeed01');
       expect(profile.popularSongs.single.videoId, 'popular0001');
       expect(profile.popularSongs.single.albumBrowseId, 'MPREalbum123');
+      expect(
+        profile.songsBrowseTarget,
+        const InnerTubeBrowseTarget(
+          browseId: 'VLOLAKartistSongs',
+          params: 'opaque-songs-params',
+        ),
+      );
       expect(profile.albums.single.title, 'Álbum Uno');
       expect(profile.singles.single.title, 'Sencillo Uno');
+      expect(
+        profile.albumsBrowseTarget,
+        const InnerTubeBrowseTarget(
+          browseId: 'VLartistAlbums',
+          params: 'opaque-albums-params',
+        ),
+      );
+      expect(
+        profile.singlesBrowseTarget,
+        const InnerTubeBrowseTarget(
+          browseId: 'VLartistSingles',
+          params: 'opaque-singles-params',
+        ),
+      );
       expect(profile.relatedArtists, isEmpty);
     },
   );
+
+  test(
+    'complete release shelves never inherit video or featured destinations',
+    () {
+      final profile = const InnerTubeArtistParser().parse({
+        'contents': [
+          _releaseShelf(
+            title: 'Albums',
+            release: _release(
+              browseId: 'MPREalbumComplete',
+              title: 'Complete album',
+              type: 'Album',
+            ),
+          ),
+          _releaseShelf(
+            title: 'Singles & EPs',
+            release: _release(
+              browseId: 'MPREsingleComplete',
+              title: 'Complete single',
+              type: 'Single',
+            ),
+          ),
+          {
+            'musicCarouselShelfRenderer': {
+              'header': {
+                'musicCarouselShelfBasicHeaderRenderer': {
+                  'title': {
+                    'runs': [
+                      {
+                        'text': 'Videos',
+                        'navigationEndpoint': {
+                          'browseEndpoint': {
+                            'browseId': 'VLartistVideos',
+                            'params': 'opaque-video-params',
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+              'contents': [
+                _song(
+                  videoId: 'video000001',
+                  title: 'Music video',
+                  artist: 'Artist',
+                ),
+              ],
+            },
+          },
+          _releaseShelf(
+            title: 'Featured on',
+            release: _release(
+              browseId: 'MPREfeaturedAlbum',
+              title: 'Compilation with other artists',
+              type: 'Album',
+            ),
+            browseId: 'MPADfeaturedAlbums',
+          ),
+        ],
+      }, artistBrowseId: 'UCartist123');
+
+      expect(profile.albums.first.title, 'Complete album');
+      expect(profile.singles.single.title, 'Complete single');
+      expect(profile.albumsBrowseTarget, isNull);
+      expect(profile.singlesBrowseTarget, isNull);
+    },
+  );
+
+  test('artist description prefers the complete description shelf', () {
+    const parser = InnerTubeArtistParser();
+    final description = 'Full artist biography. ' * 30;
+    final profile = parser.parse({
+      'header': {
+        'musicImmersiveHeaderRenderer': {
+          'title': _text('Artist'),
+          'description': _text('Truncated biography…'),
+        },
+      },
+      'contents': [
+        {
+          'musicDescriptionShelfRenderer': {'description': _text(description)},
+        },
+      ],
+    }, artistBrowseId: 'UCartist123');
+
+    expect(profile.description, description.trim());
+    expect(profile.songsBrowseTarget, isNull);
+  });
+
+  for (final action in ['title', 'moreContentButton']) {
+    test('artist songs endpoint accepts $action without params', () {
+      final endpoint = {
+        'browseEndpoint': {'browseId': 'VLOLAKartistSongs'},
+      };
+      final profile = const InnerTubeArtistParser().parse({
+        'contents': [
+          {
+            'musicShelfRenderer': {
+              'title': action == 'title'
+                  ? {
+                      'runs': [
+                        {'text': 'Songs', 'navigationEndpoint': endpoint},
+                      ],
+                    }
+                  : _text('Songs'),
+              if (action == 'moreContentButton')
+                'moreContentButton': {
+                  'buttonRenderer': {'navigationEndpoint': endpoint},
+                },
+              'contents': [
+                _song(videoId: 'popular0001', title: 'Song', artist: 'Artist'),
+              ],
+            },
+          },
+        ],
+      }, artistBrowseId: 'UCartist123');
+
+      expect(
+        profile.songsBrowseTarget,
+        const InnerTubeBrowseTarget(browseId: 'VLOLAKartistSongs', params: ''),
+      );
+    });
+  }
 
   test('artist metrics prefer a labeled subscriber count when available', () {
     const parser = InnerTubeArtistParser();
@@ -347,11 +502,24 @@ Map<String, Object?> _song({
 Map<String, Object?> _releaseShelf({
   required String title,
   required Map<String, Object?> release,
+  String? browseId,
+  String? params,
 }) => <String, Object?>{
   'musicCarouselShelfRenderer': <String, Object?>{
     'header': <String, Object?>{
       'musicCarouselShelfBasicHeaderRenderer': <String, Object?>{
         'title': _text(title),
+        if (browseId != null)
+          'moreContentButton': <String, Object?>{
+            'buttonRenderer': <String, Object?>{
+              'navigationEndpoint': <String, Object?>{
+                'browseEndpoint': <String, Object?>{
+                  'browseId': browseId,
+                  'params': ?params,
+                },
+              },
+            },
+          },
       },
     },
     'contents': <Object?>[release],

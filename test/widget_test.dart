@@ -7454,7 +7454,7 @@ void main() {
     expect(find.text('Nueva versión disponible'), findsOneWidget);
     expect(
       find.text(
-        'La versión 1.3.0 de BStream Music está disponible. Actualmente tienes la versión ${AppConstants.appVersion}.',
+        'BStream Music 1.3.0 está disponible. Versión actual: ${AppConstants.appVersion}.',
       ),
       findsOneWidget,
     );

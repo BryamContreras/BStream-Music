@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "app_identity.cpp"
   "flutter_window.cpp"
+  "incoming_csv.cpp"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"

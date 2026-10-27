@@ -1386,7 +1386,7 @@ void main() {
         tester
             .getSize(find.byKey(ValueKey('search-category-${category.name}')))
             .height,
-        58,
+        60,
       );
       expect(
         tester
@@ -1394,10 +1394,65 @@ void main() {
               find.byKey(ValueKey('search-category-surface-${category.name}')),
             )
             .height,
-        58,
+        60,
       );
     }
   });
+
+  testWidgets(
+    'selected search category has a soft gradient and larger content',
+    (tester) async {
+      final pages = <SearchCategory, SearchPage>{
+        for (final category in SearchCategory.values)
+          category: SearchPage(
+            category: category,
+            backend: SearchBackend.innerTube,
+          ),
+      };
+      await tester.pumpWidget(
+        _searchApp(
+          controller: _RecordingSearchController(
+            SearchState(query: 'radiohead', pages: pages),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final context = tester.element(
+        find.byKey(const ValueKey('search-category-songs')),
+      );
+      final selectedDecoration =
+          tester
+                  .widget<AnimatedContainer>(
+                    find.byKey(const ValueKey('search-category-surface-songs')),
+                  )
+                  .decoration!
+              as BoxDecoration;
+      final gradient = selectedDecoration.gradient! as LinearGradient;
+      expect(gradient.colors, hasLength(2));
+      expect(gradient.colors.first, isNot(gradient.colors.last));
+      expect(
+        gradient.colors.first,
+        isNot(Theme.of(context).colorScheme.primaryContainer),
+      );
+      expect(
+        tester
+            .widget<Icon>(
+              find.byKey(const ValueKey('search-category-icon-songs')),
+            )
+            .size,
+        20,
+      );
+      final labelStyle = tester.widget<AnimatedDefaultTextStyle>(
+        find.descendant(
+          of: find.byKey(const ValueKey('search-category-songs')),
+          matching: find.byType(AnimatedDefaultTextStyle),
+        ),
+      );
+      expect(labelStyle.style.fontSize, 13);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('shows responsive categories and clears the active search', (
     tester,
@@ -2432,7 +2487,7 @@ void main() {
       );
       expect(
         tester.widget<SourceImage>(firstTrackArtwork).fallbackSource,
-        'https://i.ytimg.com/vi/song-1/hq720.jpg',
+        isNull,
       );
       expect(playerController.lastTrack, isNull);
       expect(playerOpens, 0);
@@ -2442,6 +2497,19 @@ void main() {
 
       expect(playerController.lastTrack, tracks.first);
       expect(playerController.lastQueue, tracks);
+      expect(playerController.lastTrack!.thumbnailUrl, album.thumbnailUrl);
+      expect(
+        playerController.lastTrack!.catalogThumbnailUrl,
+        album.thumbnailUrl,
+      );
+      expect(
+        playerController.lastQueue!.map((track) => track.thumbnailUrl),
+        everyElement(album.thumbnailUrl),
+      );
+      expect(
+        playerController.lastQueue!.map((track) => track.catalogThumbnailUrl),
+        everyElement(album.thumbnailUrl),
+      );
       expect(playerController.lastQueueSourceId, 'album:MPRE-album');
       expect(playerOpens, 1);
     },

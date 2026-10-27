@@ -553,6 +553,49 @@ void main() {
     expect(cached.streamUrl, 'https://media.example/audio.m4a');
   });
 
+  test(
+    'album artwork replaces cached video artwork without leaking back',
+    () async {
+      final resolver = _FakeAudioResolver(includeStream: true);
+      final container = ProviderContainer(
+        overrides: [audioStreamResolverProvider.overrideWithValue(resolver)],
+      );
+      addTearDown(container.dispose);
+      final controller = container.read(remoteTrackResolverProvider);
+      const video = TrackInfo(
+        id: 'q8j3zwNhLNo',
+        title: 'Video title',
+        artist: 'Video artist',
+        url: 'https://www.youtube.com/watch?v=q8j3zwNhLNo',
+        thumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+        catalogThumbnailUrl: 'https://i.ytimg.com/vi/q8j3zwNhLNo/hqdefault.jpg',
+        metadataSource: TrackMetadataSource.youtubeMusic,
+      );
+      const albumArtwork =
+          'https://lh3.googleusercontent.com/album-cover=w544-h544-l90-rj';
+      final album = video.copyWith(
+        title: 'Album track title',
+        album: 'Selected album',
+        albumBrowseId: 'MPREb_selected_album',
+        thumbnailUrl: albumArtwork,
+        catalogThumbnailUrl: albumArtwork,
+      );
+
+      final first = await controller.resolve(video);
+      final fromAlbum = await controller.resolve(album);
+      final fromVideoAgain = await controller.resolve(video);
+
+      expect(resolver.resolveCalls, 1);
+      expect(fromAlbum.streamUrl, first.streamUrl);
+      expect(fromAlbum.thumbnailUrl, albumArtwork);
+      expect(fromAlbum.catalogThumbnailUrl, albumArtwork);
+      expect(fromAlbum.album, album.album);
+      expect(fromAlbum.title, album.title);
+      expect(fromVideoAgain.thumbnailUrl, video.thumbnailUrl);
+      expect(fromVideoAgain.catalogThumbnailUrl, video.catalogThumbnailUrl);
+    },
+  );
+
   test('equivalent YouTube URLs share the same in-flight resolution', () async {
     final resolver = _FakeAudioResolver(includeStream: true);
     final container = ProviderContainer(

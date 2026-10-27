@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/image_source.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../providers/track_selection_controller.dart';
@@ -39,7 +38,9 @@ class RemoteCollectionDetailPage extends ConsumerStatefulWidget {
     this.detailsProvider,
     this.metadata = const [],
     this.fallbackIcon = Icons.queue_music_rounded,
-    this.useCollectionArtworkForTrackFallback = false,
+    this.preferCollectionArtworkForTracks = false,
+    this.songCountLabel,
+    this.onRetry,
     super.key,
   });
 
@@ -55,7 +56,12 @@ class RemoteCollectionDetailPage extends ConsumerStatefulWidget {
   final FutureProvider<RemoteCollectionData>? detailsProvider;
   final List<String> metadata;
   final IconData fallbackIcon;
-  final bool useCollectionArtworkForTrackFallback;
+
+  /// Album entries share the selected release's cover in rows and playback.
+  /// Mixes and playlists retain each song's own artwork.
+  final bool preferCollectionArtworkForTracks;
+  final String? songCountLabel;
+  final VoidCallback? onRetry;
 
   @override
   ConsumerState<RemoteCollectionDetailPage> createState() =>
@@ -100,8 +106,8 @@ class _RemoteCollectionDetailPageState
     final resolvedArtworkSource =
         collectionArtworkSource ??
         (tracks.isEmpty ? null : tracks.first.thumbnailUrl);
-    final visibleTracks = widget.useCollectionArtworkForTrackFallback
-        ? _withCollectionArtworkFallback(tracks, collectionArtworkSource)
+    final visibleTracks = widget.preferCollectionArtworkForTracks
+        ? _withCollectionArtwork(tracks, collectionArtworkSource)
         : tracks;
     final defaultMode = defaultMiniPlayerModeForPlatform(
       Theme.of(context).platform,
@@ -195,6 +201,7 @@ class _RemoteCollectionDetailPageState
                   playLabel: strings.play,
                   addToPlaylistLabel: strings.addToPlaylist,
                   songsLabel: strings.collectionSongCount,
+                  songCountLabel: widget.songCountLabel,
                   canPlay: visibleTracks.isNotEmpty,
                   onPlay: () =>
                       _play(context, visibleTracks.first, visibleTracks),
@@ -249,6 +256,10 @@ class _RemoteCollectionDetailPageState
                     action: FilledButton.tonalIcon(
                       key: const ValueKey('remote-collection-retry'),
                       onPressed: () {
+                        if (widget.onRetry case final retry?) {
+                          retry();
+                          return;
+                        }
                         final provider = widget.detailsProvider;
                         if (provider != null) {
                           ref.invalidate(provider);
@@ -341,33 +352,33 @@ class _RemoteCollectionDetailPageState
     }
   }
 
-  List<TrackInfo> _withCollectionArtworkFallback(
+  List<TrackInfo> _withCollectionArtwork(
     List<TrackInfo> tracks,
     String? collectionArtwork,
   ) {
     final normalizedArtwork = collectionArtwork?.trim();
     if (normalizedArtwork == null || normalizedArtwork.isEmpty) return tracks;
     var changed = false;
-    final result = <TrackInfo>[
-      for (final track in tracks)
-        _hasCanonicalCatalogArtwork(track)
-            ? track
-            : track.copyWith(catalogThumbnailUrl: normalizedArtwork),
-    ];
-    for (var index = 0; index < tracks.length; index++) {
-      if (!identical(tracks[index], result[index])) {
-        changed = true;
-        break;
+    final result = <TrackInfo>[];
+    for (final track in tracks) {
+      if (track.thumbnailUrl == normalizedArtwork &&
+          track.catalogThumbnailUrl == normalizedArtwork &&
+          track.metadataSource == TrackMetadataSource.youtubeMusic) {
+        result.add(track);
+        continue;
       }
+      changed = true;
+      // Both row artwork and the playback source must use the album cover.
+      // Mark it as catalog metadata so stream extraction keeps this choice.
+      result.add(
+        track.copyWith(
+          thumbnailUrl: normalizedArtwork,
+          catalogThumbnailUrl: normalizedArtwork,
+          metadataSource: TrackMetadataSource.youtubeMusic,
+        ),
+      );
     }
     return changed ? List<TrackInfo>.unmodifiable(result) : tracks;
-  }
-
-  bool _hasCanonicalCatalogArtwork(TrackInfo track) {
-    final source = track.catalogThumbnailUrl?.trim();
-    return source != null &&
-        source.isNotEmpty &&
-        youtubeVideoIdFromThumbnailSource(source) == null;
   }
 
   void _play(BuildContext context, TrackInfo selected, List<TrackInfo> tracks) {
@@ -417,6 +428,7 @@ class _CollectionHeader extends StatelessWidget {
     required this.onPlay,
     required this.onAddToPlaylist,
     this.addingToPlaylist = false,
+    this.songCountLabel,
   });
 
   final String title;
@@ -432,6 +444,7 @@ class _CollectionHeader extends StatelessWidget {
   final VoidCallback onPlay;
   final VoidCallback? onAddToPlaylist;
   final bool addingToPlaylist;
+  final String? songCountLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -441,7 +454,10 @@ class _CollectionHeader extends StatelessWidget {
         .toList(growable: false);
     final details = [
       ...validMetadata,
-      if (trackCount != null) songsLabel(trackCount!),
+      if (songCountLabel != null)
+        songCountLabel!
+      else if (trackCount != null)
+        songsLabel(trackCount!),
     ];
 
     return LayoutBuilder(

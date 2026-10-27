@@ -7,4 +7,4 @@ Icon=com.bstream.bstream_music
 Terminal=false
 Categories=AudioVideo;Audio;Player;
 StartupWMClass=com.bstream.bstream_music
-MimeType=x-scheme-handler/bstreammusic;
+MimeType=x-scheme-handler/bstreammusic;text/csv;text/comma-separated-values;application/csv;

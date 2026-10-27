@@ -67,6 +67,7 @@ dependencies:
   video_player: 2.10.1
   video_player_android: 2.8.7
   video_player_win: ^3.3.0
+  video_player_platform_interface: 6.9.0
   audio_metadata_reader: ^1.7.1
   audio_service: ^0.18.18
   audio_service_mpris: ^0.2.1
@@ -94,7 +95,6 @@ dev_dependencies:
     sdk: flutter
   integration_test:
     sdk: flutter
-  video_player_platform_interface: 6.9.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

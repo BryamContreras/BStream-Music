@@ -9,6 +9,7 @@ import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/services/player/playback_visual_cache.dart';
 import 'package:bstream_music/services/player/fragmented_artwork_mp4.dart';
+import 'package:bstream_music/services/player/artwork_video_rendering.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -25,6 +26,7 @@ import 'package:video_player/video_player.dart';
 /// BSTREAM_CANVAS_TEST_APPLE=true exercises Animated Artwork instead of Canvas.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  configureArtworkVideoRendering();
   const path = String.fromEnvironment('BSTREAM_CANVAS_TEST_FILE');
 
   testWidgets('cached artwork advances and becomes visible on Windows', (
@@ -76,7 +78,7 @@ void main() {
                   url: file.uri,
                   isPlaying: true,
                   startOffset: _appleArtwork
-                      ? const Duration(seconds: 7)
+                      ? animatedArtworkIntroOffset
                       : Duration.zero,
                   durationHint: _snapshot.duration ?? Duration.zero,
                   autoFitInsetArtwork: _appleArtwork,
@@ -93,6 +95,13 @@ void main() {
       () => 'Production Canvas never created the video surface.',
     );
     final video = tester.widget<VideoPlayer>(find.byType(VideoPlayer));
+    final texture = tester.widget<Texture>(
+      find.descendant(
+        of: find.byType(VideoPlayer),
+        matching: find.byType(Texture),
+      ),
+    );
+    expect(texture.filterQuality, FilterQuality.medium);
     await _waitUntil(
       tester,
       () => video.controller.value.position > Duration.zero,
@@ -141,11 +150,13 @@ void main() {
       }
       debugPrint('Native Canvas pixel range: $darkest..$lightest');
       final png = (await frame.toByteData(format: ui.ImageByteFormat.png))!;
-      await File(
+      final coverFrame = File(
         '${original.parent.path}/windows-${_appleArtwork ? 'artwork' : 'canvas'}-render.png',
-      ).writeAsBytes(
+      );
+      await coverFrame.writeAsBytes(
         png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
       );
+      _fixtureCoverPath = coverFrame.path;
       expect(
         lightest - darkest,
         greaterThan(20),
@@ -163,7 +174,8 @@ void main() {
         tester,
         () =>
             video.controller.value.position >
-                const Duration(milliseconds: 7120) &&
+                animatedArtworkIntroOffset +
+                    const Duration(milliseconds: 120) &&
             video.controller.value.position <
                 duration - const Duration(seconds: 2) &&
             _videoVisible(tester),
@@ -203,21 +215,24 @@ void main() {
       );
       try {
         for (final style in PlayerStyle.values) {
+          final panelBoundary = GlobalKey();
           await tester.pumpWidget(
             UncontrolledProviderScope(
               container: container,
               child: MaterialApp(
+                theme: ThemeData.dark(),
                 home: Scaffold(
-                  body: PlayerPanel(
-                    style: style,
-                    artworkStyle: _appleArtwork
-                        ? PlayerArtworkStyle.expanded
-                        : defaultPlayerArtworkStyle,
-                    spotifyCanvasEnabled: !_appleArtwork,
-                    appleAnimatedArtworkEnabled: _appleArtwork,
-                    animatedArtworkEnabled: false,
-                    drawBackground: false,
-                    trackTransitionsEnabled: false,
+                  body: RepaintBoundary(
+                    key: panelBoundary,
+                    child: PlayerPanel(
+                      style: style,
+                      artworkStyle: PlayerArtworkStyle.expanded,
+                      spotifyCanvasEnabled: !_appleArtwork,
+                      appleAnimatedArtworkEnabled: _appleArtwork,
+                      animatedArtworkEnabled: false,
+                      drawBackground: false,
+                      trackTransitionsEnabled: false,
+                    ),
                   ),
                 ),
               ),
@@ -243,6 +258,41 @@ void main() {
           debugPrint(
             'Full player $style Canvas visible: ${nativeVideo.controller.value.position}',
           );
+          expect(nativeVideo.controller.value.hasError, isFalse);
+          if (_appleArtwork) {
+            expect(
+              nativeVideo.controller.value.position,
+              greaterThan(animatedArtworkIntroOffset),
+            );
+          } else if (style != PlayerStyle.classicVinyl) {
+            final surface = find.byKey(
+              const ValueKey('player-artwork-surface'),
+            );
+            final viewport = find.byKey(
+              const ValueKey('player-canvas-viewport'),
+            );
+            final coverRect = tester.getRect(surface);
+            final videoRect = tester.getRect(viewport);
+            expect(videoRect.left, lessThan(coverRect.left));
+            expect(videoRect.top, lessThan(coverRect.top));
+          }
+          await tester.pump(const Duration(milliseconds: 300));
+          final panel =
+              panelBoundary.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary;
+          final panelImage = await panel.toImage(pixelRatio: 1);
+          try {
+            final png = (await panelImage.toByteData(
+              format: ui.ImageByteFormat.png,
+            ))!;
+            await File(
+              '${original.parent.path}/windows-${_appleArtwork ? 'artwork' : 'canvas'}-${style.name}.png',
+            ).writeAsBytes(
+              png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes),
+            );
+          } finally {
+            panelImage.dispose();
+          }
           expect(tester.takeException(), isNull);
         }
       } finally {
@@ -264,7 +314,7 @@ bool _videoVisible(WidgetTester tester) {
       tester.widget<AnimatedOpacity>(opacity.first).opacity == 1;
 }
 
-const _snapshot = PlayerSnapshot(
+const _baseSnapshot = PlayerSnapshot(
   status: PlayerStatus.playing,
   title: 'vampire',
   artist: 'Olivia Rodrigo',
@@ -274,6 +324,11 @@ const _snapshot = PlayerSnapshot(
       : Duration(seconds: 220),
   trackId: 'native-canvas-fixture',
 );
+
+String? _fixtureCoverPath;
+PlayerSnapshot get _snapshot => _fixtureCoverPath == null
+    ? _baseSnapshot
+    : _baseSnapshot.copyWith(thumbnailUrl: _fixtureCoverPath);
 
 const _appleArtwork = bool.fromEnvironment('BSTREAM_CANVAS_TEST_APPLE');
 

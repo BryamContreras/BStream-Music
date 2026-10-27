@@ -11,6 +11,8 @@ import 'package:video_player/video_player.dart';
 import '../../../../services/player/visual_load_diagnostics.dart';
 import 'artwork_inset_detector.dart';
 
+const animatedArtworkIntroOffset = Duration(seconds: 8);
+
 @visibleForTesting
 bool isRemoteArtworkVideoSizeAllowed(Size size) =>
     size.width > 0 &&
@@ -28,7 +30,9 @@ Duration effectiveArtworkVideoStartOffset(
   if (requested <= Duration.zero) {
     return Duration.zero;
   }
-  final usableDuration = videoDuration > requested + const Duration(seconds: 2)
+  // Fragmented streams can report zero or one millisecond. Only use the
+  // song-duration hint for those unknown timelines, not for a real short clip.
+  final usableDuration = videoDuration > const Duration(milliseconds: 1)
       ? videoDuration
       : durationHint ?? videoDuration;
   if (usableDuration <= requested + const Duration(seconds: 2)) {
@@ -222,6 +226,11 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
         controller.value.duration,
         durationHint: widget.durationHint,
       );
+      if (widget.startOffset > Duration.zero && startOffset == Duration.zero) {
+        // Do not expose a static intro when the clip cannot provide a useful
+        // post-intro loop. The original album cover remains underneath.
+        throw const FormatException('Artwork clip is shorter than its intro');
+      }
       _effectiveStartOffset = startOffset;
       if (startOffset > Duration.zero &&
           controller.value.duration <=

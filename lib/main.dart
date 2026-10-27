@@ -14,6 +14,7 @@ import 'core/widgets/desktop_window_shortcuts.dart';
 import 'features/music/presentation/pages/home_page.dart';
 import 'features/music/presentation/providers/music_providers.dart';
 import 'services/player/notification_artwork_service.dart';
+import 'services/player/artwork_video_rendering.dart';
 import 'services/media_session/audio_service_desktop_media_session.dart';
 
 void main() {
@@ -61,6 +62,7 @@ AppStartupCoordinator launchBStreamMusicApp({
   AppStartupScheduler? scheduleStartup,
 }) {
   WidgetsFlutterBinding.ensureInitialized();
+  configureArtworkVideoRendering();
   // Keep artwork memory bounded across long sessions with many searches and
   // queue transitions. The default Flutter image cache allows 100 MiB and
   // 1,000 entries, which is excessive for music thumbnails.

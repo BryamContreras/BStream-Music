@@ -9,7 +9,10 @@ void main() {
       final checker = GitHubReleaseChecker(
         fetchLatestRelease: (endpoint) async {
           requestedEndpoint = endpoint;
-          return <String, Object?>{'tag_name': 'v1.3.0'};
+          return <String, Object?>{
+            'tag_name': 'v1.3.0',
+            'body': '  - Better playback.\n- New widgets.\u0000  ',
+          };
         },
       );
 
@@ -24,6 +27,7 @@ void main() {
       expect(result.currentVersion, '1.2.6');
       expect(result.latestVersion, '1.3.0');
       expect(result.releaseTag, 'v1.3.0');
+      expect(result.releaseNotes, '- Better playback.\n- New widgets.');
       expect(result.updateAvailable, isTrue);
     },
   );
@@ -36,7 +40,21 @@ void main() {
     final result = await checker.check(currentVersion: '1.2.6');
 
     expect(result.updateAvailable, isFalse);
+    expect(result.releaseNotes, isEmpty);
   });
+
+  for (final body in [null, 42, <String, Object?>{}]) {
+    test('ignores a missing or malformed release body ($body)', () async {
+      final checker = GitHubReleaseChecker(
+        fetchLatestRelease: (_) async => {'tag_name': 'v1.3.0', 'body': body},
+      );
+
+      final result = await checker.check(currentVersion: '1.2.9');
+
+      expect(result.updateAvailable, isTrue);
+      expect(result.releaseNotes, isEmpty);
+    });
+  }
 
   test('compares semantic versions instead of comparing their text', () {
     expect(compareAppVersions('v1.10.0', '1.9.9'), greaterThan(0));

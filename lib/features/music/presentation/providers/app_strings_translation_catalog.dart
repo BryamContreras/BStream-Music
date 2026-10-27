@@ -1,6 +1,57 @@
 // Static UI translations generated for the app's supported languages.
-// The application performs no translation network requests at runtime.
+// Static UI labels are translated locally; dynamic content is handled separately.
 const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
+  'The artist\'s releases could not be loaded.': <String>[
+    'Não foi possível carregar os lançamentos do artista.',
+    'Impossible de charger les sorties de cet artiste.',
+    '이 아티스트의 발매작을 불러올 수 없습니다.',
+    '无法加载此艺人的发行作品。',
+    'このアーティストのリリースを読み込めませんでした。',
+  ],
+  'No releases were found for this artist.': <String>[
+    'Nenhum lançamento deste artista foi encontrado.',
+    'Aucune sortie de cet artiste n’a été trouvée.',
+    '이 아티스트의 발매작을 찾을 수 없습니다.',
+    '未找到此艺人的发行作品。',
+    'このアーティストのリリースが見つかりませんでした。',
+  ],
+  'Some releases could not be loaded. Try again.': <String>[
+    'Não foi possível carregar todos os lançamentos. Tente novamente.',
+    'Certaines sorties n’ont pas pu être chargées. Réessayez.',
+    '일부 발매작을 불러오지 못했습니다. 다시 시도해 주세요.',
+    '部分发行作品无法加载。请重试。',
+    '一部のリリースを読み込めませんでした。もう一度お試しください。',
+  ],
+  'Show more': <String>['Mostrar mais', 'Afficher plus', '더 보기', '展开', 'もっと見る'],
+  'Show less': <String>[
+    'Mostrar menos',
+    'Afficher moins',
+    '간략히 보기',
+    '收起',
+    '折りたたむ',
+  ],
+  'View all': <String>['Ver tudo', 'Tout voir', '모두 보기', '查看全部', 'すべて見る'],
+  'ZXQPH0X songs loaded': <String>[
+    'ZXQPH0X músicas carregadas',
+    'ZXQPH0X chansons chargées',
+    'ZXQPH0X곡 로드됨',
+    '已加载 ZXQPH0X 首歌曲',
+    'ZXQPH0X曲を読み込み済み',
+  ],
+  'The artist\'s songs could not be loaded.': <String>[
+    'Não foi possível carregar as músicas do artista.',
+    'Impossible de charger les chansons de cet artiste.',
+    '이 아티스트의 노래를 불러올 수 없습니다.',
+    '无法加载此艺人的歌曲。',
+    'このアーティストの曲を読み込めませんでした。',
+  ],
+  'No songs were found for this artist.': <String>[
+    'Nenhuma música deste artista foi encontrada.',
+    'Aucune chanson de cet artiste n’a été trouvée.',
+    '이 아티스트의 노래를 찾을 수 없습니다.',
+    '未找到此艺人的歌曲。',
+    'このアーティストの曲が見つかりませんでした。',
+  ],
   'TTML depends on its public cache; if unavailable, Kugou is tried.': <String>[
     'TTML depende do cache público; se indisponível, o Kugou será consultado.',
     'Le TTML dépend du cache public ; à défaut, Kugou est essayé.',
@@ -673,7 +724,7 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '搜索失败',
     '検索失敗しました',
   ],
-  'Songs': <String>['Músicas', 'Chansons', 'Songs', '歌曲', 'Songs'],
+  'Songs': <String>['Músicas', 'Chansons', '노래', '歌曲', '曲'],
   'Videos': <String>['Vídeos', 'Vidéos', 'Videos', '视频', 'Videos'],
   'Artists': <String>['Artistas', 'Artistes', 'Artists', '艺术家', 'Artists'],
   'No songs matched this search.': <String>[
@@ -2949,14 +3000,41 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '可用新版本',
     '新しいバージョンが利用可能',
   ],
-  'BStream Music version ZXQPH0X is available. You currently have version ZXQPH1X.':
-      <String>[
-        'BStream Music versão ZXQPH0X está disponível. Atualmente você tem a versão ZXQPH1X.',
-        'BStream Music version ZXQPH0X est disponible. Vous disposez actuellement de la version ZXQPH1X.',
-        'BStream Music 버전 ZXQPH0X를 사용할 수 있습니다. 현재 ZXQPH1X 버전이 있습니다.',
-        'BStream 音乐版本 ZXQPH0X 可用。您当前使用的是ZXQPH1X版本。',
-        'BStream MusicバージョンZXQPH0Xが利用可能です。現在のバージョンは ZXQPH1X です。',
-      ],
+  'BStream Music ZXQPH0X is available. Current version: ZXQPH1X.': <String>[
+    'BStream Music ZXQPH0X está disponível. Versão atual: ZXQPH1X.',
+    'BStream Music ZXQPH0X est disponible. Version actuelle : ZXQPH1X.',
+    'BStream Music ZXQPH0X를 사용할 수 있습니다. 현재 버전: ZXQPH1X.',
+    'BStream Music ZXQPH0X 已发布。当前版本：ZXQPH1X。',
+    'BStream Music ZXQPH0X が利用可能です。現在のバージョン: ZXQPH1X。',
+  ],
+  'What’s new in ZXQPH0X': <String>[
+    'Novidades da versão ZXQPH0X',
+    'Nouveautés de la version ZXQPH0X',
+    'ZXQPH0X의 새로운 기능',
+    'ZXQPH0X 更新内容',
+    'ZXQPH0X の新機能',
+  ],
+  'Translating release notes…': <String>[
+    'Traduzindo novidades…',
+    'Traduction des notes de version…',
+    '업데이트 내용을 번역하는 중…',
+    '正在翻译更新说明…',
+    '更新内容を翻訳中…',
+  ],
+  'This release does not include release notes.': <String>[
+    'Esta versão não inclui notas de atualização.',
+    'Cette version ne comporte pas de notes de version.',
+    '이 버전에는 업데이트 내용이 없습니다.',
+    '此版本未提供更新说明。',
+    'このリリースには更新内容の説明がありません。',
+  ],
+  'Translation unavailable. Showing the original release notes.': <String>[
+    'Não foi possível traduzir. As notas originais são exibidas.',
+    'Traduction indisponible. Les notes de version originales sont affichées.',
+    '번역할 수 없습니다. 원본 업데이트 내용을 표시합니다.',
+    '翻译不可用。正在显示原始更新说明。',
+    '翻訳できませんでした。元の更新内容を表示しています。',
+  ],
   'You already have the latest version.': <String>[
     'Você já tem a versão mais recente.',
     'Vous disposez déjà de la dernière version.',

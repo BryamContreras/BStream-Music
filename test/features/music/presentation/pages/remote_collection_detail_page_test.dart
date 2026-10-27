@@ -348,6 +348,100 @@ void main() {
     expect(playerOpens, 0);
   });
 
+  for (final playFromRow in [false, true]) {
+    testWidgets(
+      'album cover reaches playback and every queued song (row=$playFromRow)',
+      (tester) async {
+        tester.view.physicalSize = const Size(360, 900);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        const albumCover = 'https://lh3.googleusercontent.com/album-cover=w512';
+        final tracks = <TrackInfo>[
+          _tracks.first.copyWith(
+            thumbnailUrl: 'https://i.ytimg.com/vi/firstsong01/hqdefault.jpg',
+            catalogThumbnailUrl:
+                'https://lh3.googleusercontent.com/other-release=w120',
+          ),
+          _tracks.last,
+        ];
+        final player = _RecordingPlayerController();
+        await tester.pumpWidget(
+          _detailApp(
+            player: player,
+            tracksProvider: FutureProvider((ref) async => tracks),
+            artworkSource: albumCover,
+            preferCollectionArtworkForTracks: true,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final action = find.byKey(
+          ValueKey(
+            playFromRow ? 'track-result-play-song-2' : 'remote-collection-play',
+          ),
+        );
+        await tester.ensureVisible(action);
+        await tester.tap(action);
+        await tester.pump();
+
+        expect(
+          player.lastTrack!.id,
+          playFromRow ? tracks.last.id : tracks.first.id,
+        );
+        expect(player.lastTrack!.thumbnailUrl, albumCover);
+        expect(player.lastTrack!.catalogThumbnailUrl, albumCover);
+        expect(player.lastQueue!.map((track) => track.thumbnailUrl), [
+          albumCover,
+          albumCover,
+        ]);
+        expect(player.lastQueue!.map((track) => track.catalogThumbnailUrl), [
+          albumCover,
+          albumCover,
+        ]);
+        expect(
+          player.lastQueue!.every(
+            (track) => track.metadataSource == TrackMetadataSource.youtubeMusic,
+          ),
+          isTrue,
+        );
+        expect(tracks.first.thumbnailUrl, contains('i.ytimg.com'));
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'mix playback retains per-song artwork despite a collection cover',
+    (tester) async {
+      final tracks = _tracks
+          .map(
+            (track) => track.copyWith(
+              thumbnailUrl: 'https://i.ytimg.com/vi/${track.id}/hqdefault.jpg',
+              catalogThumbnailUrl:
+                  'https://lh3.googleusercontent.com/${track.id}=w512',
+            ),
+          )
+          .toList();
+      final player = _RecordingPlayerController();
+      await tester.pumpWidget(
+        _detailApp(
+          player: player,
+          tracksProvider: FutureProvider((ref) async => tracks),
+          artworkSource: 'https://lh3.googleusercontent.com/mix-cover=w512',
+        ),
+      );
+      await tester.pumpAndSettle();
+      final action = find.byKey(const ValueKey('remote-collection-play'));
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pump();
+      expect(player.lastTrack, same(tracks.first));
+      expect(player.lastQueue!.first, same(tracks.first));
+      expect(player.lastQueue!.last, same(tracks.last));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('mini player stays above gesture and three-button navigation', (
     tester,
   ) async {
@@ -1134,6 +1228,7 @@ Widget _detailApp({
   String subtitle = 'Artista principal',
   List<String> metadata = const ['Album', '2026'],
   String? artworkSource,
+  bool preferCollectionArtworkForTracks = false,
   bool disableAnimations = false,
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
 }) {
@@ -1159,6 +1254,7 @@ Widget _detailApp({
         title: title,
         subtitle: subtitle,
         artworkSource: artworkSource,
+        preferCollectionArtworkForTracks: preferCollectionArtworkForTracks,
         queueSourceId: 'album:MPRE-contract',
         tracksProvider: tracksProvider,
         emptyMessage: 'La coleccion esta vacia.',

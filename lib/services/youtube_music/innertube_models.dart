@@ -270,6 +270,9 @@ class InnerTubeArtistProfile {
     this.radioPlaylistId,
     this.radioSeedVideoId,
     this.isSubscribed,
+    this.songsBrowseTarget,
+    this.albumsBrowseTarget,
+    this.singlesBrowseTarget,
   }) : popularSongs = List<InnerTubeSong>.unmodifiable(popularSongs),
        albums = List<InnerTubeAlbum>.unmodifiable(albums),
        singles = List<InnerTubeAlbum>.unmodifiable(singles),
@@ -301,10 +304,48 @@ class InnerTubeArtistProfile {
   final String? radioPlaylistId;
   final String? radioSeedVideoId;
   final bool? isSubscribed;
+
+  /// The artist Songs shelf's own “more” endpoint, when published by YouTube.
+  /// This is distinct from the artist's Play and Radio queues.
+  final InnerTubeBrowseTarget? songsBrowseTarget;
+  final InnerTubeBrowseTarget? albumsBrowseTarget;
+  final InnerTubeBrowseTarget? singlesBrowseTarget;
   final List<InnerTubeSong> popularSongs;
   final List<InnerTubeAlbum> albums;
   final List<InnerTubeAlbum> singles;
   final List<InnerTubeArtist> relatedArtists;
+}
+
+/// The bounded album or single catalog returned by an artist release shelf.
+final class InnerTubeArtistReleaseCatalog {
+  InnerTubeArtistReleaseCatalog({
+    required List<InnerTubeAlbum> releases,
+    required this.isComplete,
+  }) : releases = List<InnerTubeAlbum>.unmodifiable(releases);
+
+  final List<InnerTubeAlbum> releases;
+
+  /// False if a safety limit or repeated continuation stopped pagination.
+  final bool isComplete;
+}
+
+/// The bounded catalog returned by the artist Songs shelf's browse endpoint.
+final class InnerTubeArtistSongsDetail {
+  InnerTubeArtistSongsDetail({
+    required List<InnerTubeSong> songs,
+    required this.isComplete,
+    this.totalSongCount,
+  }) : songs = List<InnerTubeSong>.unmodifiable(songs);
+
+  final List<InnerTubeSong> songs;
+
+  /// Advertised total, or the loaded count after reaching the end of the chain.
+  /// Absent when a partial catalog has no trustworthy total.
+  final int? totalSongCount;
+
+  /// False if a result/request limit, repeated token, or network failure stopped
+  /// pagination before YouTube's last page.
+  final bool isComplete;
 }
 
 class InnerTubeNextPage {

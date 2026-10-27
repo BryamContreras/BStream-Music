@@ -79,6 +79,72 @@ void main() {
     }
   });
 
+  test('update dialog is localized without changing version identifiers', () {
+    const latestVersion = 'v1.3.0-beta.2+147';
+    const currentVersion = '1.2.9+129';
+    const english = AppStrings(AppLanguage.english);
+    const spanish = AppStrings(AppLanguage.spanish);
+    final englishMessage = english.updateAvailableMessage(
+      latestVersion: latestVersion,
+      currentVersion: currentVersion,
+    );
+
+    expect(
+      spanish.updateAvailableMessage(
+        latestVersion: latestVersion,
+        currentVersion: currentVersion,
+      ),
+      'BStream Music $latestVersion está disponible. '
+      'Versión actual: $currentVersion.',
+    );
+    expect(
+      spanish.updateReleaseNotesTitle(latestVersion),
+      'Novedades $latestVersion',
+    );
+
+    for (final language in AppLanguage.values) {
+      final strings = AppStrings(language);
+      final message = strings.updateAvailableMessage(
+        latestVersion: latestVersion,
+        currentVersion: currentVersion,
+      );
+      final heading = strings.updateReleaseNotesTitle(latestVersion);
+      expect(message, contains('BStream Music'), reason: language.code);
+      expect(message, contains(latestVersion), reason: language.code);
+      expect(message, contains(currentVersion), reason: language.code);
+      expect(heading, contains(latestVersion), reason: language.code);
+      expect(message, isNot(contains('ZXQPH')), reason: language.code);
+      expect(heading, isNot(contains('ZXQPH')), reason: language.code);
+      if (language == AppLanguage.english) continue;
+      expect(message, isNot(englishMessage), reason: language.code);
+      expect(
+        strings.updateAvailableTitle,
+        isNot(english.updateAvailableTitle),
+        reason: language.code,
+      );
+      expect(
+        heading,
+        isNot(english.updateReleaseNotesTitle(latestVersion)),
+        reason: language.code,
+      );
+      expect(
+        strings.updateReleaseNotesLoading,
+        isNot(english.updateReleaseNotesLoading),
+        reason: language.code,
+      );
+      expect(
+        strings.updateReleaseNotesEmpty,
+        isNot(english.updateReleaseNotesEmpty),
+        reason: language.code,
+      );
+      expect(
+        strings.updateReleaseNotesTranslationFailed,
+        isNot(english.updateReleaseNotesTranslationFailed),
+        reason: language.code,
+      );
+    }
+  });
+
   test('the local navigation tab uses the selected language', () {
     expect(AppStrings(AppLanguage.spanish).localTab, 'Local');
     expect(AppStrings(AppLanguage.english).localTab, 'Local');

@@ -48,6 +48,280 @@ void main() {
       return service;
     }
 
+    for (final background in [false, true]) {
+      test(
+        'artist songs follows the shelf endpoint to its end beyond 100 songs (background=$background)',
+        () async {
+          Map<String, Object> track(int index) => _songRenderer(
+            videoId: 'artist-song-$index',
+            title: 'Artist song $index',
+            artists: const ['Artist'],
+          );
+          final payload = _collectionDetailPayload(
+            List.generate(80, track),
+            continuation: 'artist-songs-page-2',
+          );
+          payload['recommendations'] = {
+            'musicShelfRenderer': {
+              'contents': [track(999)],
+            },
+          };
+          if (background) payload['padding'] = 'x' * 65536;
+          transport.responses.addAll([
+            InnerTubeHttpResponse(statusCode: 200, body: jsonEncode(payload)),
+            InnerTubeHttpResponse(
+              statusCode: 200,
+              body: jsonEncode(
+                _detailContinuationPayload(
+                  List.generate(51, (index) => track(index + 79)),
+                ),
+              ),
+            ),
+          ]);
+          final detail = await createService().getArtistSongs(
+            const InnerTubeBrowseTarget(
+              browseId: 'VLOLAKartistSongs',
+              params: 'opaque+songs/params=',
+            ),
+          );
+
+          expect(detail.songs, hasLength(130));
+          expect(detail.songs.first.videoId, 'artist-song-0');
+          expect(detail.songs.last.videoId, 'artist-song-129');
+          expect(detail.isComplete, isTrue);
+          expect(detail.totalSongCount, 130);
+          expect(transport.requests, hasLength(2));
+          expect(
+            transport.requests.first.body['browseId'],
+            'VLOLAKartistSongs',
+          );
+          expect(
+            transport.requests.first.body['params'],
+            'opaque+songs/params=',
+          );
+          expect(
+            transport.requests.last.body['continuation'],
+            'artist-songs-page-2',
+          );
+          expect(transport.requests.last.body, isNot(contains('params')));
+          expect(transport.requests.last.body, isNot(contains('browseId')));
+          expect(
+            transport.requests.every(
+              (request) => request.uri.path == '/browse',
+            ),
+            isTrue,
+          );
+        },
+      );
+    }
+
+    test(
+      'artist release catalog follows opaque endpoint and deduplicates pages',
+      () async {
+        transport.responses.addAll([
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode({
+              'contents': [
+                _twoRowAlbumRenderer(
+                  browseId: 'MPREartistAlbum001',
+                  title: 'Album one',
+                ),
+                _twoRowAlbumRenderer(
+                  browseId: 'MPREartistAlbum002',
+                  title: 'Album two',
+                ),
+                {
+                  'continuationItemRenderer': {
+                    'continuationEndpoint': {
+                      'continuationCommand': {
+                        'token': 'artist-releases-page-2',
+                      },
+                    },
+                  },
+                },
+              ],
+              'header': {
+                'filterChip': {
+                  'browseSectionListReloadEndpoint': {
+                    'continuation': {
+                      'reloadContinuationData': {
+                        'continuation': 'stale-filter-refresh-token',
+                      },
+                    },
+                  },
+                },
+              },
+              'padding': 'x' * 65536,
+            }),
+          ),
+          InnerTubeHttpResponse(
+            statusCode: HttpStatus.ok,
+            body: jsonEncode(
+              _detailContinuationPayload([
+                _twoRowAlbumRenderer(
+                  browseId: 'MPREartistAlbum002',
+                  title: 'Album two duplicate',
+                ),
+                _twoRowAlbumRenderer(
+                  browseId: 'MPREartistAlbum003',
+                  title: 'Album three',
+                ),
+              ]),
+            ),
+          ),
+        ]);
+
+        final catalog = await createService().getArtistReleaseCatalog(
+          const InnerTubeBrowseTarget(
+            browseId: 'VLartistAlbums',
+            params: 'opaque+album/params=',
+          ),
+        );
+
+        expect(catalog.releases.map((release) => release.browseId), [
+          'MPREartistAlbum001',
+          'MPREartistAlbum002',
+          'MPREartistAlbum003',
+        ]);
+        expect(catalog.isComplete, isTrue);
+        expect(transport.requests, hasLength(2));
+        expect(transport.requests.first.body['browseId'], 'VLartistAlbums');
+        expect(transport.requests.first.body['params'], 'opaque+album/params=');
+        expect(
+          transport.requests.last.body['continuation'],
+          'artist-releases-page-2',
+        );
+        expect(transport.requests.last.body, isNot(contains('browseId')));
+      },
+    );
+
+    test('artist songs preserves an advertised count when bounded', () async {
+      final payload = _collectionDetailPayload(
+        List.generate(
+          4,
+          (index) => _songRenderer(
+            videoId: 'artist-count-$index',
+            title: 'Song $index',
+            artists: const ['Artist'],
+          ),
+        ),
+        continuation: 'more-artist-songs',
+      );
+      payload['header'] = {
+        'musicResponsiveHeaderRenderer': {
+          'subtitle': {
+            'runs': [
+              {'text': 'Artist • 1,234 canciones • 90 h'},
+            ],
+          },
+        },
+      };
+      transport.response = InnerTubeHttpResponse(
+        statusCode: 200,
+        body: jsonEncode(payload),
+      );
+
+      final detail = await createService().getArtistSongs(
+        const InnerTubeBrowseTarget(browseId: 'VLOLAKartistSongs', params: ''),
+        limit: 3,
+      );
+
+      expect(detail.songs, hasLength(3));
+      expect(detail.totalSongCount, 1234);
+      expect(detail.isComplete, isFalse);
+      expect(transport.requests, hasLength(1));
+      expect(transport.requests.single.body, isNot(contains('params')));
+    });
+
+    test(
+      'artist songs stops a token cycle without claiming completeness',
+      () async {
+        transport.response = InnerTubeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode(
+            _collectionDetailPayload([
+              _songRenderer(
+                videoId: 'artist-cycle',
+                title: 'Song',
+                artists: const ['Artist'],
+              ),
+            ], continuation: 'artist-cycle-token'),
+          ),
+        );
+        final detail = await createService().getArtistSongs(
+          const InnerTubeBrowseTarget(
+            browseId: 'VLOLAKartistSongs',
+            params: '',
+          ),
+        );
+
+        expect(detail.songs, hasLength(1));
+        expect(detail.totalSongCount, isNull);
+        expect(detail.isComplete, isFalse);
+        expect(transport.requests, hasLength(2));
+      },
+    );
+
+    test('artist songs retains a prefix after continuation failure', () async {
+      transport.responses.addAll([
+        InnerTubeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode(
+            _collectionDetailPayload([
+              _songRenderer(
+                videoId: 'artist-prefix',
+                title: 'Song',
+                artists: const ['Artist'],
+              ),
+            ], continuation: 'artist-unavailable-page'),
+          ),
+        ),
+        const InnerTubeHttpResponse(statusCode: 404, body: 'Unavailable'),
+      ]);
+
+      final detail = await createService().getArtistSongs(
+        const InnerTubeBrowseTarget(browseId: 'VLOLAKartistSongs', params: ''),
+      );
+
+      expect(detail.songs.single.videoId, 'artist-prefix');
+      expect(detail.totalSongCount, isNull);
+      expect(detail.isComplete, isFalse);
+    });
+
+    test(
+      'artist songs detects a single oversized page as incomplete',
+      () async {
+        transport.response = InnerTubeHttpResponse(
+          statusCode: 200,
+          body: jsonEncode(
+            _collectionDetailPayload(
+              List.generate(
+                1001,
+                (index) => _songRenderer(
+                  videoId: 'artist-cap-$index',
+                  title: 'Song $index',
+                  artists: const ['Artist'],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final detail = await createService().getArtistSongs(
+          const InnerTubeBrowseTarget(
+            browseId: 'VLOLAKartistSongs',
+            params: '',
+          ),
+        );
+
+        expect(detail.songs, hasLength(1000));
+        expect(detail.totalSongCount, isNull);
+        expect(detail.isComplete, isFalse);
+        expect(transport.requests, hasLength(1));
+      },
+    );
+
     test('retries transient catalog failures and preserves request', () async {
       transport.responses.addAll([
         const InnerTubeHttpResponse(
@@ -793,6 +1067,12 @@ void main() {
                         {'text': 'Canciones más populares'},
                       ],
                     },
+                    'bottomEndpoint': {
+                      'browseEndpoint': {
+                        'browseId': 'VLOLAKartistSongs',
+                        'params': 'artist-songs-params',
+                      },
+                    },
                     'contents': [
                       _songRenderer(
                         videoId: 'popular0001',
@@ -844,6 +1124,13 @@ void main() {
         expect(profile.popularSongs.first.title, 'Profile title');
         expect(profile.popularSongs.first.artists, const ['Profile artist']);
         expect(profile.popularSongs.first.album, 'Profile album');
+        expect(
+          profile.songsBrowseTarget,
+          const InnerTubeBrowseTarget(
+            browseId: 'VLOLAKartistSongs',
+            params: 'artist-songs-params',
+          ),
+        );
         expect(
           profile.popularSongs.last.duration,
           const Duration(minutes: 3, seconds: 5),

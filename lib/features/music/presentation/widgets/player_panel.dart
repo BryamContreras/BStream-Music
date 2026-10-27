@@ -190,18 +190,48 @@ const expandedArtworkBoundedFocusFadeGradient = LinearGradient(
 @visibleForTesting
 const expandedArtworkBoundedToneFadeStops = <double>[0, 0.74, 1];
 
+enum _RemoteArtworkKind { none, spotifyCanvas, appleAnimatedArtwork }
+
 class _PlayerSurroundingTheme extends InheritedWidget {
-  const _PlayerSurroundingTheme({required this.data, required super.child});
+  const _PlayerSurroundingTheme({
+    required this.data,
+    required this.remoteArtworkKind,
+    required super.child,
+  });
 
   final ThemeData data;
+  final _RemoteArtworkKind remoteArtworkKind;
 
   static ThemeData? maybeOf(BuildContext context) => context
       .dependOnInheritedWidgetOfExactType<_PlayerSurroundingTheme>()
       ?.data;
 
+  static _RemoteArtworkKind artworkKindOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_PlayerSurroundingTheme>()
+          ?.remoteArtworkKind ??
+      _RemoteArtworkKind.none;
+
   @override
   bool updateShouldNotify(_PlayerSurroundingTheme oldWidget) =>
-      data != oldWidget.data;
+      data != oldWidget.data ||
+      remoteArtworkKind != oldWidget.remoteArtworkKind;
+}
+
+double _expandedSpotifyCanvasOverscan(BuildContext context, double extent) {
+  if (_PlayerSurroundingTheme.artworkKindOf(context) !=
+      _RemoteArtworkKind.spotifyCanvas) {
+    return 0;
+  }
+  final screen = MediaQuery.sizeOf(context);
+  final mobile = AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
+  final landscapeTablet =
+      screen.width > screen.height && screen.shortestSide >= 600;
+  if (mobile && !landscapeTablet) return 0;
+  // A bounded 3% bleed on each edge covers the still image's exposed border
+  // on larger layouts. This changes one texture's bounds, without extra blur
+  // or video decoding, and keeps phones' existing crop exactly as it is.
+  return math.min(12.0, extent * 0.03);
 }
 
 class PlayerPanel extends ConsumerStatefulWidget {
@@ -378,7 +408,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
         : spotifyCanvasUrl;
     final videoStartOffset =
         widget.appleAnimatedArtworkEnabled && !widget.spotifyCanvasEnabled
-        ? const Duration(seconds: 7)
+        ? animatedArtworkIntroOffset
         : Duration.zero;
     final autoFitInsetArtwork =
         widget.appleAnimatedArtworkEnabled &&
@@ -539,6 +569,11 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
               key: const ValueKey('desktop-player-surface'),
               child: _PlayerSurroundingTheme(
                 data: surroundingTheme,
+                remoteArtworkKind: widget.spotifyCanvasEnabled
+                    ? _RemoteArtworkKind.spotifyCanvas
+                    : widget.appleAnimatedArtworkEnabled
+                    ? _RemoteArtworkKind.appleAnimatedArtwork
+                    : _RemoteArtworkKind.none,
                 child: Theme(
                   key: const ValueKey('player-playback-theme'),
                   data: playerTheme,
@@ -1292,7 +1327,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             emptyMessage: strings.albumWithoutSongs,
             errorMessage: strings.albumLoadError,
             fallbackIcon: Icons.album_rounded,
-            useCollectionArtworkForTrackFallback: true,
+            preferCollectionArtworkForTracks: true,
             metadata: target.metadata,
             onOpenPlayer: () {},
           ),
@@ -3923,6 +3958,9 @@ class _PlayerArtworkSurface extends StatelessWidget {
         );
         final expanded =
             artworkStyle == PlayerArtworkStyle.expanded && url != null;
+        final canvasOverscan = expanded
+            ? _expandedSpotifyCanvasOverscan(context, artworkExtent)
+            : 0.0;
         return DecoratedBox(
           key: const ValueKey('player-artwork-surface'),
           decoration: BoxDecoration(
@@ -3981,14 +4019,30 @@ class _PlayerArtworkSurface extends StatelessWidget {
                       ),
               ),
               if (canvasUrl != null)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(borderRadius),
-                  child: expanded
-                      ? ShaderMask(
-                          blendMode: BlendMode.dstIn,
-                          shaderCallback: expandedArtworkBoundedEdgeFadeGradient
-                              .createShader,
-                          child: SpotifyCanvasVideo(
+                Positioned(
+                  top: -canvasOverscan,
+                  left: -canvasOverscan,
+                  right: -canvasOverscan,
+                  bottom: -canvasOverscan,
+                  child: ClipRRect(
+                    key: const ValueKey('player-canvas-viewport'),
+                    borderRadius: BorderRadius.circular(borderRadius),
+                    child: expanded
+                        ? ShaderMask(
+                            blendMode: BlendMode.dstIn,
+                            shaderCallback:
+                                expandedArtworkBoundedEdgeFadeGradient
+                                    .createShader,
+                            child: SpotifyCanvasVideo(
+                              key: ValueKey('canvas-$identity'),
+                              url: canvasUrl!,
+                              isPlaying: isPlaying,
+                              identity: identity,
+                              startOffset: videoStartOffset,
+                              durationHint: videoDurationHint,
+                            ),
+                          )
+                        : SpotifyCanvasVideo(
                             key: ValueKey('canvas-$identity'),
                             url: canvasUrl!,
                             isPlaying: isPlaying,
@@ -3996,15 +4050,7 @@ class _PlayerArtworkSurface extends StatelessWidget {
                             startOffset: videoStartOffset,
                             durationHint: videoDurationHint,
                           ),
-                        )
-                      : SpotifyCanvasVideo(
-                          key: ValueKey('canvas-$identity'),
-                          url: canvasUrl!,
-                          isPlaying: isPlaying,
-                          identity: identity,
-                          startOffset: videoStartOffset,
-                          durationHint: videoDurationHint,
-                        ),
+                  ),
                 ),
             ],
           ),

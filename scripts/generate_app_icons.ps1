@@ -164,7 +164,7 @@ function Save-MonochromeNotificationIcon {
         New-Item -ItemType Directory -Force -Path $directory | Out-Null
     }
 
-    # Android status icons must be a white/alpha mask. Extract the green
+    # Android status icons must be a white/alpha mask. Extract the green/blue
     # BStream mark from the source instead of using the generic music-note
     # glyph that Android would otherwise show in media notifications.
     $base = New-BStreamIcon $Source $Size $CropInsetFactor
@@ -177,10 +177,9 @@ function Save-MonochromeNotificationIcon {
     for ($y = 0; $y -lt $Size; $y++) {
         for ($x = 0; $x -lt $Size; $x++) {
             $pixel = $base.GetPixel($x, $y)
-            $green = [int]$pixel.G
-            $other = [Math]::Max([int]$pixel.R, [int]$pixel.B)
-            $strength = $green - $other
-            if ($green -gt 35 -and $strength -gt 18) {
+            $greenBlue = [Math]::Max([int]$pixel.G, [int]$pixel.B)
+            $strength = $greenBlue - [int]$pixel.R
+            if ($greenBlue -gt 35 -and $strength -gt 18) {
                 $alpha = [Math]::Min(255, [Math]::Max(0, ($strength - 18) * 12))
                 $bitmap.SetPixel(
                     $x,

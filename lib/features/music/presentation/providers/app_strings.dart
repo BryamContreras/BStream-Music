@@ -132,8 +132,36 @@ class AppStrings {
   );
   String get artistProfile => choose('Perfil del artista', 'Artist profile');
   String get popularSongs => choose('Canciones más populares', 'Popular songs');
+  String get showMore => choose('Mostrar más', 'Show more');
+  String get showLess => choose('Mostrar menos', 'Show less');
+  String get viewAll => choose('Ver todo', 'View all');
+  String get artistSongs => searchSongs;
+  String artistSongsLoadedCount(int loaded, int total) =>
+      choose('$loaded de $total canciones', '$loaded of $total songs');
+  String artistSongsPartialCount(int count) =>
+      choose('$count canciones cargadas', '$count songs loaded');
+  String get artistSongsLoadError => choose(
+    'No se pudieron cargar las canciones del artista.',
+    'The artist\'s songs could not be loaded.',
+  );
+  String get artistWithoutSongs => choose(
+    'No se encontraron canciones de este artista.',
+    'No songs were found for this artist.',
+  );
   String get albums => choose('Álbumes', 'Albums');
   String get singles => choose('Sencillos', 'Singles');
+  String get artistReleasesLoadError => choose(
+    'No se pudieron cargar los lanzamientos del artista.',
+    'The artist\'s releases could not be loaded.',
+  );
+  String get artistWithoutReleases => choose(
+    'No se encontraron lanzamientos de este artista.',
+    'No releases were found for this artist.',
+  );
+  String get artistReleasesPartial => choose(
+    'No se pudieron cargar todos los lanzamientos. Vuelve a intentarlo.',
+    'Some releases could not be loaded. Try again.',
+  );
   String get artistMix => 'Mix';
   String get subscribe => choose('Suscribirse', 'Subscribe');
   String get unsubscribe => choose('Cancelar suscripción', 'Unsubscribe');
@@ -1458,8 +1486,20 @@ class AppStrings {
     required String latestVersion,
     required String currentVersion,
   }) => choose(
-    'La versión $latestVersion de BStream Music está disponible. Actualmente tienes la versión $currentVersion.',
-    'BStream Music version $latestVersion is available. You currently have version $currentVersion.',
+    'BStream Music $latestVersion está disponible. Versión actual: $currentVersion.',
+    'BStream Music $latestVersion is available. Current version: $currentVersion.',
+  );
+  String updateReleaseNotesTitle(String version) =>
+      choose('Novedades $version', 'What’s new in $version');
+  String get updateReleaseNotesLoading =>
+      choose('Traduciendo novedades…', 'Translating release notes…');
+  String get updateReleaseNotesEmpty => choose(
+    'Este release no incluye novedades.',
+    'This release does not include release notes.',
+  );
+  String get updateReleaseNotesTranslationFailed => choose(
+    'No se pudo traducir. Se muestran las novedades originales.',
+    'Translation unavailable. Showing the original release notes.',
   );
   String get appIsUpToDate => choose(
     'Ya tienes la versión más reciente.',

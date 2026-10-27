@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
@@ -16,6 +17,7 @@ import 'package:bstream_music/services/lyrics/lyrics_romanization_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
 import 'package:bstream_music/services/storage/library_csv_import_service.dart';
+import 'package:bstream_music/services/sharing/incoming_csv_file_service.dart';
 import 'package:bstream_music/services/storage/library_csv_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_account_client.dart';
@@ -2899,6 +2901,101 @@ void main() {
   });
 
   testWidgets(
+    'cold-start CSV open asks permission and cancellation imports nothing',
+    (tester) async {
+      _configureView(tester, const Size(430, 900));
+      final incoming = _FakeIncomingCsvFileService();
+      addTearDown(incoming.close);
+      final transfer = _ImmediateCsvTransferController();
+      const file = IncomingCsvFile(
+        path: '/cache/import/Mi playlist.csv',
+        name: 'Mi playlist.csv',
+        source: 'content://files/first',
+        temporary: true,
+      );
+      incoming.controller.add(file);
+      await tester.pumpWidget(
+        _homeHarness(
+          overrides: [
+            incomingCsvFileServiceProvider.overrideWithValue(incoming),
+            libraryCsvTransferControllerProvider.overrideWith(() => transfer),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('csv-import-preview')), findsOneWidget);
+      expect(find.text('Mi playlist.csv'), findsOneWidget);
+      expect(transfer.previewPaths, [file.path]);
+      expect(transfer.importCalls, 0);
+      expect(incoming.released, isEmpty);
+
+      await tester.tap(find.byKey(const ValueKey('csv-import-preview-cancel')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('csv-import-preview')), findsNothing);
+      expect(transfer.importCalls, 0);
+      expect(incoming.released, [file]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'warm CSV open imports only after confirmation and ignores duplicate opens',
+    (tester) async {
+      _configureView(tester, const Size(430, 900));
+      final incoming = _FakeIncomingCsvFileService();
+      addTearDown(incoming.close);
+      final transfer = _ImmediateCsvTransferController();
+      await tester.pumpWidget(
+        _homeHarness(
+          overrides: [
+            incomingCsvFileServiceProvider.overrideWithValue(incoming),
+            libraryCsvTransferControllerProvider.overrideWith(() => transfer),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      const file = IncomingCsvFile(
+        path: '/cache/import/Favoritas.csv',
+        name: 'Favoritas.csv',
+        source: 'content://files/favorites',
+        temporary: true,
+      );
+      incoming.controller.add(file);
+      incoming.controller.add(
+        IncomingCsvFile(
+          path: file.path,
+          name: file.name,
+          source: file.source,
+          temporary: true,
+          id: 'same-path-duplicate',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('csv-import-preview')), findsOneWidget);
+      expect(transfer.previewPaths, [file.path]);
+      expect(transfer.importCalls, 0);
+      expect(incoming.released, isEmpty);
+
+      await tester.tap(
+        find.byKey(const ValueKey('csv-import-preview-confirm')),
+      );
+      await tester.pumpAndSettle();
+      expect(transfer.importCalls, 1);
+      expect(
+        find.byKey(const ValueKey('csv-import-progress-dialog')),
+        findsOneWidget,
+      );
+      expect(incoming.released, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('csv-import-close')));
+      await tester.pumpAndSettle();
+      expect(incoming.released, [file]);
+      expect(find.byKey(const ValueKey('csv-import-preview')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'storage transfer cards fit a small phone with large accessible text',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -3161,7 +3258,10 @@ Widget _settingsHarness({
   );
 }
 
-Widget _homeHarness({bool disableAnimations = false}) {
+Widget _homeHarness({
+  bool disableAnimations = false,
+  List<Override> overrides = const [],
+}) {
   return ProviderScope(
     overrides: [
       ..._providerOverrides(),
@@ -3182,6 +3282,7 @@ Widget _homeHarness({bool disableAnimations = false}) {
       incomingTrackLinkServiceProvider.overrideWithValue(
         const _EmptyIncomingTrackLinkService(),
       ),
+      ...overrides,
     ],
     child: MaterialApp(
       builder: disableAnimations
@@ -3434,6 +3535,7 @@ class _IdlePlayerController extends PlayerController {
 
 class _ImmediateCsvTransferController extends LibraryCsvTransferController {
   int importCalls = 0;
+  final List<String> previewPaths = [];
 
   static const document = LibraryCsvDocument(
     tracks: [
@@ -3451,6 +3553,7 @@ class _ImmediateCsvTransferController extends LibraryCsvTransferController {
 
   @override
   Future<LibraryCsvDocument> preview(String path) async {
+    previewPaths.add(path);
     state = const LibraryCsvTransferState(
       phase: LibraryCsvTransferPhase.completed,
       document: document,
@@ -3480,6 +3583,22 @@ class _ImmediateCsvTransferController extends LibraryCsvTransferController {
     );
     return result;
   }
+}
+
+class _FakeIncomingCsvFileService implements IncomingCsvFileService {
+  final controller = StreamController<IncomingCsvFile>();
+  final List<IncomingCsvFile> released = [];
+
+  @override
+  Stream<IncomingCsvFile> get files => controller.stream;
+
+  @override
+  Future<void> release(IncomingCsvFile file) async => released.add(file);
+
+  @override
+  void dispose() {}
+
+  Future<void> close() => controller.close();
 }
 
 class _PublishingCsvTransferController extends LibraryCsvTransferController {

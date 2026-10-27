@@ -58,10 +58,14 @@ class PlaylistArtworkMosaic extends StatelessWidget {
             : covers.length == 1
             ? imageAt(0)
             : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (var row = 0; row < 2; row++)
                     Expanded(
                       child: Row(
+                        // Cover needs tight square bounds: otherwise a wide
+                        // image keeps its intrinsic height and leaves gaps.
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           for (var column = 0; column < 2; column++)
                             Expanded(child: imageAt(row * 2 + column)),

@@ -4236,6 +4236,89 @@ void main() {
   );
 
   test(
+    'album artwork survives backend video thumbnails and native successors',
+    () async {
+      const albumArtwork =
+          'https://lh3.googleusercontent.com/album-cover=w544-h544-l90-rj';
+      final tracks =
+          [
+                _unresolvedRemoteTrack('q8j3zwNhLNo'),
+                _unresolvedRemoteTrack('dQw4w9WgXcQ'),
+              ]
+              .map((track) {
+                return track.copyWith(
+                  thumbnailUrl: albumArtwork,
+                  catalogThumbnailUrl: albumArtwork,
+                  album: 'Selected album',
+                  albumBrowseId: 'MPREb_selected_album',
+                  metadataSource: TrackMetadataSource.youtubeMusic,
+                );
+              })
+              .toList(growable: false);
+      final player = _NativeRemoteQueuePlayerService();
+      final container = _container(
+        player,
+        audioResolver: _BitrateAudioResolver(),
+        remoteCache: _TrackingRemotePlaybackCache(),
+      );
+      addTearDown(container.dispose);
+
+      await container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playRemote(tracks.first, queue: tracks);
+      await _waitUntil(
+        () =>
+            player.remoteWindows.isNotEmpty &&
+            player.remoteWindows.last.any(
+              (source) => source.track.id == tracks.last.id,
+            ),
+      );
+      expect(player.playedRemote.single.thumbnailUrl, albumArtwork);
+      expect(
+        container.read(playerControllerProvider).requireValue.thumbnailUrl,
+        albumArtwork,
+      );
+
+      player.emit(
+        player.currentSnapshot.copyWith(
+          thumbnailUrl:
+              'https://i.ytimg.com/vi/${tracks.first.id}/hqdefault.jpg',
+        ),
+      );
+      await _flushCompletion();
+      expect(
+        container.read(playerControllerProvider).requireValue.thumbnailUrl,
+        albumArtwork,
+      );
+
+      final nextSource = player.remoteWindows.last.firstWhere(
+        (source) => source.track.id == tracks.last.id,
+      );
+      expect(nextSource.track.thumbnailUrl, albumArtwork);
+      expect(nextSource.track.catalogThumbnailUrl, albumArtwork);
+      player.emitNativeTransition(nextSource);
+      await _waitUntil(
+        () => container.read(playbackQueueProvider).currentIndex == 1,
+      );
+      player.emit(
+        player.currentSnapshot.copyWith(
+          thumbnailUrl:
+              'https://i.ytimg.com/vi/${tracks.last.id}/hqdefault.jpg',
+        ),
+      );
+      await _flushCompletion();
+      expect(
+        container.read(playerControllerProvider).requireValue.thumbnailUrl,
+        albumArtwork,
+      );
+      expect(
+        controller.currentRemoteTrackFor(tracks.last.url)?.thumbnailUrl,
+        albumArtwork,
+      );
+    },
+  );
+
+  test(
     'native queue keeps the resolved format when the next song starts',
     () async {
       final player = _NativeRemoteQueuePlayerService();

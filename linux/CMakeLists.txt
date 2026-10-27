@@ -111,6 +111,15 @@ install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/runner/bstream_music_launcher"
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
+# Keep a native window icon in the relocatable bundle too. Installed desktops
+# use the matching hicolor entry, while X11 can use this file when running the
+# bundle directly without installing a desktop entry first.
+install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
+  RENAME "${APPLICATION_ID}.png"
+  COMPONENT Runtime)
+
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 

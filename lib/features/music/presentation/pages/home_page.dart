@@ -23,6 +23,7 @@ import '../../../../platform_channels/android_app_activation_channel.dart';
 import '../../../../platform_channels/android_external_audio_channel.dart';
 import '../../../../services/recommendations/recommendation_feed_models.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
+import '../../../../services/sharing/incoming_csv_file_service.dart';
 import '../../../../services/sharing/youtube_music_link.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/remote_music_datasource.dart';
@@ -36,6 +37,7 @@ import '../widgets/app_update_dialog.dart';
 import '../widgets/bstream_logo.dart';
 import '../widgets/favorite_star_badge.dart';
 import '../widgets/library_panel.dart';
+import '../widgets/library_csv_import_dialog.dart';
 import '../widgets/local_music_panel.dart';
 import '../widgets/lyrics_page_route.dart';
 import '../widgets/mini_player.dart';
@@ -154,9 +156,13 @@ class _HomePageState extends ConsumerState<HomePage>
   _incomingTrackLinkSubscription;
   ProviderSubscription<AsyncValue<YouTubeMusicLink>>?
   _incomingYouTubeMusicLinkSubscription;
+  ProviderSubscription<AsyncValue<IncomingCsvFile>>?
+  _incomingCsvFileSubscription;
   Future<void> _externalAudioWork = Future<void>.value();
   Future<void> _incomingTrackLinkWork = Future<void>.value();
   Future<void> _incomingYouTubeMusicLinkWork = Future<void>.value();
+  Future<void> _incomingCsvFileWork = Future<void>.value();
+  final Map<String, String> _pendingIncomingCsvSources = {};
   final Set<String> _startedExternalAudioRequests = <String>{};
   final Set<String> _reportedIncompleteExternalFolders = <String>{};
   int _latestAppEntryGeneration = 0;
@@ -237,6 +243,73 @@ class _HomePageState extends ConsumerState<HomePage>
           (_, next) => next.whenData(_queueIncomingYouTubeMusicLink),
           fireImmediately: true,
         );
+    _incomingCsvFileSubscription = ref
+        .listenManual<AsyncValue<IncomingCsvFile>>(incomingCsvFileProvider, (
+          _,
+          next,
+        ) {
+          if (next is AsyncData<IncomingCsvFile>) {
+            _queueIncomingCsvFile(next.value);
+          } else if (next is AsyncError<IncomingCsvFile>) {
+            _showIncomingCsvError(next.error);
+          }
+        }, fireImmediately: true);
+  }
+
+  void _queueIncomingCsvFile(IncomingCsvFile file) {
+    final service = ref.read(incomingCsvFileServiceProvider);
+    final pendingPath = _pendingIncomingCsvSources[file.source];
+    if (pendingPath != null) {
+      if (pendingPath != file.path) {
+        unawaited(
+          service.release(file).catchError((Object error) {
+            debugPrint('Could not release duplicate CSV: $error');
+          }),
+        );
+      }
+      return;
+    }
+    _pendingIncomingCsvSources[file.source] = file.path;
+    _incomingCsvFileWork = _incomingCsvFileWork.then((_) async {
+      try {
+        // Cold-start activations can arrive before the shell's first build.
+        if (!mounted) return;
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+        await showLibraryCsvImportFlow(
+          context: context,
+          ref: ref,
+          path: file.path,
+          fileName: file.name,
+        );
+      } catch (error) {
+        _showIncomingCsvError(error);
+      } finally {
+        _pendingIncomingCsvSources.remove(file.source);
+        try {
+          await service.release(file);
+        } catch (error) {
+          debugPrint('Could not release imported CSV copy: $error');
+        }
+      }
+    });
+  }
+
+  void _showIncomingCsvError(Object error) {
+    debugPrint('Could not open incoming CSV: $error');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final strings = ref.read(appStringsProvider);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              '${strings.csvImportFailed} ${readableCsvError(error)}',
+            ),
+          ),
+        );
+    });
   }
 
   void _queueIncomingTrackLink(BStreamTrackLink link) {
@@ -403,7 +476,7 @@ class _HomePageState extends ConsumerState<HomePage>
             metadata: const [],
             queueSourceId: 'incoming-youtube:${link.kind.name}:$collectionId',
             tracksProvider: tracksProvider,
-            useCollectionArtworkForTrackFallback: isAlbum,
+            preferCollectionArtworkForTracks: isAlbum,
             detailsProvider: isAlbum
                 ? null
                 : isPlaylist
@@ -1059,6 +1132,7 @@ class _HomePageState extends ConsumerState<HomePage>
     unawaited(_appActivationSubscription?.cancel());
     _incomingTrackLinkSubscription?.close();
     _incomingYouTubeMusicLinkSubscription?.close();
+    _incomingCsvFileSubscription?.close();
     _localMusicNavigationController.dispose();
     _libraryNavigationController.dispose();
     _settingsNavigationController.dispose();
@@ -4232,7 +4306,7 @@ class _RecommendedCollectionCard extends StatelessWidget {
           tracksProvider: collection.isAlbum
               ? homeAlbumTracksProvider(collection.browseId)
               : homeCollectionTracksProvider(collection.browseId),
-          useCollectionArtworkForTrackFallback: collection.isAlbum,
+          preferCollectionArtworkForTracks: collection.isAlbum,
           emptyMessage: strings.homeCollectionEmpty,
           errorMessage: strings.homeCollectionLoadError,
           onOpenPlayer: onOpenPlayer,

@@ -1,5 +1,7 @@
-import 'dart:convert';
 import 'dart:io';
+
+import '../../core/utils/background_work.dart';
+import '../../core/utils/bounded_byte_stream.dart';
 
 typedef GitHubLatestReleaseFetcher =
     Future<Map<String, Object?>> Function(Uri endpoint);
@@ -9,11 +11,13 @@ class AppReleaseCheckResult {
     required this.currentVersion,
     required this.latestVersion,
     required this.releaseTag,
+    this.releaseNotes = '',
   });
 
   final String currentVersion;
   final String latestVersion;
   final String releaseTag;
+  final String releaseNotes;
 
   bool get updateAvailable =>
       compareAppVersions(latestVersion, currentVersion) > 0;
@@ -46,6 +50,9 @@ class GitHubReleaseChecker {
       currentVersion: normalizedCurrent,
       latestVersion: latestVersion,
       releaseTag: tag,
+      releaseNotes: payload['body'] is String
+          ? (payload['body']! as String).replaceAll('\u0000', '').trim()
+          : '',
     );
   }
 
@@ -63,29 +70,36 @@ class GitHubReleaseChecker {
         const Duration(seconds: 10),
       );
       if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
         throw HttpException(
           'GitHub latest release request failed (${response.statusCode}).',
           uri: endpoint,
         );
       }
-      final body = await utf8.decoder
-          .bind(response)
-          .join()
-          .timeout(const Duration(seconds: 10));
-      final decoded = jsonDecode(body);
-      if (decoded is! Map) {
-        throw const FormatException(
-          'The latest GitHub release response is not an object.',
-        );
-      }
-      return decoded.map(
-        (key, value) => MapEntry(key.toString(), value as Object?),
+      final bytes = await collectBoundedByteStream(
+        response,
+        maximumBytes: 512 * 1024,
+        declaredLength: response.contentLength < 0
+            ? null
+            : response.contentLength,
+        idleTimeout: const Duration(seconds: 10),
+        totalTimeout: const Duration(seconds: 10),
       );
+      return await parseJsonBytesInBackground(bytes, _githubReleasePayload);
     } finally {
       client.close(force: true);
     }
   }
+}
+
+Map<String, Object?> _githubReleasePayload(Object? decoded) {
+  if (decoded is! Map) {
+    throw const FormatException(
+      'The latest GitHub release response is not an object.',
+    );
+  }
+  return decoded.map(
+    (key, value) => MapEntry(key.toString(), value as Object?),
+  );
 }
 
 int compareAppVersions(String left, String right) {

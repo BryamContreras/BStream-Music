@@ -17,7 +17,7 @@ void main() {
       addTearDown(() => VideoPlayerPlatform.instance = originalPlatform);
       await tester.pumpWidget(_introArtworkHarness());
       await tester.pump();
-      expect(platform.seeks, [const Duration(seconds: 7)]);
+      expect(platform.seeks, [animatedArtworkIntroOffset]);
       platform.speeds.clear();
 
       Finder opacityFinder() => find
@@ -29,25 +29,25 @@ void main() {
 
       // VideoPlayerController changes playbackSpeed synchronously, and this
       // backend also reports playing state synchronously from that operation.
-      // The original code alternated 8x/1x recursively at 7.05s.
+      // The original code alternated 8x/1x recursively just after the offset.
       platform.position = Duration.zero;
       await tester.pump(const Duration(milliseconds: 100));
       expect(platform.speeds, isNotEmpty);
       expect(platform.speeds, everyElement(8));
 
-      platform.position = const Duration(milliseconds: 7050);
+      platform.position = const Duration(milliseconds: 8050);
       await tester.pump(const Duration(milliseconds: 100));
       expect(platform.speeds, isNotEmpty);
       expect(platform.speeds, everyElement(8));
       expect(tester.widget<AnimatedOpacity>(opacityFinder()).opacity, 0);
       expect(tester.takeException(), isNull);
 
-      platform.position = const Duration(milliseconds: 7120);
+      platform.position = const Duration(milliseconds: 8120);
       await tester.pump(const Duration(milliseconds: 100));
       expect(platform.speeds, everyElement(8));
       expect(tester.widget<AnimatedOpacity>(opacityFinder()).opacity, 0);
 
-      platform.position = const Duration(milliseconds: 7121);
+      platform.position = const Duration(milliseconds: 8121);
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump();
       expect(platform.speeds.last, 1);
@@ -72,16 +72,16 @@ void main() {
     addTearDown(() => VideoPlayerPlatform.instance = originalPlatform);
     await tester.pumpWidget(_introArtworkHarness());
     await tester.pump();
-    expect(platform.seeks, [const Duration(seconds: 7)]);
+    expect(platform.seeks, [animatedArtworkIntroOffset]);
     platform.speeds.clear();
 
-    for (final milliseconds in [7050, 7120]) {
+    for (final milliseconds in [8050, 8120]) {
       platform.position = Duration(milliseconds: milliseconds);
       await tester.pump(const Duration(milliseconds: 100));
       expect(platform.speeds, isNot(contains(8)));
       expect(tester.takeException(), isNull);
     }
-    platform.position = const Duration(milliseconds: 7121);
+    platform.position = const Duration(milliseconds: 8121);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump();
     final video = tester.widget<VideoPlayer>(find.byType(VideoPlayer));
@@ -105,6 +105,24 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('short artwork never reveals the intro or seeks past its end', (
+    tester,
+  ) async {
+    final originalPlatform = VideoPlayerPlatform.instance;
+    final platform = _SynchronousArtworkVideoPlatform(
+      duration: const Duration(seconds: 9),
+    );
+    VideoPlayerPlatform.instance = platform;
+    addTearDown(() => VideoPlayerPlatform.instance = originalPlatform);
+    await tester.pumpWidget(_introArtworkHarness());
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(platform.seeks, isEmpty);
+    expect(find.byType(VideoPlayer), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   test('only portrait video receives the optional inset-artwork zoom', () {
     expect(effectivePortraitArtworkZoom(const Size(486, 648), 1.45), 1.45);
     expect(effectivePortraitArtworkZoom(const Size(768, 768), 1.45), 1.0);
@@ -119,8 +137,9 @@ void main() {
     expect(isRemoteArtworkVideoSizeAllowed(const Size(0, 720)), isFalse);
   });
 
-  test('skips seven seconds only when artwork has enough video to loop', () {
-    const skip = Duration(seconds: 7);
+  test('skips eight seconds only when artwork has enough video to loop', () {
+    const skip = animatedArtworkIntroOffset;
+    expect(skip, const Duration(seconds: 8));
     expect(
       effectiveArtworkVideoStartOffset(skip, const Duration(seconds: 25)),
       skip,
@@ -130,11 +149,11 @@ void main() {
       skip,
     );
     expect(
-      effectiveArtworkVideoStartOffset(skip, const Duration(seconds: 10)),
+      effectiveArtworkVideoStartOffset(skip, const Duration(seconds: 11)),
       skip,
     );
     expect(
-      effectiveArtworkVideoStartOffset(skip, const Duration(seconds: 9)),
+      effectiveArtworkVideoStartOffset(skip, const Duration(seconds: 10)),
       Duration.zero,
     );
     expect(
@@ -143,6 +162,14 @@ void main() {
     );
     expect(
       effectiveArtworkVideoStartOffset(skip, const Duration(seconds: 6)),
+      Duration.zero,
+    );
+    expect(
+      effectiveArtworkVideoStartOffset(
+        skip,
+        const Duration(seconds: 6),
+        durationHint: const Duration(minutes: 3),
+      ),
       Duration.zero,
     );
     expect(
@@ -179,7 +206,7 @@ Widget _introArtworkHarness() => MaterialApp(
       child: SpotifyCanvasVideo(
         url: Uri.file('fixture.mp4'),
         isPlaying: true,
-        startOffset: const Duration(seconds: 7),
+        startOffset: animatedArtworkIntroOffset,
         durationHint: const Duration(seconds: 220),
       ),
     ),
@@ -187,6 +214,11 @@ Widget _introArtworkHarness() => MaterialApp(
 );
 
 class _SynchronousArtworkVideoPlatform extends VideoPlayerPlatform {
+  _SynchronousArtworkVideoPlatform({
+    this.duration = const Duration(seconds: 20),
+  });
+
+  final Duration duration;
   late final StreamController<VideoEvent> _events =
       StreamController<VideoEvent>(
         sync: true,
@@ -194,7 +226,7 @@ class _SynchronousArtworkVideoPlatform extends VideoPlayerPlatform {
           _events.add(
             VideoEvent(
               eventType: VideoEventType.initialized,
-              duration: const Duration(seconds: 20),
+              duration: duration,
               size: const Size(768, 768),
             ),
           );
