@@ -25,6 +25,8 @@ Current version: **1.2.9+129**.
 - Optimized animated artwork performance.
 - Select multiple songs in albums, mixes, and search results to add them to a
   playlist or download them.
+- Share up to five song lyric lines as an image with artwork, blur, gradient,
+  or a photo from your gallery.
 
 ## Main features
 

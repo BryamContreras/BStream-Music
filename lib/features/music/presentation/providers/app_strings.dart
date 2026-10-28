@@ -478,6 +478,51 @@ class AppStrings {
   );
   String get lyricsOffset => choose('Desfase', 'Offset');
   String get lyricsSettings => choose('Opciones de letras', 'Lyrics options');
+  String get lyricsShareTitle => choose('Compartir letras', 'Share lyrics');
+  String get lyricsShareSelectHint => choose(
+    'Mantén pulsada una línea para compartir hasta 5 líneas',
+    'Hold a line to share up to 5 lines',
+  );
+  String get lyricsShareLimit =>
+      choose('Puedes seleccionar hasta 5 líneas', 'Select up to 5 lines');
+  String lyricsShareSelectedCount(int count) =>
+      choose('$count de 5 líneas', '$count of 5 lines');
+  String get lyricsShareBackground => choose('Fondo', 'Background');
+  String get lyricsShareBlur => choose('Desenfoque', 'Blur');
+  String get lyricsShareCover => choose('Portada', 'Artwork');
+  String get lyricsShareGradient => choose('Gradiente', 'Gradient');
+  String get lyricsShareTextColor => choose('Color del texto', 'Text color');
+  String get lyricsShareTextAuto => choose('Automático', 'Automatic');
+  String get lyricsShareTextLight => choose('Claro', 'Light');
+  String get lyricsShareTextDark => choose('Oscuro', 'Dark');
+  String get lyricsShareGallery => choose('Galería', 'Gallery');
+  String get lyricsShareChoosePhoto => choose('Elegir foto', 'Choose photo');
+  String get lyricsShareAdjustPhoto => choose('Ajustar foto', 'Adjust photo');
+  String get lyricsShareCropTitle => lyricsShareAdjustPhoto;
+  String get lyricsShareCropHint => choose(
+    'Arrastra y amplía la foto para ajustar el recorte',
+    'Drag and zoom the photo to adjust the crop',
+  );
+  String get lyricsShareUsePhoto => choose('Usar foto', 'Use photo');
+  String get lyricsShareResetCrop => choose('Restablecer', 'Reset');
+  String get lyricsSharePhotoFailed => choose(
+    'No se pudo abrir la foto. Prueba con otra imagen.',
+    'Could not open the photo. Try another image.',
+  );
+  String get lyricsSharePalette =>
+      choose('Colores del gradiente', 'Gradient colors');
+  String lyricsShareColorLabel(int index) =>
+      choose('Color $index', 'Color $index');
+  String get lyricsShareImage => choose('Compartir imagen', 'Share image');
+  String get lyricsShareSaveImage => choose('Guardar imagen', 'Save image');
+  String get lyricsShareSaved => choose('Imagen guardada', 'Image saved');
+  String get lyricsShareFailed => choose(
+    'No se pudo preparar o compartir la imagen',
+    'Could not prepare or share the image',
+  );
+  String get lyricsSharePreparing =>
+      choose('Preparando imagen…', 'Preparing image…');
+  String get lyricsSharePreview => lyricsPreview;
   String get lyricsOffsetUnavailable => choose(
     'Disponible para letras sincronizadas.',
     'Available for synchronized lyrics.',

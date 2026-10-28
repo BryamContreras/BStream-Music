@@ -12,6 +12,7 @@ import 'package:bstream_music/features/music/presentation/providers/music_provid
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_animation_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_page.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_page_route.dart';
+import 'package:bstream_music/features/music/presentation/widgets/lyrics_share_preview.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_text_style_transition.dart';
 import 'package:bstream_music/features/music/presentation/widgets/uniform_playback_slider_track_shape.dart';
 import 'package:bstream_music/features/music/presentation/widgets/wavy_playback_seek_bar.dart';
@@ -349,6 +350,218 @@ void main() {
     await tester.pump(const Duration(milliseconds: 620));
     expect(slideOffset(), closeTo(0, 0.01));
     expect(tester.binding.hasScheduledFrame, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'lyrics sharing caps selection at five and previews source order',
+    (tester) async {
+      tester.view
+        ..physicalSize = const Size(420, 1050)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+      final player = _FakePlayerService(
+        lookupSnapshot.copyWith(
+          status: PlayerStatus.paused,
+          position: Duration.zero,
+        ),
+      );
+      final document = LyricsDocument(
+        provider: 'Test provider',
+        trackName: 'Test song',
+        artistName: 'Test artist',
+        lines: List.generate(
+          8,
+          (i) => LyricLine(
+            timestamp: Duration(seconds: i * 3),
+            text: 'Share line $i',
+          ),
+        ),
+      );
+      await _pumpLyricsPage(
+        tester,
+        player: player,
+        lyrics: _FakeLyricsService(document),
+        platform: TargetPlatform.android,
+      );
+      await tester.longPress(find.byKey(const ValueKey('lyrics-line-tile-4')));
+      await tester.pump();
+      for (final index in [0, 2, 1, 3]) {
+        await tester.tap(find.byKey(ValueKey('lyrics-line-tile-$index')));
+        await tester.pump();
+      }
+      expect(find.text('5 of 5 lines'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('lyrics-line-tile-5')));
+      await tester.pump();
+      expect(find.text('5 of 5 lines'), findsOneWidget);
+      expect(find.text('Select up to 5 lines'), findsOneWidget);
+      expect(player.seekPositions, isEmpty);
+      await tester.tap(
+        find.byKey(const ValueKey('lyrics-line-selection-share')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      final preview = tester.widget<LyricsSharePreview>(
+        find.byType(LyricsSharePreview),
+      );
+      expect(preview.data.lines, List.generate(5, (i) => 'Share line $i'));
+      expect(preview.data.title, 'Test song');
+      expect(preview.data.artist, 'Test artist');
+      await tester.binding.handlePopRoute();
+      await _settleLyricsAnimations(tester);
+      await tester.tap(
+        find.byKey(const ValueKey('lyrics-line-selection-cancel')),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('lyrics-line-selection-bar')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('lyrics-line-tile-1')));
+      await tester.pump();
+      expect(player.seekPositions, [const Duration(seconds: 3)]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('lyrics sharing back and document changes clear selection', (
+    tester,
+  ) async {
+    final player = _FakePlayerService(
+      lookupSnapshot.copyWith(status: PlayerStatus.paused),
+    );
+    final container = await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+      openAsRoute: true,
+    );
+    await tester.longPress(find.byKey(const ValueKey('lyrics-line-tile-0')));
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byType(LyricsPage), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('lyrics-line-selection-bar')),
+      findsNothing,
+    );
+    await tester.longPress(find.byKey(const ValueKey('lyrics-line-tile-0')));
+    await tester.pump();
+    container
+        .read(selectedLyricsControllerProvider.notifier)
+        .select(
+          const LyricsDocument(
+            provider: 'Other provider',
+            trackName: 'Test song',
+            artistName: 'Test artist',
+            plainLyrics: 'Replacement lyrics',
+          ),
+        );
+    await _settleLyricsAnimations(tester);
+    expect(
+      find.byKey(const ValueKey('lyrics-line-selection-bar')),
+      findsNothing,
+    );
+    expect(find.text('Replacement lyrics'), findsOneWidget);
+    await tester.longPress(find.byKey(const ValueKey('plain-lyrics-original')));
+    await tester.pump();
+    expect(find.text('1 of 5 lines'), findsOneWidget);
+    player.emit(
+      lookupSnapshot.copyWith(
+        trackId: 'another-song',
+        title: 'Another song',
+        status: PlayerStatus.paused,
+      ),
+    );
+    await _settleLyricsAnimations(tester);
+    expect(
+      find.byKey(const ValueKey('lyrics-line-selection-bar')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('plain lyric hit testing selects wrapped source line', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(360, 800)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+    final player = _FakePlayerService(
+      lookupSnapshot.copyWith(status: PlayerStatus.paused),
+    );
+    await _pumpLyricsPage(
+      tester,
+      player: player,
+      lyrics: _FakeLyricsService(
+        const LyricsDocument(
+          provider: 'Test provider',
+          trackName: 'Test song',
+          artistName: 'Test artist',
+          plainLyrics:
+              'A very long original line which wraps over several screen rows\nSecond original line\nThird original line',
+        ),
+      ),
+      platform: TargetPlatform.android,
+    );
+    final paragraph = find.byKey(const ValueKey('plain-lyrics-original'));
+    final rect = tester.getRect(paragraph);
+    await tester.longPressAt(Offset(rect.left + 24, rect.top + 60));
+    await tester.pump();
+    expect(find.text('1 of 5 lines'), findsOneWidget);
+    final firstRow = find.byKey(const ValueKey('plain-lyrics-line-0'));
+    final semantics = tester.widget<Semantics>(
+      find.descendant(of: firstRow, matching: find.byType(Semantics)).first,
+    );
+    expect(semantics.properties.selected, isTrue);
+    await tester.tap(find.byKey(const ValueKey('plain-lyrics-line-1')));
+    await tester.pump();
+    expect(find.text('2 of 5 lines'), findsOneWidget);
+    expect(player.seekPositions, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('lyrics sharing stays usable with large text on compact phone', (
+    tester,
+  ) async {
+    tester.view
+      ..physicalSize = const Size(320, 568)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+    await _pumpLyricsPage(
+      tester,
+      player: _FakePlayerService(
+        lookupSnapshot.copyWith(status: PlayerStatus.paused),
+      ),
+      lyrics: _FakeLyricsService(syncedDocument),
+      platform: TargetPlatform.android,
+      textScale: 2,
+      language: AppLanguage.spanish,
+    );
+    await tester.longPress(find.byKey(const ValueKey('lyrics-line-tile-0')));
+    await tester.pump();
+    expect(find.text('1 de 5 líneas'), findsOneWidget);
+    final share = find.byKey(const ValueKey('lyrics-line-selection-share'));
+    expect(tester.widget<IconButton>(share).onPressed, isNotNull);
+    final bar = tester.getRect(
+      find.byKey(const ValueKey('lyrics-line-selection-bar')),
+    );
+    expect(bar.right, lessThanOrEqualTo(320));
+    expect(bar.bottom, lessThanOrEqualTo(568));
     expect(tester.takeException(), isNull);
   });
 

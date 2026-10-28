@@ -46,6 +46,7 @@ import '../../../../services/recommendations/recommendations.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/sharing/incoming_csv_file_service.dart';
 import '../../../../services/sharing/incoming_track_link_service.dart';
+import '../../../../services/sharing/lyrics_share_photo_service.dart';
 import '../../../../services/sharing/track_share_service.dart';
 import '../../../../services/sharing/playlist_csv_share_service.dart';
 import '../../../../services/sharing/youtube_music_playlist_share_service.dart';

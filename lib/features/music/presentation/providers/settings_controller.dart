@@ -320,8 +320,15 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     // unless the optimized copy and preference write both succeed.
     if (_platform == AppPlatformType.android && Platform.isAndroid) {
       try {
+        final lyricsPhotoPending =
+            prefs.getBool(lyricsSharePhotoPendingKey) ?? false;
         final lost = await ImagePicker().retrieveLostData();
-        final files = lost.files;
+        if (lyricsPhotoPending) {
+          await prefs.remove(lyricsSharePhotoPendingKey);
+        }
+        // A lyric-card image belongs only to its editor. After activity death
+        // its recovered result must never replace the user's app wallpaper.
+        final files = lyricsPhotoPending ? null : lost.files;
         if (files != null && files.isNotEmpty) {
           final recoveredName = await appBackgroundService.saveFile(
             File(files.first.path),

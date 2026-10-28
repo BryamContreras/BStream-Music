@@ -1632,6 +1632,7 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Interface performance and smoothness have been improved.',
             'Album, mix, and artist pages now inherit colors from their cover art.',
             'Portuguese, French, Korean, Chinese, and Japanese are now supported.',
+            'Share up to five song lyric lines as an image with artwork, blur, gradient, or a photo from your gallery.',
           ]
         : const <String>[
             'Ya está disponible el widget del reproductor para la pantalla de inicio.',
@@ -1642,6 +1643,7 @@ class _AboutApplicationSettings extends StatelessWidget {
             'Se hicieron mejoras en la interfaz para ofrecer más rendimiento y fluidez.',
             'Los fondos de álbumes, mixes y artistas ahora heredan los tonos de sus portadas.',
             'La aplicación ahora es compatible con portugués, francés, coreano, chino y japonés.',
+            'Comparte hasta cinco líneas de una canción como imagen con portada, desenfoque, gradiente o una foto de tu galería.',
           ];
     const englishHighlights = <String>[
       'The player widget is now available for your home screen.',
@@ -1652,6 +1654,7 @@ class _AboutApplicationSettings extends StatelessWidget {
       'Interface performance and smoothness have been improved.',
       'Album, mix, and artist pages now inherit colors from their cover art.',
       'Portuguese, French, Korean, Chinese, and Japanese are now supported.',
+      'Share up to five song lyric lines as an image with artwork, blur, gradient, or a photo from your gallery.',
     ];
     final highlights = List<String>.generate(
       englishHighlights.length,

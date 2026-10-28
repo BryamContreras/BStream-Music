@@ -7315,6 +7315,12 @@ void main() {
       findsOneWidget,
     );
     expect(
+      find.textContaining(
+        'Comparte hasta cinco líneas de una canción como imagen con portada',
+      ),
+      findsOneWidget,
+    );
+    expect(
       find.textContaining('Se agregó el reproductor Vinilo Clásico'),
       findsNothing,
     );

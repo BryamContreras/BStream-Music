@@ -154,4 +154,70 @@ void main() {
     expect(AppStrings(AppLanguage.chinese).localTab, '本地');
     expect(AppStrings(AppLanguage.japanese).localTab, 'ローカル');
   });
+
+  test(
+    'lyrics sharing labels and selection counts follow the app language',
+    () {
+      List<String> sharingLabels(AppStrings strings) => <String>[
+        strings.lyricsShareTitle,
+        strings.lyricsShareSelectHint,
+        strings.lyricsShareLimit,
+        strings.lyricsShareBackground,
+        strings.lyricsShareBlur,
+        strings.lyricsShareCover,
+        strings.lyricsShareGradient,
+        strings.lyricsShareTextColor,
+        strings.lyricsShareTextAuto,
+        strings.lyricsShareTextLight,
+        strings.lyricsShareTextDark,
+        strings.lyricsShareGallery,
+        strings.lyricsShareChoosePhoto,
+        strings.lyricsShareAdjustPhoto,
+        strings.lyricsShareCropTitle,
+        strings.lyricsShareCropHint,
+        strings.lyricsShareUsePhoto,
+        strings.lyricsShareResetCrop,
+        strings.lyricsSharePhotoFailed,
+        strings.lyricsSharePalette,
+        strings.lyricsShareImage,
+        strings.lyricsShareSaveImage,
+        strings.lyricsShareSaved,
+        strings.lyricsShareFailed,
+        strings.lyricsSharePreparing,
+        strings.lyricsSharePreview,
+      ];
+
+      final englishLabels = sharingLabels(
+        const AppStrings(AppLanguage.english),
+      );
+      for (final language in AppLanguage.values) {
+        final strings = AppStrings(language);
+        final labels = sharingLabels(strings);
+        for (var index = 0; index < labels.length; index++) {
+          expect(labels[index], isNotEmpty, reason: '${language.code}: $index');
+          if (language != AppLanguage.english) {
+            expect(
+              labels[index],
+              isNot(englishLabels[index]),
+              reason: '${language.code}: $index',
+            );
+          }
+        }
+        for (var count = 0; count <= 5; count++) {
+          final label = strings.lyricsShareSelectedCount(count);
+          expect(label, contains('$count'), reason: language.code);
+          expect(label, contains('5'), reason: language.code);
+          expect(label, isNot(contains('ZXQPH')), reason: language.code);
+          if (language != AppLanguage.english) {
+            expect(label, isNot('$count of 5 lines'), reason: language.code);
+          }
+        }
+        for (var index = 1; index <= 2; index++) {
+          final label = strings.lyricsShareColorLabel(index);
+          expect(label, contains('$index'), reason: language.code);
+          expect(label, isNot(contains('ZXQPH')), reason: language.code);
+        }
+      }
+    },
+  );
 }
