@@ -73,10 +73,19 @@ double _lyricsDesktopCompanionGapFor(
   if (width < 840) {
     return (inactive: 29, active: 30, plain: 27);
   }
-  if (width < 1200) {
-    return (inactive: 33, active: 34, plain: 30);
-  }
-  return (inactive: 36, active: 37, plain: 33);
+
+  // Scale continuously with the desktop window instead of jumping between
+  // three fixed sizes. A maximized 1920 px window gets ~48 px active lyrics,
+  // while the cap keeps very wide monitors readable without oversized lines.
+  final progress = ((width - 840) / 360).clamp(0.0, 1.0);
+  final beyondMediumWindow = math.max(0.0, width - 1200.0);
+  final active = (30.0 + (7.0 * progress) + (beyondMediumWindow * 0.015))
+      .clamp(30.0, 56.0)
+      .toDouble();
+  final plain = (27.0 + (6.0 * progress) + (beyondMediumWindow * 0.015))
+      .clamp(27.0, 52.0)
+      .toDouble();
+  return (inactive: active - 1.0, active: active, plain: plain);
 }
 
 ({

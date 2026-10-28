@@ -3784,7 +3784,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('desktop lyrics retain their existing horizontal margins', (
+  testWidgets('desktop lyrics keep margins and scale with window width', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(960, 720);
@@ -3796,6 +3796,9 @@ void main() {
       tester,
       player: player,
       lyrics: _FakeLyricsService(syncedDocument),
+      lyricsRomanizationEnabled: true,
+      lyricsRomanizationLanguages: const {LyricsRomanizationLanguage.korean},
+      lyricsRomanizationService: _FakeLyricsRomanizationService(),
       platform: TargetPlatform.windows,
     );
 
@@ -3803,24 +3806,42 @@ void main() {
 
     expect(padding.left, 24);
     expect(padding.right, 24);
-    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 34);
-    expect(_lyricLineFontSize(tester, 'lyric-line-1'), 33);
+    expect(
+      _lyricLineFontSize(tester, 'active-lyric-line'),
+      closeTo(32.33, 0.01),
+    );
+    expect(_lyricLineFontSize(tester, 'lyric-line-1'), closeTo(31.33, 0.01));
+    expect(_activeLine('Romanized: First line'), findsOneWidget);
 
     tester.view.physicalSize = const Size(1280, 800);
     await _pumpAnimatedLyrics(tester);
 
-    expect(_lyricLineFontSize(tester, 'active-lyric-line'), 37);
-    expect(_lyricLineFontSize(tester, 'lyric-line-1'), 36);
+    expect(
+      _lyricLineFontSize(tester, 'active-lyric-line'),
+      closeTo(38.2, 0.01),
+    );
+    expect(_lyricLineFontSize(tester, 'lyric-line-1'), closeTo(37.2, 0.01));
     expect(
       _lyricLineFontSize(tester, 'active-lyric-line') -
           _lyricLineFontSize(tester, 'lyric-line-1'),
       1,
     );
     expect(_activeLine('First line'), findsOneWidget);
+    expect(_activeLine('Romanized: First line'), findsOneWidget);
     final activeRect = tester.getRect(
       find.byKey(const ValueKey('active-lyric-line')),
     );
     expect(activeRect.center.dy, inInclusiveRange(0, 800));
+
+    tester.view.physicalSize = const Size(1920, 1080);
+    await _pumpAnimatedLyrics(tester);
+    expect(
+      _lyricLineFontSize(tester, 'active-lyric-line'),
+      closeTo(47.8, 0.01),
+    );
+    expect(_lyricLineFontSize(tester, 'lyric-line-1'), closeTo(46.8, 0.01));
+    expect(_activeLine('Romanized: First line'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('header progress follows the current playback fraction', (
@@ -4408,7 +4429,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('wide desktop plain lyrics use the available space', (
+  testWidgets('desktop lyric font grows continuously with the window width', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 800);
@@ -4427,9 +4448,21 @@ void main() {
     final plainText = tester.widget<Text>(
       find.byKey(const ValueKey('plain-lyrics-original')),
     );
-    expect(plainText.style?.fontSize, 33);
+    expect(plainText.style?.fontSize, closeTo(34.2, 0.01));
     expect(plainText.textAlign, TextAlign.center);
     expect(find.byKey(const ValueKey('lyrics-alignment-toggle')), findsNothing);
+
+    tester.view.physicalSize = const Size(1920, 1080);
+    await tester.pumpAndSettle();
+    final maximizedPlainText = tester.widget<Text>(
+      find.byKey(const ValueKey('plain-lyrics-original')),
+    );
+    expect(maximizedPlainText.style?.fontSize, closeTo(43.8, 0.01));
+    expect(
+      maximizedPlainText.style!.fontSize,
+      greaterThan(plainText.style!.fontSize!),
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('connection failures show a centered offline message', (
