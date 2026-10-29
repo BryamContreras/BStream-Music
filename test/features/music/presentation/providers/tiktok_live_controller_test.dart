@@ -521,6 +521,175 @@ void main() {
   });
 
   test(
+    'removing a pending middle request ignores late search results',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final pending = Completer<List<TrackInfo>>();
+      final harness = _LiveHarness(
+        search: (query) => query == 'Pendiente'
+            ? pending.future
+            : Future.value([_remoteTrack(query)]),
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      for (final query in ['Primera', 'Pendiente', 'Tercera']) {
+        harness.service.emit(_playEvent(query));
+      }
+      await _waitUntil(
+        () =>
+            harness.repository.searchCalls == 3 &&
+            harness.liveState.liveQueue.first.isReady,
+      );
+      final removedId = harness.liveState.liveQueue[1].id;
+      await harness.controller.removeLiveQueueItem(removedId);
+      // Repeated taps on the same row are harmless.
+      await harness.controller.removeLiveQueueItem(removedId);
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.every((item) => item.isReady) &&
+            harness.player.lastRemoteQueue?.length == 2,
+      );
+      pending.complete([_remoteTrack('late-result')]);
+      await _pumpEventQueue();
+      expect(harness.liveState.liveQueue.map((item) => item.query), [
+        'Primera',
+        'Tercera',
+      ]);
+      expect(harness.player.lastRemoteQueue?.map((track) => track.id), [
+        'Primera',
+        'Tercera',
+      ]);
+      expect(harness.player.remotePlayCalls, 1);
+    },
+  );
+
+  test(
+    'rapid row removals do not restore an already removed request',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (query) async => [_remoteTrack(query)],
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      for (final query in ['Primera', 'Segunda', 'Tercera']) {
+        harness.service.emit(_playEvent(query));
+      }
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 3 &&
+            harness.liveState.liveQueue.every((item) => item.isReady) &&
+            harness.player.lastRemoteQueue?.length == 3,
+      );
+      final removedIds = harness.liveState.liveQueue
+          .skip(1)
+          .map((item) => item.id)
+          .toList();
+      await Future.wait(removedIds.map(harness.controller.removeLiveQueueItem));
+      expect(harness.liveState.liveQueue.single.query, 'Primera');
+      expect(harness.player.lastRemoteQueue?.single.id, 'Primera');
+      expect(harness.player.remotePlayCalls, 1);
+    },
+  );
+
+  test(
+    'removing one duplicate request keeps its shared playback entry',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final harness = _LiveHarness(
+        search: (_) async => [_remoteTrack('shared')],
+      );
+      addTearDown(harness.dispose);
+      await harness.initialize();
+      harness.service.emit(_playEvent('Pedido uno'));
+      harness.service.emit(_playEvent('Pedido dos'));
+      await _waitUntil(
+        () =>
+            harness.liveState.liveQueue.length == 2 &&
+            harness.liveState.liveQueue.every((item) => item.isReady),
+      );
+      await harness.controller.removeLiveQueueItem(
+        harness.liveState.liveQueue.first.id,
+      );
+      expect(harness.liveState.liveQueue.single.query, 'Pedido dos');
+      expect(harness.player.lastRemoteQueue?.single.id, 'shared');
+      expect(harness.player.remotePlayCalls, 1);
+    },
+  );
+
+  for (final saveToLibrary in [false, true]) {
+    test(
+      '${saveToLibrary ? 'downloaded' : 'remote'} row removals preserve playback order and restore the normal queue',
+      () async {
+        final harness = _RealLiveHarness(saveToLibrary: saveToLibrary);
+        addTearDown(harness.dispose);
+        await harness.initialize();
+        await harness.player.playRemote(_remoteTrack('normal-original'));
+        await harness.player.seek(const Duration(seconds: 42));
+        for (final query in ['live-a', 'live-b', 'live-c', 'live-d']) {
+          harness.service.emit(_playEvent(query));
+        }
+        await _waitUntil(
+          () =>
+              harness.liveState.liveQueue.length == 4 &&
+              harness.liveState.liveQueue.every((item) => item.isReady) &&
+              harness.queue.entries.length == 4,
+        );
+        await harness.player.playNext();
+        await harness.player.seek(const Duration(seconds: 19));
+        String itemId(String query) => harness.liveState.liveQueue
+            .firstWhere((item) => item.query == query)
+            .id;
+
+        await harness.live.removeLiveQueueItem(itemId('live-c'));
+        expect(harness.queue.entries.map((entry) => entry.id), [
+          'live-a',
+          'live-b',
+          'live-d',
+        ]);
+        expect(harness.backend.currentSnapshot.trackId, 'live-b');
+        expect(
+          harness.backend.currentSnapshot.position,
+          const Duration(seconds: 19),
+        );
+
+        // Retire the current request, then remove an earlier row while it finishes.
+        await harness.live.removeLiveQueueItem(itemId('live-b'));
+        await harness.live.removeLiveQueueItem(itemId('live-a'));
+        expect(harness.liveState.liveQueue.single.query, 'live-d');
+        expect(harness.queue.entries.map((entry) => entry.id), [
+          'live-b',
+          'live-d',
+        ]);
+        expect(harness.queue.currentIndex, 0);
+        expect(harness.backend.currentSnapshot.trackId, 'live-b');
+        expect(
+          harness.backend.currentSnapshot.position,
+          const Duration(seconds: 19),
+        );
+
+        harness.backend.completeCurrent();
+        await _waitUntil(
+          () =>
+              harness.backend.currentSnapshot.trackId == 'live-d' &&
+              harness.queue.entries.length == 1,
+        );
+        harness.backend.completeCurrent();
+        await _waitUntil(
+          () =>
+              !harness.player.isLiveQueueActive &&
+              harness.backend.currentSnapshot.trackId == 'normal-original' &&
+              harness.backend.currentSnapshot.position ==
+                  const Duration(seconds: 42),
+        );
+        expect(harness.liveState.liveQueue, isEmpty);
+        expect(harness.backend.currentSnapshot.status, PlayerStatus.playing);
+      },
+    );
+  }
+
+  test(
     '!revoke removes only the last ready request and syncs the remaining queue',
     () async {
       SharedPreferences.setMockInitialValues({});

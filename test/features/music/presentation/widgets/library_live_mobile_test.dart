@@ -297,97 +297,120 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Android LIVE remote item remains playable without a download', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    tester.view
-      ..devicePixelRatio = 1
-      ..physicalSize = const Size(320, 568);
-    tester.platformDispatcher.textScaleFactorTestValue = 3;
-    addTearDown(() {
-      debugDefaultTargetPlatformOverride = null;
+  for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+    testWidgets('${platform.name} LIVE rows can play and remove a request', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = platform;
       tester.view
-        ..resetPhysicalSize()
-        ..resetDevicePixelRatio();
-      tester.platformDispatcher.clearTextScaleFactorTestValue();
-    });
+        ..devicePixelRatio = 1
+        ..physicalSize = platform == TargetPlatform.android
+            ? const Size(320, 568)
+            : const Size(1100, 700);
+      tester.platformDispatcher.textScaleFactorTestValue =
+          platform == TargetPlatform.android ? 3 : 1.35;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+        tester.platformDispatcher.clearTextScaleFactorTestValue();
+      });
 
-    final liveController = _RemoteQueueTikTokLiveController();
-    var openedPlayer = false;
-    const strings = AppStrings(AppLanguage.spanish);
+      final liveController = _RemoteQueueTikTokLiveController();
+      var openedPlayer = false;
+      const strings = AppStrings(AppLanguage.spanish);
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          libraryTracksProvider.overrideWith(
-            (ref) async => const <LocalTrack>[],
-          ),
-          playlistsControllerProvider.overrideWith(
-            _EmptyPlaylistsController.new,
-          ),
-          catalogPlaylistsProvider.overrideWith(
-            (ref) async => const <CatalogPlaylist>[],
-          ),
-          tiktokLiveControllerProvider.overrideWith(() => liveController),
-          playerControllerProvider.overrideWith(_IdlePlayerController.new),
-          appStringsProvider.overrideWithValue(strings),
-        ],
-        child: MaterialApp(
-          theme: ThemeData(
-            extensions: const [
-              AppSurfaceTheme(
-                backgroundMode: SurfaceBackgroundMode.liquidGlass,
-              ),
-            ],
-          ),
-          home: Scaffold(
-            body: LibraryPanel(onOpenPlayer: () => openedPlayer = true),
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            libraryTracksProvider.overrideWith(
+              (ref) async => const <LocalTrack>[],
+            ),
+            playlistsControllerProvider.overrideWith(
+              _EmptyPlaylistsController.new,
+            ),
+            catalogPlaylistsProvider.overrideWith(
+              (ref) async => const <CatalogPlaylist>[],
+            ),
+            tiktokLiveControllerProvider.overrideWith(() => liveController),
+            playerControllerProvider.overrideWith(_IdlePlayerController.new),
+            appStringsProvider.overrideWithValue(strings),
+          ],
+          child: MaterialApp(
+            theme: ThemeData(
+              extensions: const [
+                AppSurfaceTheme(
+                  backgroundMode: SurfaceBackgroundMode.liquidGlass,
+                ),
+              ],
+            ),
+            home: Scaffold(
+              body: LibraryPanel(onOpenPlayer: () => openedPlayer = true),
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    final liveEntry = find.byKey(const ValueKey('library-live-entry'));
-    await tester.scrollUntilVisible(
-      liveEntry,
-      120,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(liveEntry);
-    await tester.pumpAndSettle();
+      final liveEntry = find.byKey(const ValueKey('library-live-entry'));
+      await tester.scrollUntilVisible(
+        liveEntry,
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(liveEntry);
+      await tester.pumpAndSettle();
 
-    expect(find.text('Remote song'), findsOneWidget);
-    expect(find.text(strings.readyForRemotePlayback), findsOneWidget);
-    expect(
-      tester
-          .widget<Material>(
-            find.byKey(const ValueKey('library-live-track-remote-item')),
-          )
-          .color!
-          .a,
-      0.68,
-    );
-    final playButton = tester.widget<IconButton>(
-      find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
-    );
-    expect(playButton.onPressed, isNotNull);
-    final playTarget = tester.getRect(
-      find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
-    );
-    expect(playTarget.width, greaterThanOrEqualTo(48));
-    expect(playTarget.height, greaterThanOrEqualTo(48));
+      expect(find.text('Remote song'), findsOneWidget);
+      expect(find.text(strings.readyForRemotePlayback), findsOneWidget);
+      expect(
+        tester
+            .widget<Material>(
+              find.byKey(const ValueKey('library-live-track-remote-item')),
+            )
+            .color!
+            .a,
+        0.68,
+      );
+      final playButton = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
+      );
+      expect(playButton.onPressed, isNotNull);
+      final playTarget = tester.getRect(
+        find.widgetWithIcon(IconButton, Icons.play_arrow_rounded),
+      );
+      expect(playTarget.width, greaterThanOrEqualTo(48));
+      expect(playTarget.height, greaterThanOrEqualTo(48));
 
-    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
-    await tester.pump();
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pump();
 
-    expect(openedPlayer, isTrue);
-    expect(liveController.playedItemId, 'remote-item');
-    expect(tester.takeException(), isNull);
-    debugDefaultTargetPlatformOverride = null;
-  });
+      expect(openedPlayer, isTrue);
+      expect(liveController.playedItemId, 'remote-item');
+
+      openedPlayer = false;
+      final removeButton = find.byKey(
+        const ValueKey('library-live-remove-remote-item'),
+      );
+      expect(
+        tester.widget<IconButton>(removeButton).tooltip,
+        strings.removeFromQueue,
+      );
+      await tester.tap(removeButton);
+      await tester.pumpAndSettle();
+      expect(liveController.removedItemId, 'remote-item');
+      expect(
+        find.byKey(const ValueKey('library-live-track-remote-item')),
+        findsNothing,
+      );
+      expect(find.text(strings.liveQueueEmpty), findsOneWidget);
+      expect(openedPlayer, isFalse);
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    });
+  }
 
   testWidgets(
     'Library uses directional push and pop and respects reduced motion',
@@ -566,6 +589,7 @@ class _IdleTikTokLiveController extends TikTokLiveController {
 
 class _RemoteQueueTikTokLiveController extends TikTokLiveController {
   String? playedItemId;
+  String? removedItemId;
 
   @override
   Future<TikTokLiveState> build() async => TikTokLiveState(
@@ -595,6 +619,19 @@ class _RemoteQueueTikTokLiveController extends TikTokLiveController {
   @override
   Future<void> playLiveQueueItem(String itemId) async {
     playedItemId = itemId;
+  }
+
+  @override
+  Future<void> removeLiveQueueItem(String itemId) async {
+    removedItemId = itemId;
+    state = AsyncData(
+      state.requireValue.copyWith(
+        liveQueue: [
+          for (final item in state.requireValue.liveQueue)
+            if (item.id != itemId) item,
+        ],
+      ),
+    );
   }
 }
 

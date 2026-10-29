@@ -40,10 +40,18 @@ void main() {
     final decoded = image.decodePng(encoded)!;
     expect(decoded.width, liveOverlayArtworkSize);
     expect(decoded.height, liveOverlayArtworkSize);
-    expect(decoded.getPixel(10, 48).r.toInt(), 255);
-    expect(decoded.getPixel(10, 48).b.toInt(), 0);
-    expect(decoded.getPixel(85, 48).r.toInt(), 0);
-    expect(decoded.getPixel(85, 48).b.toInt(), 255);
+    final redSample = decoded.getPixel(
+      liveOverlayArtworkSize ~/ 8,
+      liveOverlayArtworkSize ~/ 2,
+    );
+    final blueSample = decoded.getPixel(
+      liveOverlayArtworkSize * 7 ~/ 8,
+      liveOverlayArtworkSize ~/ 2,
+    );
+    expect(redSample.r.toInt(), 255);
+    expect(redSample.b.toInt(), 0);
+    expect(blueSample.r.toInt(), 0);
+    expect(blueSample.b.toInt(), 255);
     expect(await service.load(file.path), same(dataUri));
   });
 }

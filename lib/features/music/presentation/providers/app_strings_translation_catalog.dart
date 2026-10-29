@@ -1667,6 +1667,13 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '清除 LIVE 队列',
     'LIVE キューをクリア',
   ],
+  'Remove from queue': <String>[
+    'Remover da fila',
+    'Retirer de la file d\'attente',
+    '대기열에서 제거',
+    '从队列中移除',
+    'キューから削除',
+  ],
   'Requested by': <String>[
     'Solicitado por',
     'Demandé par',

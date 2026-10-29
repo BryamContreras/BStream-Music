@@ -9,7 +9,7 @@ import 'package:image/image.dart' as image;
 import '../../../../core/utils/cached_artwork_image_provider.dart';
 import '../../../../core/utils/image_source.dart';
 
-const liveOverlayArtworkSize = 96;
+const liveOverlayArtworkSize = 128;
 const liveOverlayArtworkByteCount =
     liveOverlayArtworkSize * liveOverlayArtworkSize * 4;
 

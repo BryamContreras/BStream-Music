@@ -765,6 +765,8 @@ class AppStrings {
     'Live !play requests will appear here.',
   );
   String get clearLiveQueue => choose('Limpiar cola LIVE', 'Clear LIVE queue');
+  String get removeFromQueue =>
+      choose('Quitar de la cola', 'Remove from queue');
   String get requestedBy => choose('Pedido por', 'Requested by');
   String get moderator => choose('Moderador', 'Moderator');
   String get commandPermissions =>

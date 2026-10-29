@@ -131,6 +131,8 @@ void main() {
         status: PlayerStatus.playing,
         trackId: 'normal-1',
         isRemote: true,
+        position: Duration(seconds: 24),
+        duration: Duration(minutes: 2),
       ),
       liveQueueActive: false,
     );
@@ -141,6 +143,9 @@ void main() {
         .cast<Map<String, Object>>();
     expect(items.map((item) => item['id']), ['normal-1', 'normal-2']);
     expect(items.first['status'], 'playing');
+    expect(client.published.last['progress'], .2);
+    expect(client.published.last['positionMs'], 24000);
+    expect(client.published.last['durationMs'], 120000);
     await _flushMicrotasks();
     items = (client.published.last['items']! as List<Object?>)
         .cast<Map<String, Object>>();
@@ -151,6 +156,8 @@ void main() {
         status: PlayerStatus.playing,
         trackId: 'track-0',
         isRemote: true,
+        position: Duration(seconds: 30),
+        duration: Duration(minutes: 2),
       ),
       liveQueueActive: true,
     );
@@ -158,12 +165,15 @@ void main() {
     items = (client.published.last['items']! as List<Object?>)
         .cast<Map<String, Object>>();
     expect(items.map((item) => item['id']), ['request-0', 'request-1']);
+    expect(client.published.last['progress'], .25);
 
     player.publish(
       const PlayerSnapshot(
         status: PlayerStatus.paused,
         trackId: 'normal-1',
         isRemote: true,
+        position: Duration(seconds: 24),
+        duration: Duration(minutes: 2),
       ),
       liveQueueActive: false,
     );
@@ -173,7 +183,93 @@ void main() {
     expect(items.map((item) => item['id']), ['normal-1', 'normal-2']);
     expect(items.first['status'], 'paused');
     expect(items.first['artwork'], 'data:image/png;base64,bm9ybWFs');
+    expect(client.published.last['progress'], .2);
+    expect(client.published.last['positionMs'], 24000);
+    expect(client.published.last['durationMs'], 120000);
+
+    container.read(playbackQueueProvider.notifier).replace(const [], -1);
+    await _flushMicrotasks();
+    expect(client.published.last['items'], isEmpty);
+    expect(client.published.last['progress'], 0);
+    expect(client.published.last['positionMs'], 0);
+    expect(client.published.last['durationMs'], 0);
   });
+
+  for (final style in LiveWidgetStyle.values) {
+    test(
+      'local queue progress advances without LIVE in ${style.code}',
+      () async {
+        final client = _FakeOverlayClient();
+        final player = _FakePlayerController();
+        final container = _overlayContainer(
+          client,
+          live: _FakeLiveController(const [], status: TikTokLiveStatus.idle),
+          player: player,
+        );
+        addTearDown(container.dispose);
+        final subscription = container.listen(
+          liveOverlayControllerProvider,
+          (_, _) {},
+          fireImmediately: true,
+        );
+        addTearDown(subscription.close);
+        await _flushMicrotasks();
+        container.read(_testStyleProvider.notifier).select(style);
+        container
+            .read(playbackQueueProvider.notifier)
+            .replace(const <PlaybackQueueEntry>[
+              PlaybackQueueEntry(
+                id: 'local-1',
+                logicalEntryId: 'playlist-entry-1',
+                title: 'Canción local',
+                artist: 'Artista',
+                isRemote: false,
+              ),
+            ], 0);
+        const playback = PlayerSnapshot(
+          status: PlayerStatus.playing,
+          trackId: 'local-1',
+          sourceUrl: 'C:/Music/song.mp3',
+          position: Duration(seconds: 30),
+          duration: Duration(minutes: 2),
+        );
+        player.publish(playback, liveQueueActive: false);
+        await _flushMicrotasks();
+        await container.read(liveOverlayControllerProvider.notifier).start();
+
+        expect(client.published.last['style'], style.code);
+        expect(_lastItem(client)['id'], 'playlist-entry-1');
+        expect(_lastItem(client)['status'], 'playing');
+        expect(client.published.last['progress'], .25);
+        expect(client.published.last['positionMs'], 30000);
+        expect(client.published.last['durationMs'], 120000);
+
+        final publicationCount = client.published.length;
+        player.publish(
+          playback.copyWith(position: const Duration(seconds: 60)),
+          liveQueueActive: false,
+        );
+        await _flushMicrotasks();
+        expect(client.published.length, greaterThan(publicationCount));
+        expect(client.published.last['progress'], .5);
+        expect(client.published.last['positionMs'], 60000);
+        expect(client.published.last['durationMs'], 120000);
+
+        player.publish(
+          playback.copyWith(
+            status: PlayerStatus.paused,
+            position: const Duration(seconds: 60),
+          ),
+          liveQueueActive: false,
+        );
+        await _flushMicrotasks();
+        expect(_lastItem(client)['status'], 'paused');
+        expect(client.published.last['progress'], .5);
+        expect(client.published.last['positionMs'], 60000);
+        expect(client.startCalls, 1);
+      },
+    );
+  }
 
   test(
     'starts local HTTP, publishes localized queue/progress, and stops',
@@ -673,14 +769,18 @@ class _TestLanguageController extends Notifier<AppLanguage> {
 }
 
 class _FakeLiveController extends TikTokLiveController {
-  _FakeLiveController(this.initialQueue);
+  _FakeLiveController(
+    this.initialQueue, {
+    this.status = TikTokLiveStatus.connected,
+  });
 
   final List<LiveQueueItem> initialQueue;
+  final TikTokLiveStatus status;
 
   @override
   Future<TikTokLiveState> build() async => TikTokLiveState(
     creatorInput: '@test',
-    status: TikTokLiveStatus.connected,
+    status: status,
     message: 'Conectado',
     liveQueue: initialQueue,
   );

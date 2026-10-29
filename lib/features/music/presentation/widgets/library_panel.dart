@@ -1534,8 +1534,11 @@ class _LiveQueueTile extends ConsumerWidget {
               ),
             ],
           ),
-          trailing: item.isReady
-              ? IconButton.filledTonal(
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (item.isReady)
+                IconButton.filledTonal(
                   tooltip: strings.play,
                   icon: const Icon(Icons.play_arrow_rounded),
                   iconSize: playIconSize,
@@ -1560,7 +1563,21 @@ class _LiveQueueTile extends ConsumerWidget {
                         .playLiveQueueItem(item.id);
                   },
                 )
-              : _LiveQueueStatusIcon(item: item, color: statusColor),
+              else
+                _LiveQueueStatusIcon(item: item, color: statusColor),
+              IconButton(
+                key: ValueKey('library-live-remove-${item.id}'),
+                tooltip: strings.removeFromQueue,
+                color: AppColors.contentSubtitleFor(context),
+                icon: const Icon(Icons.close_rounded, size: 20),
+                onPressed: () async {
+                  await ref
+                      .read(tiktokLiveControllerProvider.notifier)
+                      .removeLiveQueueItem(item.id);
+                },
+              ),
+            ],
+          ),
           onTap: item.isReady
               ? () async {
                   onOpenPlayer();

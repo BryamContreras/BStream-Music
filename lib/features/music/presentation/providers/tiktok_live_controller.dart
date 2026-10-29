@@ -645,43 +645,93 @@ class TikTokLiveController extends AsyncNotifier<TikTokLiveState> {
   }
 
   Future<void> revokeLastLiveQueueItem() async {
-    final current = await future;
-    if (current.liveQueue.isEmpty) {
+    await future;
+    if (!ref.mounted) return;
+    final current = state.value;
+    if (current == null || current.liveQueue.isEmpty) {
       _setMessage('No hay pedidos en la cola LIVE para retirar.');
       return;
     }
+    await _removeLiveQueueItem(current.liveQueue.last.id, lastRequest: true);
+  }
 
-    final removed = current.liveQueue.last;
-    final remaining = List<LiveQueueItem>.unmodifiable(
-      current.liveQueue.take(current.liveQueue.length - 1),
+  Future<void> removeLiveQueueItem(String itemId) =>
+      _removeLiveQueueItem(itemId);
+
+  Future<void> _removeLiveQueueItem(
+    String itemId, {
+    bool lastRequest = false,
+  }) async {
+    await future;
+    if (!ref.mounted) return;
+    // Re-read after awaiting initialization so rapid removals cannot restore
+    // a row from an older snapshot of the queue.
+    final current = state.value;
+    if (current == null) return;
+    final removedIndex = current.liveQueue.indexWhere(
+      (item) => item.id == itemId,
     );
+    if (removedIndex < 0) return;
+    final removed = current.liveQueue[removedIndex];
+    final remaining = List<LiveQueueItem>.unmodifiable(
+      current.liveQueue.where((item) => item.id != itemId),
+    );
+    final next = current.copyWith(liveQueue: remaining);
+    final removedReadyIndex = _readyLiveTrackIndex(current, removed);
+    // Several requests can share one deduplicated playback entry. Only retire
+    // that entry once its last request has been removed.
+    final removesPlaybackEntry =
+        removedReadyIndex >= 0 && _readyLiveTrackIndex(next, removed) < 0;
     final player = ref.read(playerControllerProvider.notifier);
     final playback = ref.read(playerControllerProvider).value;
     final removesPlayingItem =
-        removed.isReady &&
+        removesPlaybackEntry &&
         player.isLiveQueueActive &&
         _snapshotMatchesLiveQueueItem(playback, removed);
 
     if (removesPlayingItem) {
       _revokedPlayingItem = removed;
-      _revokedPlayingReadyIndex = removed.saveToLibrary
-          ? remaining.where((item) => item.localTrack != null).length
-          : remaining.where((item) => item.remoteTrack != null).length;
-    } else if (removed.isReady && !player.isLiveQueueActive) {
-      final removedReadyIndex = removed.saveToLibrary
-          ? current.readyTracks.length - 1
-          : current.readyRemoteTracks.length - 1;
+      _revokedPlayingReadyIndex = removedReadyIndex;
+    } else if (removesPlaybackEntry && !player.isLiveQueueActive) {
       // Retire this occurrence before another request can reuse the same
       // video's id and accidentally inherit its interrupted seek position.
       player.removeInterruptedLiveQueueItemAt(removedReadyIndex);
     }
+    if (!removesPlayingItem &&
+        removesPlaybackEntry &&
+        _revokedPlayingItem?.saveToLibrary == removed.saveToLibrary &&
+        removedReadyIndex < _revokedPlayingReadyIndex) {
+      _revokedPlayingReadyIndex--;
+    }
+    _publishedLiveQueueItemIds.remove(removed.id);
+    state = AsyncData(next);
+    // Cancellation can immediately commit the next resolved request. Publish
+    // the removal first so that commit is not overwritten by this snapshot.
     _cancelScheduledLiveQueueItem(removed.id);
-    state = AsyncData(current.copyWith(liveQueue: remaining));
 
     if (removed.isReady && player.isLiveQueueActive) {
       await _syncLiveQueuePlaybackInOrder(saveToLibrary: removed.saveToLibrary);
     }
-    _setMessage('Último pedido retirado: ${removed.query}');
+    _setMessage(
+      lastRequest
+          ? 'Último pedido retirado: ${removed.query}'
+          : 'Pedido retirado: ${removed.query}',
+    );
+  }
+
+  int _readyLiveTrackIndex(TikTokLiveState queue, LiveQueueItem item) {
+    if (!item.isReady) return -1;
+    if (item.saveToLibrary) {
+      return queue.readyTracks.indexWhere(
+        (track) => track.id == item.localTrack?.id,
+      );
+    }
+    final remote = item.remoteTrack;
+    if (remote == null) return -1;
+    String key(TrackInfo track) =>
+        track.id.trim().isEmpty ? track.url : track.id;
+    final itemKey = key(remote);
+    return queue.readyRemoteTracks.indexWhere((track) => key(track) == itemKey);
   }
 
   Future<void> playLiveQueueItem(String itemId) async {

@@ -448,7 +448,9 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
         return entry.withArtworkDataUri(_resolvedArtwork[source]);
       }),
     );
-    final nextAppearance = _currentAppearance();
+    final nextAppearance = _currentAppearance(
+      hasCurrentItem: selection.currentItemId != null,
+    );
     if (_sameQueue(_latestQueue, next) && _latestAppearance == nextAppearance) {
       return;
     }
@@ -514,20 +516,22 @@ class LiveOverlayController extends Notifier<LiveOverlaySnapshot> {
     }
   }
 
-  LiveOverlayAppearance _currentAppearance() {
-    var durationMilliseconds = _currentLiveItemId == null
-        ? 0
-        : _playback?.duration?.inMilliseconds ?? 0;
-    var positionMilliseconds = _currentLiveItemId == null
-        ? 0
-        : _playback?.position.inMilliseconds ?? 0;
+  LiveOverlayAppearance _currentAppearance({required bool hasCurrentItem}) {
+    // The selected queue owns the progress; the remembered LIVE cursor is
+    // independent and may be absent or retained during normal playback.
+    var durationMilliseconds = hasCurrentItem
+        ? _playback?.duration?.inMilliseconds ?? 0
+        : 0;
+    var positionMilliseconds = hasCurrentItem
+        ? _playback?.position.inMilliseconds ?? 0
+        : 0;
     if (durationMilliseconds < 0) durationMilliseconds = 0;
     if (positionMilliseconds < 0) positionMilliseconds = 0;
     if (durationMilliseconds > 0 &&
         positionMilliseconds > durationMilliseconds) {
       positionMilliseconds = durationMilliseconds;
     }
-    final progress = durationMilliseconds <= 0 || _currentLiveItemId == null
+    final progress = durationMilliseconds <= 0
         ? 0
         : ((positionMilliseconds.clamp(0, durationMilliseconds) * 1000) /
                   durationMilliseconds)
