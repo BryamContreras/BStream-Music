@@ -147,6 +147,31 @@ void main() {
     },
   );
 
+  testWidgets('keyboard transition pauses then restores live glass effects', (
+    tester,
+  ) async {
+    Widget surface({required bool effectsEnabled}) => _harness(
+      child: const Text('Keyboard remains usable'),
+      effectsEnabled: effectsEnabled,
+    );
+
+    await tester.pumpWidget(surface(effectsEnabled: true));
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(find.byKey(LiquidGlassSurface.opticsKey), findsOneWidget);
+
+    await tester.pumpWidget(surface(effectsEnabled: false));
+    expect(find.byType(BackdropFilter), findsNothing);
+    expect(find.byKey(LiquidGlassSurface.opticsKey), findsNothing);
+    expect(find.byKey(LiquidGlassSurface.surfaceTintKey), findsOneWidget);
+    expect(find.text('Keyboard remains usable'), findsOneWidget);
+
+    await tester.pumpWidget(surface(effectsEnabled: true));
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(find.byKey(LiquidGlassSurface.opticsKey), findsOneWidget);
+    expect(find.text('Keyboard remains usable'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('edge preference never creates a second backdrop capture', (
     tester,
   ) async {
@@ -980,6 +1005,7 @@ class _RRectPaintRecordingCanvas implements ui.Canvas {
 
 Widget _harness({
   required Widget child,
+  bool effectsEnabled = true,
   double blurSigma = 22,
   double intensity = 1,
   double materialOpacity = 1,
@@ -997,17 +1023,20 @@ Widget _harness({
   return _baseHarness(
     platform: platform,
     brightness: brightness,
-    child: LiquidGlassSurface(
-      blurSigma: blurSigma,
-      intensity: intensity,
-      materialOpacity: materialOpacity,
-      backdropGroupKey: backdropGroupKey,
-      adaptiveEdgeEnabled: adaptiveEdgeEnabled,
-      backdropMotion: backdropMotion,
-      perimeterOpticsEnabled: perimeterOpticsEnabled,
-      edgeTreatment: edgeTreatment,
-      borderRadius: borderRadius,
-      child: child,
+    child: LiquidGlassEffectsScope(
+      enabled: effectsEnabled,
+      child: LiquidGlassSurface(
+        blurSigma: blurSigma,
+        intensity: intensity,
+        materialOpacity: materialOpacity,
+        backdropGroupKey: backdropGroupKey,
+        adaptiveEdgeEnabled: adaptiveEdgeEnabled,
+        backdropMotion: backdropMotion,
+        perimeterOpticsEnabled: perimeterOpticsEnabled,
+        edgeTreatment: edgeTreatment,
+        borderRadius: borderRadius,
+        child: child,
+      ),
     ),
   );
 }

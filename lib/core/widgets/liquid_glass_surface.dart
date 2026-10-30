@@ -20,6 +20,28 @@ enum LiquidGlassEdgeTreatment {
   none,
 }
 
+/// Temporarily suspends live backdrop effects during a native inset
+/// transition while keeping the existing surface geometry and contents.
+class LiquidGlassEffectsScope extends InheritedWidget {
+  const LiquidGlassEffectsScope({
+    required this.enabled,
+    required super.child,
+    super.key,
+  });
+
+  final bool enabled;
+
+  static bool isEnabled(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<LiquidGlassEffectsScope>()
+          ?.enabled ??
+      true;
+
+  @override
+  bool updateShouldNotify(LiquidGlassEffectsScope oldWidget) =>
+      enabled != oldWidget.enabled;
+}
+
 /// Shares scroll activity with glass nested in pinned inputs and headings.
 /// The inherited value is the listenable itself, so scroll start/end only
 /// rebuilds the small surfaces listening to it, not the scrolling body.
@@ -199,11 +221,15 @@ class LiquidGlassSurface extends StatelessWidget {
         clipBehavior == Clip.antiAlias) {
       return _LiquidGlassEnvelopeGate(surface: this);
     }
-    return _buildSheet(context);
+    return _buildSheet(
+      context,
+      effectsEnabled: LiquidGlassEffectsScope.isEnabled(context),
+    );
   }
 
   Widget _buildSheet(
     BuildContext context, {
+    required bool effectsEnabled,
     Rect? envelope,
     Size? lensSize,
     ui.FragmentShader? preparedShader,
@@ -254,7 +280,7 @@ class LiquidGlassSurface extends StatelessWidget {
         ),
       ),
       if (!allowContentOverflow) RepaintBoundary(child: child),
-      if (hasOpticalEdge)
+      if (hasOpticalEdge && effectsEnabled)
         Positioned.fill(
           child: IgnorePointer(
             child: RepaintBoundary(
@@ -303,6 +329,7 @@ class LiquidGlassSurface extends StatelessWidget {
       textDirection: textDirection,
       intensity: intensity,
       highContrast: highContrast,
+      effectsEnabled: effectsEnabled,
       lensBounds: envelope == null ? null : -envelope.topLeft & lensSize!,
       preparedShader: preparedShader,
       onEnvelopeFailure: onEnvelopeFailure,
@@ -354,19 +381,21 @@ class LiquidGlassSurface extends StatelessWidget {
             : sheet,
       );
     }
-    final shadow = RepaintBoundary(
-      child: CustomPaint(
-        key: shadowKey,
-        isComplex: true,
-        painter: _LiquidGlassShadowPainter(
-          borderRadius: borderRadius,
-          textDirection: textDirection,
-          brightness: brightness,
-          intensity: intensity * materialOpacity,
-          highContrast: highContrast,
-        ),
-      ),
-    );
+    final shadow = effectsEnabled
+        ? RepaintBoundary(
+            child: CustomPaint(
+              key: shadowKey,
+              isComplex: true,
+              painter: _LiquidGlassShadowPainter(
+                borderRadius: borderRadius,
+                textDirection: textDirection,
+                brightness: brightness,
+                intensity: intensity * materialOpacity,
+                highContrast: highContrast,
+              ),
+            ),
+          )
+        : const SizedBox.expand(key: shadowKey);
     return RepaintBoundary(
       child: Stack(
         fit: StackFit.passthrough,
@@ -500,6 +529,7 @@ class _LiquidGlassEnvelopeGateState extends State<_LiquidGlassEnvelopeGate> {
       }
       return surface._buildSheet(
         context,
+        effectsEnabled: LiquidGlassEffectsScope.isEnabled(context),
         envelope: eligible ? envelope : null,
         lensSize: eligible ? size : null,
         preparedShader: eligible ? _shader : null,
@@ -585,7 +615,10 @@ class _LiquidGlassRefractiveLensState extends State<LiquidGlassRefractiveLens> {
   @override
   Widget build(BuildContext context) {
     final shader = _shader;
-    if (!widget.enabled || shader == null || widget.baseSize.isEmpty) {
+    if (!widget.enabled ||
+        !LiquidGlassEffectsScope.isEnabled(context) ||
+        shader == null ||
+        widget.baseSize.isEmpty) {
       return const SizedBox.expand();
     }
     return _RefractiveLensHost(
@@ -876,6 +909,7 @@ class _LiquidGlassHoverTargetState extends State<LiquidGlassHoverTarget>
 
   @override
   Widget build(BuildContext context) {
+    final effectsEnabled = LiquidGlassEffectsScope.isEnabled(context);
     final retainedChild = KeyedSubtree(
       key: _retainedChildKey,
       child: widget.child,
@@ -886,7 +920,7 @@ class _LiquidGlassHoverTargetState extends State<LiquidGlassHoverTarget>
     // child so Android does not carry an idle Stack, CustomPaint and two extra
     // repaint boundaries for an effect it cannot display.
     Widget content = retainedChild;
-    if (_effectMaterialized) {
+    if (_effectMaterialized && effectsEnabled) {
       final brightness = Theme.brightnessOf(context);
       final textDirection =
           Directionality.maybeOf(context) ?? TextDirection.ltr;
@@ -960,6 +994,7 @@ class _LiquidGlassBackdrop extends StatefulWidget {
     required this.textDirection,
     required this.intensity,
     required this.highContrast,
+    required this.effectsEnabled,
     this.lensBounds,
     this.preparedShader,
     this.onEnvelopeFailure,
@@ -974,6 +1009,7 @@ class _LiquidGlassBackdrop extends StatefulWidget {
   final TextDirection textDirection;
   final double intensity;
   final bool highContrast;
+  final bool effectsEnabled;
   final Rect? lensBounds;
   final ui.FragmentShader? preparedShader;
   final VoidCallback? onEnvelopeFailure;
@@ -1302,7 +1338,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.blurSigma <= 0) {
+    if (!widget.effectsEnabled || widget.blurSigma <= 0) {
       return KeyedSubtree(
         key: LiquidGlassSurface.backdropKey,
         child: widget.child ?? const SizedBox.expand(),

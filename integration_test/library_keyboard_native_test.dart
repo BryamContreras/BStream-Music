@@ -28,6 +28,7 @@ const _useNativeIme = bool.fromEnvironment(
   'BS_TEST_NATIVE_IME',
   defaultValue: true,
 );
+const _keyboardGlassOnly = bool.fromEnvironment('BS_TEST_KEYBOARD_GLASS_ONLY');
 
 /// Native IME and playlist presentation check using production HomePage.
 /// All catalog/settings/player state is in memory. Access to the actual
@@ -84,7 +85,7 @@ void main() {
       SchedulerBinding.instance.addTimingsCallback(collect);
 
       await _navigate(tester, 1);
-      for (var cycle = 0; cycle < 2; cycle++) {
+      for (var cycle = 0; cycle < (_keyboardGlassOnly ? 1 : 2); cycle++) {
         cycles.add(
           await _keyboardCycleOrTextEntry(
             tester,
@@ -100,6 +101,24 @@ void main() {
             useNativeIme: _useNativeIme,
           ),
         );
+      }
+
+      if (_keyboardGlassOnly) {
+        SchedulerBinding.instance.removeTimingsCallback(collect);
+        binding.reportData = {
+          'nativeKeyboardGlassTransition': {
+            'displayRefreshRateHz': tester.view.display.refreshRate,
+            'cycles': cycles,
+            'frameTimings': _frameReport(
+              timings,
+              tester.view.display.refreshRate,
+            ),
+            'scope': 'One real Android IME open/close cycle on SearchView.',
+          },
+        };
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        return;
       }
 
       await _navigate(tester, 3);
@@ -302,13 +321,23 @@ Future<Map<String, Object?>> _keyboardCycle(
   final stopwatch = Stopwatch()..start();
   await tester.ensureVisible(field);
   await tester.tap(field);
+  await tester.pump();
+  expect(
+    FocusManager.instance.primaryFocus?.hasFocus,
+    isTrue,
+    reason:
+        '$label: the tapped field must own focus before requesting the IME.',
+  );
   await SystemChannels.textInput.invokeMethod<void>('TextInput.show');
   await _waitUntil(
     tester,
     () => tester.view.viewInsets.bottom > 0,
     '$label: real IME did not appear. Enable show_ime_with_hard_keyboard.',
   );
+  await tester.pump();
+  _expectNavigationGlassPaused(tester, label);
   await _settle(tester);
+  _expectNavigationGlassRestored(tester, label);
   final openedAt = stopwatch.elapsedMilliseconds;
   final inset = tester.view.viewInsets.bottom / tester.view.devicePixelRatio;
   final resizedHeight = tester.getSize(viewport).height;
@@ -327,7 +356,10 @@ Future<Map<String, Object?>> _keyboardCycle(
     () => tester.view.viewInsets.bottom == 0,
     '$label: IME did not dismiss.',
   );
+  await tester.pump();
+  _expectNavigationGlassPaused(tester, '$label close');
   await _settle(tester);
+  _expectNavigationGlassRestored(tester, '$label close');
   final closedAt = closeWatch.elapsedMilliseconds;
   final restoredHeight = tester.getSize(viewport).height;
   expect(restoredHeight, closeTo(fullHeight, 1));
@@ -340,7 +372,32 @@ Future<Map<String, Object?>> _keyboardCycle(
     'restoredHeightDp': restoredHeight,
     'openObservedMsIncludingSettle': openedAt,
     'closeObservedMsIncludingSettle': closedAt,
+    'glassPausedAndRestoredDuringOpen': true,
+    'glassPausedAndRestoredDuringClose': true,
   };
+}
+
+void _expectNavigationGlassPaused(WidgetTester tester, String label) {
+  final navigation = find.byKey(const ValueKey('bottom-navigation-glass'));
+  expect(
+    navigation,
+    findsOneWidget,
+    reason: '$label: glass surface is mounted',
+  );
+  expect(
+    find.descendant(of: navigation, matching: find.byType(BackdropFilter)),
+    findsNothing,
+    reason: '$label: expensive live glass pauses while the IME is moving',
+  );
+}
+
+void _expectNavigationGlassRestored(WidgetTester tester, String label) {
+  final navigation = find.byKey(const ValueKey('bottom-navigation-glass'));
+  expect(
+    find.descendant(of: navigation, matching: find.byType(BackdropFilter)),
+    findsOneWidget,
+    reason: '$label: full Liquid Glass returns when the IME settles',
+  );
 }
 
 Future<Map<String, Object?>> _keyboardCycleOrTextEntry(
