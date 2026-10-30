@@ -3,6 +3,7 @@ import 'dart:ui' show PointerDeviceKind;
 import 'dart:ui' as ui;
 
 import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -150,22 +151,26 @@ void main() {
   testWidgets('keyboard transition pauses then restores live glass effects', (
     tester,
   ) async {
-    Widget surface({required bool effectsEnabled}) => _harness(
+    final effectsEnabled = ValueNotifier(true);
+    addTearDown(effectsEnabled.dispose);
+    Widget surface() => _harness(
       child: const Text('Keyboard remains usable'),
       effectsEnabled: effectsEnabled,
     );
 
-    await tester.pumpWidget(surface(effectsEnabled: true));
+    await tester.pumpWidget(surface());
     expect(find.byType(BackdropFilter), findsOneWidget);
     expect(find.byKey(LiquidGlassSurface.opticsKey), findsOneWidget);
 
-    await tester.pumpWidget(surface(effectsEnabled: false));
+    effectsEnabled.value = false;
+    await tester.pump();
     expect(find.byType(BackdropFilter), findsNothing);
     expect(find.byKey(LiquidGlassSurface.opticsKey), findsNothing);
     expect(find.byKey(LiquidGlassSurface.surfaceTintKey), findsOneWidget);
     expect(find.text('Keyboard remains usable'), findsOneWidget);
 
-    await tester.pumpWidget(surface(effectsEnabled: true));
+    effectsEnabled.value = true;
+    await tester.pump();
     expect(find.byType(BackdropFilter), findsOneWidget);
     expect(find.byKey(LiquidGlassSurface.opticsKey), findsOneWidget);
     expect(find.text('Keyboard remains usable'), findsOneWidget);
@@ -1005,7 +1010,7 @@ class _RRectPaintRecordingCanvas implements ui.Canvas {
 
 Widget _harness({
   required Widget child,
-  bool effectsEnabled = true,
+  ValueListenable<bool>? effectsEnabled,
   double blurSigma = 22,
   double intensity = 1,
   double materialOpacity = 1,
@@ -1023,21 +1028,34 @@ Widget _harness({
   return _baseHarness(
     platform: platform,
     brightness: brightness,
-    child: LiquidGlassEffectsScope(
-      enabled: effectsEnabled,
-      child: LiquidGlassSurface(
-        blurSigma: blurSigma,
-        intensity: intensity,
-        materialOpacity: materialOpacity,
-        backdropGroupKey: backdropGroupKey,
-        adaptiveEdgeEnabled: adaptiveEdgeEnabled,
-        backdropMotion: backdropMotion,
-        perimeterOpticsEnabled: perimeterOpticsEnabled,
-        edgeTreatment: edgeTreatment,
-        borderRadius: borderRadius,
-        child: child,
-      ),
-    ),
+    child: effectsEnabled == null
+        ? LiquidGlassSurface(
+            blurSigma: blurSigma,
+            intensity: intensity,
+            materialOpacity: materialOpacity,
+            backdropGroupKey: backdropGroupKey,
+            adaptiveEdgeEnabled: adaptiveEdgeEnabled,
+            backdropMotion: backdropMotion,
+            perimeterOpticsEnabled: perimeterOpticsEnabled,
+            edgeTreatment: edgeTreatment,
+            borderRadius: borderRadius,
+            child: child,
+          )
+        : LiquidGlassEffectsScope(
+            enabled: effectsEnabled,
+            child: LiquidGlassSurface(
+              blurSigma: blurSigma,
+              intensity: intensity,
+              materialOpacity: materialOpacity,
+              backdropGroupKey: backdropGroupKey,
+              adaptiveEdgeEnabled: adaptiveEdgeEnabled,
+              backdropMotion: backdropMotion,
+              perimeterOpticsEnabled: perimeterOpticsEnabled,
+              edgeTreatment: edgeTreatment,
+              borderRadius: borderRadius,
+              child: child,
+            ),
+          ),
   );
 }
 

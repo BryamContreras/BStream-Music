@@ -22,24 +22,21 @@ enum LiquidGlassEdgeTreatment {
 
 /// Temporarily suspends live backdrop effects during a native inset
 /// transition while keeping the existing surface geometry and contents.
-class LiquidGlassEffectsScope extends InheritedWidget {
+class LiquidGlassEffectsScope extends InheritedNotifier<ValueListenable<bool>> {
   const LiquidGlassEffectsScope({
     required this.enabled,
     required super.child,
     super.key,
-  });
+  }) : super(notifier: enabled);
 
-  final bool enabled;
+  final ValueListenable<bool> enabled;
 
   static bool isEnabled(BuildContext context) =>
       context
           .dependOnInheritedWidgetOfExactType<LiquidGlassEffectsScope>()
-          ?.enabled ??
+          ?.enabled
+          .value ??
       true;
-
-  @override
-  bool updateShouldNotify(LiquidGlassEffectsScope oldWidget) =>
-      enabled != oldWidget.enabled;
 }
 
 /// Shares scroll activity with glass nested in pinned inputs and headings.

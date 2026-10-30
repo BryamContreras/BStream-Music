@@ -179,6 +179,7 @@ class _HomePageState extends ConsumerState<HomePage>
   bool _keyboardVisible = false;
   double? _lastKeyboardInsetBottom;
   bool _liquidGlassKeyboardTransitioning = false;
+  final ValueNotifier<bool> _keyboardGlassEffectsEnabled = ValueNotifier(true);
   Timer? _keyboardGlassSettleTimer;
   _PersistentCurrentViews? _retainedCurrentViews;
 
@@ -676,7 +677,8 @@ class _HomePageState extends ConsumerState<HomePage>
       _keyboardGlassSettleTimer = Timer(_liquidGlassKeyboardSettleDelay, () {
         _keyboardGlassSettleTimer = null;
         if (!mounted || !_liquidGlassKeyboardTransitioning) return;
-        setState(() => _liquidGlassKeyboardTransitioning = false);
+        _liquidGlassKeyboardTransitioning = false;
+        _keyboardGlassEffectsEnabled.value = true;
       });
     }
 
@@ -692,7 +694,10 @@ class _HomePageState extends ConsumerState<HomePage>
         _keyboardVisible = keyboardVisible;
         _resetChromeForViewportChange();
       }
-      if (pauseGlassEffects) _liquidGlassKeyboardTransitioning = true;
+      if (pauseGlassEffects) {
+        _liquidGlassKeyboardTransitioning = true;
+        _keyboardGlassEffectsEnabled.value = false;
+      }
     });
   }
 
@@ -1179,6 +1184,7 @@ class _HomePageState extends ConsumerState<HomePage>
     _liquidGlassBrowsingMotion.removeListener(_updateLiquidGlassBackdropMotion);
     _liquidGlassBrowsingMotion.dispose();
     _liquidGlassChromeMoving.dispose();
+    _keyboardGlassEffectsEnabled.dispose();
     super.dispose();
   }
 
@@ -1509,7 +1515,7 @@ class _HomePageState extends ConsumerState<HomePage>
           }
         },
         child: LiquidGlassEffectsScope(
-          enabled: !_liquidGlassKeyboardTransitioning,
+          enabled: _keyboardGlassEffectsEnabled,
           child: Scaffold(
             // Keep the body edge-to-edge on Android. The bottom chrome is hosted
             // inside the body so its animation cannot resize the Scaffold.
