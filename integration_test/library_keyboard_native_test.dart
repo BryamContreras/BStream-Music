@@ -17,8 +17,10 @@ import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/sharing/incoming_track_link_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,7 +87,7 @@ void main() {
       SchedulerBinding.instance.addTimingsCallback(collect);
 
       await _navigate(tester, 1);
-      for (var cycle = 0; cycle < (_keyboardGlassOnly ? 1 : 2); cycle++) {
+      for (var cycle = 0; cycle < (_keyboardGlassOnly ? 3 : 2); cycle++) {
         cycles.add(
           await _keyboardCycleOrTextEntry(
             tester,
@@ -106,6 +108,7 @@ void main() {
       if (_keyboardGlassOnly) {
         SchedulerBinding.instance.removeTimingsCallback(collect);
         binding.reportData = {
+          ...?binding.reportData,
           'nativeKeyboardGlassTransition': {
             'displayRefreshRateHz': tester.view.display.refreshRate,
             'cycles': cycles,
@@ -113,7 +116,7 @@ void main() {
               timings,
               tester.view.display.refreshRate,
             ),
-            'scope': 'One real Android IME open/close cycle on SearchView.',
+            'scope': 'Three real Android IME open/close cycles on SearchView.',
           },
         };
         expect(tester.takeException(), isNull);
@@ -317,6 +320,15 @@ Future<Map<String, Object?>> _keyboardCycle(
   double? restingHeight,
   Future<void> Function()? close,
 }) async {
+  final glass = tester
+      .widget<LiquidGlassEffectsScope>(
+        find.byType(LiquidGlassEffectsScope).first,
+      )
+      .enabled;
+  final probe = _KeyboardGlassProbe(tester.view, glass);
+  WidgetsBinding.instance.addObserver(probe);
+  glass.addListener(probe.effectsChanged);
+  addTearDown(probe.dispose);
   final fullHeight = restingHeight ?? tester.getSize(viewport).height;
   final stopwatch = Stopwatch()..start();
   await tester.ensureVisible(field);
@@ -335,9 +347,15 @@ Future<Map<String, Object?>> _keyboardCycle(
     '$label: real IME did not appear. Enable show_ime_with_hard_keyboard.',
   );
   await tester.pump();
-  _expectNavigationGlassPaused(tester, label);
-  await _settle(tester);
-  _expectNavigationGlassRestored(tester, label);
+  // A real frame/pump can finish after the 50ms pause has already ended.
+  // Observe every notifier transition and inspect the paused render state
+  // only while that state is still current.
+  _expectBottomChromeHidden(tester, label);
+  await _waitUntil(tester, () => glass.value, '$label: glass did not resume.');
+  await tester.pump();
+  _expectBottomChromeHidden(tester, label);
+  expect(probe.pauseCount, greaterThan(0));
+  expect(probe.resumptions, hasLength(1));
   final openedAt = stopwatch.elapsedMilliseconds;
   final inset = tester.view.viewInsets.bottom / tester.view.devicePixelRatio;
   final resizedHeight = tester.getSize(viewport).height;
@@ -347,6 +365,7 @@ Future<Map<String, Object?>> _keyboardCycle(
     reason: '$label: the focused viewport must resize above the native IME.',
   );
   expect(FocusManager.instance.primaryFocus?.hasFocus, isTrue);
+  final pausesBeforeClose = probe.pauseCount;
   final closeWatch = Stopwatch()..start();
   if (close != null) await close();
   FocusManager.instance.primaryFocus?.unfocus();
@@ -357,11 +376,31 @@ Future<Map<String, Object?>> _keyboardCycle(
     '$label: IME did not dismiss.',
   );
   await tester.pump();
-  _expectNavigationGlassPaused(tester, '$label close');
-  await _settle(tester);
+  if (!glass.value) _expectNavigationGlassPaused(tester, '$label close');
+  await _waitUntil(
+    tester,
+    () => glass.value,
+    '$label: glass did not resume after hide.',
+  );
+  await tester.pump();
   _expectNavigationGlassRestored(tester, '$label close');
   final closedAt = closeWatch.elapsedMilliseconds;
   final restoredHeight = tester.getSize(viewport).height;
+  probe.dispose();
+  expect(probe.pauseCount, greaterThan(pausesBeforeClose));
+  expect(probe.resumptions, hasLength(2));
+  for (final resumption in probe.resumptions) {
+    expect(
+      resumption['afterLastInsetMs'],
+      lessThanOrEqualTo(
+        const int.fromEnvironment(
+          'BS_TEST_MAX_GLASS_RESUME_MS',
+          defaultValue: 90,
+        ),
+      ),
+      reason: '$label: restore glass promptly after the last native inset.',
+    );
+  }
   expect(restoredHeight, closeTo(fullHeight, 1));
   expect(tester.takeException(), isNull);
   return {
@@ -372,31 +411,113 @@ Future<Map<String, Object?>> _keyboardCycle(
     'restoredHeightDp': restoredHeight,
     'openObservedMsIncludingSettle': openedAt,
     'closeObservedMsIncludingSettle': closedAt,
+    'glassPauseCount': probe.pauseCount,
+    'glassResumeEvents': probe.resumptions,
     'glassPausedAndRestoredDuringOpen': true,
     'glassPausedAndRestoredDuringClose': true,
+    'bottomChromeHiddenWhileKeyboardVisible': true,
   };
 }
 
+void _expectBottomChromeHidden(WidgetTester tester, String label) {
+  for (final key in ['bottom-navigation-glass', 'mini-player-shell-clip']) {
+    expect(find.byKey(ValueKey(key)), findsNothing, reason: label);
+    final retained = find.byKey(ValueKey(key), skipOffstage: false);
+    expect(retained, findsOneWidget, reason: '$label: retain $key');
+    expect(
+      find.ancestor(
+        of: retained,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Offstage && widget.offstage,
+          skipOffstage: false,
+        ),
+      ),
+      findsWidgets,
+      reason: '$label: $key must not paint, receive taps or expose semantics',
+    );
+  }
+}
+
+class _KeyboardGlassProbe with WidgetsBindingObserver {
+  _KeyboardGlassProbe(this.view, this.effects)
+    : _lastInset = view.viewInsets.bottom;
+
+  final ui.FlutterView view;
+  final ValueListenable<bool> effects;
+  final _clock = Stopwatch()..start();
+  final resumptions = <Map<String, Object>>[];
+  int pauseCount = 0;
+  double _lastInset;
+  int? _lastInsetAt;
+  bool _disposed = false;
+
+  @override
+  void didChangeMetrics() {
+    final inset = view.viewInsets.bottom;
+    if (inset == _lastInset) return;
+    _lastInset = inset;
+    _lastInsetAt = _clock.elapsedMicroseconds;
+  }
+
+  void effectsChanged() {
+    if (!effects.value) {
+      pauseCount++;
+      return;
+    }
+    if (_lastInsetAt == null) return;
+    resumptions.add({
+      'insetPx': _lastInset,
+      'afterLastInsetMs': (_clock.elapsedMicroseconds - _lastInsetAt!) / 1000,
+    });
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
+    effects.removeListener(effectsChanged);
+    _clock.stop();
+  }
+}
+
 void _expectNavigationGlassPaused(WidgetTester tester, String label) {
-  final navigation = find.byKey(const ValueKey('bottom-navigation-glass'));
-  expect(
-    navigation,
-    findsOneWidget,
-    reason: '$label: glass surface is mounted',
-  );
-  expect(
-    find.descendant(of: navigation, matching: find.byType(BackdropFilter)),
-    findsNothing,
-    reason: '$label: expensive live glass pauses while the IME is moving',
-  );
+  _expectNavigationGlass(tester, label, enabled: false);
 }
 
 void _expectNavigationGlassRestored(WidgetTester tester, String label) {
+  _expectNavigationGlass(tester, label, enabled: true);
+}
+
+void _expectNavigationGlass(
+  WidgetTester tester,
+  String label, {
+  required bool enabled,
+}) {
   final navigation = find.byKey(const ValueKey('bottom-navigation-glass'));
+  expect(navigation, findsOneWidget, reason: '$label: glass remains mounted');
+  final backdrop = find.descendant(
+    of: navigation,
+    matching: find.byKey(LiquidGlassSurface.backdropKey),
+  );
+  final renderer = tester.renderObject(backdrop);
+  final active = renderer is RenderBackdropFilter
+      ? renderer.enabled
+      : (renderer as dynamic).debugEffectsEnabled as bool;
   expect(
-    find.descendant(of: navigation, matching: find.byType(BackdropFilter)),
-    findsOneWidget,
-    reason: '$label: full Liquid Glass returns when the IME settles',
+    active,
+    enabled,
+    reason: '$label: native filter must follow IME state',
+  );
+  if (enabled && renderer is! RenderBackdropFilter) {
+    expect((renderer as dynamic).debugIsRefracting, isTrue);
+  }
+  expect(
+    find.descendant(
+      of: navigation,
+      matching: find.byKey(LiquidGlassSurface.opticsKey),
+    ),
+    enabled ? findsOneWidget : findsNothing,
+    reason: '$label: the full optical material follows the native filter',
   );
 }
 

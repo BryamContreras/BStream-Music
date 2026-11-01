@@ -4959,7 +4959,9 @@ Future<ProviderContainer> _pumpLyricsPage(
               )
             : LyricsPage(
                 presentationChrome: presentationChrome,
-                monotonicClock: monotonicClock,
+                // Layout tests hold their sampled playback position. Tests
+                // for autonomous progression inject and advance their clock.
+                monotonicClock: monotonicClock ?? () => Duration.zero,
               ),
       ),
     ),

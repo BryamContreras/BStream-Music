@@ -20,6 +20,13 @@ enum LiquidGlassEdgeTreatment {
   none,
 }
 
+bool _usesBoundedBackdropHost(BuildContext context) =>
+    _LiquidGlassShaderProgram.isSupported &&
+    switch (Theme.of(context).platform) {
+      TargetPlatform.android || TargetPlatform.windows => true,
+      _ => false,
+    };
+
 /// Temporarily suspends live backdrop effects during a native inset
 /// transition while keeping the existing surface geometry and contents.
 class LiquidGlassEffectsScope extends InheritedNotifier<ValueListenable<bool>> {
@@ -117,8 +124,8 @@ class LiquidGlassSurface extends StatelessWidget {
   }
 
   /// Exercises the native backdrop-layer topology without requiring a runtime
-  /// shader in widget tests. Production surfaces select this host on Windows
-  /// only, after the real refractive shader has loaded successfully.
+  /// shader in widget tests. Native Android and Windows surfaces use this
+  /// host to keep the shader's input within the clipped glass bounds.
   @visibleForTesting
   static Widget debugBackdropLayerHost({
     required double devicePixelRatio,
@@ -127,6 +134,8 @@ class LiquidGlassSurface extends StatelessWidget {
     required ui.ImageFilter Function(Rect bounds, bool bounded) resolveMaterial,
     bool Function()? materialIsRefractive,
     BackdropKey? backdropGroupKey,
+    bool enabled = true,
+    bool pauseBackdropDuringOpacity = false,
     Widget child = const SizedBox.expand(),
   }) => _LiquidGlassBackdropLayerHost(
     devicePixelRatio: devicePixelRatio,
@@ -135,6 +144,8 @@ class LiquidGlassSurface extends StatelessWidget {
     resolveMaterial: resolveMaterial,
     materialIsRefractive: materialIsRefractive,
     backdropGroupKey: backdropGroupKey,
+    enabled: enabled,
+    pauseBackdropDuringOpacity: pauseBackdropDuringOpacity,
     child: child,
   );
 
@@ -172,6 +183,8 @@ class LiquidGlassSurface extends StatelessWidget {
   /// backing size while a capsule morphs. Only translation-only, tightly sized
   /// circular-corner lenses on shader-capable renderers opt in; all other
   /// configurations retain the original native rounded-rectangle clip.
+  /// Android and Windows use a clipped native blur target instead: its local
+  /// shader input is cheaper than an expanded composed backdrop capture.
   final Rect? backdropEnvelope;
 
   /// Optional original shell margins to retain its exterior shadow crop when
@@ -210,6 +223,7 @@ class LiquidGlassSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (backdropEnvelope != null &&
+        !_usesBoundedBackdropHost(context) &&
         _LiquidGlassShaderProgram.isSupported &&
         blurSigma > 0 &&
         adaptiveEdgeEnabled &&
@@ -235,6 +249,10 @@ class LiquidGlassSurface extends StatelessWidget {
     final brightness = Theme.brightnessOf(context);
     final textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
     final highContrast = MediaQuery.maybeHighContrastOf(context) ?? false;
+    final compatibleBlendMode = switch (Theme.of(context).platform) {
+      TargetPlatform.android || TargetPlatform.windows => true,
+      _ => false,
+    };
     final resolvedEdgeTreatment = perimeterOpticsEnabled
         ? edgeTreatment
         : LiquidGlassEdgeTreatment.none;
@@ -287,6 +305,8 @@ class LiquidGlassSurface extends StatelessWidget {
                 curve: opticalMotionCurve,
                 builder: (context, motion, _) => CustomPaint(
                   key: opticsKey,
+                  isComplex: compatibleBlendMode,
+                  willChange: motion > 0 && motion < 1,
                   painter: _LiquidGlassOpticsPainter(
                     borderRadius: borderRadius,
                     treatment: resolvedEdgeTreatment,
@@ -300,12 +320,7 @@ class LiquidGlassSurface extends StatelessWidget {
                     // surface when an overlaid control repaints (for
                     // example, when the mini player receives hover).
                     // Src-over keeps the optics bounded to this sheet.
-                    useCompatibleBlendMode: switch (Theme.of(
-                      context,
-                    ).platform) {
-                      TargetPlatform.android || TargetPlatform.windows => true,
-                      _ => false,
-                    },
+                    useCompatibleBlendMode: compatibleBlendMode,
                   ),
                 ),
               ),
@@ -313,10 +328,8 @@ class LiquidGlassSurface extends StatelessWidget {
           ),
         ),
     ];
-    final boundDesktopForeground =
-        envelope == null &&
-        _LiquidGlassShaderProgram.isSupported &&
-        Theme.of(context).platform == TargetPlatform.windows;
+    final boundForeground =
+        envelope == null && _usesBoundedBackdropHost(context);
     final backdrop = _LiquidGlassBackdrop(
       blurSigma: blurSigma,
       backdropGroupKey: backdropGroupKey,
@@ -334,14 +347,14 @@ class LiquidGlassSurface extends StatelessWidget {
       // blurred/tinted background, but not force a full-window backdrop copy.
       // Keeping the exact foreground inside the material's bounded native
       // target preserves those effects without changing their paint recipe.
-      child: boundDesktopForeground
+      child: boundForeground
           ? Stack(fit: StackFit.passthrough, children: foreground)
           : null,
     );
     final clippedSheet = ClipRRect(
       borderRadius: resolvedBorderRadius,
       clipBehavior: clipBehavior,
-      child: boundDesktopForeground
+      child: boundForeground
           ? backdrop
           : Stack(
               fit: StackFit.passthrough,
@@ -752,7 +765,9 @@ class _RenderRefractiveLens extends RenderBox {
     _backdrop.layer ??= BackdropFilterLayer(
       filter: const ui.ColorFilter.mode(Color(0x00000000), BlendMode.src),
     );
-    _lastBounds = null;
+    // Repainting an unchanged lens must not allocate another shader filter.
+    // Configuration changes invalidate these bounds in update(); ancestor
+    // movement is still resolved against the current transform in _resolve().
     context.pushLayer(_composition.layer!, (context, offset) {
       context.pushLayer(_clip.layer!, (context, offset) {
         context.pushLayer(_backdrop.layer!, (context, offset) {}, offset);
@@ -1040,7 +1055,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
   bool _shaderCreationFailed = false;
   Object? _filterConfigSignature;
   ImageFilterConfig? _positionAwareFilterConfig;
-  _LiquidGlassMaterialResolver? _desktopMaterialResolver;
+  _LiquidGlassMaterialResolver? _boundedMaterialResolver;
   Animation<double>? _routeSecondaryAnimation;
   bool _routeGeometryRefreshScheduled = false;
 
@@ -1292,7 +1307,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
 
   bool _materialIsRefractive() => _usesRefraction;
 
-  Widget _buildDesktopForeground(BuildContext context) {
+  Widget _buildBoundedForeground(BuildContext context) {
     final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
     final radius = widget.borderRadius.resolve(widget.textDirection);
     final signature = (
@@ -1308,7 +1323,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
     );
     if (signature != _filterConfigSignature) {
       _filterConfigSignature = signature;
-      _desktopMaterialResolver = (bounds, bounded) => _materialFilter(
+      _boundedMaterialResolver = (bounds, bounded) => _materialFilter(
         surfaceBoundsPx: bounds,
         devicePixelRatio: devicePixelRatio,
         borderRadius: radius,
@@ -1322,11 +1337,14 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
     return KeyedSubtree(
       key: LiquidGlassSurface.backdropKey,
       child: _LiquidGlassBackdropLayerHost(
+        enabled: widget.effectsEnabled,
+        pauseBackdropDuringOpacity:
+            Theme.of(context).platform == TargetPlatform.android,
         devicePixelRatio: devicePixelRatio,
         viewportSize: MediaQuery.sizeOf(context),
         blurFilter: _blurFilterForGroup(null),
         backdropGroupKey: widget.backdropGroupKey,
-        resolveMaterial: _desktopMaterialResolver!,
+        resolveMaterial: _boundedMaterialResolver!,
         materialIsRefractive: _materialIsRefractive,
         child: widget.child!,
       ),
@@ -1335,7 +1353,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.effectsEnabled || widget.blurSigma <= 0) {
+    if (widget.blurSigma <= 0) {
       return KeyedSubtree(
         key: LiquidGlassSurface.backdropKey,
         child: widget.child ?? const SizedBox.expand(),
@@ -1343,8 +1361,8 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
     }
     if (widget.child != null &&
         widget.lensBounds == null &&
-        Theme.of(context).platform == TargetPlatform.windows) {
-      return _buildDesktopForeground(context);
+        _usesBoundedBackdropHost(context)) {
+      return _buildBoundedForeground(context);
     }
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1359,10 +1377,10 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
         // own refraction. The mini player deliberately uses a separate key.
         final effectiveBackdropGroupKey = widget.backdropGroupKey;
         final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-        final useDesktopLayerHost =
+        final useBoundedLayerHost =
             _usesRefraction &&
             widget.lensBounds == null &&
-            Theme.of(context).platform == TargetPlatform.windows;
+            _usesBoundedBackdropHost(context);
         final signature = (
           size,
           devicePixelRatio,
@@ -1380,7 +1398,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
           _fragmentProgram,
           widget.lensBounds,
           widget.preparedShader,
-          useDesktopLayerHost,
+          useBoundedLayerHost,
         );
         if (_usesRefraction && signature != _filterConfigSignature) {
           _filterConfigSignature = signature;
@@ -1398,7 +1416,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
               groupKey: effectiveBackdropGroupKey,
             ),
           );
-          _desktopMaterialResolver = (bounds, bounded) => _materialFilter(
+          _boundedMaterialResolver = (bounds, bounded) => _materialFilter(
             surfaceBoundsPx: bounds,
             devicePixelRatio: devicePixelRatio,
             borderRadius: borderRadius,
@@ -1406,15 +1424,18 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
             boundedBackdrop: bounded,
           );
         }
-        if (useDesktopLayerHost) {
+        if (useBoundedLayerHost) {
           return KeyedSubtree(
             key: LiquidGlassSurface.backdropKey,
             child: _LiquidGlassBackdropLayerHost(
+              enabled: widget.effectsEnabled,
+              pauseBackdropDuringOpacity:
+                  Theme.of(context).platform == TargetPlatform.android,
               devicePixelRatio: devicePixelRatio,
               viewportSize: MediaQuery.sizeOf(context),
               blurFilter: _blurFilterForGroup(null),
               backdropGroupKey: effectiveBackdropGroupKey,
-              resolveMaterial: _desktopMaterialResolver!,
+              resolveMaterial: _boundedMaterialResolver!,
               materialIsRefractive: _materialIsRefractive,
               child: const SizedBox.expand(),
             ),
@@ -1425,6 +1446,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
             : null;
         return BackdropFilter(
           key: LiquidGlassSurface.backdropKey,
+          enabled: widget.effectsEnabled,
           filter: widget.lensBounds != null && !_usesRefraction
               ? _envelopeFailureFilter()
               : positionAwareFilter == null
@@ -1449,6 +1471,8 @@ typedef _LiquidGlassMaterialResolver =
 /// needed, and initial layout cannot accidentally select a permanent fallback.
 class _LiquidGlassBackdropLayerHost extends SingleChildRenderObjectWidget {
   const _LiquidGlassBackdropLayerHost({
+    this.enabled = true,
+    this.pauseBackdropDuringOpacity = false,
     required this.devicePixelRatio,
     required this.viewportSize,
     required this.blurFilter,
@@ -1464,6 +1488,8 @@ class _LiquidGlassBackdropLayerHost extends SingleChildRenderObjectWidget {
   final _LiquidGlassMaterialResolver resolveMaterial;
   final bool Function()? materialIsRefractive;
   final BackdropKey? backdropGroupKey;
+  final bool enabled;
+  final bool pauseBackdropDuringOpacity;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
@@ -1474,6 +1500,8 @@ class _LiquidGlassBackdropLayerHost extends SingleChildRenderObjectWidget {
         resolveMaterial,
         backdropGroupKey,
         materialIsRefractive,
+        enabled,
+        pauseBackdropDuringOpacity,
       );
 
   @override
@@ -1487,6 +1515,8 @@ class _LiquidGlassBackdropLayerHost extends SingleChildRenderObjectWidget {
     resolveMaterial: resolveMaterial,
     backdropGroupKey: backdropGroupKey,
     materialIsRefractive: materialIsRefractive,
+    enabled: enabled,
+    pauseBackdropDuringOpacity: pauseBackdropDuringOpacity,
   );
 }
 
@@ -1498,6 +1528,8 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
     this._resolveMaterial,
     this._backdropGroupKey,
     this._materialIsRefractive,
+    this._enabled,
+    this._pauseBackdropDuringOpacity,
   );
 
   double _devicePixelRatio;
@@ -1506,6 +1538,12 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
   _LiquidGlassMaterialResolver _resolveMaterial;
   BackdropKey? _backdropGroupKey;
   bool Function()? _materialIsRefractive;
+  bool _enabled;
+  bool _pauseBackdropDuringOpacity;
+  bool get debugEffectsEnabled => _enabled;
+  bool get debugIsRefracting => _enabled && (_inner.layer?._enabled ?? false);
+  Rect? debugResolvedBounds;
+  bool debugUsesBoundedInput = false;
   final _composition = LayerHandle<_LiquidGlassCompositionLayer>();
   final _outer = LayerHandle<_LiquidGlassOuterBackdropLayer>();
   final _inner = LayerHandle<_ConditionalLiquidGlassLensLayer>();
@@ -1517,13 +1555,17 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
     required _LiquidGlassMaterialResolver resolveMaterial,
     required BackdropKey? backdropGroupKey,
     required bool Function()? materialIsRefractive,
+    required bool enabled,
+    required bool pauseBackdropDuringOpacity,
   }) {
     if (_devicePixelRatio == devicePixelRatio &&
         _viewportSize == viewportSize &&
         _blurFilter == blurFilter &&
         _resolveMaterial == resolveMaterial &&
         _backdropGroupKey == backdropGroupKey &&
-        _materialIsRefractive == materialIsRefractive) {
+        _materialIsRefractive == materialIsRefractive &&
+        _enabled == enabled &&
+        _pauseBackdropDuringOpacity == pauseBackdropDuringOpacity) {
       return;
     }
     _devicePixelRatio = devicePixelRatio;
@@ -1532,6 +1574,8 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
     _resolveMaterial = resolveMaterial;
     _backdropGroupKey = backdropGroupKey;
     _materialIsRefractive = materialIsRefractive;
+    _enabled = enabled;
+    _pauseBackdropDuringOpacity = pauseBackdropDuringOpacity;
     markNeedsPaint();
   }
 
@@ -1584,56 +1628,91 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
     return false;
   }
 
+  // Dirty traversal reevaluates this each scene, including the frame opacity
+  // reaches 1. A paused, unchanged material must not invalidate its whole
+  // page's retained subtree throughout the fade.
+  bool _needsSceneResolution() =>
+      !_pauseBackdropDuringOpacity ||
+      _outer.layer?.enabled != false ||
+      !_hasPartialOpacityAncestor;
+
   void _resolveComposition() {
     if (!attached || !hasSize || size.isEmpty) return;
-    final transform = getTransformTo(null);
-    final surface = _physicalRect(
-      MatrixUtils.transformRect(transform, Offset.zero & size),
-    );
-    // Runtime shader snapshots and advanced blends on a partially transparent
-    // render target are backend-dependent. Preserve the exact original order
-    // during fades: one composed backdrop, then tint/content/optics outside it.
-    // The full bounded path resumes at opacity 1 without rebuilding widgets.
+    // Defer the foreground during fades to preserve the original alpha and
+    // paint order. Android pauses backdrop capture for this interval; Windows
+    // retains the composed material required by its advanced blends.
     final partialOpacity = _hasPartialOpacityAncestor;
-    final bounded = partialOpacity
-        ? null
-        : _boundedLensBounds(surface, transform);
     final outer = _outer.layer!;
     final inner = _inner.layer!;
+    final previousLensState = (
+      inner.filter,
+      inner.backdropKey,
+      inner._enabled,
+      inner._foregroundInside,
+    );
     inner.foregroundInside = !partialOpacity;
-    if (bounded == null) {
-      // Match the half-pixel coordinate rounding of the original material.
-      double halfPixel(double value) => (value * 2).roundToDouble() / 2;
-      outer
-        ..filter = _resolveMaterial(
-          Rect.fromLTRB(
-            halfPixel(surface.left),
-            halfPixel(surface.top),
-            halfPixel(surface.right),
-            halfPixel(surface.bottom),
-          ),
-          false,
-        )
-        ..backdropKey = _backdropGroupKey;
+    outer.enabled = !(partialOpacity && _pauseBackdropDuringOpacity);
+    if (!outer.enabled) {
+      // Capturing a fading page prevents caching its static content. Keep
+      // tint/content/painted optics, and restore the live backdrop at opacity 1.
       inner.enabled = false;
+      debugUsesBoundedInput = false;
     } else {
-      final material = _resolveMaterial(bounded, true);
-      outer
-        ..filter = _blurFilter
-        // A grouped capture would skip this surface's already-blurred pixels
-        // when the child samples them. Each stage owns its bounded input.
-        ..backdropKey = null;
-      inner
-        ..filter = material
-        ..backdropKey = null
-        // If shader creation fails, _materialFilter returns a plain blur.
-        // Do not run that blur again inside the existing native blur target.
-        ..enabled = _materialIsRefractive?.call() ?? true;
+      // Paused fade frames only paint their retained foreground. Resolve the
+      // transforms and clipping chain when the live material is needed again.
+      final transform = getTransformTo(null);
+      final surface = _physicalRect(
+        MatrixUtils.transformRect(transform, Offset.zero & size),
+      );
+      final bounded = partialOpacity
+          ? null
+          : _boundedLensBounds(surface, transform);
+      debugResolvedBounds = bounded ?? surface;
+      debugUsesBoundedInput = bounded != null;
+      if (bounded == null) {
+        // Match the half-pixel coordinate rounding of the original material.
+        double halfPixel(double value) => (value * 2).roundToDouble() / 2;
+        outer
+          ..filter = _resolveMaterial(
+            Rect.fromLTRB(
+              halfPixel(surface.left),
+              halfPixel(surface.top),
+              halfPixel(surface.right),
+              halfPixel(surface.bottom),
+            ),
+            false,
+          )
+          ..backdropKey = _backdropGroupKey;
+        inner.enabled = false;
+      } else {
+        final material = _resolveMaterial(bounded, true);
+        outer
+          ..filter = _blurFilter
+          // A grouped capture would skip this surface's already-blurred pixels
+          // when the child samples them. Each stage owns its bounded input.
+          ..backdropKey = null;
+        inner
+          ..filter = material
+          ..backdropKey = null
+          // If shader creation fails, _materialFilter returns a plain blur.
+          // Do not run that blur again inside the existing native blur target.
+          ..enabled = _materialIsRefractive?.call() ?? true;
+      }
     }
     // updateSubtreeNeedsAddToScene ran before this late resolver. A changed
     // inner filter/eligibility must not be hidden inside the outer layer's
     // previously retained native subtree on this same frame.
-    outer.invalidateResolvedChild();
+    // Keep unchanged engine layers retained. A retained backdrop still samples
+    // the current scene; retaining it does not freeze or reduce the effect.
+    if (previousLensState !=
+        (
+          inner.filter,
+          inner.backdropKey,
+          inner._enabled,
+          inner._foregroundInside,
+        )) {
+      outer.invalidateResolvedChild();
+    }
   }
 
   @override
@@ -1642,10 +1721,17 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
   @override
   void paint(PaintingContext context, Offset offset) {
     if (child == null) return;
+    if (!_enabled) {
+      // Keep the foreground and render object mounted across IME changes.
+      // The next enabled paint resolves fresh bounds after Scaffold layout.
+      super.paint(context, offset);
+      return;
+    }
     _outer.layer ??= _LiquidGlassOuterBackdropLayer(filter: _blurFilter);
     _inner.layer ??= _ConditionalLiquidGlassLensLayer(filter: _blurFilter);
     _composition.layer ??= _LiquidGlassCompositionLayer(
       resolve: _resolveComposition,
+      needsResolution: _needsSceneResolution,
       paintDeferredForeground: (builder) =>
           _inner.layer?.addDeferredForegroundToScene(builder),
     );
@@ -1659,6 +1745,7 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
   @override
   void dispose() {
     _composition.layer?.resolve = null;
+    _composition.layer?.needsResolution = null;
     _composition.layer?.paintDeferredForeground = null;
     _composition.layer = null;
     _outer.layer = null;
@@ -1674,14 +1761,16 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
 class _LiquidGlassCompositionLayer extends ContainerLayer {
   _LiquidGlassCompositionLayer({
     required this.resolve,
+    required this.needsResolution,
     required this.paintDeferredForeground,
   });
 
   VoidCallback? resolve;
+  bool Function()? needsResolution;
   void Function(ui.SceneBuilder builder)? paintDeferredForeground;
 
   @override
-  bool get alwaysNeedsAddToScene => true;
+  bool get alwaysNeedsAddToScene => needsResolution?.call() ?? true;
 
   @override
   void addToScene(ui.SceneBuilder builder) {
@@ -1693,6 +1782,24 @@ class _LiquidGlassCompositionLayer extends ContainerLayer {
 
 class _LiquidGlassOuterBackdropLayer extends BackdropFilterLayer {
   _LiquidGlassOuterBackdropLayer({required super.filter});
+
+  bool _enabled = true;
+  bool get enabled => _enabled;
+  set enabled(bool value) {
+    if (_enabled == value) return;
+    _enabled = value;
+    markNeedsAddToScene();
+  }
+
+  @override
+  void addToScene(ui.SceneBuilder builder) {
+    if (_enabled) {
+      super.addToScene(builder);
+    } else {
+      engineLayer = null;
+      addChildrenToScene(builder);
+    }
+  }
 
   void invalidateResolvedChild() => markNeedsAddToScene();
 }
@@ -1765,8 +1872,8 @@ class _LiquidGlassShaderProgram {
   static Future<ui.FragmentProgram?>? _load;
   static ui.FragmentProgram? program;
 
-  // The lens is composed with blur inside one BackdropFilter, avoiding the
-  // competing live captures that made the previous Android path unstable.
+  // Bounded hosts apply the lens to their own blurred input. Other backends
+  // compose blur and refraction into one filter for the original capture.
   static bool get isSupported => ui.ImageFilter.isShaderFilterSupported;
 
   static Future<ui.FragmentProgram?> ensureLoaded() {
@@ -1903,7 +2010,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
         Offset(size.width, math.max(0.0, seamY - 1.1)),
         Paint()
           ..strokeWidth = highContrast ? 0.9 : 0.55
-          ..blendMode = BlendMode.softLight
+          ..blendMode = opticalBlendMode
           ..color = Colors.black.withValues(alpha: alpha(0.06, 0.1))
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.1),
       );
@@ -1912,7 +2019,7 @@ class _LiquidGlassOpticsPainter extends CustomPainter {
         Offset(size.width, seamY),
         Paint()
           ..strokeWidth = highContrast ? 0.55 : 0.35
-          ..blendMode = BlendMode.softLight
+          ..blendMode = opticalBlendMode
           ..color = Colors.white.withValues(alpha: alpha(0.08, 0.12))
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8),
       );

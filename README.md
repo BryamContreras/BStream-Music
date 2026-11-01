@@ -1,6 +1,6 @@
 # BStream Music
 
-![Flutter 3.47.2](https://img.shields.io/badge/Flutter-3.47.2-02569B?logo=flutter&logoColor=white)
+![Flutter 3.47.9](https://img.shields.io/badge/Flutter-3.47.9-02569B?logo=flutter&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20Linux%20%7C%20macOS-blue)
 ![Version](https://img.shields.io/badge/version-1.2.9%2B129-brightgreen)
 ![Build](https://github.com/BryamContreras/BStream-Music/actions/workflows/desktop-builds.yml/badge.svg?branch=main)
@@ -370,7 +370,7 @@ remain inside the Dart service layer on every platform.
 
 ## Development requirements
 
-- Stable Flutter compatible with Dart `^3.12.0`.
+- Stable Flutter 3.47.9 or newer, compatible with Dart `^3.12.0`.
 - Android Studio and Android SDK for Android development.
 - Visual Studio/Build Tools with **Desktop development with C++** for Windows.
 - The pinned NuGet CLI on `PATH` for Windows plugin dependencies (the build
@@ -381,6 +381,11 @@ remain inside the Dart service layer on every platform.
   unsigned iOS application and IPA needs no Apple certificate; direct device,
   TestFlight, and App Store installation still require an accepted signature
   and provisioning method.
+
+CI uses Flutter 3.47.9 for every target. Each build packages the matching
+Flutter engine with the application. Android keeps Flutter's automatic
+renderer selection; Liquid Glass rendering paths depend on the platform and
+available shader support.
 
 Check the environment with:
 

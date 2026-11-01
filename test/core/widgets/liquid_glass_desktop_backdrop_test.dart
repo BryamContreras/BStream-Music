@@ -6,6 +6,184 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('paused glass lets a fading page retain its native subtree', (
+    tester,
+  ) async {
+    final opacity = ValueNotifier(0.75);
+    addTearDown(opacity.dispose);
+    const boundaryKey = ValueKey('retained-fading-page');
+    var resolutions = 0;
+    await tester.pumpWidget(
+      _harness(
+        child: ValueListenableBuilder(
+          valueListenable: opacity,
+          child: RepaintBoundary(
+            key: boundaryKey,
+            child: LiquidGlassSurface.debugBackdropLayerHost(
+              pauseBackdropDuringOpacity: true,
+              devicePixelRatio: 1,
+              viewportSize: const Size(800, 600),
+              blurFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              resolveMaterial: (_, _) {
+                resolutions++;
+                return ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2);
+              },
+            ),
+          ),
+          builder: (context, value, child) =>
+              Opacity(opacity: value, child: child),
+        ),
+      ),
+    );
+    _compose(tester);
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(boundaryKey),
+    );
+    final layer = boundary.debugLayer!;
+    final native = _engineLayer(layer);
+    expect(native, isNotNull);
+    for (final alpha in [0.5, 0.25, 0.6]) {
+      opacity.value = alpha;
+      await tester.pump();
+      _compose(tester);
+      expect(_engineLayer(layer), same(native));
+    }
+    expect(resolutions, 0);
+    opacity.value = 1;
+    await tester.pump();
+    _compose(tester);
+    expect(resolutions, greaterThan(0));
+    expect(_engineLayer(layer), isNot(same(native)));
+    final filters = tester.layers.whereType<BackdropFilterLayer>().toList();
+    expect(_engineLayer(filters.first), isNotNull);
+    expect(_engineLayer(filters.last), isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unchanged native filters retain their engine layers', (
+    tester,
+  ) async {
+    final blur = ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8);
+    var material = ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2);
+    await tester.pumpWidget(
+      _harness(
+        child: RepaintBoundary(
+          child: LiquidGlassSurface.debugBackdropLayerHost(
+            devicePixelRatio: 1,
+            viewportSize: const Size(800, 600),
+            blurFilter: blur,
+            resolveMaterial: (_, _) => material,
+          ),
+        ),
+      ),
+    );
+    _compose(tester);
+    final filters = tester.layers.whereType<BackdropFilterLayer>().toList();
+    final firstOuter = _engineLayer(filters.first);
+    final firstInner = _engineLayer(filters.last);
+    expect(firstOuter, isNotNull);
+    expect(firstInner, isNotNull);
+    for (var frame = 0; frame < 3; frame++) {
+      _compose(tester);
+      expect(_engineLayer(filters.first), same(firstOuter));
+      expect(_engineLayer(filters.last), same(firstInner));
+    }
+
+    // A late material change still has to invalidate its retained parent on
+    // this frame, even when neither layout nor foreground paint ran again.
+    material = ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5);
+    _compose(tester);
+    expect(_engineLayer(filters.first), isNot(same(firstOuter)));
+    expect(_engineLayer(filters.last), isNot(same(firstInner)));
+    final updatedOuter = _engineLayer(filters.first);
+    final updatedInner = _engineLayer(filters.last);
+    _compose(tester);
+    expect(_engineLayer(filters.first), same(updatedOuter));
+    expect(_engineLayer(filters.last), same(updatedInner));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('fading native host pauses captures and preserves foreground', (
+    tester,
+  ) async {
+    final calls = <(Rect, bool)>[];
+    await tester.pumpWidget(
+      _harness(
+        child: Opacity(
+          opacity: 0.5,
+          child: LiquidGlassSurface.debugBackdropLayerHost(
+            pauseBackdropDuringOpacity: true,
+            devicePixelRatio: 1,
+            viewportSize: const Size(800, 600),
+            blurFilter: ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+            resolveMaterial: (bounds, bounded) {
+              calls.add((bounds, bounded));
+              return ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2);
+            },
+          ),
+        ),
+      ),
+    );
+    _compose(tester);
+    expect(calls, isEmpty);
+    final layers = tester.layers.whereType<BackdropFilterLayer>().toList();
+    expect(layers, hasLength(2));
+    expect(_engineLayer(layers.first), isNull);
+    expect(_engineLayer(layers.last), isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('paused native host retains content and resolves fresh bounds', (
+    tester,
+  ) async {
+    final enabled = ValueNotifier(true);
+    addTearDown(enabled.dispose);
+    final calls = <(Rect, bool)>[];
+    final contentKey = GlobalKey();
+    await tester.pumpWidget(
+      _harness(
+        child: ValueListenableBuilder(
+          valueListenable: enabled,
+          child: SizedBox(key: contentKey),
+          builder: (context, active, child) => Transform.translate(
+            offset: active ? Offset.zero : const Offset(0, -200),
+            child: LiquidGlassSurface.debugBackdropLayerHost(
+              enabled: active,
+              devicePixelRatio: 1,
+              viewportSize: const Size(800, 600),
+              blurFilter: ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+              resolveMaterial: (bounds, bounded) {
+                calls.add((bounds, bounded));
+                return ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2);
+              },
+              child: child!,
+            ),
+          ),
+        ),
+      ),
+    );
+    _compose(tester);
+    final content = contentKey.currentContext!.findRenderObject();
+    expect(tester.layers.whereType<BackdropFilterLayer>(), hasLength(2));
+    for (var cycle = 0; cycle < 3; cycle++) {
+      enabled.value = false;
+      await tester.pump();
+      final pausedCalls = calls.length;
+      _compose(tester);
+      expect(calls, hasLength(pausedCalls));
+      expect(tester.layers.whereType<BackdropFilterLayer>(), isEmpty);
+      expect(contentKey.currentContext!.findRenderObject(), same(content));
+      enabled.value = true;
+      await tester.pump();
+      _compose(tester);
+      expect(calls.length, greaterThan(pausedCalls));
+      expect(calls.last, (const Rect.fromLTWH(0, 0, 120, 60), true));
+      expect(tester.layers.whereType<BackdropFilterLayer>(), hasLength(2));
+      expect(contentKey.currentContext!.findRenderObject(), same(content));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('desktop lens is bounded on its very first composed frame', (
     tester,
   ) async {

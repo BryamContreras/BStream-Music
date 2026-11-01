@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Updated the minimum Flutter version and CI builds to stable 3.47.9.
+- Retained Liquid Glass filters and painted optics during navigation, with
+  full droplet growth and refraction reserved for dragging.
+- Shortened navigation droplet travel to 220 ms and retained its optical
+  subtree while moving between tabs.
+- Hidden the bottom menu and mini player while the software keyboard is
+  visible, retaining their state without painting or running animations.
+- Resumed visible glass effects 50 ms after the last keyboard inset change.
+
+### Fixed
+
+- Preserved full-player artwork through its exit transition.
+
 ## 1.2.9+129 — 2026-10-12
 
 ### Added

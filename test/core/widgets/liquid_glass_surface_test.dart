@@ -8,6 +8,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+    testWidgets('$platform header optics use cacheable compatible blends', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _harness(
+          platform: platform,
+          edgeTreatment: LiquidGlassEdgeTreatment.bottom,
+          child: const Text('Encabezado'),
+        ),
+      );
+      final paints = _paintOptics(tester);
+      expect(paints, hasLength(2));
+      expect(
+        paints.every((paint) => paint.blendMode == BlendMode.srcOver),
+        isTrue,
+      );
+      final optics = tester.widget<CustomPaint>(
+        find.byKey(LiquidGlassSurface.opticsKey),
+      );
+      expect(optics.isComplex, isTrue);
+      expect(optics.willChange, isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   for (final brightness in Brightness.values) {
     testWidgets(
       'material opacity preserves refraction strength in $brightness',
@@ -161,10 +187,15 @@ void main() {
     await tester.pumpWidget(surface());
     expect(find.byType(BackdropFilter), findsOneWidget);
     expect(find.byKey(LiquidGlassSurface.opticsKey), findsOneWidget);
+    final backdrop = tester.renderObject(find.byType(BackdropFilter));
 
     effectsEnabled.value = false;
     await tester.pump();
-    expect(find.byType(BackdropFilter), findsNothing);
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isFalse,
+    );
+    expect(tester.renderObject(find.byType(BackdropFilter)), same(backdrop));
     expect(find.byKey(LiquidGlassSurface.opticsKey), findsNothing);
     expect(find.byKey(LiquidGlassSurface.surfaceTintKey), findsOneWidget);
     expect(find.text('Keyboard remains usable'), findsOneWidget);
@@ -172,6 +203,11 @@ void main() {
     effectsEnabled.value = true;
     await tester.pump();
     expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isTrue,
+    );
+    expect(tester.renderObject(find.byType(BackdropFilter)), same(backdrop));
     expect(find.byKey(LiquidGlassSurface.opticsKey), findsOneWidget);
     expect(find.text('Keyboard remains usable'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -993,6 +1029,11 @@ List<ui.Paint> _paintHover(WidgetTester tester) {
 
 class _RRectPaintRecordingCanvas implements ui.Canvas {
   final List<ui.Paint> superellipsePaints = <ui.Paint>[];
+
+  @override
+  void drawLine(ui.Offset first, ui.Offset second, ui.Paint paint) {
+    superellipsePaints.add(paint);
+  }
 
   @override
   void drawRRect(ui.RRect rrect, ui.Paint paint) {

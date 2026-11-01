@@ -112,7 +112,7 @@ class HomePage extends ConsumerStatefulWidget {
 
 class _HomePageState extends ConsumerState<HomePage>
     with WidgetsBindingObserver {
-  static const _liquidGlassKeyboardSettleDelay = Duration(milliseconds: 160);
+  static const _liquidGlassKeyboardSettleDelay = Duration(milliseconds: 50);
   bool _appForeground = true;
   bool _activityUpdateScheduled = false;
   bool _rootRouteVisible = true;
@@ -178,7 +178,6 @@ class _HomePageState extends ConsumerState<HomePage>
   FlutterView? _view;
   bool _keyboardVisible = false;
   double? _lastKeyboardInsetBottom;
-  bool _liquidGlassKeyboardTransitioning = false;
   final ValueNotifier<bool> _keyboardGlassEffectsEnabled = ValueNotifier(true);
   Timer? _keyboardGlassSettleTimer;
   _PersistentCurrentViews? _retainedCurrentViews;
@@ -676,28 +675,22 @@ class _HomePageState extends ConsumerState<HomePage>
       _keyboardGlassSettleTimer?.cancel();
       _keyboardGlassSettleTimer = Timer(_liquidGlassKeyboardSettleDelay, () {
         _keyboardGlassSettleTimer = null;
-        if (!mounted || !_liquidGlassKeyboardTransitioning) return;
-        _liquidGlassKeyboardTransitioning = false;
+        if (!mounted) return;
         _keyboardGlassEffectsEnabled.value = true;
       });
     }
 
-    final pauseGlassEffects =
-        insetChanged && !_liquidGlassKeyboardTransitioning;
-    if (!visibilityChanged && !pauseGlassEffects) return;
-    // The Scaffold still follows every native IME inset, keeping focused
-    // fields and chrome above the keyboard. Pause glass only for the insets'
-    // changing interval, and rebuild the retained shell only at transition
-    // start/end rather than for every native keyboard animation frame.
+    // Notify only the glass surfaces. Pausing a filter does not change the
+    // shell's layout or require rebuilding the retained tabs.
+    if (insetChanged) _keyboardGlassEffectsEnabled.value = false;
+    if (!visibilityChanged) return;
+    // The Scaffold follows native IME insets for focused fields. The bottom
+    // chrome stays mounted but does not paint while the keyboard is present.
+    // Other glass surfaces resume after the inset settles; only a visibility
+    // change needs to rebuild the retained shell.
     setState(() {
-      if (visibilityChanged) {
-        _keyboardVisible = keyboardVisible;
-        _resetChromeForViewportChange();
-      }
-      if (pauseGlassEffects) {
-        _liquidGlassKeyboardTransitioning = true;
-        _keyboardGlassEffectsEnabled.value = false;
-      }
+      _keyboardVisible = keyboardVisible;
+      _resetChromeForViewportChange();
     });
   }
 
@@ -709,9 +702,8 @@ class _HomePageState extends ConsumerState<HomePage>
     _liquidGlassChromeSettleTimer = null;
     _setLiquidGlassChromeMoving(false);
     if (_keyboardVisible) {
-      // Keep the mini player attached to the navigation while the IME changes
-      // the usable viewport. Revealing both pieces of chrome also keeps the
-      // focused field reachable above the keyboard.
+      // Restore expanded navigation after editing, including when the user
+      // opened the keyboard from the compact search control.
       _bottomNavigationRevealed = true;
     }
   }
@@ -983,9 +975,8 @@ class _HomePageState extends ConsumerState<HomePage>
       }
       _selectedIndex = index;
       if (playerTransition) {
-        // Keep the panel's track/artwork switchers dormant while the large
-        // player is entering. The shell morph then owns the frame budget and
-        // the panel can start its normal transitions once it is settled.
+        // Keep the complete player, including its decoded artwork, alive
+        // until the shell finishes moving it out of view.
         _playerTransitionActive = true;
       }
       if (index != _playerIndex && revealBottomNavigation) {
@@ -1023,52 +1014,24 @@ class _HomePageState extends ConsumerState<HomePage>
 
   void _openPlayerFromExternalEntry() {
     Navigator.maybeOf(context)?.popUntil((route) => route.isFirst);
-    if (_isPlayerSelected) {
-      _viewHistory.clear();
-      _rootBackCount = 0;
-      _lastRootBackAt = null;
-      _schedulePlayerHistoryEntry();
-      return;
-    }
-    _releaseFocusForViewChange();
-    setState(() {
-      _viewHistory.clear();
-      _rootBackCount = 0;
-      _lastRootBackAt = null;
-      _selectedIndex = _playerIndex;
-    });
-    _schedulePlayerHistoryEntry();
+    _viewHistory.clear();
+    _rootBackCount = 0;
+    _lastRootBackAt = null;
+    _setSelectedIndex(_playerIndex, recordHistory: false);
   }
 
   void _openHomeFromExternalEntry() {
     Navigator.maybeOf(context)?.popUntil((route) => route.isFirst);
-    if (_isPlayerSelected) {
-      _removePlayerHistoryEntry();
-    }
-    _releaseFocusForViewChange();
-    setState(() {
-      _viewHistory.clear();
-      _rootBackCount = 0;
-      _lastRootBackAt = null;
-      _selectedIndex = _homeIndex;
-      _bottomNavigationRevealed = true;
-      _resetBottomNavigationScrollIntent();
-    });
+    _viewHistory.clear();
+    _rootBackCount = 0;
+    _lastRootBackAt = null;
+    _setSelectedIndex(_homeIndex, recordHistory: false);
+    _setBottomNavigationRevealed(true);
   }
 
   void _openSearch() {
-    if (_isPlayerSelected) {
-      _removePlayerHistoryEntry();
-    }
-    _releaseFocusForViewChange();
-    setState(() {
-      _viewHistory.clear();
-      _rootBackCount = 0;
-      _lastRootBackAt = null;
-      _selectedIndex = _searchIndex;
-      _bottomNavigationRevealed = true;
-      _resetBottomNavigationScrollIntent();
-    });
+    _viewHistory.clear();
+    _setSelectedIndex(_searchIndex, recordHistory: false);
   }
 
   void _openLyrics() {
@@ -1356,11 +1319,12 @@ class _HomePageState extends ConsumerState<HomePage>
     final bottomNavigationBaseHeight = useSideNavigation
         ? 0.0
         : _BottomNavigation.baseHeight(glassyCompact: _usesMobileNavigation);
-    final browsingViewportBottomPadding = transparentSurfaces
+    final browsingViewportBottomPadding =
+        _keyboardVisible || transparentSurfaces ? 0.0 : bottomNavigationHeight;
+    final browsingContentBottomPadding = _keyboardVisible
         ? 0.0
-        : bottomNavigationHeight;
-    final browsingContentBottomPadding =
-        miniPlayerHeight + (transparentSurfaces ? bottomNavigationHeight : 0.0);
+        : miniPlayerHeight +
+              (transparentSurfaces ? bottomNavigationHeight : 0.0);
     final shellTransitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : _shellTransitionDuration;
@@ -1469,7 +1433,7 @@ class _HomePageState extends ConsumerState<HomePage>
     // Non-Liquid surfaces are always present. Liquid Glass keeps its shell
     // mounted as well; its content compacts around the mini player instead of
     // fading a flat menu in and out.
-    final bottomNavigationVisible = showBottomNavigation;
+    final bottomNavigationVisible = showBottomNavigation && !_keyboardVisible;
     final miniPlayerNavigationOffset =
         useLiquidBottomNavigation &&
             !useSideNavigation &&
@@ -1649,6 +1613,7 @@ class _HomePageState extends ConsumerState<HomePage>
                                         'bottom-navigation-shell-opacity',
                                       ),
                                       visible: bottomNavigationVisible,
+                                      suspended: _keyboardVisible,
                                       duration: chromeVisibilityDuration,
                                       hiddenTranslation: Offset(
                                         0,
@@ -1735,7 +1700,8 @@ class _HomePageState extends ConsumerState<HomePage>
                               opacityKey: const ValueKey(
                                 'mini-player-shell-opacity',
                               ),
-                              visible: !_isPlayerSelected,
+                              visible: !_isPlayerSelected && !_keyboardVisible,
+                              suspended: _keyboardVisible,
                               duration: chromeVisibilityDuration,
                               hiddenTranslation:
                                   miniPlayerAppearance
@@ -1793,6 +1759,7 @@ class _ShellVisibilityTransition extends StatelessWidget {
     required this.visible,
     required this.duration,
     required this.child,
+    this.suspended = false,
     this.hiddenTranslation = const Offset(0, 0.08),
     this.hiddenScale = 1,
     this.clipKey,
@@ -1808,6 +1775,9 @@ class _ShellVisibilityTransition extends StatelessWidget {
   final bool visible;
   final Duration duration;
   final Widget child;
+  // Native IME resizing must not carry the chrome up the screen. Offstage
+  // retains playback/navigation state without painting or ticking it.
+  final bool suspended;
   final Offset hiddenTranslation;
   final double hiddenScale;
   final Key? clipKey;
@@ -1820,59 +1790,74 @@ class _ShellVisibilityTransition extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
-      ignoring: !visible,
-      child: ExcludeSemantics(
-        excluding: !visible,
-        child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(end: visible ? 1 : 0),
-          duration: duration,
-          curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
-          builder: (context, value, child) {
-            final scale = lerpDouble(hiddenScale, 1, value)!;
-            final movingChild = FractionalTranslation(
-              key: translationKey,
-              translation: Offset.lerp(hiddenTranslation, Offset.zero, value)!,
-              child: Transform.scale(
-                key: scaleKey,
-                scaleX: scale,
-                // A live backdrop must keep its physical height. Scaling it
-                // vertically stretches the captured pixels and flattens the
-                // rim while the sheet is moving.
-                scaleY: preserveBackdropMaterial ? 1 : scale,
-                alignment: Alignment.bottomCenter,
-                // Keep every visible exit frame (and the live material)
-                // unchanged. Once the sheet has completely left its clip,
-                // its retained marquee/progress clocks must not request
-                // frames behind the full player. This does not mute any
-                // browsing text that is visible underneath Liquid Glass.
-                child: TickerMode(enabled: visible || value > 0, child: child!),
-              ),
-            );
-            return ClipRect(
-              key: clipKey,
-              clipper: fixedHorizontalClipWidth == null && clipTopOutset == 0
-                  ? null
-                  : _ShellBoundsClipper(
-                      fixedHorizontalClipWidth,
-                      topOutset: clipTopOutset,
+    return Offstage(
+      offstage: suspended,
+      child: ExcludeFocus(
+        excluding: !visible || suspended,
+        child: IgnorePointer(
+          ignoring: !visible,
+          child: ExcludeSemantics(
+            excluding: !visible,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(end: visible ? 1 : 0),
+              duration: suspended ? Duration.zero : duration,
+              curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
+              builder: (context, value, child) {
+                final scale = lerpDouble(hiddenScale, 1, value)!;
+                final movingChild = FractionalTranslation(
+                  key: translationKey,
+                  translation: Offset.lerp(
+                    hiddenTranslation,
+                    Offset.zero,
+                    value,
+                  )!,
+                  child: Transform.scale(
+                    key: scaleKey,
+                    scaleX: scale,
+                    // A live backdrop must keep its physical height. Scaling it
+                    // vertically stretches the captured pixels and flattens the
+                    // rim while the sheet is moving.
+                    scaleY: preserveBackdropMaterial ? 1 : scale,
+                    alignment: Alignment.bottomCenter,
+                    // Keep every visible exit frame (and the live material)
+                    // unchanged. Once the sheet has completely left its clip,
+                    // its retained marquee/progress clocks must not request
+                    // frames behind the full player. This does not mute any
+                    // browsing text that is visible underneath Liquid Glass.
+                    child: TickerMode(
+                      enabled: !suspended && (visible || value > 0),
+                      child: child!,
                     ),
-              // Keep Liquid Glass out of an Opacity save layer: fading the
-              // complete BackdropFilter also fades its sampled background and
-              // makes the material look like a flat overlay. Its full-height
-              // translation exits through this clip instead. Other surface
-              // modes retain their established fade.
-              child: preserveBackdropMaterial
-                  ? KeyedSubtree(key: opacityKey, child: movingChild)
-                  : Opacity(
-                      key: opacityKey,
-                      opacity:
-                          1 - math.pow(1 - value.clamp(0.0, 1.0), 3).toDouble(),
-                      child: movingChild,
-                    ),
-            );
-          },
-          child: child,
+                  ),
+                );
+                return ClipRect(
+                  key: clipKey,
+                  clipper:
+                      fixedHorizontalClipWidth == null && clipTopOutset == 0
+                      ? null
+                      : _ShellBoundsClipper(
+                          fixedHorizontalClipWidth,
+                          topOutset: clipTopOutset,
+                        ),
+                  // Keep Liquid Glass out of an Opacity save layer: fading the
+                  // complete BackdropFilter also fades its sampled background and
+                  // makes the material look like a flat overlay. Its full-height
+                  // translation exits through this clip instead. Other surface
+                  // modes retain their established fade.
+                  child: preserveBackdropMaterial
+                      ? KeyedSubtree(key: opacityKey, child: movingChild)
+                      : Opacity(
+                          key: opacityKey,
+                          opacity:
+                              1 -
+                              math.pow(1 - value.clamp(0.0, 1.0), 3).toDouble(),
+                          child: movingChild,
+                        ),
+                );
+              },
+              child: child,
+            ),
+          ),
         ),
       ),
     );
@@ -2239,7 +2224,6 @@ class _LiquidNavigationSelectionLayerState
   late final AnimationController _pressGrowth;
   final _dragOrdinal = ValueNotifier<double?>(null);
   int? _pointer;
-  int? _pressedOrdinal;
   bool _dragging = false;
 
   @override
@@ -2249,25 +2233,21 @@ class _LiquidNavigationSelectionLayerState
     super.dispose();
   }
 
-  void _beginInteraction(PointerDownEvent event, double slotWidth) {
+  void _beginInteraction(PointerDownEvent event) {
     if (_pointer != null ||
         widget.onOrdinalSelected == null ||
         event.buttons != kPrimaryButton) {
       return;
     }
-    setState(() {
-      _pointer = event.pointer;
-      _pressedOrdinal = (event.localPosition.dx / slotWidth).floor().clamp(
-        0,
-        widget.itemCount - 1,
-      );
-    });
-    if (widget.transitionDuration != Duration.zero) _pressGrowth.forward();
+    _pointer = event.pointer;
   }
 
   void _updateDrag(Offset position, double slotWidth) {
     if (_pointer == null) return;
-    _dragging = true;
+    if (!_dragging) {
+      setState(() => _dragging = true);
+      if (widget.transitionDuration != Duration.zero) _pressGrowth.forward();
+    }
     // Only the small transform subtree observes pointer motion. The tabs,
     // labels, glass shader and retained lens paint do not rebuild per event.
     _dragOrdinal.value = (position.dx / slotWidth - 0.5).clamp(
@@ -2278,10 +2258,10 @@ class _LiquidNavigationSelectionLayerState
 
   void _endInteraction({bool commit = false}) {
     if (_pointer == null) return;
+    _pointer = null;
+    if (!_dragging) return;
     final ordinal = commit && _dragging ? _dragOrdinal.value?.round() : null;
     setState(() {
-      _pointer = null;
-      _pressedOrdinal = null;
       _dragging = false;
       _dragOrdinal.value = null;
     });
@@ -2313,7 +2293,6 @@ class _LiquidNavigationSelectionLayerState
     if (widget.itemCount != oldWidget.itemCount ||
         widget.onOrdinalSelected == null) {
       _pointer = null;
-      _pressedOrdinal = null;
       _dragging = false;
       _dragOrdinal.value = null;
       _pressGrowth.value = 0;
@@ -2329,7 +2308,7 @@ class _LiquidNavigationSelectionLayerState
     final reducedMotion = widget.transitionDuration == Duration.zero;
     final travelDuration = reducedMotion
         ? Duration.zero
-        : const Duration(milliseconds: 360);
+        : const Duration(milliseconds: 220);
     final fadeDuration = reducedMotion
         ? Duration.zero
         : const Duration(milliseconds: 220);
@@ -2339,10 +2318,7 @@ class _LiquidNavigationSelectionLayerState
     return LayoutBuilder(
       builder: (context, constraints) {
         final slotWidth = constraints.maxWidth / widget.itemCount;
-        final ordinal = (_pressedOrdinal ?? _lastVisibleOrdinal).clamp(
-          0,
-          widget.itemCount - 1,
-        );
+        final ordinal = _lastVisibleOrdinal.clamp(0, widget.itemCount - 1);
         final compatibleBlendMode = switch (Theme.of(context).platform) {
           TargetPlatform.android || TargetPlatform.windows => true,
           _ => false,
@@ -2359,7 +2335,7 @@ class _LiquidNavigationSelectionLayerState
         );
         final lens = AnimatedOpacity(
           key: const ValueKey('bottom-navigation-selection-lens-opacity'),
-          opacity: widget.selectedOrdinal >= 0 || _pointer != null ? 1 : 0,
+          opacity: widget.selectedOrdinal >= 0 || _dragging ? 1 : 0,
           duration: fadeDuration,
           curve: Curves.easeOutCubic,
           child: IgnorePointer(
@@ -2387,7 +2363,11 @@ class _LiquidNavigationSelectionLayerState
                       baseSize: base,
                       scale: scale,
                       maxScale: _activeScale,
-                      enabled: widget.selectedOrdinal >= 0 || _pointer != null,
+                      // Taps only translate the retained highlight. Capture
+                      // and refract the backdrop while dragging and settling.
+                      enabled:
+                          !reducedMotion &&
+                          (_dragging || _pressGrowth.value > 0),
                     ),
                   ),
                 ),
@@ -2434,56 +2414,44 @@ class _LiquidNavigationSelectionLayerState
             else
               ValueListenableBuilder<double?>(
                 valueListenable: _dragOrdinal,
-                child: lens,
+                // Travel only changes this retained subtree's transform.
+                // Growth and refraction have their own clock, active only
+                // while dragging and during its release animation.
+                child: AnimatedBuilder(
+                  animation: _pressGrowth,
+                  child: lens,
+                  builder: (context, child) => refractedLens(
+                    Size(
+                      math.max(0, slotWidth - 6),
+                      math.max(0, constraints.maxHeight - 4),
+                    ),
+                    1 +
+                        Curves.easeOutCubic.transform(_pressGrowth.value) *
+                            (_activeScale - 1),
+                    child!,
+                  ),
+                ),
                 builder: (context, dragOrdinal, child) =>
-                    TweenAnimationBuilder<
-                      ({double left, double width, double scale})
-                    >(
+                    TweenAnimationBuilder<double>(
                       key: const ValueKey(
                         'bottom-navigation-selection-lens-position',
                       ),
-                      tween: _LiquidNavigationLensTween(
-                        animateGrowth: !reducedMotion,
-                        end: (
-                          left: slotWidth * (dragOrdinal ?? ordinal) + 3,
-                          width: math.max(0, slotWidth - 6),
-                          scale: 1,
-                        ),
+                      tween: Tween<double>(
+                        end: slotWidth * (dragOrdinal ?? ordinal) + 3,
                       ),
                       duration: dragOrdinal != null
                           ? Duration.zero
                           : travelDuration,
                       curve: Curves.easeOutQuart,
                       child: child,
-                      builder: (context, geometry, child) => Positioned(
+                      builder: (context, left, child) => Positioned(
                         left: 0,
                         top: 2,
                         bottom: 2,
-                        width: geometry.width,
+                        width: math.max(0, slotWidth - 6),
                         child: Transform.translate(
-                          offset: Offset(geometry.left, 0),
-                          child: AnimatedBuilder(
-                            animation: _pressGrowth,
-                            child: child,
-                            builder: (context, child) => refractedLens(
-                              Size(
-                                geometry.width,
-                                math.max(0, constraints.maxHeight - 4),
-                              ),
-                              // Position follows the finger immediately;
-                              // growth settles independently so starting a
-                              // fast drag never snaps to the larger size.
-                              math.max(
-                                geometry.scale,
-                                1 +
-                                    Curves.easeOutCubic.transform(
-                                          _pressGrowth.value,
-                                        ) *
-                                        (_activeScale - 1),
-                              ),
-                              child!,
-                            ),
-                          ),
+                          offset: Offset(left, 0),
+                          child: child,
                         ),
                       ),
                     ),
@@ -2494,7 +2462,7 @@ class _LiquidNavigationSelectionLayerState
           return selection;
         }
         return Listener(
-          onPointerDown: (event) => _beginInteraction(event, slotWidth),
+          onPointerDown: _beginInteraction,
           onPointerUp: (event) {
             if (event.pointer != _pointer) return;
             _endInteraction(
@@ -2519,30 +2487,6 @@ class _LiquidNavigationSelectionLayerState
       },
     );
   }
-}
-
-class _LiquidNavigationLensTween
-    extends Tween<({double left, double width, double scale})> {
-  _LiquidNavigationLensTween({required super.end, required this.animateGrowth});
-
-  final bool animateGrowth;
-
-  @override
-  ({double left, double width, double scale}) lerp(double t) => (
-    left: lerpDouble(begin!.left, end!.left, t)!,
-    // lerpDouble returns equal endpoints verbatim. A translation must never
-    // acquire tiny width rounding changes that would relayout its parent.
-    width: lerpDouble(begin!.width, end!.width, t)!,
-    // A composited swell during travel; no extra blur, paint or layout.
-    scale: math.max(
-      lerpDouble(begin!.scale, end!.scale, t)!,
-      animateGrowth && (begin!.left - end!.left).abs() > 0.5
-          ? 1 +
-                math.sin(math.pi * t) *
-                    (_LiquidNavigationSelectionLayerState._activeScale - 1)
-          : 1,
-    ),
-  );
 }
 
 class _LiquidNavigationSelectionPainter extends CustomPainter {
@@ -3415,7 +3359,9 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
             keepTickerEnabled: widget.playerTransitionActive,
             animateInitialEntry: !_playerWasInitialDestination,
             child: PlayerPanel(
-              active: widget.selectedIndex == widget.playerIndex,
+              active:
+                  widget.selectedIndex == widget.playerIndex ||
+                  widget.playerTransitionActive,
               onOpenSearch: widget.onOpenSearch,
               onCollapse: widget.onCollapsePlayer,
               // Keep the dark artwork backdrop scoped to the player. The
@@ -3427,8 +3373,8 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               spotifyCanvasEnabled: widget.spotifyCanvasEnabled,
               appleAnimatedArtworkEnabled: widget.appleAnimatedArtworkEnabled,
               trackTransitionsEnabled:
-                  widget.selectedIndex == widget.playerIndex &&
-                  !widget.playerTransitionActive,
+                  widget.selectedIndex == widget.playerIndex ||
+                  widget.playerTransitionActive,
             ),
           ),
       ],
@@ -3529,6 +3475,9 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
   @override
   Widget build(BuildContext context) {
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final stableGlassTabGeometry =
+        Theme.of(context).platform == TargetPlatform.android &&
+        AppColors.surfaceBackgroundModeFor(context).isLiquidGlass;
     final duration = disableAnimations || widget.instantVisibilityChange
         ? Duration.zero
         : widget.transitionDuration ?? const Duration(milliseconds: 320);
@@ -3565,7 +3514,12 @@ class _PersistentViewSlotState extends State<_PersistentViewSlot> {
             // brief dark flash on slower Android devices.
             curve: Curves.easeInOutCubic,
             child: AnimatedSlide(
-              offset: entered ? Offset.zero : const Offset(0.018, 0),
+              // Moving a backdrop by even a few pixels changes its intermediate
+              // texture bounds every frame. A pure fade keeps Android's glass
+              // captures reusable throughout the tab transition.
+              offset: entered || stableGlassTabGeometry
+                  ? Offset.zero
+                  : const Offset(0.018, 0),
               duration: duration,
               curve: Curves.easeOutCubic,
               child: RepaintBoundary(child: tickerContent),
