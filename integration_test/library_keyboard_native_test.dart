@@ -350,6 +350,14 @@ Future<Map<String, Object?>> _keyboardCycle(
   // A real frame/pump can finish after the 50ms pause has already ended.
   // Observe every notifier transition and inspect the paused render state
   // only while that state is still current.
+  await _waitUntil(
+    tester,
+    () => find
+        .byKey(const ValueKey('bottom-navigation-glass'))
+        .evaluate()
+        .isEmpty,
+    '$label: bottom chrome did not finish its 80ms fade out.',
+  );
   _expectBottomChromeHidden(tester, label);
   await _waitUntil(tester, () => glass.value, '$label: glass did not resume.');
   await tester.pump();
@@ -383,6 +391,15 @@ Future<Map<String, Object?>> _keyboardCycle(
     '$label: glass did not resume after hide.',
   );
   await tester.pump();
+  await _waitUntil(
+    tester,
+    () => tester
+        .widgetList<Opacity>(
+          find.byKey(const ValueKey('keyboard-chrome-opacity')),
+        )
+        .every((widget) => widget.opacity == 1),
+    '$label: bottom chrome did not finish its 100ms fade in.',
+  );
   _expectNavigationGlassRestored(tester, '$label close');
   final closedAt = closeWatch.elapsedMilliseconds;
   final restoredHeight = tester.getSize(viewport).height;

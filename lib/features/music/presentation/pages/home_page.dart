@@ -54,16 +54,9 @@ import 'artist_profile_page.dart';
 import 'remote_collection_detail_page.dart';
 import 'search_view.dart';
 
-double _shellSystemBottomInset(
-  BuildContext context, {
-  required bool keyboardVisible,
-}) {
-  // When Scaffold has already resized its body above the IME, the body's
-  // bottom edge is the keyboard edge. Reserving viewPadding again leaves a
-  // visible strip between the mini player and the bottom navigation.
-  if (keyboardVisible) {
-    return 0;
-  }
+double _shellSystemBottomInset(BuildContext context) {
+  // Chrome exits behind the keyboard. Retain its system inset so reopening
+  // cannot animate the navigation padding after the short keyboard fade ends.
   return math.max(
     MediaQuery.viewPaddingOf(context).bottom,
     MediaQuery.paddingOf(context).bottom,
@@ -1270,10 +1263,7 @@ class _HomePageState extends ConsumerState<HomePage>
     final width = MediaQuery.sizeOf(context).width;
     final useSideNavigation = width >= 920 && !_usesMobileNavigation;
     final showBottomNavigation = !useSideNavigation && !_isPlayerSelected;
-    final systemBottomInset = _shellSystemBottomInset(
-      context,
-      keyboardVisible: _keyboardVisible,
-    );
+    final systemBottomInset = _shellSystemBottomInset(context);
     final defaultMode = defaultMiniPlayerModeForPlatform(
       Theme.of(context).platform,
     );
@@ -1433,7 +1423,7 @@ class _HomePageState extends ConsumerState<HomePage>
     // Non-Liquid surfaces are always present. Liquid Glass keeps its shell
     // mounted as well; its content compacts around the mini player instead of
     // fading a flat menu in and out.
-    final bottomNavigationVisible = showBottomNavigation && !_keyboardVisible;
+    final bottomNavigationVisible = showBottomNavigation;
     final miniPlayerNavigationOffset =
         useLiquidBottomNavigation &&
             !useSideNavigation &&
@@ -1700,7 +1690,7 @@ class _HomePageState extends ConsumerState<HomePage>
                               opacityKey: const ValueKey(
                                 'mini-player-shell-opacity',
                               ),
-                              visible: !_isPlayerSelected && !_keyboardVisible,
+                              visible: !_isPlayerSelected,
                               suspended: _keyboardVisible,
                               duration: chromeVisibilityDuration,
                               hiddenTranslation:
@@ -1790,17 +1780,18 @@ class _ShellVisibilityTransition extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Offstage(
-      offstage: suspended,
+    return _KeyboardChromeTransition(
+      hidden: suspended,
+      disableAnimations: duration == Duration.zero,
       child: ExcludeFocus(
         excluding: !visible || suspended,
         child: IgnorePointer(
-          ignoring: !visible,
+          ignoring: !visible || suspended,
           child: ExcludeSemantics(
-            excluding: !visible,
+            excluding: !visible || suspended,
             child: TweenAnimationBuilder<double>(
               tween: Tween<double>(end: visible ? 1 : 0),
-              duration: suspended ? Duration.zero : duration,
+              duration: duration,
               curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
               builder: (context, value, child) {
                 final scale = lerpDouble(hiddenScale, 1, value)!;
@@ -1825,7 +1816,7 @@ class _ShellVisibilityTransition extends StatelessWidget {
                     // frames behind the full player. This does not mute any
                     // browsing text that is visible underneath Liquid Glass.
                     child: TickerMode(
-                      enabled: !suspended && (visible || value > 0),
+                      enabled: visible || value > 0,
                       child: child!,
                     ),
                   ),
@@ -1862,6 +1853,56 @@ class _ShellVisibilityTransition extends StatelessWidget {
       ),
     );
   }
+}
+
+class _KeyboardChromeTransition extends StatelessWidget {
+  const _KeyboardChromeTransition({
+    required this.hidden,
+    required this.disableAnimations,
+    required this.child,
+  });
+
+  final bool hidden;
+  final bool disableAnimations;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+    tween: Tween<double>(end: hidden ? 0 : 1),
+    duration: disableAnimations
+        ? Duration.zero
+        : Duration(milliseconds: hidden ? 80 : 100),
+    curve: Curves.easeOutCubic,
+    child: child,
+    builder: (context, value, child) => Offstage(
+      offstage: hidden && value == 0,
+      child: TickerMode(
+        enabled: !hidden || value > 0,
+        // Scaffold follows the IME insets. Keep the exiting chrome at the
+        // screen bottom, behind the keyboard, during its short fade out.
+        // Read the view directly: Scaffold removes the body's MediaQuery insets.
+        child: Transform.translate(
+          key: const ValueKey('keyboard-chrome-position'),
+          offset: Offset(
+            0,
+            hidden
+                ? View.of(context).viewInsets.bottom /
+                      View.of(context).devicePixelRatio
+                : 0,
+          ),
+          child: Opacity(
+            key: const ValueKey('keyboard-chrome-opacity'),
+            opacity: value,
+            child: Transform.scale(
+              key: const ValueKey('keyboard-chrome-scale'),
+              scale: lerpDouble(0.98, 1, value)!,
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _ShellBoundsClipper extends CustomClipper<Rect> {
@@ -2017,120 +2058,127 @@ class _BottomNavigation extends StatelessWidget {
           child: mainContent,
         ),
       );
-      return AnimatedPadding(
-        duration: transitionDuration,
-        curve: Curves.easeOutCubic,
-        padding: liquidCollapsed
-            ? EdgeInsets.fromLTRB(10, 0, 10, systemBottomInset + 8)
-            : EdgeInsets.fromLTRB(10, 4, 10, systemBottomInset + 4),
-        child: SizedBox(
-          height: liquidHeight,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final searchExtent = detachedSearchDestination == null
-                  ? 0.0
-                  : liquidHeight + 8;
-              final expandedMainWidth = math.max(
-                0.0,
-                constraints.maxWidth - searchExtent,
-              );
-              final collapsedMainWidth = math.min(
-                liquidHeight,
-                expandedMainWidth,
-              );
-              return TweenAnimationBuilder<double>(
-                tween: Tween<double>(end: liquidCollapsed ? 0 : 1),
-                duration: transitionDuration,
-                curve: Curves.easeOutCubic,
-                child: mainGlassContent,
-                builder: (context, value, mainGlassContent) {
-                  final mainWidth = lerpDouble(
-                    collapsedMainWidth,
-                    expandedMainWidth,
-                    value,
-                  )!;
-                  final rtl = Directionality.of(context) == TextDirection.rtl;
-                  final envelope =
-                      glassyCompact && theme.platform == TargetPlatform.android
-                      ? Rect.fromLTWH(
-                          rtl ? mainWidth - expandedMainWidth : 0,
-                          0,
-                          expandedMainWidth,
-                          liquidHeight,
-                        )
-                      : null;
-                  final mainGlass = ValueListenableBuilder<bool>(
-                    valueListenable: backdropMotion,
-                    child: mainGlassContent,
-                    builder: (context, moving, child) => LiquidGlassSurface(
-                      key: const ValueKey('bottom-navigation-glass'),
-                      borderRadius: radius,
-                      blurSigma: 8,
-                      intensity: LiquidGlassSurface.chromeIntensity,
-                      materialOpacity: LiquidGlassSurface.chromeOpacity,
-                      backdropGroupKey: backdropGroupKey,
-                      backdropEnvelope: envelope,
-                      backdropMotion: moving,
-                      allowContentOverflow: true,
-                      child: child!,
-                    ),
-                  );
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SizedBox(
-                        width: mainWidth,
-                        // Morph only the geometry. Resampling a live runtime
-                        // image filter through a non-identity scale can blur
-                        // its thin rim and forces extra GPU work mid-scroll.
-                        child: mainGlass,
+      return Padding(
+        // Native safe-area changes follow the viewport immediately. Only the
+        // compact/expanded navigation geometry uses the longer shell motion.
+        padding: EdgeInsets.only(bottom: systemBottomInset),
+        child: AnimatedPadding(
+          duration: transitionDuration,
+          curve: Curves.easeOutCubic,
+          padding: liquidCollapsed
+              ? const EdgeInsets.fromLTRB(10, 0, 10, 8)
+              : const EdgeInsets.fromLTRB(10, 4, 10, 4),
+          child: SizedBox(
+            height: liquidHeight,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final searchExtent = detachedSearchDestination == null
+                    ? 0.0
+                    : liquidHeight + 8;
+                final expandedMainWidth = math.max(
+                  0.0,
+                  constraints.maxWidth - searchExtent,
+                );
+                final collapsedMainWidth = math.min(
+                  liquidHeight,
+                  expandedMainWidth,
+                );
+                return TweenAnimationBuilder<double>(
+                  tween: Tween<double>(end: liquidCollapsed ? 0 : 1),
+                  duration: transitionDuration,
+                  curve: Curves.easeOutCubic,
+                  child: mainGlassContent,
+                  builder: (context, value, mainGlassContent) {
+                    final mainWidth = lerpDouble(
+                      collapsedMainWidth,
+                      expandedMainWidth,
+                      value,
+                    )!;
+                    final rtl = Directionality.of(context) == TextDirection.rtl;
+                    final envelope =
+                        glassyCompact &&
+                            theme.platform == TargetPlatform.android
+                        ? Rect.fromLTWH(
+                            rtl ? mainWidth - expandedMainWidth : 0,
+                            0,
+                            expandedMainWidth,
+                            liquidHeight,
+                          )
+                        : null;
+                    final mainGlass = ValueListenableBuilder<bool>(
+                      valueListenable: backdropMotion,
+                      child: mainGlassContent,
+                      builder: (context, moving, child) => LiquidGlassSurface(
+                        key: const ValueKey('bottom-navigation-glass'),
+                        borderRadius: radius,
+                        blurSigma: 8,
+                        intensity: LiquidGlassSurface.chromeIntensity,
+                        materialOpacity: LiquidGlassSurface.chromeOpacity,
+                        backdropGroupKey: backdropGroupKey,
+                        backdropEnvelope: envelope,
+                        backdropMotion: moving,
+                        allowContentOverflow: true,
+                        child: child!,
                       ),
-                      const Spacer(),
-                      if (detachedSearchDestination case final search?) ...[
-                        const SizedBox(width: 8),
-                        SizedBox.square(
-                          dimension: liquidHeight,
-                          child: ValueListenableBuilder<bool>(
-                            valueListenable: backdropMotion,
-                            builder: (context, moving, child) =>
-                                LiquidGlassSurface(
-                                  key: const ValueKey(
-                                    'bottom-navigation-search-glass',
+                    );
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SizedBox(
+                          width: mainWidth,
+                          // Morph only the geometry. Resampling a live runtime
+                          // image filter through a non-identity scale can blur
+                          // its thin rim and forces extra GPU work mid-scroll.
+                          child: mainGlass,
+                        ),
+                        const Spacer(),
+                        if (detachedSearchDestination case final search?) ...[
+                          const SizedBox(width: 8),
+                          SizedBox.square(
+                            dimension: liquidHeight,
+                            child: ValueListenableBuilder<bool>(
+                              valueListenable: backdropMotion,
+                              builder: (context, moving, child) =>
+                                  LiquidGlassSurface(
+                                    key: const ValueKey(
+                                      'bottom-navigation-search-glass',
+                                    ),
+                                    borderRadius: BorderRadius.circular(
+                                      liquidHeight / 2,
+                                    ),
+                                    blurSigma: 8,
+                                    intensity:
+                                        LiquidGlassSurface.chromeIntensity,
+                                    materialOpacity:
+                                        LiquidGlassSurface.chromeOpacity,
+                                    backdropGroupKey: backdropGroupKey,
+                                    backdropMotion: moving,
+                                    child: child!,
                                   ),
-                                  borderRadius: BorderRadius.circular(
-                                    liquidHeight / 2,
-                                  ),
-                                  blurSigma: 8,
-                                  intensity: LiquidGlassSurface.chromeIntensity,
-                                  materialOpacity:
-                                      LiquidGlassSurface.chromeOpacity,
-                                  backdropGroupKey: backdropGroupKey,
-                                  backdropMotion: moving,
-                                  child: child!,
+                              child: DecoratedBox(
+                                key: const ValueKey(
+                                  'bottom-navigation-search-surface',
                                 ),
-                            child: DecoratedBox(
-                              key: const ValueKey(
-                                'bottom-navigation-search-surface',
-                              ),
-                              decoration: BoxDecoration(
-                                color: AppColors.surfaceChromeFor(context),
-                                shape: BoxShape.circle,
-                              ),
-                              child: _DetachedSearchButton(
-                                destination: search,
-                                selected: selectedIndex == search.index,
-                                onTap: () =>
-                                    onDestinationSelected(search.index),
+                                decoration: BoxDecoration(
+                                  color: AppColors.surfaceChromeFor(context),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: _DetachedSearchButton(
+                                  destination: search,
+                                  selected: selectedIndex == search.index,
+                                  onTap: () =>
+                                      onDestinationSelected(search.index),
+                                ),
                               ),
                             ),
                           ),
-                        ),
+                        ],
                       ],
-                    ],
-                  );
-                },
-              );
-            },
+                    );
+                  },
+                );
+              },
+            ),
           ),
         ),
       );

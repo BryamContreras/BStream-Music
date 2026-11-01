@@ -11,6 +11,8 @@
   subtree while moving between tabs.
 - Hidden the bottom menu and mini player while the software keyboard is
   visible, retaining their state without painting or running animations.
+- Changed keyboard chrome transitions to a subtle 2% zoom and fade: 100 ms
+  to reappear and 80 ms to hide, starting immediately when visibility changes.
 - Resumed visible glass effects 50 ms after the last keyboard inset change.
 
 ### Fixed

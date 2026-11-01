@@ -2891,10 +2891,13 @@ void main() {
           matching: find.byKey(LiquidGlassSurface.backdropKey),
         );
         expect(backdrop, findsOneWidget);
-        expect(
+        final opacityAncestors = tester.widgetList<Opacity>(
           find.ancestor(of: backdrop, matching: find.byType(Opacity)),
-          findsNothing,
-          reason: 'The live backdrop must not fade as a flat composited layer.',
+        );
+        expect(
+          opacityAncestors.every((widget) => widget.opacity == 1),
+          isTrue,
+          reason: 'Player transitions must keep the live backdrop unfaded.',
         );
       }
       final miniScale = tester.widget<Transform>(
@@ -3762,11 +3765,35 @@ void main() {
           final retainedNav = tester.element(nav);
           final retainedNavRect = tester.getRect(nav);
           final retainedMiniRect = tester.getRect(mini);
+          Finder keyboardPart(String shell, String part) => find.descendant(
+            of: find.byKey(ValueKey('$shell-shell-transition')),
+            matching: find.byKey(ValueKey('keyboard-chrome-$part')),
+          );
           for (var cycle = 0; cycle < 3; cycle++) {
             for (final inset in [60.0, 180.0, 300.0, 180.0, 60.0]) {
               tester.view.viewInsets = FakeViewPadding(bottom: inset);
               await tester.pump();
-              await tester.pump(const Duration(milliseconds: 60));
+              if (inset == 60 && nav.evaluate().isNotEmpty) {
+                await tester.pump(const Duration(milliseconds: 40));
+                for (final shell in ['bottom-navigation', 'mini-player']) {
+                  expect(
+                    tester
+                        .widget<Opacity>(keyboardPart(shell, 'opacity'))
+                        .opacity,
+                    inExclusiveRange(0, 1),
+                  );
+                  expect(
+                    tester
+                        .widget<Transform>(keyboardPart(shell, 'position'))
+                        .transform
+                        .getTranslation()
+                        .y,
+                    inset,
+                    reason: 'Exiting chrome stays behind the native keyboard.',
+                  );
+                }
+              }
+              await tester.pump(const Duration(milliseconds: 80));
               expect(nav, findsNothing);
               expect(mini, findsNothing);
               final hiddenMini = find.byType(MiniPlayer, skipOffstage: false);
@@ -3795,7 +3822,55 @@ void main() {
             }
             tester.view.viewInsets = const FakeViewPadding();
             await tester.pump();
-            await tester.pump(const Duration(milliseconds: 400));
+            await tester.pump(const Duration(milliseconds: 16));
+            for (final shell in ['bottom-navigation', 'mini-player']) {
+              expect(
+                tester.widget<Opacity>(keyboardPart(shell, 'opacity')).opacity,
+                inExclusiveRange(0, 1),
+                reason: 'Reappear on the first frame without a settle delay.',
+              );
+              final zoom = tester.widget<Transform>(
+                keyboardPart(shell, 'scale'),
+              );
+              expect(zoom.transform.storage[0], inExclusiveRange(0.98, 1));
+              expect(zoom.transform.storage[5], inExclusiveRange(0.98, 1));
+              expect(
+                tester
+                    .widget<Transform>(keyboardPart(shell, 'position'))
+                    .transform
+                    .getTranslation()
+                    .y,
+                0,
+              );
+            }
+            expect(
+              tester
+                  .widget<FractionalTranslation>(
+                    find.byKey(const ValueKey('mini-player-shell-translation')),
+                  )
+                  .translation,
+              Offset.zero,
+              reason: 'Keyboard return must not trigger the player slide.',
+            );
+            if (cycle == 0) {
+              // Reopening during the short entrance must cancel it cleanly.
+              tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+              await tester.pump();
+              await tester.pump(const Duration(milliseconds: 80));
+              expect(nav, findsNothing);
+              expect(mini, findsNothing);
+              tester.view.viewInsets = const FakeViewPadding();
+              await tester.pump();
+              await tester.pump(const Duration(milliseconds: 100));
+            } else {
+              await tester.pump(const Duration(milliseconds: 84));
+            }
+            for (final shell in ['bottom-navigation', 'mini-player']) {
+              expect(
+                tester.widget<Opacity>(keyboardPart(shell, 'opacity')).opacity,
+                1,
+              );
+            }
             expect(tester.element(mini), same(retainedMini));
             expect(tester.element(nav), same(retainedNav));
             expect(tester.getRect(nav), rectMoreOrLessEquals(retainedNavRect));
