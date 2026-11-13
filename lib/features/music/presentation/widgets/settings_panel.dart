@@ -21,6 +21,7 @@ import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../platform_channels/android_supported_links_settings_channel.dart';
 import '../../../../platform_channels/ios_file_export_channel.dart';
 import '../../../../services/app_update/github_release_checker.dart';
+import '../../../../services/audio_sources/audio_source_policy.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
 import '../providers/live_overlay_controller.dart';
@@ -35,6 +36,10 @@ import 'youtube_music_settings_account_card.dart';
 
 typedef DownloadDirectoryPicker =
     Future<String?> Function({String? dialogTitle, String? initialDirectory});
+
+bool _usesSingleAudioQuality(BuildContext context) =>
+    AppPlatform.isDesktop &&
+    !AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
 
 double _settingsContentMaxWidth(BuildContext context, double compactWidth) {
   final desktopLayout =
@@ -144,6 +149,8 @@ enum _SettingsRoute {
   lyrics,
   lyricsProviders,
   storage,
+  audioSources,
+  dataSaving,
   live,
   about,
 }
@@ -416,6 +423,8 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       _SettingsRoute.lyrics => strings.lyricsAppearance,
       _SettingsRoute.lyricsProviders => strings.lyricsProviders,
       _SettingsRoute.storage => strings.storage,
+      _SettingsRoute.audioSources => strings.audioSources,
+      _SettingsRoute.dataSaving => strings.dataSaving,
       _SettingsRoute.live => strings.liveConnection,
       _SettingsRoute.about => strings.aboutApplication,
     };
@@ -539,6 +548,20 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onChanged: (provider, enabled) => ref
             .read(settingsControllerProvider.notifier)
             .toggleLyricsProvider(provider, enabled),
+      ),
+      _SettingsRoute.audioSources => _AudioSourcesSettings(
+        jioSaavnEnabled: state.jioSaavnEnabled,
+        strings: strings,
+        onJioSaavnChanged: (enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .setJioSaavnEnabled(enabled),
+      ),
+      _SettingsRoute.dataSaving => _DataSavingSettings(
+        state: state,
+        strings: strings,
+        singleProfile: _usesSingleAudioQuality(context),
+        onWifiTap: () => _chooseAudioQuality(wifi: true),
+        onMobileTap: () => _chooseAudioQuality(wifi: false),
       ),
       _SettingsRoute.storage => _StorageSettings(
         strings: strings,
@@ -744,6 +767,16 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
               title: strings.storage,
               children: [
                 _SettingsEntryCard(
+                  key: const ValueKey('storage-data-saving'),
+                  icon: Icons.data_saver_on_rounded,
+                  title: strings.dataSaving,
+                  subtitle: _usesSingleAudioQuality(context)
+                      ? strings.desktopDataSavingSummary
+                      : strings.dataSavingSummary,
+                  onTap: () => _openRoute(_SettingsRoute.dataSaving),
+                ),
+                const SizedBox(height: appCardGap),
+                _SettingsEntryCard(
                   key: const ValueKey('settings-card-storage'),
                   icon: Icons.storage_rounded,
                   title: strings.backupAndRestore,
@@ -765,55 +798,62 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                 ),
               ],
             ),
-            if (showSupportedLinks || supportsTikTokLive)
-              Consumer(
-                builder: (context, scopedRef, _) {
-                  final tiktokLive = supportsTikTokLive
-                      ? scopedRef.watch(tiktokLiveControllerProvider)
-                      : null;
-                  final liveState = tiktokLive?.value;
-                  return _SettingsGroup(
-                    title: strings.integrations,
-                    children: [
-                      if (showSupportedLinks)
-                        _SettingsEntryCard(
-                          key: const ValueKey('settings-card-supported-links'),
-                          icon: Icons.link_rounded,
-                          title: strings.supportedLinks,
-                          subtitle: strings.supportedLinksSummary,
-                          onTap: _openSupportedLinksSettings,
-                        ),
-                      if (showSupportedLinks && tiktokLive != null)
-                        const SizedBox(height: appCardGap),
-                      if (tiktokLive != null) ...[
-                        _SettingsEntryCard(
-                          key: const ValueKey('settings-card-live'),
-                          icon: Icons.live_tv_rounded,
-                          title: strings.liveConnection,
-                          subtitle:
-                              liveState?.message ??
-                              strings.liveConnectionSummary,
-                          status: switch (liveState?.status) {
-                            TikTokLiveStatus.connected => true,
-                            TikTokLiveStatus.error ||
-                            TikTokLiveStatus.liveEnded => false,
-                            _ => null,
-                          },
-                          onTap: () => _openRoute(_SettingsRoute.live),
-                        ),
-                        const SizedBox(height: appCardGap),
-                        _LiveRequestStorageCard(
-                          state: liveState,
-                          strings: strings,
-                          onChanged: (value) => scopedRef
-                              .read(tiktokLiveControllerProvider.notifier)
-                              .setSaveRequestsToLibrary(value),
-                        ),
-                      ],
+            Consumer(
+              builder: (context, scopedRef, _) {
+                final tiktokLive = supportsTikTokLive
+                    ? scopedRef.watch(tiktokLiveControllerProvider)
+                    : null;
+                final liveState = tiktokLive?.value;
+                return _SettingsGroup(
+                  title: strings.integrations,
+                  children: [
+                    _SettingsEntryCard(
+                      key: const ValueKey('settings-card-audio-sources'),
+                      icon: Icons.library_music_rounded,
+                      title: strings.audioSources,
+                      subtitle: strings.audioSourcesSummary,
+                      onTap: () => _openRoute(_SettingsRoute.audioSources),
+                    ),
+                    if (showSupportedLinks || tiktokLive != null)
+                      const SizedBox(height: appCardGap),
+                    if (showSupportedLinks)
+                      _SettingsEntryCard(
+                        key: const ValueKey('settings-card-supported-links'),
+                        icon: Icons.link_rounded,
+                        title: strings.supportedLinks,
+                        subtitle: strings.supportedLinksSummary,
+                        onTap: _openSupportedLinksSettings,
+                      ),
+                    if (showSupportedLinks && tiktokLive != null)
+                      const SizedBox(height: appCardGap),
+                    if (tiktokLive != null) ...[
+                      _SettingsEntryCard(
+                        key: const ValueKey('settings-card-live'),
+                        icon: Icons.live_tv_rounded,
+                        title: strings.liveConnection,
+                        subtitle:
+                            liveState?.message ?? strings.liveConnectionSummary,
+                        status: switch (liveState?.status) {
+                          TikTokLiveStatus.connected => true,
+                          TikTokLiveStatus.error ||
+                          TikTokLiveStatus.liveEnded => false,
+                          _ => null,
+                        },
+                        onTap: () => _openRoute(_SettingsRoute.live),
+                      ),
+                      const SizedBox(height: appCardGap),
+                      _LiveRequestStorageCard(
+                        state: liveState,
+                        strings: strings,
+                        onChanged: (value) => scopedRef
+                            .read(tiktokLiveControllerProvider.notifier)
+                            .setSaveRequestsToLibrary(value),
+                      ),
                     ],
-                  );
-                },
-              ),
+                  ],
+                );
+              },
+            ),
             _SettingsGroup(
               title: strings.applicationInformation,
               children: [
@@ -895,6 +935,40 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       return;
     }
     await ref.read(settingsControllerProvider.notifier).setLanguage(selected);
+  }
+
+  Future<void> _chooseAudioQuality({required bool wifi}) async {
+    final state = ref.read(settingsControllerProvider).value;
+    if (state == null) return;
+    final strings = ref.read(appStringsProvider);
+    final saved = wifi ? state.wifiAudioQuality : state.mobileAudioQuality;
+    final selected = await showAppDialog<AudioQualityProfile>(
+      context: context,
+      builder: (_) => _AudioQualityProfileDialog(
+        networkLabel: _usesSingleAudioQuality(context)
+            ? strings.audioQuality
+            : wifi
+            ? strings.wifiNetwork
+            : strings.mobileNetwork,
+        selected: state.jioSaavnEnabled ? saved : AudioQualityProfile.standard,
+        jioSaavnEnabled: state.jioSaavnEnabled,
+        strings: strings,
+      ),
+    );
+    if (!mounted || selected == null) return;
+    // The source may be disabled while a dialog is open. Never select an
+    // unavailable provider; the mandatory YouTube Music choice stays usable.
+    final current = ref.read(settingsControllerProvider).value;
+    if (current == null ||
+        (selected == AudioQualityProfile.high && !current.jioSaavnEnabled)) {
+      return;
+    }
+    final controller = ref.read(settingsControllerProvider.notifier);
+    if (wifi) {
+      await controller.setWifiAudioQuality(selected);
+    } else {
+      await controller.setMobileAudioQuality(selected);
+    }
   }
 
   Future<void> _chooseLocalMusicFilters({
@@ -4341,6 +4415,178 @@ class _SettingsItemSurface extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AudioSourcesSettings extends StatelessWidget {
+  const _AudioSourcesSettings({
+    required this.jioSaavnEnabled,
+    required this.strings,
+    required this.onJioSaavnChanged,
+  });
+
+  final bool jioSaavnEnabled;
+  final AppStrings strings;
+  final ValueChanged<bool> onJioSaavnChanged;
+
+  @override
+  Widget build(BuildContext context) => _SettingsSectionPanel(
+    children: [
+      _SettingsEntryCard(
+        key: const ValueKey('audio-source-youtube-music'),
+        icon: Icons.play_circle_rounded,
+        title: 'YouTube Music',
+        subtitle: strings.youtubeMusicSourceDescription,
+        onTap: null,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: strings.audioSourceAlwaysEnabled,
+              child: const Icon(Icons.lock_outline_rounded, size: 18),
+            ),
+            Switch.adaptive(
+              key: const ValueKey('audio-source-youtube-music-switch'),
+              value: true,
+              onChanged: null,
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: appCardGap),
+      _SettingsEntryCard(
+        key: const ValueKey('audio-source-jiosaavn'),
+        icon: Icons.high_quality_rounded,
+        title: 'JioSaavn',
+        subtitle: strings.jioSaavnSourceDescription,
+        onTap: () => onJioSaavnChanged(!jioSaavnEnabled),
+        trailing: Switch.adaptive(
+          key: const ValueKey('audio-source-jiosaavn-switch'),
+          value: jioSaavnEnabled,
+          onChanged: onJioSaavnChanged,
+        ),
+      ),
+    ],
+  );
+}
+
+class _DataSavingSettings extends StatelessWidget {
+  const _DataSavingSettings({
+    required this.state,
+    required this.strings,
+    required this.singleProfile,
+    required this.onWifiTap,
+    required this.onMobileTap,
+  });
+
+  final SettingsState state;
+  final AppStrings strings;
+  final bool singleProfile;
+  final VoidCallback onWifiTap;
+  final VoidCallback onMobileTap;
+
+  String _selectionLabel(AudioQualityProfile saved) {
+    final high = state.jioSaavnEnabled && saved == AudioQualityProfile.high;
+    return high
+        ? '${strings.highAudioQuality} · JioSaavn'
+        : '${strings.standardAudioQuality} · YouTube Music';
+  }
+
+  @override
+  Widget build(BuildContext context) => _SettingsSectionPanel(
+    children: [
+      _SettingsEntryCard(
+        key: ValueKey(
+          singleProfile ? 'data-saving-quality' : 'data-saving-wifi',
+        ),
+        icon: singleProfile ? Icons.headphones_rounded : Icons.wifi_rounded,
+        title: singleProfile ? strings.audioQuality : strings.wifiNetwork,
+        subtitle: _selectionLabel(state.wifiAudioQuality),
+        onTap: onWifiTap,
+      ),
+      if (!singleProfile) ...[
+        const SizedBox(height: appCardGap),
+        _SettingsEntryCard(
+          key: const ValueKey('data-saving-mobile'),
+          icon: Icons.signal_cellular_alt_rounded,
+          title: strings.mobileNetwork,
+          subtitle: _selectionLabel(state.mobileAudioQuality),
+          onTap: onMobileTap,
+        ),
+      ],
+    ],
+  );
+}
+
+class _AudioQualityProfileDialog extends StatelessWidget {
+  const _AudioQualityProfileDialog({
+    required this.networkLabel,
+    required this.selected,
+    required this.jioSaavnEnabled,
+    required this.strings,
+  });
+
+  final String networkLabel;
+  final AudioQualityProfile selected;
+  final bool jioSaavnEnabled;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) => AppAlertDialog(
+    key: const ValueKey('audio-quality-profile-dialog'),
+    scrollable: true,
+    title: Text(networkLabel),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 480),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (jioSaavnEnabled) ...[
+            _option(
+              context,
+              profile: AudioQualityProfile.high,
+              title: strings.highAudioQuality,
+              provider: 'JioSaavn',
+              icon: Icons.high_quality_rounded,
+            ),
+            const SizedBox(height: appCardGap),
+          ],
+          _option(
+            context,
+            profile: AudioQualityProfile.standard,
+            title: strings.standardAudioQuality,
+            provider: 'YouTube Music',
+            icon: Icons.play_circle_rounded,
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: Text(strings.cancel),
+      ),
+    ],
+  );
+
+  Widget _option(
+    BuildContext context, {
+    required AudioQualityProfile profile,
+    required String title,
+    required String provider,
+    required IconData icon,
+  }) => _SettingsEntryCard(
+    key: ValueKey('audio-quality-profile-${profile.name}'),
+    icon: icon,
+    title: title,
+    subtitle: provider,
+    onTap: () => Navigator.of(context).pop(profile),
+    trailing: Icon(
+      selected == profile
+          ? Icons.check_circle_rounded
+          : Icons.radio_button_unchecked_rounded,
+      color: selected == profile ? Theme.of(context).colorScheme.primary : null,
+    ),
+  );
 }
 
 class _StorageSettings extends StatelessWidget {

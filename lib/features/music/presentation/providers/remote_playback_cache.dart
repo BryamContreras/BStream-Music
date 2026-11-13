@@ -938,6 +938,11 @@ class RemotePlaybackCache {
 
   String _cacheKey(TrackInfo track) {
     final source = track.url.trim().isNotEmpty ? track.url : track.id;
+    if (track.streamSource == AudioStreamSource.jioSaavn.name) {
+      final variant =
+          '$source\u0000jioSaavn:${track.streamFormatId}:${track.streamBitrate}';
+      return 'jio_${sha256.convert(utf8.encode(variant))}';
+    }
     return _cacheKeyFromSource(source);
   }
 

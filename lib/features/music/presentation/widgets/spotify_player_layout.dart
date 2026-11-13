@@ -357,6 +357,12 @@ class _SpotifyPlayerControls extends ConsumerWidget {
     final isPlaying = snapshot.status == PlayerStatus.playing;
     final player = ref.read(playerControllerProvider.notifier);
     final gap = compact ? 12.0 : 20.0;
+    final transportSpacing = _playerTransportSpacing(
+      before: gap,
+      after: gap,
+      timelineTail:
+          12 + math.max(20.0, MediaQuery.textScalerOf(context).scale(16)),
+    );
     final side = compact ? 48.0 : 54.0;
     final primary = compact ? 68.0 : 76.0;
     return Column(
@@ -446,7 +452,7 @@ class _SpotifyPlayerControls extends ConsumerWidget {
           showThumb: true,
           sliderKey: const ValueKey('spotify-player-linear-seek'),
         ),
-        SizedBox(height: gap),
+        SizedBox(height: transportSpacing.before),
         FittedBox(
           fit: BoxFit.scaleDown,
           child: SizedBox(
@@ -532,7 +538,7 @@ class _SpotifyPlayerControls extends ConsumerWidget {
             ),
           ),
         ),
-        SizedBox(height: gap),
+        SizedBox(height: transportSpacing.after),
         _PlayerUtilityControls(
           showCapsule: false,
           snapshot: snapshot,

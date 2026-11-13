@@ -4,12 +4,64 @@ import 'dart:io';
 import 'package:bstream_music/core/constants/app_constants.dart';
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
+import 'package:bstream_music/services/audio_sources/audio_format_details.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
+  test(
+    'v10 downloads and backups gain optional audio format losslessly',
+    () async {
+      sqfliteFfiInit();
+      final directory = await Directory.systemTemp.createTemp(
+        'bstream-v10-audio-format-',
+      );
+      final path = p.join(directory.path, 'library.db');
+      final service = _TestLocalDatabaseService(path);
+      addTearDown(() async {
+        await service.close();
+        await directory.delete(recursive: true);
+      });
+      final original = LocalTrack(
+        id: 'download-before-formats',
+        title: 'Existing download',
+        artist: 'Artist',
+        filePath: p.join(directory.path, 'download.webm'),
+        addedAt: DateTime.utc(2026),
+        sourceUrl: 'https://music.youtube.com/watch?v=abcdefghijk',
+      );
+      await service.saveLocalTrack(original);
+      await service.close();
+      final legacy = await databaseFactoryFfi.openDatabase(path);
+      await legacy.execute(
+        'ALTER TABLE local_tracks DROP COLUMN audio_format_json',
+      );
+      await legacy.setVersion(10);
+      await legacy.close();
+      // Validation must accept older backups without mutating their schema.
+      await service.validateBackupDatabase(path);
+      final migrated = (await service.getLocalTracks()).single;
+      expect(migrated.title, original.title);
+      expect(migrated.filePath, original.filePath);
+      expect(migrated.sourceUrl, original.sourceUrl);
+      expect(migrated.audioFormat, isNull);
+
+      const format = AudioFormatDetails(
+        codec: 'opus',
+        mimeType: 'audio/webm',
+        bitrate: 135000,
+        sampleRate: 48000,
+        channels: 2,
+      );
+      await service.saveLocalTrack(migrated.copyWith(audioFormat: format));
+      await service.close();
+      await service.validateBackupDatabase(path);
+      expect((await service.getLocalTracks()).single.audioFormat, format);
+    },
+  );
+
   test('migrates v4 metadata and backfills canonical source IDs', () async {
     sqfliteFfiInit();
     final directory = await Directory.systemTemp.createTemp(
@@ -85,7 +137,7 @@ void main() {
     final database = await service.database;
     final versionRows = await database.rawQuery('PRAGMA user_version');
     expect(versionRows.single['user_version'], AppConstants.databaseVersion);
-    expect(AppConstants.databaseVersion, 10);
+    expect(AppConstants.databaseVersion, 11);
 
     final tableInfo = await database.rawQuery(
       'PRAGMA table_info(local_tracks)',
@@ -103,6 +155,7 @@ void main() {
         'metadata_source',
         'source_id',
         'catalog_thumbnail_url',
+        'audio_format_json',
       }),
     );
 
@@ -131,8 +184,21 @@ void main() {
       thumbnailUrl: 'https://i.ytimg.com/vi/abcdefghijk/hq720.jpg',
       catalogThumbnailUrl: 'https://example.com/innertube.jpg',
       metadataSource: TrackMetadataSource.youtubeMusic,
+      audioFormat: const AudioFormatDetails(
+        codec: 'opus',
+        mimeType: 'audio/webm',
+        bitrate: 135000,
+        sampleRate: 48000,
+        channels: 2,
+      ),
     );
     await service.saveLocalTrack(downloadedTrack);
+    expect(
+      (await service.getLocalTracks())
+          .firstWhere((track) => track.id == downloadedTrack.id)
+          .audioFormat,
+      downloadedTrack.audioFormat,
+    );
 
     final savedRows = await database.query(
       'local_tracks',

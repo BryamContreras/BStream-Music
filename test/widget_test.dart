@@ -6609,7 +6609,7 @@ void main() {
       );
 
       expect(requestedBrowseIds, [browseId]);
-      expect(find.text('Favoritas para viajar'), findsNWidgets(2));
+      expect(find.text('Favoritas para viajar'), findsOneWidget);
       expect(find.text('Cuenta de prueba'), findsOneWidget);
       expect(find.text('Playlist'), findsNothing);
       expect(find.text('Cancion enlazada uno'), findsOneWidget);
@@ -6809,7 +6809,7 @@ void main() {
                 .byKey(const ValueKey('remote-collection-detail'))
                 .evaluate()
                 .isNotEmpty &&
-            find.text('Playlist para relajarse').evaluate().length == 2,
+            find.text('Playlist para relajarse').evaluate().length == 1,
         reason: 'the loaded playlist detail to be rendered',
       );
 
@@ -6819,7 +6819,7 @@ void main() {
         find.byKey(const ValueKey('remote-collection-detail')),
         findsOneWidget,
       );
-      expect(find.text('Playlist para relajarse'), findsNWidgets(2));
+      expect(find.text('Playlist para relajarse'), findsOneWidget);
       expect(find.text('YouTube Music'), findsOneWidget);
       expect(find.text('Playlist uno'), findsOneWidget);
       expect(find.text('Playlist dos'), findsOneWidget);

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../../../../services/audio_sources/audio_format_details.dart';
 import '../../domain/entities/download_options.dart';
 import '../../domain/entities/download_result.dart';
 
@@ -12,12 +13,14 @@ class DownloadResultModel extends DownloadResult {
     required super.mediaType,
     required super.completedAt,
     super.bytes,
+    super.audioFormat,
   });
 
   factory DownloadResultModel.completed({
     required String sourceUrl,
     required String filePath,
     required DownloadMediaType mediaType,
+    AudioFormatDetails? audioFormat,
   }) {
     final file = File(filePath);
     return DownloadResultModel(
@@ -30,6 +33,7 @@ class DownloadResultModel extends DownloadResult {
       mediaType: mediaType,
       completedAt: DateTime.now(),
       bytes: file.existsSync() ? file.lengthSync() : null,
+      audioFormat: audioFormat,
     );
   }
 }

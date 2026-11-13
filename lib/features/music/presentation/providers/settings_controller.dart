@@ -91,6 +91,15 @@ const defaultLocalMusicFilters = <LocalMusicFilter>{
   LocalMusicFilter.hideTracksUnder30Seconds,
 };
 
+AudioQualityProfile _audioQualityProfileFromCode(
+  String? code, {
+  required AudioQualityProfile fallback,
+}) => switch (code) {
+  'high' => AudioQualityProfile.high,
+  'standard' => AudioQualityProfile.standard,
+  _ => fallback,
+};
+
 class SettingsState {
   const SettingsState({
     required this.downloadDirectory,
@@ -104,6 +113,9 @@ class SettingsState {
     this.playerFont = defaultPlayerFont,
     this.liveWidgetStyle = LiveWidgetStyle.classic,
     this.showAudioQuality = false,
+    this.jioSaavnEnabled = true,
+    this.wifiAudioQuality = AudioQualityProfile.high,
+    this.mobileAudioQuality = AudioQualityProfile.standard,
     this.animatedArtworkEnabled = defaultAnimatedArtworkEnabled,
     this.playerArtworkStyle = defaultPlayerArtworkStyle,
     this.appleAnimatedArtworkEnabled = false,
@@ -138,6 +150,9 @@ class SettingsState {
   final PlayerFont playerFont;
   final LiveWidgetStyle liveWidgetStyle;
   final bool showAudioQuality;
+  final bool jioSaavnEnabled;
+  final AudioQualityProfile wifiAudioQuality;
+  final AudioQualityProfile mobileAudioQuality;
   final bool animatedArtworkEnabled;
   final PlayerArtworkStyle playerArtworkStyle;
   final bool appleAnimatedArtworkEnabled;
@@ -168,6 +183,9 @@ class SettingsState {
     PlayerFont? playerFont,
     LiveWidgetStyle? liveWidgetStyle,
     bool? showAudioQuality,
+    bool? jioSaavnEnabled,
+    AudioQualityProfile? wifiAudioQuality,
+    AudioQualityProfile? mobileAudioQuality,
     bool? animatedArtworkEnabled,
     PlayerArtworkStyle? playerArtworkStyle,
     bool? appleAnimatedArtworkEnabled,
@@ -204,6 +222,9 @@ class SettingsState {
       playerFont: playerFont ?? this.playerFont,
       liveWidgetStyle: liveWidgetStyle ?? this.liveWidgetStyle,
       showAudioQuality: showAudioQuality ?? this.showAudioQuality,
+      jioSaavnEnabled: jioSaavnEnabled ?? this.jioSaavnEnabled,
+      wifiAudioQuality: wifiAudioQuality ?? this.wifiAudioQuality,
+      mobileAudioQuality: mobileAudioQuality ?? this.mobileAudioQuality,
       animatedArtworkEnabled:
           animatedArtworkEnabled ?? this.animatedArtworkEnabled,
       playerArtworkStyle: playerArtworkStyle ?? this.playerArtworkStyle,
@@ -255,6 +276,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _playerFontKey = 'settings.playerFont';
   static const _liveWidgetStyleKey = 'settings.liveWidgetStyle';
   static const _showAudioQualityKey = 'settings.showAudioQuality';
+  static const _jioSaavnEnabledKey = 'settings.jioSaavnEnabled';
+  static const _wifiAudioQualityKey = 'settings.wifiAudioQuality';
+  static const _mobileAudioQualityKey = 'settings.mobileAudioQuality';
   static const _animatedArtworkEnabledKey = 'settings.animatedArtworkEnabled';
   static const _playerArtworkStyleKey = 'settings.playerArtworkStyle';
   static const _appleAnimatedArtworkEnabledKey =
@@ -282,6 +306,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
   Future<void> _enabledLyricsProvidersWriteTail = Future<void>.value();
   Future<void> _animatedArtworkWriteTail = Future<void>.value();
+  Future<void> _audioSourceSettingsWriteTail = Future<void>.value();
   Future<void> _remoteArtworkWriteTail = Future<void>.value();
   Future<void> _lyricsAnimationStyleWriteTail = Future<void>.value();
   Future<void> _lyricsRomanizationWriteTail = Future<void>.value();
@@ -358,6 +383,15 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       prefs.getString(_liveWidgetStyleKey),
     );
     final showAudioQuality = prefs.getBool(_showAudioQualityKey) ?? false;
+    final jioSaavnEnabled = prefs.getBool(_jioSaavnEnabledKey) ?? true;
+    final wifiAudioQuality = _audioQualityProfileFromCode(
+      prefs.getString(_wifiAudioQualityKey),
+      fallback: AudioQualityProfile.high,
+    );
+    final mobileAudioQuality = _audioQualityProfileFromCode(
+      prefs.getString(_mobileAudioQualityKey),
+      fallback: AudioQualityProfile.standard,
+    );
     final animatedArtworkEnabled =
         prefs.getBool(_animatedArtworkEnabledKey) ??
         defaultAnimatedArtworkEnabled;
@@ -579,6 +613,9 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       playerFont: playerFont,
       liveWidgetStyle: liveWidgetStyle,
       showAudioQuality: showAudioQuality,
+      jioSaavnEnabled: jioSaavnEnabled,
+      wifiAudioQuality: wifiAudioQuality,
+      mobileAudioQuality: mobileAudioQuality,
       animatedArtworkEnabled: animatedArtworkEnabled,
       playerArtworkStyle: playerArtworkStyle,
       appleAnimatedArtworkEnabled: appleAnimatedArtworkEnabled,
@@ -903,6 +940,49 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     state = AsyncData(current.copyWith(showAudioQuality: enabled));
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_showAudioQualityKey, enabled);
+  }
+
+  Future<void> setJioSaavnEnabled(bool enabled) async {
+    final loaded = state.asData?.value ?? await future;
+    final current = state.asData?.value ?? loaded;
+    if (current.jioSaavnEnabled == enabled) return;
+    state = AsyncData(current.copyWith(jioSaavnEnabled: enabled));
+    await _persistAudioSourceSetting(
+      (prefs) => prefs.setBool(_jioSaavnEnabledKey, enabled),
+    );
+  }
+
+  Future<void> setWifiAudioQuality(AudioQualityProfile profile) async {
+    final loaded = state.asData?.value ?? await future;
+    final current = state.asData?.value ?? loaded;
+    if (current.wifiAudioQuality == profile) return;
+    state = AsyncData(current.copyWith(wifiAudioQuality: profile));
+    await _persistAudioSourceSetting(
+      (prefs) => prefs.setString(_wifiAudioQualityKey, profile.name),
+    );
+  }
+
+  Future<void> setMobileAudioQuality(AudioQualityProfile profile) async {
+    final loaded = state.asData?.value ?? await future;
+    final current = state.asData?.value ?? loaded;
+    if (current.mobileAudioQuality == profile) return;
+    state = AsyncData(current.copyWith(mobileAudioQuality: profile));
+    await _persistAudioSourceSetting(
+      (prefs) => prefs.setString(_mobileAudioQualityKey, profile.name),
+    );
+  }
+
+  Future<void> _persistAudioSourceSetting(
+    Future<bool> Function(SharedPreferences prefs) persist,
+  ) async {
+    final write = _audioSourceSettingsWriteTail.catchError((_) {}).then((
+      _,
+    ) async {
+      final prefs = await SharedPreferences.getInstance();
+      await persist(prefs);
+    });
+    _audioSourceSettingsWriteTail = write.catchError((_) {});
+    await write;
   }
 
   Future<void> setLiveWidgetStyle(LiveWidgetStyle style) async {

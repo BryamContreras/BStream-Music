@@ -1,3 +1,23 @@
+import '../../../../services/audio_sources/audio_format_details.dart';
+
+enum PlaybackAudioQualityTier { low, standard, high }
+
+/// Classifies the audible format, independently from the requested profile or
+/// provider. A provider selection cannot prove that an upgrade was available.
+PlaybackAudioQualityTier? playbackAudioQualityTier({
+  String? codec,
+  String? mimeType,
+  int? bitrate,
+}) {
+  if (AudioFormatDetails(codec: codec, mimeType: mimeType).isLossless) {
+    return PlaybackAudioQualityTier.high;
+  }
+  if (bitrate == null || bitrate <= 0) return null;
+  if (bitrate >= 256000) return PlaybackAudioQualityTier.high;
+  if (bitrate >= 128000) return PlaybackAudioQualityTier.standard;
+  return PlaybackAudioQualityTier.low;
+}
+
 /// Describes only the audio format details known for the active source.
 /// A container or file extension is not used to guess a bitrate, sample rate
 /// or channel count. Unknown details are omitted instead of showing defaults.

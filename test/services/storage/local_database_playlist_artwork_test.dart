@@ -49,8 +49,11 @@ void main() {
       await service.validateBackupDatabase(service.path);
 
       final migrated = (await service.getCatalogPlaylist('legacy'))!.playlist;
-      expect((await service.database).getVersion(), completion(10));
-      expect(AppConstants.databaseVersion, 10);
+      expect(
+        (await service.database).getVersion(),
+        completion(AppConstants.databaseVersion),
+      );
+      expect(AppConstants.databaseVersion, 11);
       expect(migrated.name, original.name);
       expect(migrated.trackIds, original.trackIds);
       expect(migrated.createdAt, original.createdAt);

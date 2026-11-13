@@ -1,23 +1,24 @@
 import 'dart:async';
 
-import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
-import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/pages/artist_profile_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/artwork_detail_scaffold.dart';
+import 'package:bstream_music/features/music/presentation/widgets/expanded_artwork_header_background.dart';
 import 'package:bstream_music/features/music/presentation/widgets/mini_player.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:bstream_music/services/youtube_music/account/youtube_music_account.dart';
 import 'package:bstream_music/services/youtube_music/innertube_search_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets(
-    'long artist biography expands and collapses without losing its text',
+    'artist biography stays hidden until requested and collapses completely',
     (tester) async {
       tester.view.physicalSize = const Size(360, 900);
       tester.view.devicePixelRatio = 1;
@@ -27,7 +28,10 @@ void main() {
         12,
         'Una biografía completa del artista con sus comienzos, discos y conciertos.',
       ).join(' ');
-      final service = _ArtistProfileService()..profileDescription = description;
+      final service = _ArtistProfileService()
+        ..profileDescription = description
+        ..profileSubscriberCount = '226 k suscriptores'
+        ..profileMonthlyListenerCount = '7.82 M oyentes';
       await tester.pumpWidget(
         _artistProfileApp(
           service: service,
@@ -39,36 +43,43 @@ void main() {
         const ValueKey('artist-profile-description'),
       );
       final toggle = find.byKey(const ValueKey('artist-description-toggle'));
-      final collapsedHeight = tester.getSize(biography).height;
-      expect(tester.widget<Text>(biography).maxLines, 4);
-      expect(tester.widget<Text>(biography).data, description);
-      expect(toggle, findsOneWidget);
-      await tester.ensureVisible(toggle);
+      expect(biography, findsNothing);
+      expect(find.text(description), findsNothing);
+      expect(find.text('226 k suscriptores'), findsOneWidget);
+      expect(find.text('7.82 M oyentes'), findsOneWidget);
+      expect(
+        find.text(const AppStrings(AppLanguage.spanish).showMore),
+        findsOneWidget,
+      );
+      await Scrollable.ensureVisible(tester.element(toggle), alignment: 0.5);
+      await tester.pumpAndSettle();
       await tester.tap(toggle);
       await tester.pumpAndSettle();
 
       expect(tester.widget<Text>(biography).maxLines, isNull);
-      expect(tester.getSize(biography).height, greaterThan(collapsedHeight));
+      expect(tester.widget<Text>(biography).data, description);
       expect(
         find.text(const AppStrings(AppLanguage.spanish).showLess),
         findsOneWidget,
       );
-      await tester.drag(
-        find.byKey(const ValueKey('artist-profile-scroll')),
-        const Offset(0, -850),
-      );
+      await Scrollable.ensureVisible(tester.element(toggle), alignment: 0.5);
       await tester.pumpAndSettle();
       expect(toggle.hitTestable(), findsOneWidget);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
-      expect(tester.widget<Text>(biography).maxLines, 4);
-      expect(tester.getSize(biography).height, collapsedHeight);
-      expect(tester.widget<Text>(biography).data, description);
+      expect(biography, findsNothing);
+      expect(find.text(description), findsNothing);
+      expect(
+        find.text(const AppStrings(AppLanguage.spanish).showMore),
+        findsOneWidget,
+      );
+      expect(find.text('226 k suscriptores'), findsOneWidget);
+      expect(find.text('7.82 M oyentes'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
 
-  testWidgets('short artist biography has no expansion control', (
+  testWidgets('short artist biography also opens only on request', (
     tester,
   ) async {
     final service = _ArtistProfileService()
@@ -77,9 +88,31 @@ void main() {
       _artistProfileApp(service: service, player: _RecordingPlayerController()),
     );
     await tester.pumpAndSettle();
+    expect(find.text('Cantante y compositor.'), findsNothing);
+    final toggle = find.byKey(const ValueKey('artist-description-toggle'));
+    expect(toggle, findsOneWidget);
+    await Scrollable.ensureVisible(tester.element(toggle), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
     expect(find.text('Cantante y compositor.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('artist without biography has no empty expansion control', (
+    tester,
+  ) async {
+    final service = _ArtistProfileService()..profileDescription = '   ';
+    await tester.pumpWidget(
+      _artistProfileApp(service: service, player: _RecordingPlayerController()),
+    );
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('artist-description-toggle')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('artist-profile-description')),
       findsNothing,
     );
     expect(tester.takeException(), isNull);
@@ -280,7 +313,8 @@ void main() {
           tester.getCenter(sectionTitle).dy,
           closeTo(tester.getCenter(viewAll).dy, 0.01),
         );
-        await tester.ensureVisible(viewAll);
+        await Scrollable.ensureVisible(tester.element(viewAll), alignment: 0.5);
+        await tester.pumpAndSettle();
         await tester.tap(viewAll);
         await tester.pumpAndSettle();
 
@@ -413,7 +447,11 @@ void main() {
               '${fromGrid ? 'artist-release-grid' : 'artist-release'}-${release.browseId}',
             ),
           );
-          await tester.ensureVisible(releaseCard);
+          await Scrollable.ensureVisible(
+            tester.element(releaseCard),
+            alignment: 0.5,
+          );
+          await tester.pumpAndSettle();
           await tester.tap(releaseCard);
           await tester.pumpAndSettle();
 
@@ -622,6 +660,106 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final viewport in [
+    (
+      size: const Size(320, 568),
+      textScale: 1.0,
+      platform: TargetPlatform.android,
+    ),
+    (size: const Size(390, 844), textScale: 1.0, platform: TargetPlatform.iOS),
+    (
+      size: const Size(800, 600),
+      textScale: 1.0,
+      platform: TargetPlatform.android,
+    ),
+    (
+      size: const Size(1440, 900),
+      textScale: 1.0,
+      platform: TargetPlatform.windows,
+    ),
+    (
+      size: const Size(800, 600),
+      textScale: 1.0,
+      platform: TargetPlatform.linux,
+    ),
+    (
+      size: const Size(960, 600),
+      textScale: 1.0,
+      platform: TargetPlatform.macOS,
+    ),
+    (
+      size: const Size(320, 568),
+      textScale: 2.0,
+      platform: TargetPlatform.android,
+    ),
+  ]) {
+    testWidgets(
+      'expanded artist header fits ${viewport.platform} ${viewport.size} at text scale ${viewport.textScale}',
+      (tester) async {
+        tester.view.physicalSize = viewport.size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final service = _ArtistProfileService()
+          ..profilePopularSongs = _popularSongs
+          ..profileSubscriberCount = '226 k suscriptores'
+          ..profileMonthlyListenerCount = 'Público mensual: 7.82 M usuarios'
+          ..profileDescription = 'Cantante y compositor.';
+        await tester.pumpWidget(
+          _artistProfileApp(
+            service: service,
+            player: _RecordingPlayerController(),
+            artistThumbnailUrl: 'https://img.test/artist.jpg',
+            textScale: viewport.textScale,
+            platform: viewport.platform,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final photo = tester.getRect(
+          find.byKey(const ValueKey('artist-profile-artwork')),
+        );
+        final backgroundFinder = find.byType(ExpandedArtworkHeaderBackground);
+        final background = tester.widget<ExpandedArtworkHeaderBackground>(
+          backgroundFinder,
+        );
+        final backgroundRect = tester.getRect(backgroundFinder);
+        final expectedWidth = viewport.size.width.clamp(0.0, 1080.0);
+        expect(photo.width, expectedWidth);
+        expect(photo.center.dx, closeTo(viewport.size.width / 2, 0.01));
+        expect(backgroundRect.width, expectedWidth);
+        expect(background.artworkHeight, lessThanOrEqualTo(480));
+        expect(background.artworkTopInset, 0);
+        expect(
+          background.preserveArtworkAspectRatio,
+          viewport.platform == TargetPlatform.android ||
+                  viewport.platform == TargetPlatform.iOS
+              ? isFalse
+              : isTrue,
+        );
+        expect(
+          photo.height,
+          closeTo(
+            background.artworkTopInset + background.artworkHeight * 0.90,
+            0.01,
+          ),
+        );
+        final name = tester.getRect(
+          find.byKey(const ValueKey('artist-profile-name')),
+        );
+        expect(name.top, greaterThanOrEqualTo(photo.bottom));
+        expect(name.left, greaterThanOrEqualTo(photo.left));
+        expect(name.right, lessThanOrEqualTo(photo.right));
+
+        final play = find.byKey(const ValueKey('artist-play-all'));
+        await Scrollable.ensureVisible(tester.element(play), alignment: 0.5);
+        await tester.pumpAndSettle();
+        expect(play.hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   for (final width in [320.0, 1440.0]) {
     testWidgets(
       'artist section titles, songs and releases share margins at $width',
@@ -760,7 +898,115 @@ void main() {
     });
   }
 
-  testWidgets('artist app bar respects every surface background mode', (
+  testWidgets(
+    'artist photo fills the status area with circular navigation in every theme and surface mode',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1;
+      tester.view.padding = const FakeViewPadding(top: 24);
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+        tester.view.resetPadding();
+      });
+      for (final brightness in Brightness.values) {
+        for (final mode in SurfaceBackgroundMode.values) {
+          await tester.pumpWidget(
+            _artistProfileApp(
+              service: _ArtistProfileService(),
+              player: _RecordingPlayerController(),
+              artistThumbnailUrl: 'https://img.test/artist.jpg',
+              surfaceBackgroundMode: mode,
+              brightness: brightness,
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final page = find.byKey(const ValueKey('artist-profile-page'));
+          expect(tester.widget(page), isA<ArtworkDetailScaffold>());
+          final scaffold = tester.widget<Scaffold>(
+            find.descendant(of: page, matching: find.byType(Scaffold)),
+          );
+          expect(scaffold.appBar, isNull);
+          expect(find.byType(AppBar), findsNothing);
+          expect(
+            find.text(const AppStrings(AppLanguage.spanish).artistProfile),
+            findsNothing,
+          );
+          expect(
+            find.byKey(const ValueKey('artist-profile-app-bar-spacer')),
+            findsNothing,
+          );
+          final headerRect = tester.getRect(
+            find.byKey(const ValueKey('artist-profile-header')),
+          );
+          expect(headerRect.top, 0);
+          final background = tester.widget<ExpandedArtworkHeaderBackground>(
+            find.byType(ExpandedArtworkHeaderBackground),
+          );
+          expect(background.artworkTopInset, 0);
+          expect(
+            tester.getRect(find.byType(ExpandedArtworkHeaderBackground)).top,
+            0,
+            reason: 'The soft backdrop must continue beneath the status icons.',
+          );
+          final photo = tester.getRect(
+            find.byKey(const ValueKey('artist-profile-artwork')),
+          );
+          expect(photo.height, closeTo(background.artworkHeight * 0.9, 0.01));
+
+          final back = find.byKey(const ValueKey('artist-profile-back'));
+          expect(tester.getSize(back), const Size.square(48));
+          expect(tester.getTopLeft(back).dy, 32);
+          expect(back.hitTestable(), findsOneWidget);
+          final button = tester.widget<IconButton>(back);
+          expect(button.style!.shape!.resolve({}), isA<CircleBorder>());
+          expect(
+            button.tooltip,
+            MaterialLocalizations.of(tester.element(back)).backButtonTooltip,
+          );
+
+          final overlay = tester
+              .widget<AnnotatedRegion<SystemUiOverlayStyle>>(
+                find
+                    .descendant(
+                      of: page,
+                      matching: find.byType(
+                        AnnotatedRegion<SystemUiOverlayStyle>,
+                      ),
+                    )
+                    .first,
+              )
+              .value;
+          expect(overlay.statusBarColor, Colors.transparent);
+          expect(overlay.systemStatusBarContrastEnforced, isFalse);
+          expect(
+            overlay.statusBarIconBrightness,
+            brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+          );
+          expect(overlay.statusBarBrightness, brightness);
+          final blend = find.byKey(
+            const ValueKey('artwork-detail-status-bar-blend'),
+          );
+          expect(tester.getRect(blend).top, 0);
+          expect(tester.getRect(blend).height, 24);
+          final gradient =
+              (tester.widget<DecoratedBox>(blend).decoration as BoxDecoration)
+                      .gradient!
+                  as LinearGradient;
+          expect(gradient.colors.first.a, lessThan(1));
+          expect(gradient.colors.last.a, 0);
+          expect(
+            find.byKey(const ValueKey('artist-profile-status-bar-surface')),
+            findsNothing,
+          );
+          expect(tester.takeException(), isNull);
+        }
+      }
+    },
+  );
+
+  testWidgets('artist circular back button stays above the scrolling photo', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -771,136 +1017,39 @@ void main() {
       tester.view.resetDevicePixelRatio();
       tester.view.resetPadding();
     });
-    for (final mode in SurfaceBackgroundMode.values) {
-      await tester.pumpWidget(
-        _artistProfileApp(
-          service: _ArtistProfileService(),
-          player: _RecordingPlayerController(),
-          surfaceBackgroundMode: mode,
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final surface = tester.widget<DecoratedBox>(
-        find.byKey(const ValueKey('artist-profile-app-bar-surface')),
-      );
-      final decoration = surface.decoration as BoxDecoration;
-      final appBarFinder = find.byKey(const ValueKey('artist-profile-app-bar'));
-      final appBarWidget = tester.widget<AppBar>(appBarFinder);
-      final tonalSurface = Theme.of(
-        tester.element(appBarFinder),
-      ).colorScheme.surface;
-      final transparent = mode == SurfaceBackgroundMode.transparent;
-      expect(
-        decoration.gradient,
-        mode.isLiquidGlass ? isNull : isA<LinearGradient>(),
-      );
-      expect(decoration.border, isNull);
-      expect(
-        find.byKey(const ValueKey('artist-profile-app-bar-blur')),
-        transparent ? findsOneWidget : findsNothing,
-      );
-      if (mode.isLiquidGlass) {
-        expect(
-          decoration.color,
-          AppColors.tabHeaderSurfaceFor(
-            tester.element(appBarFinder),
-            scrolledUnder: true,
-          ),
-        );
-      } else {
-        expect(decoration.color!.a, transparent ? lessThan(1) : 1);
-      }
-      expect(
-        find.descendant(
-          of: appBarFinder,
-          matching: find.byType(LiquidGlassSurface),
-        ),
-        mode.isLiquidGlass ? findsOneWidget : findsNothing,
-      );
-      expect(
-        find.descendant(
-          of: appBarFinder,
-          matching: find.byType(BackdropFilter),
-        ),
-        transparent || mode.isLiquidGlass ? findsOneWidget : findsNothing,
-      );
-      expect(
-        appBarWidget.forceMaterialTransparency,
-        transparent || mode.isLiquidGlass,
-      );
-      expect(
-        appBarWidget.backgroundColor,
-        transparent || mode.isLiquidGlass
-            ? Colors.transparent
-            : decoration.color,
-      );
-      expect(appBarWidget.systemOverlayStyle?.statusBarColor, tonalSurface);
-      final statusBarFinder = find.byKey(
-        const ValueKey('artist-profile-status-bar-surface'),
-      );
-      final statusBarFill = tester.widget<ColoredBox>(
-        find.descendant(of: statusBarFinder, matching: find.byType(ColoredBox)),
-      );
-      expect(statusBarFill.color, tonalSurface);
-      final statusBarRect = tester.getRect(statusBarFinder);
-      final toolbarSurfaceRect = tester.getRect(
-        find.byKey(const ValueKey('artist-profile-app-bar-surface')),
-      );
-      expect(statusBarRect.height, 24);
-      expect(statusBarRect.bottom, toolbarSurfaceRect.top);
-      expect(toolbarSurfaceRect.height, kToolbarHeight);
-      expect(
-        tester
-            .widget<Scaffold>(find.byKey(const ValueKey('artist-profile-page')))
-            .extendBodyBehindAppBar,
-        isTrue,
-      );
-      final spacer = tester.getSize(
-        find.byKey(const ValueKey('artist-profile-app-bar-spacer')),
-      );
-      final appBar = tester.getSize(appBarFinder);
-      expect(spacer.height, appBar.height);
-    }
-  });
-
-  testWidgets('artist glass app bar restores its optics after scrolling', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(360, 640);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(() {
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-    });
     final service = _ArtistProfileService()
-      ..profilePopularSongs = _popularSongs;
+      ..profilePopularSongs = _popularSongs
+      ..profileAlbums = _shelfReleases;
     await tester.pumpWidget(
       _artistProfileApp(
         service: service,
         player: _RecordingPlayerController(),
+        artistThumbnailUrl: 'https://img.test/artist.jpg',
         surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
       ),
     );
     await tester.pumpAndSettle();
 
-    final glassFinder = find.byKey(
-      const ValueKey('surface-detail-liquid-glass'),
+    final back = find.byKey(const ValueKey('artist-profile-back'));
+    final before = tester.getRect(back);
+    await tester.drag(
+      find.byKey(const ValueKey('artist-profile-scroll')),
+      const Offset(0, -280),
     );
-    bool isMoving() =>
-        tester.widget<LiquidGlassSurface>(glassFinder).backdropMotion;
-    expect(isMoving(), isFalse);
-
-    final gesture = await tester.startGesture(
-      tester.getCenter(find.byKey(const ValueKey('artist-profile-scroll'))),
-    );
-    await gesture.moveBy(const Offset(0, -160));
-    await tester.pump();
-    expect(isMoving(), isTrue);
-
-    await gesture.up();
     await tester.pumpAndSettle();
-    expect(isMoving(), isFalse);
+    final scrollable = tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('artist-profile-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(scrollable.position.pixels, greaterThan(0));
+    expect(tester.getRect(back), before);
+    expect(back.hitTestable(), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -919,16 +1068,13 @@ void main() {
       await tester.pump();
 
       expect(find.text('Artista de prueba'), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('artist-profile-background-blur')),
-        findsOneWidget,
-      );
+      expect(find.byType(ExpandedArtworkHeaderBackground), findsOneWidget);
       expect(
         find.byKey(const ValueKey('artist-profile-background-image')),
         findsOneWidget,
       );
       expect(
-        find.byKey(const ValueKey('artist-profile-background-overlay')),
+        find.byKey(const ValueKey('artist-profile-background-fade')),
         findsOneWidget,
       );
       final header = find.byKey(const ValueKey('artist-profile-header'));
@@ -1409,9 +1555,12 @@ Widget _artistProfileApp({
   _RecordingArtistAccount? account,
   VoidCallback? onOpenPlayer,
   String? artistThumbnailUrl,
+  double textScale = 1,
+  Brightness brightness = Brightness.light,
   Map<String, List<TrackInfo>> albumTracks = const {},
   String artistBrowseId = 'UCartist123',
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
+  TargetPlatform platform = TargetPlatform.android,
 }) {
   return ProviderScope(
     overrides: [
@@ -1428,8 +1577,15 @@ Widget _artistProfileApp({
       ),
     ],
     child: MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       theme: ThemeData(
-        platform: TargetPlatform.android,
+        platform: platform,
+        brightness: brightness,
         extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
       ),
       home: ArtistProfilePage(

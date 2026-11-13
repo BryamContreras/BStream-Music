@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../../../services/audio_sources/audio_format_details.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 
@@ -22,6 +23,7 @@ class LocalTrackModel extends LocalTrack {
     super.sourceId,
     super.lastPlayedAt,
     super.lastPlayedPlaylistId,
+    super.audioFormat,
   });
 
   factory LocalTrackModel.fromMap(Map<String, Object?> map) {
@@ -43,6 +45,7 @@ class LocalTrackModel extends LocalTrack {
       sourceId: map['source_id'] as String?,
       lastPlayedAt: _date(map['last_played_at']),
       lastPlayedPlaylistId: map['last_played_playlist_id'] as String?,
+      audioFormat: _audioFormat(map['audio_format_json']),
     );
   }
 
@@ -65,6 +68,7 @@ class LocalTrackModel extends LocalTrack {
       sourceId: track.sourceId,
       lastPlayedAt: track.lastPlayedAt,
       lastPlayedPlaylistId: track.lastPlayedPlaylistId,
+      audioFormat: track.audioFormat,
     );
   }
 
@@ -87,7 +91,20 @@ class LocalTrackModel extends LocalTrack {
       'added_at': addedAt.toIso8601String(),
       'last_played_at': lastPlayedAt?.toIso8601String(),
       'last_played_playlist_id': lastPlayedPlaylistId,
+      'audio_format_json': audioFormat == null
+          ? null
+          : jsonEncode(audioFormat!.toMap()),
     };
+  }
+
+  static AudioFormatDetails? _audioFormat(Object? value) {
+    try {
+      final decoded = value is String ? jsonDecode(value) : value;
+      return decoded is Map ? AudioFormatDetails.fromMap(decoded) : null;
+    } catch (_) {
+      // An old or damaged optional format must not hide a playable download.
+      return null;
+    }
   }
 
   static Duration? _duration(Object? value) {

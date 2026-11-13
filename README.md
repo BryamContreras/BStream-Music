@@ -19,6 +19,7 @@ Current version: **1.3.1+131**.
 
 ## What's new in 1.3.1
 
+- The player now supports higher quality audio when available.
 - Improved and optimized the layouts of the player styles.
 - Added the new Spotify Style player.
 - Added filtering options in the Local music tab.
@@ -59,12 +60,24 @@ Current version: **1.3.1+131**.
   advance immediately to tokenless clients. If an active stream loses
   connectivity, BStream
   retries the resolver chain with bounded backoff; navigation cancels obsolete
-  attempts. Every selected candidate is deep-probed at or beyond 3 MiB before
+  attempts. YouTube candidates are deep-probed at or beyond 3 MiB before
   publication, and downloads resume through validated range requests and safe
   `.part` files. Native M4A/AAC, WebM/Opus, and other available audio
   containers remain unconverted; when YouTube exposes only a direct muxed
   fallback, it is preserved as `.mp4` instead of being mislabeled or
   transcoded.
+- Optional JioSaavn audio upgrades follow the selected Wi-Fi/mobile profile.
+  YouTube Music remains enabled and starts playback first. A bounded lookup
+  checks the recording's title, version, artists and duration before preparing
+  a verified higher-bitrate rendition on the existing muted standby deck.
+  Promotion retains catalog metadata, queue and position, with a short linear
+  transition; missing matches or failed preparation leave YouTube playing.
+  Settings expose both sources under Integrations and quality under Storage >
+  Data saving. Desktop has one quality choice for all connections. On mobile,
+  Wi-Fi defaults to High/JioSaavn and cellular to Standard/YouTube Music.
+  Disabling JioSaavn applies Standard without erasing
+  saved preferences. A headphones quality capsule shares each player's elapsed/
+  duration row and reflects the actual stream, not the requested profile.
 - High-quality artwork uses one proportional crop policy from search through
   playback and downloaded-library storage.
 - SQLite-backed local library.
@@ -312,11 +325,71 @@ actually delivers to the WebSocket client.
 | Linux | `media_kit` | Dart InnerTube | Three tokenless/JS-less InnerTube identities (`visionOS`, `androidSdkless`, `visionOS01`); MPRIS controls; TikTok LIVE; Ubuntu 22.04-based x64 installers; requires GTK 3, libmpv, SQLite, and libsecret |
 | macOS | `media_kit` | Dart InnerTube | Optional headless WebView for EJS and Web BotGuard PO tokens; Now Playing controls, TikTok LIVE, separate PKG installers for Apple Silicon and Intel; minimum window `960 × 600` |
 
-Downloads and remote playback use the same native-audio selection policy on
-every platform: prefer the best available M4A/AAC stream, otherwise use the
-best original audio stream. BStream preserves the source container and does
-not extract, remux, transcode, or embed tags/artwork. Library metadata is kept
-in SQLite and artwork is saved as a separate thumbnail file.
+YouTube playback and downloads prefer the best available native M4A/AAC stream,
+otherwise the best original compatible audio stream. When the current network
+profile requests High and JioSaavn is enabled, the optional resolver verifies a
+matching recording and a real higher-quality CDN rendition. Playback starts
+YouTube immediately and looks for the improvement in the background; downloads
+select the verified rendition before transferring the file and fall back to
+YouTube if the optional CDN fails. Search results and all library metadata keep
+their YouTube Music identity. Renditions and partial downloads from different
+providers have separate cache/file identities. Desktop uses its single saved
+quality without querying the connection type. On mobile, unknown connectivity
+uses Standard and Ethernet uses the Wi-Fi profile. Connection checks are shared
+and event-driven, without internet polling.
+
+The JioSaavn adapter uses bounded public API requests and URL decoding in Dart,
+requires the catalog's actual 320 kbps flag and a small playable-CDN range probe,
+and uses the reference client's catalog compatibility headers only on JioSaavn
+API requests. These headers are not forwarded to audio CDNs, YouTube or player
+requests. Technical labels reuse the local MP4/AAC header parser to obtain the
+selected stream's declared bitrate, sample rate and channels. The optional
+header lookup reuses the verification prefix, skips audio payloads and has
+bounded bytes, requests and elapsed time; unavailable details remain unknown
+without preventing a verified source upgrade. Catalog availability depends on the track
+and region; an unavailable recording remains on YouTube. Its source-upgrade
+behavior was researched against [BitChord](https://github.com/kushagrasinghx/BitChord)
+and implemented independently for BStream's existing playback infrastructure.
+
+BStream preserves the original audio samples and does not extract, remux, or
+transcode them. Compatible downloaded files receive
+embedded title, artist and album before entering the library, reusing the
+resolved catalog data. Container detection uses the file contents, with these
+tagging capabilities:
+
+| Audio container | Embedded artwork | Tag format |
+| --- | --- | --- |
+| M4A / audio-only MP4 (AAC or ALAC) | Yes | iTunes `ilst` |
+| MP3 | Yes | ID3v2.3 / ID3v2.4 |
+| FLAC | Yes | Vorbis comments and PICTURE |
+| Ogg Opus / Ogg Vorbis | Yes | Comments and METADATA_BLOCK_PICTURE |
+| WAV (RIFF PCM/float) | Yes | ID3 chunk |
+| APE (Monkey's Audio) | Yes | APEv2 |
+| Audio-only WebM / Matroska (Opus/Vorbis) | External cached image | Text Tags |
+
+Embedded covers reuse the saved JPEG/PNG thumbnail. WebM's supported subset
+does not include cover attachments, so its image remains in the existing cache;
+tagging never changes the container or renames the file. Tagging runs outside
+the UI thread, copies media in bounded blocks and validates a temporary file
+before replacing the original. The format writers share atomic publication and
+copying, while FLAC and Ogg share comment/picture handling. Existing unrelated
+tags are preserved; repeating the same update skips rewriting the audio. Unsafe,
+malformed or unsupported layouts retain the original download, including
+encrypted streams, multiplexed/chained Ogg, RF64 and unsupported legacy ID3 flags.
+Library metadata remains in SQLite and artwork is also kept as a separate
+thumbnail for fast browsing. The downloaded-songs menu can update existing
+owned downloads from their saved metadata without downloading them again;
+files currently open in the player are skipped.
+
+Playback of the app-owned library uses its SQLite-backed track records and
+shared in-memory state for titles, artists, albums and cached artwork. Embedded
+tags are kept for portability; the player does not reread them to rebuild that
+information when a song starts. The Local tab has a separate device catalog:
+desktop scans read text tags in a background isolate, while Android and iOS
+reuse their native media indexes. Filtering, revisiting the tab and playback
+reuse each catalog's session snapshot; refreshing updates the device catalog.
+Mobile device artwork is requested separately on demand rather than extracted
+for every song during a library scan. Desktop text scans skip embedded images.
 
 BStream does not invoke or bundle standalone `ffmpeg` or `ffprobe`
 executables. Desktop playback still relies on the codec libraries included by

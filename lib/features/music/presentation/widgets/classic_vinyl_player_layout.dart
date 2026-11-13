@@ -656,9 +656,30 @@ class _ClassicVinylControls extends ConsumerWidget {
         mainAxisSize: MainAxisSize.max,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [metadata, timeline, transport, utilityRow],
+        children: [
+          metadata,
+          timeline,
+          // The progress line sits nine pixels above its touch area's edge.
+          // Center against that line while retaining the roomy layout slots.
+          Transform.translate(offset: const Offset(0, -4.5), child: transport),
+          utilityRow,
+        ],
       );
     }
+
+    final transportSpacing = _playerTransportSpacing(
+      before: tight
+          ? 2
+          : compact
+          ? (smallPhone ? 8 : 5)
+          : 12,
+      after: tight
+          ? 2
+          : compact
+          ? (smallPhone ? 6 : 3)
+          : 8,
+      timelineTail: tight ? 8 : 9,
+    );
 
     return Column(
       key: const ValueKey('classic-vinyl-player-controls'),
@@ -676,25 +697,9 @@ class _ClassicVinylControls extends ConsumerWidget {
               : 12,
         ),
         timeline,
-        SizedBox(
-          height: tight
-              ? 2
-              : compact
-              ? (smallPhone ? 8 : 5)
-              : roomy
-              ? 16
-              : 12,
-        ),
+        SizedBox(height: transportSpacing.before),
         transport,
-        SizedBox(
-          height: tight
-              ? 2
-              : compact
-              ? (smallPhone ? 6 : 3)
-              : roomy
-              ? 12
-              : 8,
-        ),
+        SizedBox(height: transportSpacing.after),
         Center(child: utilityRow),
         if (hasError) ...[
           SizedBox(height: compact ? 6 : 10),

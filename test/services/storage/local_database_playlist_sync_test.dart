@@ -17,7 +17,7 @@ void main() {
   setUpAll(sqfliteFfiInit);
 
   test(
-    'fresh v10 contains catalog, sync, ordering, and custom artwork schema',
+    'fresh database contains catalog, sync, ordering, and artwork schema',
     () async {
       final sandbox = await Directory.systemTemp.createTemp(
         'bstream-v10-fresh-',
@@ -30,7 +30,7 @@ void main() {
 
       final db = await service.database;
       expect(await db.getVersion(), AppConstants.databaseVersion);
-      expect(AppConstants.databaseVersion, 10);
+      expect(AppConstants.databaseVersion, 11);
       final playlistColumns = (await db.rawQuery(
         'PRAGMA table_info(playlists)',
       )).map((row) => row['name']).toSet();
@@ -231,7 +231,10 @@ void main() {
       );
       expect(catalog.entries.last.track.provider, CatalogProvider.legacy);
       expect(catalog.entries.map((entry) => entry.id).toSet(), hasLength(3));
-      expect((await service.database).getVersion(), completion(10));
+      expect(
+        (await service.database).getVersion(),
+        completion(AppConstants.databaseVersion),
+      );
     },
   );
 

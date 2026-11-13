@@ -1,3 +1,4 @@
+import '../../../../services/audio_sources/audio_format_details.dart';
 import 'download_options.dart';
 
 class DownloadResult {
@@ -9,6 +10,7 @@ class DownloadResult {
     required this.mediaType,
     required this.completedAt,
     this.bytes,
+    this.audioFormat,
   });
 
   final String id;
@@ -18,6 +20,7 @@ class DownloadResult {
   final DownloadMediaType mediaType;
   final DateTime completedAt;
   final int? bytes;
+  final AudioFormatDetails? audioFormat;
 }
 
 enum DownloadProgressStatus { queued, running, completed, failed }

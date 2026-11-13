@@ -26,29 +26,41 @@ class TrackSelectionToolbar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final selection = ref.watch(trackSelectionProvider(scope));
     final strings = ref.watch(appStringsProvider);
+    final theme = Theme.of(context);
     return Row(
       key: ValueKey('$keyPrefix-toolbar'),
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         if (showCloseButton)
           IconButton(
             key: ValueKey('$keyPrefix-close'),
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             tooltip: strings.cancel,
             onPressed: selection.clear,
             icon: const Icon(Icons.close_rounded),
           ),
         Expanded(
-          child: Text(
-            strings.selectedSongs(selection.count),
-            key: ValueKey('$keyPrefix-count'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+          child: Padding(
+            padding: const EdgeInsetsDirectional.only(start: 12, end: 8),
+            child: Text(
+              strings.selectedSongs(selection.count),
+              key: ValueKey('$keyPrefix-count'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textHeightBehavior: const TextHeightBehavior(
+                leadingDistribution: TextLeadingDistribution.even,
+              ),
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.onSurface,
+                fontWeight: FontWeight.w700,
+                height: 1.2,
+              ),
+            ),
           ),
         ),
         IconButton(
           key: ValueKey('$keyPrefix-add-to-playlist'),
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
           tooltip: strings.addToPlaylist,
           onPressed: selection.busy
               ? null
@@ -57,6 +69,7 @@ class TrackSelectionToolbar extends ConsumerWidget {
         ),
         IconButton(
           key: ValueKey('$keyPrefix-download'),
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
           tooltip: strings.downloadAudio,
           onPressed: selection.busy
               ? null

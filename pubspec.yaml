@@ -53,6 +53,9 @@ dependencies:
   # APIs. Keep this exact until that adapter is migrated to a public contract.
   kuromoji: 1.0.5
   crypto: ^3.0.7
+  # 7.3.2 requires dbus 0.8 through nm, while audio_service_mpris uses dbus 0.7.
+  connectivity_plus: 7.3.1
+  pointycastle: ^4.0.0
   image: ^4.8.0
   uuid: ^4.5.3
   file_picker: ^12.2.0
@@ -68,7 +71,7 @@ dependencies:
   video_player_android: 2.8.7
   video_player_win: ^3.3.0
   video_player_platform_interface: 6.9.0
-  audio_metadata_reader: ^1.7.1
+  audio_metadata_reader: ^1.8.1
   audio_service: ^0.18.18
   audio_service_mpris: ^0.2.1
   smtc_windows: ^1.1.0

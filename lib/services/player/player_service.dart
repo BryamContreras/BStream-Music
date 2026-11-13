@@ -196,6 +196,16 @@ abstract interface class NativeRemoteQueuePlayer {
   });
 }
 
+/// Optional same-recording upgrade. Preparation happens on a muted second
+/// deck while the current source remains audible. A failed or stale upgrade
+/// leaves that source and its logical queue item untouched.
+abstract interface class AudioSourceUpgradePlayer {
+  Future<bool> upgradeRemoteSource(
+    RemotePlaybackSource source, {
+    bool Function()? shouldContinue,
+  });
+}
+
 abstract class PlayerService {
   Stream<PlayerSnapshot> get snapshotStream;
   PlayerSnapshot get currentSnapshot;

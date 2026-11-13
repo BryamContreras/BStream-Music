@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:bstream_music/services/audio_sources/mp4_audio_format.dart';
+import 'package:bstream_music/services/audio_sources/webm_audio_format.dart';
 import 'package:bstream_music/services/player/local_audio_quality_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -110,6 +112,200 @@ void main() {
     expect(result?.sampleRate, 44100);
     expect(result?.channels, 2);
     expect(result?.bitrate, 128000);
+  });
+
+  test('WebM reads Opus Tracks instead of false MPEG payload syncs', () async {
+    final result = await read(
+      _webm([
+        ..._ebml(0x1941a469, Uint8List(300 * 1024)), // Skip attachments.
+        ..._ebml(0x1654ae6b, _webmAudioTrack()),
+        ..._ebml(0x1f43b675, _mpegFrame()),
+      ]),
+      'download.webm',
+    );
+    expect(result?.codec, 'opus');
+    expect(result?.sampleRate, 48000);
+    expect(result?.channels, 2);
+    expect(result?.bitrate, isNull);
+  });
+
+  test(
+    'WebM without an unambiguous audio track never claims MP1/MP2',
+    () async {
+      final unknown = await read(
+        _webm([..._ebml(0x1f43b675, _mpegFrame())]),
+        'missing-tracks.webm',
+      );
+      expect(unknown?.mimeType, 'audio/webm');
+      expect(unknown?.codec, isNull);
+      final multiple = await read(
+        _webm([
+          ..._ebml(0x1654ae6b, [..._webmAudioTrack(), ..._webmAudioTrack()]),
+        ]),
+        'multiple.webm',
+      );
+      expect(multiple?.codec, isNull);
+      expect(multiple?.sampleRate, isNull);
+      expect(multiple?.channels, isNull);
+    },
+  );
+
+  test('isolated MPEG sync in unknown binary is not an audio format', () async {
+    expect(
+      await read([
+        ...Uint8List(32),
+        ..._mpegFrame(),
+        ...Uint8List(32),
+      ], 'binary'),
+      isNull,
+    );
+  });
+
+  test('WebM average rate skips audio payloads, large covers and tags', () {
+    final prefix = _webm([
+      ..._webmInfo(),
+      ..._ebml(0x1654ae6b, _webmAudioTrack()),
+    ]);
+    final cover = _ebml(0x1941a469, Uint8List(500 * 1024));
+    final firstCluster = _ebml(0x1f43b675, Uint8List(67500));
+    final secondCluster = _ebml(0x1f43b675, Uint8List(101250));
+    final tags = _ebml(0x1254c367, Uint8List(300 * 1024));
+    var offset = prefix.length;
+    final forbidden = <(int, int)>[];
+    for (final (element, payloadSize) in [
+      (cover, 500 * 1024),
+      (firstCluster, 67500),
+      (secondCluster, 101250),
+      (tags, 300 * 1024),
+    ]) {
+      forbidden.add((
+        offset + element.length - payloadSize,
+        offset + element.length,
+      ));
+      offset += element.length;
+    }
+    final reader = _AuditedHeaderReader(
+      Uint8List.fromList([
+        ...prefix,
+        ...cover,
+        ...firstCluster,
+        ...secondCluster,
+        ...tags,
+      ]),
+      forbidden: forbidden,
+    );
+    final result = readWebmAudioFormat(reader);
+    expect(result?.codec, 'opus');
+    expect(result?.bitrate, 135000);
+    expect(reader.bytesRead, lessThan(4096));
+    expect(reader.reads, lessThan(1024));
+  });
+
+  test('WebM average uses declared timecode scale and late Info', () async {
+    final result = await read(
+      _webm([
+        ..._ebml(0x1654ae6b, _webmAudioTrack()),
+        ..._ebml(0x1f43b675, Uint8List(168750)),
+        ..._webmInfo(ticks: 5000, timecodeScale: 2000000),
+      ]),
+      'late-info.webm',
+    );
+    expect(result?.codec, 'opus');
+    expect(result?.bitrate, 135000);
+  });
+
+  test(
+    'WebM video and multiple tracks do not invent an audio bitrate',
+    () async {
+      final result = await read(
+        _webm([
+          ..._webmInfo(),
+          ..._ebml(0x1654ae6b, [
+            ..._ebml(0xae, [
+              ..._ebml(0x83, [1]),
+              ..._ebml(0x86, _ascii('V_VP9')),
+            ]),
+            ..._webmAudioTrack(),
+          ]),
+          ..._ebml(0x1f43b675, Uint8List(168750)),
+        ]),
+        'video-and-audio.webm',
+      );
+      expect(result?.codec, 'opus');
+      expect(result?.bitrate, isNull);
+    },
+  );
+
+  test('WebM unbounded clusters keep track details without bitrate', () async {
+    final result = await read(
+      _webm([
+        ..._webmInfo(),
+        ..._ebml(0x1654ae6b, _webmAudioTrack()),
+        0x1f,
+        0x43,
+        0xb6,
+        0x75,
+        0xff,
+        ...Uint8List(168750),
+      ]),
+      'unbounded-cluster.webm',
+    );
+    expect(result?.codec, 'opus');
+    expect(result?.bitrate, isNull);
+  });
+
+  test('WebM invalid duration and scale leave average unknown', () async {
+    for (final (name, info) in [
+      ('missing', _ebml(0x1549a966, [])),
+      ('zero', _webmInfo(ticks: 0)),
+      ('negative', _webmInfo(ticks: -1)),
+      ('nan', _webmInfo(ticks: double.nan)),
+      ('infinite', _webmInfo(ticks: double.infinity)),
+      ('scale-zero', _webmInfo(timecodeScale: 0)),
+      ('duplicate-info', [..._webmInfo(), ..._webmInfo()]),
+      (
+        'duplicate-duration',
+        _ebml(0x1549a966, [
+          ..._ebml(
+            0x4489,
+            (ByteData(8)..setFloat64(0, 10000)).buffer.asUint8List(),
+          ),
+          ..._ebml(
+            0x4489,
+            (ByteData(8)..setFloat64(0, 5000)).buffer.asUint8List(),
+          ),
+        ]),
+      ),
+    ]) {
+      final result = await read(
+        _webm([
+          ...info,
+          ..._ebml(0x1654ae6b, _webmAudioTrack()),
+          ..._ebml(0x1f43b675, Uint8List(168750)),
+        ]),
+        '$name.webm',
+      );
+      expect(result?.codec, 'opus', reason: name);
+      expect(result?.bitrate, isNull, reason: name);
+    }
+  });
+
+  test('WebM global element budget stops before claiming a partial rate', () {
+    final reader = _AuditedHeaderReader(
+      Uint8List.fromList(
+        _webm([
+          ..._ebml(0x1654ae6b, _webmAudioTrack()),
+          ..._webmInfo(),
+          for (var index = 0; index < 600; index++) ..._ebml(0xec, []),
+          ..._ebml(0x1f43b675, Uint8List(168750)),
+        ]),
+      ),
+    );
+    final result = readWebmAudioFormat(reader);
+    expect(result?.codec, 'opus');
+    expect(result?.bitrate, isNull);
+    expect(reader.reads, lessThan(1024));
+    expect(reader.bytesRead, lessThan(4096));
   });
 
   test(
@@ -317,6 +513,74 @@ void main() {
 }
 
 List<int> _ascii(String text) => text.codeUnits;
+
+List<int> _ebml(int id, List<int> payload) {
+  final idWidth = (id.bitLength + 7) ~/ 8;
+  var sizeWidth = 1;
+  while (payload.length >= (1 << (7 * sizeWidth)) - 1) {
+    sizeWidth++;
+  }
+  return [
+    for (var index = idWidth - 1; index >= 0; index--)
+      (id >> (8 * index)) & 255,
+    for (var index = sizeWidth - 1; index >= 0; index--)
+      ((payload.length | (1 << (7 * sizeWidth))) >> (8 * index)) & 255,
+    ...payload,
+  ];
+}
+
+List<int> _webm(List<int> payload) => [
+  ..._ebml(0x1a45dfa3, _ebml(0x4282, _ascii('webm'))),
+  0x18, 0x53, 0x80, 0x67, 0xff, // Segment with unknown length.
+  ...payload,
+];
+
+List<int> _webmAudioTrack() => _ebml(0xae, [
+  ..._ebml(0x83, [2]),
+  ..._ebml(0x86, _ascii('A_OPUS')),
+  ..._ebml(0xe1, [
+    ..._ebml(0xb5, (ByteData(8)..setFloat64(0, 44100)).buffer.asUint8List()),
+    ..._ebml(0x9f, [2]),
+  ]),
+]);
+
+List<int> _webmInfo({double ticks = 10000, int? timecodeScale}) =>
+    _ebml(0x1549a966, [
+      if (timecodeScale != null) ..._ebml(0x2ad7b1, _u32(timecodeScale)),
+      ..._ebml(
+        0x4489,
+        (ByteData(8)..setFloat64(0, ticks)).buffer.asUint8List(),
+      ),
+    ]);
+
+class _AuditedHeaderReader implements AudioFormatHeaderReader {
+  _AuditedHeaderReader(this.bytes, {this.forbidden = const []});
+  final Uint8List bytes;
+  final List<(int, int)> forbidden;
+  int reads = 0;
+  int bytesRead = 0;
+
+  @override
+  int get length => bytes.length;
+
+  @override
+  Uint8List? read(int offset, int count) {
+    for (final (start, end) in forbidden) {
+      if (offset < end && offset + count > start) {
+        throw StateError('Probe read an audio or metadata payload.');
+      }
+    }
+    reads++;
+    bytesRead += count;
+    if (offset < 0 ||
+        offset + count > length ||
+        reads > 1024 ||
+        bytesRead > 256 * 1024) {
+      return null;
+    }
+    return Uint8List.sublistView(bytes, offset, offset + count);
+  }
+}
 
 List<int> _u32(int value) =>
     (ByteData(4)..setUint32(0, value)).buffer.asUint8List();

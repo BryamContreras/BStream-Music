@@ -3,6 +3,51 @@ import 'package:bstream_music/features/music/presentation/widgets/playback_audio
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('quality tiers reflect actual bitrate boundaries', () {
+    for (final bitrate in [1, 64000, 96000, 127999]) {
+      expect(
+        playbackAudioQualityTier(codec: 'aac', bitrate: bitrate),
+        PlaybackAudioQualityTier.low,
+      );
+    }
+    for (final bitrate in [128000, 141000, 192000, 255999]) {
+      expect(
+        playbackAudioQualityTier(codec: 'opus', bitrate: bitrate),
+        PlaybackAudioQualityTier.standard,
+      );
+    }
+    for (final bitrate in [256000, 320000]) {
+      expect(
+        playbackAudioQualityTier(codec: 'aac', bitrate: bitrate),
+        PlaybackAudioQualityTier.high,
+      );
+    }
+  });
+
+  test(
+    'known lossless formats classify high without guessing from filenames',
+    () {
+      for (final codec in ['flac', 'ALAC', 'pcm', 'pcm_s16le']) {
+        expect(
+          playbackAudioQualityTier(codec: codec),
+          PlaybackAudioQualityTier.high,
+        );
+      }
+      for (final mime in ['audio/flac', 'audio/x-flac', 'audio/alac']) {
+        expect(
+          playbackAudioQualityTier(mimeType: mime),
+          PlaybackAudioQualityTier.high,
+        );
+      }
+      for (final codec in [null, 'opus', 'aac', 'unknown']) {
+        expect(playbackAudioQualityTier(codec: codec), isNull);
+        expect(playbackAudioQualityTier(codec: codec, bitrate: 0), isNull);
+      }
+      expect(playbackAudioQualityTier(mimeType: 'audio/wav'), isNull);
+      expect(playbackAudioQualityTier(bitrate: -1), isNull);
+    },
+  );
+
   test('known stream details use the requested compact order', () {
     const strings = AppStrings(AppLanguage.spanish);
     expect(

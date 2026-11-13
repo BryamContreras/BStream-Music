@@ -98,6 +98,29 @@ class LiquidGlassSurface extends StatelessWidget {
   static const chromeIntensity = 1.16;
   static const chromeOpacity = 0.68;
 
+  /// Neutral material shared by live glass and inexpensive painted controls.
+  /// This calculation does not load a shader or sample the backdrop.
+  static Color materialTintFor(
+    BuildContext context, {
+    double intensity = 1,
+    double materialOpacity = 1,
+  }) {
+    assert(intensity >= 0 && intensity <= 2);
+    assert(materialOpacity >= 0 && materialOpacity <= 1);
+    final brightness = Theme.brightnessOf(context);
+    final highContrast = MediaQuery.maybeHighContrastOf(context) ?? false;
+    final tint = brightness == Brightness.dark
+        ? const Color(0xFF121212)
+        : const Color(0xFFFAFAFA);
+    // A neutral veil preserves the backdrop hue while giving controls contrast.
+    final alpha =
+        (0.4 * intensity * materialOpacity * (highContrast ? 1.16 : 1.0)).clamp(
+          0.0,
+          0.52,
+        );
+    return tint.withValues(alpha: alpha);
+  }
+
   /// Stable key for the bounded [BackdropFilter].
   static const backdropKey = ValueKey<String>('liquid-glass-backdrop');
 
@@ -261,18 +284,11 @@ class LiquidGlassSurface extends StatelessWidget {
     final isFloatingSheet =
         resolvedEdgeTreatment == LiquidGlassEdgeTreatment.perimeter;
     final resolvedBorderRadius = borderRadius.resolve(textDirection);
-    final surfaceTint = brightness == Brightness.dark
-        ? const Color(0xFF121212)
-        : const Color(0xFFFAFAFA);
-    // Echo's default surface opacity is 40%. A dark neutral veil gives the
-    // controls contrast without bleaching the refracted backdrop color.
-    const baseTintAlpha = 0.4;
-    final surfaceTintAlpha =
-        (baseTintAlpha *
-                intensity *
-                materialOpacity *
-                (highContrast ? 1.16 : 1.0))
-            .clamp(0.0, 0.52);
+    final surfaceTint = materialTintFor(
+      context,
+      intensity: intensity,
+      materialOpacity: materialOpacity,
+    );
     final disableAnimations =
         MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final opticalMotionDuration = disableAnimations
@@ -289,9 +305,7 @@ class LiquidGlassSurface extends StatelessWidget {
       Positioned.fill(
         child: DecoratedBox(
           key: surfaceTintKey,
-          decoration: BoxDecoration(
-            color: surfaceTint.withValues(alpha: surfaceTintAlpha),
-          ),
+          decoration: BoxDecoration(color: surfaceTint),
         ),
       ),
       if (!allowContentOverflow) RepaintBoundary(child: child),

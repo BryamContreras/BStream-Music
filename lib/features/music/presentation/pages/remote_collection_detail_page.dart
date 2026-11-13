@@ -7,14 +7,15 @@ import 'package:flutter_riverpod/misc.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
+import '../../../../core/widgets/painted_glass_button_style.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../providers/track_selection_controller.dart';
+import '../widgets/artwork_detail_scaffold.dart';
 import '../widgets/artwork_gradient_header_background.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/playlist_actions.dart';
 import '../widgets/source_image.dart';
-import '../widgets/surface_detail_app_bar.dart';
 import '../widgets/track_result_tile.dart';
 import '../widgets/track_selection_toolbar.dart';
 
@@ -73,14 +74,6 @@ class _RemoteCollectionDetailPageState
     extends ConsumerState<RemoteCollectionDetailPage> {
   bool _addingToPlaylist = false;
   final _selectionScope = Object();
-  final GlassScrollMotionNotifier _glassScrollMotion =
-      GlassScrollMotionNotifier();
-
-  @override
-  void dispose() {
-    _glassScrollMotion.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -131,45 +124,26 @@ class _RemoteCollectionDetailPageState
     final bottomContentPadding = underlayMiniPlayer
         ? miniPlayerHeight + MediaQuery.viewPaddingOf(context).bottom
         : 0.0;
-    final scaffold = Scaffold(
+    final scaffold = ArtworkDetailScaffold(
       key: const ValueKey('remote-collection-detail'),
       extendBody: underlayMiniPlayer,
-      extendBodyBehindAppBar: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      appBar: SurfaceDetailAppBar(
-        backdropMotion: _glassScrollMotion,
-        appBarKey: const ValueKey('remote-collection-app-bar'),
-        surfaceKey: const ValueKey('remote-collection-app-bar-surface'),
-        blurKey: const ValueKey('remote-collection-app-bar-blur'),
-        statusBarSurfaceKey: const ValueKey(
-          'remote-collection-status-bar-surface',
-        ),
-        leading: IconButton(
-          key: ValueKey(
-            selection.active
-                ? 'collection-selection-close'
-                : 'remote-collection-back',
-          ),
-          tooltip: selection.active
-              ? strings.cancel
-              : MaterialLocalizations.of(context).backButtonTooltip,
-          onPressed: selection.active
-              ? selection.clear
-              : () => Navigator.of(context).maybePop(),
-          icon: Icon(
-            selection.active ? Icons.close_rounded : Icons.arrow_back_rounded,
-          ),
-        ),
-        title: selection.active
-            ? TrackSelectionToolbar(
-                scope: _selectionScope,
-                tracks: visibleTracks,
-                keyPrefix: 'collection-selection',
-                initialPlaylistName: resolvedTitle,
-                showCloseButton: false,
-              )
-            : Text(resolvedTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+      backButtonKey: ValueKey(
+        selection.active
+            ? 'collection-selection-close'
+            : 'remote-collection-back',
       ),
+      backTooltip: selection.active ? strings.cancel : null,
+      onBack: selection.active ? selection.clear : null,
+      closeButton: selection.active,
+      selectionToolbar: selection.active
+          ? TrackSelectionToolbar(
+              scope: _selectionScope,
+              tracks: visibleTracks,
+              keyPrefix: 'collection-selection',
+              initialPlaylistName: resolvedTitle,
+              showCloseButton: false,
+            )
+          : null,
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -183,12 +157,6 @@ class _RemoteCollectionDetailPageState
           CustomScrollView(
             scrollCacheExtent: const ScrollCacheExtent.pixels(800),
             slivers: [
-              SliverToBoxAdapter(
-                child: SizedBox(
-                  key: const ValueKey('remote-collection-app-bar-spacer'),
-                  height: surfaceDetailAppBarBodyInset(context),
-                ),
-              ),
               SliverToBoxAdapter(
                 child: _CollectionHeader(
                   title: resolvedTitle,
@@ -321,10 +289,7 @@ class _RemoteCollectionDetailPageState
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) selection.clear();
       },
-      child: NotificationListener<ScrollNotification>(
-        onNotification: _glassScrollMotion.handleNotification,
-        child: scaffold,
-      ),
+      child: scaffold,
     );
   }
 
@@ -450,6 +415,7 @@ class _CollectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final actionStyle = paintedGlassButtonStyle(context);
     final validMetadata = metadata
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty)
@@ -533,7 +499,7 @@ class _CollectionHeader extends StatelessWidget {
                 FilledButton.icon(
                   key: const ValueKey('remote-collection-play'),
                   onPressed: canPlay ? onPlay : null,
-                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                  style: actionStyle,
                   icon: const Icon(Icons.play_arrow_rounded),
                   label: Text(playLabel),
                 ),
@@ -541,9 +507,7 @@ class _CollectionHeader extends StatelessWidget {
                   FilledButton.tonalIcon(
                     key: const ValueKey('remote-collection-add-to-playlist'),
                     onPressed: addingToPlaylist ? null : onAddToPlaylist,
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(0, 48),
-                    ),
+                    style: actionStyle,
                     icon: const Icon(Icons.playlist_add_rounded),
                     label: Text(addToPlaylistLabel),
                   ),
@@ -569,7 +533,7 @@ class _CollectionHeader extends StatelessWidget {
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
                       wide ? 28 : 20,
-                      wide ? 24 : 12,
+                      MediaQuery.paddingOf(context).top + (wide ? 24 : 12),
                       wide ? 28 : 20,
                       20,
                     ),

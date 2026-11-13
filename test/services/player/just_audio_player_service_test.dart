@@ -863,6 +863,222 @@ void main() {
     },
   );
 
+  group('same-recording source upgrades', () {
+    test('realigns after a muted decoder takes time to start', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('current'));
+        fixture.primary
+          ..emitDuration(const Duration(minutes: 3))
+          ..emitPosition(const Duration(seconds: 41));
+        await _drainEvents();
+        fixture.standby.onPlay = () {
+          fixture.primary.emitPosition(const Duration(seconds: 44));
+        };
+        expect(
+          await fixture.service.upgradeRemoteSource(_upgradeSource()),
+          isTrue,
+        );
+        expect(fixture.standby.position, const Duration(seconds: 44));
+        expect(
+          fixture.service.currentSnapshot.position,
+          const Duration(seconds: 44),
+        );
+        expect(fixture.primary.seekCalls, 0);
+        expect(fixture.primary.setAudioSourcesCalls, 1);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    test(
+      'prepares muted, keeps playback, and retains the native future queue',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.service.playRemoteSource(_remoteSource('current'));
+          await fixture.service.updateRemoteQueue([
+            _remoteSource('next'),
+            _remoteSource('third'),
+          ]);
+          await fixture.service.setVolume(.65);
+          fixture.primary
+            ..emitDuration(const Duration(minutes: 3))
+            ..emitPosition(const Duration(seconds: 41));
+          await _drainEvents();
+          final snapshots = <PlayerSnapshot>[];
+          final subscription = fixture.service.snapshotStream.listen(
+            snapshots.add,
+          );
+          fixture.standby.blockNextSourceLoad = true;
+          final upgrade = fixture.service.upgradeRemoteSource(_upgradeSource());
+          await _waitUntil(() => fixture.standby.sourceLoadCalls.isNotEmpty);
+          expect(fixture.primary.playing, isTrue);
+          expect(fixture.primary.stopCalls, 0);
+          expect(fixture.standby.playCalls, 0);
+          expect(
+            fixture.standby.volumeCalls.every((value) => value == 0),
+            isTrue,
+          );
+          fixture.primary.emitPosition(const Duration(seconds: 43));
+          fixture.standby.completeSourceLoad(0);
+          expect(await upgrade, isTrue);
+          expect(fixture.service.crossfadeEnabled, isFalse);
+          expect(
+            fixture.service.currentSnapshot.queueEntryId,
+            'remote:current',
+          );
+          expect(
+            fixture.service.currentSnapshot.position,
+            const Duration(seconds: 43),
+          );
+          expect(fixture.service.currentSnapshot.volume, .65);
+          expect(fixture.standby.sequence, hasLength(3));
+          expect(_queueEntryId(fixture.standby), 'remote:current');
+          expect(
+            (fixture.standby.sequence[0] as UriAudioSource).uri.host,
+            'quality.example',
+          );
+          expect((fixture.standby.sequence[1].tag as MediaItem).id, 'next');
+          expect((fixture.standby.sequence[2].tag as MediaItem).id, 'third');
+          expect(fixture.primary.setAudioSourcesCalls, 1);
+          expect(fixture.primary.seekCalls, 0);
+          expect(fixture.standby.playCalls, 1);
+          expect(
+            snapshots.every(
+              (snapshot) => snapshot.status == PlayerStatus.playing,
+            ),
+            isTrue,
+          );
+          expect(
+            snapshots.every(
+              (snapshot) => snapshot.queueEntryId == 'remote:current',
+            ),
+            isTrue,
+          );
+          await fixture.service.updateRemoteQueue([_remoteSource('last')]);
+          expect(fixture.standby.setAudioSourcesCalls, 1);
+          expect((fixture.standby.sequence.last.tag as MediaItem).id, 'last');
+          await subscription.cancel();
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    for (final action in ['pause', 'seek', 'volume', 'next', 'stale']) {
+      test(
+        '$action cancels a preparing upgrade without starting its deck',
+        () async {
+          final fixture = await _CrossfadeFixture.create();
+          try {
+            await fixture.service.playRemoteSource(_remoteSource('current'));
+            await fixture.service.updateRemoteQueue([_remoteSource('next')]);
+            fixture.primary
+              ..emitDuration(const Duration(minutes: 3))
+              ..emitPosition(const Duration(seconds: 41));
+            await _drainEvents();
+            var current = true;
+            fixture.standby.blockNextSourceLoad = true;
+            final upgrade = fixture.service.upgradeRemoteSource(
+              _upgradeSource(),
+              shouldContinue: () => current,
+            );
+            await _waitUntil(() => fixture.standby.sourceLoadCalls.isNotEmpty);
+            switch (action) {
+              case 'pause':
+                await fixture.service.pause();
+              case 'seek':
+                await fixture.service.seek(const Duration(seconds: 72));
+              case 'volume':
+                await fixture.service.setVolume(.2);
+              case 'next':
+                fixture.primary.emitSequenceState(currentIndex: 1);
+                await _drainEvents();
+              case 'stale':
+                current = false;
+            }
+            if (!fixture.standby.sourceLoadCalls.single.completer.isCompleted) {
+              fixture.standby.completeSourceLoad(0);
+            }
+            expect(await upgrade, isFalse);
+            expect(fixture.standby.playCalls, 0);
+            expect(fixture.primary.stopCalls, 0);
+            expect(
+              fixture.service.currentSnapshot.queueEntryId,
+              action == 'next' ? 'remote:next' : 'remote:current',
+            );
+            if (action == 'pause') {
+              expect(
+                fixture.service.currentSnapshot.status,
+                PlayerStatus.paused,
+              );
+            }
+            if (action == 'seek') {
+              expect(
+                fixture.service.currentSnapshot.position,
+                const Duration(seconds: 72),
+              );
+            }
+            if (action == 'volume') {
+              expect(fixture.service.currentSnapshot.volume, .2);
+            }
+          } finally {
+            await fixture.dispose();
+          }
+        },
+      );
+    }
+
+    test(
+      'an invalid upgrade keeps the original and never restarts it',
+      () async {
+        final fixture = await _CrossfadeFixture.create();
+        try {
+          await fixture.service.playRemoteSource(_remoteSource('current'));
+          fixture.primary.emitDuration(const Duration(minutes: 3));
+          await _drainEvents();
+          fixture.standby.failNextSourceLoad = PlayerException(
+            1,
+            'bad source',
+            0,
+          );
+          expect(
+            await fixture.service.upgradeRemoteSource(_upgradeSource()),
+            isFalse,
+          );
+          expect(fixture.primary.playing, isTrue);
+          expect(fixture.primary.setAudioSourcesCalls, 1);
+          expect(fixture.primary.stopCalls, 0);
+          expect(
+            fixture.service.currentSnapshot.queueEntryId,
+            'remote:current',
+          );
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test('near the next track no upgrade decoder is opened', () async {
+      final fixture = await _CrossfadeFixture.create();
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('current'));
+        fixture.primary
+          ..emitDuration(const Duration(minutes: 3))
+          ..emitPosition(const Duration(seconds: 178));
+        await _drainEvents();
+        expect(
+          await fixture.service.upgradeRemoteSource(_upgradeSource()),
+          isFalse,
+        );
+        expect(fixture.standby.setAudioSourcesCalls, 0);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
   group('dual-deck crossfade', () {
     test(
       'background snapshot throttling keeps crossfade timing precise',
@@ -2206,6 +2422,20 @@ RemotePlaybackSource _remoteSource(String id) => RemotePlaybackSource(
   queueEntryId: 'remote:$id',
 );
 
+RemotePlaybackSource _upgradeSource() {
+  final original = _remoteSource('current');
+  return RemotePlaybackSource(
+    track: original.track.copyWith(
+      streamUrl: 'https://quality.example/current.m4a',
+      streamExtension: 'm4a',
+      streamBitrate: 320000,
+      streamCodec: 'aac',
+    ),
+    uri: Uri.parse('https://quality.example/current.m4a'),
+    queueEntryId: original.queueEntryId,
+  );
+}
+
 String? _queueEntryId(_BlockingAudioPlayer backend) {
   if (backend.sequence.isEmpty) return null;
   final index = backend.currentIndex ?? 0;
@@ -2443,6 +2673,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   final Completer<void> releasePause = Completer<void>();
   void Function(Duration position)? onUnindexedSeek;
   void Function(double volume)? onSetVolume;
+  void Function()? onPlay;
 
   @override
   Stream<Duration> createPositionStream({
@@ -2759,6 +2990,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   Future<void> play() async {
     playCalls++;
     _playing = true;
+    onPlay?.call();
     emitReady();
     if (blockNextPlay) {
       blockNextPlay = false;

@@ -21,6 +21,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../../../services/player/cast_aware_player_service.dart';
 import 'audio_route_providers.dart';
+import 'audio_source_providers.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/bounded_byte_stream.dart';
 import '../../../../core/utils/cached_artwork_image_provider.dart';
@@ -28,8 +29,11 @@ import '../../../../core/utils/image_source.dart';
 import '../../../../core/utils/safe_file_name.dart';
 import '../../../../services/downloader/audio_stream_resolver.dart';
 import '../../../../services/downloader/downloader_service.dart';
+import '../../../../services/downloader/download_audio_metadata_service.dart';
 import '../../../../services/downloader/innertube_audio_resolver.dart';
 import '../../../../services/downloader/innertube_download_service.dart';
+import '../../../../services/audio_sources/audio_source_policy.dart';
+import '../../../../services/audio_sources/audio_format_details.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
 import '../../../../services/lyrics/better_lyrics_service.dart';
@@ -105,6 +109,7 @@ import '../../domain/usecases/search_tracks.dart';
 import 'app_strings.dart';
 import 'home_feed_activity_provider.dart';
 import 'local_audio_availability.dart';
+import 'local_audio_quality_provider.dart';
 import 'lyrics_animation_style.dart';
 import 'live_widget_style.dart';
 import 'mini_player_background_mode.dart';
@@ -145,6 +150,9 @@ export '../../domain/entities/lyrics_provider.dart';
 
 part 'app_strings_provider.dart';
 part 'download_controller.dart';
+part 'audio_quality_upgrade_coordinator.dart';
+part 'player/downloaded_audio_playback.dart';
+part 'download_metadata_refresh_controller.dart';
 part 'download_directory_migrator.dart';
 part 'local_track_download_helper.dart';
 part 'library_csv_transfer_controller.dart';
@@ -318,9 +326,31 @@ final innerTubePlaybackServiceProvider = Provider<InnerTubePlaybackService>((
 });
 
 final downloaderServiceProvider = Provider<DownloaderService>((ref) {
-  final service = InnerTubeDownloadService(
+  late final InnerTubeDownloadService service;
+  service = InnerTubeDownloadService(
     playback: ref.watch(innerTubePlaybackServiceProvider),
     catalog: ref.watch(youtubeMusicSearchProvider),
+    audioUpgrade: (url, metadata, baseline, shouldContinue) async {
+      final policy = ref.read(audioSourcePolicyProvider);
+      final monitor = policy.useSingleProfile
+          ? null
+          : ref.read(audioNetworkMonitorProvider);
+      final network = await monitor?.current() ?? AudioNetworkKind.unknown;
+      if (!shouldContinue() || !policy.allowsUpgrade(network)) return null;
+      final track = metadata ?? await service.getInfo(url);
+      if (!shouldContinue()) return null;
+      return ref.read(audioSourceUpgradeLookupProvider)(
+        track,
+        currentBitrate: baseline.bitrate,
+        shouldContinue: () =>
+            shouldContinue() &&
+            ref
+                .read(audioSourcePolicyProvider)
+                .allowsUpgrade(
+                  monitor?.lastKnownKind ?? AudioNetworkKind.unknown,
+                ),
+      );
+    },
   );
   ref.onDispose(() => unawaited(service.dispose()));
   return service;
@@ -2923,6 +2953,11 @@ final getPlaybackInfoProvider = Provider<GetPlaybackInfo>((ref) {
 final searchTracksProvider = Provider<SearchTracks>((ref) {
   return SearchTracks(ref.watch(musicRepositoryProvider));
 });
+
+final downloadAudioMetadataServiceProvider =
+    Provider<DownloadAudioMetadataService>((ref) {
+      return DownloadAudioMetadataService();
+    });
 
 final downloadAudioProvider = Provider<DownloadAudio>((ref) {
   return DownloadAudio(ref.watch(musicRepositoryProvider));

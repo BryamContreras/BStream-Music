@@ -1,16 +1,16 @@
 import 'dart:async';
 
-import 'package:bstream_music/core/theme/app_colors.dart';
 import 'package:bstream_music/core/theme/app_theme.dart';
-import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/presentation/pages/remote_collection_detail_page.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/artwork_detail_scaffold.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playlist_picker_dialog.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -264,7 +264,7 @@ void main() {
         find.byKey(const ValueKey('remote-collection-detail')),
         findsOneWidget,
       );
-      expect(find.text('Album de contrato'), findsNWidgets(2));
+      expect(find.text('Album de contrato'), findsOneWidget);
       expect(find.text('Artista principal'), findsOneWidget);
       expect(find.textContaining('Album'), findsWidgets);
       expect(find.textContaining('2026'), findsOneWidget);
@@ -644,7 +644,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('No se pudo cargar la coleccion.'), findsOneWidget);
-    expect(find.text('Album de contrato'), findsNWidgets(2));
+    expect(find.text('Album de contrato'), findsOneWidget);
     expect(player.playCalls, 0);
 
     await tester.tap(find.byKey(const ValueKey('remote-collection-retry')));
@@ -684,7 +684,7 @@ void main() {
     expect(player.playCalls, 0);
   });
 
-  testWidgets('keeps the accented detail surface pinned while scrolling', (
+  testWidgets('keeps the circular back button pinned above scrolling artwork', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 640);
@@ -706,7 +706,6 @@ void main() {
       ),
       retry: (_, _) => null,
     );
-
     await tester.pumpWidget(
       _detailApp(
         player: _RecordingPlayerController(),
@@ -715,289 +714,160 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final appBarFinder = find.byKey(
-      const ValueKey('remote-collection-app-bar'),
-    );
-    final titleFinder = find.descendant(
-      of: appBarFinder,
-      matching: find.text('Album de contrato'),
-    );
-
-    final initialTitleRect = tester.getRect(titleFinder);
-    final initialHeaderRect = tester.getRect(
-      find.byKey(const ValueKey('remote-collection-header')),
-    );
-    final appBarRect = tester.getRect(appBarFinder);
-    final statusBarSurface = find.byKey(
-      const ValueKey('remote-collection-status-bar-surface'),
-    );
-    final toolbarSurface = find.byKey(
-      const ValueKey('remote-collection-app-bar-surface'),
-    );
-    final statusBarRect = tester.getRect(statusBarSurface);
-    final toolbarRect = tester.getRect(toolbarSurface);
-    expect(statusBarRect.height, 24);
-    expect(statusBarRect.top, appBarRect.top);
-    expect(statusBarRect.bottom, toolbarRect.top);
-    expect(toolbarRect.height, kToolbarHeight);
-    expect(toolbarRect.bottom, appBarRect.bottom);
+    final back = find.byKey(const ValueKey('remote-collection-back'));
+    final initialBackRect = tester.getRect(back);
+    final header = find.byKey(const ValueKey('remote-collection-header'));
+    final initialHeaderRect = tester.getRect(header);
+    expect(find.byType(AppBar), findsNothing);
+    expect(find.text('Album de contrato'), findsOneWidget);
+    expect(initialHeaderRect.top, 0);
+    expect(initialBackRect.size, const Size(48, 48));
+    expect(initialBackRect.top, greaterThanOrEqualTo(24));
     expect(
       tester
-          .getSize(
-            find.byKey(const ValueKey('remote-collection-app-bar-spacer')),
-          )
-          .height,
-      appBarRect.height,
+          .getRect(find.byKey(const ValueKey('remote-collection-artwork')))
+          .top,
+      36,
+      reason:
+          'The cover starts below the system inset without reserving a title bar.',
     );
-    expect(initialHeaderRect.top, greaterThanOrEqualTo(appBarRect.bottom));
-    final surface = tester.widget<DecoratedBox>(
-      find.byKey(const ValueKey('remote-collection-app-bar-surface')),
-    );
-    final decoration = surface.decoration as BoxDecoration;
-    expect(decoration.color!.a, 1);
-    expect(decoration.gradient, isA<LinearGradient>());
-    expect(decoration.border, isNull);
+    final button = tester.widget<IconButton>(back);
     expect(
-      find.byKey(const ValueKey('remote-collection-app-bar-blur')),
-      findsNothing,
+      button.style!.shape!.resolve(const <WidgetState>{}),
+      isA<CircleBorder>(),
     );
-    final appBar = tester.widget<AppBar>(appBarFinder);
-    expect(appBar.forceMaterialTransparency, isFalse);
-    expect(appBar.backgroundColor?.a, 1);
-    expect(
-      appBar.systemOverlayStyle?.statusBarColor,
-      Theme.of(tester.element(appBarFinder)).colorScheme.surface,
-    );
-    expect(
-      tester
-          .widget<Scaffold>(
-            find.byKey(const ValueKey('remote-collection-detail')),
-          )
-          .extendBodyBehindAppBar,
-      isTrue,
-    );
+    expect(back.hitTestable(), findsOneWidget);
 
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
     await tester.pumpAndSettle();
-
     expect(
       tester.state<ScrollableState>(find.byType(Scrollable)).position.pixels,
       greaterThan(0),
     );
-    expect(tester.getRect(titleFinder), initialTitleRect);
-    expect(
-      tester
-          .getRect(find.byKey(const ValueKey('remote-collection-header')))
-          .top,
-      lessThan(appBarRect.bottom),
+    expect(tester.getRect(back), initialBackRect);
+    expect(tester.getRect(header).top, lessThan(initialHeaderRect.top));
+    expect(back.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final brightness in Brightness.values) {
+    for (final mode in SurfaceBackgroundMode.values) {
+      testWidgets(
+        'collection artwork extends under transparent system bars for $brightness/$mode',
+        (tester) async {
+          tester.view.physicalSize = const Size(360, 640);
+          tester.view.devicePixelRatio = 1;
+          tester.view.padding = const FakeViewPadding(top: 24);
+          addTearDown(() {
+            tester.view.resetPhysicalSize();
+            tester.view.resetDevicePixelRatio();
+            tester.view.resetPadding();
+          });
+          await tester.pumpWidget(
+            _detailApp(
+              player: _RecordingPlayerController(),
+              tracksProvider: FutureProvider((ref) async => _tracks),
+              surfaceBackgroundMode: mode,
+              brightness: brightness,
+              artworkSource: 'https://img.test/collection.jpg',
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(find.byType(AppBar), findsNothing);
+          expect(
+            find.byKey(const ValueKey('remote-collection-app-bar-spacer')),
+            findsNothing,
+          );
+          final region = tester.widget<AnnotatedRegion<SystemUiOverlayStyle>>(
+            find.descendant(
+              of: find.byType(ArtworkDetailScaffold),
+              matching: find.byType(AnnotatedRegion<SystemUiOverlayStyle>),
+            ),
+          );
+          expect(region.value.statusBarColor, Colors.transparent);
+          expect(region.value.systemStatusBarContrastEnforced, isFalse);
+          expect(
+            region.value.statusBarIconBrightness,
+            brightness == Brightness.dark ? Brightness.light : Brightness.dark,
+          );
+          final background = find.byKey(
+            const ValueKey('remote-collection-background-photo'),
+          );
+          expect(tester.getRect(background).top, 0);
+          expect(
+            tester
+                .getRect(
+                  find.byKey(
+                    const ValueKey('remote-collection-artwork-underlay'),
+                  ),
+                )
+                .top,
+            0,
+          );
+          final back = find.byKey(const ValueKey('remote-collection-back'));
+          expect(tester.getRect(back).top, greaterThanOrEqualTo(24));
+          expect(back.hitTestable(), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  testWidgets('circular close clears selection while keeping the detail open', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _detailApp(
+        player: _RecordingPlayerController(),
+        tracksProvider: FutureProvider((ref) async => _tracks),
+      ),
     );
-    expect(find.text('Album de contrato'), findsWidgets);
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Primera cancion'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('collection-selection-toolbar')),
+      findsOneWidget,
+    );
+    final close = find.byKey(const ValueKey('collection-selection-close'));
+    expect(tester.getSize(close), const Size(48, 48));
+    await tester.tap(close);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('collection-selection-toolbar')),
+      findsNothing,
+    );
     expect(
       find.byKey(const ValueKey('remote-collection-back')),
       findsOneWidget,
     );
-
-    tester.state<ScrollableState>(find.byType(Scrollable)).position.jumpTo(0);
-    await tester.pumpAndSettle();
-
-    expect(tester.getRect(titleFinder), initialTitleRect);
+    expect(find.text('Album de contrato'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('transparent detail surface blurs only its app bar bounds', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(360, 640);
-    tester.view.devicePixelRatio = 1;
-    tester.view.padding = const FakeViewPadding(top: 24);
-    addTearDown(() {
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-      tester.view.resetPadding();
-    });
-    final tracksProvider = FutureProvider<List<TrackInfo>>(
-      (ref) async => _tracks,
-      retry: (_, _) => null,
-    );
-
+  testWidgets('circular back returns to the previous route', (tester) async {
     await tester.pumpWidget(
       _detailApp(
         player: _RecordingPlayerController(),
-        tracksProvider: tracksProvider,
-        surfaceBackgroundMode: SurfaceBackgroundMode.transparent,
+        tracksProvider: FutureProvider((ref) async => _tracks),
+        openFromLauncher: true,
       ),
     );
     await tester.pumpAndSettle();
-
-    final blurFinder = find.byKey(
-      const ValueKey('remote-collection-app-bar-blur'),
-    );
-    final surfaceFinder = find.byKey(
-      const ValueKey('remote-collection-app-bar-surface'),
-    );
-    final statusBarSurfaceFinder = find.byKey(
-      const ValueKey('remote-collection-status-bar-surface'),
-    );
-    expect(blurFinder, findsOneWidget);
+    await tester.tap(find.text('Abrir coleccion'));
+    await tester.pumpAndSettle();
     expect(
-      find.ancestor(of: blurFinder, matching: find.byType(ClipRect)),
+      find.byKey(const ValueKey('remote-collection-detail')),
       findsOneWidget,
     );
-    final decoration =
-        tester.widget<DecoratedBox>(surfaceFinder).decoration as BoxDecoration;
-    expect(decoration.color!.a, lessThan(1));
-    expect(decoration.gradient, isA<LinearGradient>());
-    expect(decoration.border, isNull);
-    expect(tester.getRect(blurFinder), tester.getRect(surfaceFinder));
-    expect(tester.getRect(blurFinder).height, closeTo(kToolbarHeight, 0.01));
-    expect(tester.getRect(statusBarSurfaceFinder).height, 24);
-    expect(
-      tester.getRect(statusBarSurfaceFinder).bottom,
-      tester.getRect(surfaceFinder).top,
-    );
-    final appBar = tester.widget<AppBar>(
-      find.byKey(const ValueKey('remote-collection-app-bar')),
-    );
-    expect(appBar.forceMaterialTransparency, isTrue);
-    expect(appBar.backgroundColor, Colors.transparent);
-    expect(
-      appBar.systemOverlayStyle?.statusBarColor,
-      Theme.of(tester.element(surfaceFinder)).colorScheme.surface,
-    );
-  });
-
-  testWidgets('liquid glass detail surface uses layered glass in its app bar', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(360, 640);
-    tester.view.devicePixelRatio = 1;
-    tester.view.padding = const FakeViewPadding(top: 24);
-    addTearDown(() {
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-      tester.view.resetPadding();
-    });
-    final tracksProvider = FutureProvider<List<TrackInfo>>(
-      (ref) async => _tracks,
-      retry: (_, _) => null,
-    );
-
-    await tester.pumpWidget(
-      _detailApp(
-        player: _RecordingPlayerController(),
-        tracksProvider: tracksProvider,
-        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
-      ),
-    );
+    await tester.tap(find.byKey(const ValueKey('remote-collection-back')));
     await tester.pumpAndSettle();
-
-    final blurFinder = find.byKey(
-      const ValueKey('remote-collection-app-bar-blur'),
-    );
-    final surfaceFinder = find.byKey(
-      const ValueKey('remote-collection-app-bar-surface'),
-    );
-    final statusBarFinder = find.byKey(
-      const ValueKey('remote-collection-status-bar-surface'),
-    );
-    final appBarFinder = find.byKey(
-      const ValueKey('remote-collection-app-bar'),
-    );
-    final tonalSurface = Theme.of(
-      tester.element(appBarFinder),
-    ).colorScheme.surface;
-
-    expect(blurFinder, findsNothing);
-    final liquidGlassFinder = find.descendant(
-      of: appBarFinder,
-      matching: find.byType(LiquidGlassSurface),
-    );
-    expect(liquidGlassFinder, findsOneWidget);
+    expect(find.text('Abrir coleccion'), findsOneWidget);
     expect(
-      find.descendant(
-        of: liquidGlassFinder,
-        matching: find.byKey(LiquidGlassSurface.backdropKey),
-      ),
-      findsOneWidget,
+      find.byKey(const ValueKey('remote-collection-detail')),
+      findsNothing,
     );
-    final statusBarRect = tester.getRect(statusBarFinder);
-    final toolbarRect = tester.getRect(surfaceFinder);
-    expect(statusBarRect.height, 24);
-    expect(statusBarRect.bottom, toolbarRect.top);
-    expect(toolbarRect.height, kToolbarHeight);
-    expect(
-      tester
-          .getSize(
-            find.byKey(const ValueKey('remote-collection-app-bar-spacer')),
-          )
-          .height,
-      tester
-          .getSize(find.byKey(const ValueKey('remote-collection-app-bar')))
-          .height,
-    );
-
-    final decoration =
-        tester.widget<DecoratedBox>(surfaceFinder).decoration as BoxDecoration;
-    expect(
-      decoration.color,
-      AppColors.tabHeaderSurfaceFor(
-        tester.element(appBarFinder),
-        scrolledUnder: true,
-      ),
-    );
-    expect(decoration.gradient, isNull);
-    expect(decoration.border, isNull);
-    final statusBarFill = tester.widget<ColoredBox>(
-      find.descendant(of: statusBarFinder, matching: find.byType(ColoredBox)),
-    );
-    expect(statusBarFill.color, tonalSurface);
-    final appBar = tester.widget<AppBar>(appBarFinder);
-    expect(appBar.forceMaterialTransparency, isTrue);
-    expect(appBar.backgroundColor, Colors.transparent);
-    expect(appBar.systemOverlayStyle?.statusBarColor, tonalSurface);
-  });
-
-  testWidgets('collection glass app bar restores optics after scrolling', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(360, 640);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(() {
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-    });
-    final tracksProvider = FutureProvider<List<TrackInfo>>(
-      (ref) async => [
-        for (var index = 0; index < 12; index++)
-          _tracks.first.copyWith(id: 'scroll-song-$index'),
-      ],
-      retry: (_, _) => null,
-    );
-    await tester.pumpWidget(
-      _detailApp(
-        player: _RecordingPlayerController(),
-        tracksProvider: tracksProvider,
-        surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    final glassFinder = find.byKey(
-      const ValueKey('surface-detail-liquid-glass'),
-    );
-    bool isMoving() =>
-        tester.widget<LiquidGlassSurface>(glassFinder).backdropMotion;
-    expect(isMoving(), isFalse);
-
-    final gesture = await tester.startGesture(
-      tester.getCenter(find.byType(CustomScrollView)),
-    );
-    await gesture.moveBy(const Offset(0, -160));
-    await tester.pump();
-    expect(isMoving(), isTrue);
-
-    await gesture.up();
-    await tester.pumpAndSettle();
-    expect(isMoving(), isFalse);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -1230,8 +1100,23 @@ Widget _detailApp({
   String? artworkSource,
   bool preferCollectionArtworkForTracks = false,
   bool disableAnimations = false,
+  bool openFromLauncher = false,
+  Brightness brightness = Brightness.light,
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
 }) {
+  final detailPage = RemoteCollectionDetailPage(
+    title: title,
+    subtitle: subtitle,
+    artworkSource: artworkSource,
+    preferCollectionArtworkForTracks: preferCollectionArtworkForTracks,
+    queueSourceId: 'album:MPRE-contract',
+    tracksProvider: tracksProvider,
+    emptyMessage: 'La coleccion esta vacia.',
+    errorMessage: 'No se pudo cargar la coleccion.',
+    onOpenPlayer: onOpenPlayer ?? _noop,
+    onAddToPlaylist: onAddToPlaylist,
+    metadata: metadata,
+  );
   return ProviderScope(
     overrides: [
       playerControllerProvider.overrideWith(() => player),
@@ -1241,6 +1126,7 @@ Widget _detailApp({
     ],
     child: MaterialApp(
       theme: ThemeData(
+        brightness: brightness,
         extensions: [AppSurfaceTheme(backgroundMode: surfaceBackgroundMode)],
       ),
       builder: (context, child) {
@@ -1250,19 +1136,20 @@ Widget _detailApp({
           child: child!,
         );
       },
-      home: RemoteCollectionDetailPage(
-        title: title,
-        subtitle: subtitle,
-        artworkSource: artworkSource,
-        preferCollectionArtworkForTracks: preferCollectionArtworkForTracks,
-        queueSourceId: 'album:MPRE-contract',
-        tracksProvider: tracksProvider,
-        emptyMessage: 'La coleccion esta vacia.',
-        errorMessage: 'No se pudo cargar la coleccion.',
-        onOpenPlayer: onOpenPlayer ?? _noop,
-        onAddToPlaylist: onAddToPlaylist,
-        metadata: metadata,
-      ),
+      home: openFromLauncher
+          ? Builder(
+              builder: (context) => Scaffold(
+                body: Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(builder: (_) => detailPage),
+                    ),
+                    child: const Text('Abrir coleccion'),
+                  ),
+                ),
+              ),
+            )
+          : detailPage,
     ),
   );
 }

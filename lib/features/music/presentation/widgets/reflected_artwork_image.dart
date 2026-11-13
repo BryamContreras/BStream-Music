@@ -5,19 +5,24 @@ import 'package:flutter/material.dart';
 
 /// Extends a cover below its lower edge by reflecting the same decoded image.
 ///
-/// [artworkRect] matches the unreflected foreground cover and must cover the
-/// viewport horizontally. The caller owns [image] and the surrounding backdrop
-/// supplies its blur; painting the reflection performs no image loading.
+/// [artworkRect] matches the unreflected foreground cover. Narrow photos extend
+/// their edge colors sideways and reflect below their lower edge.
+/// The caller owns [image] and the surrounding backdrop supplies its blur;
+/// painting the reflection performs no image loading.
 class ReflectedArtworkImage extends StatelessWidget {
   const ReflectedArtworkImage({
     required this.image,
     required this.artworkRect,
+    this.alignment = Alignment.center,
     this.filterQuality = FilterQuality.medium,
     super.key,
   });
 
   final ui.Image image;
   final Rect artworkRect;
+
+  /// Matches the foreground image's cover crop before reflecting its edge.
+  final Alignment alignment;
   final FilterQuality filterQuality;
 
   @override
@@ -26,6 +31,7 @@ class ReflectedArtworkImage extends StatelessWidget {
     painter: _ReflectedArtworkPainter(
       image: image,
       artworkRect: artworkRect,
+      alignment: alignment,
       filterQuality: filterQuality,
     ),
   );
@@ -38,12 +44,16 @@ class ProgressiveReflectedArtworkImage extends StatefulWidget {
   const ProgressiveReflectedArtworkImage({
     required this.image,
     required this.artworkRect,
+    this.alignment = Alignment.center,
     this.filterQuality = FilterQuality.medium,
     super.key,
   });
 
   final ui.Image image;
   final Rect artworkRect;
+
+  /// Matches the foreground image's cover crop before reflecting its edge.
+  final Alignment alignment;
   final FilterQuality filterQuality;
 
   @override
@@ -56,6 +66,7 @@ class _ProgressiveReflectedArtworkImageState
   ui.Image? _raster;
   ui.Image? _source;
   Rect? _artworkRect;
+  Alignment? _alignment;
   Size? _viewport;
   FilterQuality? _filterQuality;
 
@@ -72,11 +83,13 @@ class _ProgressiveReflectedArtworkImageState
       if (_raster == null ||
           !identical(_source, widget.image) ||
           _artworkRect != widget.artworkRect ||
+          _alignment != widget.alignment ||
           _viewport != viewport ||
           _filterQuality != widget.filterQuality) {
         final raster = _rasterizeProgressiveReflection(
           image: widget.image,
           artworkRect: widget.artworkRect,
+          alignment: widget.alignment,
           viewport: viewport,
           filterQuality: widget.filterQuality,
         );
@@ -84,6 +97,7 @@ class _ProgressiveReflectedArtworkImageState
         _raster = raster;
         _source = widget.image;
         _artworkRect = widget.artworkRect;
+        _alignment = widget.alignment;
         _viewport = viewport;
         _filterQuality = widget.filterQuality;
         previous?.dispose();
@@ -107,6 +121,7 @@ class _ProgressiveReflectedArtworkImageState
 ui.Image _rasterizeProgressiveReflection({
   required ui.Image image,
   required Rect artworkRect,
+  required Alignment alignment,
   required Size viewport,
   required FilterQuality filterQuality,
 }) {
@@ -129,6 +144,7 @@ ui.Image _rasterizeProgressiveReflection({
   final painter = _ReflectedArtworkPainter(
     image: image,
     artworkRect: rasterRect,
+    alignment: alignment,
     filterQuality: filterQuality,
   );
   final recorder = ui.PictureRecorder();
@@ -202,11 +218,13 @@ class _ReflectedArtworkPainter extends CustomPainter {
   const _ReflectedArtworkPainter({
     required this.image,
     required this.artworkRect,
+    required this.alignment,
     required this.filterQuality,
   });
 
   final ui.Image image;
   final Rect artworkRect;
+  final Alignment alignment;
   final FilterQuality filterQuality;
 
   @override
@@ -220,26 +238,60 @@ class _ReflectedArtworkPainter extends CustomPainter {
       return;
     }
 
+    // Extreme proportions use a single cover for the blurred background.
+    // Ordinary photos retain their exact reflected lower edge.
+    final repeatedRect =
+        size.width / artworkRect.width > 31 ||
+            size.height / artworkRect.height > 31
+        ? Offset.zero & size
+        : artworkRect;
     final imageSize = Size(image.width.toDouble(), image.height.toDouble());
-    final fitted = applyBoxFit(BoxFit.cover, imageSize, artworkRect.size);
-    final source = Alignment.center.inscribe(
-      fitted.source,
-      Offset.zero & imageSize,
-    );
-    final destination = Offset.zero & artworkRect.size;
-    final tileHeight = artworkRect.height;
-    final firstTile = (-artworkRect.top / tileHeight).floor();
-    final lastTile = ((size.height - artworkRect.top) / tileHeight).ceil() - 1;
+    final fitted = applyBoxFit(BoxFit.cover, imageSize, repeatedRect.size);
+    final source = alignment.inscribe(fitted.source, Offset.zero & imageSize);
+    final destination = Offset.zero & repeatedRect.size;
+    final tileWidth = repeatedRect.width;
+    final tileHeight = repeatedRect.height;
+    final firstTile = (-repeatedRect.top / tileHeight).floor();
+    final lastTile = ((size.height - repeatedRect.top) / tileHeight).ceil() - 1;
     final paint = Paint()..filterQuality = filterQuality;
 
     canvas.save();
     canvas.clipRect(Offset.zero & size);
     for (var tile = firstTile; tile <= lastTile; tile += 1) {
-      final top = artworkRect.top + tile * tileHeight;
+      final top = repeatedRect.top + tile * tileHeight;
       canvas.save();
-      canvas.translate(artworkRect.left, tile.isOdd ? top + tileHeight : top);
+      canvas.translate(repeatedRect.left, tile.isOdd ? top + tileHeight : top);
       if (tile.isOdd) canvas.scale(1, -1);
       canvas.drawImageRect(image, source, destination, paint);
+      // Extend only edge colors into the blurred sides. Repeating the whole
+      // portrait would introduce extra faces beside the focused artist.
+      final edgeWidth = math.min(1.0, source.width);
+      if (repeatedRect.left > 0) {
+        canvas.drawImageRect(
+          image,
+          Rect.fromLTWH(source.left, source.top, edgeWidth, source.height),
+          Rect.fromLTWH(-repeatedRect.left, 0, repeatedRect.left, tileHeight),
+          paint,
+        );
+      }
+      if (repeatedRect.right < size.width) {
+        canvas.drawImageRect(
+          image,
+          Rect.fromLTWH(
+            source.right - edgeWidth,
+            source.top,
+            edgeWidth,
+            source.height,
+          ),
+          Rect.fromLTWH(
+            tileWidth,
+            0,
+            size.width - repeatedRect.right,
+            tileHeight,
+          ),
+          paint,
+        );
+      }
       canvas.restore();
     }
     canvas.restore();
@@ -249,5 +301,6 @@ class _ReflectedArtworkPainter extends CustomPainter {
   bool shouldRepaint(_ReflectedArtworkPainter oldDelegate) =>
       !identical(image, oldDelegate.image) ||
       artworkRect != oldDelegate.artworkRect ||
+      alignment != oldDelegate.alignment ||
       filterQuality != oldDelegate.filterQuality;
 }

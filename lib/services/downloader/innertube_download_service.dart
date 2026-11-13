@@ -11,11 +11,21 @@ import '../../features/music/data/models/download_result_model.dart';
 import '../../features/music/domain/entities/download_options.dart';
 import '../../features/music/domain/entities/download_result.dart';
 import '../../features/music/domain/entities/track_info.dart';
+import '../audio_sources/audio_format_details.dart';
 import '../youtube_music/innertube_search_service.dart';
 import '../youtube_music/playback/innertube_playback_service.dart';
 import '../youtube_music/playback/innertube_video_id.dart';
 import 'downloader_service.dart';
+import 'audio_stream_resolver.dart';
 import 'http_audio_transfer.dart';
+
+typedef DownloadAudioUpgrade =
+    Future<AudioStreamResolution?> Function(
+      String url,
+      TrackInfo? metadata,
+      AudioStreamResolution baseline,
+      bool Function() shouldContinue,
+    );
 
 /// Downloader and metadata adapter backed only by InnerTube and `dart:io`.
 final class InnerTubeDownloadService
@@ -26,6 +36,7 @@ final class InnerTubeDownloadService
     HttpAudioTransfer? transfer,
     this.maxStreamRefreshes = 2,
     this.disposePlaybackService = false,
+    this.audioUpgrade,
   }) : _transfer = transfer ?? HttpAudioTransfer() {
     if (maxStreamRefreshes < 0) {
       throw ArgumentError.value(
@@ -45,6 +56,7 @@ final class InnerTubeDownloadService
   final HttpAudioTransfer _transfer;
   final int maxStreamRefreshes;
   final bool disposePlaybackService;
+  final DownloadAudioUpgrade? audioUpgrade;
   final StreamController<DownloadProgress> _progress =
       StreamController<DownloadProgress>.broadcast(sync: true);
   final Set<String> _cancelledTaskIds = <String>{};
@@ -181,6 +193,56 @@ final class InnerTubeDownloadService
         excludedProfileKeys: excludedProfileKeys,
       );
       _ensureTaskActive(taskId);
+      AudioStreamResolution? upgrade;
+      try {
+        upgrade = await audioUpgrade?.call(
+          url,
+          options.track ?? metadata,
+          AudioStreamResolution(
+            source: AudioStreamSource.innerTube,
+            streamUrl: resolved.uri.toString(),
+            streamExtension: resolved.extension,
+            streamMimeType: resolved.format.mimeType,
+            codec: resolved.codec,
+            bitrate: resolved.format.isAudioOnly
+                ? resolved.format.effectiveBitrate
+                : null,
+            httpHeaders: resolved.headers,
+          ),
+          () => !_disposed && !_isTaskCancelled(taskId),
+        );
+      } on Object {
+        _ensureTaskActive(taskId);
+      }
+      _ensureTaskActive(taskId);
+      if (upgrade != null &&
+          upgrade.isUsable &&
+          const {
+            'http',
+            'https',
+          }.contains(Uri.parse(upgrade.streamUrl).scheme) &&
+          Uri.parse(upgrade.streamUrl).host.isNotEmpty &&
+          (upgrade.bitrate ?? 0) >
+              (resolved.format.isAudioOnly
+                  ? resolved.format.effectiveBitrate
+                  : 0)) {
+        try {
+          return await _downloadUpgradedAudio(
+            url,
+            options,
+            taskId,
+            upgrade,
+            metadata: options.track ?? metadata,
+            destinationPaths: destinationPaths,
+          );
+        } on HttpAudioTransferException {
+          _ensureTaskActive(taskId);
+          // A failed optional CDN must not prevent the verified YouTube
+          // download. Keep its untouched source ready as the fallback.
+          await _deleteTransferArtifacts(destinationPaths);
+          destinationPaths.clear();
+        }
+      }
       final outputDirectory = Directory(options.outputDirectory);
       await outputDirectory.create(recursive: true);
       final baseName = safeFileName(
@@ -253,6 +315,15 @@ final class InnerTubeDownloadService
             sourceUrl: url,
             filePath: result.file.path,
             mediaType: DownloadMediaType.audio,
+            audioFormat: AudioFormatDetails(
+              codec: resolved.codec,
+              mimeType: resolved.format.mimeType,
+              bitrate: resolved.format.isAudioOnly
+                  ? resolved.format.effectiveBitrate
+                  : null,
+              sampleRate: resolved.format.audioSampleRate,
+              channels: resolved.format.audioChannels,
+            ),
           );
         } on HttpAudioTransferException catch (error) {
           if (!error.shouldRefreshUrl || refresh >= maxStreamRefreshes) {
@@ -320,6 +391,71 @@ final class InnerTubeDownloadService
   }
 
   bool _isTaskCancelled(String taskId) => _cancelledTaskIds.contains(taskId);
+
+  Future<DownloadResult> _downloadUpgradedAudio(
+    String url,
+    DownloadOptions options,
+    String taskId,
+    AudioStreamResolution source, {
+    required TrackInfo? metadata,
+    required Set<String> destinationPaths,
+  }) async {
+    final directory = Directory(options.outputDirectory);
+    await directory.create(recursive: true);
+    final requested = options.fileName?.trim();
+    final name = safeFileName(
+      requested == null || requested.isEmpty
+          ? _defaultFileName(metadata!)
+          : requested,
+    );
+    // Partial transfers from different providers must never share a file.
+    final destination = await _availableDestination(
+      directory,
+      '$name-jiosaavn-${(source.bitrate! / 1000).round()}',
+      source.streamExtension ?? 'm4a',
+    );
+    destinationPaths.add(destination.path);
+    final result = await _transfer.download(
+      uri: Uri.parse(source.streamUrl),
+      destination: destination,
+      headers: source.httpHeaders ?? const {},
+      isCancelled: () => _disposed || _isTaskCancelled(taskId),
+      onProgress: (progress) {
+        if (_disposed || _isTaskCancelled(taskId)) return;
+        _emit(
+          DownloadProgress(
+            taskId: taskId,
+            url: url,
+            status: DownloadProgressStatus.running,
+            progress: progress.fraction,
+            message: 'JioSaavn',
+          ),
+        );
+      },
+    );
+    _ensureTaskActive(taskId);
+    _emit(
+      DownloadProgress(
+        taskId: taskId,
+        url: url,
+        status: DownloadProgressStatus.completed,
+        progress: 1,
+        message: 'JioSaavn',
+      ),
+    );
+    return DownloadResultModel.completed(
+      sourceUrl: url,
+      filePath: result.file.path,
+      mediaType: DownloadMediaType.audio,
+      audioFormat: AudioFormatDetails(
+        codec: source.codec,
+        mimeType: source.streamMimeType,
+        bitrate: source.bitrate,
+        sampleRate: source.sampleRate,
+        channels: source.channels,
+      ),
+    );
+  }
 
   bool _isExplicitTaskCancellation(String taskId, Object error) {
     if (_isTaskCancelled(taskId)) return true;

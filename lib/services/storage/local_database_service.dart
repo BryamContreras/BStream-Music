@@ -2079,7 +2079,8 @@ class LocalDatabaseService {
             catalog_key TEXT,
             added_at TEXT NOT NULL,
             last_played_at TEXT,
-            last_played_playlist_id TEXT
+            last_played_playlist_id TEXT,
+            audio_format_json TEXT
           )
         ''');
         await db.execute('''
@@ -2214,6 +2215,14 @@ class LocalDatabaseService {
             definition: 'TEXT',
           );
         }
+        if (oldVersion < 11) {
+          await _addColumnIfMissing(
+            db,
+            table: 'local_tracks',
+            column: 'audio_format_json',
+            definition: 'TEXT',
+          );
+        }
       },
       onOpen: _repairAndValidateCurrentSchema,
     );
@@ -2245,6 +2254,7 @@ class LocalDatabaseService {
       'catalog_thumbnail_url': 'TEXT',
       'artist_browse_ids_json': "TEXT NOT NULL DEFAULT '[]'",
       'catalog_key': 'TEXT',
+      'audio_format_json': 'TEXT',
     };
     for (final column in additiveColumns.entries) {
       if (localColumns.add(column.key)) {
@@ -2334,6 +2344,7 @@ class LocalDatabaseService {
       },
       if (version >= 6) 'artist_browse_ids_json',
       if (version >= 8) 'catalog_key',
+      if (version >= 11) 'audio_format_json',
     };
     await _requireTableColumns(
       db,

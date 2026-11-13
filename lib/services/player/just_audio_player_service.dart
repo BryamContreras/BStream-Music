@@ -27,7 +27,8 @@ class JustAudioPlayerService
         PlayerService,
         NativeRemoteQueuePlayer,
         CrossfadeCapablePlayer,
-        SkipSilenceCapablePlayer {
+        SkipSilenceCapablePlayer,
+        AudioSourceUpgradePlayer {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
   static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
   static const _backgroundPositionSnapshotInterval = Duration(seconds: 1);
@@ -297,6 +298,12 @@ class JustAudioPlayerService
       tag: tag,
       queueEntryId: queueEntryId,
     );
+    if (_sourceUpgradeActive && !sameLogicalItem) {
+      // Native Next must win over an upgrade of the previous recording.
+      // Treat this as cancellation, never as an accelerated track crossfade.
+      _crossfadeGeneration++;
+      unawaited(_resetCrossfadeState(restorePrimaryVolume: true));
+    }
     if (!force && _crossfadeStartGeneration != null && !sameLogicalItem) {
       // The native primary queue won the race while crossfade startup was
       // waiting for a serialized AudioSink option write. Cancel the unopened
@@ -479,6 +486,7 @@ class JustAudioPlayerService
   Stopwatch? _remoteStartupWatch;
   bool _loggedRemoteDuration = false;
   bool _crossfadeEnabled = false;
+  bool _sourceUpgradeActive = false;
   Duration _crossfadeDuration = const Duration(seconds: 5);
   int _crossfadeGeneration = 0;
   CrossfadePlaybackSource? _preparedCrossfadeSource;
@@ -826,6 +834,207 @@ class JustAudioPlayerService
   }
 
   @override
+  Future<bool> upgradeRemoteSource(
+    RemotePlaybackSource source, {
+    bool Function()? shouldContinue,
+  }) async {
+    final before = _snapshot;
+    final duration = before.duration;
+    if (_disposed ||
+        _sourceUpgradeActive ||
+        _sourceLoadPending ||
+        !before.isRemote ||
+        before.status != PlayerStatus.playing ||
+        before.sourceUrl != source.track.url ||
+        before.trackId !=
+            (source.track.id.isEmpty ? source.track.url : source.track.id) ||
+        before.queueEntryId != source.queueEntryId ||
+        duration == null ||
+        duration - _player.position <=
+            _crossfadeDuration + const Duration(seconds: 3) ||
+        _crossfadeRamp != null ||
+        _crossfadeStartGeneration != null ||
+        _crossfadePreparation != null ||
+        _preparedCrossfadeSource != null ||
+        _crossfadePromotionInProgress ||
+        !(shouldContinue?.call() ?? true)) {
+      return false;
+    }
+    final sources = List<RemotePlaybackSource>.of(_remoteQueueSources);
+    final index = sources.indexWhere(
+      (entry) => entry.queueEntryId == source.queueEntryId,
+    );
+    if (index < 0 || index != _player.currentIndex) return false;
+    sources[index] = source;
+    final plan = _JustAudioCrossfadeLoadPlan(
+      audioSources: sources.map(_remoteAudioSource).toList(growable: false),
+      initialIndex: index,
+      localTracks: const [],
+      remoteSources: sources,
+      remoteHasSingleLogicalItem: _remoteHasSingleLogicalItem,
+      nativeLocalQueueLoaded: false,
+      shuffleOrder: null,
+    );
+    final playbackGeneration = _playbackGeneration;
+    final queueRevision = _remoteQueueRevision;
+    final intentRevision = _playIntentRevision;
+    final seekRevision = _seekRevision;
+    final generation = ++_crossfadeGeneration;
+    final outgoing = _player;
+    final prepared = RemoteCrossfadePlaybackSource(source);
+    var committed = false;
+    _sourceUpgradeActive = true;
+    bool isCurrent() =>
+        !_disposed &&
+        _sourceUpgradeActive &&
+        generation == _crossfadeGeneration &&
+        playbackGeneration == _playbackGeneration &&
+        queueRevision == _remoteQueueRevision &&
+        intentRevision == _playIntentRevision &&
+        seekRevision == _seekRevision &&
+        _playWhenReady &&
+        _snapshot.status == PlayerStatus.playing &&
+        _snapshot.queueEntryId == before.queueEntryId &&
+        (shouldContinue?.call() ?? true);
+    try {
+      await _resetCrossfadeState(
+        restorePrimaryVolume: true,
+        preserveStandby: true,
+        preserveSourceUpgrade: true,
+      );
+      if (!isCurrent()) return false;
+      final preparation = _prepareCrossfadeSource(
+        prepared,
+        plan,
+        generation,
+        initialPosition: outgoing.position,
+      );
+      _crossfadePreparation = preparation;
+      await preparation;
+      if (identical(_crossfadePreparation, preparation)) {
+        _crossfadePreparation = null;
+      }
+      final incoming = _crossfadePlayer;
+      if (!isCurrent() ||
+          incoming == null ||
+          _preparedCrossfadeSource != prepared) {
+        return false;
+      }
+      final detectedDuration = incoming.duration;
+      if (detectedDuration != null &&
+          (detectedDuration - duration).abs() > const Duration(seconds: 2)) {
+        return false;
+      }
+      await incoming
+          .seek(outgoing.position, index: index)
+          .timeout(_operationTimeout);
+      if (!isCurrent()) return false;
+      if (incoming.processingState != ProcessingState.ready) {
+        await incoming.playerStateStream
+            .firstWhere(
+              (state) => state.processingState == ProcessingState.ready,
+            )
+            .timeout(_operationTimeout);
+      }
+      if (!isCurrent()) return false;
+      // The first seek may have waited for a decoder buffer. Align once more
+      // inside that now-warm range, then start muted without pausing the source.
+      await incoming
+          .seek(outgoing.position, index: index)
+          .timeout(_operationTimeout);
+      if (!isCurrent()) return false;
+      unawaited(_playCrossfadeIncoming(incoming, generation, prepared));
+      if (!incoming.playing ||
+          incoming.processingState != ProcessingState.ready) {
+        await incoming.playerStateStream
+            .firstWhere(
+              (state) =>
+                  state.playing &&
+                  state.processingState == ProcessingState.ready,
+            )
+            .timeout(_operationTimeout);
+      }
+      if (!isCurrent()) return false;
+      // Starting a prepared decoder can buffer after the last seek while the
+      // original keeps advancing. Align again after that readiness boundary,
+      // before either deck's gain changes, instead of exposing an old clock.
+      if ((incoming.position - outgoing.position).abs() >
+          const Duration(milliseconds: 50)) {
+        await incoming
+            .seek(outgoing.position, index: index)
+            .timeout(_operationTimeout);
+        if (!isCurrent()) return false;
+        if (incoming.processingState != ProcessingState.ready) {
+          await incoming.playerStateStream
+              .firstWhere(
+                (state) => state.processingState == ProcessingState.ready,
+              )
+              .timeout(_operationTimeout);
+        }
+      }
+      if (!isCurrent() ||
+          (incoming.position - outgoing.position).abs() >
+              const Duration(milliseconds: 250)) {
+        return false;
+      }
+      late final CrossfadeRamp ramp;
+      ramp = CrossfadeRamp(
+        duration: const Duration(milliseconds: 100),
+        tickInterval: const Duration(milliseconds: 20),
+        applyGains: (gains) async {
+          if (!isCurrent() || !identical(_crossfadeRamp, ramp)) {
+            ramp.cancel();
+            return;
+          }
+          _crossfadePrimaryGain = gains.outgoing * gains.outgoing;
+          _crossfadeIncomingGain = gains.incoming * gains.incoming;
+          await _writeCrossfadeVolumes(
+            outgoing: outgoing,
+            incoming: incoming,
+            outgoingVolume: _crossfadePrimaryGain * _masterVolume,
+            incomingVolume: _crossfadeIncomingGain * _masterVolume,
+          );
+        },
+      );
+      _crossfadeRamp = ramp;
+      if (!await ramp.start() || !isCurrent()) return false;
+      await _promoteCrossfadePlayer(
+        generation: generation,
+        outgoing: outgoing,
+        incoming: incoming,
+        source: prepared,
+      );
+      committed = identical(_player, incoming);
+      return committed;
+    } catch (error, stackTrace) {
+      if (!_disposed) {
+        developer.log(
+          'just_audio source upgrade kept the original source',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+      return false;
+    } finally {
+      if (generation == _crossfadeGeneration) {
+        _sourceUpgradeActive = false;
+        if (!committed) {
+          _crossfadeGeneration++;
+          await _resetCrossfadeState(restorePrimaryVolume: true);
+        }
+      }
+    }
+  }
+
+  Future<void> _cancelSourceUpgradeForAction() async {
+    if (!_sourceUpgradeActive) return;
+    _sourceUpgradeActive = false;
+    _crossfadeGeneration++;
+    await _resetCrossfadeState(restorePrimaryVolume: true);
+  }
+
+  @override
   Future<void> configureCrossfade({
     required bool enabled,
     required Duration duration,
@@ -855,7 +1064,7 @@ class JustAudioPlayerService
 
   @override
   Future<void> prepareCrossfade(CrossfadePlaybackSource? source) async {
-    if (_disposed) {
+    if (_disposed || _sourceUpgradeActive) {
       return;
     }
     if (!_crossfadeEnabled || source == null) {
@@ -926,8 +1135,9 @@ class JustAudioPlayerService
   Future<void> _prepareCrossfadeSource(
     CrossfadePlaybackSource source,
     _JustAudioCrossfadeLoadPlan plan,
-    int generation,
-  ) async {
+    int generation, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     _standbyRetirementGeneration++;
     final incoming = _crossfadePlayer ??= _newCrossfadePlayer();
     _crossfadeErrorSubscription = incoming.errorStream.listen((error) {
@@ -963,7 +1173,7 @@ class JustAudioPlayerService
           .setAudioSources(
             plan.audioSources,
             initialIndex: plan.initialIndex,
-            initialPosition: Duration.zero,
+            initialPosition: initialPosition,
             preload: true,
             shuffleOrder: plan.shuffleOrder,
           )
@@ -1079,7 +1289,9 @@ class JustAudioPlayerService
   }
 
   bool _isCrossfadeCurrent(int generation) =>
-      !_disposed && _crossfadeEnabled && generation == _crossfadeGeneration;
+      !_disposed &&
+      (_crossfadeEnabled || _sourceUpgradeActive) &&
+      generation == _crossfadeGeneration;
 
   Future<void> _abortCrossfadeGeneration(int generation) async {
     if (!_isCrossfadeCurrent(generation)) {
@@ -1092,7 +1304,9 @@ class JustAudioPlayerService
   Future<void> _resetCrossfadeState({
     required bool restorePrimaryVolume,
     bool preserveStandby = false,
+    bool preserveSourceUpgrade = false,
   }) async {
+    if (!preserveSourceUpgrade) _sourceUpgradeActive = false;
     _crossfadeRamp?.cancel();
     _crossfadeRamp = null;
     _crossfadeStartGeneration = null;
@@ -1179,6 +1393,7 @@ class JustAudioPlayerService
   }
 
   void _maybeStartCrossfade({Duration? positionOverride}) {
+    if (_sourceUpgradeActive) return;
     if (_skipSilenceDeckMismatch ||
         _skipSilenceConfigurationPending ||
         _hasUncertainSkipSilenceDecks) {
@@ -1519,11 +1734,13 @@ class JustAudioPlayerService
             !identical(incoming, _crossfadePlayer)) {
           return;
         }
-        var nextSnapshot = _crossfadeSnapshot(
-          source,
-          position: incoming.position,
-          detectedDuration: incoming.duration,
-        );
+        var nextSnapshot = _sourceUpgradeActive
+            ? _snapshot.copyWith(position: incoming.position)
+            : _crossfadeSnapshot(
+                source,
+                position: incoming.position,
+                detectedDuration: incoming.duration,
+              );
         if (_crossfadePaused || _snapshot.status == PlayerStatus.paused) {
           nextSnapshot = nextSnapshot.copyWith(status: PlayerStatus.paused);
         }
@@ -2413,6 +2630,7 @@ class JustAudioPlayerService
 
   @override
   Future<void> pause() async {
+    final upgradeCancellation = _cancelSourceUpgradeForAction();
     final intentRevision = ++_playIntentRevision;
     final generation = _playbackGeneration;
     _playWhenReady = false;
@@ -2421,6 +2639,7 @@ class JustAudioPlayerService
     _crossfadeRamp?.pause();
     final incoming = _crossfadePlayer;
     await Future.wait<void>([
+      upgradeCancellation,
       _player.pause(),
       if (_crossfadeRamp != null && incoming != null) incoming.pause(),
     ]);
@@ -2491,18 +2710,20 @@ class JustAudioPlayerService
 
   @override
   Future<void> seek(Duration position) {
+    final upgradeCancellation = _cancelSourceUpgradeForAction();
     final generation = _playbackGeneration;
     final revision = ++_seekRevision;
     final target = position < Duration.zero ? Duration.zero : position;
     final logicalIndex = _logicalPrimaryIndexForSnapshot(_snapshot);
-    final operation = _seekTail.then(
-      (_) => _performSeek(
+    final operation = _seekTail.then((_) async {
+      await upgradeCancellation;
+      return _performSeek(
         target,
         generation: generation,
         revision: revision,
         logicalIndex: logicalIndex,
-      ),
-    );
+      );
+    });
     _seekTail = operation.then<void>(
       (_) {},
       onError: (Object _, StackTrace _) {},
@@ -2563,9 +2784,11 @@ class JustAudioPlayerService
 
   @override
   Future<void> setVolume(double volume) async {
+    final upgradeCancellation = _cancelSourceUpgradeForAction();
     final normalized = volume.clamp(0, 1).toDouble();
     _masterVolume = normalized;
     _emit(_snapshot.copyWith(volume: normalized));
+    await upgradeCancellation;
     final outgoing = _player;
     final ramp = _crossfadeRamp;
     final incoming = _crossfadePlayer;

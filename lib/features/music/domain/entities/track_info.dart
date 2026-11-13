@@ -72,6 +72,25 @@ class TrackInfo {
   final List<String?> artistBrowseIds;
   final TrackMetadataSource metadataSource;
 
+  /// Retains catalog identity while discarding a previously selected transport.
+  /// Optional providers must be reconsidered under the current network policy.
+  TrackInfo withoutAudioTransport() => TrackInfo(
+    id: id,
+    title: title,
+    artist: artist,
+    url: url,
+    thumbnailUrl: thumbnailUrl,
+    catalogThumbnailUrl: catalogThumbnailUrl,
+    duration: duration,
+    extractor: extractor,
+    album: album,
+    albumBrowseId: albumBrowseId,
+    viewCount: viewCount,
+    artists: artists,
+    artistBrowseIds: artistBrowseIds,
+    metadataSource: metadataSource,
+  );
+
   TrackInfo copyWith({
     String? id,
     String? title,

@@ -301,7 +301,11 @@ class _MediaKitPlayerBackend
 }
 
 class MediaKitPlayerService
-    implements PlayerService, CrossfadeCapablePlayer, PlayerAudioOutput {
+    implements
+        PlayerService,
+        CrossfadeCapablePlayer,
+        AudioSourceUpgradePlayer,
+        PlayerAudioOutput {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
   static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
 
@@ -352,6 +356,8 @@ class MediaKitPlayerService
   int? _backendGeneration;
   bool _disposed = false;
   bool _crossfadeEnabled = false;
+  bool _sourceUpgradeActive = false;
+  Completer<void>? _sourceUpgradeCancellation;
   Duration _crossfadeDuration = const Duration(seconds: 5);
   int _crossfadeGeneration = 0;
   CrossfadePlaybackSource? _preparedCrossfadeSource;
@@ -367,6 +373,7 @@ class MediaKitPlayerService
   int _seekRevision = 0;
   Duration _standbyPosition = Duration.zero;
   Duration? _standbyDuration;
+  Duration? _standbyDecodedDuration;
   int _standbyRetirementGeneration = 0;
 
   static bool _initialized = false;
@@ -530,6 +537,242 @@ class MediaKitPlayerService
   );
 
   @override
+  Future<bool> upgradeRemoteSource(
+    RemotePlaybackSource source, {
+    bool Function()? shouldContinue,
+  }) async {
+    final before = _snapshot;
+    final duration = before.duration;
+    if (_disposed ||
+        _sourceUpgradeActive ||
+        !before.isRemote ||
+        before.status != PlayerStatus.playing ||
+        before.sourceUrl != source.track.url ||
+        before.trackId !=
+            (source.track.id.isEmpty ? source.track.url : source.track.id) ||
+        (before.queueEntryId != null &&
+            before.queueEntryId != source.queueEntryId) ||
+        duration == null ||
+        duration - before.position <=
+            _crossfadeDuration + const Duration(seconds: 3) ||
+        _crossfadeRamp != null ||
+        _crossfadePreparation != null ||
+        _preparedCrossfadeSource != null ||
+        _crossfadePromotionInProgress ||
+        !(shouldContinue?.call() ?? true)) {
+      return false;
+    }
+    final playbackGeneration = _requestedGeneration;
+    final seekRevision = _seekRevision;
+    final generation = ++_crossfadeGeneration;
+    final outgoing = _player;
+    final prepared = RemoteCrossfadePlaybackSource(source);
+    final cancellation = Completer<void>();
+    var committed = false;
+    _sourceUpgradeActive = true;
+    bool isCurrent() =>
+        !_disposed &&
+        _sourceUpgradeActive &&
+        generation == _crossfadeGeneration &&
+        playbackGeneration == _requestedGeneration &&
+        seekRevision == _seekRevision &&
+        _snapshot.status == PlayerStatus.playing &&
+        _snapshot.sourceUrl == before.sourceUrl &&
+        _snapshot.queueEntryId == before.queueEntryId &&
+        (shouldContinue?.call() ?? true);
+    try {
+      await _resetCrossfadeState(
+        restoreActiveVolume: true,
+        preserveStandby: true,
+        preserveSourceUpgrade: true,
+      );
+      if (!isCurrent()) return false;
+      _sourceUpgradeCancellation = cancellation;
+      final preparation = _prepareCrossfadeSource(prepared, generation);
+      _crossfadePreparation = preparation;
+      await preparation;
+      if (identical(_crossfadePreparation, preparation)) {
+        _crossfadePreparation = null;
+      }
+      final incoming = _standbyPlayer;
+      if (!isCurrent() ||
+          incoming == null ||
+          _preparedCrossfadeSource != prepared) {
+        return false;
+      }
+      // media_kit.open completes after dispatching playlist-pos, before mpv
+      // finishes loading the file. Seeking at that point can be silently
+      // ignored. Wait for decoder metadata, rather than catalog duration.
+      await _waitForSourceUpgradeValue<Duration>(
+        incoming.durationStream,
+        (value) => value > Duration.zero,
+        current: _standbyDecodedDuration,
+        cancellation: cancellation,
+      );
+      if (!isCurrent()) return false;
+      if (_standbyDuration != null &&
+          (_standbyDuration! - duration).abs() > const Duration(seconds: 2)) {
+        return false;
+      }
+      // Loading never pauses the active decoder. Only seek the muted prepared
+      // source, using the clock after preparation rather than its old position.
+      var position = await _sourceUpgradePosition(outgoing, _snapshot.position);
+      if (!isCurrent()) return false;
+      await _seekSourceUpgrade(incoming, position, cancellation);
+      if (!isCurrent()) return false;
+      await incoming.play().timeout(_operationTimeout);
+      if (!isCurrent()) return false;
+      // A native seek may have waited for buffering while the old decoder kept
+      // advancing. Correct that drift once while the new decoder is muted.
+      // Native time-pos avoids using the UI's throttled position snapshot.
+      final livePosition = await _sourceUpgradePosition(
+        outgoing,
+        _snapshot.position,
+      );
+      if (!isCurrent()) return false;
+      if ((livePosition - position).abs() > const Duration(milliseconds: 30)) {
+        position = livePosition;
+        await _seekSourceUpgrade(incoming, position, cancellation);
+        if (!isCurrent()) return false;
+      }
+      late final CrossfadeRamp ramp;
+      ramp = CrossfadeRamp(
+        duration: const Duration(milliseconds: 100),
+        tickInterval: const Duration(milliseconds: 20),
+        applyGains: (gains) async {
+          if (!isCurrent() || !identical(_crossfadeRamp, ramp)) {
+            ramp.cancel();
+            return;
+          }
+          // Both decks carry the same recording. Linear amplitude gains avoid
+          // the level increase an equal-power overlap would add here.
+          await _writeCrossfadeVolumes(
+            outgoing: outgoing,
+            incoming: incoming,
+            outgoingVolume: gains.outgoing * gains.outgoing * _masterVolume,
+            incomingVolume: gains.incoming * gains.incoming * _masterVolume,
+          );
+        },
+      );
+      _crossfadeRamp = ramp;
+      if (!await ramp.start() || !isCurrent()) return false;
+      await _promoteCrossfadePlayer(
+        generation: generation,
+        outgoing: outgoing,
+        incoming: incoming,
+        source: prepared,
+      );
+      committed = identical(_player, incoming);
+      return committed;
+    } catch (error, stackTrace) {
+      if (!_disposed) {
+        developer.log(
+          'media_kit source upgrade kept the original source',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+      return false;
+    } finally {
+      if (!cancellation.isCompleted) cancellation.complete();
+      if (identical(_sourceUpgradeCancellation, cancellation)) {
+        _sourceUpgradeCancellation = null;
+      }
+      if (generation == _crossfadeGeneration) {
+        _sourceUpgradeActive = false;
+        if (!committed) {
+          _crossfadeGeneration++;
+          await _resetCrossfadeState(restoreActiveVolume: true);
+        }
+      }
+    }
+  }
+
+  Future<void> _seekSourceUpgrade(
+    MediaKitPlayerBackend incoming,
+    Duration position,
+    Completer<void> cancellation,
+  ) async {
+    // Subscribe before seeking: an acknowledged command is not proof that
+    // the decoder accepted the target. Keep it muted until its real clock
+    // reaches that target, and keep the original if it cannot seek there.
+    final aligned = _waitForSourceUpgradeValue<Duration>(
+      incoming.positionStream,
+      (value) => (value - position).abs() <= const Duration(milliseconds: 150),
+      current: _standbyPosition,
+      cancellation: cancellation,
+    );
+    await Future.wait<void>([
+      aligned,
+      incoming.seek(position).timeout(_operationTimeout),
+    ], eagerError: true);
+  }
+
+  Future<void> _waitForSourceUpgradeValue<T>(
+    Stream<T> stream,
+    bool Function(T value) accepts, {
+    required T? current,
+    required Completer<void> cancellation,
+  }) async {
+    if (current != null && accepts(current)) return;
+    final completion = Completer<void>();
+    final subscription = stream.listen(
+      (value) {
+        if (!completion.isCompleted && accepts(value)) completion.complete();
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!completion.isCompleted) completion.completeError(error, stack);
+      },
+      onDone: () {
+        if (!completion.isCompleted) {
+          completion.completeError(StateError('Prepared decoder was closed.'));
+        }
+      },
+    );
+    try {
+      await Future.any<void>([
+        completion.future,
+        cancellation.future.then<void>((_) {
+          throw StateError('Source alignment was cancelled.');
+        }),
+      ]).timeout(_operationTimeout);
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
+  Future<Duration> _sourceUpgradePosition(
+    MediaKitPlayerBackend backend,
+    Duration fallback,
+  ) async {
+    final platform = backend.platform;
+    if (platform is NativePlayer) {
+      try {
+        final seconds = double.tryParse(
+          await platform
+              .getProperty('time-pos')
+              .timeout(const Duration(milliseconds: 250)),
+        );
+        if (seconds != null && seconds.isFinite && seconds >= 0) {
+          return Duration(microseconds: (seconds * 1000000).round());
+        }
+      } catch (_) {
+        // Alternate/older native backends may not expose a usable live clock.
+        // The last source position is still a safe bounded fallback.
+      }
+    }
+    return fallback;
+  }
+
+  Future<void> _cancelSourceUpgradeForAction() async {
+    if (!_sourceUpgradeActive) return;
+    _sourceUpgradeActive = false;
+    _crossfadeGeneration++;
+    await _resetCrossfadeState(restoreActiveVolume: true);
+  }
+
+  @override
   Future<void> configureCrossfade({
     required bool enabled,
     required Duration duration,
@@ -559,7 +802,7 @@ class MediaKitPlayerService
 
   @override
   Future<void> prepareCrossfade(CrossfadePlaybackSource? source) async {
-    if (_disposed) {
+    if (_disposed || _sourceUpgradeActive) {
       return;
     }
     if (!_crossfadeEnabled || source == null) {
@@ -614,6 +857,7 @@ class MediaKitPlayerService
     _crossfadePreparationCancellation = cancellation;
     _standbyPosition = Duration.zero;
     _standbyDuration = _crossfadeSourceDuration(source);
+    _standbyDecodedDuration = null;
     _attachStandbyPlayer(standby, generation);
     try {
       await _runCrossfadePreparationWithDeadline(() async {
@@ -726,9 +970,11 @@ class MediaKitPlayerService
         }),
         player.durationStream.listen((duration) {
           if (_isCrossfadeCurrent(generation) &&
-              identical(player, _standbyPlayer) &&
-              duration > Duration.zero) {
-            _standbyDuration = duration;
+              identical(player, _standbyPlayer)) {
+            _standbyDecodedDuration = duration > Duration.zero
+                ? duration
+                : null;
+            if (duration > Duration.zero) _standbyDuration = duration;
           }
         }),
         player.errorStream.listen((message) {
@@ -813,6 +1059,7 @@ class MediaKitPlayerService
   }
 
   void _maybeStartCrossfade() {
+    if (_sourceUpgradeActive) return;
     final effectiveDuration = crossfadeStartDuration(
       enabled: _crossfadeEnabled,
       disposed: _disposed,
@@ -912,7 +1159,9 @@ class MediaKitPlayerService
     _crossfadePromotionCompletion = promotionCompletion;
     try {
       final requestedGeneration = _requestedGeneration;
-      var nextSnapshot = _crossfadeSnapshot(source);
+      var nextSnapshot = _sourceUpgradeActive
+          ? _snapshot.copyWith(position: _standbyPosition)
+          : _crossfadeSnapshot(source);
       bool isCurrent() =>
           _isCrossfadeCurrent(generation) &&
           requestedGeneration == _requestedGeneration;
@@ -964,6 +1213,7 @@ class MediaKitPlayerService
       _backendGeneration = _requestedGeneration;
       _standbyPosition = Duration.zero;
       _standbyDuration = null;
+      _standbyDecodedDuration = null;
       _attachActivePlayer(incoming);
       if (_crossfadePaused || _snapshot.status == PlayerStatus.paused) {
         nextSnapshot = nextSnapshot.copyWith(status: PlayerStatus.paused);
@@ -1023,12 +1273,23 @@ class MediaKitPlayerService
   }
 
   bool _isCrossfadeCurrent(int generation) =>
-      !_disposed && _crossfadeEnabled && generation == _crossfadeGeneration;
+      !_disposed &&
+      (_crossfadeEnabled || _sourceUpgradeActive) &&
+      generation == _crossfadeGeneration;
 
   Future<void> _resetCrossfadeState({
     required bool restoreActiveVolume,
     bool preserveStandby = false,
+    bool preserveSourceUpgrade = false,
   }) async {
+    if (!preserveSourceUpgrade) {
+      _sourceUpgradeActive = false;
+      final sourceCancellation = _sourceUpgradeCancellation;
+      _sourceUpgradeCancellation = null;
+      if (sourceCancellation != null && !sourceCancellation.isCompleted) {
+        sourceCancellation.complete();
+      }
+    }
     _crossfadeRamp?.cancel();
     _crossfadeRamp = null;
     if (_disableCrossfadeAfterHandoff) {
@@ -1143,6 +1404,7 @@ class MediaKitPlayerService
     }
     _standbyPosition = Duration.zero;
     _standbyDuration = null;
+    _standbyDecodedDuration = null;
   }
 
   void _attachActivePlayer(MediaKitPlayerBackend player) {
@@ -1481,6 +1743,7 @@ class MediaKitPlayerService
 
   @override
   Future<void> pause() async {
+    final upgradeCancellation = _cancelSourceUpgradeForAction();
     final generation = _requestedGeneration;
     _crossfadePaused = true;
     _crossfadeRamp?.pause();
@@ -1490,6 +1753,7 @@ class MediaKitPlayerService
       }
       final standby = _standbyPlayer;
       await Future.wait<void>([
+        upgradeCancellation,
         _player.pause(),
         if (_crossfadeRamp != null && standby != null) standby.pause(),
       ]);
@@ -1543,16 +1807,18 @@ class MediaKitPlayerService
 
   @override
   Future<void> seek(Duration position) {
+    final upgradeCancellation = _cancelSourceUpgradeForAction();
     final requestedGeneration = _requestedGeneration;
     final revision = ++_seekRevision;
     final target = position < Duration.zero ? Duration.zero : position;
-    final operation = _seekTail.then(
-      (_) => _performSeek(
+    final operation = _seekTail.then((_) async {
+      await upgradeCancellation;
+      return _performSeek(
         target,
         requestedGeneration: requestedGeneration,
         revision: revision,
-      ),
-    );
+      );
+    });
     _seekTail = operation.then<void>(
       (_) {},
       onError: (Object _, StackTrace _) {},
@@ -1590,9 +1856,11 @@ class MediaKitPlayerService
 
   @override
   Future<void> setVolume(double volume) async {
+    final upgradeCancellation = _cancelSourceUpgradeForAction();
     final normalized = volume.clamp(0, 1).toDouble();
     _masterVolume = normalized;
     _emit(_snapshot.copyWith(volume: normalized));
+    await upgradeCancellation;
     final ramp = _crossfadeRamp;
     final standby = _standbyPlayer;
     if (ramp != null && standby != null) {

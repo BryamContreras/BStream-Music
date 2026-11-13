@@ -58,7 +58,15 @@ void main() {
         await request.response.close();
         return;
       }
-      if (request.uri.path.contains('html')) {
+      if (request.uri.path.contains('rendition-')) {
+        final byte = request.uri.path.contains('jio-high')
+            ? 20
+            : request.uri.path.contains('jio-standard')
+            ? 30
+            : 10;
+        request.response.headers.contentType = ContentType('audio', 'mp4');
+        request.response.add(List<int>.filled(2048, byte));
+      } else if (request.uri.path.contains('html')) {
         request.response.headers.contentType = ContentType('text', 'html');
         request.response.write('<html>not audio</html>');
       } else if (request.uri.path.contains('json')) {
@@ -145,6 +153,45 @@ void main() {
     expect(file!.path, endsWith('.3gp'));
     expect(await file.length(), greaterThan(0));
   });
+
+  test(
+    'mobile cache separates providers and renditions for a long catalog URL',
+    () async {
+      final catalogUrl =
+          'https://music.youtube.com/watch?v=ABCDEFGHIJK&list='
+          '${List.filled(160, 'x').join()}';
+      final youtube = _track(server, 'rendition-yt').copyWith(
+        url: catalogUrl,
+        streamSource: 'innerTube',
+        streamBitrate: 128000,
+      );
+      final jioHigh = youtube.copyWith(
+        streamUrl: _track(server, 'rendition-jio-high').streamUrl,
+        streamSource: 'jioSaavn',
+        streamFormatId: 'saavn-song:320',
+        streamBitrate: 320000,
+      );
+      final jioStandard = jioHigh.copyWith(
+        streamUrl: _track(server, 'rendition-jio-standard').streamUrl,
+        streamFormatId: 'saavn-song:160',
+        streamBitrate: 160000,
+      );
+      final tracks = [youtube, jioHigh, jioStandard];
+      await cache.retainOnlyTracks(tracks);
+      final files = await Future.wait(tracks.map(cache.warmResolved));
+      expect(files.every((file) => file != null), isTrue);
+      expect(files.map((file) => file!.path).toSet(), hasLength(3));
+      for (var index = 0; index < tracks.length; index++) {
+        final cached = await cache.cachedFile(tracks[index]);
+        expect(cached?.path, files[index]!.path);
+        expect(
+          await cached!.readAsBytes(),
+          List.filled(2048, 10 * (index + 1)),
+        );
+      }
+      expect(await _audioFiles(cacheDirectory), hasLength(3));
+    },
+  );
 
   test(
     'protected tracks still obey file and byte quotas by priority',

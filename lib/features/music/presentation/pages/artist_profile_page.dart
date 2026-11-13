@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/platform/app_platform.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/widgets/horizontal_shelf_scroll_behavior.dart';
+import '../../../../core/widgets/painted_glass_button_style.dart';
 import '../../../../services/youtube_music/account/youtube_music_account.dart';
 import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../data/datasources/remote_music_datasource.dart';
@@ -14,10 +16,11 @@ import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
 import '../providers/subscribed_artists_controller.dart';
 import '../providers/youtube_music_auth_controller.dart';
+import '../widgets/artwork_detail_scaffold.dart';
 import '../widgets/artwork_gradient_header_background.dart';
+import '../widgets/expanded_artwork_header_background.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/source_image.dart';
-import '../widgets/surface_detail_app_bar.dart';
 import '../widgets/track_result_tile.dart';
 import 'artist_releases_page.dart';
 import 'artist_songs_page.dart';
@@ -103,18 +106,10 @@ class ArtistProfilePage extends ConsumerStatefulWidget {
 }
 
 class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
-  final GlassScrollMotionNotifier _glassScrollMotion =
-      GlassScrollMotionNotifier();
   bool _subscriptionBusy = false;
   bool _radioBusy = false;
   bool _popularPlaybackBusy = false;
   bool? _subscriptionOverride;
-
-  @override
-  void dispose() {
-    _glassScrollMotion.dispose();
-    super.dispose();
-  }
 
   ArtistProfileRequest get _request => (
     artistBrowseId: widget.artistBrowseId,
@@ -124,7 +119,6 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final strings = ref.watch(appStringsProvider);
     final profileState = ref.watch(artistProfileProvider(_request));
     final defaultMode = defaultMiniPlayerModeForPlatform(
       Theme.of(context).platform,
@@ -160,25 +154,11 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
           singles: const <InnerTubeAlbum>[],
         );
 
-    return Scaffold(
+    return ArtworkDetailScaffold(
       key: const ValueKey('artist-profile-page'),
       extendBody: underlayMiniPlayer,
-      extendBodyBehindAppBar: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      appBar: SurfaceDetailAppBar(
-        backdropMotion: _glassScrollMotion,
-        appBarKey: const ValueKey('artist-profile-app-bar'),
-        surfaceKey: const ValueKey('artist-profile-app-bar-surface'),
-        blurKey: const ValueKey('artist-profile-app-bar-blur'),
-        statusBarSurfaceKey: const ValueKey(
-          'artist-profile-status-bar-surface',
-        ),
-        title: Text(
-          strings.artistProfile,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
+      backButtonKey: const ValueKey('artist-profile-back'),
+      statusBarFadeExtent: 0,
       // Render the identity and artwork immediately. Mix pages feel faster
       // because their header metadata is already known before tracks load;
       // artist pages now follow the same progressive pattern.
@@ -192,16 +172,13 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
               keyPrefix: 'artist-profile',
             ),
           ),
-          NotificationListener<ScrollNotification>(
-            onNotification: _glassScrollMotion.handleNotification,
-            child: _buildProfile(
-              context,
-              profile,
-              profileLoaded: profileState.hasValue,
-              profileLoading: profileState.isLoading,
-              profileFailed: profileState.hasError && !profileState.hasValue,
-              bottomContentPadding: bottomContentPadding,
-            ),
+          _buildProfile(
+            context,
+            profile,
+            profileLoaded: profileState.hasValue,
+            profileLoading: profileState.isLoading,
+            profileFailed: profileState.hasError && !profileState.hasValue,
+            bottomContentPadding: bottomContentPadding,
           ),
         ],
       ),
@@ -260,73 +237,55 @@ class _ArtistProfilePageState extends ConsumerState<ArtistProfilePage> {
       scrollCacheExtent: const ScrollCacheExtent.pixels(800),
       slivers: [
         SliverToBoxAdapter(
-          child: SizedBox(
-            key: const ValueKey('artist-profile-app-bar-spacer'),
-            height: surfaceDetailAppBarBodyInset(context),
-          ),
-        ),
-        SliverToBoxAdapter(
           child: RepaintBoundary(
             key: const ValueKey('artist-profile-header'),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: ArtworkGradientHeaderBackground(
-                    artworkSource: profile.artist.thumbnailUrl,
-                    cacheWidth: 640,
-                    keyPrefix: 'artist-profile',
-                  ),
-                ),
-                _ArtistHeader(
-                  profile: profile,
-                  radioLabel: strings.artistMix,
-                  subscribeLabel: subscribed
-                      ? strings.unsubscribe
-                      : strings.subscribe,
-                  playLabel: strings.play,
-                  showSubscription: account != null,
-                  subscriptionTooltip:
-                      profileLoaded && subscriptionChannelId == null
-                      ? strings.artistSubscriptionUnavailable
-                      : null,
-                  subscriptionBusy:
-                      _subscriptionBusy ||
-                      profileLoading ||
-                      (account != null && subscription.isLoading),
-                  radioBusy: _radioBusy,
-                  canStartRadio:
-                      !_popularPlaybackBusy &&
-                      ((profile.radioPlaylistId?.trim().isNotEmpty == true &&
-                              (profile.radioSeedVideoId?.trim().isNotEmpty ==
-                                      true ||
-                                  tracks.isNotEmpty ||
-                                  widget.seedVideoId?.trim().isNotEmpty ==
-                                      true)) ||
-                          tracks.isNotEmpty ||
-                          widget.seedVideoId?.trim().isNotEmpty == true),
-                  canPlayAll:
-                      profileLoaded &&
-                      !_radioBusy &&
-                      (profile.playPlaylistId?.trim().isNotEmpty == true ||
-                          tracks.isNotEmpty),
-                  subscribed: subscribed,
-                  playAllBusy: _popularPlaybackBusy,
-                  onRadio: () => _startRadio(profile, tracks),
-                  onPlayAll: () => _playArtistQueue(profile, tracks),
-                  onSubscription: () {
-                    if (account == null || subscriptionChannelId == null) {
-                      _showMessage(strings.artistSubscriptionUnavailable);
-                      return;
-                    }
-                    _toggleSubscription(
-                      account,
-                      subscriptionChannelId,
-                      subscribed,
-                      profile,
-                    );
-                  },
-                ),
-              ],
+            child: _ArtistHeader(
+              profile: profile,
+              radioLabel: strings.artistMix,
+              subscribeLabel: subscribed
+                  ? strings.unsubscribe
+                  : strings.subscribe,
+              playLabel: strings.play,
+              showSubscription: account != null,
+              subscriptionTooltip:
+                  profileLoaded && subscriptionChannelId == null
+                  ? strings.artistSubscriptionUnavailable
+                  : null,
+              subscriptionBusy:
+                  _subscriptionBusy ||
+                  profileLoading ||
+                  (account != null && subscription.isLoading),
+              radioBusy: _radioBusy,
+              canStartRadio:
+                  !_popularPlaybackBusy &&
+                  ((profile.radioPlaylistId?.trim().isNotEmpty == true &&
+                          (profile.radioSeedVideoId?.trim().isNotEmpty ==
+                                  true ||
+                              tracks.isNotEmpty ||
+                              widget.seedVideoId?.trim().isNotEmpty == true)) ||
+                      tracks.isNotEmpty ||
+                      widget.seedVideoId?.trim().isNotEmpty == true),
+              canPlayAll:
+                  profileLoaded &&
+                  !_radioBusy &&
+                  (profile.playPlaylistId?.trim().isNotEmpty == true ||
+                      tracks.isNotEmpty),
+              subscribed: subscribed,
+              playAllBusy: _popularPlaybackBusy,
+              onRadio: () => _startRadio(profile, tracks),
+              onPlayAll: () => _playArtistQueue(profile, tracks),
+              onSubscription: () {
+                if (account == null || subscriptionChannelId == null) {
+                  _showMessage(strings.artistSubscriptionUnavailable);
+                  return;
+                }
+                _toggleSubscription(
+                  account,
+                  subscriptionChannelId,
+                  subscribed,
+                  profile,
+                );
+              },
             ),
           ),
         ),
@@ -742,34 +701,22 @@ class _ArtistHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final actionStyle = paintedGlassButtonStyle(context);
     final description = profile.description?.trim();
     final subscriberCount = profile.subscriberCount?.trim();
     final monthlyListenerCount = profile.monthlyListenerCount?.trim();
-    return _ArtistContent(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(0, 18, 0, 8),
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _artistContentMaxWidth),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final wide = constraints.maxWidth >= 700;
-            final artwork = ClipOval(
-              key: const ValueKey('artist-profile-artwork'),
-              child: SizedBox.square(
-                dimension: wide ? 216 : 176,
-                child: SourceImage(
-                  source: profile.artist.thumbnailUrl,
-                  cacheWidth: 640,
-                  fit: BoxFit.cover,
-                  fallback: ColoredBox(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    child: Icon(
-                      Icons.person_rounded,
-                      size: wide ? 88 : 72,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ),
-            );
+            final desktop = !AppPlatform.isMobileTargetPlatform(theme.platform);
+            final hasArtwork =
+                profile.artist.thumbnailUrl?.trim().isNotEmpty == true;
+            final artworkHeight = hasArtwork
+                ? constraints.maxWidth.clamp(240.0, wide ? 440.0 : 480.0)
+                : (wide ? 216.0 : 176.0);
             final details = Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: wide
@@ -838,6 +785,7 @@ class _ArtistHeader extends StatelessWidget {
                         children: [
                           FilledButton.icon(
                             key: const ValueKey('artist-mix'),
+                            style: actionStyle,
                             onPressed: canStartRadio && !radioBusy
                                 ? onRadio
                                 : null,
@@ -856,6 +804,7 @@ class _ArtistHeader extends StatelessWidget {
                               message: subscriptionTooltip ?? '',
                               child: FilledButton.tonalIcon(
                                 key: const ValueKey('artist-subscription'),
+                                style: actionStyle,
                                 onPressed: subscriptionBusy
                                     ? null
                                     : onSubscription,
@@ -882,6 +831,7 @@ class _ArtistHeader extends StatelessWidget {
                       dimension: 54,
                       child: IconButton.filled(
                         key: const ValueKey('artist-play-all'),
+                        style: paintedGlassButtonStyle(context, circular: true),
                         tooltip: playLabel,
                         onPressed: canPlayAll && !playAllBusy
                             ? onPlayAll
@@ -900,18 +850,33 @@ class _ArtistHeader extends StatelessWidget {
                 ),
               ],
             );
-            if (!wide) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [artwork, const SizedBox(height: 16), details],
-              );
-            }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+            return Stack(
               children: [
-                artwork,
-                const SizedBox(width: 28),
-                Expanded(child: details),
+                Positioned.fill(
+                  child: ExpandedArtworkHeaderBackground(
+                    artworkSource: profile.artist.thumbnailUrl,
+                    artworkHeight: artworkHeight,
+                    // Artist sources range from wide banners to portraits.
+                    // Enlarge smaller photos with a limited crop; the shared
+                    // reflection continues into the remaining background.
+                    preserveArtworkAspectRatio: desktop,
+                    keyPrefix: 'artist-profile',
+                  ),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      key: const ValueKey('artist-profile-artwork'),
+                      height: artworkHeight * 0.90,
+                      width: double.infinity,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
+                      child: details,
+                    ),
+                  ],
+                ),
               ],
             );
           },
@@ -952,57 +917,41 @@ class _ArtistDescriptionState extends ConsumerState<_ArtistDescription> {
         height: 1.4,
       ),
     );
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final painter = TextPainter(
-          text: TextSpan(text: widget.description, style: style),
-          maxLines: 4,
-          textAlign: widget.textAlign,
-          textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context),
-          locale: Localizations.maybeLocaleOf(context),
-        )..layout(maxWidth: constraints.maxWidth);
-        final canExpand = painter.didExceedMaxLines;
-        painter.dispose();
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: widget.textAlign == TextAlign.center
-              ? CrossAxisAlignment.center
-              : CrossAxisAlignment.start,
-          children: [
-            AnimatedSize(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.topCenter,
-              child: Text(
-                key: const ValueKey('artist-profile-description'),
-                widget.description,
-                maxLines: _expanded ? null : 4,
-                overflow: _expanded ? TextOverflow.clip : TextOverflow.ellipsis,
-                textAlign: widget.textAlign,
-                style: style,
-              ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: widget.textAlign == TextAlign.center
+          ? CrossAxisAlignment.center
+          : CrossAxisAlignment.start,
+      children: [
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: _expanded
+              ? Text(
+                  key: const ValueKey('artist-profile-description'),
+                  widget.description,
+                  textAlign: widget.textAlign,
+                  style: style,
+                )
+              : const SizedBox.shrink(),
+        ),
+        Semantics(
+          expanded: _expanded,
+          child: TextButton(
+            key: const ValueKey('artist-description-toggle'),
+            onPressed: () => setState(() => _expanded = !_expanded),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              visualDensity: VisualDensity.compact,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              textStyle: Theme.of(context).textTheme.labelSmall,
             ),
-            if (canExpand)
-              TextButton(
-                key: const ValueKey('artist-description-toggle'),
-                onPressed: () => setState(() => _expanded = !_expanded),
-                style: TextButton.styleFrom(
-                  minimumSize: const Size(0, 32),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  textStyle: Theme.of(context).textTheme.labelSmall,
-                ),
-                child: Text(_expanded ? strings.showLess : strings.showMore),
-              ),
-          ],
-        );
-      },
+            child: Text(_expanded ? strings.showLess : strings.showMore),
+          ),
+        ),
+      ],
     );
   }
 }

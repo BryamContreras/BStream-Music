@@ -14,7 +14,8 @@ class CastAwarePlayerService
         PlayerService,
         NativeRemoteQueuePlayer,
         CrossfadeCapablePlayer,
-        SkipSilenceCapablePlayer {
+        SkipSilenceCapablePlayer,
+        AudioSourceUpgradePlayer {
   CastAwarePlayerService({required PlayerService local, required this.cast})
     // Preserve a named injection point for the local backend.
     // ignore: prefer_initializing_formals
@@ -309,7 +310,7 @@ class CastAwarePlayerService
       if (_local case final NativeRemoteQueuePlayer native) {
         await native.playRemoteSource(remote);
       } else {
-        await _local.playRemote(remote.track);
+        await _local.playRemote(_transportTrack(remote));
       }
     }
   }
@@ -333,8 +334,45 @@ class CastAwarePlayerService
     if (_local case final NativeRemoteQueuePlayer native) {
       await native.playRemoteSource(source);
     } else {
-      await _local.playRemote(source.track);
+      await _local.playRemote(_transportTrack(source));
     }
+  }
+
+  TrackInfo _transportTrack(
+    RemotePlaybackSource source,
+  ) => source.track.copyWith(
+    // Native-queue backends receive this URI directly. A single-source backend
+    // must receive the same transport, including a cached file URI, rather
+    // than silently reopening the catalog track's expired/network stream URL.
+    streamUrl: source.uri.toString(),
+    httpHeaders: source.uri.scheme == 'file'
+        ? const {}
+        : source.httpHeaders ?? source.track.httpHeaders,
+  );
+
+  @override
+  Future<bool> upgradeRemoteSource(
+    RemotePlaybackSource source, {
+    bool Function()? shouldContinue,
+  }) async {
+    if (_disposed || _casting || _transitioning) return false;
+    final local = _local;
+    if (local is! AudioSourceUpgradePlayer) return false;
+    final operation = _operation;
+    bool isCurrent() =>
+        !_disposed &&
+        !_casting &&
+        !_transitioning &&
+        operation == _operation &&
+        (shouldContinue?.call() ?? true);
+    final promoted = await (local as AudioSourceUpgradePlayer)
+        .upgradeRemoteSource(source, shouldContinue: isCurrent);
+    if (promoted && isCurrent()) {
+      _remoteSources[source.queueEntryId] = source;
+      _source = _CastSource.remote(source);
+      return true;
+    }
+    return false;
   }
 
   @override

@@ -2,10 +2,36 @@
 
 ## Unreleased
 
+### Added
+
+- Audio Sources in Integrations, with mandatory YouTube Music and optional
+  JioSaavn enabled by default. Data saving offers one quality choice on desktop
+  and Wi-Fi/cellular profiles on mobile, also applied to downloads.
+- Background same-recording JioSaavn quality upgrades that reuse the existing
+  standby playback deck, retain queue/position/catalog metadata and fall back
+  to YouTube when no verified higher-quality recording is available.
+- Actual Low/Standard/High audio quality and current-track upgrade status in a
+  headphones capsule beside the playback times in all player styles, localized
+  in all seven languages.
+- Read JioSaavn's actual codec, declared bitrate, sample rate and channels with
+  the shared local MP4/AAC parser and a bounded, cached header lookup.
+- Embed title, artist, album and cached artwork in compatible M4A/audio MP4
+  (AAC/ALAC), MP3, FLAC, Ogg Opus/Vorbis, WAV and APE files, plus text tags in
+  audio-only WebM/Matroska Opus/Vorbis downloads. WebM artwork remains cached
+  separately, preserving its container and filename.
+- Detect metadata containers from file contents and share format-specific
+  comment/picture handling, bounded copying and validated atomic publication,
+  without transcoding the audio. Metadata is written in a bounded background
+  task before library publication, with atomic replacement and the original
+  file retained when tagging fails or a container layout is unsupported.
+- Update existing downloaded files from their saved library metadata through
+  the downloaded-songs menu, without new network requests.
+
 ## 1.3.1+131 — 2026-11-12
 
 ### Added
 
+- The player now supports higher quality audio when available.
 - Added the new Spotify Style player.
 - Added filtering options in the Local music tab.
 - Added support for word-synchronized lyrics when word timing is available,

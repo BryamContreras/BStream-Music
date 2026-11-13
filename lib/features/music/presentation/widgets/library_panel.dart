@@ -46,6 +46,8 @@ import 'track_play_button.dart';
 
 enum _LibraryRouteType { root, downloads, live, playlist }
 
+enum _DownloadsMenuAction { refreshMetadata }
+
 enum _TrackMenuAction {
   download,
   renameTrack,
@@ -2604,7 +2606,7 @@ class _TrackListView extends ConsumerWidget {
                 subtitle: subtitle,
                 onBack: onBack,
                 trailing: playlist == null
-                    ? null
+                    ? _DownloadedMetadataMenu(trackCount: queueTracks.length)
                     : _PlaylistMenu(
                         playlist: playlist!,
                         onBack: onBack,
@@ -2840,6 +2842,96 @@ class _TrackSelectionToolbar extends ConsumerWidget {
 }
 
 enum _TrackListMode { downloads, playlist }
+
+class _DownloadedMetadataMenu extends ConsumerWidget {
+  const _DownloadedMetadataMenu({required this.trackCount});
+
+  final int trackCount;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final strings = ref.watch(appStringsProvider);
+    final state = ref.watch(downloadMetadataRefreshControllerProvider);
+    final progress = strings.downloadedMetadataProgress(
+      state.processed,
+      state.total,
+    );
+    return SizedBox.square(
+      dimension: 48,
+      child: GlassPopupMenuButton<_DownloadsMenuAction>(
+        key: const ValueKey('downloads-metadata-menu'),
+        tooltip: state.running ? progress : strings.moreOptions,
+        enabled: !state.running && trackCount > 0,
+        icon: state.running
+            ? Semantics(
+                liveRegion: true,
+                label: progress,
+                child: SizedBox.square(
+                  dimension: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    value: state.total == 0
+                        ? null
+                        : state.processed / state.total,
+                  ),
+                ),
+              )
+            : const Icon(Icons.more_vert_rounded),
+        onSelected: (_) => unawaited(_refresh(context, ref)),
+        itemBuilder: (context) => [
+          PopupMenuItem(
+            key: const ValueKey('downloads-refresh-metadata'),
+            value: _DownloadsMenuAction.refreshMetadata,
+            child: _trackMenuItem(
+              context,
+              Icons.sync_rounded,
+              strings.refreshDownloadedMetadata,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _refresh(BuildContext context, WidgetRef ref) async {
+    final strings = ref.read(appStringsProvider);
+    final controller = ref.read(
+      downloadMetadataRefreshControllerProvider.notifier,
+    );
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(strings.downloadedMetadataProgress(0, trackCount)),
+        ),
+      );
+    try {
+      final result = await controller.refresh();
+      if (!messenger.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              strings.downloadedMetadataSummary(
+                result.updated,
+                result.skipped,
+                result.failed,
+              ),
+            ),
+          ),
+        );
+    } catch (_) {
+      if (!messenger.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text(strings.downloadedMetadataFailed)),
+        );
+    }
+  }
+}
 
 class _LibraryFilterSurface extends StatelessWidget {
   const _LibraryFilterSurface({

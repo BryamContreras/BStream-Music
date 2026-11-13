@@ -953,6 +953,21 @@ class AppStrings {
                   : '$count songs removed from playlist.'),
       );
   String get folder => choose('Carpeta', 'Folder');
+  String get refreshDownloadedMetadata =>
+      choose('Actualizar metadatos de archivos', 'Update file metadata');
+  String downloadedMetadataProgress(int processed, int total) => choose(
+    'Actualizando metadatos: $processed de $total',
+    'Updating metadata: $processed of $total',
+  );
+  String downloadedMetadataSummary(int updated, int skipped, int failed) =>
+      choose(
+        'Actualizados: $updated · Omitidos: $skipped · Fallidos: $failed',
+        'Updated: $updated · Skipped: $skipped · Failed: $failed',
+      );
+  String get downloadedMetadataFailed => choose(
+    'No se pudieron actualizar los metadatos. Inténtalo nuevamente.',
+    'Could not update file metadata. Try again.',
+  );
   String get exportBackup => choose('Exportar', 'Export');
   String get importBackup => choose('Importar', 'Import');
   String get importData => choose('Importar', 'Import');
@@ -1272,6 +1287,39 @@ class AppStrings {
     'Export or restore your library and settings.',
   );
   String get integrations => choose('Integraciones', 'Integrations');
+  String get audioSources => choose('Fuentes de audio', 'Audio sources');
+  String get audioSourcesSummary => choose(
+    'Elige los proveedores para reproducir y descargar.',
+    'Choose providers for playback and downloads.',
+  );
+  String get youtubeMusicSourceDescription => choose(
+    'Fuente principal, siempre activa.',
+    'Primary source, always enabled.',
+  );
+  String get jioSaavnSourceDescription => choose(
+    'Mejora el audio cuando hay una versión de mayor calidad.',
+    'Improve audio when a higher quality version is available.',
+  );
+  String get audioSourceAlwaysEnabled =>
+      choose('Siempre activada', 'Always enabled');
+  String get dataSaving => choose('Ahorro de datos', 'Data saving');
+  String get audioQuality => choose('Calidad de audio', 'Audio quality');
+  String get desktopDataSavingSummary => choose(
+    'Elige la calidad para reproducir y descargar.',
+    'Choose audio quality for playback and downloads.',
+  );
+  String get dataSavingSummary => choose(
+    'Elige la calidad para Wi-Fi y datos móviles.',
+    'Choose audio quality for Wi-Fi and mobile data.',
+  );
+  String get wifiNetwork => choose('Wi-Fi', 'Wi-Fi');
+  String get mobileNetwork => choose('Datos móviles', 'Mobile data');
+  String get highAudioQuality => choose('Alta calidad', 'High quality');
+  String get standardAudioQuality =>
+      choose('Calidad estándar', 'Standard quality');
+  String get lowAudioQuality => choose('Baja calidad', 'Low quality');
+  String get improvingAudioQuality =>
+      choose('Mejorando calidad…', 'Improving quality…');
   String get supportedLinks =>
       choose('Abrir enlaces compatibles', 'Open supported links');
   String get supportedLinksSummary => choose(
@@ -1566,6 +1614,10 @@ class AppStrings {
     'Player styles, local music filters, lyrics, and settings',
   );
   List<String> get whatsNewHighlights => [
+    choose(
+      'El reproductor ahora es compatible con audio de mayor calidad cuando está disponible.',
+      'The player now supports higher quality audio when available.',
+    ),
     choose(
       'Se mejoraron y optimizaron los diseños de los estilos del reproductor.',
       'Improved and optimized player style layouts.',

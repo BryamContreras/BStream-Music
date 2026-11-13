@@ -7,6 +7,104 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'extends edge colors beside a narrow photo without repeating its subject',
+    (tester) async {
+      final source = (await tester.runAsync(_createQuadrantImage))!;
+      try {
+        final pixels = await _capture(
+          tester,
+          source,
+          const Rect.fromLTWH(80, 20, 80, 80),
+          const Size(240, 180),
+        );
+
+        // Side extensions hold the adjacent edge; only the lower continuation
+        // reflects the photo. Duplicated faces cannot enter from a side tile.
+        expect(pixels.argbAt(0, 40), Colors.red.toARGB32());
+        expect(pixels.argbAt(79, 40), Colors.red.toARGB32());
+        expect(pixels.argbAt(80, 40), Colors.red.toARGB32());
+        expect(pixels.argbAt(159, 40), Colors.yellow.toARGB32());
+        expect(pixels.argbAt(160, 40), Colors.yellow.toARGB32());
+        expect(pixels.argbAt(239, 40), Colors.yellow.toARGB32());
+        for (final y in [0, 40, 80, 99, 100, 140, 179]) {
+          expect(pixels.argbAt(79, y), pixels.argbAt(80, y));
+          expect(pixels.argbAt(159, y), pixels.argbAt(160, y));
+        }
+        for (final x in [0, 40, 80, 100, 140, 159, 160, 200, 239]) {
+          expect(pixels.argbAt(x, 99), pixels.argbAt(x, 100));
+        }
+        expect(pixels.argbAt(100, 99), Colors.cyan.toARGB32());
+        expect(pixels.argbAt(100, 100), Colors.cyan.toARGB32());
+        expect(pixels.argbAt(100, 179), Colors.red.toARGB32());
+        pixels.expectOpaque();
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        source.dispose();
+      }
+    },
+  );
+
+  testWidgets('retained blur stays opaque beside a narrow centered portrait', (
+    tester,
+  ) async {
+    final source = (await tester.runAsync(_createWhiteImage))!;
+    try {
+      final pixels = await _capture(
+        tester,
+        source,
+        const Rect.fromLTWH(120, 16, 80, 160),
+        const Size(320, 420),
+        progressive: true,
+      );
+      for (var y = 0; y < pixels.height; y += 1) {
+        for (final x in [0, 50, 119, 120, 160, 199, 200, 269, 319]) {
+          final argb = pixels.argbAt(x, y);
+          expect((argb >> 24) & 255, greaterThanOrEqualTo(254));
+          expect((argb >> 16) & 255, greaterThanOrEqualTo(250));
+          expect((argb >> 8) & 255, greaterThanOrEqualTo(250));
+          expect(argb & 255, greaterThanOrEqualTo(250));
+        }
+      }
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      source.dispose();
+    }
+  });
+
+  for (final rect in [
+    const Rect.fromLTWH(159.9995, 0, 0.001, 160),
+    const Rect.fromLTWH(0, 0, 320, 0.001),
+  ]) {
+    testWidgets('fills extreme proportions without unbounded tiling: $rect', (
+      tester,
+    ) async {
+      final source = (await tester.runAsync(_createWhiteImage))!;
+      try {
+        final pixels = await _capture(
+          tester,
+          source,
+          rect,
+          const Size(320, 420),
+        );
+        pixels.expectOpaque();
+        for (final position in [
+          const Offset(0, 0),
+          const Offset(160, 210),
+          const Offset(319, 419),
+        ]) {
+          expect(
+            pixels.argbAt(position.dx.toInt(), position.dy.toInt()),
+            Colors.white.toARGB32(),
+          );
+        }
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        source.dispose();
+      }
+    });
+  }
+
   testWidgets('continues the bottom edge in reverse order without a seam', (
     tester,
   ) async {
@@ -94,6 +192,39 @@ void main() {
     }
   });
 
+  testWidgets('reflects the same upper crop when portrait alignment changes', (
+    tester,
+  ) async {
+    final source = (await tester.runAsync(_createBandedImage))!;
+    try {
+      const rect = Rect.fromLTWH(0, 0, 80, 40);
+      const viewport = Size(80, 90);
+      final centered = await _capture(tester, source, rect, viewport);
+      final aligned = await _capture(
+        tester,
+        source,
+        rect,
+        viewport,
+        alignment: const Alignment(0, -0.5),
+      );
+
+      // A wide hero crops the square source vertically. Moving the crop
+      // upward restores its red upper band instead of beginning in yellow.
+      expect(centered.argbAt(40, 5), Colors.yellow.toARGB32());
+      expect(aligned.argbAt(40, 5), Colors.red.toARGB32());
+      expect(aligned.argbAt(40, 20), Colors.yellow.toARGB32());
+      expect(aligned.argbAt(40, 35), Colors.cyan.toARGB32());
+      expect(aligned.argbAt(40, 39), aligned.argbAt(40, 40));
+      expect(aligned.argbAt(40, 45), Colors.cyan.toARGB32());
+      expect(aligned.argbAt(40, 60), Colors.yellow.toARGB32());
+      expect(aligned.argbAt(40, 75), Colors.red.toARGB32());
+      aligned.expectOpaque();
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      source.dispose();
+    }
+  });
+
   testWidgets('retained reflection keeps near detail and diffuses it below', (
     tester,
   ) async {
@@ -151,20 +282,25 @@ void main() {
       final source = (await tester.runAsync(_createBandedImage))!;
       final nextSource = (await tester.runAsync(_createWhiteImage))!;
       const rasterKey = ValueKey('progressive-reflected-artwork-raster');
-      Widget artwork(ui.Image image, Rect rect, Size viewport) =>
-          Directionality(
-            textDirection: TextDirection.ltr,
-            child: Align(
-              alignment: Alignment.topLeft,
-              child: SizedBox.fromSize(
-                size: viewport,
-                child: ProgressiveReflectedArtworkImage(
-                  image: image,
-                  artworkRect: rect,
-                ),
-              ),
+      Widget artwork(
+        ui.Image image,
+        Rect rect,
+        Size viewport, {
+        Alignment alignment = Alignment.center,
+      }) => Directionality(
+        textDirection: TextDirection.ltr,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox.fromSize(
+            size: viewport,
+            child: ProgressiveReflectedArtworkImage(
+              image: image,
+              artworkRect: rect,
+              alignment: alignment,
             ),
-          );
+          ),
+        ),
+      );
       ui.Image raster() =>
           tester.widget<RawImage>(find.byKey(rasterKey)).image!;
       try {
@@ -191,11 +327,37 @@ void main() {
         expect(second.debugDisposed, isTrue);
 
         await tester.pumpWidget(
-          artwork(nextSource, shifted, const Size(320, 580)),
+          artwork(
+            source,
+            shifted,
+            const Size(320, 580),
+            alignment: const Alignment(0, -0.5),
+          ),
+        );
+        final aligned = raster();
+        expect(aligned, isNot(same(resized)));
+        expect(resized.debugDisposed, isTrue);
+        await tester.pumpWidget(
+          artwork(
+            source,
+            shifted,
+            const Size(320, 580),
+            alignment: const Alignment(0, -0.5),
+          ),
+        );
+        expect(raster(), same(aligned));
+
+        await tester.pumpWidget(
+          artwork(
+            nextSource,
+            shifted,
+            const Size(320, 580),
+            alignment: const Alignment(0, -0.5),
+          ),
         );
         final replaced = raster();
-        expect(replaced, isNot(same(resized)));
-        expect(resized.debugDisposed, isTrue);
+        expect(replaced, isNot(same(aligned)));
+        expect(aligned.debugDisposed, isTrue);
         await tester.pumpWidget(const SizedBox.shrink());
         expect(replaced.debugDisposed, isTrue);
         expect(source.debugDisposed, isFalse);
@@ -260,6 +422,24 @@ Future<ui.Image> _createBandedImage() async {
   }
 }
 
+Future<ui.Image> _createQuadrantImage() async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  const colors = [Colors.red, Colors.yellow, Colors.cyan, Colors.blue];
+  for (var index = 0; index < colors.length; index += 1) {
+    canvas.drawRect(
+      Rect.fromLTWH((index % 2) * 32, (index ~/ 2) * 32, 32, 32),
+      Paint()..color = colors[index],
+    );
+  }
+  final picture = recorder.endRecording();
+  try {
+    return await picture.toImage(64, 64);
+  } finally {
+    picture.dispose();
+  }
+}
+
 Future<ui.Image> _createLandscapeImage() async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
@@ -293,6 +473,7 @@ Future<_Pixels> _capture(
   Rect artworkRect,
   Size viewport, {
   bool progressive = false,
+  Alignment alignment = Alignment.center,
 }) async {
   const captureKey = ValueKey('reflection-capture');
   await tester.pumpWidget(
@@ -308,11 +489,13 @@ Future<_Pixels> _capture(
                 ? ProgressiveReflectedArtworkImage(
                     image: source,
                     artworkRect: artworkRect,
+                    alignment: alignment,
                     filterQuality: FilterQuality.none,
                   )
                 : ReflectedArtworkImage(
                     image: source,
                     artworkRect: artworkRect,
+                    alignment: alignment,
                     filterQuality: FilterQuality.none,
                   ),
           ),

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:bstream_music/features/music/data/models/local_track_model.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
+import 'package:bstream_music/services/audio_sources/audio_format_details.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -28,6 +29,13 @@ void main() {
         metadataSource: TrackMetadataSource.youtubeMusic,
         lastPlayedAt: playedAt,
         lastPlayedPlaylistId: 'playlist-1',
+        audioFormat: const AudioFormatDetails(
+          codec: 'aac',
+          mimeType: 'audio/mp4',
+          bitrate: 325929,
+          sampleRate: 44100,
+          channels: 2,
+        ),
       );
 
       final map = original.toMap();
@@ -56,6 +64,13 @@ void main() {
       expect(restored.metadataSource, TrackMetadataSource.youtubeMusic);
       expect(restored.lastPlayedAt, playedAt);
       expect(restored.lastPlayedPlaylistId, original.lastPlayedPlaylistId);
+      expect(restored.audioFormat, original.audioFormat);
+      expect(
+        LocalTrackModel.fromEntity(
+          original.copyWith(title: 'Renamed'),
+        ).audioFormat,
+        original.audioFormat,
+      );
     });
 
     test('reads a legacy row without metadata columns', () {
@@ -79,6 +94,7 @@ void main() {
       expect(track.metadataSource, TrackMetadataSource.youtube);
       expect(track.sourceId, isNull);
       expect(track.catalogThumbnailUrl, isNull);
+      expect(track.audioFormat, isNull);
     });
 
     test('ignores malformed artists JSON and unknown metadata sources', () {
@@ -92,6 +108,7 @@ void main() {
         'source_id': 'video-id',
         'catalog_thumbnail_url': 'https://example.com/catalog.jpg',
         'file_path': '/music/still-playable.m4a',
+        'audio_format_json': '{not valid json',
         'added_at': DateTime.utc(2026).toIso8601String(),
       });
 
@@ -100,6 +117,7 @@ void main() {
       expect(track.album, 'Fallback album');
       expect(track.sourceId, 'video-id');
       expect(track.catalogThumbnailUrl, 'https://example.com/catalog.jpg');
+      expect(track.audioFormat, isNull);
     });
   });
 }

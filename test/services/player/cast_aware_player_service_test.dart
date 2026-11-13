@@ -74,6 +74,77 @@ void main() {
     },
   );
   test(
+    'same-track upgrades delegate locally and retain the upgraded cast URL',
+    () async {
+      await player.playRemoteSource(remote);
+      await player.seek(const Duration(seconds: 27));
+      final upgraded = RemotePlaybackSource(
+        track: remoteTrack.copyWith(
+          streamUrl: 'https://quality.test/audio.m4a',
+          streamBitrate: 320000,
+        ),
+        uri: Uri.parse('https://quality.test/audio.m4a'),
+        queueEntryId: remote.queueEntryId,
+      );
+      expect(await player.upgradeRemoteSource(upgraded), isTrue);
+      expect(local.upgrades, 1);
+      expect(player.currentSnapshot.position, const Duration(seconds: 27));
+      expect(player.currentSnapshot.queueEntryId, remote.queueEntryId);
+      await player.connectCast(device);
+      expect(cast.lastSource, upgraded.uri);
+    },
+  );
+
+  test(
+    'casting keeps its current stream instead of opening a local upgrade',
+    () async {
+      await player.playRemoteSource(remote);
+      await player.connectCast(device);
+      expect(await player.upgradeRemoteSource(remote), isFalse);
+      expect(local.upgrades, 0);
+      expect(cast.loads, 1);
+    },
+  );
+
+  for (final cached in [true, false]) {
+    test(
+      'single-source backend receives the actual remote transport (cached=$cached)',
+      () async {
+        final basic = _SingleSourcePlayer();
+        final separateCast = _Cast();
+        final wrapped = CastAwarePlayerService(
+          local: basic,
+          cast: separateCast,
+        );
+        addTearDown(() async {
+          await wrapped.dispose();
+          await separateCast.dispose();
+        });
+        final uri = cached
+            ? Uri.file('/cache/original.m4a')
+            : Uri.parse('https://actual.example/original.m4a');
+        final source = RemotePlaybackSource(
+          track: remoteTrack,
+          uri: uri,
+          queueEntryId: 'queue-original',
+          httpHeaders: const {'X-Test-Transport': 'actual'},
+        );
+        await wrapped.playRemoteSource(source);
+        expect(basic.lastTrack!.streamUrl, uri.toString());
+        expect(
+          basic.lastTrack!.httpHeaders,
+          cached ? <String, String>{} : {'X-Test-Transport': 'actual'},
+        );
+        expect(wrapped.currentSnapshot.isRemote, isTrue);
+        expect(wrapped.currentSnapshot.trackId, remoteTrack.id);
+        expect(wrapped.currentSnapshot.sourceUrl, remoteTrack.url);
+        expect(wrapped.currentSnapshot.queueEntryId, isNull);
+        expect(await wrapped.upgradeRemoteSource(source), isTrue);
+      },
+    );
+  }
+
+  test(
     'receiver ACK required, preserves position and routes controls remotely',
     () async {
       await player.playLocal(track);
@@ -362,15 +433,52 @@ class _Cast extends CastCoordinator {
   }
 }
 
+class _SingleSourcePlayer implements PlayerService, AudioSourceUpgradePlayer {
+  final delegate = _LocalPlayer();
+  TrackInfo? lastTrack;
+  @override
+  Stream<PlayerSnapshot> get snapshotStream => delegate.snapshotStream;
+  @override
+  PlayerSnapshot get currentSnapshot => delegate.currentSnapshot;
+  @override
+  bool get supportsLocalQueueReplacement => false;
+  @override
+  Future<void> playRemote(TrackInfo track) async {
+    lastTrack = track;
+    delegate.publish(
+      PlayerSnapshot(
+        status: PlayerStatus.playing,
+        trackId: track.id,
+        title: track.title,
+        artist: track.artist,
+        sourceUrl: track.url,
+        isRemote: true,
+      ),
+    );
+  }
+
+  @override
+  Future<bool> upgradeRemoteSource(
+    RemotePlaybackSource source, {
+    bool Function()? shouldContinue,
+  }) async => shouldContinue?.call() ?? true;
+  @override
+  Future<void> dispose() => delegate.dispose();
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 class _LocalPlayer
     implements
         PlayerService,
         NativeRemoteQueuePlayer,
         CrossfadeCapablePlayer,
-        SkipSilenceCapablePlayer {
+        SkipSilenceCapablePlayer,
+        AudioSourceUpgradePlayer {
   final controller = StreamController<PlayerSnapshot>.broadcast(sync: true);
   PlayerSnapshot snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   int localPlays = 0, remotePlays = 0, remoteUpdates = 0;
+  int upgrades = 0;
   Completer<void>? prepareBarrier;
   @override
   bool crossfadeEnabled = false;
@@ -427,6 +535,16 @@ class _LocalPlayer
         isRemote: true,
       ),
     );
+  }
+
+  @override
+  Future<bool> upgradeRemoteSource(
+    RemotePlaybackSource source, {
+    bool Function()? shouldContinue,
+  }) async {
+    if (!(shouldContinue?.call() ?? true)) return false;
+    upgrades++;
+    return true;
   }
 
   @override

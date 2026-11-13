@@ -58,6 +58,9 @@ enum AudioStreamSource {
 
   /// An InnerTube client selected after the default path was rejected.
   innerTubeFallback,
+
+  /// A verified higher-quality rendition of the same catalog recording.
+  jioSaavn,
 }
 
 /// Controls which portion of a resolver chain may be used.

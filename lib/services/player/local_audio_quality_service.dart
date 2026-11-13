@@ -7,81 +7,14 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
-/// Technical details of the selected local file, not the device's audio output.
-/// Missing values deliberately remain unknown rather than assuming stereo/48k.
-class LocalAudioQuality {
-  const LocalAudioQuality({
-    this.codec,
-    this.mimeType,
-    this.sampleRate,
-    this.bitrate,
-    this.channels,
-  });
+import '../audio_sources/audio_format_details.dart';
+import '../audio_sources/mp4_audio_format.dart';
+import '../audio_sources/webm_audio_format.dart';
 
-  final String? codec;
-  final String? mimeType;
-  final int? sampleRate;
-  final int? bitrate;
-  final int? channels;
+export '../audio_sources/audio_format_details.dart' show AudioFormatDetails;
 
-  static LocalAudioQuality? fromMap(Map<Object?, Object?>? map) {
-    if (map == null) return null;
-    String? text(Object? value) {
-      if (value is! String) return null;
-      final result = value.trim().toLowerCase();
-      return result.isEmpty ||
-              result.length > 128 ||
-              RegExp(r'[\x00-\x1f\x7f]').hasMatch(result)
-          ? null
-          : result;
-    }
-
-    int? integer(Object? value, int maximum) {
-      if (value is! num ||
-          !value.isFinite ||
-          value != value.truncateToDouble()) {
-        return null;
-      }
-      return value > 0 && value <= maximum ? value.toInt() : null;
-    }
-
-    final result = LocalAudioQuality(
-      codec: text(map['codec']),
-      mimeType: text(map['mimeType']),
-      sampleRate: integer(map['sampleRate'], 0x7fffffff),
-      bitrate: integer(map['bitrate'], 0x7fffffff),
-      channels: integer(map['channels'], 64),
-    );
-    return result.codec == null &&
-            result.mimeType == null &&
-            result.sampleRate == null &&
-            result.bitrate == null &&
-            result.channels == null
-        ? null
-        : result;
-  }
-
-  Map<String, Object?> toMap() => {
-    'codec': codec,
-    'mimeType': mimeType,
-    'sampleRate': sampleRate,
-    'bitrate': bitrate,
-    'channels': channels,
-  };
-
-  @override
-  bool operator ==(Object other) =>
-      other is LocalAudioQuality &&
-      codec == other.codec &&
-      mimeType == other.mimeType &&
-      sampleRate == other.sampleRate &&
-      bitrate == other.bitrate &&
-      channels == other.channels;
-
-  @override
-  int get hashCode =>
-      Object.hash(codec, mimeType, sampleRate, bitrate, channels);
-}
+/// Backwards-compatible name for local header and native decoder information.
+typedef LocalAudioQuality = AudioFormatDetails;
 
 /// No network streams, metadata requests or second decoder are used here.
 bool isSupportedLocalAudioQualitySource(String source) =>
@@ -320,7 +253,10 @@ LocalAudioQuality? _probeLocalFile(String path) {
     if (_ascii(signature, 0, 4) == 'fLaC') return _readFlac(reader, offset);
     if (_ascii(signature, 0, 4) == 'OggS') return _readOgg(reader, offset);
     if (first.length >= 8 && _ascii(first, 4, 4) == 'ftyp') {
-      return _readMp4(reader);
+      return readMp4AudioFormat(reader);
+    }
+    if (_data(first).getUint32(0) == 0x1a45dfa3) {
+      return readWebmAudioFormat(reader);
     }
     return _readMpegAudio(reader, offset);
   } catch (_) {
@@ -330,13 +266,15 @@ LocalAudioQuality? _probeLocalFile(String path) {
   }
 }
 
-class _HeaderReader {
+class _HeaderReader implements AudioFormatHeaderReader {
   _HeaderReader(this.file, this.length);
   final RandomAccessFile file;
+  @override
   final int length;
   int remaining = 256 * 1024;
   int reads = 0;
 
+  @override
   Uint8List? read(int offset, int count) {
     if (offset < 0 ||
         count < 0 ||
@@ -461,23 +399,6 @@ LocalAudioQuality? _readOgg(_HeaderReader reader, int offset) {
   return const LocalAudioQuality(mimeType: 'audio/ogg');
 }
 
-const _aacRates = [
-  96000,
-  88200,
-  64000,
-  48000,
-  44100,
-  32000,
-  24000,
-  22050,
-  16000,
-  12000,
-  11025,
-  8000,
-  7350,
-];
-const _aacChannels = [0, 1, 2, 3, 4, 5, 6, 8];
-
 LocalAudioQuality? _readMpegAudio(_HeaderReader reader, int offset) {
   final count = (reader.length - offset).clamp(0, 8192);
   final bytes = reader.read(offset, count);
@@ -487,7 +408,8 @@ LocalAudioQuality? _readMpegAudio(_HeaderReader reader, int offset) {
     final b1 = bytes[i + 1], b2 = bytes[i + 2], b3 = bytes[i + 3];
     if (b1 & 0xf6 == 0xf0) {
       final rateIndex = (b2 >> 2) & 15;
-      if (rateIndex >= _aacRates.length) continue;
+      final rate = aacSampleRateForIndex(rateIndex);
+      if (rate == null) continue;
       final configuration = (b2 & 1) << 2 | b3 >> 6;
       final frameLength =
           (b3 & 3) << 11 | bytes[i + 4] << 3 | bytes[i + 5] >> 5;
@@ -499,10 +421,8 @@ LocalAudioQuality? _readMpegAudio(_HeaderReader reader, int offset) {
       return LocalAudioQuality(
         codec: 'aac',
         mimeType: 'audio/aac',
-        sampleRate: _aacRates[rateIndex],
-        channels: configuration > 0 && configuration < _aacChannels.length
-            ? _aacChannels[configuration]
-            : null,
+        sampleRate: rate,
+        channels: aacChannelCountForConfiguration(configuration),
       );
     }
     final version = (b1 >> 3) & 3, layer = (b1 >> 1) & 3;
@@ -597,6 +517,21 @@ LocalAudioQuality? _readMpegAudio(_HeaderReader reader, int offset) {
         : ((version != 3 && layer == 1 ? 72 : 144) * bitrate ~/ sampleRate) +
               ((b2 >> 1) & 1);
     if (frameLength < 4 || offset + i + frameLength > reader.length) continue;
+    final nextFrame = offset + i + frameLength;
+    if (nextFrame < reader.length) {
+      final next = reader.read(nextFrame, 4);
+      // Compressed container payloads can contain accidental MPEG sync bits.
+      // Require a following frame with the same version/layer/rate, allowing
+      // bitrate changes in VBR streams, before claiming an MPEG codec.
+      if (next == null ||
+          next[0] != 0xff ||
+          next[1] & 0xfe != b1 & 0xfe ||
+          next[2] & 0x0c != b2 & 0x0c ||
+          next[2] >> 4 == 0 ||
+          next[2] >> 4 == 15) {
+        continue;
+      }
+    }
     // A single MPEG frame's bitrate does not establish the song's average.
     // Only an explicit CBR Info marker or complete Xing/VBRI stream counters
     // establish a value; otherwise bitrate deliberately stays unknown.
@@ -652,247 +587,3 @@ int? _mpegAverageBitrate({
 }) => bytes > 0 && frames > 0
     ? (bytes * 8 * sampleRate / (frames * samplesPerFrame)).round()
     : null;
-
-class _Atom {
-  const _Atom(this.type, this.payload, this.end);
-  final String type;
-  final int payload;
-  final int end;
-}
-
-_Atom? _atom(_HeaderReader reader, int offset, int end) {
-  if (offset + 8 > end) return null;
-  final header = reader.read(offset, 8);
-  if (header == null) return null;
-  var size = _data(header).getUint32(0), headerSize = 8;
-  if (size == 1) {
-    final extended = reader.read(offset + 8, 8);
-    if (extended == null) return null;
-    size = _data(extended).getUint64(0);
-    headerSize = 16;
-  } else if (size == 0) {
-    size = end - offset;
-  }
-  if (size < headerSize || offset + size > end) return null;
-  return _Atom(_ascii(header, 4, 4), offset + headerSize, offset + size);
-}
-
-LocalAudioQuality? _readMp4(_HeaderReader reader) {
-  final formats = <LocalAudioQuality>[];
-  var boxes = 0;
-  void walk(int start, int end, int depth) {
-    if (depth > 8) return;
-    for (var offset = start; offset + 8 <= end && boxes++ < 512;) {
-      final atom = _atom(reader, offset, end);
-      if (atom == null) return;
-      if (const {'moov', 'trak', 'mdia', 'minf', 'stbl'}.contains(atom.type)) {
-        walk(atom.payload, atom.end, depth + 1);
-      } else if (atom.type == 'stsd') {
-        final header = reader.read(atom.payload, 8);
-        if (header == null) return;
-        var entryOffset = atom.payload + 8;
-        final count = _data(header).getUint32(4).clamp(0, 32);
-        for (var i = 0; i < count && boxes++ < 512; i++) {
-          final entry = _atom(reader, entryOffset, atom.end);
-          if (entry == null) break;
-          final quality = _readAudioSampleEntry(reader, entry);
-          if (quality != null) formats.add(quality);
-          entryOffset = entry.end;
-        }
-      }
-      offset = atom.end;
-    }
-  }
-
-  walk(0, reader.length, 0);
-  // A file can contain multiple audio tracks/sample descriptions. Without
-  // knowing the selected decoder track, do not choose one arbitrarily.
-  return formats.length == 1
-      ? formats.single
-      : const LocalAudioQuality(mimeType: 'audio/mp4');
-}
-
-LocalAudioQuality? _readAudioSampleEntry(_HeaderReader reader, _Atom entry) {
-  if (!const {
-    'mp4a',
-    'alac',
-    'Opus',
-    'fLaC',
-    '.mp3',
-    'mp3 ',
-  }.contains(entry.type)) {
-    return null;
-  }
-  final header = reader.read(entry.payload, 28);
-  if (header == null || entry.payload + 28 > entry.end) return null;
-  final data = _data(header), version = data.getUint16(8);
-  String? codec = switch (entry.type) {
-    'alac' => 'alac',
-    'Opus' => 'opus',
-    'fLaC' => 'flac',
-    '.mp3' || 'mp3 ' => 'mp3',
-    _ => null,
-  };
-  if (version > 1) {
-    return LocalAudioQuality(codec: codec, mimeType: 'audio/mp4');
-  }
-  var channels = data.getUint16(16);
-  var sampleRate = data.getUint32(24) >> 16;
-  int? bitrate;
-  var offset = entry.payload + (version == 1 ? 44 : 28);
-  for (var count = 0; offset + 8 <= entry.end && count < 64; count++) {
-    final atom = _atom(reader, offset, entry.end);
-    if (atom == null) break;
-    if (atom.type == 'esds') {
-      final bytes = reader.read(
-        atom.payload,
-        (atom.end - atom.payload).clamp(0, 4096),
-      );
-      final config = bytes == null ? null : _decoderConfig(bytes);
-      if (config != null) {
-        codec = config.codec;
-        bitrate = config.bitrate;
-        sampleRate = config.sampleRate ?? sampleRate;
-        channels = config.channels ?? channels;
-      }
-    } else if (atom.type == 'dOps') {
-      final bytes = reader.read(atom.payload, 11);
-      if (bytes != null) channels = bytes[1];
-      sampleRate = 48000;
-    } else if (atom.type == 'btrt' && bitrate == null) {
-      final bytes = reader.read(atom.payload, 12);
-      if (bytes != null) bitrate = _data(bytes).getUint32(8);
-    }
-    offset = atom.end;
-  }
-  return LocalAudioQuality.fromMap({
-    'codec': codec,
-    'mimeType': 'audio/mp4',
-    'sampleRate': sampleRate,
-    'channels': channels,
-    'bitrate': bitrate,
-  });
-}
-
-class _DecoderConfig {
-  const _DecoderConfig(
-    this.codec,
-    this.bitrate,
-    this.sampleRate,
-    this.channels,
-  );
-  final String? codec;
-  final int? bitrate;
-  final int? sampleRate;
-  final int? channels;
-}
-
-_DecoderConfig? _decoderConfig(Uint8List bytes) {
-  _DecoderConfig? walk(int start, int end, int depth) {
-    if (depth > 4) return null;
-    for (
-      var offset = start, count = 0;
-      offset + 2 <= end && count < 32;
-      count++
-    ) {
-      final tag = bytes[offset++];
-      var length = 0, finished = false;
-      for (var i = 0; i < 4 && offset < end; i++) {
-        final next = bytes[offset++];
-        length = length << 7 | next & 127;
-        if (next & 128 == 0) {
-          finished = true;
-          break;
-        }
-      }
-      if (!finished || offset + length > end) return null;
-      final limit = offset + length;
-      if (tag == 3 && length >= 3) {
-        final flags = bytes[offset + 2];
-        var nested = offset + 3;
-        if (flags & 128 != 0) nested += 2;
-        if (flags & 64 != 0) {
-          if (nested >= limit) return null;
-          nested += 1 + bytes[nested];
-        }
-        if (flags & 32 != 0) nested += 2;
-        final result = nested <= limit ? walk(nested, limit, depth + 1) : null;
-        if (result != null) return result;
-      } else if (tag == 4 && length >= 13) {
-        final objectType = bytes[offset];
-        final codec = switch (objectType) {
-          0x40 || 0x66 || 0x67 || 0x68 => 'aac',
-          0x69 || 0x6b => 'mp3',
-          _ => null,
-        };
-        final bitrate = _data(bytes).getUint32(offset + 9);
-        int? rate, channels;
-        final nested = offset + 13;
-        if (codec == 'aac' && nested + 2 < limit && bytes[nested] == 5) {
-          var pos = nested + 1, configLength = 0;
-          for (var i = 0; i < 4 && pos < limit; i++) {
-            final next = bytes[pos++];
-            configLength = configLength << 7 | next & 127;
-            if (next & 128 == 0) break;
-          }
-          if (pos + configLength <= limit) {
-            final config = _aacConfig(
-              Uint8List.sublistView(bytes, pos, pos + configLength),
-            );
-            rate = config?.$1;
-            channels = config?.$2;
-          }
-        }
-        return _DecoderConfig(
-          codec,
-          bitrate > 0 ? bitrate : null,
-          rate,
-          channels,
-        );
-      }
-      offset = limit;
-    }
-    return null;
-  }
-
-  return bytes.length < 6 ? null : walk(4, bytes.length, 0);
-}
-
-(int?, int?)? _aacConfig(Uint8List bytes) {
-  var position = 0;
-  int? bits(int count) {
-    if (position + count > bytes.length * 8) return null;
-    var result = 0;
-    for (var i = 0; i < count; i++, position++) {
-      result =
-          result << 1 | ((bytes[position >> 3] >> (7 - (position & 7))) & 1);
-    }
-    return result;
-  }
-
-  int? frequency() {
-    final index = bits(4);
-    if (index == 15) return bits(24);
-    return index != null && index < _aacRates.length ? _aacRates[index] : null;
-  }
-
-  var objectType = bits(5);
-  if (objectType == 31) {
-    final extension = bits(6);
-    if (extension == null) return null;
-    objectType = extension + 32;
-  }
-  var rate = frequency();
-  final configuration = bits(4);
-  int? channels =
-      configuration != null &&
-          configuration > 0 &&
-          configuration < _aacChannels.length
-      ? _aacChannels[configuration]
-      : null;
-  if (objectType == 5 || objectType == 29) {
-    rate = frequency() ?? rate;
-    if (objectType == 29) channels = 2;
-  }
-  return (rate, channels);
-}

@@ -393,6 +393,273 @@ void main() {
     },
   );
 
+  group('same-recording source upgrades', () {
+    test(
+      'waits for decoded metadata before seeking a newly opened file',
+      () async {
+        final active = _FakeMediaKitBackend();
+        final standby = _FakeMediaKitBackend();
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await _playAndComplete(service, active, 'a');
+        active
+          ..emitDuration(const Duration(minutes: 3))
+          ..emitPosition(const Duration(seconds: 41));
+        await _drainEvents();
+        final upgrade = service.upgradeRemoteSource(_upgradeSource());
+        await _waitUntil(() => standby.openCalls.isNotEmpty);
+        standby.completeOpen(0);
+        await _drainEvents();
+        expect(standby.seekCalls, isEmpty);
+        expect(standby.playCalls, 0);
+        expect(standby.volumeCalls.every((value) => value == 0), isTrue);
+        active.emitPosition(const Duration(seconds: 43));
+        standby.emitDuration(const Duration(minutes: 3));
+        expect(await upgrade, isTrue);
+        expect(standby.seekCalls.first, const Duration(seconds: 43));
+        expect(service.currentSnapshot.position, const Duration(seconds: 43));
+      },
+    );
+
+    test(
+      'keeps the upgrade muted until the decoder confirms the seek',
+      () async {
+        final active = _FakeMediaKitBackend();
+        final standby = _FakeMediaKitBackend()
+          ..durationOnOpen = const Duration(minutes: 3)
+          ..acknowledgeSeeks = false;
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await _playAndComplete(service, active, 'a');
+        active
+          ..emitDuration(const Duration(minutes: 3))
+          ..emitPosition(const Duration(seconds: 41));
+        await _drainEvents();
+        final upgrade = service.upgradeRemoteSource(_upgradeSource());
+        await _waitUntil(() => standby.openCalls.isNotEmpty);
+        standby.completeOpen(0);
+        await _waitUntil(() => standby.seekCalls.isNotEmpty);
+        standby.emitPosition(Duration.zero);
+        await _drainEvents();
+        expect(standby.playCalls, 0);
+        expect(standby.volumeCalls.every((value) => value == 0), isTrue);
+        expect(service.currentSnapshot.position, const Duration(seconds: 41));
+        standby.emitPosition(const Duration(seconds: 41));
+        expect(await upgrade, isTrue);
+        expect(service.currentSnapshot.position, const Duration(seconds: 41));
+      },
+    );
+
+    test('an ignored native seek retains the original source', () async {
+      final active = _FakeMediaKitBackend();
+      final standby = _FakeMediaKitBackend()
+        ..durationOnOpen = const Duration(minutes: 3)
+        ..acknowledgeSeeks = false;
+      final service = MediaKitPlayerService(
+        backend: active,
+        backendFactory: () => standby,
+        operationTimeout: const Duration(milliseconds: 100),
+      );
+      addTearDown(service.dispose);
+      await _playAndComplete(service, active, 'a');
+      active
+        ..emitDuration(const Duration(minutes: 3))
+        ..emitPosition(const Duration(seconds: 41));
+      await _drainEvents();
+      final upgrade = service.upgradeRemoteSource(_upgradeSource());
+      await _waitUntil(() => standby.openCalls.isNotEmpty);
+      standby.completeOpen(0);
+      expect(await upgrade, isFalse);
+      expect(standby.playCalls, 0);
+      expect(active.openCalls, hasLength(1));
+      expect(active.stopCalls, 0);
+      expect(service.currentSnapshot.status, PlayerStatus.playing);
+      expect(service.currentSnapshot.position, const Duration(seconds: 41));
+    });
+
+    test(
+      'keeps the original audible until a muted aligned deck is ready',
+      () async {
+        final active = _FakeMediaKitBackend();
+        final standby = _FakeMediaKitBackend()
+          ..durationOnOpen = const Duration(minutes: 3);
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await _playAndComplete(service, active, 'a');
+        await service.setVolume(.65);
+        active
+          ..emitDuration(const Duration(minutes: 3))
+          ..emitPosition(const Duration(seconds: 41));
+        await _drainEvents();
+        final original = service.currentSnapshot;
+        final snapshots = <PlayerSnapshot>[];
+        final subscription = service.snapshotStream.listen(snapshots.add);
+        final upgrade = service.upgradeRemoteSource(_upgradeSource());
+        await _waitUntil(() => standby.openCalls.isNotEmpty);
+        expect(standby.openCalls.single.play, isFalse);
+        expect(standby.volumeCalls, [0]);
+        expect(active.pauseCalls, 0);
+        expect(active.stopCalls, 0);
+        active.emitPosition(const Duration(seconds: 43));
+        await _drainEvents();
+        standby.completeOpen(0);
+        expect(await upgrade, isTrue);
+        expect(service.crossfadeEnabled, isFalse);
+        expect(standby.seekCalls, [const Duration(seconds: 43)]);
+        expect(standby.playCalls, 1);
+        expect(service.currentSnapshot.trackId, original.trackId);
+        expect(service.currentSnapshot.queueEntryId, original.queueEntryId);
+        expect(service.currentSnapshot.sourceUrl, original.sourceUrl);
+        expect(service.currentSnapshot.title, original.title);
+        expect(service.currentSnapshot.position, const Duration(seconds: 43));
+        expect(service.currentSnapshot.volume, .65);
+        expect(
+          snapshots.every(
+            (snapshot) => snapshot.status == PlayerStatus.playing,
+          ),
+          isTrue,
+        );
+        expect(active.openCalls, hasLength(1));
+        active.emitPosition(const Duration(seconds: 99));
+        standby.emitPosition(const Duration(seconds: 44));
+        await _drainEvents();
+        expect(service.currentSnapshot.position, const Duration(seconds: 44));
+        await subscription.cancel();
+      },
+    );
+
+    for (final liveClockAvailable in [true, false]) {
+      test(
+        'uses live native position instead of stale UI ticks (available=$liveClockAvailable)',
+        () async {
+          final active = _LiveClockBackend(available: liveClockAvailable);
+          final standby = _FakeMediaKitBackend()
+            ..durationOnOpen = const Duration(minutes: 3);
+          final service = MediaKitPlayerService(
+            backend: active,
+            backendFactory: () => standby,
+          );
+          addTearDown(service.dispose);
+          await _playAndComplete(service, active, 'a');
+          active
+            ..emitDuration(const Duration(minutes: 3))
+            ..emitPosition(const Duration(seconds: 41));
+          await _drainEvents();
+          final upgrade = service.upgradeRemoteSource(_upgradeSource());
+          await _waitUntil(() => standby.openCalls.isNotEmpty);
+          standby.completeOpen(0);
+          expect(await upgrade, isTrue);
+          expect(active.clock.reads, 2);
+          expect(
+            standby.seekCalls,
+            liveClockAvailable
+                ? [
+                    const Duration(milliseconds: 43250),
+                    const Duration(milliseconds: 43410),
+                  ]
+                : [const Duration(seconds: 41)],
+          );
+          expect(
+            service.currentSnapshot.position,
+            liveClockAvailable
+                ? const Duration(milliseconds: 43410)
+                : const Duration(seconds: 41),
+          );
+          expect(active.pauseCalls, 0);
+          expect(active.openCalls, hasLength(1));
+        },
+      );
+    }
+
+    for (final action in ['pause', 'seek', 'volume', 'next', 'stale']) {
+      test('$action cancels a preparing upgrade without playing it', () async {
+        final active = _FakeMediaKitBackend();
+        final standby = _FakeMediaKitBackend()
+          ..durationOnOpen = const Duration(minutes: 3);
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await _playAndComplete(service, active, 'a');
+        active
+          ..emitDuration(const Duration(minutes: 3))
+          ..emitPosition(const Duration(seconds: 41));
+        await _drainEvents();
+        var current = true;
+        final upgrade = service.upgradeRemoteSource(
+          _upgradeSource(),
+          shouldContinue: () => current,
+        );
+        await _waitUntil(() => standby.openCalls.isNotEmpty);
+        switch (action) {
+          case 'pause':
+            await service.pause();
+          case 'seek':
+            await service.seek(const Duration(seconds: 72));
+          case 'volume':
+            await service.setVolume(.2);
+          case 'next':
+            final previousLoads = active.openCalls.length;
+            final play = service.playRemote(_track('next'));
+            await _waitUntil(() => active.openCalls.length > previousLoads);
+            active.completeOpen(previousLoads);
+            await play;
+          case 'stale':
+            current = false;
+        }
+        standby.completeOpen(0);
+        expect(await upgrade, isFalse);
+        expect(standby.playCalls, 0);
+        expect(active.stopCalls, 0);
+        expect(
+          service.currentSnapshot.trackId,
+          action == 'next' ? 'next' : 'a',
+        );
+        if (action == 'pause') {
+          expect(service.currentSnapshot.status, PlayerStatus.paused);
+        }
+        if (action == 'seek') {
+          expect(active.seekCalls.last, const Duration(seconds: 72));
+        }
+        if (action == 'volume') expect(service.currentSnapshot.volume, .2);
+      });
+    }
+
+    test('standby failure retains current playback without a reload', () async {
+      final active = _FakeMediaKitBackend();
+      final standby = _FakeMediaKitBackend()
+        ..durationOnOpen = const Duration(minutes: 3);
+      final service = MediaKitPlayerService(
+        backend: active,
+        backendFactory: () => standby,
+      );
+      addTearDown(service.dispose);
+      await _playAndComplete(service, active, 'a');
+      active.emitDuration(const Duration(minutes: 3));
+      await _drainEvents();
+      final upgrade = service.upgradeRemoteSource(_upgradeSource());
+      await _waitUntil(() => standby.openCalls.isNotEmpty);
+      standby.openCalls.single.completer.completeError(
+        StateError('bad upgrade'),
+      );
+      expect(await upgrade, isFalse);
+      expect(service.currentSnapshot.status, PlayerStatus.playing);
+      expect(service.currentSnapshot.trackId, 'a');
+      expect(active.openCalls, hasLength(1));
+      expect(active.pauseCalls, 0);
+    });
+  });
+
   group('dual-deck crossfade', () {
     test(
       'preloads silently, hands off, and ignores the retired deck',
@@ -1090,6 +1357,20 @@ TrackInfo _track(
   duration: duration,
 );
 
+RemotePlaybackSource _upgradeSource() {
+  final track = _track('a', duration: const Duration(minutes: 3)).copyWith(
+    streamUrl: 'https://quality.example/a.m4a',
+    streamBitrate: 320000,
+    streamExtension: 'm4a',
+    streamCodec: 'aac',
+  );
+  return RemotePlaybackSource(
+    track: track,
+    uri: Uri.parse(track.streamUrl!),
+    queueEntryId: 'queue-a',
+  );
+}
+
 RemoteCrossfadePlaybackSource _crossfadeSource(String id) {
   final track = _track(id, duration: const Duration(minutes: 3));
   return RemoteCrossfadePlaybackSource(
@@ -1142,6 +1423,33 @@ class _OpenCall {
   final int session;
   final bool play;
   final completer = Completer<void>();
+}
+
+class _LiveClockBackend extends _FakeMediaKitBackend {
+  _LiveClockBackend({required bool available})
+    : clock = _NativeClock(available);
+  final _NativeClock clock;
+  @override
+  Object? get platform => clock;
+}
+
+class _NativeClock implements NativePlayer {
+  _NativeClock(this.available);
+  final bool available;
+  int reads = 0;
+  @override
+  Future<String> getProperty(
+    String property, {
+    bool waitForInitialization = true,
+  }) async {
+    expect(property, 'time-pos');
+    reads++;
+    if (!available) throw StateError('No native clock');
+    return reads == 1 ? '43.25' : '43.41';
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _AudioOutputBackend extends _FakeMediaKitBackend
@@ -1201,6 +1509,8 @@ class _AudioOutputBackend extends _FakeMediaKitBackend
 class _FakeMediaKitBackend implements MediaKitPlayerBackend {
   @override
   bool completed = false;
+  Duration? durationOnOpen;
+  bool acknowledgeSeeks = true;
   final positions = StreamController<Duration>.broadcast();
   final durations = StreamController<Duration>.broadcast();
   final volumes = StreamController<double>.broadcast();
@@ -1264,6 +1574,8 @@ class _FakeMediaKitBackend implements MediaKitPlayerBackend {
     final call = openCalls[index];
     if (call.session == session) currentSourceId = _id(call.media);
     call.completer.complete();
+    final duration = durationOnOpen;
+    if (duration != null) emitDuration(duration);
   }
 
   void emitErrorForSession(int sourceSession, String message) {
@@ -1296,6 +1608,7 @@ class _FakeMediaKitBackend implements MediaKitPlayerBackend {
   @override
   Future<void> seek(Duration position) async {
     seekCalls.add(position);
+    if (acknowledgeSeeks) emitPosition(position);
   }
 
   @override

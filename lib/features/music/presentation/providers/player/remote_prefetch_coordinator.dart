@@ -184,6 +184,10 @@ class RemotePrefetchCoordinator {
 
   String? get signature => _signature;
 
+  /// After invalidation, let already-issued native mutations settle before a
+  /// same-track deck promotion captures the authoritative queue revision.
+  Future<void> waitForServiceMutations() => _serviceMutationTail;
+
   void invalidate() {
     _generation++;
     _cancelWarmupDelay();

@@ -1,3 +1,4 @@
+import '../../../../services/audio_sources/audio_format_details.dart';
 import 'track_info.dart';
 
 class LocalTrack {
@@ -20,6 +21,7 @@ class LocalTrack {
     this.lastPlayedAt,
     this.lastPlayedPlaylistId,
     this.isExternal = false,
+    this.audioFormat,
   });
 
   final String id;
@@ -43,6 +45,10 @@ class LocalTrack {
   /// True for a transient track opened from Android outside BStream's library.
   final bool isExternal;
 
+  /// The format of the downloaded payload, recorded when it was resolved.
+  /// Catalog refreshes must never replace it with a different stream's format.
+  final AudioFormatDetails? audioFormat;
+
   LocalTrack copyWith({
     String? id,
     String? title,
@@ -62,6 +68,7 @@ class LocalTrack {
     DateTime? lastPlayedAt,
     String? lastPlayedPlaylistId,
     bool? isExternal,
+    AudioFormatDetails? audioFormat,
   }) {
     return LocalTrack(
       id: id ?? this.id,
@@ -82,6 +89,7 @@ class LocalTrack {
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
       lastPlayedPlaylistId: lastPlayedPlaylistId ?? this.lastPlayedPlaylistId,
       isExternal: isExternal ?? this.isExternal,
+      audioFormat: audioFormat ?? this.audioFormat,
     );
   }
 }

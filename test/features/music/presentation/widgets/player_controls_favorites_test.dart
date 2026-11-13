@@ -10,9 +10,11 @@ import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/playlist.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/audio_source_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/local_audio_quality_provider.dart';
 import 'package:bstream_music/features/music/presentation/widgets/animated_artwork_motion.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_panel.dart';
+import 'package:bstream_music/features/music/presentation/widgets/player_controls_capsule.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_dismiss_region.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_gradient_background.dart';
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
@@ -46,6 +48,63 @@ void main() {
     duration: Duration(minutes: 3),
     volume: 0.72,
   );
+
+  for (final style in [
+    PlayerStyle.bstreamMusic,
+    PlayerStyle.spotifyMusic,
+    PlayerStyle.classicVinyl,
+  ]) {
+    testWidgets(
+      '${style.name} balances transport between progress and utilities',
+      (tester) async {
+        for (final frame in const [
+          (platform: TargetPlatform.android, size: Size(390, 844)),
+          (platform: TargetPlatform.iOS, size: Size(390, 844)),
+          (platform: TargetPlatform.android, size: Size(320, 568)),
+          (platform: TargetPlatform.windows, size: Size(960, 720)),
+          (platform: TargetPlatform.windows, size: Size(1440, 900)),
+        ]) {
+          _configureView(tester, frame.size);
+          await tester.pumpWidget(
+            _playerHarness(
+              key: ValueKey('balanced-$style-$frame'),
+              platform: frame.platform,
+              snapshot: snapshot,
+              localTrack: localTrack,
+              playlists: _TestPlaylistsController(),
+              style: style,
+              disableAnimations: true,
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          final progress = style == PlayerStyle.bstreamMusic
+              ? find.byType(WavyPlaybackSeekBar)
+              : find.byKey(
+                  ValueKey(
+                    style == PlayerStyle.spotifyMusic
+                        ? 'spotify-player-linear-seek'
+                        : 'classic-vinyl-player-linear-seek',
+                  ),
+                );
+          final lineY = tester.getRect(progress).center.dy;
+          final primary = tester.getRect(
+            find.byKey(const ValueKey('player-primary-control')),
+          );
+          final utility = tester.getRect(
+            find.byKey(const ValueKey('player-utility-controls')),
+          );
+          expect(primary.top, greaterThanOrEqualTo(lineY));
+          expect(primary.bottom, lessThanOrEqualTo(utility.top));
+          expect(
+            primary.center.dy,
+            closeTo((lineY + utility.top) / 2, frame.size.height < 650 ? 9 : 3),
+            reason: '$style / $frame should visually center the transport row',
+          );
+          expect(tester.takeException(), isNull);
+        }
+      },
+    );
+  }
 
   testWidgets(
     'Spotify Style uses circular playback actions and opens the mobile queue',
@@ -405,6 +464,254 @@ void main() {
     isRemote: true,
   );
   const stereoQuality = 'Opus \u00b7 48 kHz \u00b7 141 kbps - Est\u00e9reo';
+
+  for (final style in PlayerStyle.values) {
+    testWidgets('${style.name} shows headphone quality in its time row', (
+      tester,
+    ) async {
+      _configureView(tester, const Size(600, 900));
+      final active = qualitySnapshot.copyWith(queueEntryId: 'quality-entry');
+      final player = _TestPlayerController(
+        active,
+        canonicalRemoteTrack: qualityTrack.copyWith(streamSource: 'innerTube'),
+      );
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: active,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          playerController: player,
+          style: style,
+          showAudioQuality: true,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+      final tier = find.byKey(const ValueKey('player-audio-quality-tier'));
+      expect(tester.widget<Text>(tier).data, 'Calidad estándar');
+      final provider = find.byKey(
+        const ValueKey('player-audio-quality-source'),
+      );
+      // Vinyl reserves a narrower lane for its controls even on tall screens.
+      if (style == PlayerStyle.classicVinyl) {
+        expect(provider, findsNothing);
+      } else {
+        expect(tester.widget<Text>(provider).data, '\u00b7 YouTube Music');
+      }
+      final capsule = find.byKey(
+        const ValueKey('player-audio-quality-capsule'),
+      );
+      expect(tester.widget(capsule), isA<PlayerControlsCapsule>());
+      expect(find.descendant(of: capsule, matching: tier), findsOneWidget);
+      final headphones = find.byKey(
+        const ValueKey('player-audio-quality-headphones'),
+      );
+      expect(tester.widget<Icon>(headphones).icon, Icons.headphones_rounded);
+      expect(
+        tester.getCenter(headphones).dx,
+        lessThan(tester.getTopLeft(tier).dx),
+      );
+      final position = find.byKey(
+        ValueKey(
+          style == PlayerStyle.bstreamMusic
+              ? 'player-position'
+              : 'apple-player-position',
+        ),
+      );
+      final duration = find.byKey(
+        ValueKey(
+          style == PlayerStyle.bstreamMusic
+              ? 'player-duration'
+              : 'apple-player-duration',
+        ),
+      );
+      final timeRow = find.byKey(const ValueKey('player-timeline-time-row'));
+      expect(find.descendant(of: timeRow, matching: capsule), findsOneWidget);
+      expect(
+        tester.getCenter(capsule).dy,
+        closeTo(tester.getCenter(duration).dy, .1),
+      );
+      expect(
+        tester.getCenter(capsule).dy,
+        closeTo(tester.getCenter(position).dy, .1),
+      );
+      expect(
+        tester.getTopLeft(capsule).dx,
+        greaterThan(tester.getTopRight(position).dx),
+      );
+      expect(
+        tester.getTopRight(capsule).dx,
+        lessThan(tester.getTopLeft(duration).dx),
+      );
+      expect(
+        find.descendant(of: capsule, matching: find.byType(BackdropFilter)),
+        findsNothing,
+      );
+      final progress = switch (style) {
+        PlayerStyle.bstreamMusic => find.byType(WavyPlaybackSeekBar),
+        PlayerStyle.appleMusic => find.byKey(
+          const ValueKey('apple-player-linear-seek'),
+        ),
+        PlayerStyle.classicVinyl => find.byKey(
+          const ValueKey('classic-vinyl-player-linear-seek'),
+        ),
+        PlayerStyle.spotifyMusic => find.byKey(
+          const ValueKey('spotify-player-linear-seek'),
+        ),
+      };
+      if (style == PlayerStyle.bstreamMusic ||
+          style == PlayerStyle.classicVinyl) {
+        expect(
+          tester.getBottomLeft(timeRow).dy,
+          lessThanOrEqualTo(tester.getTopLeft(progress).dy),
+        );
+      } else {
+        expect(
+          tester.getTopLeft(timeRow).dy,
+          greaterThanOrEqualTo(tester.getBottomLeft(progress).dy),
+        );
+      }
+
+      player.canonicalRemoteTrack = qualityTrack.copyWith(
+        streamCodec: 'mp4a.40.2',
+        streamMimeType: 'audio/mp4',
+        streamBitrate: 320000,
+        streamSource: 'jioSaavn',
+      );
+      player.emit(active.copyWith(position: const Duration(seconds: 1)));
+      await tester.pump();
+      expect(tester.widget<Text>(tier).data, 'Alta calidad');
+      if (provider.evaluate().isNotEmpty) {
+        expect(tester.widget<Text>(provider).data, '\u00b7 JioSaavn');
+      }
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(PlayerPanel)),
+      );
+      final upgrades = container.read(
+        audioQualityUpgradeStateProvider.notifier,
+      );
+      upgrades.begin('obsolete-entry');
+      await tester.pump();
+      final improving = find.byKey(
+        const ValueKey('player-audio-quality-upgrading'),
+      );
+      expect(improving, findsNothing);
+      upgrades.begin('quality-entry');
+      await tester.pump();
+      expect(improving, findsOneWidget);
+      expect(tester.widget<Text>(improving).data, 'Mejorando calidad…');
+
+      await container
+          .read(settingsControllerProvider.notifier)
+          .setShowAudioQuality(false);
+      await tester.pump();
+      expect(tier, findsNothing);
+      expect(improving, findsOneWidget);
+      player.emit(active.copyWith(queueEntryId: 'next-entry'));
+      await tester.pump();
+      expect(improving, findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final variant in const [
+    (size: Size(320, 568), textScale: 1.0),
+    (size: Size(320, 568), textScale: 2.0),
+    (size: Size(568, 320), textScale: 1.5),
+  ]) {
+    testWidgets(
+      'time-row quality capsule fits ${variant.size} at ${variant.textScale}',
+      (tester) async {
+        _configureView(
+          tester,
+          variant.size,
+          textScaleFactor: variant.textScale,
+        );
+        for (final style in PlayerStyle.values) {
+          final active = qualitySnapshot.copyWith(
+            queueEntryId: 'compact-quality',
+          );
+          final player = _TestPlayerController(
+            active,
+            canonicalRemoteTrack: qualityTrack.copyWith(
+              streamSource: 'innerTube',
+            ),
+          );
+          await tester.pumpWidget(
+            _playerHarness(
+              key: ValueKey('${style.name}-${variant.size}'),
+              platform: TargetPlatform.android,
+              snapshot: active,
+              localTrack: localTrack,
+              playlists: _TestPlaylistsController(),
+              playerController: player,
+              style: style,
+              showAudioQuality: true,
+              disableAnimations: true,
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          final capsule = find.byKey(
+            const ValueKey('player-audio-quality-capsule'),
+          );
+          final capsuleRect = tester.getRect(capsule);
+          expect(capsuleRect.left, greaterThanOrEqualTo(0), reason: '$style');
+          expect(
+            capsuleRect.right,
+            lessThanOrEqualTo(variant.size.width),
+            reason: '$style',
+          );
+          expect(find.byIcon(Icons.headphones_rounded), findsOneWidget);
+          final timeRow = find.byKey(
+            const ValueKey('player-timeline-time-row'),
+          );
+          final inlineCapsule = find.descendant(of: timeRow, matching: capsule);
+          if (variant.textScale < 2) {
+            expect(inlineCapsule, findsOneWidget, reason: '$style');
+          }
+          final duration = find.byKey(
+            ValueKey(
+              style == PlayerStyle.bstreamMusic
+                  ? 'player-duration'
+                  : 'apple-player-duration',
+            ),
+          );
+          if (inlineCapsule.evaluate().isNotEmpty) {
+            expect(
+              tester.getCenter(capsule).dy,
+              closeTo(tester.getCenter(duration).dy, .1),
+              reason: '$style',
+            );
+          } else {
+            expect(
+              capsuleRect.top,
+              greaterThanOrEqualTo(tester.getBottomLeft(timeRow).dy),
+              reason: 'Large text keeps the clock labels readable in $style',
+            );
+          }
+          expect(tester.takeException(), isNull, reason: '$style');
+          final container = ProviderScope.containerOf(
+            tester.element(find.byType(PlayerPanel)),
+          );
+          container
+              .read(audioQualityUpgradeStateProvider.notifier)
+              .begin('compact-quality');
+          await tester.pump();
+          expect(
+            find.byKey(const ValueKey('player-audio-quality-upgrading')),
+            findsOneWidget,
+          );
+          expect(
+            tester.getRect(capsule).width,
+            lessThanOrEqualTo(variant.size.width),
+            reason: '$style',
+          );
+          expect(tester.takeException(), isNull, reason: '$style');
+        }
+      },
+    );
+  }
 
   for (final variant in const [
     (platform: TargetPlatform.android, size: Size(390, 820)),
@@ -859,6 +1166,68 @@ void main() {
     },
   );
 
+  for (final bitrate in [128000, 320000]) {
+    testWidgets(
+      'downloaded quality uses stored $bitrate format without file reads',
+      (tester) async {
+        _configureView(tester, const Size(960, 720));
+        final downloaded = localTrack.copyWith(
+          sourceUrl: qualityTrack.url,
+          filePath: '/tmp/downloaded.webm',
+          audioFormat: LocalAudioQuality(
+            codec: 'opus',
+            mimeType: 'audio/webm',
+            bitrate: bitrate,
+            sampleRate: 48000,
+            channels: 2,
+          ),
+        );
+        var reads = 0;
+        final service = LocalAudioQualityService(
+          fingerprintLoader: (_) async {
+            reads++;
+            return 'unused';
+          },
+          loader: (_) async {
+            reads++;
+            return null;
+          },
+        );
+        addTearDown(service.dispose);
+        final active = snapshot.copyWith(sourceUrl: downloaded.filePath);
+        await tester.pumpWidget(
+          _playerHarness(
+            platform: TargetPlatform.windows,
+            snapshot: active,
+            localTrack: downloaded,
+            playerController: _TestPlayerController(
+              active,
+              localTrack: downloaded,
+            ),
+            playlists: _TestPlaylistsController(),
+            showAudioQuality: true,
+            localAudioQualityService: service,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(
+          find.text(
+            'Opus \u00b7 48 kHz \u00b7 ${bitrate ~/ 1000} kbps - Est\u00e9reo',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.text(
+            bitrate == 320000 ? 'Alta calidad' : 'Calidad est\u00e1ndar',
+          ),
+          findsOneWidget,
+        );
+        expect(reads, 0);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   for (final downloaded in [false, true]) {
     testWidgets(
       '${downloaded ? 'downloaded' : 'local'} artwork quality reads actual file metadata once',
@@ -1225,6 +1594,48 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('catalog playback of a downloaded file uses its stored format', (
+    tester,
+  ) async {
+    _configureView(tester, const Size(960, 720));
+    final downloaded = qualityTrack.copyWith(
+      streamUrl: File('/tmp/offline.m4a').uri.toString(),
+      streamCodec: 'aac',
+      streamMimeType: 'audio/mp4',
+      streamExtension: 'm4a',
+      streamBitrate: 320000,
+      streamSampleRate: 44100,
+      streamChannels: 2,
+    );
+    final player = _TestPlayerController(
+      qualitySnapshot,
+      canonicalRemoteTrack: qualityTrack,
+      preparedAudioSource: RemotePlaybackSource(
+        track: downloaded,
+        uri: Uri.parse(downloaded.streamUrl!),
+        queueEntryId: 'downloaded-quality',
+      ),
+    );
+    await tester.pumpWidget(
+      _playerHarness(
+        platform: TargetPlatform.windows,
+        snapshot: qualitySnapshot,
+        localTrack: localTrack,
+        playlists: _TestPlaylistsController(),
+        playerController: player,
+        showAudioQuality: true,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      find.text('AAC \u00b7 44.1 kHz \u00b7 320 kbps - Est\u00e9reo'),
+      findsOneWidget,
+    );
+    expect(find.text('Alta calidad'), findsOneWidget);
+    expect(find.text(stereoQuality), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'audio quality never guesses between conflicting current and prepared formats',
@@ -2561,10 +2972,9 @@ void main() {
       for (final gap in sectionGaps) {
         expect(gap, greaterThanOrEqualTo(18));
       }
-      final sortedSectionGaps = [...sectionGaps]..sort();
       expect(
-        sortedSectionGaps.last - sortedSectionGaps.first,
-        lessThanOrEqualTo(1),
+        roomyTransport.center.dy,
+        closeTo((vinylSeekRect.center.dy + utilityRow.top) / 2, 1),
       );
       expect(metadata.top, closeTo(controls.top, 1));
       expect(utilityRow.bottom, closeTo(controls.bottom, 1));
@@ -6026,7 +6436,7 @@ void main() {
       );
       expect(
         tester.getRect(playbackControls).top - tester.getRect(timeline).bottom,
-        closeTo(18, 0.1),
+        lessThan(18),
       );
       expect(longShadow.blurRadius, 42);
       expect(longShadow.spreadRadius, 6);
@@ -6162,7 +6572,7 @@ void main() {
     );
     expect(
       tester.getRect(playbackControls).top - tester.getRect(timeline).bottom,
-      closeTo(18 - (16 * compactness), 0.2),
+      inInclusiveRange(0, 18 - (16 * compactness)),
     );
     expect(shadow.color.a, lessThanOrEqualTo(0.32));
     expect(shadow.spreadRadius, lessThan(0.3));

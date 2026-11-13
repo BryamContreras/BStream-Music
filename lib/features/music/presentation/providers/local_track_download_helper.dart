@@ -425,6 +425,7 @@ class LocalTrackDownloadHelper {
     final options = DownloadOptions(
       outputDirectory: audioDirectory,
       fileName: _identityFileName(metadataTrack, identityDigest),
+      track: metadataTrack,
       taskId: taskId,
     );
 
@@ -447,6 +448,7 @@ class LocalTrackDownloadHelper {
     }
     _SavedThumbnail? savedThumbnail;
     LocalTrack? persistedTrack;
+    var completedResult = result;
     try {
       savedThumbnail = await _saveThumbnail(
         metadataTrack,
@@ -454,6 +456,40 @@ class LocalTrackDownloadHelper {
         identityDigest,
         isCancelled: isCancelled,
       );
+      _throwIfDownloadCancelled(isCancelled);
+
+      // Embed only after the artwork has been saved and before publishing the
+      // library row. Playback must not open a file while tags are being written.
+      try {
+        final metadataResult = await _ref
+            .read(downloadAudioMetadataServiceProvider)
+            .embed(
+              filePath: result.filePath,
+              title: metadataTrack.title,
+              artist: metadataTrack.artist,
+              album: metadataTrack.album,
+              artworkPath: savedThumbnail?.path ?? staleMatch?.thumbnailPath,
+            );
+        if (metadataResult == AudioMetadataWriteResult.written) {
+          completedResult = DownloadResult(
+            id: result.id,
+            sourceUrl: result.sourceUrl,
+            filePath: result.filePath,
+            fileName: result.fileName,
+            mediaType: result.mediaType,
+            completedAt: result.completedAt,
+            bytes: await File(result.filePath).length(),
+            audioFormat: result.audioFormat,
+          );
+        }
+      } catch (error, stackTrace) {
+        // Tagging is optional. Its service preserves the original audio when
+        // unsupported or unsuccessful, so the usable download can still finish.
+        debugPrint(
+          'Downloaded audio metadata could not be embedded: '
+          '$error\n$stackTrace',
+        );
+      }
       _throwIfDownloadCancelled(isCancelled);
 
       final localTrack = LocalTrack(
@@ -474,6 +510,7 @@ class LocalTrackDownloadHelper {
         sourceId: metadataTrack.id.trim().isEmpty ? null : metadataTrack.id,
         lastPlayedAt: staleMatch?.lastPlayedAt,
         lastPlayedPlaylistId: staleMatch?.lastPlayedPlaylistId,
+        audioFormat: result.audioFormat,
       );
 
       await _ref.read(libraryRepositoryProvider).saveLocalTrack(localTrack);
@@ -488,7 +525,7 @@ class LocalTrackDownloadHelper {
         track: localTrack,
         remoteTrack: metadataTrack,
         reusedExisting: false,
-        downloadResult: result,
+        downloadResult: completedResult,
       );
     } catch (_) {
       // The media file is not useful unless its library row was persisted.
@@ -743,6 +780,7 @@ class LocalTrackDownloadHelper {
       lastPlayedAt: existing.lastPlayedAt,
       lastPlayedPlaylistId: existing.lastPlayedPlaylistId,
       isExternal: existing.isExternal,
+      audioFormat: existing.audioFormat,
     );
     if (_hasSameStoredMetadata(existing, next)) {
       await _commitSavedThumbnail(savedThumbnail);

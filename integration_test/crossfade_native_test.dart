@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:bstream_music/features/music/domain/entities/local_track.dart';
+import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/player/just_audio_player_service.dart';
 import 'package:bstream_music/services/player/media_kit_player_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
@@ -59,6 +60,129 @@ void main() {
       await subscription.cancel();
       await service.dispose();
       await directory.delete(recursive: true);
+    }
+  });
+
+  testWidgets('native quality upgrades retain the current recording clock', (
+    tester,
+  ) async {
+    if (!Platform.isAndroid &&
+        !Platform.isIOS &&
+        !Platform.isWindows &&
+        !Platform.isLinux &&
+        !Platform.isMacOS) {
+      return;
+    }
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream_native_quality_upgrade_',
+    );
+    const duration = Duration(seconds: 45);
+    const catalogTrack = TrackInfo(
+      id: 'native-quality-upgrade',
+      title: 'Native quality upgrade',
+      artist: 'BStream integration test',
+      url: 'https://www.youtube.com/watch?v=native-quality-upgrade',
+      duration: duration,
+      streamExtension: 'wav',
+    );
+    final PlayerService service = Platform.isAndroid || Platform.isIOS
+        ? JustAudioPlayerService()
+        : MediaKitPlayerService();
+    final upgradePlayer = service as AudioSourceUpgradePlayer;
+    final snapshots = <PlayerSnapshot>[];
+    final subscription = service.snapshotStream.listen(snapshots.add);
+    try {
+      // Each rendition has the same PCM, duration and catalog identity, but a
+      // separate file forces a real decoder load and promotion. The second
+      // handoff also exercises reuse of the retired original decoder.
+      final bytes = _toneWave(duration, frequency: 220);
+      final files = <File>[];
+      for (var index = 0; index < 3; index++) {
+        final file = File(
+          '${directory.path}${Platform.pathSeparator}rendition-$index.wav',
+        );
+        await file.writeAsBytes(bytes);
+        files.add(file);
+      }
+      RemotePlaybackSource source(File file) => RemotePlaybackSource(
+        track: catalogTrack.copyWith(streamUrl: file.uri.toString()),
+        uri: file.uri,
+        queueEntryId: 'native:quality-upgrade',
+        isOnlyLogicalQueueItem: true,
+      );
+      await service.setVolume(0);
+      final initial = source(files.first);
+      if (service case final NativeRemoteQueuePlayer nativeQueue) {
+        await nativeQueue.playRemoteSource(initial);
+      } else {
+        await service.playRemote(initial.track);
+      }
+      await _waitUntil(
+        () =>
+            service.currentSnapshot.status == PlayerStatus.playing &&
+            service.currentSnapshot.duration != null &&
+            service.currentSnapshot.position >
+                const Duration(milliseconds: 100),
+        timeout: const Duration(seconds: 10),
+      );
+      for (var index = 1; index < files.length; index++) {
+        final target = Duration(seconds: index == 1 ? 8 : 20);
+        await service.seek(target);
+        await _waitUntil(
+          () =>
+              service.currentSnapshot.position >=
+              target + const Duration(milliseconds: 250),
+          timeout: const Duration(seconds: 5),
+        );
+        snapshots.clear();
+        final before = service.currentSnapshot;
+        final elapsed = Stopwatch()..start();
+        expect(
+          await upgradePlayer.upgradeRemoteSource(source(files[index])),
+          isTrue,
+          reason: 'Native rendition $index must be ready and seekable',
+        );
+        final promoted = service.currentSnapshot;
+        expect(promoted.trackId, before.trackId);
+        expect(promoted.queueEntryId, before.queueEntryId);
+        expect(promoted.sourceUrl, before.sourceUrl);
+        expect(promoted.status, PlayerStatus.playing);
+        expect(
+          promoted.position.inMilliseconds,
+          closeTo(
+            before.position.inMilliseconds + elapsed.elapsedMilliseconds,
+            750,
+          ),
+          reason: 'Promotion must follow the advancing source clock',
+        );
+        await _waitUntil(
+          () =>
+              service.currentSnapshot.position >=
+              promoted.position + const Duration(milliseconds: 250),
+          timeout: const Duration(seconds: 5),
+          diagnostic: () =>
+              'After upgrade: ${service.currentSnapshot.position}',
+        );
+        expect(
+          snapshots.every(
+            (snapshot) =>
+                snapshot.position >= target - const Duration(milliseconds: 150),
+          ),
+          isTrue,
+          reason: 'Real decoder events must never reset the recording to zero',
+        );
+        expect(
+          snapshots.every(
+            (snapshot) => snapshot.status == PlayerStatus.playing,
+          ),
+          isTrue,
+          reason: 'Preparing the replacement must not interrupt playback',
+        );
+      }
+    } finally {
+      await subscription.cancel();
+      await service.dispose();
+      if (await directory.exists()) await directory.delete(recursive: true);
     }
   });
 

@@ -28,6 +28,7 @@ import '../../../../services/youtube_music/innertube_search_service.dart';
 import '../../domain/entities/local_track.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/music_providers.dart';
+import '../providers/audio_source_providers.dart';
 import '../providers/playback_artwork_provider.dart';
 import '../providers/local_audio_quality_provider.dart';
 import '../providers/playback_visual_cache_provider.dart';
@@ -35,6 +36,7 @@ import '../providers/spotify_canvas_provider.dart';
 import '../pages/artist_profile_page.dart';
 import '../pages/remote_collection_detail_page.dart';
 import 'animated_artwork_motion.dart';
+import 'artwork_fade_gradients.dart';
 import 'audio_routing_menus.dart';
 import 'classic_vinyl_deck.dart';
 import 'favorite_star_badge.dart';
@@ -52,6 +54,8 @@ import 'track_change_transition.dart';
 import 'uniform_playback_slider_track_shape.dart';
 import 'wavy_playback_seek_bar.dart';
 
+export 'artwork_fade_gradients.dart';
+
 part 'classic_vinyl_player_layout.dart';
 part 'spotify_player_layout.dart';
 
@@ -65,6 +69,19 @@ double _playerMetadataFontSize(BuildContext context, double fontSize) {
 }
 
 double _playerControlsHorizontalInset(bool landscape) => landscape ? 6 : 8;
+
+/// Balance the visible progress line and utility row, accounting for the
+/// slider's touch area and any time labels below it. Reuse the existing space
+/// so compact players keep their artwork and controls within the viewport.
+({double before, double after}) _playerTransportSpacing({
+  required double before,
+  required double after,
+  required double timelineTail,
+}) {
+  final total = before + after;
+  final balancedBefore = math.max(0.0, (total - timelineTail) / 2);
+  return (before: balancedBefore, after: total - balancedBefore);
+}
 
 double _playerTopSafeInset(BuildContext context) =>
     AppPlatform.isMobileTargetPlatform(Theme.of(context).platform)
@@ -124,157 +141,6 @@ final _appleAnimatedArtworkUrlProvider = FutureProvider.autoDispose
       (ref, track) =>
           ref.read(_appleAnimatedArtworkResolverProvider).resolve(track),
     );
-
-@visibleForTesting
-const expandedArtworkHeroEdgeFadeGradient = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [
-    Colors.transparent,
-    Colors.transparent,
-    Color(0x0EFFFFFF),
-    Color(0x33FFFFFF),
-    Color(0x64FFFFFF),
-    Color(0x9BFFFFFF),
-    Color(0xCCFFFFFF),
-    Color(0xF1FFFFFF),
-    Colors.white,
-    Colors.white,
-    Color(0xF2FFFFFF),
-    Color(0xD9FFFFFF),
-    Color(0xA6FFFFFF),
-    Color(0x66FFFFFF),
-    Color(0x26FFFFFF),
-    Color(0x08FFFFFF),
-    Colors.transparent,
-    Colors.transparent,
-  ],
-  // Finish the video blend before its texture is clipped. A transparent guard
-  // keeps bright frames and fractional texture bounds from exposing a seam.
-  stops: [
-    0,
-    0.05,
-    0.06,
-    0.07,
-    0.08,
-    0.09,
-    0.10,
-    0.11,
-    0.12,
-    0.66,
-    0.72,
-    0.78,
-    0.84,
-    0.90,
-    0.93,
-    0.95,
-    0.96,
-    1,
-  ],
-);
-
-@visibleForTesting
-const expandedArtworkHeroBlurFadeGradient = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [
-    Colors.white,
-    Colors.white,
-    Color(0xE6FFFFFF),
-    Color(0x99FFFFFF),
-    Colors.transparent,
-  ],
-  stops: [0, 0.70, 0.79, 0.91, 1],
-);
-
-@visibleForTesting
-const expandedArtworkHeroFocusFadeGradient = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [
-    Colors.transparent,
-    Colors.transparent,
-    Color(0x0EFFFFFF),
-    Color(0x33FFFFFF),
-    Color(0x64FFFFFF),
-    Color(0x9BFFFFFF),
-    Color(0xCCFFFFFF),
-    Color(0xF1FFFFFF),
-    Colors.white,
-    Colors.white,
-    Color(0xF5FFFFFF),
-    Color(0xDBFFFFFF),
-    Color(0xB6FFFFFF),
-    Color(0x8BFFFFFF),
-    Color(0x5EFFFFFF),
-    Color(0x35FFFFFF),
-    Color(0x15FFFFFF),
-    Color(0x03FFFFFF),
-    Colors.transparent,
-    Colors.transparent,
-  ],
-  // Transparent margins at both ends survive the maximum zoom and vertical
-  // pan. The upper smoothstep blend meets the backdrop without a dark band.
-  stops: [
-    0,
-    0.05,
-    0.06,
-    0.07,
-    0.08,
-    0.09,
-    0.10,
-    0.11,
-    0.12,
-    0.60,
-    0.64,
-    0.68,
-    0.72,
-    0.76,
-    0.80,
-    0.84,
-    0.88,
-    0.92,
-    0.94,
-    1,
-  ],
-);
-
-@visibleForTesting
-const expandedArtworkBoundedEdgeFadeGradient = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [Colors.white, Colors.white, Colors.transparent],
-  stops: [0, 0.84, 1],
-);
-
-@visibleForTesting
-const expandedArtworkBoundedVideoFadeGradient = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [
-    Colors.white,
-    Colors.white,
-    Color(0xCCFFFFFF),
-    Color(0x80FFFFFF),
-    Color(0x26FFFFFF),
-    Color(0x0AFFFFFF),
-    Colors.transparent,
-    Colors.transparent,
-  ],
-  // The guard also covers the small Canvas overscan on larger layouts.
-  stops: [0, 0.84, 0.88, 0.91, 0.94, 0.95, 0.96, 1],
-);
-
-@visibleForTesting
-const expandedArtworkBoundedFocusFadeGradient = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [Colors.white, Colors.white, Color(0xB3FFFFFF), Colors.transparent],
-  stops: [0, 0.68, 0.84, 1],
-);
-
-@visibleForTesting
-const expandedArtworkBoundedToneFadeStops = <double>[0, 0.74, 1];
 
 enum _RemoteArtworkKind { none, spotifyCanvas, appleAnimatedArtwork }
 
@@ -2627,77 +2493,19 @@ class _AppleMusicTimelineState extends ConsumerState<_AppleMusicTimeline> {
         ),
       ),
     );
-    final labels = LayoutBuilder(
-      builder: (context, constraints) {
-        final textDirection = Directionality.of(context);
-        final textScaler = MediaQuery.textScalerOf(context);
-        double measuredWidth(String value) {
-          final painter = TextPainter(
-            text: TextSpan(text: value, style: labelStyle),
-            textDirection: textDirection,
-            textScaler: textScaler,
-            maxLines: 1,
-          )..layout();
-          return painter.width;
-        }
-
-        final sideWidth = math.max(
-          measuredWidth(positionLabel),
-          measuredWidth(durationLabel),
-        );
-        final stackLabels = sideWidth * 2 + 8 > constraints.maxWidth;
-        final position = Text(
-          key: const ValueKey('apple-player-position'),
-          positionLabel,
-          maxLines: 1,
-          style: labelStyle,
-        );
-        final totalDuration = Text(
-          key: const ValueKey('apple-player-duration'),
-          durationLabel,
-          maxLines: 1,
-          style: labelStyle,
-        );
-        if (stackLabels) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: position,
-              ),
-              Align(
-                alignment: AlignmentDirectional.centerEnd,
-                child: totalDuration,
-              ),
-            ],
-          );
-        }
-        return Row(
-          children: [
-            SizedBox(
-              width: sideWidth,
-              child: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: position,
-              ),
-            ),
-            const Spacer(),
-            SizedBox(
-              width: sideWidth,
-              child: Align(
-                alignment: AlignmentDirectional.centerEnd,
-                child: totalDuration,
-              ),
-            ),
-          ],
-        );
-      },
+    final labels = _PlaybackTimelineLabels(
+      positionLabel: positionLabel,
+      durationLabel: durationLabel,
+      labelStyle: labelStyle,
+      positionKey: const ValueKey('apple-player-position'),
+      durationKey: const ValueKey('apple-player-duration'),
     );
 
     return Column(
       key: const ValueKey('apple-player-timeline'),
-      children: widget.labelsAbove ? [labels, slider] : [slider, labels],
+      children: [
+        if (widget.labelsAbove) ...[labels, slider] else ...[slider, labels],
+      ],
     );
   }
 }
@@ -4238,6 +4046,13 @@ class _PlayerControls extends ConsumerWidget {
       color: AppColors.contentSubtitleFor(context),
     );
     final titleArtistGap = lerpDouble(6, 4, spacingCompactness)!;
+    final transportSpacing = _playerTransportSpacing(
+      before: mobile
+          ? lerpDouble(18, 2, spacingCompactness)!
+          : lerpDouble(compact ? 18 : 28, 12, compactness)!,
+      after: landscape ? 0 : lerpDouble(10, 6, spacingCompactness)!,
+      timelineTail: 24,
+    );
     final visualIdentity = playbackVisualIdentity(
       trackId: snapshot.trackId,
       sourceUrl: snapshot.sourceUrl,
@@ -4416,18 +4231,14 @@ class _PlayerControls extends ConsumerWidget {
               spacingCompactness: spacingCompactness,
               landscape: landscape,
             ),
-            SizedBox(
-              height: mobile
-                  ? lerpDouble(18, 2, spacingCompactness)
-                  : lerpDouble(compact ? 18 : 28, 12, compactness),
-            ),
+            SizedBox(height: transportSpacing.before),
             _PlaybackButtons(
               snapshot: snapshot,
               hasTrack: hasTrack,
               isPlaying: isPlaying,
               compact: compact,
               compactness: compactness,
-              spacingCompactness: spacingCompactness,
+              utilityGap: transportSpacing.after,
               landscape: landscape,
               onOpenLyrics: onOpenLyrics,
               queueVisible: queueVisible,
@@ -4958,7 +4769,7 @@ class _PlaybackButtons extends ConsumerWidget {
     required this.isPlaying,
     required this.compact,
     required this.compactness,
-    required this.spacingCompactness,
+    required this.utilityGap,
     this.landscape = false,
     required this.onOpenLyrics,
     required this.queueVisible,
@@ -4971,7 +4782,7 @@ class _PlaybackButtons extends ConsumerWidget {
   final bool isPlaying;
   final bool compact;
   final double compactness;
-  final double spacingCompactness;
+  final double utilityGap;
   final bool landscape;
   final VoidCallback onOpenLyrics;
   final bool queueVisible;
@@ -5215,9 +5026,7 @@ class _PlaybackButtons extends ConsumerWidget {
                 ),
               ),
             ),
-            SizedBox(
-              height: landscape ? 0 : lerpDouble(10, 6, spacingCompactness),
-            ),
+            SizedBox(height: utilityGap),
             _PlayerUtilityControls(
               snapshot: snapshot,
               hasTrack: hasTrack,
@@ -6140,6 +5949,102 @@ Future<void> _toggleFavoriteForSnapshot({
     );
 }
 
+/// The quality pill follows each style's time row, above or below its slider.
+/// Shared measurement keeps the clock labels aligned without shrinking them.
+class _PlaybackTimelineLabels extends StatelessWidget {
+  const _PlaybackTimelineLabels({
+    required this.positionLabel,
+    required this.durationLabel,
+    required this.labelStyle,
+    required this.positionKey,
+    required this.durationKey,
+  });
+
+  final String positionLabel;
+  final String durationLabel;
+  final TextStyle? labelStyle;
+  final Key positionKey;
+  final Key durationKey;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final effectiveStyle = DefaultTextStyle.of(
+        context,
+      ).style.merge(labelStyle);
+      double widthOf(String value) {
+        final painter = TextPainter(
+          text: TextSpan(text: value, style: effectiveStyle),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final width = painter.width;
+        painter.dispose();
+        return width;
+      }
+
+      final sideWidth = math.max(
+        widthOf(positionLabel),
+        widthOf(durationLabel),
+      );
+      final position = Text(
+        positionLabel,
+        key: positionKey,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: labelStyle,
+      );
+      final duration = Text(
+        durationLabel,
+        key: durationKey,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: labelStyle,
+      );
+      final clocksFit = sideWidth * 2 + 8 <= constraints.maxWidth;
+      final pillFits = sideWidth * 2 + 72 <= constraints.maxWidth;
+      Widget side(Widget text, AlignmentGeometry alignment) => SizedBox(
+        width: sideWidth,
+        child: Align(alignment: alignment, child: text),
+      );
+      final clocks = clocksFit
+          ? Row(
+              key: const ValueKey('player-timeline-time-row'),
+              children: [
+                side(position, AlignmentDirectional.centerStart),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: pillFits
+                        ? const Center(child: _PlaybackTimelineQuality())
+                        : const SizedBox.shrink(),
+                  ),
+                ),
+                side(duration, AlignmentDirectional.centerEnd),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: position,
+                ),
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: duration,
+                ),
+              ],
+            );
+      if (pillFits) return clocks;
+      // Large accessibility fonts can consume the entire clock row. Keep the
+      // capsule in this label group instead of overflowing into its controls.
+      return Column(children: [clocks, const _PlaybackTimelineQuality()]);
+    },
+  );
+}
+
 class _Timeline extends ConsumerWidget {
   const _Timeline({required this.spacingCompactness, this.landscape = false});
 
@@ -6177,84 +6082,71 @@ class _Timeline extends ConsumerWidget {
         height: landscape ? 1 : null,
       ),
     );
-    final textDirection = Directionality.of(context);
-    final textScaler = MediaQuery.textScalerOf(context);
-
-    double labelWidth(String label) {
-      final painter = TextPainter(
-        text: TextSpan(text: label, style: labelStyle),
-        textDirection: textDirection,
-        textScaler: textScaler,
-        maxLines: 1,
-      )..layout();
-      return painter.width;
-    }
-
-    return LayoutBuilder(
+    return Column(
       key: const ValueKey('player-timeline'),
-      builder: (context, constraints) {
-        final sideWidth = math.max(
-          labelWidth(positionLabel),
-          labelWidth(durationLabel),
-        );
-        final stackLabels = sideWidth * 2 + 8 > constraints.maxWidth;
-        final labels = stackLabels
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: Text(positionLabel, style: labelStyle),
-                  ),
-                  Align(
-                    alignment: AlignmentDirectional.centerEnd,
-                    child: Text(durationLabel, style: labelStyle),
-                  ),
-                ],
-              )
-            : Row(
-                children: [
-                  SizedBox(
-                    width: sideWidth,
-                    child: Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: Text(positionLabel, style: labelStyle),
-                    ),
-                  ),
-                  const Spacer(),
-                  SizedBox(
-                    width: sideWidth,
-                    child: Align(
-                      alignment: AlignmentDirectional.centerEnd,
-                      child: Text(durationLabel, style: labelStyle),
-                    ),
-                  ),
-                ],
-              );
-
-        return Column(
-          children: [
-            labels,
-            SizedBox(height: lerpDouble(6, 4, spacingCompactness)),
-            SizedBox(
-              height: 48,
-              child: WavyPlaybackSeekBar(
-                position: position,
-                duration: duration,
-                isPlaying: timeline.isPlaying,
-                waveColor: progressColor,
-                colorAnimationKey: const ValueKey(
-                  'player-progress-color-animation',
-                ),
-                onSeek: (next) =>
-                    ref.read(playerControllerProvider.notifier).seek(next),
-              ),
+      children: [
+        _PlaybackTimelineLabels(
+          positionLabel: positionLabel,
+          durationLabel: durationLabel,
+          labelStyle: labelStyle,
+          positionKey: const ValueKey('player-position'),
+          durationKey: const ValueKey('player-duration'),
+        ),
+        SizedBox(height: lerpDouble(6, 4, spacingCompactness)),
+        SizedBox(
+          height: 48,
+          child: WavyPlaybackSeekBar(
+            position: position,
+            duration: duration,
+            isPlaying: timeline.isPlaying,
+            waveColor: progressColor,
+            colorAnimationKey: const ValueKey(
+              'player-progress-color-animation',
             ),
-          ],
-        );
-      },
+            onSeek: (next) =>
+                ref.read(playerControllerProvider.notifier).seek(next),
+          ),
+        ),
+      ],
     );
   }
+}
+
+({TrackInfo track, Uri? preparedUri})? _audibleRemoteAudioFormat(
+  PlayerSnapshot snapshot,
+  PlayerController controller,
+) {
+  final sourceUrl = snapshot.sourceUrl?.trim();
+  if (sourceUrl == null || sourceUrl.isEmpty) return null;
+  final current = controller.currentRemoteTrackFor(sourceUrl);
+  final prepared = controller.preparedAudioSourceFor(sourceUrl);
+  final preparedTrack = prepared?.track;
+  if (prepared != null &&
+      prepared.uri.scheme == 'file' &&
+      preparedTrack != null) {
+    // A downloaded payload can differ from the current online rendition. Its
+    // stored format describes the file actually opened by the player.
+    return (track: preparedTrack, preparedUri: prepared.uri);
+  }
+  if (current?.streamUrl?.isNotEmpty == true &&
+      preparedTrack?.streamUrl?.isNotEmpty == true &&
+      current!.streamUrl != preparedTrack!.streamUrl &&
+      (current.streamCodec != preparedTrack.streamCodec ||
+          current.streamMimeType != preparedTrack.streamMimeType ||
+          current.streamExtension != preparedTrack.streamExtension ||
+          current.streamSampleRate != preparedTrack.streamSampleRate ||
+          current.streamBitrate != preparedTrack.streamBitrate ||
+          current.streamChannels != preparedTrack.streamChannels)) {
+    // Native lookahead can replace an old resolved queue entry, while a
+    // later recovery can refresh only the current entry. Neither URL alone
+    // proves which conflicting format is audible: do not show stale facts.
+    return null;
+  }
+  final track = current?.streamUrl?.isNotEmpty == true
+      ? current
+      : preparedTrack ?? current;
+  if (track == null) return null;
+  return (track: track, preparedUri: prepared?.uri);
 }
 
 String? _audioQualityForSnapshot(
@@ -6272,27 +6164,9 @@ String? _audioQualityForSnapshot(
 
   if (snapshot.isRemote) {
     if (sourceUrl == null || sourceUrl.isEmpty) return null;
-    final current = controller.currentRemoteTrackFor(sourceUrl);
-    final prepared = controller.preparedAudioSourceFor(sourceUrl);
-    final preparedTrack = prepared?.track;
-    if (current?.streamUrl?.isNotEmpty == true &&
-        preparedTrack?.streamUrl?.isNotEmpty == true &&
-        current!.streamUrl != preparedTrack!.streamUrl &&
-        (current.streamCodec != preparedTrack.streamCodec ||
-            current.streamMimeType != preparedTrack.streamMimeType ||
-            current.streamExtension != preparedTrack.streamExtension ||
-            current.streamSampleRate != preparedTrack.streamSampleRate ||
-            current.streamBitrate != preparedTrack.streamBitrate ||
-            current.streamChannels != preparedTrack.streamChannels)) {
-      // Native lookahead can replace an old resolved queue entry, while a
-      // later recovery can refresh only the current entry. Neither URL alone
-      // proves which conflicting format is audible: do not show stale facts.
-      return null;
-    }
-    final track = current?.streamUrl?.isNotEmpty == true
-        ? current
-        : preparedTrack ?? current;
-    if (track == null) return null;
+    final format = _audibleRemoteAudioFormat(snapshot, controller);
+    if (format == null) return null;
+    final track = format.track;
     return playbackAudioQualityLabel(
       codec: track.streamCodec,
       mimeType: track.streamMimeType,
@@ -6303,13 +6177,24 @@ String? _audioQualityForSnapshot(
       stereoLabel: strings.audioQualityStereo,
       monoLabel: strings.audioQualityMono,
       channelCountLabel: strings.audioQualityChannels,
-      localSource: prepared?.uri.scheme == 'file'
-          ? prepared!.uri.toFilePath()
+      localSource: format.preparedUri?.scheme == 'file'
+          ? format.preparedUri!.toFilePath()
           : null,
     );
   }
   final local = controller.currentLocalTrackFor(snapshot.trackId);
-  return playbackAudioQualityLabel(localSource: local?.filePath ?? sourceUrl);
+  final format = local?.audioFormat;
+  return playbackAudioQualityLabel(
+    codec: format?.codec,
+    mimeType: format?.mimeType,
+    bitrate: format?.bitrate,
+    sampleRate: format?.sampleRate,
+    channels: format?.channels,
+    stereoLabel: strings.audioQualityStereo,
+    monoLabel: strings.audioQualityMono,
+    channelCountLabel: strings.audioQualityChannels,
+    localSource: local?.filePath ?? sourceUrl,
+  );
 }
 
 String? _localAudioQualitySource(
@@ -6323,12 +6208,164 @@ String? _localAudioQualitySource(
           snapshot.status != PlayerStatus.completed)) {
     return null;
   }
-  final source =
-      controller.currentLocalTrackFor(snapshot.trackId)?.filePath ??
-      snapshot.sourceUrl;
+  final local = controller.currentLocalTrackFor(snapshot.trackId);
+  // Owned downloads carry resolver facts in the library record. Reading tags
+  // again on playback would duplicate that work; probing is only for legacy
+  // records and external local files without known technical information.
+  if (local?.audioFormat != null) return null;
+  final source = local?.filePath ?? snapshot.sourceUrl;
   return source != null && isSupportedLocalAudioQualitySource(source)
       ? source
       : null;
+}
+
+class _PlaybackTimelineQuality extends ConsumerWidget {
+  const _PlaybackTimelineQuality();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!TickerMode.valuesOf(context).enabled) return const SizedBox.shrink();
+    final enabled = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => settings.value?.showAudioQuality ?? false,
+      ),
+    );
+    final controller = ref.watch(playerControllerProvider.notifier);
+    final audio = ref.watch(
+      playerControllerProvider.select((player) {
+        final snapshot = player.value;
+        final active =
+            snapshot != null &&
+            (snapshot.status == PlayerStatus.playing ||
+                snapshot.status == PlayerStatus.paused ||
+                snapshot.status == PlayerStatus.completed);
+        final track = enabled && snapshot != null && active && snapshot.isRemote
+            ? _audibleRemoteAudioFormat(snapshot, controller)?.track
+            : null;
+        final localFormat =
+            enabled && snapshot != null && active && !snapshot.isRemote
+            ? controller.currentLocalTrackFor(snapshot.trackId)?.audioFormat
+            : null;
+        return (
+          queueEntryId: snapshot?.queueEntryId,
+          provider: switch (track?.streamSource) {
+            'innerTube' || 'innerTubeFallback' => 'YouTube Music',
+            'jioSaavn' => 'JioSaavn',
+            _ => null,
+          },
+          tier: playbackAudioQualityTier(
+            codec: track?.streamCodec ?? localFormat?.codec,
+            mimeType: track?.streamMimeType ?? localFormat?.mimeType,
+            bitrate: track?.streamBitrate ?? localFormat?.bitrate,
+          ),
+          localSource: enabled
+              ? _localAudioQualitySource(snapshot, controller)
+              : null,
+        );
+      }),
+    );
+    final upgrading = ref.watch(
+      audioQualityUpgradeStateProvider.select(
+        (upgrade) =>
+            upgrade.active &&
+            audio.queueEntryId != null &&
+            upgrade.queueEntryId == audio.queueEntryId,
+      ),
+    );
+    var tier = audio.tier;
+    final localSource = audio.localSource;
+    if (localSource != null) {
+      // This source-keyed future is also used by the artwork overlay. Both
+      // consumers share the same bounded probe and cached result.
+      final quality = ref
+          .watch(localPlaybackAudioQualityProvider(localSource))
+          .value;
+      if (quality != null) {
+        tier = playbackAudioQualityTier(
+          codec: quality.codec,
+          mimeType: quality.mimeType,
+          bitrate: quality.bitrate,
+        );
+      }
+    }
+    if (tier == null && !upgrading) return const SizedBox.shrink();
+    final strings = ref.watch(appStringsProvider);
+    final label = switch (tier) {
+      PlaybackAudioQualityTier.low => strings.lowAudioQuality,
+      PlaybackAudioQualityTier.standard => strings.standardAudioQuality,
+      PlaybackAudioQualityTier.high => strings.highAudioQuality,
+      null => null,
+    };
+    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
+      fontSize: 10,
+      height: 1.2,
+      fontWeight: FontWeight.w600,
+      color: AppColors.playbackSecondaryControlForegroundFor(context),
+    );
+    final primary = upgrading ? strings.improvingAudioQuality : label!;
+    return PlayerControlsCapsule(
+      key: const ValueKey('player-audio-quality-capsule'),
+      child: Padding(
+        key: const ValueKey('player-timeline-audio-quality'),
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            double widthOf(String text) {
+              final painter = TextPainter(
+                text: TextSpan(text: text, style: style),
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+                maxLines: 1,
+              )..layout();
+              final width = painter.width;
+              painter.dispose();
+              return width;
+            }
+
+            final source = '\u00b7 ${audio.provider}';
+            final showSource =
+                !upgrading &&
+                audio.provider != null &&
+                widthOf(primary) + widthOf(source) + 26 <= constraints.maxWidth;
+            final primaryText = Text(
+              primary,
+              key: ValueKey(
+                upgrading
+                    ? 'player-audio-quality-upgrading'
+                    : 'player-audio-quality-tier',
+              ),
+              style: style,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            );
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.headphones_rounded,
+                  key: const ValueKey('player-audio-quality-headphones'),
+                  size: 14,
+                  color: style?.color,
+                ),
+                const SizedBox(width: 4),
+                Flexible(child: primaryText),
+                if (showSource) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    source,
+                    key: const ValueKey('player-audio-quality-source'),
+                    style: style,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class _ArtworkAudioQualityOverlay extends ConsumerWidget {
