@@ -390,11 +390,11 @@ jobs:
 
       - name: Enforce Android artifact size budgets
         run: |
-          # 1.3.1 baseline: about 49.63/51.02/52.74 MiB after the player and
-          # lyrics additions. Keep tight per-ABI caps, including IPADIC.
-          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk" 50
+          # 1.3.1 baseline: about 50.0/51.3/53.0 MiB with audio sources and
+          # file metadata support. Keep tight per-ABI caps, including IPADIC.
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk" 50.5
           dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk" 52
-          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 53
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 53.5
 
       - name: Upload Android ARMv7 APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
