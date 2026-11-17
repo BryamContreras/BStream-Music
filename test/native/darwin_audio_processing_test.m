@@ -1,7 +1,9 @@
 #import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <AVFoundation/AVFoundation.h>
 #import "BStreamSilenceAnalyzer.h"
 #import "BStreamAudioProcessingTap.h"
+#import "BStreamAudioStatus.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -40,6 +42,26 @@ static uint64_t Counter(NSDictionary *dictionary, NSString *key) {
     id value = dictionary[key];
     CHECK([value isKindOfClass:[NSNumber class]]);
     return [value unsignedLongLongValue];
+}
+
+static void TestStatusBooleanWireTypes(void) {
+    int supported = 1;
+    int configured = 1;
+    int failures = 0;
+    NSDictionary *status = @{
+        @"configured": BStreamAudioStatusBoolean(supported && configured),
+        @"skipSilenceSupported": BStreamAudioStatusBoolean(supported && failures < 3),
+        @"unavailable": BStreamAudioStatusBoolean(supported && !configured),
+    };
+    for (NSString *key in status) {
+        // boolValue alone accepts NSNumber(int), masking the Flutter codec
+        // regression. Its Core Foundation type must be an actual boolean.
+        CHECK(CFGetTypeID((__bridge CFTypeRef)status[key]) == CFBooleanGetTypeID());
+    }
+    CHECK([status[@"configured"] boolValue]);
+    CHECK([status[@"skipSilenceSupported"] boolValue]);
+    CHECK(![status[@"unavailable"] boolValue]);
+    puts("Darwin status fields preserve boolean wire types");
 }
 
 static void Store16(uint8_t *bytes, uint16_t value) {
@@ -234,6 +256,7 @@ static void TestTapLifecycleAndWatchdog(NSURL *url) {
 int main(void) {
     @autoreleasepool {
         CHECK(NSThread.isMainThread);
+        TestStatusBooleanWireTypes();
         NSURL *directory = [NSURL fileURLWithPath:[NSTemporaryDirectory()
             stringByAppendingPathComponent:[@"bstream-darwin-test-" stringByAppendingString:NSUUID.UUID.UUIDString]]
                                      isDirectory:YES];

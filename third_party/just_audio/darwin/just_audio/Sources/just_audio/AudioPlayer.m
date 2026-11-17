@@ -8,6 +8,7 @@
 #import "./include/just_audio/LoopingAudioSource.h"
 #import "./include/just_audio/ClippingAudioSource.h"
 #import "./include/just_audio/BStreamAudioProcessingTap.h"
+#import "./include/just_audio/BStreamAudioStatus.h"
 #import "./include/just_audio/BStreamSilenceAnalyzer.h"
 #import <AVFoundation/AVFoundation.h>
 #import <stdlib.h>
@@ -326,14 +327,14 @@
     active = supported && _bstreamEqualizerEnabled && active;
     NSMutableDictionary *status = processor ? [[processor diagnostics] mutableCopy] : [NSMutableDictionary dictionary];
     status[@"supported"] = @(supported);
-    status[@"configured"] = @(processor && processor.configured);
+    status[@"configured"] = BStreamAudioStatusBoolean(processor && processor.configured);
     status[@"enabled"] = @(active);
     status[@"engine"] = @"bstream-dsp";
     status[@"preampDb"] = @(active ? -maximum : 0);
     status[@"revision"] = @(_bstreamRevision);
     status[@"parameters"] = @{@"minDecibels": @(-12), @"maxDecibels": @12, @"bands": bands};
     BStreamSilenceAnalyzer *analyzer = item ? [_bstreamAnalyzers objectForKey:item] : nil;
-    if (analyzer) status[@"skipSilenceSupported"] = @(analyzer.supported && !external && _bstreamSkipFailures < 3);
+    if (analyzer) status[@"skipSilenceSupported"] = BStreamAudioStatusBoolean(analyzer.supported && !external && _bstreamSkipFailures < 3);
     else if (external) status[@"skipSilenceSupported"] = @NO;
     return status;
 }
@@ -342,7 +343,7 @@
     BStreamSilenceAnalyzer *analyzer = _player.currentItem ? [_bstreamAnalyzers objectForKey:_player.currentItem] : nil;
     NSMutableDictionary *status = analyzer ? [analyzer.diagnostics mutableCopy] : [NSMutableDictionary dictionary];
     status[@"requestedEnabled"] = @(_bstreamSkipSilenceEnabled);
-    status[@"supported"] = @((!analyzer || analyzer.supported) && _bstreamSkipFailures < 3 && !_player.externalPlaybackActive);
+    status[@"supported"] = BStreamAudioStatusBoolean((!analyzer || analyzer.supported) && _bstreamSkipFailures < 3 && !_player.externalPlaybackActive);
     status[@"seekCount"] = @(_bstreamSkipCount);
     return status;
 }
