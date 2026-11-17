@@ -724,6 +724,19 @@ class JustAudioPlayerService
   @override
   bool get skipSilenceEnabled => _skipSilenceEnabled;
 
+  Future<Map<String, dynamic>?> readSkipSilenceDiagnostics() async {
+    final player = _player;
+    final deck = _equalizerDecks[player];
+    if (_disposed || deck == null) return null;
+    final status = await deck.effect.readSkipSilenceStatus();
+    // A handoff may retire this deck while its diagnostic reply is in flight.
+    return !_disposed &&
+            identical(player, _player) &&
+            identical(deck, _equalizerDecks[player])
+        ? status
+        : null;
+  }
+
   @override
   Future<void> configureSkipSilence({required bool enabled}) async {
     _skipSilenceEnabled = enabled;

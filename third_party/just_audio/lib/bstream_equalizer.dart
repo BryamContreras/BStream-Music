@@ -238,6 +238,25 @@ class BStreamEqualizer extends AudioEffect
     return _decode(result);
   }
 
+  /// Reads silence-analysis metadata without changing equalizer state.
+  /// Null means this binding has no diagnostics endpoint or is no longer active.
+  Future<Map<String, dynamic>?> readSkipSilenceStatus() async {
+    if (!_connected) return null;
+    final epoch = _bindingEpoch;
+    final id = _boundId;
+    try {
+      final result = await _channel!
+          .invokeMapMethod<String, dynamic>('bstreamSkipSilenceReadStatus')
+          .timeout(_nativeTimeout);
+      if (!_connected || epoch != _bindingEpoch || id != _boundId) {
+        return null;
+      }
+      return result;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   @override
   Future<void> setEnabled(bool enabled) async {
     await configure(enabled: enabled, gainsDb: _gains);

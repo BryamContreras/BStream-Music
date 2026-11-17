@@ -1237,6 +1237,7 @@
         [self bstreamPublishStatus];
         //NSLog(@"currentItem -> [%d]", [self indexForItem:_player.currentItem]);
         IndexedPlayerItem *playerItem = (IndexedPlayerItem *)change[NSKeyValueChangeNewKey];
+        BOOL publishItemChange = NO;
         //IndexedPlayerItem *oldPlayerItem = (IndexedPlayerItem *)change[NSKeyValueChangeOldKey];
         if (playerItem.status == AVPlayerItemStatusFailed) {
             [self sendErrorForItem:playerItem];
@@ -1249,6 +1250,7 @@
                 //NSLog(@"Queue change detected. Adjusting index from %d -> %d", _index, expectedIndex);
                 _index = expectedIndex;
                 [self updateEndAction];
+                publishItemChange = YES;
             }
         }
         //NSLog(@"currentItem changed. _index=%d", _index);
@@ -1291,6 +1293,7 @@
         /* } */
 
         if (_justAdvanced) {
+            publishItemChange = YES;
             IndexedAudioSource *audioSource = playerItem.audioSource;
             if (_loopMode == lmLoopOne) {
                 [audioSource flip];
@@ -1310,9 +1313,11 @@
             _justAdvanced = NO;
         }
         // Pair the successor's index/duration with its own clock, after any
-        // loop-item flip. Never reuse the outgoing item's cached position.
-        [self updatePosition];
-        [self broadcastPlaybackEvent];
+        // loop-item flip. Initial attachment keeps its existing load events.
+        if (publishItemChange) {
+            [self updatePosition];
+            [self broadcastPlaybackEvent];
+        }
     } else if ([keyPath isEqualToString:@"loadedTimeRanges"]) {
         [self bstreamProcessingTick];
         IndexedPlayerItem *playerItem = (IndexedPlayerItem *)object;

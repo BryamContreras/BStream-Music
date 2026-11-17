@@ -27,6 +27,7 @@ void main() {
       ]);
       expect(status.preampDb, -12);
       expect((await equalizer.readStatus()).parameters.bands.first.gain, 3.5);
+      expect(await equalizer.readSkipSilenceStatus(), isNull);
 
       final bypass = await equalizer.configure(
         enabled: false,
@@ -138,6 +139,86 @@ void main() {
       expect(equalizer.supported, isTrue);
     },
   );
+
+  test(
+    'Darwin silence diagnostics preserve metadata without changing EQ state',
+    () async {
+      final bridge = _NativeBridge(darwin: true);
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer, darwin: true);
+      addTearDown(() async {
+        await player.dispose();
+        bridge.dispose();
+      });
+      await equalizer.configure(enabled: true, gainsDb: [3.5, 1, -2, 0, 4]);
+      await _load(player);
+      final engine = bridge.engines.single;
+      final revision = engine.revision;
+      final nativeStatus = <String, Object?>{
+        'supported': false,
+        'assetReadable': false,
+        'error': 'The asset is not readable.',
+        'errorCode': -11800,
+        'errorDomain': 'AVFoundationErrorDomain',
+        'readersCreated': 0,
+        'decodedFrames': 0,
+        'rangeCount': 0,
+        'ranges': <Object?>[],
+        'lastPositionSeconds': 0.25,
+        'lastBufferedUntilSeconds': 8.0,
+        'lastLimitSeconds': 8.0,
+      };
+      engine.skipSilenceDiagnostics = nativeStatus;
+
+      expect(await equalizer.readSkipSilenceStatus(), nativeStatus);
+      expect(engine.skipSilenceReadCalls, 1);
+      expect(equalizer.supported, isTrue);
+      expect(equalizer.enabled, isTrue);
+      expect(engine.revision, revision);
+      expect(engine.gains, [3.5, 1, -2, 0, 4]);
+    },
+  );
+
+  test('silence diagnostics are optional on the Android bridge', () async {
+    final bridge = _NativeBridge();
+    final equalizer = BStreamEqualizer();
+    final player = _player(equalizer);
+    addTearDown(() async {
+      await player.dispose();
+      bridge.dispose();
+    });
+    await _load(player);
+
+    expect(await equalizer.readSkipSilenceStatus(), isNull);
+    expect(bridge.engines.single.skipSilenceReadCalls, 1);
+    expect(equalizer.supported, isTrue);
+  });
+
+  test('silence diagnostics ignore a reply from a released binding', () async {
+    final bridge = _NativeBridge(darwin: true);
+    final equalizer = BStreamEqualizer();
+    final player = _player(equalizer, darwin: true);
+    addTearDown(() async {
+      await player.dispose();
+      bridge.dispose();
+    });
+    await _load(player);
+    final oldEngine = bridge.engines.single;
+    final delayed = oldEngine.blockSkipSilenceRead();
+    final oldRead = equalizer.readSkipSilenceStatus();
+    await delayed.started.future;
+    await player.stop();
+    expect(await equalizer.readSkipSilenceStatus(), isNull);
+    await _load(player);
+    final currentEngine = bridge.engines.last;
+    currentEngine.skipSilenceDiagnostics = {'decodedFrames': 48000};
+
+    expect(await equalizer.readSkipSilenceStatus(), {'decodedFrames': 48000});
+    delayed.complete({'supported': false, 'decodedFrames': 8});
+    expect(await oldRead, isNull);
+    expect(equalizer.supported, isTrue);
+    expect(currentEngine.skipSilenceReadCalls, 1);
+  });
 
   test(
     'a released engine cannot block writes or overwrite a new engine ACK',
@@ -379,6 +460,9 @@ class _NativeEngine {
   int revision = 0;
   _BlockedReply? _configureReply;
   _BlockedReply? _readReply;
+  _BlockedReply? _skipSilenceReadReply;
+  int skipSilenceReadCalls = 0;
+  Map<String, Object?> skipSilenceDiagnostics = {'supported': true};
   MethodChannel get methods =>
       MethodChannel('com.ryanheise.just_audio.methods.$id');
   MethodChannel get events =>
@@ -395,6 +479,12 @@ class _NativeEngine {
     final reply = _BlockedReply();
     bridge.blocked.add(reply);
     return _readReply = reply;
+  }
+
+  _BlockedReply blockSkipSilenceRead() {
+    final reply = _BlockedReply();
+    bridge.blocked.add(reply);
+    return _skipSilenceReadReply = reply;
   }
 
   Future<dynamic> handle(MethodCall call) async {
@@ -426,6 +516,17 @@ class _NativeEngine {
         return reply.result.future;
       }
       return status();
+    }
+    if (call.method == 'bstreamSkipSilenceReadStatus') {
+      skipSilenceReadCalls++;
+      if (!bridge.darwin) throw MissingPluginException();
+      final reply = _skipSilenceReadReply;
+      _skipSilenceReadReply = null;
+      if (reply != null) {
+        reply.started.complete();
+        return reply.result.future;
+      }
+      return skipSilenceDiagnostics;
     }
     if (call.method == 'load') {
       await bridge.messenger.handlePlatformMessage(

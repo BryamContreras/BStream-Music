@@ -392,11 +392,36 @@ void main() {
         reason: 'Clock synchronization must not introduce playback errors.',
       );
     } finally {
+      await _logSkipSilenceDiagnostics(service, 'clock-sync-long-gap');
       await subscription.cancel();
       await service.dispose();
       await server.close();
     }
   }, timeout: const Timeout(Duration(seconds: 45)));
+}
+
+Future<void> _logSkipSilenceDiagnostics(
+  JustAudioPlayerService service,
+  String phase,
+) async {
+  if (!Platform.isIOS) return;
+  try {
+    final status = await service.readSkipSilenceDiagnostics().timeout(
+      const Duration(seconds: 2),
+    );
+    final snapshot = service.currentSnapshot;
+    // ignore: avoid_print
+    print(
+      'SKIP_SILENCE_NATIVE $phase: status=$status, '
+      'supported=${service.supportsSkipSilence}, '
+      'track=${snapshot.trackId}, playback=${snapshot.status}, '
+      'position=${snapshot.position}, duration=${snapshot.duration}',
+    );
+  } catch (error) {
+    // Diagnostics must preserve the original playback assertion failure.
+    // ignore: avoid_print
+    print('SKIP_SILENCE_NATIVE $phase: diagnosticsError=$error');
+  }
 }
 
 void _expectLongSilenceShortened({
@@ -506,6 +531,10 @@ Future<Duration> _measurePlayback(
     );
     return watch.elapsed;
   } finally {
+    await _logSkipSilenceDiagnostics(
+      service,
+      'local:${track.id} enabled=$skipSilenceEnabled',
+    );
     await subscription.cancel();
     await service.dispose();
   }
@@ -578,6 +607,10 @@ Future<Duration> _measureRemotePlayback(
     );
     return watch.elapsed;
   } finally {
+    await _logSkipSilenceDiagnostics(
+      service,
+      'remote:$id enabled=$skipSilenceEnabled',
+    );
     await subscription.cancel();
     await service.dispose();
   }
@@ -658,6 +691,10 @@ Future<Duration> _measureCrossfadeHandoff(
     );
     return watch.elapsed;
   } finally {
+    await _logSkipSilenceDiagnostics(
+      service,
+      'crossfade enabled=$skipSilenceEnabled',
+    );
     await subscription.cancel();
     await service.dispose();
   }
