@@ -655,7 +655,7 @@
     // TODO: Provide a similar case as _seekPos for _initialPos.
     if (CMTIME_IS_VALID(_seekPos)) {
         return (int)(1000 * CMTimeGetSeconds(_seekPos));
-    } else if (_indexedAudioSources && _indexedAudioSources.count > 0) {
+    } else if (_index >= 0 && (NSUInteger)_index < _indexedAudioSources.count) {
         int ms = (int)(1000 * CMTimeGetSeconds(_indexedAudioSources[_index].position));
         if (ms < 0) ms = 0;
         return ms;
@@ -667,7 +667,7 @@
 - (int)getBufferedPosition {
     if (_processingState == psIdle || _processingState == psLoading) {
         return 0;
-    } else if (_indexedAudioSources && _indexedAudioSources.count > 0) {
+    } else if (_index >= 0 && (NSUInteger)_index < _indexedAudioSources.count) {
         int ms = (int)(1000 * CMTimeGetSeconds(_indexedAudioSources[_index].bufferedPosition));
         if (ms < 0) ms = 0;
         return ms;
@@ -679,7 +679,7 @@
 - (int)getDuration {
     if (_processingState == psIdle || _processingState == psLoading) {
         return -1;
-    } else if (_indexedAudioSources && _indexedAudioSources.count > 0) {
+    } else if (_index >= 0 && (NSUInteger)_index < _indexedAudioSources.count) {
         int v = (int)(1000 * CMTimeGetSeconds(_indexedAudioSources[_index].duration));
         return v;
     } else {
@@ -1223,6 +1223,13 @@
         _bstreamSkipRetryAfter = 0;
         [self bstreamPublishStatus];
     } else if ([keyPath isEqualToString:@"currentItem"] && _player.currentItem) {
+        id changedItem = change[NSKeyValueChangeNewKey];
+        if (![changedItem isKindOfClass:[IndexedPlayerItem class]] || changedItem != _player.currentItem) return;
+        IndexedPlayerItem *playerItem = (IndexedPlayerItem *)changedItem;
+        int expectedIndex = [self indexForItem:playerItem];
+        // A delayed observation may refer to an item from the previous load.
+        // It cannot establish an index in the newly decoded source sequence.
+        if (expectedIndex < 0 || (NSUInteger)expectedIndex >= _indexedAudioSources.count) return;
         _bstreamSkipFailures = 0;
         _bstreamSkipRetryAfter = 0;
         [self bstreamCancelScheduledSkip];
@@ -1236,14 +1243,12 @@
         }
         [self bstreamPublishStatus];
         //NSLog(@"currentItem -> [%d]", [self indexForItem:_player.currentItem]);
-        IndexedPlayerItem *playerItem = (IndexedPlayerItem *)change[NSKeyValueChangeNewKey];
         BOOL publishItemChange = NO;
         //IndexedPlayerItem *oldPlayerItem = (IndexedPlayerItem *)change[NSKeyValueChangeOldKey];
         if (playerItem.status == AVPlayerItemStatusFailed) {
             [self sendErrorForItem:playerItem];
             return;
         } else {
-            int expectedIndex = [self indexForItem:playerItem];
             if (_index != expectedIndex) {
                 // AVQueuePlayer will sometimes skip over error items without
                 // notifying this observer.
@@ -1477,7 +1482,18 @@
     // - when the shuffle order changes. (TODO)
     // - when the shuffle mode changes.
     if (!_player) return;
-    if (_audioSource && (_loopMode != lmLoopOff || ([_order count] > 0 && [_orderInv[_index] intValue] + 1 < [_order count]))) {
+    if (!_audioSource || _index < 0 || (NSUInteger)_index >= _indexedAudioSources.count ||
+            (NSUInteger)_index >= _orderInv.count) {
+        _player.actionAtItemEnd = AVPlayerActionAtItemEndPause;
+        return;
+    }
+    NSNumber *orderPosition = _orderInv[_index];
+    if (![orderPosition isKindOfClass:[NSNumber class]] || orderPosition.integerValue < 0 ||
+            (NSUInteger)orderPosition.integerValue >= _order.count) {
+        _player.actionAtItemEnd = AVPlayerActionAtItemEndPause;
+        return;
+    }
+    if (_loopMode != lmLoopOff || orderPosition.integerValue + 1 < (NSInteger)_order.count) {
         _player.actionAtItemEnd = AVPlayerActionAtItemEndAdvance;
     } else {
         _player.actionAtItemEnd = AVPlayerActionAtItemEndPause; // AVPlayerActionAtItemEndNone

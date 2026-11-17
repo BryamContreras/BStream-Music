@@ -245,6 +245,38 @@ jobs:
           --target=integration_test/crossfade_native_test.dart
           -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
 
+      - name: Collect iOS failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          diagnostics="$RUNNER_TEMP/ios-native-diagnostics"
+          mkdir -p "$diagnostics"
+          if [[ -n "${BSTREAM_IOS_SIMULATOR_ID:-}" ]]; then
+            xcrun simctl spawn "$BSTREAM_IOS_SIMULATOR_ID" log show \
+              --style compact --last 20m \
+              --predicate 'process == "Runner" OR process == "ReportCrash" OR eventMessage CONTAINS[c] "com.bstream.bstreamMusic"' \
+              > "$diagnostics/simulator.log" 2>&1 || true
+          fi
+          for report_dir in \
+            "$HOME/Library/Logs/DiagnosticReports" \
+            "$HOME/Library/Developer/CoreSimulator/Devices/${BSTREAM_IOS_SIMULATOR_ID:-none}/data/Library/Logs/CrashReporter"
+          do
+            if [[ -d "$report_dir" ]]; then
+              find "$report_dir" -type f \
+                \( -name 'Runner*.ips' -o -name 'Runner*.crash' -o -name 'JetsamEvent*.ips' -o -name 'darwin_audio_processing_test*.ips' \) \
+                -print -exec cp -p '{}' "$diagnostics/" \;
+            fi
+          done
+
+      - name: Upload iOS failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-native-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-native-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Stop the iOS simulator
         if: always() && env.BSTREAM_IOS_SIMULATOR_ID != ''
         shell: bash
