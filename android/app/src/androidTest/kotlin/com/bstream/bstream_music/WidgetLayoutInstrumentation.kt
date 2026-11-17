@@ -29,8 +29,11 @@ import kotlin.math.roundToInt
 
 /** Runs production RemoteViews on Android without touching real widget data or playback. */
 class WidgetLayoutInstrumentation : Instrumentation() {
+    private var selectedSuite: String? = null
+
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
+        selectedSuite = arguments?.getString("suite")
         start()
     }
 
@@ -39,11 +42,15 @@ class WidgetLayoutInstrumentation : Instrumentation() {
         var cases = 0
         runOnMainSync {
             try {
-                cases = verifyLayouts()
+                cases = when (selectedSuite) {
+                    null -> verifyLayouts() + HomeWidgetBridgeNativeChecks.verify(targetContext)
+                    "home-widget-bridge" -> HomeWidgetBridgeNativeChecks.verify(targetContext)
+                    else -> error("Unknown widget instrumentation suite: $selectedSuite")
+                }
             } catch (error: Throwable) {
                 failure = error
             } finally {
-                try {
+                if (selectedSuite == null || selectedSuite == "home-widget-bridge") try {
                     // Queue/artwork fixtures intentionally exercise update()
                     // against the real launcher provider; restore its host
                     // view from the app's untouched production preferences.
@@ -59,11 +66,17 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             }
         }
         val result = Bundle()
+        val resultPrefix = if (selectedSuite == "home-widget-bridge") "HOME_WIDGET_BRIDGE" else "WIDGET_LAYOUT"
         if (failure == null) {
-            result.putString("stream", "WIDGET_LAYOUT_OK: $cases production cases passed (sizes, text, controls, rotation, font scaling, artwork transitions).")
+            val detail = if (selectedSuite == "home-widget-bridge") {
+                "headless updates, metadata/artwork ordering, action relay, lifecycle, media controls"
+            } else {
+                "sizes, text, controls, rotation, font scaling, artwork transitions"
+            }
+            result.putString("stream", "${resultPrefix}_OK: $cases production cases passed ($detail).")
             finish(Activity.RESULT_OK, result)
         } else {
-            result.putString("stream", "WIDGET_LAYOUT_FAILED: ${failure!!.stackTraceToString()}")
+            result.putString("stream", "${resultPrefix}_FAILED: ${failure!!.stackTraceToString()}")
             finish(Activity.RESULT_CANCELED, result)
         }
     }

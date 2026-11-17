@@ -11,6 +11,74 @@ String formatEqualizerGain(double gain) {
   return '${gain > 0 ? '+' : ''}${gain.toStringAsFixed(digits)} dB';
 }
 
+/// A compact response curve with a control point for each equalizer band.
+class EqualizerCurveIcon extends StatelessWidget {
+  const EqualizerCurveIcon({super.key, this.size, this.color});
+
+  final double? size;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    final effectiveColor =
+        color ?? theme.color ?? Theme.of(context).colorScheme.onSurface;
+    return SizedBox.square(
+      dimension: size ?? theme.size ?? 24,
+      child: CustomPaint(
+        painter: _EqualizerCurveIconPainter(
+          effectiveColor.withValues(
+            alpha: effectiveColor.a * (theme.opacity ?? 1),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EqualizerCurveIconPainter extends CustomPainter {
+  const _EqualizerCurveIconPainter(this.color);
+
+  final Color color;
+  static const _points = [
+    Offset(2.5, 14.5),
+    Offset(7, 7.5),
+    Offset(12, 16),
+    Offset(17, 8.5),
+    Offset(21.5, 11.5),
+  ];
+  static final _curve = Path()
+    ..moveTo(2.5, 14.5)
+    ..cubicTo(4.75, 14.5, 4.75, 7.5, 7, 7.5)
+    ..cubicTo(9.5, 7.5, 9.5, 16, 12, 16)
+    ..cubicTo(14.5, 16, 14.5, 8.5, 17, 8.5)
+    ..cubicTo(19.25, 8.5, 19.25, 11.5, 21.5, 11.5);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24, size.height / 24);
+    canvas.drawPath(
+      _curve,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.7
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+    final marker = Paint()..color = color;
+    for (final point in _points) {
+      canvas.drawCircle(point, 1.45, marker);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _EqualizerCurveIconPainter oldDelegate) =>
+      color != oldDelegate.color;
+}
+
 /// A view of the five stored controls, rather than an audio sampling task.
 class EqualizerCurveChart extends StatelessWidget {
   const EqualizerCurveChart({

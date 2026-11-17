@@ -2131,7 +2131,10 @@ class JustAudioPlayerService
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final source = track.streamUrl;
     if (source == null || source.isEmpty) {
       throw const app_errors.PlayerException(
@@ -2154,11 +2157,18 @@ class JustAudioPlayerService
         httpHeaders: track.httpHeaders,
         isOnlyLogicalQueueItem: true,
       ),
+      initialPosition: initialPosition,
     );
   }
 
   @override
-  Future<void> playRemoteSource(RemotePlaybackSource source) async {
+  Future<void> playRemoteSource(
+    RemotePlaybackSource source, {
+    Duration initialPosition = Duration.zero,
+  }) async {
+    final startPosition = initialPosition < Duration.zero
+        ? Duration.zero
+        : initialPosition;
     final generation = ++_playbackGeneration;
     _beginPlaybackIntent(generation);
     _remoteQueueRevision++;
@@ -2187,6 +2197,7 @@ class JustAudioPlayerService
         sourceUrl: track.url,
         thumbnailUrl: track.thumbnailUrl,
         duration: track.duration,
+        position: startPosition,
         volume: _masterVolume,
         isRemote: true,
       ),
@@ -2211,7 +2222,7 @@ class JustAudioPlayerService
           final loadedDuration = await _player.setAudioSources(
             [_remoteAudioSource(source)],
             initialIndex: 0,
-            initialPosition: Duration.zero,
+            initialPosition: startPosition,
             // Validate the signed URL before reporting that playback has
             // started. This turns HTTP/format failures into a catchable error
             // instead of a later, easily lost background event.
@@ -2530,7 +2541,13 @@ class JustAudioPlayerService
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
+    final startPosition = initialPosition < Duration.zero
+        ? Duration.zero
+        : initialPosition;
     final generation = ++_playbackGeneration;
     _beginPlaybackIntent(generation);
     _activeRemoteTrack = null;
@@ -2552,6 +2569,7 @@ class JustAudioPlayerService
         sourceUrl: track.sourceUrl,
         thumbnailUrl: track.thumbnailPath ?? track.thumbnailUrl,
         duration: track.duration,
+        position: startPosition,
         volume: _masterVolume,
         isRemote: false,
         isExternal: track.isExternal,
@@ -2564,7 +2582,10 @@ class JustAudioPlayerService
         }
         _remoteQueueSources = const [];
         _remoteHasSingleLogicalItem = false;
-        await _player.setAudioSource(_localAudioSource(track));
+        await _player.setAudioSource(
+          _localAudioSource(track),
+          initialPosition: startPosition,
+        );
         if (generation != _playbackGeneration) {
           return;
         }
@@ -2586,7 +2607,11 @@ class JustAudioPlayerService
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (tracks.isEmpty) {
       return;
     }
@@ -2600,6 +2625,9 @@ class JustAudioPlayerService
     }
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
     final current = tracks[safeIndex];
+    final startPosition = initialPosition < Duration.zero
+        ? Duration.zero
+        : initialPosition;
     _emit(
       PlayerSnapshot(
         status: PlayerStatus.loading,
@@ -2610,6 +2638,7 @@ class JustAudioPlayerService
         sourceUrl: current.sourceUrl,
         thumbnailUrl: current.thumbnailPath ?? current.thumbnailUrl,
         duration: current.duration,
+        position: startPosition,
         volume: _masterVolume,
         isRemote: false,
         isExternal: current.isExternal,
@@ -2625,12 +2654,12 @@ class JustAudioPlayerService
         _remoteHasSingleLogicalItem = false;
         if (_sameQueue(queueIds, _localQueueIds) &&
             _player.sequence.length == tracks.length) {
-          await _player.seek(Duration.zero, index: safeIndex);
+          await _player.seek(startPosition, index: safeIndex);
         } else {
           await _player.setAudioSources(
             tracks.map(_localAudioSource).toList(growable: false),
             initialIndex: safeIndex,
-            initialPosition: Duration.zero,
+            initialPosition: startPosition,
           );
           _localQueueIds = queueIds;
         }

@@ -1674,8 +1674,8 @@ class AppStrings {
       'A 5-band equalizer is now available.',
     ),
     choose(
-      'El reproductor ahora es compatible con audio de mayor calidad cuando está disponible.',
-      'The player now supports higher quality audio when available.',
+      'Compatibilidad con audio de mayor calidad, siempre que esté disponible.',
+      'Support for higher quality audio whenever available.',
     ),
     choose(
       'Se mejoraron y optimizaron los diseños de los estilos del reproductor.',

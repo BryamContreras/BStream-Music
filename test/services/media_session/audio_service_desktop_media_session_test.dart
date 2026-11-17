@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:bstream_music/services/media_session/audio_service_desktop_media_session.dart';
 import 'package:bstream_music/services/media_session/desktop_media_session.dart';
@@ -162,6 +164,74 @@ void main() {
   });
 
   group('AudioServiceMediaSessionCallbackBridge', () {
+    test('attaching a restored session does not start playback', () {
+      final calls = <String>[];
+      final bridge = AudioServiceMediaSessionCallbackBridge();
+
+      bridge.attach(_callbacks('restored', calls));
+
+      expect(calls, isEmpty);
+    });
+
+    test('retains the first cold-start play until callbacks attach', () async {
+      final calls = <String>[];
+      final bridge = AudioServiceMediaSessionCallbackBridge();
+      var completed = false;
+      final play = bridge.play().then((_) => completed = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+      expect(calls, isEmpty);
+
+      bridge.attach(_callbacks('restored', calls));
+      await play;
+      bridge.attach(_callbacks('replacement', calls));
+
+      expect(calls, ['restored:play']);
+    });
+
+    test('cold-start pause is not blocked by a pending play', () async {
+      final calls = <String>[];
+      final bridge = AudioServiceMediaSessionCallbackBridge();
+      final releasePlay = Completer<void>();
+      final play = bridge.play();
+      final pause = bridge.pause();
+
+      bridge.attach(
+        _callbacks('restored', calls, playBarrier: releasePlay.future),
+      );
+      await pause;
+      expect(calls, ['restored:play', 'restored:pause']);
+      releasePlay.complete();
+      await play;
+    });
+
+    test('bounds the cold-start command backlog', () async {
+      final calls = <String>[];
+      final bridge = AudioServiceMediaSessionCallbackBridge();
+      final commands = List.generate(9, (_) => bridge.next());
+      // The oldest excess command is retired even if startup never finishes.
+      await commands.first;
+
+      bridge.attach(_callbacks('restored', calls));
+      await Future.wait(commands);
+
+      expect(calls, List.filled(8, 'restored:next'));
+    });
+
+    test('expires a cold-start intent instead of playing it later', () async {
+      final calls = <String>[];
+      final bridge = AudioServiceMediaSessionCallbackBridge(
+        startupCommandTimeout: Duration.zero,
+      );
+
+      await bridge.play();
+      bridge.attach(_callbacks('restored', calls));
+      expect(calls, isEmpty);
+      await bridge.play();
+
+      expect(calls, ['restored:play']);
+    });
+
     test('replaces callbacks and ignores a stale detach', () async {
       final calls = <String>[];
       final bridge = AudioServiceMediaSessionCallbackBridge();
@@ -226,9 +296,16 @@ DesktopMediaSessionState _state(
   );
 }
 
-DesktopMediaSessionCallbacks _callbacks(String name, List<String> calls) {
+DesktopMediaSessionCallbacks _callbacks(
+  String name,
+  List<String> calls, {
+  Future<void>? playBarrier,
+}) {
   return DesktopMediaSessionCallbacks(
-    play: () async => calls.add('$name:play'),
+    play: () async {
+      calls.add('$name:play');
+      await playBarrier;
+    },
     pause: () async => calls.add('$name:pause'),
     togglePlayPause: () async => calls.add('$name:toggle'),
     next: () async => calls.add('$name:next'),

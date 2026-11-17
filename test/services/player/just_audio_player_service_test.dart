@@ -16,6 +16,139 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   _androidEqualizerTests();
 
+  group('restored playback position', () {
+    for (final sourceType in [
+      'remote',
+      'remote source',
+      'local',
+      'local queue',
+    ]) {
+      test('$sourceType loads at its saved position before playing', () async {
+        final fixture = await _Fixture.create();
+        final backend = fixture.backend..blockNextSourceLoad = true;
+        const position = Duration(seconds: 42, milliseconds: 250);
+        final positionsAtPlay = <Duration>[];
+        backend.onPlay = () => positionsAtPlay.add(backend.position);
+        try {
+          final Future<void> play;
+          switch (sourceType) {
+            case 'remote':
+              play = fixture.service.playRemote(
+                _remoteSource('restored').track,
+                initialPosition: position,
+              );
+            case 'remote source':
+              play = fixture.service.playRemoteSource(
+                _remoteSource('restored'),
+                initialPosition: position,
+              );
+            case 'local':
+              play = fixture.service.playLocal(
+                _localTrack('restored'),
+                initialPosition: position,
+              );
+            case 'local queue':
+              play = fixture.service.playLocalQueue(
+                [_localTrack('previous'), _localTrack('restored')],
+                1,
+                initialPosition: position,
+              );
+            default:
+              throw StateError('Unknown source type');
+          }
+          await _waitUntil(() => backend.sourceLoadCalls.isNotEmpty);
+          expect(backend.sourceLoadCalls.single.initialPosition, position);
+          expect(backend.playCalls, 0);
+          expect(fixture.service.currentSnapshot.position, position);
+          backend.completeSourceLoad(0);
+          await play;
+          await _drainEvents();
+          expect(positionsAtPlay, [position]);
+          expect(backend.seekCalls, 0);
+          expect(fixture.service.currentSnapshot.position, position);
+          if (sourceType == 'local queue') expect(backend.currentIndex, 1);
+        } finally {
+          await fixture.dispose();
+        }
+      });
+    }
+
+    test(
+      'an existing local queue seeks before restarting the selected item',
+      () async {
+        final fixture = await _Fixture.create();
+        final backend = fixture.backend;
+        final queue = [_localTrack('first'), _localTrack('second')];
+        const position = Duration(seconds: 23);
+        try {
+          await fixture.service.playLocalQueue(queue, 0);
+          await fixture.service.pause();
+          final positionsAtPlay = <Duration>[];
+          backend.onPlay = () => positionsAtPlay.add(backend.position);
+          await fixture.service.playLocalQueue(
+            queue,
+            1,
+            initialPosition: position,
+          );
+          await _drainEvents();
+          expect(backend.sourceLoadCalls, hasLength(1));
+          expect(backend.currentIndex, 1);
+          expect(positionsAtPlay, [position]);
+          expect(fixture.service.currentSnapshot.position, position);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'an obsolete restored load cannot seek or play over a newer source',
+      () async {
+        final fixture = await _Fixture.create();
+        final backend = fixture.backend..blockNextSourceLoad = true;
+        final positionsAtPlay = <Duration>[];
+        backend.onPlay = () => positionsAtPlay.add(backend.position);
+        try {
+          final previous = fixture.service.playRemoteSource(
+            _remoteSource('obsolete'),
+            initialPosition: const Duration(seconds: 42),
+          );
+          await _waitUntil(() => backend.sourceLoadCalls.length == 1);
+          await fixture.service.playRemoteSource(_remoteSource('selected'));
+          await previous;
+          backend.completeSourceLoad(0);
+          await _drainEvents();
+          expect(positionsAtPlay, [Duration.zero]);
+          expect(backend.seekCalls, 0);
+          expect(fixture.service.currentSnapshot.trackId, 'selected');
+          expect(fixture.service.currentSnapshot.position, Duration.zero);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'invalid negative positions use the normal beginning of the source',
+      () async {
+        final fixture = await _Fixture.create();
+        try {
+          await fixture.service.playLocal(
+            _localTrack('negative'),
+            initialPosition: const Duration(seconds: -1),
+          );
+          expect(
+            fixture.backend.sourceLoadCalls.single.initialPosition,
+            Duration.zero,
+          );
+          expect(fixture.backend.position, Duration.zero);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+  });
+
   MediaItem remoteItem(String id, String queueEntryId) {
     return MediaItem(
       id: id,

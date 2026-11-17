@@ -47,6 +47,7 @@ import '../../../../services/media_session/desktop_media_session_factory.dart';
 import '../../../../services/player/just_audio_player_service.dart';
 import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
+import '../../../../services/player/playback_session_store.dart';
 import '../../../../services/player/player_equalizer.dart';
 import 'equalizer_providers.dart';
 import '../../../../services/recommendations/recommendations.dart';
@@ -162,6 +163,7 @@ part 'library_csv_transfer_controller.dart';
 part 'lyrics_offset_controller.dart';
 part 'playback_history_tracker.dart';
 part 'player/player_queue_components.dart';
+part 'player/playback_session_controller.dart';
 part 'player/player_playback_coordinators.dart';
 part 'player/playback_history_track_factory.dart';
 part 'player_controller.dart';
@@ -205,7 +207,12 @@ final homeScreenWidgetSyncProvider = Provider<void>((ref) {
   );
 
   void publish() {
-    final snapshot = ref.read(playerControllerProvider).value;
+    final playback = ref.read(playerControllerProvider);
+    // A cold launch restores persisted metadata asynchronously. Keep the
+    // complete native widget snapshot until that restore can publish its song
+    // and queue together instead of replacing it with an empty loading state.
+    if (playback.isLoading) return;
+    final snapshot = playback.value;
     final accent =
         ref.read(settingsControllerProvider).value?.accent ?? AppAccent.white;
     final language =
@@ -783,27 +790,40 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
     return Duration(milliseconds: milliseconds.toInt());
   }
 
+  Future<void> withReadyPlayer(
+    FutureOr<void> Function(PlayerController player) action,
+  ) async {
+    // Media buttons can arrive while a cold process is restoring its queue.
+    // Resolve the same controller future as the app/widget action path before
+    // selecting, seeking or resuming its persisted song.
+    try {
+      await ref.read(playerControllerProvider.future);
+    } catch (_) {
+      if (!ref.mounted) return;
+      rethrow;
+    }
+    if (ref.mounted) {
+      await action(ref.read(playerControllerProvider.notifier));
+    }
+  }
+
   final callbacks = DesktopMediaSessionCallbacks(
-    play: () => ref.read(playerControllerProvider.notifier).resume(),
-    pause: () => ref.read(playerControllerProvider.notifier).pause(),
+    play: () => withReadyPlayer((player) => player.resume()),
+    pause: () => withReadyPlayer((player) => player.pause()),
     togglePlayPause: () =>
-        ref.read(playerControllerProvider.notifier).togglePlayPause(),
-    next: () => ref.read(playerControllerProvider.notifier).playNext(),
-    previous: () => ref.read(playerControllerProvider.notifier).playPrevious(),
-    stop: () => ref.read(playerControllerProvider.notifier).stop(),
-    seek: (position) =>
-        ref.read(playerControllerProvider.notifier).seek(position),
-    seekBy: (offset) => ref
-        .read(playerControllerProvider.notifier)
-        .seek(relativeSeekPosition(offset)),
-    setShuffleEnabled: (enabled) async {
-      ref.read(playerControllerProvider.notifier).setShuffleEnabled(enabled);
-    },
-    setRepeatMode: (mode) async {
-      ref.read(playerControllerProvider.notifier).setRepeatMode(mode);
-    },
+        withReadyPlayer((player) => player.togglePlayPause()),
+    next: () => withReadyPlayer((player) => player.playNext()),
+    previous: () => withReadyPlayer((player) => player.playPrevious()),
+    stop: () => withReadyPlayer((player) => player.stop()),
+    seek: (position) => withReadyPlayer((player) => player.seek(position)),
+    seekBy: (offset) =>
+        withReadyPlayer((player) => player.seek(relativeSeekPosition(offset))),
+    setShuffleEnabled: (enabled) =>
+        withReadyPlayer((player) => player.setShuffleEnabled(enabled)),
+    setRepeatMode: (mode) =>
+        withReadyPlayer((player) => player.setRepeatMode(mode)),
     playQueueIndex: (index) =>
-        ref.read(playerControllerProvider.notifier).playQueueIndex(index),
+        withReadyPlayer((player) => player.playQueueIndex(index)),
   );
   final binding = DesktopMediaSessionBinding(
     session,

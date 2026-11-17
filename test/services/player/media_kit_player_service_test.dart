@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bstream_music/core/errors/app_exception.dart';
+import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/player/media_kit_player_service.dart';
 import 'package:bstream_music/services/player/player_audio_output.dart';
@@ -10,6 +11,92 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 
 void main() {
+  group('restored playback position', () {
+    const position = Duration(seconds: 42, milliseconds: 250);
+    for (final localQueue in [false, true]) {
+      test('seeks before audio starts (local queue=$localQueue)', () async {
+        final backend = _InitialPositionBackend();
+        final service = MediaKitPlayerService(backend: backend);
+        addTearDown(service.dispose);
+        final local = LocalTrack(
+          id: 'restored',
+          title: 'Restored',
+          artist: 'Artist',
+          filePath: '/music/restored.m4a',
+          addedAt: DateTime(2026),
+        );
+        final play = localQueue
+            ? service.playLocalQueue([local], 0, initialPosition: position)
+            : service.playRemote(_track('restored'), initialPosition: position);
+        await _waitUntil(() => backend.openCalls.isNotEmpty);
+        expect(backend.openCalls.single.play, isFalse);
+        expect(backend.openCalls.single.media.start, isNull);
+        expect(backend.seekCalls, isEmpty);
+        expect(backend.playCalls, 0);
+        expect(service.currentSnapshot.position, position);
+        backend.completeOpen(0);
+        await play;
+        expect(backend.playbackCommands, ['open:false', 'seek:42250', 'play']);
+        expect(backend.seekCalls, [position]);
+        expect(service.currentSnapshot.position, position);
+        expect(service.currentSnapshot.status, PlayerStatus.playing);
+      });
+    }
+
+    test(
+      'normal and negative positions retain the single native open',
+      () async {
+        final backend = _InitialPositionBackend();
+        final service = MediaKitPlayerService(backend: backend);
+        addTearDown(service.dispose);
+        final play = service.playRemote(
+          _track('start'),
+          initialPosition: const Duration(seconds: -1),
+        );
+        await _waitUntil(() => backend.openCalls.isNotEmpty);
+        backend.completeOpen(0);
+        await play;
+        expect(backend.openCalls.single.play, isTrue);
+        expect(backend.playbackCommands, ['open:true']);
+        expect(backend.seekCalls, isEmpty);
+        expect(backend.playCalls, 0);
+        expect(service.currentSnapshot.position, Duration.zero);
+      },
+    );
+
+    test(
+      'a cancelled initial seek cannot start audio after a newer selection',
+      () async {
+        final backend = _InitialPositionBackend()
+          ..seekBarrier = Completer<void>();
+        final service = MediaKitPlayerService(backend: backend);
+        addTearDown(() async {
+          final barrier = backend.seekBarrier;
+          if (barrier != null && !barrier.isCompleted) barrier.complete();
+          await service.dispose();
+        });
+        final obsolete = service.playRemote(
+          _track('obsolete'),
+          initialPosition: position,
+        );
+        await _waitUntil(() => backend.openCalls.length == 1);
+        backend.completeOpen(0);
+        await backend.seekStarted.future;
+        final selected = service.playRemote(_track('selected'));
+        await _waitUntil(() => backend.openCalls.length == 2);
+        backend.completeOpen(1);
+        await Future.wait([obsolete, selected]);
+        backend.seekBarrier!.complete();
+        await _drainEvents();
+        expect(backend.playCalls, 0);
+        expect(backend.currentSourceId, 'selected');
+        expect(service.currentSnapshot.trackId, 'selected');
+        expect(service.currentSnapshot.position, Duration.zero);
+        expect(service.currentSnapshot.status, PlayerStatus.playing);
+      },
+    );
+  });
+
   group('native equalizer', () {
     const bass = EqualizerSettings(enabled: true, gainsDb: [6, 3, 0, 0, 0]);
     const vocal = EqualizerSettings(
@@ -1696,6 +1783,32 @@ class _EqualizerBackend extends _AudioOutputBackend
   Future<void> open(Media media, {required bool play}) {
     equalizersAtOpen.add(equalizer);
     return super.open(media, play: play);
+  }
+}
+
+class _InitialPositionBackend extends _FakeMediaKitBackend {
+  final playbackCommands = <String>[];
+  final seekStarted = Completer<void>();
+  Completer<void>? seekBarrier;
+
+  @override
+  Future<void> open(Media media, {required bool play}) {
+    playbackCommands.add('open:$play');
+    return super.open(media, play: play);
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    playbackCommands.add('seek:${position.inMilliseconds}');
+    await super.seek(position);
+    if (!seekStarted.isCompleted) seekStarted.complete();
+    await seekBarrier?.future;
+  }
+
+  @override
+  Future<void> play() async {
+    playbackCommands.add('play');
+    await super.play();
   }
 }
 

@@ -92,8 +92,9 @@ extension _DownloadedAudioPlayback on PlayerController {
   Future<bool> _tryPlayLibraryDownload(
     TrackInfo catalog,
     int requestId,
-    PlayerSnapshot pending,
-  ) async {
+    PlayerSnapshot pending, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final service = _audioSourceRef.read(playerServiceProvider);
     if (service is! AudioSourceUpgradePlayer) return false;
     final local = await _libraryDownloadFor(catalog);
@@ -125,9 +126,12 @@ extension _DownloadedAudioPlayback on PlayerController {
     final attempt = _beginRemoteLoadAttempt();
     try {
       if (service is NativeRemoteQueuePlayer) {
-        await (service as NativeRemoteQueuePlayer).playRemoteSource(source);
+        await (service as NativeRemoteQueuePlayer).playRemoteSource(
+          source,
+          initialPosition: initialPosition,
+        );
       } else {
-        await service.playRemote(track);
+        await service.playRemote(track, initialPosition: initialPosition);
       }
       if (_wasRemoteLoadFailureHandled(attempt) ||
           !_isCurrentPlayRequest(requestId)) {

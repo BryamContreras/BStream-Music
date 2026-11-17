@@ -1543,6 +1543,33 @@ class _SettingsHeader extends StatelessWidget {
   }
 }
 
+class _SettingsLeadingIcon extends StatelessWidget {
+  const _SettingsLeadingIcon({this.icon, this.child, this.color})
+    : assert(icon != null || child != null);
+
+  final IconData? icon;
+  final Widget? child;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final highlight = color ?? Theme.of(context).colorScheme.primary;
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+        color: highlight.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(appListCardIconRadius),
+        border: Border.all(color: highlight.withValues(alpha: 0.24)),
+      ),
+      child: IconTheme.merge(
+        data: IconThemeData(color: highlight, size: 24),
+        child: Center(child: child ?? Icon(icon)),
+      ),
+    );
+  }
+}
+
 class _SettingsEntryCard extends StatelessWidget {
   const _SettingsEntryCard({
     this.icon,
@@ -1581,22 +1608,10 @@ class _SettingsEntryCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
             child: Row(
               children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    color: highlight.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(appListCardIconRadius),
-                    border: Border.all(
-                      color: highlight.withValues(alpha: 0.24),
-                    ),
-                  ),
-                  child: IconTheme.merge(
-                    data: IconThemeData(color: highlight, size: 24),
-                    child: Center(
-                      child: leading ?? Icon(icon, color: highlight, size: 24),
-                    ),
-                  ),
+                _SettingsLeadingIcon(
+                  icon: icon,
+                  color: highlight,
+                  child: leading,
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -3661,7 +3676,10 @@ class _SleepTimerSettings extends StatelessWidget {
             SwitchListTile.adaptive(
               value: state.isActive,
               onChanged: onEnabledChanged,
-              secondary: const Icon(Icons.bedtime_rounded),
+              secondary: const _SettingsLeadingIcon(
+                icon: Icons.bedtime_rounded,
+              ),
+              horizontalTitleGap: 14,
               title: Text(
                 strings.automaticShutdown,
                 style: const TextStyle(fontWeight: FontWeight.w800),
@@ -3759,7 +3777,10 @@ class _CrossfadeSettings extends StatelessWidget {
               key: const ValueKey('settings-crossfade-switch'),
               value: enabled,
               onChanged: onEnabledChanged,
-              secondary: const Icon(Icons.multitrack_audio_rounded),
+              secondary: const _SettingsLeadingIcon(
+                icon: Icons.multitrack_audio_rounded,
+              ),
+              horizontalTitleGap: 14,
               title: Text(
                 strings.crossfade,
                 style: const TextStyle(fontWeight: FontWeight.w800),
@@ -3835,7 +3856,10 @@ class _SkipSilenceSettings extends StatelessWidget {
           key: const ValueKey('settings-skip-silence-switch'),
           value: enabled,
           onChanged: onEnabledChanged,
-          secondary: const Icon(Icons.fast_forward_rounded),
+          secondary: const _SettingsLeadingIcon(
+            icon: Icons.fast_forward_rounded,
+          ),
+          horizontalTitleGap: 14,
           title: Text(
             strings.skipSilence,
             style: const TextStyle(fontWeight: FontWeight.w800),

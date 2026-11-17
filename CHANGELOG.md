@@ -32,7 +32,7 @@
 ### Added
 
 - A 5-band equalizer is now available.
-- The player now supports higher quality audio when available.
+- Support for higher quality audio whenever available.
 - Added the new Spotify Style player.
 - Added filtering options in the Local music tab.
 - Added support for word-synchronized lyrics when word timing is available,

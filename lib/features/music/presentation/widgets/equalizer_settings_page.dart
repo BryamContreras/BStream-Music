@@ -255,8 +255,7 @@ class EqualizerSettingsPage extends ConsumerWidget {
                             children: [
                               Row(
                                 children: [
-                                  Icon(
-                                    Icons.show_chart_rounded,
+                                  EqualizerCurveIcon(
                                     size: 20,
                                     color: colors.primary,
                                   ),

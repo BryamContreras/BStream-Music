@@ -20,7 +20,7 @@ Current version: **1.3.1+131**.
 ## What's new in 1.3.1
 
 - A 5-band equalizer is now available.
-- The player now supports higher quality audio when available.
+- Support for higher quality audio whenever available.
 - Improved and optimized the layouts of the player styles.
 - Added the new Spotify Style player.
 - Added filtering options in the Local music tab.

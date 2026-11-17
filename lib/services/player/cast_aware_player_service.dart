@@ -223,7 +223,13 @@ class CastAwarePlayerService
     autoplay: autoplay,
   );
 
-  Future<bool> _playSource(_CastSource source) async {
+  Future<bool> _playSource(
+    _CastSource source, {
+    Duration initialPosition = Duration.zero,
+  }) async {
+    final startPosition = initialPosition < Duration.zero
+        ? Duration.zero
+        : initialPosition;
     final operation = ++_operation;
     final previous = currentSnapshot;
     _source = source;
@@ -234,13 +240,14 @@ class CastAwarePlayerService
     _transitioning = true;
     _remoteSnapshot = source.snapshot.copyWith(
       status: PlayerStatus.loading,
+      position: startPosition,
       volume: previous.volume,
       shuffleEnabled: previous.shuffleEnabled,
       repeatMode: previous.repeatMode,
     );
     _publish(_remoteSnapshot!);
     try {
-      await _loadReceiver(source, Duration.zero, autoplay: true);
+      await _loadReceiver(source, startPosition, autoplay: true);
       if (_disposed || operation != _operation) return true;
       _transitioning = false;
       _remoteSnapshot = _remoteSnapshot!.copyWith(
@@ -290,10 +297,10 @@ class CastAwarePlayerService
         _restoreVolume ??= localSnapshot.volume;
         await _local.setVolume(0);
         _checkOperation(operation);
-        await _restoreSource(source);
+        await _restoreSource(source, initialPosition: snapshot.position);
+      } else {
+        await _local.seek(snapshot.position);
       }
-      if (_disposed || operation != _operation) return;
-      await _local.seek(snapshot.position);
       if (_disposed || operation != _operation) return;
       if (snapshot.status == PlayerStatus.playing ||
           snapshot.status == PlayerStatus.loading) {
@@ -315,43 +322,67 @@ class CastAwarePlayerService
     }
   }
 
-  Future<void> _restoreSource(_CastSource source) async {
+  Future<void> _restoreSource(
+    _CastSource source, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (source.localTrack case final LocalTrack track) {
       final index = _localQueue.indexWhere((item) => item.id == track.id);
       if (index >= 0) {
-        await _local.playLocalQueue(_localQueue, index);
+        await _local.playLocalQueue(
+          _localQueue,
+          index,
+          initialPosition: initialPosition,
+        );
       } else {
-        await _local.playLocal(track);
+        await _local.playLocal(track, initialPosition: initialPosition);
       }
     } else if (source.remoteSource case final RemotePlaybackSource remote) {
       if (_local case final NativeRemoteQueuePlayer native) {
-        await native.playRemoteSource(remote);
+        await native.playRemoteSource(remote, initialPosition: initialPosition);
       } else {
-        await _local.playRemote(_transportTrack(remote));
+        await _local.playRemote(
+          _transportTrack(remote),
+          initialPosition: initialPosition,
+        );
       }
     }
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final source = RemotePlaybackSource(
       track: track,
       uri: Uri.parse(track.streamUrl ?? track.url),
       queueEntryId: track.id,
       httpHeaders: track.httpHeaders,
     );
-    await playRemoteSource(source);
+    await playRemoteSource(source, initialPosition: initialPosition);
   }
 
   @override
-  Future<void> playRemoteSource(RemotePlaybackSource source) async {
+  Future<void> playRemoteSource(
+    RemotePlaybackSource source, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     _remoteSources[source.queueEntryId] = source;
     _localQueue = const [];
-    if (await _playSource(_CastSource.remote(source))) return;
+    if (await _playSource(
+      _CastSource.remote(source),
+      initialPosition: initialPosition,
+    )) {
+      return;
+    }
     if (_local case final NativeRemoteQueuePlayer native) {
-      await native.playRemoteSource(source);
+      await native.playRemoteSource(source, initialPosition: initialPosition);
     } else {
-      await _local.playRemote(_transportTrack(source));
+      await _local.playRemote(
+        _transportTrack(source),
+        initialPosition: initialPosition,
+      );
     }
   }
 
@@ -411,21 +442,38 @@ class CastAwarePlayerService
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     _localQueue = [track];
-    if (!await _playSource(_CastSource.local(track))) {
-      await _local.playLocal(track);
+    if (!await _playSource(
+      _CastSource.local(track),
+      initialPosition: initialPosition,
+    )) {
+      await _local.playLocal(track, initialPosition: initialPosition);
     }
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (initialIndex < 0 || initialIndex >= tracks.length) {
       throw RangeError.index(initialIndex, tracks);
     }
     _localQueue = List.of(tracks);
-    if (!await _playSource(_CastSource.local(tracks[initialIndex]))) {
-      await _local.playLocalQueue(tracks, initialIndex);
+    if (!await _playSource(
+      _CastSource.local(tracks[initialIndex]),
+      initialPosition: initialPosition,
+    )) {
+      await _local.playLocalQueue(
+        tracks,
+        initialIndex,
+        initialPosition: initialPosition,
+      );
     }
   }
 

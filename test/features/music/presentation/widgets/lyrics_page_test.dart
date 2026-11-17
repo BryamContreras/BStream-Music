@@ -5421,16 +5421,23 @@ class _FakePlayerService implements PlayerService {
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {}
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {}
 
   @override
   Future<void> playLocalQueue(
     List<LocalTrack> tracks,
-    int initialIndex,
-  ) async {}
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) async {}
 
   @override
-  Future<void> playRemote(TrackInfo track) async {}
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {}
 
   @override
   Future<void> replaceLocalQueue(

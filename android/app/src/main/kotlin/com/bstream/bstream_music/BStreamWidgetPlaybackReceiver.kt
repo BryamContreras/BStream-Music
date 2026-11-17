@@ -13,22 +13,38 @@ import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.session.MediaControllerCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.util.Log
+import android.view.KeyEvent
 import com.ryanheise.audioservice.AudioService
+import com.ryanheise.audioservice.AudioServicePlugin
 
-/** Sends queue selections to the same media session as notification controls. */
+/** Sends widget controls and queue selections to the existing playback engine. */
 class BStreamWidgetPlaybackReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != ACTION_PLAY_QUEUE_ITEM) return
-        val action = intent.getStringExtra(MainActivity.EXTRA_HOME_WIDGET_ACTION) ?: return
-        if (!action.startsWith(MainActivity.HOME_WIDGET_QUEUE_PREFIX)) return
-        val index = action.removePrefix(MainActivity.HOME_WIDGET_QUEUE_PREFIX)
-            .toIntOrNull()?.takeIf { it >= 0 } ?: return
-        QueuePlaybackRequest(context.applicationContext, index, goAsync()).connect()
+        if (intent == null) return
+        val index: Int?
+        val keyCode: Int?
+        when (intent.action) {
+            ACTION_PLAY_QUEUE_ITEM -> {
+                val action = intent.getStringExtra(MainActivity.EXTRA_HOME_WIDGET_ACTION) ?: return
+                if (!action.startsWith(MainActivity.HOME_WIDGET_QUEUE_PREFIX)) return
+                index = action.removePrefix(MainActivity.HOME_WIDGET_QUEUE_PREFIX)
+                    .toIntOrNull()?.takeIf { it >= 0 } ?: return
+                keyCode = null
+            }
+            ACTION_MEDIA_BUTTON -> {
+                keyCode = intent.getIntExtra(EXTRA_MEDIA_KEY_CODE, -1)
+                    .takeIf { it in MEDIA_KEY_CODES } ?: return
+                index = null
+            }
+            else -> return
+        }
+        PlaybackRequest(context.applicationContext, index, keyCode, goAsync()).connect()
     }
 
-    private class QueuePlaybackRequest(
+    private class PlaybackRequest(
         private val context: Context,
-        private val index: Int,
+        private val index: Int?,
+        private val keyCode: Int?,
         private val pending: PendingResult,
     ) : MediaBrowserCompat.ConnectionCallback() {
         private val handler = Handler(Looper.getMainLooper())
@@ -51,6 +67,12 @@ class BStreamWidgetPlaybackReceiver : BroadcastReceiver() {
             // queue. Wait for that publication, without starting an Activity.
             handler.postDelayed(timeout, 8_000)
             try {
+                // Reuse audio_service's cached engine. Registration and native
+                // MethodChannel handling share this main Looper: the bridge is
+                // ready before Dart's first headless widget update is handled.
+                BStreamHomeWidgetEnginePlugin.registerWith(
+                    AudioServicePlugin.getFlutterEngine(context),
+                )
                 browser.connect()
             } catch (error: Exception) {
                 Log.w(TAG, "Unable to connect widget to playback", error)
@@ -63,6 +85,11 @@ class BStreamWidgetPlaybackReceiver : BroadcastReceiver() {
                 controller = MediaControllerCompat(context, browser.sessionToken).also {
                     it.registerCallback(callback, handler)
                 }
+                if (keyCode != null) {
+                    controller?.dispatchMediaButtonEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+                    finish()
+                    return
+                }
                 playWhenReady()
             } catch (error: Exception) {
                 Log.w(TAG, "Unable to select widget queue item", error)
@@ -72,10 +99,11 @@ class BStreamWidgetPlaybackReceiver : BroadcastReceiver() {
 
         private fun playWhenReady() {
             if (finished) return
+            val targetIndex = index ?: return
             val media = controller ?: return
             val queue = media.queue?.takeIf { it.isNotEmpty() } ?: return
-            if (index < queue.size) {
-                media.transportControls.skipToQueueItem(queue[index].queueId)
+            if (targetIndex < queue.size) {
+                media.transportControls.skipToQueueItem(queue[targetIndex].queueId)
             }
             finish()
         }
@@ -97,6 +125,25 @@ class BStreamWidgetPlaybackReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "BStreamWidgetPlayback"
         private const val ACTION_PLAY_QUEUE_ITEM = "com.bstream.bstream_music.WIDGET_QUEUE_PLAY"
+        private const val ACTION_MEDIA_BUTTON = "com.bstream.bstream_music.WIDGET_MEDIA_BUTTON"
+        private const val EXTRA_MEDIA_KEY_CODE = "media_key_code"
+        private val MEDIA_KEY_CODES = setOf(
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            KeyEvent.KEYCODE_MEDIA_NEXT,
+        )
+
+        fun mediaButton(context: Context, keyCode: Int): PendingIntent {
+            require(keyCode in MEDIA_KEY_CODES)
+            val intent = Intent(context, BStreamWidgetPlaybackReceiver::class.java).apply {
+                action = ACTION_MEDIA_BUTTON
+                putExtra(EXTRA_MEDIA_KEY_CODE, keyCode)
+            }
+            return PendingIntent.getBroadcast(
+                context, keyCode, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
 
         fun queueClickTemplate(context: Context, appWidgetId: Int): PendingIntent {
             val intent = Intent(context, BStreamWidgetPlaybackReceiver::class.java).apply {

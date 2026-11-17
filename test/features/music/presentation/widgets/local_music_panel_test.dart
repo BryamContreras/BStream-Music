@@ -7,6 +7,7 @@ import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/widgets/local_music_panel.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
+import 'package:bstream_music/features/music/presentation/widgets/track_play_button.dart';
 import 'package:bstream_music/services/local_media/device_audio_catalog.dart';
 import 'package:bstream_music/services/local_media/device_audio_filter.dart';
 import 'package:bstream_music/services/local_media/local_media_providers.dart';
@@ -43,6 +44,92 @@ void main() {
     expect(player.lastQueueSourceId, 'device-local:folder:folder:downloads');
     expect(player.lastUseNativeQueue, isFalse);
   });
+
+  for (final viewport in const [Size(360, 800), Size(1280, 900)]) {
+    testWidgets(
+      'folder play remains visible without hover at ${viewport.width}px',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = viewport;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final catalog = _FakeDeviceAudioCatalog(
+          const DeviceAudioCatalogResult(
+            status: DeviceAudioPermissionStatus.granted,
+            tracks: _tracks,
+          ),
+        );
+        final player = _RecordingLocalPlayerController();
+        final navigation = LocalMusicNavigationController();
+        addTearDown(navigation.dispose);
+        var openedPlayer = 0;
+        await tester.pumpWidget(
+          _harness(
+            catalog: catalog,
+            player: player,
+            navigation: navigation,
+            onOpenPlayer: () => openedPlayer++,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final downloadsPlay = find.byKey(
+          const ValueKey('local-folder-play-folder:downloads'),
+        );
+        final favoritesPlay = find.byKey(
+          const ValueKey('local-folder-play-folder:favorites'),
+        );
+        for (final button in [downloadsPlay, favoritesPlay]) {
+          expect(button.hitTestable(), findsOneWidget);
+          expect(tester.widget(button), isA<TrackPlayButton>());
+          expect(tester.getSize(button).shortestSide, greaterThanOrEqualTo(48));
+          expect(tester.widget<TrackPlayButton>(button).onPressed, isNotNull);
+        }
+        expect(navigation.canPop, isFalse);
+
+        await tester.tap(downloadsPlay);
+        await tester.pump();
+        expect(player.lastQueue!.map((track) => track.id), [
+          'device:alpha',
+          'device:beta',
+        ]);
+        expect(player.lastTrack?.id, 'device:alpha');
+        expect(
+          player.lastQueueSourceId,
+          'device-local:folder:folder:downloads',
+        );
+        expect(player.lastQueue!.every((track) => track.isExternal), isTrue);
+        expect(player.lastUseNativeQueue, isFalse);
+        expect(navigation.canPop, isFalse);
+        expect(find.byKey(const ValueKey('local-detail-title')), findsNothing);
+        expect(openedPlayer, 1);
+
+        await tester.tap(favoritesPlay);
+        await tester.pump();
+        expect(player.lastQueue!.map((track) => track.id), ['device:gamma']);
+        expect(player.lastTrack?.id, 'device:gamma');
+        expect(
+          player.lastQueueSourceId,
+          'device-local:folder:folder:favorites',
+        );
+        expect(navigation.canPop, isFalse);
+        expect(openedPlayer, 2);
+
+        // The card itself still browses the folder independently of its play
+        // control, so tapping play cannot accidentally open the folder route.
+        await tester.tap(
+          find.byKey(const ValueKey('local-folder-folder:downloads')),
+        );
+        await tester.pumpAndSettle();
+        expect(navigation.canPop, isTrue);
+        expect(
+          find.byKey(const ValueKey('local-detail-title')),
+          findsOneWidget,
+        );
+        expect(player.playCalls, 2);
+      },
+    );
+  }
 
   testWidgets(
     'shows all songs and distinct folders, then plays a transient full queue',
@@ -221,6 +308,7 @@ Widget _harness({
   _RecordingLocalPlayerController? player,
   LocalMusicNavigationController? navigation,
   SurfaceBackgroundMode surfaceBackgroundMode = SurfaceBackgroundMode.accent,
+  VoidCallback? onOpenPlayer,
 }) {
   return ProviderScope(
     overrides: [
@@ -236,7 +324,7 @@ Widget _harness({
       ),
       home: Scaffold(
         body: LocalMusicPanel(
-          onOpenPlayer: () {},
+          onOpenPlayer: onOpenPlayer ?? () {},
           navigationController: navigation,
         ),
       ),

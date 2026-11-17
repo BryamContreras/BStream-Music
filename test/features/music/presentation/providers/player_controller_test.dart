@@ -19,6 +19,7 @@ import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:bstream_music/services/downloader/fallback_audio_resolver.dart';
 import 'package:bstream_music/services/media_session/desktop_media_session.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/player/playback_session_store.dart';
 import 'package:bstream_music/services/storage/local_database_service.dart';
 import 'package:bstream_music/services/storage/local_library_reconciler.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +31,365 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  group('persisted playback session', () {
+    testWidgets('backend-only clock updates create no empty-session timer', (
+      tester,
+    ) async {
+      const initial = PlayerSnapshot(
+        status: PlayerStatus.playing,
+        trackId: 'backend-only',
+        title: 'Backend metadata without a logical queue',
+      );
+      final player = _FakePlayerService()..emit(initial);
+      final store = _MemoryPlaybackSessionStore();
+      final container = _container(
+        player,
+        sessionStore: store,
+        settingsController: _CrossfadeSettingsController(
+          const SettingsState(
+            downloadDirectory: '/tmp/bstream-no-session-test',
+            language: AppLanguage.spanish,
+            recommendationHistoryEnabled: false,
+          ),
+        ),
+      );
+      addTearDown(container.dispose);
+      await container.read(playerControllerProvider.future);
+      await tester.pump();
+      player.emit(initial.copyWith(position: const Duration(seconds: 1)));
+      await tester.pump();
+      expect(container.read(playbackQueueProvider).entries, isEmpty);
+      expect(store.saved, isNull);
+      // The widget-test invariant also requires no pending five-second timer,
+      // before addTearDown disposes this external provider container.
+    });
+
+    test(
+      'removing a previously saved queue still clears its session',
+      () async {
+        final store = _MemoryPlaybackSessionStore();
+        final player = _FakePlayerService();
+        final container = _container(player, sessionStore: store);
+        addTearDown(container.dispose);
+        await container.read(playerControllerProvider.future);
+        final controller = container.read(playerControllerProvider.notifier);
+        await controller.playLocal(
+          _track(1),
+          queueSourceId: 'folder:clear-persisted-session',
+        );
+        await controller.flushPlaybackSession();
+        expect(store.saved, isNotNull);
+        expect(
+          await controller.clearQueueSource('folder:clear-persisted-session'),
+          isTrue,
+        );
+        await controller.flushPlaybackSession();
+        expect(store.saved, isNull);
+      },
+    );
+
+    test(
+      'restores local queue paused and loads its saved cursor before audio',
+      () async {
+        final store = _MemoryPlaybackSessionStore();
+        final firstPlayer = _FakePlayerService();
+        final first = _container(firstPlayer, sessionStore: store);
+        await first.read(playerControllerProvider.future);
+        final controller = first.read(playerControllerProvider.notifier);
+        final tracks = [
+          for (var index = 1; index <= 3; index++)
+            _track(index).copyWith(duration: const Duration(minutes: 3)),
+        ];
+        await controller.playLocal(
+          tracks[1],
+          queue: tracks,
+          queueSourceId: 'folder:music',
+        );
+        await _flushCompletion();
+        await controller.seek(const Duration(seconds: 37));
+        controller.setShuffleEnabled(true);
+        controller.setRepeatMode(PlaybackRepeatMode.all);
+        await controller.flushPlaybackSession();
+        expect(store.saved?.position, const Duration(seconds: 37));
+        first.dispose();
+
+        final player = _FakePlayerService();
+        final second = _container(player, sessionStore: store);
+        addTearDown(second.dispose);
+        final restored = await second.read(playerControllerProvider.future);
+        expect(restored.trackId, tracks[1].id);
+        expect(restored.status, PlayerStatus.paused);
+        expect(restored.wantsToPlay, isFalse);
+        expect(restored.position, const Duration(seconds: 37));
+        expect(restored.shuffleEnabled, isTrue);
+        expect(restored.repeatMode, PlaybackRepeatMode.all);
+        expect(player.playedLocalIds, isEmpty);
+        expect(player.playedRemote, isEmpty);
+        final queue = second.read(playbackQueueProvider);
+        expect(
+          queue.entries.map((entry) => entry.id),
+          tracks.map((track) => track.id),
+        );
+        expect(queue.currentIndex, 1);
+
+        final reopened = second.read(playerControllerProvider.notifier);
+        await reopened.seek(const Duration(seconds: 44));
+        expect(player.lastSeekPosition, isNull);
+        await reopened.playQueueIndex(1);
+        await _flushCompletion();
+        expect(player.lastLocalQueueIndex, 1);
+        expect(player.initialPositions, [const Duration(seconds: 44)]);
+        expect(player.lastSeekPosition, isNull);
+        expect(
+          second.read(playerControllerProvider).value?.position,
+          const Duration(seconds: 44),
+        );
+        await reopened.playQueueIndex(1);
+        expect(player.playLocalQueueCalls, 1);
+        await reopened.playQueueIndex(0);
+        expect(player.initialPositions.last, Duration.zero);
+      },
+    );
+
+    test(
+      'restores remote duplicates without resolving until explicit play',
+      () async {
+        final remote = _queuedRemoteTrack('persisted-remote');
+        final store = _MemoryPlaybackSessionStore()
+          ..saved = PlaybackSession(
+            entries: [
+              PlaybackSessionEntry(
+                remote: remote,
+                logicalEntryId: 'first-copy',
+              ),
+              PlaybackSessionEntry(
+                remote: remote,
+                logicalEntryId: 'second-copy',
+              ),
+            ],
+            currentIndex: 1,
+            position: const Duration(seconds: 18),
+            activePlaybackIsRemote: true,
+            remoteSourceId: 'playlist:test',
+          );
+        final player = _FakePlayerService();
+        final container = _container(
+          player,
+          sessionStore: store,
+          audioResolver: _FakeAudioResolverFromRepository(
+            _FakeMusicRepository([remote]),
+          ),
+        );
+        addTearDown(container.dispose);
+        final restored = await container.read(playerControllerProvider.future);
+        expect(restored.title, remote.title);
+        expect(restored.status, PlayerStatus.paused);
+        expect(restored.position, const Duration(seconds: 18));
+        expect(player.playedRemote, isEmpty);
+        final queue = container.read(playbackQueueProvider);
+        expect(queue.currentIndex, 1);
+        expect(queue.entries.map((entry) => entry.logicalEntryId), [
+          'first-copy',
+          'second-copy',
+        ]);
+        await container.read(playerControllerProvider.notifier).resume();
+        await _flushCompletion();
+        expect(player.playedRemote.single.streamUrl, isNotNull);
+        expect(player.initialPositions, [const Duration(seconds: 18)]);
+        expect(player.lastSeekPosition, isNull);
+        expect(container.read(playbackQueueProvider).currentIndex, 1);
+      },
+    );
+
+    for (final nativeQueue in const <bool>[false, true]) {
+      test(
+        'restored fallback loads its cursor before audio (native=$nativeQueue)',
+        () async {
+          final remote = _queuedRemoteTrack(
+            'restored-fallback',
+          ).copyWith(duration: const Duration(minutes: 3));
+          final store = _MemoryPlaybackSessionStore()
+            ..saved = PlaybackSession(
+              entries: <PlaybackSessionEntry>[
+                PlaybackSessionEntry(remote: remote),
+              ],
+              currentIndex: 0,
+              position: const Duration(seconds: 18),
+              activePlaybackIsRemote: true,
+            );
+          final _FakePlayerService player = nativeQueue
+              ? _RejectPrimaryNativeQueuePlayerService()
+              : _RejectPrimaryInnerTubePlayerService();
+          final resolver = _ModeAwareFallbackAudioResolver();
+          final container = _container(
+            player,
+            sessionStore: store,
+            audioResolver: resolver,
+            retryDelay: (_) async {},
+          );
+          addTearDown(container.dispose);
+          final restored = await container.read(
+            playerControllerProvider.future,
+          );
+          expect(restored.status, PlayerStatus.paused);
+          final observed = <PlayerSnapshot>[];
+          final listener = container.listen<AsyncValue<PlayerSnapshot>>(
+            playerControllerProvider,
+            (_, next) {
+              final snapshot = next.value;
+              if (snapshot != null) observed.add(snapshot);
+            },
+          );
+          addTearDown(listener.close);
+          await container.read(playerControllerProvider.notifier).resume();
+          await _flushCompletion();
+          expect(resolver.modes, const <AudioResolutionMode>[
+            AudioResolutionMode.primaryThenFallback,
+            AudioResolutionMode.fallbackOnly,
+          ]);
+          expect(
+            player.playedRemote.single.streamSource,
+            AudioStreamSource.innerTubeFallback.name,
+          );
+          expect(player.initialPositions, const <Duration>[
+            Duration(seconds: 18),
+          ]);
+          expect(player.lastSeekPosition, isNull);
+          expect(
+            container.read(playerControllerProvider).value?.position,
+            const Duration(seconds: 18),
+          );
+          expect(
+            observed.where(
+              (snapshot) =>
+                  snapshot.status == PlayerStatus.playing &&
+                  snapshot.position == Duration.zero,
+            ),
+            isEmpty,
+            reason: 'The alternate source must never play its intro first.',
+          );
+        },
+      );
+    }
+
+    test(
+      'a restored local queue defers crossfade preload until explicit play',
+      () async {
+        final tracks = <LocalTrack>[
+          _track(1).copyWith(duration: const Duration(minutes: 3)),
+          _track(2).copyWith(duration: const Duration(minutes: 3)),
+        ];
+        final store = _MemoryPlaybackSessionStore()
+          ..saved = PlaybackSession(
+            entries: tracks
+                .map((track) => PlaybackSessionEntry(local: track))
+                .toList(growable: false),
+            currentIndex: 0,
+            position: const Duration(seconds: 18),
+          );
+        final player = _CrossfadePlayerService();
+        final container = _container(
+          player,
+          sessionStore: store,
+          settingsController: _enabledCrossfadeSettings(),
+        );
+        addTearDown(container.dispose);
+        final restored = await container.read(playerControllerProvider.future);
+        await _flushCompletion();
+        expect(restored.status, PlayerStatus.paused);
+        expect(player.crossfadeEnabled, isTrue);
+        expect(player.playedLocalIds, isEmpty);
+        expect(player.preparedCrossfadeSource, isNull);
+        expect(
+          player.crossfadePreparations
+              .whereType<LocalCrossfadePlaybackSource>(),
+          isEmpty,
+        );
+
+        final controller = container.read(playerControllerProvider.notifier);
+        controller.setShuffleEnabled(true);
+        controller.setRepeatMode(PlaybackRepeatMode.all);
+        await _flushCompletion();
+        expect(player.playedLocalIds, isEmpty);
+        expect(player.preparedCrossfadeSource, isNull);
+        expect(
+          player.crossfadePreparations
+              .whereType<LocalCrossfadePlaybackSource>(),
+          isEmpty,
+        );
+
+        await controller.resume();
+        await _waitUntil(
+          () => player.preparedCrossfadeSource is LocalCrossfadePlaybackSource,
+        );
+        final prepared =
+            player.preparedCrossfadeSource! as LocalCrossfadePlaybackSource;
+        expect(prepared.track.id, tracks[1].id);
+        expect(player.playedLocalIds, <String>[tracks[0].id]);
+        expect(player.initialPositions, <Duration>[
+          const Duration(seconds: 18),
+        ]);
+      },
+    );
+
+    test('a new selection wins over a delayed restoration', () async {
+      final gate = Completer<PlaybackSession?>();
+      final store = _MemoryPlaybackSessionStore()..readGate = gate;
+      final player = _FakePlayerService();
+      final container = _container(player, sessionStore: store);
+      addTearDown(container.dispose);
+      final startup = container.read(playerControllerProvider.future);
+      final controller = container.read(playerControllerProvider.notifier);
+      await controller.playLocal(_track(2));
+      gate.complete(
+        PlaybackSession(
+          entries: [PlaybackSessionEntry(local: _track(1))],
+          currentIndex: 0,
+          position: const Duration(seconds: 25),
+        ),
+      );
+      await startup;
+      await _flushCompletion();
+      expect(
+        container.read(playerControllerProvider).value?.trackId,
+        'track-2',
+      );
+      expect(
+        container.read(playbackQueueProvider).entries.single.id,
+        'track-2',
+      );
+      expect(player.playedLocalIds, ['track-2']);
+    });
+
+    test('does not replace a backend that is already playing', () async {
+      final store = _MemoryPlaybackSessionStore()
+        ..saved = PlaybackSession(
+          entries: [PlaybackSessionEntry(local: _track(1))],
+          currentIndex: 0,
+          position: Duration.zero,
+        );
+      final player = _FakePlayerService()
+        ..emit(
+          const PlayerSnapshot(
+            status: PlayerStatus.playing,
+            trackId: 'active-track',
+            title: 'Already active',
+          ),
+        );
+      final container = _container(player, sessionStore: store);
+      await container.read(playerControllerProvider.future);
+      expect(
+        container.read(playerControllerProvider).value?.trackId,
+        'active-track',
+      );
+      expect(container.read(playbackQueueProvider).entries, isEmpty);
+      container.dispose();
+      await _flushCompletion();
+      expect(store.saved?.entries.single.local?.id, 'track-1');
+      expect(player.playedLocalIds, isEmpty);
+    });
   });
 
   group('LIVE temporary queue', () {
@@ -3407,7 +3767,20 @@ void main() {
 
       expect(repository.infoCalls, 2);
       expect(player.playedRemote.last.streamUrl, contains('refreshed.m4a'));
-      expect(player.lastSeekPosition, const Duration(minutes: 5, seconds: 12));
+      expect(player.initialPositions, const <Duration>[
+        Duration.zero,
+        Duration(minutes: 5, seconds: 12),
+      ]);
+      expect(player.lastSeekPosition, isNull);
+      expect(
+        observed.where(
+          (snapshot) =>
+              snapshot.status == PlayerStatus.playing &&
+              snapshot.position == Duration.zero,
+        ),
+        isEmpty,
+        reason: 'Recovery must start at its retained cursor, before audio.',
+      );
       expect(container.read(playbackQueueProvider).currentIndex, 0);
       expect(
         observed.where(
@@ -6119,6 +6492,7 @@ ProviderContainer _container(
   LocalTrackFileProbe? fileProbe,
   RemotePlaybackCache? remoteCache,
   SettingsController? settingsController,
+  PlaybackSessionStore? sessionStore,
   RemotePlaybackRetryDelay? retryDelay,
   List<Duration>? desktopSessionRetryBackoff,
   List<Override> extraOverrides = const [],
@@ -6127,6 +6501,9 @@ ProviderContainer _container(
   final catalogDatabase = _FakeCatalogDatabase(resolvedRepository);
   return ProviderContainer(
     overrides: [
+      playbackSessionStoreProvider.overrideWithValue(
+        sessionStore ?? _MemoryPlaybackSessionStore(),
+      ),
       playerControllerProvider.overrideWith(
         () => PlayerController(
           remotePrefetchCoordinator: RemotePrefetchCoordinator(
@@ -6429,6 +6806,25 @@ class _LiveRetryAudioResolver
   Future<void> dispose() async {}
 }
 
+class _MemoryPlaybackSessionStore implements PlaybackSessionStore {
+  PlaybackSession? saved;
+  Completer<PlaybackSession?>? readGate;
+
+  @override
+  Future<PlaybackSession?> read() async =>
+      readGate == null ? saved : await readGate!.future;
+
+  @override
+  Future<void> write(PlaybackSession session) async {
+    saved = session;
+  }
+
+  @override
+  Future<void> clear() async {
+    saved = null;
+  }
+}
+
 class _FakePlayerService implements PlayerService {
   _FakePlayerService({
     this.supportsLocalQueueReplacement = false,
@@ -6443,6 +6839,7 @@ class _FakePlayerService implements PlayerService {
   int pauseCalls = 0;
   int resumeCalls = 0;
   Duration? lastSeekPosition;
+  final List<Duration> initialPositions = [];
   final List<bool> shuffleValues = [];
   final List<PlaybackRepeatMode> repeatModes = [];
   final List<String> playedLocalIds = [];
@@ -6480,8 +6877,12 @@ class _FakePlayerService implements PlayerService {
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     playedLocalIds.add(track.id);
+    initialPositions.add(initialPosition);
     final error = localPlayError;
     if (error != null) {
       throw error;
@@ -6489,6 +6890,7 @@ class _FakePlayerService implements PlayerService {
     emit(
       PlayerSnapshot(
         status: PlayerStatus.playing,
+        position: initialPosition,
         title: track.title,
         artist: track.artist,
         album: track.album,
@@ -6501,23 +6903,32 @@ class _FakePlayerService implements PlayerService {
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     playLocalQueueCalls++;
     lastLocalQueue = List.unmodifiable(tracks);
     lastLocalQueueIndex = initialIndex;
-    await playLocal(tracks[initialIndex]);
+    await playLocal(tracks[initialIndex], initialPosition: initialPosition);
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final error = remotePlayError;
     if (error != null) {
       throw error;
     }
     playedRemote.add(track);
+    initialPositions.add(initialPosition);
     emit(
       PlayerSnapshot(
         status: PlayerStatus.playing,
+        position: initialPosition,
         title: track.title,
         artist: track.artist,
         album: track.album,
@@ -6581,17 +6992,23 @@ class _FakePlayerService implements PlayerService {
 
 class _FailingLiveRequestPlayerService extends _FakePlayerService {
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (track.id == 'track-99') throw StateError('Local decoder unavailable');
-    await super.playLocal(track);
+    await super.playLocal(track, initialPosition: initialPosition);
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (track.id == 'permanent-live-failure') {
       throw StateError('Sign in to confirm you are not a bot');
     }
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
   }
 }
 
@@ -6797,7 +7214,10 @@ class _DelayedLocalPlayerService extends _FakePlayerService {
   void complete(String trackId) => _gates[trackId]!.complete();
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final generation = ++_generation;
     started.add(track.id);
     final gate = Completer<void>();
@@ -6806,7 +7226,7 @@ class _DelayedLocalPlayerService extends _FakePlayerService {
     if (generation != _generation) {
       return;
     }
-    await super.playLocal(track);
+    await super.playLocal(track, initialPosition: initialPosition);
   }
 }
 
@@ -6839,7 +7259,10 @@ class _IntentAwareRemotePlayerService extends _FakePlayerService {
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     started.add(track.id);
     _playWhenReady = true;
     emit(
@@ -6857,7 +7280,7 @@ class _IntentAwareRemotePlayerService extends _FakePlayerService {
     if (load != null) await load.future;
     if (!_playWhenReady) return;
     physicallyPlaying = true;
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
     emit(currentSnapshot.copyWith(playWhenReady: true));
   }
 }
@@ -6880,12 +7303,15 @@ class _BlockingRemotePlayerService extends _FakePlayerService {
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     startedRemoteIds.add(track.id);
     if (_blockedIds.contains(track.id)) {
       await _gates[track.id]!.future;
     }
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
   }
 }
 
@@ -6902,7 +7328,10 @@ class _StaleOutgoingRemotePlayerService extends _FakePlayerService {
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (playedRemote.isNotEmpty) {
       emit(
         currentSnapshot.copyWith(status: PlayerStatus.stopped, isRemote: false),
@@ -6910,7 +7339,7 @@ class _StaleOutgoingRemotePlayerService extends _FakePlayerService {
       _outgoingSnapshotEmitted.complete();
       await _releaseReplacement.future;
     }
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
   }
 }
 
@@ -6918,12 +7347,16 @@ class _RejectPrimaryInnerTubePlayerService extends _FakePlayerService {
   final List<TrackInfo> attemptedRemote = [];
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     attemptedRemote.add(track);
     if (track.streamSource == AudioStreamSource.innerTube.name) {
       emit(
         PlayerSnapshot(
           status: PlayerStatus.failed,
+          position: initialPosition,
           trackId: track.id,
           sourceUrl: track.url,
           isRemote: true,
@@ -6932,16 +7365,19 @@ class _RejectPrimaryInnerTubePlayerService extends _FakePlayerService {
       );
       throw Exception('Source error: format is not supported');
     }
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
   }
 }
 
 class _ReadyInnerTubeFallbackPlayerService
     extends _RejectPrimaryInnerTubePlayerService {
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (track.streamSource == AudioStreamSource.innerTube.name) {
-      return super.playRemote(track);
+      return super.playRemote(track, initialPosition: initialPosition);
     }
     attemptedRemote.add(track);
     playedRemote.add(track);
@@ -6965,7 +7401,10 @@ class _LatePrimaryFailurePlayerService extends _FakePlayerService {
   final Completer<void> _primaryCompletion = Completer<void>();
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     attemptedRemote.add(track);
     if (track.streamSource == AudioStreamSource.innerTube.name) {
       emit(
@@ -6980,7 +7419,7 @@ class _LatePrimaryFailurePlayerService extends _FakePlayerService {
       await _primaryCompletion.future;
       return;
     }
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
   }
 
   void completePrimaryWithError() {
@@ -6993,7 +7432,10 @@ class _BlockedOriginalPrimaryFailurePlayerService extends _FakePlayerService {
   final Completer<void> _originalCompletion = Completer<void>();
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     attemptedRemote.add(track);
     if (attemptedRemote.length == 1) {
       emit(
@@ -7029,7 +7471,10 @@ class _BlockedOriginalPrimarySuccessPlayerService extends _FakePlayerService {
   final Completer<void> _originalCompletion = Completer<void>();
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     attemptedRemote.add(track);
     if (attemptedRemote.length == 1) {
       emit(
@@ -7046,7 +7491,7 @@ class _BlockedOriginalPrimarySuccessPlayerService extends _FakePlayerService {
       await _originalCompletion.future;
       return;
     }
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
   }
 
   void completeOriginalSuccessfully() {
@@ -7064,7 +7509,10 @@ class _PendingRetryFailurePlayerService extends _FakePlayerService {
   Future<void> get retryAttemptStarted => _retryAttemptStarted.future;
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     attemptedRemote.add(track);
     if (attemptedRemote.length == 1) {
       throw const SocketException('HTTP 503 from the initial primary source');
@@ -7087,7 +7535,7 @@ class _PendingRetryFailurePlayerService extends _FakePlayerService {
       _retryAttemptStarted.complete();
     }
     await _retryCompletion.future;
-    await super.playRemote(track);
+    await super.playRemote(track, initialPosition: initialPosition);
   }
 
   void completeRetrySuccessfully() {
@@ -7144,6 +7592,31 @@ class _ModeAwareFallbackAudioResolver
   Future<void> dispose() async {}
 }
 
+class _RejectPrimaryNativeQueuePlayerService
+    extends _NativeRemoteQueuePlayerService {
+  @override
+  Future<void> playRemoteSource(
+    RemotePlaybackSource source, {
+    Duration initialPosition = Duration.zero,
+  }) async {
+    if (source.track.streamSource == AudioStreamSource.innerTube.name) {
+      emit(
+        PlayerSnapshot(
+          status: PlayerStatus.failed,
+          position: initialPosition,
+          trackId: source.track.id,
+          queueEntryId: source.queueEntryId,
+          sourceUrl: source.track.url,
+          isRemote: true,
+          errorMessage: 'Source error: format is not supported',
+        ),
+      );
+      throw StateError('Source error: format is not supported');
+    }
+    await super.playRemoteSource(source, initialPosition: initialPosition);
+  }
+}
+
 class _NativeRemoteQueuePlayerService extends _FakePlayerService
     implements NativeRemoteQueuePlayer {
   _NativeRemoteQueuePlayerService({this.failCachedOpen = false});
@@ -7156,7 +7629,10 @@ class _NativeRemoteQueuePlayerService extends _FakePlayerService
   final List<bool> remoteWindowFinalizations = [];
 
   @override
-  Future<void> playRemoteSource(RemotePlaybackSource source) async {
+  Future<void> playRemoteSource(
+    RemotePlaybackSource source, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     if (failCachedOpen && source.uri.scheme == 'file') {
       failCachedOpen = false;
       cachedOpenFailures++;
@@ -7165,7 +7641,8 @@ class _NativeRemoteQueuePlayerService extends _FakePlayerService
     nativeRemoteStarts++;
     nativeRemoteSources.add(source);
     playedRemote.add(source.track);
-    emit(_remoteSnapshot(source));
+    initialPositions.add(initialPosition);
+    emit(_remoteSnapshot(source).copyWith(position: initialPosition));
   }
 
   @override

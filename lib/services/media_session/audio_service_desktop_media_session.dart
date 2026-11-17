@@ -77,10 +77,46 @@ PlaybackState buildAudioServicePlaybackState(DesktopMediaSessionState state) {
 
 @visibleForTesting
 class AudioServiceMediaSessionCallbackBridge {
+  AudioServiceMediaSessionCallbackBridge({
+    Duration startupCommandTimeout = const Duration(seconds: 10),
+  }) : _startupCommandTimeout = startupCommandTimeout {
+    if (startupCommandTimeout < Duration.zero) {
+      throw ArgumentError.value(
+        startupCommandTimeout,
+        'startupCommandTimeout',
+        'Duration must not be negative.',
+      );
+    }
+  }
+
+  static const _maximumStartupCommands = 8;
+
+  final Duration _startupCommandTimeout;
+  final List<_PendingMediaSessionCommand> _startupCommands = [];
   DesktopMediaSessionCallbacks? _callbacks;
+  Timer? _startupCommandTimer;
+  bool _hasAttached = false;
 
   void attach(DesktopMediaSessionCallbacks callbacks) {
     _callbacks = callbacks;
+    _hasAttached = true;
+    _startupCommandTimer?.cancel();
+    _startupCommandTimer = null;
+    final commands = List<_PendingMediaSessionCommand>.of(_startupCommands);
+    _startupCommands.clear();
+    for (final command in commands) {
+      if (!identical(_callbacks, callbacks)) {
+        command.completion.complete();
+        continue;
+      }
+      // Invoke in arrival order without waiting for a slow play/resolve to
+      // finish: a subsequent pause must be able to cancel that initial play.
+      Future<void>.sync(() => command.invoke(callbacks)).then(
+        (_) => command.completion.complete(),
+        onError: (Object error, StackTrace stackTrace) =>
+            command.completion.completeError(error, stackTrace),
+      );
+    }
   }
 
   bool detach(DesktopMediaSessionCallbacks callbacks) {
@@ -91,27 +127,58 @@ class AudioServiceMediaSessionCallbackBridge {
     return false;
   }
 
-  Future<void> play() => _callbacks?.play() ?? Future<void>.value();
+  Future<void> _dispatch(
+    Future<void> Function(DesktopMediaSessionCallbacks callbacks) invoke,
+  ) {
+    final callbacks = _callbacks;
+    if (callbacks != null) return invoke(callbacks);
+    // Only initial startup owns a pending command window. Commands after an
+    // intentional detach stay harmless instead of reviving a retired session.
+    if (_hasAttached) return Future<void>.value();
+    final command = _PendingMediaSessionCommand(invoke);
+    if (_startupCommands.length == _maximumStartupCommands) {
+      _startupCommands.removeAt(0).completion.complete();
+    }
+    _startupCommands.add(command);
+    _startupCommandTimer ??= Timer(_startupCommandTimeout, () {
+      _startupCommandTimer = null;
+      final expired = List<_PendingMediaSessionCommand>.of(_startupCommands);
+      _startupCommands.clear();
+      for (final command in expired) {
+        command.completion.complete();
+      }
+    });
+    return command.completion.future;
+  }
 
-  Future<void> pause() => _callbacks?.pause() ?? Future<void>.value();
+  Future<void> play() => _dispatch((callbacks) => callbacks.play());
 
-  Future<void> stop() => _callbacks?.stop() ?? Future<void>.value();
+  Future<void> pause() => _dispatch((callbacks) => callbacks.pause());
 
-  Future<void> next() => _callbacks?.next() ?? Future<void>.value();
+  Future<void> stop() => _dispatch((callbacks) => callbacks.stop());
 
-  Future<void> previous() => _callbacks?.previous() ?? Future<void>.value();
+  Future<void> next() => _dispatch((callbacks) => callbacks.next());
+
+  Future<void> previous() => _dispatch((callbacks) => callbacks.previous());
 
   Future<void> seek(Duration position) =>
-      _callbacks?.seek(position) ?? Future<void>.value();
+      _dispatch((callbacks) => callbacks.seek(position));
 
   Future<void> playQueueIndex(int index) =>
-      _callbacks?.playQueueIndex(index) ?? Future<void>.value();
+      _dispatch((callbacks) => callbacks.playQueueIndex(index));
 
   Future<void> setShuffleEnabled(bool enabled) =>
-      _callbacks?.setShuffleEnabled(enabled) ?? Future<void>.value();
+      _dispatch((callbacks) => callbacks.setShuffleEnabled(enabled));
 
   Future<void> setRepeatMode(PlaybackRepeatMode mode) =>
-      _callbacks?.setRepeatMode(mode) ?? Future<void>.value();
+      _dispatch((callbacks) => callbacks.setRepeatMode(mode));
+}
+
+class _PendingMediaSessionCommand {
+  _PendingMediaSessionCommand(this.invoke);
+
+  final Future<void> Function(DesktopMediaSessionCallbacks callbacks) invoke;
+  final Completer<void> completion = Completer<void>();
 }
 
 class AudioServiceDesktopMediaSession implements DesktopMediaSession {

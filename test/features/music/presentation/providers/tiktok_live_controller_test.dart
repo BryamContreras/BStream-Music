@@ -2485,7 +2485,10 @@ class _LiveAppendPlayerService extends PlayerService {
   bool get supportsLocalQueueReplacement => false;
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final gate = remotePlayGates.remove(track.id);
     if (gate != null) await gate;
     playedRemoteIds.add(track.id);
@@ -2495,6 +2498,7 @@ class _LiveAppendPlayerService extends PlayerService {
       artist: track.artist,
       trackId: track.id,
       sourceUrl: track.url,
+      position: initialPosition,
       duration: track.duration,
       isRemote: true,
     );
@@ -2518,21 +2522,29 @@ class _LiveAppendPlayerService extends PlayerService {
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     _snapshot = PlayerSnapshot(
       status: PlayerStatus.playing,
       title: track.title,
       artist: track.artist,
       trackId: track.id,
       sourceUrl: track.filePath,
+      position: initialPosition,
       duration: track.duration,
     );
     _snapshots.add(_snapshot);
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
-    await playLocal(tracks[initialIndex]);
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) async {
+    await playLocal(tracks[initialIndex], initialPosition: initialPosition);
   }
 
   @override

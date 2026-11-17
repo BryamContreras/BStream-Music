@@ -94,6 +94,67 @@ void main() {
     },
   );
   test(
+    'initial positions reach each local load without a later seek',
+    () async {
+      await player.playLocal(
+        track,
+        initialPosition: const Duration(seconds: 17),
+      );
+      expect(local.currentSnapshot.position, const Duration(seconds: 17));
+
+      final next = track.copyWith(id: 'next', filePath: '/music/next.mp3');
+      await player.playLocalQueue(
+        [track, next],
+        1,
+        initialPosition: const Duration(seconds: 29),
+      );
+      expect(local.currentSnapshot.trackId, 'next');
+      expect(local.currentSnapshot.position, const Duration(seconds: 29));
+
+      await player.playRemote(
+        remoteTrack,
+        initialPosition: const Duration(seconds: 41),
+      );
+      expect(local.currentSnapshot.position, const Duration(seconds: 41));
+
+      await player.playRemoteSource(
+        remote,
+        initialPosition: const Duration(seconds: 53),
+      );
+      expect(local.currentSnapshot.queueEntryId, remote.queueEntryId);
+      expect(local.currentSnapshot.position, const Duration(seconds: 53));
+      expect(local.seekPositions, isEmpty);
+      expect(cast.loads, 0);
+    },
+  );
+  test(
+    'restoring locally leaves an unrelated cast session untouched',
+    () async {
+      const foreign = CastState(
+        device: device,
+        contentId: 'another-app',
+        status: CastPlaybackStatus.playing,
+        position: Duration(seconds: 91),
+      );
+      cast.publish(foreign);
+
+      await player.playRemoteSource(
+        remote,
+        initialPosition: const Duration(seconds: 23),
+      );
+
+      expect(player.isCasting, isFalse);
+      expect(local.currentSnapshot.position, const Duration(seconds: 23));
+      expect(cast.state, same(foreign));
+      expect(cast.connections, 0);
+      expect(cast.loads, 0);
+      expect(cast.plays, 0);
+      expect(cast.pauses, 0);
+      expect(cast.lastSeek, isNull);
+      expect(cast.lastVolume, isNull);
+    },
+  );
+  test(
     'same-track upgrades delegate locally and retain the upgraded cast URL',
     () async {
       await player.playRemoteSource(remote);
@@ -149,7 +210,10 @@ void main() {
           queueEntryId: 'queue-original',
           httpHeaders: const {'X-Test-Transport': 'actual'},
         );
-        await wrapped.playRemoteSource(source);
+        await wrapped.playRemoteSource(
+          source,
+          initialPosition: const Duration(seconds: 39),
+        );
         expect(basic.lastTrack!.streamUrl, uri.toString());
         expect(
           basic.lastTrack!.httpHeaders,
@@ -159,6 +223,8 @@ void main() {
         expect(wrapped.currentSnapshot.trackId, remoteTrack.id);
         expect(wrapped.currentSnapshot.sourceUrl, remoteTrack.url);
         expect(wrapped.currentSnapshot.queueEntryId, isNull);
+        expect(wrapped.currentSnapshot.position, const Duration(seconds: 39));
+        expect(basic.delegate.seekPositions, isEmpty);
         expect(await wrapped.upgradeRemoteSource(source), isTrue);
       },
     );
@@ -222,12 +288,16 @@ void main() {
           uri: Uri.parse('https://cdn.test/next.webm'),
           queueEntryId: 'occurrence-2',
         ),
+        initialPosition: const Duration(seconds: 31),
       );
       await player.updateRemoteQueue([remote]);
       expect(local.remotePlays, 1);
       expect(local.remoteUpdates, 0);
       expect(cast.loads, 2);
+      expect(cast.lastPosition, const Duration(seconds: 31));
+      expect(cast.lastSeek, isNull);
       expect(player.currentSnapshot.queueEntryId, 'occurrence-2');
+      expect(player.currentSnapshot.position, const Duration(seconds: 31));
     },
   );
   test('disconnect resumes latest cast song at receiver position', () async {
@@ -294,12 +364,18 @@ void main() {
         uri: Uri.parse('https://cdn.test/next.webm'),
         queueEntryId: 'next-occurrence',
       );
-      await player.playRemoteSource(next);
+      await player.playRemoteSource(
+        next,
+        initialPosition: const Duration(seconds: 43),
+      );
       expect(player.isCasting, false);
       expect(local.remotePlays, 2);
       expect(player.currentSnapshot.trackId, 'next');
       expect(player.currentSnapshot.status, PlayerStatus.playing);
       expect(player.currentSnapshot.volume, 1);
+      expect(cast.lastPosition, const Duration(seconds: 43));
+      expect(local.currentSnapshot.position, const Duration(seconds: 43));
+      expect(local.seekPositions, isEmpty);
     },
   );
   test(
@@ -463,7 +539,10 @@ class _SingleSourcePlayer implements PlayerService, AudioSourceUpgradePlayer {
   @override
   bool get supportsLocalQueueReplacement => false;
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     lastTrack = track;
     delegate.publish(
       PlayerSnapshot(
@@ -472,6 +551,7 @@ class _SingleSourcePlayer implements PlayerService, AudioSourceUpgradePlayer {
         title: track.title,
         artist: track.artist,
         sourceUrl: track.url,
+        position: initialPosition,
         isRemote: true,
       ),
     );
@@ -500,6 +580,7 @@ class _LocalPlayer
   PlayerSnapshot snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   int localPlays = 0, remotePlays = 0, remoteUpdates = 0;
   int upgrades = 0;
+  final List<Duration> seekPositions = [];
   EqualizerSettings equalizer = const EqualizerSettings();
   @override
   bool get supportsEqualizer => true;
@@ -527,7 +608,10 @@ class _LocalPlayer
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     localPlays++;
     publish(
       PlayerSnapshot(
@@ -536,22 +620,32 @@ class _LocalPlayer
         title: track.title,
         artist: track.artist,
         sourceUrl: track.filePath,
+        position: initialPosition,
       ),
     );
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) =>
-      playLocal(tracks[initialIndex]);
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) => playLocal(tracks[initialIndex], initialPosition: initialPosition);
   @override
   Future<void> replaceLocalQueue(
     List<LocalTrack> tracks,
     int preferredIndex,
   ) async {}
   @override
-  Future<void> playRemote(TrackInfo track) async {}
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {}
   @override
-  Future<void> playRemoteSource(RemotePlaybackSource source) async {
+  Future<void> playRemoteSource(
+    RemotePlaybackSource source, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     remotePlays++;
     publish(
       PlayerSnapshot(
@@ -561,6 +655,7 @@ class _LocalPlayer
         title: source.track.title,
         artist: source.track.artist,
         sourceUrl: source.track.url,
+        position: initialPosition,
         isRemote: true,
       ),
     );
@@ -601,6 +696,7 @@ class _LocalPlayer
 
   @override
   Future<void> seek(Duration position) async {
+    seekPositions.add(position);
     publish(snapshot.copyWith(position: position));
   }
 

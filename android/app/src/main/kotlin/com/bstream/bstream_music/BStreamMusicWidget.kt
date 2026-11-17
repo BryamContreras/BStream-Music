@@ -27,7 +27,6 @@ import android.graphics.Typeface
 import android.view.KeyEvent
 import android.view.View
 import android.widget.RemoteViews
-import com.ryanheise.audioservice.AudioService
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
@@ -559,13 +558,7 @@ class BStreamMusicWidget : AppWidgetProvider() {
         }
 
         private fun mediaButton(context: Context, keyCode: Int): PendingIntent {
-            val intent = Intent(Intent.ACTION_MEDIA_BUTTON, Uri.parse("bstreamwidget://control/$keyCode"), context, AudioService::class.java).apply {
-                putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-            }
-            return PendingIntent.getService(
-                context, keyCode, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
+            return BStreamWidgetPlaybackReceiver.mediaButton(context, keyCode)
         }
 
         private fun widgetAction(context: Context, action: String): PendingIntent {

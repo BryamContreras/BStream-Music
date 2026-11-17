@@ -26,7 +26,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
-class MainActivity : AudioServiceActivity() {
+class MainActivity : AudioServiceActivity(), BStreamHomeWidgetEnginePlugin.ActionRelay {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingFileExportResult: MethodChannel.Result? = null
     private var pendingFileExportSourcePath: String? = null
@@ -36,12 +36,10 @@ class MainActivity : AudioServiceActivity() {
     // workers keep visible rows responsive without creating unbounded metadata
     // concurrency on slower storage.
     private val localArtworkExecutor = Executors.newFixedThreadPool(2)
-    private val widgetArtworkExecutor = Executors.newSingleThreadExecutor()
     private var externalAudioChannel: MethodChannel? = null
     private val pendingExternalAudioEvents = ArrayDeque<Map<String, Any?>>()
     private var appActivationChannel: MethodChannel? = null
-    private var homeWidgetChannel: MethodChannel? = null
-    private var homeWidgetActionHandlerReady = false
+    private var homeWidgetBridge: BStreamHomeWidgetEnginePlugin? = null
     private var pendingHomeWidgetAction: String? = null
     private var pendingAppActivation: Map<String, Any>? = null
     private var pendingExternalAudioPermissionRequest: ExternalAudioRequest? = null
@@ -86,40 +84,9 @@ class MainActivity : AudioServiceActivity() {
             flutterEngine.plugins.add(BStreamCastEnginePlugin())
         }
 
-        homeWidgetChannel = MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            "bstream_music/home_widget",
-        ).also { channel -> channel.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "update" -> {
-                    val data = call.arguments as? Map<*, *> ?: emptyMap<String, Any>()
-                    // Serialize metadata and covers, including bitmap rendering,
-                    // without doing disk or image work on the Android UI thread.
-                    widgetArtworkExecutor.execute { BStreamMusicWidget.update(this, data) }
-                    result.success(null)
-                }
-                "updateArtwork" -> {
-                    val data = call.arguments as? Map<*, *> ?: emptyMap<String, Any>()
-                    widgetArtworkExecutor.execute { BStreamMusicWidget.updateArtwork(this, data) }
-                    result.success(null)
-                }
-                "updateArtworkBytes" -> {
-                    val data = call.arguments as? Map<*, *> ?: emptyMap<String, Any>()
-                    widgetArtworkExecutor.execute { BStreamMusicWidget.updateArtworkBytes(this, data) }
-                    result.success(null)
-                }
-                "registerActionHandler" -> {
-                    homeWidgetActionHandlerReady = true
-                    result.success(null)
-                }
-                "consumePendingAction" -> {
-                    val action = pendingHomeWidgetAction
-                    pendingHomeWidgetAction = null
-                    result.success(action)
-                }
-                else -> result.notImplemented()
-            }
-        } }
+        homeWidgetBridge = BStreamHomeWidgetEnginePlugin.registerWith(flutterEngine).also {
+            it.attachActionRelay(this)
+        }
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -212,28 +179,17 @@ class MainActivity : AudioServiceActivity() {
         val action = intent.getStringExtra(EXTRA_HOME_WIDGET_ACTION)
             ?.takeIf(::isValidHomeWidgetAction)
             ?: return false
-        val channel = homeWidgetChannel
-        if (channel == null || !homeWidgetActionHandlerReady) {
-            pendingHomeWidgetAction = action
-        } else {
-            pendingHomeWidgetAction = action
-            channel.invokeMethod(
-                "widgetAction",
-                action,
-                object : MethodChannel.Result {
-                    override fun success(result: Any?) {
-                        if (pendingHomeWidgetAction == action) {
-                            pendingHomeWidgetAction = null
-                        }
-                    }
-
-                    override fun error(code: String, message: String?, details: Any?) = Unit
-
-                    override fun notImplemented() = Unit
-                },
-            )
+        pendingHomeWidgetAction = action
+        homeWidgetBridge?.sendAction(action) {
+            if (pendingHomeWidgetAction == action) pendingHomeWidgetAction = null
         }
         return true
+    }
+
+    override fun consumePendingAction(): String? {
+        val action = pendingHomeWidgetAction
+        pendingHomeWidgetAction = null
+        return action
     }
 
     private fun isValidHomeWidgetAction(action: String): Boolean {
@@ -285,7 +241,8 @@ class MainActivity : AudioServiceActivity() {
         localAudioQualityPlugin?.dispose()
         externalAudioExecutor.shutdownNow()
         localArtworkExecutor.shutdownNow()
-        widgetArtworkExecutor.shutdownNow()
+        homeWidgetBridge?.detachActionRelay(this)
+        homeWidgetBridge = null
         pendingLocalAudioPermissionResult?.error(
             "activity_destroyed",
             "The Android activity was closed before audio permission completed.",

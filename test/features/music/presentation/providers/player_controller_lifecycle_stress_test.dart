@@ -404,18 +404,28 @@ class _LifecyclePlayerService implements PlayerService {
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
-    emit(_playingSnapshot(track, position: Duration.zero));
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
+    emit(_playingSnapshot(track, position: initialPosition));
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) async {
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     playLocalQueueCalls++;
-    await playLocal(tracks[initialIndex]);
+    await playLocal(tracks[initialIndex], initialPosition: initialPosition);
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     playedRemote.add(track);
     emit(
       PlayerSnapshot(
@@ -424,6 +434,7 @@ class _LifecyclePlayerService implements PlayerService {
         artist: track.artist,
         trackId: track.id,
         sourceUrl: track.url,
+        position: initialPosition,
         duration: track.duration,
         isRemote: true,
       ),

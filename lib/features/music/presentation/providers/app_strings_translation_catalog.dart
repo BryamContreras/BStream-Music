@@ -3664,12 +3664,12 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '现已提供五段均衡器。',
     '5バンドイコライザーが利用できるようになりました。',
   ],
-  'The player now supports higher quality audio when available.': <String>[
-    'O player agora oferece suporte a áudio de maior qualidade quando disponível.',
-    'Le lecteur prend désormais en charge un son de meilleure qualité lorsqu’il est disponible.',
-    '더 높은 음질의 오디오가 제공되는 경우 재생할 수 있도록 지원합니다.',
-    '播放器现已支持在可用时播放更高音质的音频。',
-    '高音質の音源が利用できる場合に再生できるようになりました。',
+  'Support for higher quality audio whenever available.': <String>[
+    'Suporte a áudio de maior qualidade, sempre que disponível.',
+    'Prise en charge d’un son de meilleure qualité lorsqu’il est disponible.',
+    '더 높은 음질의 오디오가 제공되는 경우 재생을 지원합니다.',
+    '支持播放更高音质的音频（如有提供）。',
+    'より高音質の音源がある場合は、その再生に対応。',
   ],
   'Improved and optimized player style layouts.': <String>[
     'Layouts dos estilos do player aprimorados e otimizados.',

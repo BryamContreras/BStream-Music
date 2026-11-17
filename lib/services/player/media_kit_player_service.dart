@@ -1781,7 +1781,10 @@ class MediaKitPlayerService
   }
 
   @override
-  Future<void> playRemote(TrackInfo track) async {
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final source = track.streamUrl;
     if (source == null || source.isEmpty) {
       throw const PlayerException(
@@ -1806,6 +1809,9 @@ class MediaKitPlayerService
         sourceUrl: track.url,
         thumbnailUrl: track.thumbnailUrl,
         duration: track.duration,
+        position: initialPosition < Duration.zero
+            ? Duration.zero
+            : initialPosition,
         volume: _masterVolume,
         isRemote: true,
       ),
@@ -1816,7 +1822,12 @@ class MediaKitPlayerService
       'headerKeys=${_diagnosticHeaderKeys(track.httpHeaders)}',
       name: 'BStreamPlayback',
     );
-    await _openForGeneration(_remoteMedia(track), generation, play: true);
+    await _openForGeneration(
+      _remoteMedia(track),
+      generation,
+      play: true,
+      initialPosition: initialPosition,
+    );
   }
 
   Media _remoteMedia(TrackInfo track) {
@@ -1926,7 +1937,10 @@ class MediaKitPlayerService
   }
 
   @override
-  Future<void> playLocal(LocalTrack track) async {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) async {
     final generation = ++_requestedGeneration;
     _cancelActiveOpen();
     await _invalidateCrossfadeForExplicitAction();
@@ -1943,21 +1957,33 @@ class MediaKitPlayerService
         sourceUrl: track.sourceUrl,
         thumbnailUrl: track.thumbnailPath ?? track.thumbnailUrl,
         duration: track.duration,
+        position: initialPosition < Duration.zero
+            ? Duration.zero
+            : initialPosition,
         volume: _masterVolume,
         isRemote: false,
         isExternal: track.isExternal,
       ),
     );
-    await _openForGeneration(Media(track.filePath), generation, play: true);
+    await _openForGeneration(
+      Media(track.filePath),
+      generation,
+      play: true,
+      initialPosition: initialPosition,
+    );
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) {
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) {
     if (tracks.isEmpty) {
       return Future.value();
     }
     final safeIndex = initialIndex.clamp(0, tracks.length - 1);
-    return playLocal(tracks[safeIndex]);
+    return playLocal(tracks[safeIndex], initialPosition: initialPosition);
   }
 
   @override
@@ -2249,7 +2275,11 @@ class MediaKitPlayerService
     Media media,
     int generation, {
     required bool play,
+    Duration initialPosition = Duration.zero,
   }) {
+    final startPosition = initialPosition < Duration.zero
+        ? Duration.zero
+        : initialPosition;
     return _enqueueOperation(
       () async {
         if (!_isCurrentGeneration(generation)) {
@@ -2273,7 +2303,12 @@ class MediaKitPlayerService
         // is being interrupted. Publish only the explicit loading snapshot.
         _backendGeneration = null;
         try {
-          await _player.open(media, play: play);
+          // A restored position is a one-time seek, not Media.start (which
+          // would also change the start of subsequent native repeats).
+          await _player.open(
+            media,
+            play: play && startPosition == Duration.zero,
+          );
         } catch (error, stackTrace) {
           final detail = _sanitizePlaybackError(error.toString());
           developer.log(
@@ -2290,6 +2325,14 @@ class MediaKitPlayerService
         if (!_isCurrentGeneration(generation)) {
           return;
         }
+        if (startPosition > Duration.zero) {
+          await _player.seek(startPosition);
+          if (!_isCurrentGeneration(generation)) return;
+          if (play) {
+            await _player.play();
+            if (!_isCurrentGeneration(generation)) return;
+          }
+        }
         if (_snapshot.status == PlayerStatus.failed) {
           throw PlayerException(
             _snapshot.errorMessage ?? 'MediaKit no pudo abrir el audio.',
@@ -2300,6 +2343,7 @@ class MediaKitPlayerService
         _emit(
           _snapshot.copyWith(
             status: play ? PlayerStatus.playing : PlayerStatus.paused,
+            position: startPosition,
           ),
         );
       },

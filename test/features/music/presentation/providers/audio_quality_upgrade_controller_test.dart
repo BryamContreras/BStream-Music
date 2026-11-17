@@ -971,6 +971,7 @@ class _BasePlayer implements PlayerService, AudioSourceUpgradePlayer {
   Future<void> _start(
     RemotePlaybackSource source, {
     bool includeQueueId = true,
+    Duration initialPosition = Duration.zero,
   }) async {
     started.add(source);
     final track = source.track;
@@ -985,6 +986,7 @@ class _BasePlayer implements PlayerService, AudioSourceUpgradePlayer {
         queueEntryId: includeQueueId ? source.queueEntryId : null,
         sourceUrl: track.url,
         thumbnailUrl: track.thumbnailUrl,
+        position: initialPosition,
         duration: track.duration,
         isRemote: true,
       ),
@@ -1038,23 +1040,33 @@ class _BasePlayer implements PlayerService, AudioSourceUpgradePlayer {
   @override
   Future<void> dispose() async => _events.close();
   @override
-  Future<void> playRemote(TrackInfo track) => _start(
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  }) => _start(
     RemotePlaybackSource(
       track: track,
       uri: Uri.parse(track.streamUrl!),
       queueEntryId: 'desktop-${track.id}',
     ),
     includeQueueId: false,
+    initialPosition: initialPosition,
   );
   @override
-  Future<void> playLocal(LocalTrack track) {
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  }) {
     localPlayCalls++;
     throw StateError('No cached local fallback in this fixture');
   }
 
   @override
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex) =>
-      throw StateError('No local queue in this fixture');
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  }) => throw StateError('No local queue in this fixture');
   @override
   Future<void> replaceLocalQueue(
     List<LocalTrack> tracks,
@@ -1066,7 +1078,10 @@ class _Player extends _BasePlayer implements NativeRemoteQueuePlayer {
   Completer<void>? nextQueueMutationGate;
   int queueUpdateCalls = 0;
   @override
-  Future<void> playRemoteSource(RemotePlaybackSource source) => _start(source);
+  Future<void> playRemoteSource(
+    RemotePlaybackSource source, {
+    Duration initialPosition = Duration.zero,
+  }) => _start(source, initialPosition: initialPosition);
   @override
   Future<void> updateRemoteQueue(
     List<RemotePlaybackSource> upcoming, {

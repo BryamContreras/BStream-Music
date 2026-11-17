@@ -186,7 +186,10 @@ abstract interface class SkipSilenceCapablePlayer {
 /// prepared remote sources inside ExoPlayer so track boundaries do not depend
 /// on a Dart completion callback.
 abstract interface class NativeRemoteQueuePlayer {
-  Future<void> playRemoteSource(RemotePlaybackSource source);
+  Future<void> playRemoteSource(
+    RemotePlaybackSource source, {
+    Duration initialPosition = Duration.zero,
+  });
 
   /// Reconciles only the sources after the currently playing remote item.
   /// Previously played sources remain available for native Previous controls.
@@ -214,9 +217,21 @@ abstract class PlayerService {
   /// reopening the current track.
   bool get supportsLocalQueueReplacement;
 
-  Future<void> playRemote(TrackInfo track);
-  Future<void> playLocal(LocalTrack track);
-  Future<void> playLocalQueue(List<LocalTrack> tracks, int initialIndex);
+  /// Opens the selected recording at [initialPosition] before it becomes
+  /// audible. This is a one-time starting position, not a persistent clip.
+  Future<void> playRemote(
+    TrackInfo track, {
+    Duration initialPosition = Duration.zero,
+  });
+  Future<void> playLocal(
+    LocalTrack track, {
+    Duration initialPosition = Duration.zero,
+  });
+  Future<void> playLocalQueue(
+    List<LocalTrack> tracks,
+    int initialIndex, {
+    Duration initialPosition = Duration.zero,
+  });
 
   /// Replaces the loaded local queue while retaining the current item when it
   /// is still present. [preferredIndex] is used if that item was removed.

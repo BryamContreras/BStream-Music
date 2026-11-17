@@ -123,7 +123,7 @@ void main() {
     const spanish = AppStrings(AppLanguage.spanish);
     const expectedEnglish = <String>[
       'A 5-band equalizer is now available.',
-      'The player now supports higher quality audio when available.',
+      'Support for higher quality audio whenever available.',
       'Improved and optimized player style layouts.',
       'Added the new Spotify Style player.',
       'Added filtering options to the Local music tab.',
@@ -140,6 +140,10 @@ void main() {
     expect(
       spanish.whatsNewHighlights.first,
       'Ahora está disponible un ecualizador de 5 bandas.',
+    );
+    expect(
+      spanish.whatsNewHighlights[1],
+      'Compatibilidad con audio de mayor calidad, siempre que esté disponible.',
     );
     expect(
       spanish.whatsNewHighlights.last,

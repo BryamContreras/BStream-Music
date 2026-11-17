@@ -149,12 +149,41 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   final RecommendationQueueExtensionCoordinator _recommendationExtension =
       RecommendationQueueExtensionCoordinator();
   bool _disposed = false;
+  _PlaybackSessionCheckpoint? _sessionCheckpoint;
+  PlayerSnapshot? _sessionSnapshot;
+  List<_QueueItem>? _sessionQueueIdentity;
+  List<PlaybackSessionEntry> _sessionEntries = const [];
 
   bool get _changingLocalTrack => _changingLocalTrackRequestId != null;
 
   @override
   Future<PlayerSnapshot> build() async {
     final service = ref.watch(playerServiceProvider);
+    final startupRequestId = _playRequestId;
+    final sessionStore = ref.read(playbackSessionStoreProvider);
+    final checkpoint = _PlaybackSessionCheckpoint(
+      store: sessionStore,
+      capture: _capturePlaybackSession,
+      canPersist: () => !isLiveQueueActive,
+      hasQueue: () => _queue.isNotEmpty,
+    );
+    _sessionCheckpoint = checkpoint;
+    listenSelf((previous, next) {
+      final snapshot = next.asData?.value;
+      if (snapshot == null) return;
+      final old = _sessionSnapshot;
+      _sessionSnapshot = snapshot;
+      if (old?.trackId != snapshot.trackId ||
+          old?.queueEntryId != snapshot.queueEntryId ||
+          old?.status != snapshot.status ||
+          old?.shuffleEnabled != snapshot.shuffleEnabled ||
+          old?.repeatMode != snapshot.repeatMode) {
+        checkpoint.schedule(immediate: true);
+      } else if (old?.position != snapshot.position) {
+        checkpoint.schedule();
+      }
+    });
+    ref.onDispose(checkpoint.dispose);
     ref.read(equalizerRuntimeProvider);
     _activePlaybackIsRemote = service.currentSnapshot.isRemote;
     _playWhenReady = service.currentSnapshot.wantsToPlay;
@@ -404,8 +433,164 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       unawaited(historyShutdownRegistration.dispose());
       unawaited(subscription.cancel());
     });
-    return initialSnapshot;
+    PlaybackSession? saved;
+    try {
+      saved = await sessionStore.read();
+    } catch (error) {
+      debugPrint('Playback session restoration failed: $error');
+    }
+    var startupSnapshot = _sessionSnapshot ?? initialSnapshot;
+    final backendSnapshot = service.currentSnapshot;
+    if (!_disposed &&
+        startupRequestId == _playRequestId &&
+        _queue.isEmpty &&
+        !backendSnapshot.wantsToPlay &&
+        backendSnapshot.trackId == null &&
+        (backendSnapshot.title?.trim().isEmpty ?? true) &&
+        startupSnapshot.trackId == null &&
+        (startupSnapshot.title?.trim().isEmpty ?? true) &&
+        saved != null) {
+      startupSnapshot = _restorePlaybackSession(saved, startupSnapshot);
+    } else if (backendSnapshot.trackId != null) {
+      startupSnapshot = _decorateSnapshot(backendSnapshot);
+    }
+    if (!_disposed) {
+      _sessionSnapshot = startupSnapshot;
+      checkpoint.activate();
+      if (_queue.isNotEmpty) checkpoint.schedule(immediate: true);
+    }
+    return startupSnapshot;
   }
+
+  PlaybackSession? _capturePlaybackSession() {
+    if (_queueIndex < 0 || _queueIndex >= _queue.length) return null;
+    if (!identical(_sessionQueueIdentity, _queue)) {
+      _sessionQueueIdentity = _queue;
+      _sessionEntries = List<PlaybackSessionEntry>.unmodifiable(
+        _queue.map(
+          (item) => PlaybackSessionEntry(
+            local: item.local,
+            remote: item.remote,
+            logicalEntryId: item.logicalEntryId,
+          ),
+        ),
+      );
+    }
+    final item = _queue[_queueIndex];
+    final snapshot = _sessionSnapshot;
+    final matchesSelection =
+        snapshot != null &&
+        ((snapshot.trackId != null &&
+                (snapshot.trackId == item.id ||
+                    snapshot.trackId == item.local?.id ||
+                    snapshot.trackId == item.remote?.id)) ||
+            (item.remote != null && snapshot.sourceUrl == item.remote!.url));
+    final session = PlaybackSession(
+      entries: _sessionEntries,
+      currentIndex: _queueIndex,
+      position: matchesSelection
+          ? _resumePlaybackPosition ?? snapshot.position
+          : Duration.zero,
+      shuffleEnabled: _shuffleEnabled,
+      repeatMode: _repeatMode,
+      playedIndices: _shufflePlayedIndices.toList(growable: false),
+      shufflePlan: _shufflePlan,
+      localSourceId: _activeLocalQueueSourceId,
+      remoteSourceId: _activeRemoteQueueSourceId,
+      activePlaybackIsRemote: _activePlaybackIsRemote,
+      useNativeLocalQueue: _useNativeLocalQueue,
+    );
+    _sessionEntries = session.entries;
+    return session;
+  }
+
+  PlayerSnapshot _restorePlaybackSession(
+    PlaybackSession saved,
+    PlayerSnapshot initial,
+  ) {
+    _remoteQueueEntries.beginGeneration();
+    _queue = saved.entries
+        .map((entry) {
+          final local = entry.local;
+          final remote = entry.remote;
+          var item = local != null && remote != null
+              ? _QueueItem.hybrid(
+                  local: local,
+                  remote: remote,
+                  logicalEntryId: entry.logicalEntryId,
+                )
+              : local != null
+              ? _QueueItem.local(local, logicalEntryId: entry.logicalEntryId)
+              : _QueueItem.remote(
+                  remote!,
+                  logicalEntryId: entry.logicalEntryId,
+                );
+          if (remote != null) {
+            item = item.withRemoteQueueEntryId(
+              _remoteQueueEntries.newRemoteItem(remote).remoteQueueEntryId!,
+            );
+          }
+          return item;
+        })
+        .toList(growable: false);
+    _queueIndex = saved.currentIndex;
+    _shuffleEnabled = saved.shuffleEnabled;
+    _repeatMode = saved.repeatMode;
+    _queueNavigation.restoreShuffleState(
+      playedIndices: saved.playedIndices,
+      plan: saved.shufflePlan,
+    );
+    _activeLocalQueueSourceId = saved.localSourceId;
+    _activeRemoteQueueSourceId = saved.remoteSourceId;
+    _activePlaybackIsRemote = saved.activePlaybackIsRemote;
+    _useNativeLocalQueue =
+        saved.useNativeLocalQueue &&
+        _queue.every((entry) => entry.local != null && entry.remote == null);
+    _resumeNeedsReload = true;
+    _userPaused = true;
+    _explicitlyStopped = false;
+    _releasePlaybackIntent();
+    final item = _queue[_queueIndex];
+    final local = item.local;
+    final remote = item.remote;
+    _activePlaybackIsRemote =
+        local == null || (saved.activePlaybackIsRemote && remote != null);
+    final duration = _activePlaybackIsRemote
+        ? remote?.duration ?? local?.duration
+        : local?.duration ?? remote?.duration;
+    final position = duration != null && saved.position >= duration
+        ? Duration.zero
+        : saved.position;
+    _resumePlaybackPosition = position;
+    _publishPlaybackQueue();
+    return PlayerSnapshot(
+      status: PlayerStatus.paused,
+      playWhenReady: false,
+      trackId: _activePlaybackIsRemote
+          ? (remote!.id.isEmpty ? remote.url : remote.id)
+          : local!.id,
+      queueEntryId: _activePlaybackIsRemote ? _currentRemoteQueueEntryId : null,
+      title: local?.title ?? remote!.title,
+      artist: local?.artist ?? remote!.artist,
+      album: local?.album ?? remote?.album,
+      sourceUrl: _activePlaybackIsRemote
+          ? remote!.url
+          : local!.sourceUrl ?? local.filePath,
+      thumbnailUrl:
+          local?.thumbnailPath ?? local?.thumbnailUrl ?? remote?.thumbnailUrl,
+      duration: duration,
+      position: position,
+      volume: initial.volume,
+      isRemote: _activePlaybackIsRemote,
+      isExternal: local?.isExternal ?? false,
+      shuffleEnabled: _shuffleEnabled,
+      repeatMode: _repeatMode,
+    );
+  }
+
+  /// Drains the latest checkpoint for lifecycle and deterministic shutdowns.
+  Future<void> flushPlaybackSession() =>
+      _sessionCheckpoint?.flush() ?? Future<void>.value();
 
   void _prepareQueueSourceTransition(String? sourceId) {
     final wasLive = isLiveQueueActive;
@@ -1441,6 +1626,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Future<void> _playRemoteTrack(
     TrackInfo track, {
     bool automaticTransition = false,
+    Duration initialPosition = Duration.zero,
   }) async {
     if (track.streamSource == AudioStreamSource.jioSaavn.name) {
       track = track.withoutAudioTransport();
@@ -1459,7 +1645,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     ref
         .read(remotePlaybackCacheProvider)
         .protectPlaybackWindow(_remoteCacheWindow());
-    final pendingSnapshot = _remoteLoadingSnapshot(track);
+    final pendingSnapshot = _remoteLoadingSnapshot(
+      track,
+    ).copyWith(position: initialPosition);
     _pendingRemoteSnapshot = pendingSnapshot;
     state = AsyncData(pendingSnapshot);
 
@@ -1498,7 +1686,12 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
           return;
         }
       }
-      if (await _tryPlayLibraryDownload(track, requestId, pendingSnapshot)) {
+      if (await _tryPlayLibraryDownload(
+        track,
+        requestId,
+        pendingSnapshot,
+        initialPosition: initialPosition,
+      )) {
         return;
       }
       if (!_isCurrentPlayRequest(requestId)) return;
@@ -1523,7 +1716,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         if (cachedSource != null) {
           final loadAttemptId = _beginRemoteLoadAttempt();
           try {
-            await nativeRemoteService.playRemoteSource(cachedSource);
+            await nativeRemoteService.playRemoteSource(
+              cachedSource,
+              initialPosition: initialPosition,
+            );
             if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
                 !_isCurrentRemoteSelection(
                   track,
@@ -1582,9 +1778,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
                     .extension(cachedTrack.filePath)
                     .replaceFirst('.', ''),
               ),
+              initialPosition: initialPosition,
             );
           } else {
-            await service.playLocal(cachedTrack);
+            await service.playLocal(
+              cachedTrack,
+              initialPosition: initialPosition,
+            );
           }
           if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
               !_isCurrentRemoteSelection(
@@ -1672,7 +1872,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         if (cachedSource != null) {
           final loadAttemptId = _beginRemoteLoadAttempt();
           try {
-            await nativeRemoteService.playRemoteSource(cachedSource);
+            await nativeRemoteService.playRemoteSource(
+              cachedSource,
+              initialPosition: initialPosition,
+            );
             if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
                 !_isCurrentRemoteSelection(
                   playableTrack,
@@ -1715,6 +1918,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         try {
           await nativeRemoteService.playRemoteSource(
             _networkRemotePlaybackSource(playableTrack),
+            initialPosition: initialPosition,
           );
           if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
               !_isCurrentRemoteSelection(
@@ -1775,6 +1979,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
               await _refreshAndReplayRemote(
                 playableTrack,
                 requestId,
+                resumePosition: initialPosition,
                 expectedQueueEntryId: pendingSnapshot.queueEntryId,
                 mode: AudioResolutionMode.fallbackOnly,
               );
@@ -1810,9 +2015,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
                     .extension(cachedPlayableTrack.filePath)
                     .replaceFirst('.', ''),
               ),
+              initialPosition: initialPosition,
             );
           } else {
-            await service.playLocal(cachedPlayableTrack);
+            await service.playLocal(
+              cachedPlayableTrack,
+              initialPosition: initialPosition,
+            );
           }
           if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
               !_isCurrentRemoteSelection(
@@ -1852,7 +2061,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       final loadAttemptId = _beginRemoteLoadAttempt();
       try {
         final service = ref.read(playerServiceProvider);
-        await service.playRemote(playableTrack);
+        await service.playRemote(
+          playableTrack,
+          initialPosition: initialPosition,
+        );
         if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
             !_isCurrentRemoteSelection(
               playableTrack,
@@ -1905,6 +2117,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
             await _refreshAndReplayRemote(
               playableTrack,
               requestId,
+              resumePosition: initialPosition,
               expectedQueueEntryId: pendingSnapshot.queueEntryId,
               mode: AudioResolutionMode.fallbackOnly,
             );
@@ -2458,14 +2671,30 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     _replaceCurrentRemoteTrack(refreshed);
     _remotePrefetch.invalidate();
     final service = ref.read(playerServiceProvider);
+    final duration = refreshed.duration;
+    final safeResumePosition = resumePosition <= Duration.zero
+        ? Duration.zero
+        : duration != null && resumePosition >= duration
+        ? Duration(
+            microseconds: math.max(
+              0,
+              duration.inMicroseconds -
+                  const Duration(seconds: 1).inMicroseconds,
+            ),
+          )
+        : resumePosition;
     final loadAttemptId = _beginRemoteLoadAttempt();
     try {
       if (service is NativeRemoteQueuePlayer) {
         await (service as NativeRemoteQueuePlayer).playRemoteSource(
           _networkRemotePlaybackSource(refreshed),
+          initialPosition: safeResumePosition,
         );
       } else {
-        await service.playRemote(refreshed);
+        await service.playRemote(
+          refreshed,
+          initialPosition: safeResumePosition,
+        );
       }
       if (_wasRemoteLoadFailureHandled(loadAttemptId) ||
           !_isCurrentRemoteSelection(
@@ -2499,19 +2728,6 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       return;
     }
     unawaited(_warmUpcomingRemoteTracks(requestId));
-    if (resumePosition > Duration.zero) {
-      final duration = refreshed.duration;
-      final safeResumePosition = duration != null && resumePosition >= duration
-          ? Duration(
-              microseconds: math.max(
-                0,
-                duration.inMicroseconds -
-                    const Duration(seconds: 1).inMicroseconds,
-              ),
-            )
-          : resumePosition;
-      await service.seek(safeResumePosition);
-    }
     _clearPendingRemoteSnapshot(requestId);
   }
 
@@ -3359,6 +3575,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Future<_LocalPlaybackAttempt> _playLocalTrack(
     LocalTrack track, {
     bool publishFailure = true,
+    Duration initialPosition = Duration.zero,
   }) async {
     _activePlaybackIsRemote = false;
     final requestId = ++_playRequestId;
@@ -3385,9 +3602,13 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
           localQueue != null &&
           localQueue.isNotEmpty &&
           _queueIndex >= 0) {
-        await service.playLocalQueue(localQueue, _queueIndex);
+        await service.playLocalQueue(
+          localQueue,
+          _queueIndex,
+          initialPosition: initialPosition,
+        );
       } else {
-        await service.playLocal(track);
+        await service.playLocal(track, initialPosition: initialPosition);
       }
       if (!_isCurrentPlayRequest(requestId)) {
         return _LocalPlaybackAttempt.cancelled;
@@ -3554,16 +3775,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         _queueIndex >= 0 &&
         _queueIndex < _queue.length) {
       final resumePosition = _resumePlaybackPosition;
-      final operation = _playQueueItem(_queue[_queueIndex]);
-      final requestId = _playRequestId;
-      await operation;
-      if (!_disposed &&
-          _isCurrentPlayRequest(requestId) &&
-          state.value?.status != PlayerStatus.failed &&
-          resumePosition != null &&
-          resumePosition > Duration.zero) {
-        await seek(resumePosition);
-      }
+      await _playQueueItem(
+        _queue[_queueIndex],
+        initialPosition: resumePosition ?? Duration.zero,
+      );
       return;
     }
     _explicitlyStopped = false;
@@ -3712,7 +3927,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
   Future<void> playQueueIndex(int index) async {
     _resetQueueNavigation();
-    if (index < 0 || index >= _queue.length || index == _queueIndex) {
+    if (index < 0 || index >= _queue.length) {
+      return;
+    }
+    if (index == _queueIndex) {
+      if (state.value?.wantsToPlay != true) await resume();
       return;
     }
     final previousRemoteTrack = _playingRemoteTrack;
@@ -3904,6 +4123,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   Future<void> _playQueueItem(
     _QueueItem item, {
     bool automaticTransition = false,
+    Duration initialPosition = Duration.zero,
   }) async {
     final local = item.local;
     if (local != null) {
@@ -3918,6 +4138,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         await _playRemoteTrack(
           catalog,
           automaticTransition: automaticTransition,
+          initialPosition: initialPosition,
         );
         return;
       }
@@ -3926,6 +4147,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       final operation = _playLocalTrack(
         local,
         publishFailure: item.remote == null,
+        initialPosition: initialPosition,
       );
       final requestId = _playRequestId;
       final result = await operation;
@@ -3966,7 +4188,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
     final remote = item.remote;
     if (remote != null) {
-      await _playRemoteTrack(remote, automaticTransition: automaticTransition);
+      await _playRemoteTrack(
+        remote,
+        automaticTransition: automaticTransition,
+        initialPosition: initialPosition,
+      );
     }
   }
 
@@ -4048,6 +4274,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   Future<void> _scheduleCrossfadePreparation(CrossfadePlaybackSource? source) {
+    if (source != null && _resumeNeedsReload && !_playWhenReady) {
+      // A restored/cancelled selection has no active source yet. Keep its
+      // standby unloaded until an explicit Play requests the native queue.
+      return Future<void>.value();
+    }
     if (source != null &&
         _audioQualityUpgradeJob != null &&
         ref.read(audioQualityUpgradeStateProvider).active) {
@@ -4265,6 +4496,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
           _queue.map((item) => item.presentation).toList(growable: false),
           _queueIndex,
         );
+    _sessionCheckpoint?.schedule(immediate: true);
   }
 
   int _nextQueueIndex({required bool automatic}) {
