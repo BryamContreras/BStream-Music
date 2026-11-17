@@ -360,6 +360,9 @@ class JustAudioPlayerService
         queueEntryId: queueEntryId,
         sourceUrl: tag.extras?['sourceUrl']?.toString(),
         thumbnailUrl: displayArtworkSourceForMediaItem(tag),
+        // A native queue advance changes the item and its clock together.
+        // Preserve the published clock for same-item metadata refreshes.
+        position: sameLogicalItem ? _snapshot.position : _player.position,
         duration:
             _usableDuration(tag.duration) ??
             (sameLogicalItem ? _usableDuration(_snapshot.duration) : null),

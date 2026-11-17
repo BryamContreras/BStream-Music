@@ -665,6 +665,54 @@ void main() {
   );
 
   test(
+    'a native queue transition publishes the new item and clock together',
+    () async {
+      final fixture = await _Fixture.create();
+      final backend = fixture.backend;
+      final snapshots = <PlayerSnapshot>[];
+      final subscription = fixture.service.snapshotStream.listen(snapshots.add);
+      try {
+        await fixture.service.playRemoteSource(_remoteSource('quick-pick-a'));
+        await fixture.service.updateRemoteQueue([
+          _remoteSource('quick-pick-b'),
+        ]);
+        backend.emitPosition(const Duration(seconds: 10));
+        await _drainEvents();
+        expect(
+          fixture.service.currentSnapshot.position,
+          const Duration(seconds: 10),
+        );
+        snapshots.clear();
+
+        // The native index and clock change in one event, before the next
+        // periodic position sample reaches the service.
+        backend.emitSequenceState(
+          currentIndex: 1,
+          position: const Duration(milliseconds: 125),
+        );
+        await _drainEvents();
+
+        final successorSnapshots = snapshots.where(
+          (snapshot) => snapshot.trackId == 'quick-pick-b',
+        );
+        expect(successorSnapshots, isNotEmpty);
+        expect(
+          successorSnapshots.map((snapshot) => snapshot.position),
+          everyElement(const Duration(milliseconds: 125)),
+          reason: 'New track metadata must never carry the previous clock.',
+        );
+        expect(
+          fixture.service.currentSnapshot.position,
+          const Duration(milliseconds: 125),
+        );
+      } finally {
+        await subscription.cancel();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
     'source deadline interrupts the native load before late completion',
     () async {
       final deadline = Completer<void>();
@@ -3401,9 +3449,12 @@ class _BlockingAudioPlayer extends AudioPlayer {
     _states.add(PlayerState(_playing, _processingState));
   }
 
-  void emitSequenceState({int? currentIndex}) {
+  void emitSequenceState({int? currentIndex, Duration? position}) {
     if (currentIndex != null) {
       _currentIndex = currentIndex;
+    }
+    if (position != null) {
+      _position = position;
     }
     _sequenceStates.add(sequenceState);
   }

@@ -602,12 +602,13 @@ Future<Duration> _measureCrossfadeHandoff(
       diagnostic: () => service.currentSnapshot.toString(),
     );
     await service.pause();
+    // A seek invalidates the standby, so reset the primary before preparing it.
+    await service.seek(Duration.zero);
     await crossfade.configureCrossfade(
       enabled: true,
       duration: const Duration(milliseconds: 700),
     );
     await crossfade.prepareCrossfade(LocalCrossfadePlaybackSource(incoming));
-    await service.seek(Duration.zero);
 
     final watch = Stopwatch()..start();
     await service.resume();

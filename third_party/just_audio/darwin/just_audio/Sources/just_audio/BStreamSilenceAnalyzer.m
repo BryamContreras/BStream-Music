@@ -44,6 +44,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     AVAsset *_asset;
     AVAssetTrack *_track;
     BOOL _local;
+    NSString *_sourceScheme;
     dispatch_queue_t _queue;
     NSHashTable<BStreamSilenceAnalyzer *> *_observers;
     __weak BStreamSilenceAnalyzer *_pendingOwner;
@@ -77,6 +78,11 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     BOOL _notificationScheduled;
     NSString *_errorText;
     NSNumber *_errorCode;
+    NSString *_errorDomain;
+    NSNumber *_assetReadable;
+    double _lastRequestedPosition;
+    double _lastBufferedUntil;
+    double _lastRequestedLimit;
 }
 - (instancetype)initWithAsset:(AVAsset *)asset;
 - (void)addObserver:(BStreamSilenceAnalyzer *)observer;
@@ -84,6 +90,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
 - (void)requestAt:(double)position bufferedUntil:(double)end observer:(BStreamSilenceAnalyzer *)observer;
 - (nullable NSValue *)nextGapAt:(double)position;
 - (NSDictionary<NSString *, id> *)snapshot;
+- (NSDictionary<NSString *, id> *)debugSummary;
 - (BOOL)isSupported;
 - (BOOL)isReady;
 - (nullable NSString *)errorText;
@@ -105,12 +112,14 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     if (!self) return nil;
     _asset = asset;
     _local = [asset isKindOfClass:[AVURLAsset class]] && ((AVURLAsset *)asset).URL.isFileURL;
+    _sourceScheme = [asset isKindOfClass:[AVURLAsset class]] ? ((AVURLAsset *)asset).URL.scheme : @"composition";
     _queue = dispatch_queue_create("com.bstream.silence.analysis", DISPATCH_QUEUE_SERIAL);
     dispatch_set_target_queue(_queue, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     _observers = [NSHashTable weakObjectsHashTable];
     _gaps = [NSMutableArray array];
     _coverage = [NSMutableArray array];
     _duration = _cursor = _segmentStart = _activeStart = _activeEnd = NAN;
+    _lastRequestedPosition = _lastBufferedUntil = _lastRequestedLimit = NAN;
     _supported = YES;
     _needsReset = YES;
     return self;
@@ -162,14 +171,19 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     });
 }
 
-- (void)rejectSource:(NSString *)message code:(nullable NSNumber *)code {
+- (void)rejectSource:(NSString *)message code:(nullable NSNumber *)code domain:(nullable NSString *)domain {
     @synchronized (self) {
         _supported = NO;
         _errorText = message;
         _errorCode = code;
+        _errorDomain = domain;
         _pending = NO;
         ++_publicationRevision;
     }
+#if DEBUG
+    // One rejection per cached asset, with no URLs, headers, PCM or extra reads.
+    NSLog(@"BStream silence rejected: %@", self.debugSummary);
+#endif
     [self notifyObservers];
 }
 
@@ -181,7 +195,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     if ([_asset isKindOfClass:[AVURLAsset class]]) {
         NSString *extension = ((AVURLAsset *)_asset).URL.pathExtension.lowercaseString;
         if ([extension isEqualToString:@"m3u8"] || [extension isEqualToString:@"m3u"]) {
-            [self rejectSource:@"Live or HLS media cannot be read for silence analysis." code:nil];
+            [self rejectSource:@"Live or HLS media cannot be read for silence analysis." code:nil domain:nil];
             return;
         }
     }
@@ -192,17 +206,19 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
                 NSError *error = nil;
                 if ([self->_asset statusOfValueForKey:key error:&error] != AVKeyValueStatusLoaded) {
                     [self rejectSource:@"The source could not be inspected for silence analysis."
-                                   code:error ? @(error.code) : nil];
+                                   code:error ? @(error.code) : nil domain:error.domain];
                     return;
                 }
             }
-            if (self->_asset.hasProtectedContent || !self->_asset.readable) {
-                [self rejectSource:@"Protected or unreadable media does not support silence analysis." code:nil];
+            BOOL readable = self->_asset.readable;
+            @synchronized (self) { self->_assetReadable = @(readable); }
+            if (self->_asset.hasProtectedContent || !readable) {
+                [self rejectSource:@"Protected or unreadable media does not support silence analysis." code:nil domain:nil];
                 return;
             }
             double duration = BStreamSeconds(self->_asset.duration);
             if (!isfinite(duration) || duration <= 0) {
-                [self rejectSource:@"A finite source duration is required for silence analysis." code:nil];
+                [self rejectSource:@"A finite source duration is required for silence analysis." code:nil domain:nil];
                 return;
             }
             NSArray<AVAssetTrack *> *tracks = [self->_asset tracksWithMediaType:AVMediaTypeAudio];
@@ -211,7 +227,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
                 track = tracks.firstObject;
             }
             if (!track) {
-                [self rejectSource:@"A single selected audio track is required for silence analysis." code:nil];
+                [self rejectSource:@"A single selected audio track is required for silence analysis." code:nil domain:nil];
                 return;
             }
             @synchronized (self) {
@@ -229,6 +245,9 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     if (!isfinite(position) || position < 0) return;
     AVAssetReader *cancel = nil;
     @synchronized (self) {
+        _lastRequestedPosition = position;
+        _lastBufferedUntil = end;
+        _lastRequestedLimit = NAN;
         if (!_supported || _observers.count == 0) return;
         double limit = position + BStreamSilenceLookaheadSeconds;
         if (!_local) {
@@ -239,6 +258,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
             limit = MIN(limit, end);
         }
         if (isfinite(_duration)) limit = MIN(limit, _duration);
+        _lastRequestedLimit = limit;
         if (limit <= position + 0.005) return;
         if ([self coverageEndForPosition:position] >= limit - 0.005) return;
         // One deck must not continually cancel another deck's reader when a
@@ -411,7 +431,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
             NSError *error = reader.error ?: readerError;
             if ((reader && !outputSupported) || BStreamPermanentReaderFailure(error)) {
                 [self rejectSource:@"This source cannot be decoded for silence analysis."
-                               code:error ? @(error.code) : nil];
+                               code:error ? @(error.code) : nil domain:error.domain];
             } else {
                 @synchronized (self) {
                     NSString *message = @"The source could not be decoded for silence analysis.";
@@ -420,6 +440,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
                             !(_errorCode == code || [_errorCode isEqual:code])) ++_publicationRevision;
                     _errorText = message;
                     _errorCode = code;
+                    _errorDomain = error.domain;
                     _retryAfter = NSProcessInfo.processInfo.systemUptime + 1;
                     _needsReset = YES;
                 }
@@ -540,7 +561,7 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     }
     if ([self isCurrentGeneration:generation]) {
         if (!validPCM) {
-            [self rejectSource:@"The decoded PCM format is unavailable for silence analysis." code:nil];
+            [self rejectSource:@"The decoded PCM format is unavailable for silence analysis." code:nil domain:nil];
         } else {
             // Reader completion at a bounded window is not source EOF. Only
             // finish the classifier at the actual asset end, never at a seek
@@ -566,11 +587,13 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
                     if (![_errorText isEqualToString:message] || _errorCode) ++_publicationRevision;
                     _errorText = message;
                     _errorCode = nil;
+                    _errorDomain = nil;
                     _retryAfter = NSProcessInfo.processInfo.systemUptime + 4;
                     _needsReset = YES;
                 } else if (reader.status == AVAssetReaderStatusFailed && !BStreamPermanentReaderFailure(reader.error)) {
                     _errorText = @"The source decoder could not complete the requested analysis window.";
                     _errorCode = reader.error ? @(reader.error.code) : nil;
+                    _errorDomain = reader.error.domain;
                     ++_publicationRevision;
                     _retryAfter = NSProcessInfo.processInfo.systemUptime + 1;
                     _needsReset = YES;
@@ -578,10 +601,11 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
                     if (_errorText) ++_publicationRevision;
                     _errorText = nil;
                     _errorCode = nil;
+                    _errorDomain = nil;
                 }
             }
             if (reader.status == AVAssetReaderStatusFailed && BStreamPermanentReaderFailure(reader.error)) {
-                [self rejectSource:@"This source cannot be decoded for silence analysis." code:@(reader.error.code)];
+                [self rejectSource:@"This source cannot be decoded for silence analysis." code:@(reader.error.code) domain:reader.error.domain];
             }
         }
     }
@@ -610,6 +634,27 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
         }
     }
     return nil;
+}
+
+- (NSDictionary<NSString *, id> *)debugSummary {
+    @synchronized (self) {
+        // Bounded lifecycle diagnostics: no interval array or periodic logging.
+        return @{
+            @"source": _local ? @"local" : @"progressive",
+            @"sourceScheme": _sourceScheme ?: @"unknown",
+            @"supported": @(_supported), @"ready": @(_ready),
+            @"assetReadable": _assetReadable ?: (id)[NSNull null],
+            @"error": _errorText ?: (id)[NSNull null],
+            @"errorCode": _errorCode ?: (id)[NSNull null],
+            @"errorDomain": _errorDomain ?: (id)[NSNull null],
+            @"analyzedUntilMs": @(isfinite(_cursor) ? llround(_cursor * 1000) : 0),
+            @"decodedFrames": @(_decodedFrames), @"readersCreated": @(_readersCreated),
+            @"rangeCount": @(_gaps.count),
+            @"lastPositionSeconds": isfinite(_lastRequestedPosition) ? @(_lastRequestedPosition) : (id)[NSNull null],
+            @"lastBufferedUntilSeconds": isfinite(_lastBufferedUntil) ? @(_lastBufferedUntil) : (id)[NSNull null],
+            @"lastLimitSeconds": isfinite(_lastRequestedLimit) ? @(_lastRequestedLimit) : (id)[NSNull null],
+        };
+    }
 }
 
 - (NSDictionary<NSString *, id> *)snapshot {
@@ -733,6 +778,9 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
 - (void)invalidate {
     if (_invalidated) return;
     _invalidated = YES;
+#if DEBUG
+    if (_entry) NSLog(@"BStream silence disposed: %@", _entry.debugSummary);
+#endif
     [_entry removeObserver:self];
     _entry = nil;
     self.onStatusChange = nil;

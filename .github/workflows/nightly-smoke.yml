@@ -2,6 +2,25 @@ name: Nightly native smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform to validate
+        type: choice
+        default: all
+        options:
+          - all
+          - android
+          - ios
+          - windows
+      ios_scenario:
+        description: iOS scenario to validate
+        type: choice
+        default: all
+        options:
+          - all
+          - equalizer
+          - silence
+          - crossfade
   schedule:
     - cron: "41 6 * * *"
 
@@ -18,6 +37,7 @@ env:
 jobs:
   windows-native:
     name: Windows crossfade and InnerTube playback
+    if: github.event_name == 'schedule' || inputs.platform == 'all' || inputs.platform == 'windows'
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
@@ -68,6 +88,7 @@ jobs:
 
   android-native:
     name: Android native crossfade
+    if: github.event_name == 'schedule' || inputs.platform == 'all' || inputs.platform == 'android'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -117,6 +138,7 @@ jobs:
 
   ios-native:
     name: iOS DSP, silence skipping, and crossfade
+    if: github.event_name == 'schedule' || inputs.platform == 'all' || inputs.platform == 'ios'
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -200,6 +222,7 @@ jobs:
           printf 'BSTREAM_IOS_SIMULATOR_ID=%s\n' "$simulator_id" >> "$GITHUB_ENV"
 
       - name: Run native iOS equalizer scenarios
+        if: github.event_name == 'schedule' || inputs.ios_scenario == 'all' || inputs.ios_scenario == 'equalizer'
         shell: bash
         run: >-
           flutter drive --driver=test_driver/integration_test.dart
@@ -207,6 +230,7 @@ jobs:
           -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
 
       - name: Run native iOS silence skipping scenarios
+        if: github.event_name == 'schedule' || inputs.ios_scenario == 'all' || inputs.ios_scenario == 'silence'
         shell: bash
         run: >-
           flutter drive --driver=test_driver/integration_test.dart
@@ -214,6 +238,7 @@ jobs:
           -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
 
       - name: Run native iOS crossfade scenarios
+        if: github.event_name == 'schedule' || inputs.ios_scenario == 'all' || inputs.ios_scenario == 'crossfade'
         shell: bash
         run: >-
           flutter drive --driver=test_driver/integration_test.dart
