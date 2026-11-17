@@ -242,9 +242,12 @@ void main() {
           duration: const Duration(milliseconds: 4500),
           skipSilenceEnabled: true,
         );
+        if (Platform.isIOS && !pauseEnabled.skipSilenceAvailable) {
+          _expectUnsupportedDarwinReader(pauseEnabled);
+        }
         _expectPreserved(
-          baseline: pauseBaseline,
-          enabled: pauseEnabled,
+          baseline: pauseBaseline.elapsed,
+          enabled: pauseEnabled.elapsed,
           reason:
               'A slow CDN must not turn a four-second musical pause into '
               'skippable silence.',
@@ -262,11 +265,22 @@ void main() {
           duration: const Duration(milliseconds: 10500),
           skipSilenceEnabled: true,
         );
-        _expectLongSilenceShortened(
-          baseline: gapBaseline,
-          enabled: gapEnabled,
-          location: 'inside a slowly streamed track',
-        );
+        if (Platform.isIOS && !gapEnabled.skipSilenceAvailable) {
+          _expectUnsupportedDarwinReader(gapEnabled);
+          _expectPreserved(
+            baseline: gapBaseline.elapsed,
+            enabled: gapEnabled.elapsed,
+            reason:
+                'An HTTP asset rejected by AVAssetReader must play its '
+                'original timeline with silence skipping unavailable.',
+          );
+        } else {
+          _expectLongSilenceShortened(
+            baseline: gapBaseline.elapsed,
+            enabled: gapEnabled.elapsed,
+            location: 'inside a slowly streamed track',
+          );
+        }
         expect(
           server.completedResponses,
           greaterThanOrEqualTo(4),
@@ -286,31 +300,47 @@ void main() {
       return;
     }
 
-    final longGapBytes = _stereoWave(const [
+    const longGapSegments = [
       _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
       _WaveSegment.silence(Duration(seconds: 60)),
       _WaveSegment.tone(Duration(milliseconds: 250), peak: 2800),
-    ]);
-    final server = await _ThrottledWaveServer.start({
-      '/clock-sync-long-gap.wav': longGapBytes,
-    });
+    ];
+    // AVAssetReader can reject progressive HTTP assets even when AVPlayer
+    // plays them. Exercise its seek/rescan clock with readable local PCM.
+    final directory = Platform.isIOS
+        ? await Directory.systemTemp.createTemp('bstream_native_silence_seek_')
+        : null;
+    final server = Platform.isAndroid
+        ? await _ThrottledWaveServer.start({
+            '/clock-sync-long-gap.wav': _stereoWave(longGapSegments),
+          })
+        : null;
     final service = JustAudioPlayerService();
     final snapshots = <PlayerSnapshot>[];
     final subscription = service.snapshotStream.listen(snapshots.add);
-    final track = TrackInfo(
-      id: 'clock-sync-long-gap',
-      title: 'clock-sync-long-gap',
-      artist: 'BStream clock integration test',
-      url: server.uriFor('/clock-sync-long-gap.wav').toString(),
-      streamUrl: server.uriFor('/clock-sync-long-gap.wav').toString(),
-      streamExtension: 'wav',
-      streamMimeType: 'audio/wav',
-      duration: const Duration(milliseconds: 60500),
-    );
+    Map<String, dynamic>? diagnostics;
     try {
       await service.setVolume(0.01);
       await service.configureSkipSilence(enabled: true);
-      await service.playRemote(track);
+      if (directory != null) {
+        await service.playLocal(
+          await _writeTrack(directory, 'clock-sync-long-gap', longGapSegments),
+        );
+      } else {
+        final uri = server!.uriFor('/clock-sync-long-gap.wav').toString();
+        await service.playRemote(
+          TrackInfo(
+            id: 'clock-sync-long-gap',
+            title: 'clock-sync-long-gap',
+            artist: 'BStream clock integration test',
+            url: uri,
+            streamUrl: uri,
+            streamExtension: 'wav',
+            streamMimeType: 'audio/wav',
+            duration: const Duration(milliseconds: 60500),
+          ),
+        );
+      }
       await _waitUntil(
         () => service.currentSnapshot.status == PlayerStatus.playing,
         timeout: const Duration(seconds: 12),
@@ -343,6 +373,11 @@ void main() {
           var acceleratedUpdates = 0;
           var previous = observations.first;
           for (final observation in observations.skip(1)) {
+            expect(
+              observation.position + const Duration(milliseconds: 150),
+              greaterThanOrEqualTo(previous.position),
+              reason: '$phase must not publish a backward clock jump.',
+            );
             final sourceDelta = observation.position - previous.position;
             if (sourceDelta <= Duration.zero) {
               continue;
@@ -353,12 +388,15 @@ void main() {
             }
             previous = observation;
           }
+          // Darwin can seek across one cached verified range covering the
+          // eight-second target. Media3 publishes several PCM clock updates.
+          final minimumAcceleratedUpdates = Platform.isIOS ? 1 : 2;
           expect(
             acceleratedUpdates,
-            greaterThanOrEqualTo(2),
+            greaterThanOrEqualTo(minimumAcceleratedUpdates),
             reason:
-                '$phase must publish multiple accelerated clock updates, '
-                'not one delayed discontinuity. Observations: $observations',
+                '$phase must publish at least $minimumAcceleratedUpdates '
+                'accelerated clock updates. Observations: $observations',
           );
           expect(
             service.currentSnapshot.status,
@@ -392,19 +430,62 @@ void main() {
         reason: 'Clock synchronization must not introduce playback errors.',
       );
     } finally {
-      await _logSkipSilenceDiagnostics(service, 'clock-sync-long-gap');
+      diagnostics = await _logSkipSilenceDiagnostics(
+        service,
+        'clock-sync-long-gap',
+      );
       await subscription.cancel();
       await service.dispose();
-      await server.close();
+      await server?.close();
+      if (directory != null && await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    }
+    if (Platform.isIOS) {
+      expect(diagnostics?['source'], 'local');
+      expect(diagnostics?['supported'], isTrue);
+      expect(
+        diagnostics?['seekCount'],
+        greaterThanOrEqualTo(2),
+        reason: 'Both scan phases must perform a verified native silence seek.',
+      );
     }
   }, timeout: const Timeout(Duration(seconds: 45)));
 }
 
-Future<void> _logSkipSilenceDiagnostics(
+typedef _RemotePlaybackMeasurement = ({
+  Duration elapsed,
+  Map<String, dynamic>? diagnostics,
+  bool skipSilenceAvailable,
+});
+
+void _expectUnsupportedDarwinReader(_RemotePlaybackMeasurement measurement) {
+  expect(Platform.isIOS, isTrue);
+  expect(measurement.skipSilenceAvailable, isFalse);
+  final status = measurement.diagnostics;
+  expect(
+    status,
+    isNotNull,
+    reason: 'Unavailable skipping needs native evidence.',
+  );
+  expect(status!['source'], 'progressive');
+  expect(status['assetReadable'], isTrue);
+  expect(status['errorCode'], -11838);
+  expect(status['errorDomain'], 'AVFoundationErrorDomain');
+  expect(status['requestedEnabled'], isTrue);
+  expect(status['supported'], isFalse);
+  expect(status['ready'], isFalse);
+  expect(status['decodedFrames'], 0);
+  expect(status['readersCreated'], 0);
+  expect(status['seekCount'], 0);
+  expect(status['ranges'], isEmpty);
+}
+
+Future<Map<String, dynamic>?> _logSkipSilenceDiagnostics(
   JustAudioPlayerService service,
   String phase,
 ) async {
-  if (!Platform.isIOS) return;
+  if (!Platform.isIOS) return null;
   try {
     final status = await service.readSkipSilenceDiagnostics().timeout(
       const Duration(seconds: 2),
@@ -417,10 +498,12 @@ Future<void> _logSkipSilenceDiagnostics(
       'track=${snapshot.trackId}, playback=${snapshot.status}, '
       'position=${snapshot.position}, duration=${snapshot.duration}',
     );
+    return status;
   } catch (error) {
     // Diagnostics must preserve the original playback assertion failure.
     // ignore: avoid_print
     print('SKIP_SILENCE_NATIVE $phase: diagnosticsError=$error');
+    return null;
   }
 }
 
@@ -540,7 +623,7 @@ Future<Duration> _measurePlayback(
   }
 }
 
-Future<Duration> _measureRemotePlayback(
+Future<_RemotePlaybackMeasurement> _measureRemotePlayback(
   Uri uri, {
   required String id,
   required Duration duration,
@@ -549,6 +632,9 @@ Future<Duration> _measureRemotePlayback(
   final service = JustAudioPlayerService();
   final snapshots = <PlayerSnapshot>[];
   final subscription = service.snapshotStream.listen(snapshots.add);
+  late Duration elapsed;
+  Map<String, dynamic>? diagnostics;
+  late bool skipSilenceAvailable;
   final track = TrackInfo(
     id: id,
     title: id,
@@ -605,15 +691,21 @@ Future<Duration> _measureRemotePlayback(
       isEmpty,
       reason: 'Slow streaming must not emit a playback failure.',
     );
-    return watch.elapsed;
+    elapsed = watch.elapsed;
   } finally {
-    await _logSkipSilenceDiagnostics(
+    diagnostics = await _logSkipSilenceDiagnostics(
       service,
       'remote:$id enabled=$skipSilenceEnabled',
     );
+    skipSilenceAvailable = service.supportsSkipSilence;
     await subscription.cancel();
     await service.dispose();
   }
+  return (
+    elapsed: elapsed,
+    diagnostics: diagnostics,
+    skipSilenceAvailable: skipSilenceAvailable,
+  );
 }
 
 Future<Duration> _measureCrossfadeHandoff(

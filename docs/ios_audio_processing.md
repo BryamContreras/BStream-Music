@@ -79,6 +79,27 @@ la preferencia para la siguiente fuente compatible. Cast y la reproducción
 externa no se presentan como audio procesado localmente. El lector respeta
 las [limitaciones de AVAssetReader](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/05_Export.html).
 
+`asset.readable` es una comprobación inicial; crear el lector también debe
+funcionar. En la prueba de WAV progresivo por HTTP del simulador, el asset
+declaró `readable=true`, pero `AVAssetReader` rechazó la operación con
+`AVFoundationErrorDomain / -11838`
+([`operationNotSupportedForAsset`](https://developer.apple.com/documentation/avfoundation/averror-swift.struct/code/operationnotsupportedforasset)).
+En esa ruta, BStream informa `supported=false`, conserva la preferencia y
+reproduce normalmente: no crea lectores, no procesa PCM para el analizador y
+no realiza seeks de silencio. No descarga la canción completa ni añade otra
+lectura de red para eludir el rechazo. La compatibilidad depende de la fuente
+y del resultado nativo, no solo de su extensión o de que se pueda reproducir.
+
+La disponibilidad del ecualizador se comprueba por separado. El rechazo de
+`AVAssetReader` afecta al análisis de silencios; el ecualizador sigue disponible
+cuando el tap del reproductor entrega PCM compatible.
+
+Para QA, `BStreamEqualizer.readSkipSilenceStatus()` consulta explícitamente el
+estado del motor: error y dominio, legibilidad, frames analizados, lectores,
+intervalos confirmados, seeks y último límite de buffer. Estos datos proceden
+del estado ya existente; la consulta no inicia un análisis ni añade sondeos
+periódicos durante la reproducción.
+
 El núcleo se verifica con señales PCM y DFT, bypass exacto, formatos, canales,
 transiciones y secuencias musicales/silenciosas. Puede compilarse sin APIs de
 Apple:
@@ -92,10 +113,22 @@ cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
 /tmp/bstream-audio-dsp-test
 ```
 
-La integración usa los mismos escenarios en Android e iOS: todos los presets,
-ajustes manuales, bypass, reanudación, dos motores y mejora de fuente. La suite
-de silencios comprueba pausas musicales, fundidos, CDN lento y búsquedas hacia
-atrás. Su ejecución iOS requiere un Mac con Xcode y un simulador disponible:
+En el simulador iOS de CI se verificaron todos los presets desde la pantalla
+real, ajustes manuales, bypass, reanudación, dos motores y mejora de fuente con
+señales WAV locales. También se verificó que los saltos locales conservan
+pausas musicales de cuatro segundos, instrumentación tenue y reverberación,
+acortan silencios largos al principio, en medio y al final, y mantienen el
+reloj original y el relevo al siguiente motor.
+
+La suite distingue la aceleración de fuentes compatibles de la reproducción
+normal cuando Apple rechaza el analizador. El caso de CDN lento valida la
+disponibilidad real y el error nativo, además de conservar el audio y el reloj;
+no exige aceleración a una ruta rechazada. La búsqueda hacia atrás comprueba
+el avance acelerado y la reutilización de intervalos con una fuente local
+compatible en iOS. Android mantiene su prueba con transporte remoto y su
+propio procesamiento PCM.
+
+La ejecución iOS requiere un Mac con Xcode y un simulador disponible:
 
 ```sh
 flutter test integration_test/equalizer_ios_native_test.dart -d IOS_SIMULATOR_ID
@@ -104,6 +137,16 @@ flutter test integration_test/crossfade_native_test.dart -d IOS_SIMULATOR_ID
 ```
 
 El job `ios-native` del workflow nocturno selecciona un simulador disponible y
-ejecuta estos escenarios. Tener la prueba configurada no equivale a haberla
-ejecutado: la compilación de AVFoundation y la ejecución del simulador no se
-pueden validar desde un host Windows.
+ejecuta estos escenarios. La compilación de AVFoundation y las verificaciones
+nativas se realizan en ese runner macOS; las pruebas Dart y una compilación
+Windows no sustituyen esa ejecución. Las señales de prueba verifican el motor
+y su integración, sin representar una certificación de todos los dispositivos
+físicos ni de todos los transportes remotos.
+
+La ejecución manual permite seleccionar `platform` (`all`, `android`, `ios` o
+`windows`) y `ios_scenario` (`all`, `equalizer`, `silence` o `crossfade`). Las
+ejecuciones programadas mantienen todos los escenarios. Por ejemplo:
+
+```sh
+gh workflow run nightly-smoke.yml --ref main -f platform=ios -f ios_scenario=all
+```

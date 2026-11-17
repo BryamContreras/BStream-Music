@@ -44,7 +44,6 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     AVAsset *_asset;
     AVAssetTrack *_track;
     BOOL _local;
-    NSString *_sourceScheme;
     dispatch_queue_t _queue;
     NSHashTable<BStreamSilenceAnalyzer *> *_observers;
     __weak BStreamSilenceAnalyzer *_pendingOwner;
@@ -90,7 +89,6 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
 - (void)requestAt:(double)position bufferedUntil:(double)end observer:(BStreamSilenceAnalyzer *)observer;
 - (nullable NSValue *)nextGapAt:(double)position;
 - (NSDictionary<NSString *, id> *)snapshot;
-- (NSDictionary<NSString *, id> *)debugSummary;
 - (BOOL)isSupported;
 - (BOOL)isReady;
 - (nullable NSString *)errorText;
@@ -112,7 +110,6 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     if (!self) return nil;
     _asset = asset;
     _local = [asset isKindOfClass:[AVURLAsset class]] && ((AVURLAsset *)asset).URL.isFileURL;
-    _sourceScheme = [asset isKindOfClass:[AVURLAsset class]] ? ((AVURLAsset *)asset).URL.scheme : @"composition";
     _queue = dispatch_queue_create("com.bstream.silence.analysis", DISPATCH_QUEUE_SERIAL);
     dispatch_set_target_queue(_queue, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     _observers = [NSHashTable weakObjectsHashTable];
@@ -180,10 +177,6 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
         _pending = NO;
         ++_publicationRevision;
     }
-#if DEBUG
-    // One rejection per cached asset, with no URLs, headers, PCM or extra reads.
-    NSLog(@"BStream silence rejected: %@", self.debugSummary);
-#endif
     [self notifyObservers];
 }
 
@@ -636,27 +629,6 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
     return nil;
 }
 
-- (NSDictionary<NSString *, id> *)debugSummary {
-    @synchronized (self) {
-        // Bounded lifecycle diagnostics: no interval array or periodic logging.
-        return @{
-            @"source": _local ? @"local" : @"progressive",
-            @"sourceScheme": _sourceScheme ?: @"unknown",
-            @"supported": @(_supported), @"ready": @(_ready),
-            @"assetReadable": _assetReadable ?: (id)[NSNull null],
-            @"error": _errorText ?: (id)[NSNull null],
-            @"errorCode": _errorCode ?: (id)[NSNull null],
-            @"errorDomain": _errorDomain ?: (id)[NSNull null],
-            @"analyzedUntilMs": @(isfinite(_cursor) ? llround(_cursor * 1000) : 0),
-            @"decodedFrames": @(_decodedFrames), @"readersCreated": @(_readersCreated),
-            @"rangeCount": @(_gaps.count),
-            @"lastPositionSeconds": isfinite(_lastRequestedPosition) ? @(_lastRequestedPosition) : (id)[NSNull null],
-            @"lastBufferedUntilSeconds": isfinite(_lastBufferedUntil) ? @(_lastBufferedUntil) : (id)[NSNull null],
-            @"lastLimitSeconds": isfinite(_lastRequestedLimit) ? @(_lastRequestedLimit) : (id)[NSNull null],
-        };
-    }
-}
-
 - (NSDictionary<NSString *, id> *)snapshot {
     @synchronized (self) {
         NSMutableArray *ranges = [NSMutableArray arrayWithCapacity:_gaps.count];
@@ -783,9 +755,6 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
 - (void)invalidate {
     if (_invalidated) return;
     _invalidated = YES;
-#if DEBUG
-    if (_entry) NSLog(@"BStream silence disposed: %@", _entry.debugSummary);
-#endif
     [_entry removeObserver:self];
     _entry = nil;
     self.onStatusChange = nil;
