@@ -62,6 +62,7 @@
     BOOL _bstreamSkipSilenceEnabled;
     BOOL _bstreamDisposed;
     BOOL _bstreamSkipSeeking;
+    BOOL _bstreamWaitingForTap;
     NSArray<NSNumber *> *_bstreamGains;
     uint64_t _bstreamRevision;
     uint64_t _bstreamSkipEpoch;
@@ -362,11 +363,38 @@
 }
 
 - (void)bstreamApplyPlaybackRate {
-    if (!_playing || !_player || _bstreamDisposed) return;
+    if (!_playing || !_player || _bstreamDisposed || _processingState == psCompleted) return;
     BStreamAudioProcessingTap *processor = [_bstreamProcessors objectForKey:_player.currentItem];
     // Loading tracks and installing the initial mix precede audibility. Preset
     // changes never replace the mix and cannot restart AVPlayer's media clock.
-    _player.rate = processor && !processor.ready ? 0 : _speed;
+    if (processor && !processor.ready) {
+        BOOL beganWaiting = !_bstreamWaitingForTap;
+        _bstreamWaitingForTap = YES;
+        _player.rate = 0;
+        if (beganWaiting && _processingState != psLoading && _processingState != psCompleted) {
+            // Dart may extrapolate a ready+playing clock while AVPlayer is
+            // deliberately held at zero. Publish the real preparation wait.
+            [self enterBuffering:@"waiting for audio processing installation"];
+            [self updatePosition];
+            [self broadcastPlaybackEvent];
+        }
+        return;
+    }
+    _bstreamWaitingForTap = NO;
+    if (_bstreamRegistered && _processingState == psReady && _player.currentItem) {
+        if (@available(macOS 10.12, iOS 10.0, *)) {
+            if (_player.timeControlStatus != AVPlayerTimeControlStatusPlaying) {
+                // An already installed tap does not mean AVPlayer has begun
+                // advancing. Publish the wait before requesting its rate.
+                [self enterBuffering:@"waiting for playback to start"];
+                [self updatePosition];
+                [self broadcastPlaybackEvent];
+            }
+        }
+    }
+    // AVPlayer's normal timeControlStatus callback exits buffering once it
+    // actually plays. Do not claim readiness over a network-buffering wait.
+    _player.rate = _speed;
 }
 
 - (void)bstreamCancelScheduledSkip {
@@ -630,6 +658,14 @@
 }
 
 - (void)leaveBuffering:(NSString *)reason {
+    if (_bstreamWaitingForTap && _playing) return;
+    if (_bstreamRegistered && _playing && _player.currentItem) {
+        if (@available(macOS 10.12, iOS 10.0, *)) {
+            // Readiness of the item is distinct from its clock actually running.
+            // Only AVPlayer's Playing state releases a pending play intent.
+            if (_player.timeControlStatus != AVPlayerTimeControlStatusPlaying) return;
+        }
+    }
     if (_processingState == psBuffering || _processingState == psLoading) {
         //NSLog(@"LEAVE BUFFERING: %@", reason);
         _processingState = psReady;
@@ -908,6 +944,7 @@
 }
 
 - (void)load:(NSDictionary *)source initialPosition:(CMTime)initialPosition initialIndex:(NSNumber *)initialIndex result:(FlutterResult)result {
+    _bstreamWaitingForTap = NO;
     if (_playing) {
         [_player pause];
     }
@@ -1019,7 +1056,7 @@
 
     if (_loadResult && (_indexedAudioSources.count == 0 || !_player.currentItem ||
             _player.currentItem.status == AVPlayerItemStatusReadyToPlay)) {
-        _processingState = psReady;
+        [self leaveBuffering:@"load ready"];
         _loadResult(@{@"duration": @([self getDurationMicroseconds])});
         _loadResult = nil;
     } else {
@@ -1234,7 +1271,6 @@
         _bstreamSkipRetryAfter = 0;
         [self bstreamCancelScheduledSkip];
         [self bstreamAttachProcessingToItem:_player.currentItem];
-        [self bstreamApplyPlaybackRate];
         for (AVPlayerItem *oldItem in _bstreamAnalyzers.keyEnumerator.allObjects) {
             if (![_player.items containsObject:oldItem]) {
                 [[_bstreamAnalyzers objectForKey:oldItem] invalidate];
@@ -1317,6 +1353,7 @@
             }
             _justAdvanced = NO;
         }
+        [self bstreamApplyPlaybackRate];
         // Pair the successor's index/duration with its own clock, after any
         // loop-item flip. Initial attachment keeps its existing load events.
         if (publishItemChange) {
@@ -1404,9 +1441,14 @@
 
 - (void)pause {
     if (!_playing) return;
+    BOOL wasWaitingForTap = _bstreamWaitingForTap && _processingState == psBuffering;
     [self bstreamCancelScheduledSkip];
     _playing = NO;
+    _bstreamWaitingForTap = NO;
     [_player pause];
+    if (wasWaitingForTap && _player.currentItem.status == AVPlayerItemStatusReadyToPlay) {
+        [self leaveBuffering:@"paused during audio processing installation"];
+    }
     [self updatePosition];
     [self broadcastPlaybackEvent];
     if (_playResult) {
@@ -1417,6 +1459,7 @@
 }
 
 - (void)complete {
+    _bstreamWaitingForTap = NO;
     [self updatePosition];
     _processingState = psCompleted;
     [self broadcastPlaybackEvent];

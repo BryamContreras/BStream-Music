@@ -21,6 +21,10 @@ on:
           - equalizer
           - silence
           - crossfade
+      ios_debugger:
+        description: Capture a native backtrace (use ios_scenario=silence)
+        type: boolean
+        default: false
   schedule:
     - cron: "41 6 * * *"
 
@@ -232,10 +236,28 @@ jobs:
       - name: Run native iOS silence skipping scenarios
         if: github.event_name == 'schedule' || inputs.ios_scenario == 'all' || inputs.ios_scenario == 'silence'
         shell: bash
-        run: >-
-          flutter drive --driver=test_driver/integration_test.dart
-          --target=integration_test/skip_silence_native_test.dart
-          -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
+        run: |
+          native_debugger_pid=""
+          if [[ "${{ inputs.ios_debugger }}" == "true" ]]; then
+            diagnostics="$RUNNER_TEMP/ios-native-diagnostics"
+            mkdir -p "$diagnostics"
+            sudo /usr/sbin/DevToolsSecurity -enable || true
+            xcrun lldb --batch \
+              -o 'settings set auto-confirm true' \
+              -o 'process attach --name Runner --waitfor' \
+              -o 'process handle -s false -n false -p true SIGPIPE SIGUSR1 SIGUSR2 SIGPROF SIGTERM' \
+              -o 'continue' \
+              -o 'thread backtrace all' \
+              -o 'register read' \
+              -o 'process kill' \
+              -o 'quit' \
+              > "$diagnostics/lldb.log" 2>&1 < /dev/null &
+            native_debugger_pid=$!
+          fi
+          trap 'if [[ -n "$native_debugger_pid" ]]; then kill "$native_debugger_pid" 2>/dev/null || true; fi' EXIT
+          flutter drive --driver=test_driver/integration_test.dart \
+            --target=integration_test/skip_silence_native_test.dart \
+            -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
 
       - name: Run native iOS crossfade scenarios
         if: github.event_name == 'schedule' || inputs.ios_scenario == 'all' || inputs.ios_scenario == 'crossfade'
@@ -251,6 +273,8 @@ jobs:
         run: |
           diagnostics="$RUNNER_TEMP/ios-native-diagnostics"
           mkdir -p "$diagnostics"
+          # ReportCrash writes asynchronously after the process terminates.
+          sleep 10
           if [[ -n "${BSTREAM_IOS_SIMULATOR_ID:-}" ]]; then
             xcrun simctl spawn "$BSTREAM_IOS_SIMULATOR_ID" log show \
               --style compact --last 20m \

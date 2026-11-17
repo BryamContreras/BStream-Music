@@ -99,6 +99,162 @@ void main() {
   });
 
   test(
+    'Darwin play intent waits for native startup before advancing its clock',
+    () async {
+      final bridge = _NativeBridge(darwin: true);
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer, darwin: true);
+      addTearDown(() async {
+        await player.dispose();
+        bridge.dispose();
+      });
+      await _load(player);
+      final engine = bridge.engines.single;
+      final delayed = engine.blockPlay();
+      final play = player.play();
+      expect(player.playing, isTrue);
+      expect(player.processingState, ProcessingState.ready);
+      await delayed.started.future;
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      expect(player.position, Duration.zero);
+
+      // The native tap can genuinely buffer after accepting the play intent.
+      await engine.emitPlayback(processingState: 2);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(player.processingState, ProcessingState.buffering);
+      expect(player.position, Duration.zero);
+      await engine.emitPlayback();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(player.processingState, ProcessingState.ready);
+      expect(
+        player.position,
+        greaterThanOrEqualTo(const Duration(milliseconds: 150)),
+      );
+      await player.pause();
+      await play.timeout(const Duration(seconds: 1));
+      delayed.complete({});
+    },
+  );
+
+  test(
+    'Darwin cancels session activation without cancelling a later resume',
+    () async {
+      const sessionChannel = MethodChannel('com.ryanheise.audio_session');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final activationStarted = Completer<void>();
+      final activationReleased = Completer<void>();
+      messenger.setMockMethodCallHandler(sessionChannel, (call) async {
+        if (call.method == 'setConfiguration') {
+          activationStarted.complete();
+          await activationReleased.future;
+        }
+        return null;
+      });
+      final bridge = _NativeBridge(darwin: true);
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer, darwin: true, activateSession: true);
+      addTearDown(() async {
+        if (!activationReleased.isCompleted) activationReleased.complete();
+        await player.dispose();
+        bridge.dispose();
+        messenger.setMockMethodCallHandler(sessionChannel, null);
+      });
+      await _load(player);
+      final engine = bridge.engines.single;
+      final cancelled = player.play();
+      await activationStarted.future;
+      await player.pause();
+      await cancelled.timeout(const Duration(seconds: 1));
+      expect(engine.playCalls, 0);
+      expect(player.playing, isFalse);
+      expect(player.processingState, ProcessingState.ready);
+      expect(player.position, Duration.zero);
+
+      final delayed = engine.blockPlay();
+      final resumed = player.play();
+      await delayed.started.future;
+      activationReleased.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      expect(player.playing, isTrue);
+      expect(player.position, Duration.zero);
+      await engine.emitPlayback();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(player.playing, isTrue);
+      expect(
+        player.position,
+        greaterThanOrEqualTo(const Duration(milliseconds: 150)),
+      );
+      await player.pause();
+      await resumed.timeout(const Duration(seconds: 1));
+      delayed.complete({});
+    },
+  );
+
+  test(
+    'Darwin disposal cancels native startup before awaiting cleanup',
+    () async {
+      final bridge = _NativeBridge(darwin: true);
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer, darwin: true);
+      addTearDown(() async {
+        await player.dispose();
+        bridge.dispose();
+      });
+      await _load(player);
+      final engine = bridge.engines.single;
+      final delayed = engine.blockPlay();
+      final play = player.play();
+      await delayed.started.future;
+
+      final disposal = player.dispose();
+      expect(player.playing, isFalse);
+      await play.timeout(const Duration(seconds: 1));
+      await disposal.timeout(const Duration(seconds: 1));
+      delayed.complete({});
+    },
+  );
+
+  test('a cancelled Darwin start cannot unlock the next play clock', () async {
+    final bridge = _NativeBridge(darwin: true);
+    final equalizer = BStreamEqualizer();
+    final player = _player(equalizer, darwin: true);
+    addTearDown(() async {
+      await player.dispose();
+      bridge.dispose();
+    });
+    await _load(player);
+    final engine = bridge.engines.single;
+    final firstReply = engine.blockPlay();
+    final firstPlay = player.play();
+    await firstReply.started.future;
+    final oldEventTime = DateTime.now();
+    await player.pause();
+    await firstPlay.timeout(const Duration(seconds: 1));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final secondReply = engine.blockPlay();
+    final secondPlay = player.play();
+    await secondReply.started.future;
+    firstReply.complete({});
+    await engine.emitPlayback(updateTime: oldEventTime);
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    expect(player.playing, isTrue);
+    expect(player.processingState, ProcessingState.ready);
+    expect(player.position, Duration.zero);
+
+    await engine.emitPlayback();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(
+      player.position,
+      greaterThanOrEqualTo(const Duration(milliseconds: 150)),
+    );
+    await player.pause();
+    await secondPlay.timeout(const Duration(seconds: 1));
+    secondReply.complete({});
+  });
+
+  test(
     'Darwin initializes the shared DSP and retains skip targets per asset',
     () async {
       final bridge = _NativeBridge(darwin: true);
@@ -372,16 +528,19 @@ void main() {
   });
 }
 
-AudioPlayer _player(BStreamEqualizer equalizer, {bool darwin = false}) =>
-    AudioPlayer(
-      audioPipeline: darwin
-          ? AudioPipeline(darwinAudioEffects: [equalizer])
-          : AudioPipeline(androidAudioEffects: [equalizer]),
-      handleInterruptions: false,
-      androidApplyAudioAttributes: false,
-      handleAudioSessionActivation: false,
-      useProxyForRequestHeaders: false,
-    );
+AudioPlayer _player(
+  BStreamEqualizer equalizer, {
+  bool darwin = false,
+  bool activateSession = false,
+}) => AudioPlayer(
+  audioPipeline: darwin
+      ? AudioPipeline(darwinAudioEffects: [equalizer])
+      : AudioPipeline(androidAudioEffects: [equalizer]),
+  handleInterruptions: false,
+  androidApplyAudioAttributes: false,
+  handleAudioSessionActivation: activateSession,
+  useProxyForRequestHeaders: false,
+);
 
 Future<Duration?> _load(AudioPlayer player) => player.setAudioSource(
   AudioSource.uri(Uri.parse('file:///bstream-bridge-fixture.wav')),
@@ -461,6 +620,8 @@ class _NativeEngine {
   _BlockedReply? _configureReply;
   _BlockedReply? _readReply;
   _BlockedReply? _skipSilenceReadReply;
+  _BlockedReply? _playReply;
+  int playCalls = 0;
   int skipSilenceReadCalls = 0;
   Map<String, Object?> skipSilenceDiagnostics = {'supported': true};
   MethodChannel get methods =>
@@ -487,7 +648,23 @@ class _NativeEngine {
     return _skipSilenceReadReply = reply;
   }
 
+  _BlockedReply blockPlay() {
+    final reply = _BlockedReply();
+    bridge.blocked.add(reply);
+    return _playReply = reply;
+  }
+
   Future<dynamic> handle(MethodCall call) async {
+    if (call.method == 'play') {
+      playCalls++;
+      final reply = _playReply;
+      _playReply = null;
+      if (reply != null) {
+        reply.started.complete();
+        return reply.result.future;
+      }
+      return <String, Object?>{};
+    }
     if (call.method == 'setSkipSilence') {
       final arguments = call.arguments as Map<dynamic, dynamic>;
       requestedSkipSilence = arguments['enabled'] == true;
@@ -529,11 +706,18 @@ class _NativeEngine {
       return skipSilenceDiagnostics;
     }
     if (call.method == 'load') {
-      await bridge.messenger.handlePlatformMessage(
+      await emitPlayback();
+      return <String, Object?>{'duration': 180000000};
+    }
+    return <String, Object?>{};
+  }
+
+  Future<void> emitPlayback({int processingState = 3, DateTime? updateTime}) =>
+      bridge.messenger.handlePlatformMessage(
         events.name,
         const StandardMethodCodec().encodeSuccessEnvelope({
-          'processingState': 3,
-          'updateTime': DateTime.now().millisecondsSinceEpoch,
+          'processingState': processingState,
+          'updateTime': (updateTime ?? DateTime.now()).millisecondsSinceEpoch,
           'updatePosition': 0,
           'bufferedPosition': 180000000,
           'duration': 180000000,
@@ -541,10 +725,6 @@ class _NativeEngine {
         }),
         null,
       );
-      return <String, Object?>{'duration': 180000000};
-    }
-    return <String, Object?>{};
-  }
 
   Future<void> emitStatus({bool supported = true}) async {
     await bridge.messenger.handlePlatformMessage(
