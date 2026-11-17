@@ -1,11 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <AVFoundation/AVFoundation.h>
+#import <objc/runtime.h>
 #import "BStreamSilenceAnalyzer.h"
 #import "BStreamAudioProcessingTap.h"
 #import "BStreamAudioStatus.h"
 #include <math.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -195,6 +197,82 @@ static void TestBoundedSharedAnalysis(NSURL *url) {
     puts("Darwin bounded/shared AVAssetReader analysis passed");
 }
 
+static BOOL (*ReaderStart)(id, SEL);
+static void (*ReaderCancel)(id, SEL);
+static dispatch_semaphore_t ResumeReaderStart;
+static atomic_bool DelayReaderStart;
+static atomic_bool ReaderStartHeld;
+static atomic_bool ReaderStartTimedOut;
+static atomic_uintptr_t StartingReader;
+static atomic_uint CancelsDuringReaderStart;
+
+static BOOL DelayedReaderStart(id reader, SEL selector) {
+    BOOL delayed = atomic_exchange(&DelayReaderStart, false);
+    if (delayed) {
+        atomic_store(&StartingReader, (uintptr_t)(__bridge void *)reader);
+        atomic_store(&ReaderStartHeld, true);
+        if (dispatch_semaphore_wait(ResumeReaderStart,
+                dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
+            atomic_store(&ReaderStartTimedOut, true);
+        }
+    }
+    BOOL started = ReaderStart(reader, selector);
+    if (delayed) {
+        atomic_store(&ReaderStartHeld, false);
+        atomic_store(&StartingReader, 0);
+    }
+    return started;
+}
+
+static void ObservedReaderCancel(id reader, SEL selector) {
+    if (atomic_load(&ReaderStartHeld) &&
+            atomic_load(&StartingReader) == (uintptr_t)(__bridge void *)reader) {
+        // Record the forbidden overlap without letting AVFoundation crash the
+        // test process. Cancellation of an initialized reader remains real.
+        atomic_fetch_add(&CancelsDuringReaderStart, 1);
+        return;
+    }
+    ReaderCancel(reader, selector);
+}
+
+static void TestBackwardSeekDuringReaderStart(NSURL *url) {
+    AVPlayerItem *item = Item(url);
+    BStreamSilenceAnalyzer *analyzer = [[BStreamSilenceAnalyzer alloc]
+        initWithItem:item cacheIdentifier:NSUUID.UUID.UUIDString];
+    [analyzer requestAnalysisAtTime:Time(0) bufferedUntil:kCMTimeInvalid];
+    AwaitAnalysis(analyzer, 11990);
+
+    atomic_init(&DelayReaderStart, true);
+    atomic_init(&ReaderStartHeld, false);
+    atomic_init(&ReaderStartTimedOut, false);
+    atomic_init(&StartingReader, 0);
+    atomic_init(&CancelsDuringReaderStart, 0);
+    ResumeReaderStart = dispatch_semaphore_create(0);
+    Method start = class_getInstanceMethod(AVAssetReader.class, @selector(startReading));
+    Method cancel = class_getInstanceMethod(AVAssetReader.class, @selector(cancelReading));
+    ReaderStart = (BOOL (*)(id, SEL))method_getImplementation(start);
+    ReaderCancel = (void (*)(id, SEL))method_getImplementation(cancel);
+    method_setImplementation(start, (IMP)DelayedReaderStart);
+    method_setImplementation(cancel, (IMP)ObservedReaderCancel);
+
+    // Hold AVFoundation's next initialization at the SDK boundary while the
+    // user seeks backwards. No private analyzer state is inspected or changed.
+    [analyzer requestAnalysisAtTime:Time(12) bufferedUntil:kCMTimeInvalid];
+    CHECK(WaitUntil(^BOOL { return atomic_load(&ReaderStartHeld); }, 5));
+    [analyzer requestAnalysisAtTime:Time(0.25) bufferedUntil:kCMTimeInvalid];
+    dispatch_semaphore_signal(ResumeReaderStart);
+    AwaitAnalysis(analyzer, 12240);
+    CHECK(!atomic_load(&ReaderStartTimedOut));
+    CHECK(atomic_load(&CancelsDuringReaderStart) == 0);
+    CHECK(CMTIME_IS_NUMERIC([analyzer gapEndForTime:Time(7)]));
+    [analyzer invalidate];
+
+    method_setImplementation(start, (IMP)ReaderStart);
+    method_setImplementation(cancel, (IMP)ReaderCancel);
+    ResumeReaderStart = nil;
+    puts("Darwin backward seek during reader initialization passed");
+}
+
 static void TestTapLifecycleAndWatchdog(NSURL *url) {
     AVPlayerItem *item = Item(url);
     __weak BStreamAudioProcessingTap *retired = nil;
@@ -265,6 +343,7 @@ int main(void) {
                                       withIntermediateDirectories:NO attributes:nil error:&error]);
         NSURL *fixture = WriteFixture(directory);
         TestBoundedSharedAnalysis(fixture);
+        TestBackwardSeekDuringReaderStart(fixture);
         TestTapLifecycleAndWatchdog(fixture);
         CHECK([[NSFileManager defaultManager] removeItemAtURL:directory error:&error]);
         puts("BStream Darwin AVFoundation processing: all tests passed");

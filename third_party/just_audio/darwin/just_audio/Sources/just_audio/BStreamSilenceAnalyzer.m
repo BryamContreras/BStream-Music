@@ -411,13 +411,21 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
         reader.timeRange = CMTimeRangeFromTimeToTime(BStreamTime(start), BStreamTime(end));
         @synchronized (self) {
             if (generation == _generation && _observers.count > 0) {
-                _reader = reader;
                 ++_readersCreated;
             } else {
                 began = NO;
             }
         }
         if (began) began = [reader startReading];
+        @synchronized (self) {
+            if (began && generation == _generation && _observers.count > 0) {
+                // Cancellation must not tear down AVFoundation's mixdown
+                // channel while startReading is still constructing it.
+                _reader = reader;
+            } else if (generation != _generation || _observers.count == 0) {
+                began = NO;
+            }
+        }
     }
     if (!began) {
         if ([self isCurrentGeneration:generation]) {
