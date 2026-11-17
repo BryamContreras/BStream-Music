@@ -5,6 +5,7 @@ import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/casting/cast_coordinator.dart';
 import 'package:bstream_music/services/player/cast_aware_player_service.dart';
 import 'package:bstream_music/services/player/player_service.dart';
+import 'package:bstream_music/services/player/player_equalizer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -54,6 +55,25 @@ void main() {
     expect(player.isCasting, false);
     expect(player.supportsLocalQueueReplacement, true);
   });
+  test(
+    'equalizer tuning stays local while a cast receiver owns playback',
+    () async {
+      const curve = EqualizerSettings(enabled: true, gainsDb: [6, 3, 0, 1, 0]);
+      expect(player.supportsEqualizer, isTrue);
+      await player.configureEqualizer(curve);
+      expect(local.equalizer, curve);
+      await player.playRemoteSource(remote);
+      await player.connectCast(device);
+      final loads = cast.loads;
+      final updated = curve.withBand(3, -3);
+      await player.configureEqualizer(updated);
+      expect(local.equalizer, updated);
+      expect(player.isCasting, isTrue);
+      expect(cast.loads, loads);
+      await player.disconnectCast();
+      expect(local.equalizer, updated);
+    },
+  );
   test(
     'normal playback, native queue, skip silence and crossfade delegate unchanged',
     () async {
@@ -474,11 +494,20 @@ class _LocalPlayer
         NativeRemoteQueuePlayer,
         CrossfadeCapablePlayer,
         SkipSilenceCapablePlayer,
+        EqualizerCapablePlayer,
         AudioSourceUpgradePlayer {
   final controller = StreamController<PlayerSnapshot>.broadcast(sync: true);
   PlayerSnapshot snapshot = const PlayerSnapshot(status: PlayerStatus.idle);
   int localPlays = 0, remotePlays = 0, remoteUpdates = 0;
   int upgrades = 0;
+  EqualizerSettings equalizer = const EqualizerSettings();
+  @override
+  bool get supportsEqualizer => true;
+  @override
+  Future<void> configureEqualizer(EqualizerSettings settings) async {
+    equalizer = settings;
+  }
+
   Completer<void>? prepareBarrier;
   @override
   bool crossfadeEnabled = false;

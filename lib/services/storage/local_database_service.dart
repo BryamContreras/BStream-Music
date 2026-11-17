@@ -18,6 +18,7 @@ import '../../features/music/domain/repositories/catalog_playlist_repository.dar
 import '../recommendations/recommendation_storage_models.dart';
 import '../sharing/bstream_track_link.dart';
 import 'portable_sqlite_upsert.dart';
+import 'backup_audio_layout.dart';
 
 class PlaybackEventRetentionPolicy {
   const PlaybackEventRetentionPolicy({
@@ -258,6 +259,48 @@ class LocalDatabaseService {
   Future<T> withDatabase<T>(Future<T> Function(Database) operation) async {
     final db = await database;
     return operation(db);
+  }
+
+  /// Capture canonical membership and downloaded-file metadata in one read
+  /// transaction. ZIP layout planning only receives these plain records, never
+  /// the live database or one query per playlist.
+  Future<BackupAudioMetadata> getBackupAudioMetadata() async {
+    final db = await database;
+    return db.transaction((transaction) async {
+      final tracks = await transaction.query(
+        'local_tracks',
+        columns: [
+          'id',
+          'file_path',
+          'title',
+          'artist',
+          'duration_seconds',
+          'catalog_key',
+        ],
+        orderBy: 'id ASC',
+      );
+      final playlists = await transaction.query(
+        'playlists',
+        columns: ['id', 'name', 'track_ids', 'entries_migrated'],
+        where: 'deleted_at IS NULL',
+        orderBy: 'updated_at DESC, id ASC',
+      );
+      final entries = await transaction.rawQuery('''
+        SELECT pi.item_id, pi.playlist_id, pi.local_track_id,
+               pi.catalog_key, pi.position, pi.deleted_at
+        FROM playlist_items AS pi
+        INNER JOIN playlists AS p ON p.id = pi.playlist_id
+        WHERE p.deleted_at IS NULL
+        ORDER BY pi.playlist_id ASC, pi.position ASC, pi.item_id ASC
+      ''');
+      List<Map<String, Object?>> portable(List<Map<String, Object?>> rows) =>
+          rows.map((row) => Map<String, Object?>.from(row)).toList();
+      return (
+        tracks: portable(tracks),
+        playlists: portable(playlists),
+        entries: portable(entries),
+      );
+    });
   }
 
   Future<String> databasePath() async {

@@ -10,6 +10,7 @@ import 'player_artwork_style.dart';
 import 'player_style.dart';
 import 'player_font.dart';
 import 'app_strings_translation_catalog.dart';
+import '../../../../services/player/player_equalizer.dart';
 
 enum AppLanguage {
   spanish,
@@ -1334,6 +1335,60 @@ class AppStrings {
       choose('Apagado automático', 'Automatic shutdown');
   String get sleepTimerOff => choose('Desactivado', 'Off');
   String get crossfade => 'Crossfade';
+  String get equalizer => choose('Ecualizador', 'Equalizer');
+  String get skipSilenceUnavailableForAudio =>
+      choose('No disponible para este audio.', 'Unavailable for this audio.');
+  String get equalizerCurve =>
+      choose('Curva de ecualización', 'Equalizer curve');
+  String get equalizerCurveHint => choose(
+    'Vista aproximada de los ajustes',
+    'Approximate view of your settings',
+  );
+  String get equalizerSummary => choose(
+    'Ajusta el sonido con presets o cinco bandas.',
+    'Adjust the sound with presets or five bands.',
+  );
+  String get equalizerEnabled =>
+      choose('Activar ecualizador', 'Enable equalizer');
+  String get equalizerPresets => choose('Presets', 'Presets');
+  String get equalizerReset =>
+      choose('Restablecer ecualizador', 'Reset equalizer');
+  String get equalizerUnavailable => choose(
+    'El ecualizador no está disponible en este dispositivo.',
+    'The equalizer is unavailable on this device.',
+  );
+  String get equalizerCastUnavailable => choose(
+    'El ecualizador solo se aplica al audio de este dispositivo, no al transmitir.',
+    'The equalizer only affects audio on this device, not cast playback.',
+  );
+  String get equalizerError => choose(
+    'No se pudo aplicar el ecualizador. Prueba otro ajuste.',
+    'Could not apply the equalizer. Try another setting.',
+  );
+  String equalizerPresetName(EqualizerPreset preset) => switch (preset) {
+    EqualizerPreset.flat => choose('Plano', 'Flat'),
+    EqualizerPreset.acoustic => choose('Acústico', 'Acoustic'),
+    EqualizerPreset.bassBoost => choose('Refuerzo de graves', 'Bass boost'),
+    EqualizerPreset.bassCut => choose('Reducción de graves', 'Bass cut'),
+    EqualizerPreset.vocal => choose('Voz', 'Vocal'),
+    EqualizerPreset.trebleBoost => choose('Refuerzo de agudos', 'Treble boost'),
+    EqualizerPreset.trebleCut => choose('Reducción de agudos', 'Treble cut'),
+    EqualizerPreset.loudness => choose('Sonoridad', 'Loudness'),
+    EqualizerPreset.spokenWord => choose('Palabra hablada', 'Spoken word'),
+    EqualizerPreset.electronic => choose('Electrónica', 'Electronic'),
+    EqualizerPreset.rock => choose('Rock', 'Rock'),
+    EqualizerPreset.hipHop => choose('Hip-hop', 'Hip-hop'),
+    EqualizerPreset.jazz => choose('Jazz', 'Jazz'),
+    EqualizerPreset.classical => choose('Clásica', 'Classical'),
+    EqualizerPreset.smallSpeakers => choose(
+      'Altavoces pequeños',
+      'Small speakers',
+    ),
+    EqualizerPreset.lateNight => choose('Noche', 'Late night'),
+    EqualizerPreset.custom => choose('Personalizado', 'Custom'),
+  };
+  String equalizerBandName(int index) =>
+      const ['60 Hz', '230 Hz', '910 Hz', '3.6 kHz', '14 kHz'][index];
   String get crossfadeSummary => choose(
     'Superpone suavemente el final de una canción con el inicio de la siguiente.',
     'Smoothly overlaps the end of one song with the start of the next.',
@@ -1614,6 +1669,10 @@ class AppStrings {
     'Player styles, local music filters, lyrics, and settings',
   );
   List<String> get whatsNewHighlights => [
+    choose(
+      'Ahora está disponible un ecualizador de 5 bandas.',
+      'A 5-band equalizer is now available.',
+    ),
     choose(
       'El reproductor ahora es compatible con audio de mayor calidad cuando está disponible.',
       'The player now supports higher quality audio when available.',

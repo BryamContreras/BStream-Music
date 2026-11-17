@@ -31,6 +31,7 @@
 
 ### Added
 
+- A 5-band equalizer is now available.
 - The player now supports higher quality audio when available.
 - Added the new Spotify Style player.
 - Added filtering options in the Local music tab.

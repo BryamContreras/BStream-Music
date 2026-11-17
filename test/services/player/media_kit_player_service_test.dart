@@ -4,11 +4,177 @@ import 'package:bstream_music/core/errors/app_exception.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/player/media_kit_player_service.dart';
 import 'package:bstream_music/services/player/player_audio_output.dart';
+import 'package:bstream_music/services/player/player_equalizer.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 
 void main() {
+  group('native equalizer', () {
+    const bass = EqualizerSettings(enabled: true, gainsDb: [6, 3, 0, 0, 0]);
+    const vocal = EqualizerSettings(
+      enabled: true,
+      gainsDb: [-3, 0, 3.5, 2, -1],
+    );
+
+    test('optional capability leaves existing backends compatible', () async {
+      final service = MediaKitPlayerService(backend: _FakeMediaKitBackend());
+      addTearDown(service.dispose);
+      expect(service.supportsEqualizer, isFalse);
+      await service.configureEqualizer(const EqualizerSettings());
+      await expectLater(
+        service.configureEqualizer(bass),
+        throwsUnsupportedError,
+      );
+    });
+
+    test('tuning keeps the source, clock, logical volume and route', () async {
+      final backend = _EqualizerBackend();
+      final service = MediaKitPlayerService(backend: backend);
+      addTearDown(service.dispose);
+      await _playAndComplete(service, backend, 'equalized');
+      await service.setVolume(.4);
+      await service.selectAudioOutput('usb');
+      backend.emitPosition(const Duration(seconds: 17));
+      await _drainEvents();
+      final volumeWrites = backend.volumeCalls.length;
+
+      await service.configureEqualizer(bass);
+
+      expect(backend.equalizer, bass);
+      expect(service.currentSnapshot.trackId, 'equalized');
+      expect(service.currentSnapshot.position, const Duration(seconds: 17));
+      expect(service.currentSnapshot.volume, .4);
+      expect(backend.volumeCalls.length, volumeWrites);
+      expect(backend.selectedDeviceId, 'usb');
+      expect(backend.openCalls, hasLength(1));
+      expect(backend.pauseCalls, 0);
+      expect(backend.stopCalls, 0);
+      expect(backend.seekCalls, isEmpty);
+
+      final writes = backend.equalizerCalls.length;
+      for (var second = 18; second < 25; second++) {
+        backend.emitPosition(Duration(seconds: second));
+      }
+      await _drainEvents();
+      expect(backend.equalizerCalls.length, writes);
+    });
+
+    test(
+      'a new standby inherits tuning before open and after promotion',
+      () async {
+        final active = _EqualizerBackend();
+        final standby = _EqualizerBackend();
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await service.configureEqualizer(bass);
+        await service.selectAudioOutput('usb');
+        await _playAndComplete(service, active, 'a');
+        await service.configureCrossfade(
+          enabled: true,
+          duration: const Duration(milliseconds: 400),
+        );
+        await _prepareAndComplete(service, standby, 'b');
+        expect(standby.equalizersAtOpen, [bass]);
+        expect(standby.routesAtOpen, ['usb']);
+        expect(standby.volumeCalls, [0]);
+        await service.configureEqualizer(vocal);
+        expect(active.equalizer, vocal);
+        expect(standby.equalizer, vocal);
+
+        active
+          ..emitDuration(const Duration(seconds: 2))
+          ..emitPosition(const Duration(milliseconds: 1600));
+        await _waitUntil(() => service.currentSnapshot.trackId == 'b');
+        await service.configureEqualizer(const EqualizerSettings());
+        expect(active.equalizer.enabled, isFalse);
+        expect(standby.equalizer.enabled, isFalse);
+        expect(service.audioOutputState.selectedDeviceId, 'usb');
+      },
+    );
+
+    test(
+      'rapid changes coalesce and the latest curve reaches both decks',
+      () async {
+        final active = _EqualizerBackend();
+        final standby = _EqualizerBackend();
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await _playAndComplete(service, active, 'a');
+        await service.configureCrossfade(
+          enabled: true,
+          duration: const Duration(seconds: 1),
+        );
+        await _prepareAndComplete(service, standby, 'b');
+        active.releaseEqualizer = Completer<void>();
+        final first = service.configureEqualizer(bass);
+        await _waitUntil(() => active.equalizerCalls.contains(bass));
+        const skipped = EqualizerSettings(
+          enabled: true,
+          gainsDb: [1, 2, 3, 4, 5],
+        );
+        final intermediate = service.configureEqualizer(skipped);
+        final latest = service.configureEqualizer(vocal);
+        active.releaseEqualizer!.complete();
+        await Future.wait([first, intermediate, latest]);
+
+        expect(active.equalizer, vocal);
+        expect(standby.equalizer, vocal);
+        expect(active.equalizerCalls, isNot(contains(skipped)));
+        expect(standby.equalizerCalls, isNot(contains(skipped)));
+      },
+    );
+
+    test('a filter failure is reported without preventing playback', () async {
+      final backend = _EqualizerBackend()..failEqualizer = true;
+      final service = MediaKitPlayerService(backend: backend);
+      addTearDown(service.dispose);
+      await expectLater(service.configureEqualizer(bass), throwsStateError);
+
+      await _playAndComplete(service, backend, 'still-plays');
+
+      expect(service.currentSnapshot.trackId, 'still-plays');
+      expect(service.currentSnapshot.status, PlayerStatus.playing);
+      expect(backend.openCalls, hasLength(1));
+    });
+
+    test(
+      'a standby created during a pending update opens with the latest curve',
+      () async {
+        final active = _EqualizerBackend();
+        final standby = _EqualizerBackend();
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await _playAndComplete(service, active, 'a');
+        await service.configureCrossfade(
+          enabled: true,
+          duration: const Duration(seconds: 1),
+        );
+        active.releaseEqualizer = Completer<void>();
+        final first = service.configureEqualizer(bass);
+        await _waitUntil(() => active.equalizerCalls.contains(bass));
+        final preparation = service.prepareCrossfade(_crossfadeSource('b'));
+        final latest = service.configureEqualizer(vocal);
+        active.releaseEqualizer!.complete();
+        await _waitUntil(() => standby.openCalls.isNotEmpty);
+        expect(standby.equalizersAtOpen, [vocal]);
+        standby.completeOpen(0);
+        await Future.wait([first, latest, preparation]);
+        expect(standby.playCalls, 0);
+        expect(standby.volumeCalls, [0]);
+      },
+    );
+  });
+
   group('player audio output', () {
     test(
       'selects only the player route and preserves playback and volume',
@@ -1503,6 +1669,33 @@ class _AudioOutputBackend extends _FakeMediaKitBackend
   Future<void> dispose() async {
     await outputs.close();
     await super.dispose();
+  }
+}
+
+class _EqualizerBackend extends _AudioOutputBackend
+    implements EqualizerCapablePlayer {
+  EqualizerSettings equalizer = const EqualizerSettings();
+  final equalizerCalls = <EqualizerSettings>[];
+  final equalizersAtOpen = <EqualizerSettings>[];
+  Completer<void>? releaseEqualizer;
+  bool failEqualizer = false;
+
+  @override
+  bool get supportsEqualizer => true;
+
+  @override
+  Future<void> configureEqualizer(EqualizerSettings settings) async {
+    equalizerCalls.add(settings);
+    final barrier = releaseEqualizer;
+    if (barrier != null) await barrier.future;
+    if (failEqualizer) throw StateError('Injected optional filter failure');
+    equalizer = settings;
+  }
+
+  @override
+  Future<void> open(Media media, {required bool play}) {
+    equalizersAtOpen.add(equalizer);
+    return super.open(media, play: play);
   }
 }
 

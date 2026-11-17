@@ -694,7 +694,7 @@ void main() {
     ),
   ]) {
     testWidgets(
-      'expanded artist header fits ${viewport.platform} ${viewport.size} at text scale ${viewport.textScale}',
+      'artist header fits ${viewport.platform} ${viewport.size} at text scale ${viewport.textScale}',
       (tester) async {
         tester.view.physicalSize = viewport.size;
         tester.view.devicePixelRatio = 1;
@@ -720,36 +720,34 @@ void main() {
           find.byKey(const ValueKey('artist-profile-artwork')),
         );
         final backgroundFinder = find.byType(ExpandedArtworkHeaderBackground);
-        final background = tester.widget<ExpandedArtworkHeaderBackground>(
-          backgroundFinder,
-        );
-        final backgroundRect = tester.getRect(backgroundFinder);
-        final expectedWidth = viewport.size.width.clamp(0.0, 1080.0);
-        expect(photo.width, expectedWidth);
-        expect(photo.center.dx, closeTo(viewport.size.width / 2, 0.01));
-        expect(backgroundRect.width, expectedWidth);
-        expect(background.artworkHeight, lessThanOrEqualTo(480));
-        expect(background.artworkTopInset, 0);
-        expect(
-          background.preserveArtworkAspectRatio,
-          viewport.platform == TargetPlatform.android ||
-                  viewport.platform == TargetPlatform.iOS
-              ? isFalse
-              : isTrue,
-        );
-        expect(
-          photo.height,
-          closeTo(
-            background.artworkTopInset + background.artworkHeight * 0.90,
-            0.01,
-          ),
-        );
         final name = tester.getRect(
           find.byKey(const ValueKey('artist-profile-name')),
         );
-        expect(name.top, greaterThanOrEqualTo(photo.bottom));
-        expect(name.left, greaterThanOrEqualTo(photo.left));
-        expect(name.right, lessThanOrEqualTo(photo.right));
+        final mobile =
+            viewport.platform == TargetPlatform.android ||
+            viewport.platform == TargetPlatform.iOS;
+        if (mobile) {
+          final background = tester.widget<ExpandedArtworkHeaderBackground>(
+            backgroundFinder,
+          );
+          final backgroundRect = tester.getRect(backgroundFinder);
+          final expectedWidth = viewport.size.width.clamp(0.0, 1080.0);
+          expect(photo.width, expectedWidth);
+          expect(photo.center.dx, closeTo(viewport.size.width / 2, 0.01));
+          expect(backgroundRect.width, expectedWidth);
+          expect(background.artworkHeight, lessThanOrEqualTo(480));
+          expect(background.artworkTopInset, 0);
+          expect(background.preserveArtworkAspectRatio, isFalse);
+          expect(photo.height, closeTo(background.artworkHeight * 0.90, 0.01));
+          expect(name.top, greaterThanOrEqualTo(photo.bottom));
+          expect(name.left, greaterThanOrEqualTo(photo.left));
+          expect(name.right, lessThanOrEqualTo(photo.right));
+        } else {
+          expect(backgroundFinder, findsNothing);
+          expect(photo.size, const Size.square(224));
+          expect(name.left, greaterThan(photo.right));
+          expect(photo.top, greaterThanOrEqualTo(24));
+        }
 
         final play = find.byKey(const ValueKey('artist-play-all'));
         await Scrollable.ensureVisible(tester.element(play), alignment: 0.5);

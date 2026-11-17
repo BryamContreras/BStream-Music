@@ -1,5 +1,6 @@
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/audio_source_providers.dart';
+import 'package:bstream_music/features/music/presentation/providers/equalizer_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
 import 'package:bstream_music/services/audio_sources/audio_source_policy.dart';
@@ -14,6 +15,54 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('playback settings opens the shared equalizer and returns', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1000, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(_harness(desktop: true));
+    await tester.pumpAndSettle();
+    await _reveal(tester, 'settings-card-equalizer');
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('settings-card-equalizer')))
+          .dy,
+      lessThan(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('settings-inline-timer')))
+            .dy,
+      ),
+    );
+    await _open(tester, 'settings-card-equalizer');
+    expect(
+      find.byKey(const ValueKey('equalizer-settings-page')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('equalizer-back')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-card-equalizer')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('iOS playback settings opens the same live equalizer controls', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_harness());
+    await tester.pumpAndSettle();
+    await _open(tester, 'settings-card-equalizer');
+    expect(
+      find.byKey(const ValueKey('equalizer-settings-page')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('equalizer-enabled')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('audio sources keeps YouTube enabled and allows Jio toggling', (
     tester,
@@ -215,6 +264,8 @@ Widget _harness({
   overrides: [
     audioSourceUsesSingleProfileProvider.overrideWithValue(desktop),
     settingsControllerProvider.overrideWith(_TestSettingsController.new),
+    equalizerRuntimeProvider.overrideWith(_SupportedRuntime.new),
+    equalizerAvailableProvider.overrideWithValue(true),
     appStringsProvider.overrideWithValue(const AppStrings(AppLanguage.spanish)),
     tiktokLiveControllerProvider.overrideWith(_IdleLiveController.new),
     youtubeMusicSessionStoreProvider.overrideWithValue(
@@ -238,6 +289,11 @@ class _TestSettingsController extends SettingsController {
     downloadDirectory: '/tmp/BStream-Music',
     language: AppLanguage.spanish,
   );
+}
+
+class _SupportedRuntime extends EqualizerRuntimeController {
+  @override
+  EqualizerRuntimeState build() => const EqualizerRuntimeState(supported: true);
 }
 
 class _IdleLiveController extends TikTokLiveController {

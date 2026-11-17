@@ -7,8 +7,11 @@
 #import "./include/just_audio/ConcatenatingAudioSource.h"
 #import "./include/just_audio/LoopingAudioSource.h"
 #import "./include/just_audio/ClippingAudioSource.h"
+#import "./include/just_audio/BStreamAudioProcessingTap.h"
+#import "./include/just_audio/BStreamSilenceAnalyzer.h"
 #import <AVFoundation/AVFoundation.h>
 #import <stdlib.h>
+#include <math.h>
 #include <TargetConditionals.h>
 
 #define TREADMILL_SIZE 2
@@ -53,9 +56,27 @@
     NSDictionary<NSString *, NSObject *> *_icyMetadata;
     NSNumber *_errorCode;
     NSString *_errorMessage;
+    BOOL _bstreamRegistered;
+    BOOL _bstreamEqualizerEnabled;
+    BOOL _bstreamSkipSilenceEnabled;
+    BOOL _bstreamDisposed;
+    BOOL _bstreamSkipSeeking;
+    NSArray<NSNumber *> *_bstreamGains;
+    uint64_t _bstreamRevision;
+    uint64_t _bstreamSkipEpoch;
+    uint64_t _bstreamSkipCount;
+    NSUInteger _bstreamSkipFailures;
+    NSTimeInterval _bstreamSkipRetryAfter;
+    NSMapTable<AVPlayerItem *, BStreamAudioProcessingTap *> *_bstreamProcessors;
+    NSMapTable<AVPlayerItem *, BStreamSilenceAnalyzer *> *_bstreamAnalyzers;
+    id _bstreamTimeObserver;
+    id _bstreamBoundaryObserver;
+    __weak AVPlayerItem *_bstreamBoundaryItem;
+    CMTime _bstreamBoundaryTime;
+    NSDictionary *_bstreamLastStatusSummary;
 }
 
-- (instancetype)initWithRegistrar:(NSObject<FlutterPluginRegistrar> *)registrar playerId:(NSString*)idParam loadConfiguration:(NSDictionary *)loadConfiguration useLazyPreparation:(BOOL)useLazyPreparation {
+- (instancetype)initWithRegistrar:(NSObject<FlutterPluginRegistrar> *)registrar playerId:(NSString*)idParam loadConfiguration:(NSDictionary *)loadConfiguration audioEffects:(NSArray *)audioEffects useLazyPreparation:(BOOL)useLazyPreparation {
     self = [super init];
     NSAssert(self, @"super init cannot be nil");
     _registrar = registrar;
@@ -115,6 +136,16 @@
     _icyMetadata = @{};
     _errorCode = (NSNumber *)[NSNull null];
     _errorMessage = (NSString *)[NSNull null];
+    _bstreamProcessors = [NSMapTable weakToStrongObjectsMapTable];
+    _bstreamAnalyzers = [NSMapTable weakToStrongObjectsMapTable];
+    _bstreamGains = @[@0, @0, @0, @0, @0];
+    _bstreamBoundaryTime = kCMTimeInvalid;
+    for (NSDictionary *effect in audioEffects) {
+        if ([effect[@"type"] isEqual:@"bstreamAudioEqualizer"]) {
+            _bstreamRegistered = YES;
+            [self bstreamConfigureEqualizer:effect];
+        }
+    }
     __weak __typeof__(self) weakSelf = self;
     [_methodChannel setMethodCallHandler:^(FlutterMethodCall* call, FlutterResult result) {
         [weakSelf handleMethodCall:call result:result];
@@ -138,8 +169,25 @@
             [self setVolume:(float)[request[@"volume"] doubleValue]];
             result(@{});
         } else if ([@"setSkipSilence" isEqualToString:call.method]) {
-            /// TODO on iOS side; Seems more involved, so someone with ObjectiveC experience might look at it.
+            _bstreamSkipSilenceEnabled = [request[@"enabled"] boolValue];
+            _bstreamSkipFailures = 0;
+            _bstreamSkipRetryAfter = 0;
+            [self bstreamCancelScheduledSkip];
+            if (!_bstreamSkipSilenceEnabled) {
+                for (BStreamSilenceAnalyzer *analyzer in _bstreamAnalyzers.objectEnumerator) [analyzer invalidate];
+                [_bstreamAnalyzers removeAllObjects];
+            }
+            [self bstreamProcessingTick];
+            [self bstreamPublishStatus];
             result(@{});
+        } else if ([@"bstreamEqualizerConfigure" isEqualToString:call.method]) {
+            [self bstreamConfigureEqualizer:request];
+            result([self bstreamEqualizerStatus]);
+            [self bstreamPublishStatus];
+        } else if ([@"bstreamEqualizerReadStatus" isEqualToString:call.method]) {
+            result([self bstreamEqualizerStatus]);
+        } else if ([@"bstreamSkipSilenceReadStatus" isEqualToString:call.method]) {
+            result([self bstreamSkipSilenceStatus]);
         } else if ([@"setSpeed" isEqualToString:call.method]) {
             [self setSpeed:(float)[request[@"speed"] doubleValue]];
             result(@{});
@@ -196,6 +244,254 @@
 
 - (float)speed {
     return _speed;
+}
+
+- (void)bstreamConfigureEqualizer:(NSDictionary *)request {
+    NSArray *raw = request[@"gainsDb"];
+    if (![raw isKindOfClass:[NSArray class]] || raw.count != 5) {
+        @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"Five equalizer gains are required" userInfo:nil];
+    }
+    NSMutableArray<NSNumber *> *gains = [NSMutableArray arrayWithCapacity:5];
+    for (id value in raw) {
+        if (![value isKindOfClass:[NSNumber class]] || !isfinite([value doubleValue])) {
+            @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"Equalizer gains must be finite" userInfo:nil];
+        }
+        [gains addObject:@(fmax(-12, fmin(12, [value doubleValue])))];
+    }
+    BOOL enabled = [request[@"enabled"] boolValue];
+    if (enabled != _bstreamEqualizerEnabled || ![_bstreamGains isEqualToArray:gains]) ++_bstreamRevision;
+    _bstreamGains = gains.copy;
+    _bstreamEqualizerEnabled = enabled;
+    for (AVPlayerItem *item in _player.items) {
+        BStreamAudioProcessingTap *processor = [_bstreamProcessors objectForKey:item];
+        [processor configureEnabled:enabled gains:_bstreamGains revision:_bstreamRevision];
+    }
+}
+
+- (BStreamSilenceAnalyzer *)bstreamAnalyzerForItem:(AVPlayerItem *)item {
+    if (!item || !_bstreamSkipSilenceEnabled || _bstreamDisposed) return nil;
+    BStreamSilenceAnalyzer *analyzer = [_bstreamAnalyzers objectForKey:item];
+    if (!analyzer) {
+        analyzer = [[BStreamSilenceAnalyzer alloc] initWithItem:item];
+        [_bstreamAnalyzers setObject:analyzer forKey:item];
+        __weak AudioPlayer *weakSelf = self;
+        __weak AVPlayerItem *weakItem = item;
+        analyzer.onStatusChange = ^{
+            AudioPlayer *owner = weakSelf;
+            if (!owner || owner->_bstreamDisposed || owner->_player.currentItem != weakItem) return;
+            [owner bstreamPublishStatus];
+            [owner bstreamProcessingTick];
+        };
+    }
+    return analyzer;
+}
+
+- (void)bstreamAttachProcessingToItem:(AVPlayerItem *)item {
+    if (!item || !_bstreamRegistered || _bstreamDisposed) return;
+    BStreamAudioProcessingTap *existing = [_bstreamProcessors objectForKey:item];
+    if (existing) {
+        [existing configureEnabled:_bstreamEqualizerEnabled gains:_bstreamGains revision:_bstreamRevision];
+        [existing cancelFade];
+        return;
+    }
+    BStreamAudioProcessingTap *processor = [[BStreamAudioProcessingTap alloc] initWithItem:item];
+    if (!processor) return;
+    [_bstreamProcessors setObject:processor forKey:item];
+    [processor configureEnabled:_bstreamEqualizerEnabled gains:_bstreamGains revision:_bstreamRevision];
+    __weak AudioPlayer *weakSelf = self;
+    __weak AVPlayerItem *weakItem = item;
+    processor.onStatusChange = ^{
+        AudioPlayer *owner = weakSelf;
+        if (!owner || owner->_bstreamDisposed || owner->_player.currentItem != weakItem) return;
+        [owner bstreamPublishStatus];
+        [owner bstreamApplyPlaybackRate];
+    };
+}
+
+- (NSDictionary *)bstreamEqualizerStatus {
+    AVPlayerItem *item = _player.currentItem;
+    BStreamAudioProcessingTap *processor = item ? [_bstreamProcessors objectForKey:item] : nil;
+    BOOL external = _player && _player.externalPlaybackActive;
+    BOOL supported = _bstreamRegistered && !external && (!item || processor.supported);
+    BOOL active = NO;
+    double maximum = 0;
+    NSMutableArray *bands = [NSMutableArray arrayWithCapacity:5];
+    const double frequencies[] = {60, 230, 910, 3600, 14000};
+    for (int i = 0; i < 5; i++) {
+        double gain = _bstreamGains[i].doubleValue;
+        active |= fabs(gain) >= .01;
+        maximum = fmax(maximum, gain);
+        [bands addObject:@{@"index": @(i), @"centerFrequency": @(frequencies[i]), @"gain": @(gain)}];
+    }
+    active = supported && _bstreamEqualizerEnabled && active;
+    NSMutableDictionary *status = processor ? [[processor diagnostics] mutableCopy] : [NSMutableDictionary dictionary];
+    status[@"supported"] = @(supported);
+    status[@"configured"] = @(processor && processor.configured);
+    status[@"enabled"] = @(active);
+    status[@"engine"] = @"bstream-dsp";
+    status[@"preampDb"] = @(active ? -maximum : 0);
+    status[@"revision"] = @(_bstreamRevision);
+    status[@"parameters"] = @{@"minDecibels": @(-12), @"maxDecibels": @12, @"bands": bands};
+    BStreamSilenceAnalyzer *analyzer = item ? [_bstreamAnalyzers objectForKey:item] : nil;
+    if (analyzer) status[@"skipSilenceSupported"] = @(analyzer.supported && !external && _bstreamSkipFailures < 3);
+    else if (external) status[@"skipSilenceSupported"] = @NO;
+    return status;
+}
+
+- (NSDictionary *)bstreamSkipSilenceStatus {
+    BStreamSilenceAnalyzer *analyzer = _player.currentItem ? [_bstreamAnalyzers objectForKey:_player.currentItem] : nil;
+    NSMutableDictionary *status = analyzer ? [analyzer.diagnostics mutableCopy] : [NSMutableDictionary dictionary];
+    status[@"requestedEnabled"] = @(_bstreamSkipSilenceEnabled);
+    status[@"supported"] = @((!analyzer || analyzer.supported) && _bstreamSkipFailures < 3 && !_player.externalPlaybackActive);
+    status[@"seekCount"] = @(_bstreamSkipCount);
+    return status;
+}
+
+- (void)bstreamPublishStatus {
+    if (!_bstreamRegistered || _bstreamDisposed) return;
+    NSDictionary *status = [self bstreamEqualizerStatus];
+    NSMutableDictionary *summary = [NSMutableDictionary dictionary];
+    for (NSString *key in @[@"supported", @"skipSilenceSupported", @"configured", @"sampleRate",
+                            @"channelCount", @"pcmEncoding", @"enabled", @"revision", @"error"]) {
+        summary[key] = status[key] ?: (id)[NSNull null];
+    }
+    if ([_bstreamLastStatusSummary isEqualToDictionary:summary]) return;
+    _bstreamLastStatusSummary = summary.copy;
+    [_methodChannel invokeMethod:@"bstreamEqualizerStatusChanged" arguments:status];
+}
+
+- (void)bstreamApplyPlaybackRate {
+    if (!_playing || !_player || _bstreamDisposed) return;
+    BStreamAudioProcessingTap *processor = [_bstreamProcessors objectForKey:_player.currentItem];
+    // Loading tracks and installing the initial mix precede audibility. Preset
+    // changes never replace the mix and cannot restart AVPlayer's media clock.
+    _player.rate = processor && !processor.ready ? 0 : _speed;
+}
+
+- (void)bstreamCancelScheduledSkip {
+    ++_bstreamSkipEpoch;
+    if (_bstreamSkipSeeking) [_player.currentItem cancelPendingSeeks];
+    _bstreamSkipSeeking = NO;
+    if (_bstreamBoundaryObserver) {
+        [_player removeTimeObserver:_bstreamBoundaryObserver];
+        _bstreamBoundaryObserver = nil;
+    }
+    [[_bstreamProcessors objectForKey:_bstreamBoundaryItem] cancelFade];
+    _bstreamBoundaryItem = nil;
+    _bstreamBoundaryTime = kCMTimeInvalid;
+    for (AVPlayerItem *item in _player.items) [[_bstreamProcessors objectForKey:item] cancelFade];
+}
+
+- (void)bstreamEnsureTimeObserver {
+    if (!_player || _bstreamTimeObserver || _bstreamDisposed || (!_bstreamRegistered && !_bstreamSkipSilenceEnabled)) return;
+    __weak AudioPlayer *weakSelf = self;
+    _bstreamTimeObserver = [_player addPeriodicTimeObserverForInterval:CMTimeMake(200, 1000)
+        queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
+            [weakSelf bstreamProcessingTick];
+        }];
+}
+
+- (void)bstreamPerformSkipForItem:(AVPlayerItem *)item expectedEpoch:(uint64_t)epoch {
+    if (!item || _bstreamDisposed || !_bstreamSkipSilenceEnabled || !_playing ||
+        item != _player.currentItem || epoch != _bstreamSkipEpoch ||
+        _player.externalPlaybackActive || _bstreamSkipFailures >= 3 ||
+        NSProcessInfo.processInfo.systemUptime < _bstreamSkipRetryAfter ||
+        CMTIME_IS_VALID(_seekPos) || _bstreamSkipSeeking) return;
+    BStreamSilenceAnalyzer *analyzer = [_bstreamAnalyzers objectForKey:item];
+    CMTime now = item.currentTime;
+    if (!analyzer) return;
+    CMTime target = [analyzer gapEndForTime:now];
+    if (!CMTIME_IS_NUMERIC(target)) return;
+    CMTime clipEnd = item.forwardPlaybackEndTime;
+    if (CMTIME_IS_NUMERIC(clipEnd) && CMTimeCompare(target, clipEnd) >= 0) {
+        // Leave the final retained samples for AVQueuePlayer's natural EOF and
+        // the existing crossfade/promotion logic; never seek to the next song.
+        target = CMTimeSubtract(clipEnd, CMTimeMake(250, 1000));
+    }
+    if (CMTimeGetSeconds(CMTimeSubtract(target, now)) < .08) return;
+    _bstreamSkipSeeking = YES;
+    if (_bstreamBoundaryObserver) {
+        [_player removeTimeObserver:_bstreamBoundaryObserver];
+        _bstreamBoundaryObserver = nil;
+    }
+    _bstreamBoundaryItem = nil;
+    BStreamAudioProcessingTap *processor = [_bstreamProcessors objectForKey:item];
+    [processor resetAfterSeekToTime:target fadeIn:YES];
+    __weak AudioPlayer *weakSelf = self;
+    [item seekToTime:target toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AudioPlayer *owner = weakSelf;
+            if (!owner || owner->_bstreamDisposed || item != owner->_player.currentItem || epoch != owner->_bstreamSkipEpoch) return;
+            owner->_bstreamSkipSeeking = NO;
+            if (finished && owner->_bstreamSkipSilenceEnabled) {
+                ++owner->_bstreamSkipCount;
+                owner->_bstreamSkipFailures = 0;
+                owner->_bstreamSkipRetryAfter = 0;
+                [owner updatePosition];
+                [owner broadcastPlaybackEvent];
+            } else {
+                ++owner->_bstreamSkipFailures;
+                owner->_bstreamSkipRetryAfter = NSProcessInfo.processInfo.systemUptime + 1;
+                [processor cancelFade];
+                [owner bstreamPublishStatus];
+            }
+            [owner bstreamProcessingTick];
+        });
+    }];
+}
+
+- (void)bstreamProcessingTick {
+    if (_bstreamDisposed || !_player) return;
+    [self bstreamEnsureTimeObserver];
+    AVPlayerItem *item = _player.currentItem;
+    if (!item) return;
+    BStreamAudioProcessingTap *processor = [_bstreamProcessors objectForKey:item];
+    if (_playing && _player.rate > 0 && CMTIME_IS_INVALID(_seekPos) && !_bstreamSkipSeeking) {
+        [processor validatePlaybackAtTime:item.currentTime];
+    }
+    if ([processor consumeStatusChange]) [self bstreamPublishStatus];
+    if (_player.externalPlaybackActive) {
+        [self bstreamCancelScheduledSkip];
+        return;
+    }
+    if (!_bstreamSkipSilenceEnabled || _player.externalPlaybackActive ||
+        item.status != AVPlayerItemStatusReadyToPlay || _bstreamSkipSeeking || CMTIME_IS_VALID(_seekPos)) return;
+    if (_bstreamSkipFailures >= 3) return;
+    BStreamSilenceAnalyzer *analyzer = [self bstreamAnalyzerForItem:item];
+    if (!analyzer.supported) return;
+    CMTime now = item.currentTime;
+    if (!CMTIME_IS_NUMERIC(now)) return;
+    CMTime bufferedUntil = now;
+    for (NSValue *value in item.loadedTimeRanges) {
+        CMTimeRange range = value.CMTimeRangeValue;
+        if (CMTimeRangeContainsTime(range, now) || CMTimeCompare(now, CMTimeRangeGetEnd(range)) == 0) {
+            bufferedUntil = CMTimeRangeGetEnd(range);
+            break;
+        }
+    }
+    [analyzer requestAnalysisAtTime:now bufferedUntil:bufferedUntil];
+    if (!_playing) return; // A prepared deck may analyze without becoming audible.
+    NSValue *next = [analyzer nextGapAfterTime:now];
+    if (!next) return;
+    CMTimeRange gap = next.CMTimeRangeValue;
+    CMTime clipEnd = item.forwardPlaybackEndTime;
+    if (CMTIME_IS_NUMERIC(clipEnd) && CMTimeCompare(gap.start, clipEnd) >= 0) return;
+    if (CMTimeCompare(now, gap.start) >= 0) {
+        [self bstreamPerformSkipForItem:item expectedEpoch:_bstreamSkipEpoch];
+        return;
+    }
+    if (_bstreamBoundaryObserver && _bstreamBoundaryItem == item && CMTimeCompare(_bstreamBoundaryTime, gap.start) == 0) return;
+    [self bstreamCancelScheduledSkip];
+    _bstreamBoundaryItem = item;
+    _bstreamBoundaryTime = gap.start;
+    [processor fadeOutAtTime:gap.start];
+    uint64_t epoch = _bstreamSkipEpoch;
+    __weak AudioPlayer *weakSelf = self;
+    __weak AVPlayerItem *weakItem = item;
+    _bstreamBoundaryObserver = [_player addBoundaryTimeObserverForTimes:@[[NSValue valueWithCMTime:gap.start]]
+        queue:dispatch_get_main_queue() usingBlock:^{
+            [weakSelf bstreamPerformSkipForItem:weakItem expectedEpoch:epoch];
+        }];
 }
 
 // Untested
@@ -396,6 +692,10 @@
 }
 
 - (void)removeItemObservers:(AVPlayerItem *)playerItem {
+    [[_bstreamProcessors objectForKey:playerItem] invalidate];
+    [[_bstreamAnalyzers objectForKey:playerItem] invalidate];
+    [_bstreamProcessors removeObjectForKey:playerItem];
+    [_bstreamAnalyzers removeObjectForKey:playerItem];
     [playerItem removeObserver:self forKeyPath:@"status"];
     [playerItem removeObserver:self forKeyPath:@"playbackBufferEmpty"];
     [playerItem removeObserver:self forKeyPath:@"playbackBufferFull"];
@@ -553,6 +853,7 @@
                     break;
                 }
                 //NSLog(@"inserting item %d", si);
+                [self bstreamAttachProcessingToItem:_indexedAudioSources[si].playerItem];
                 [_player insertItem:_indexedAudioSources[si].playerItem afterItem:nil];
                 if (_loopMode == lmLoopOne) {
                     // We only want one item in the queue.
@@ -571,6 +872,7 @@
                 [_indexedAudioSources[si] preparePlayerItem2];
                 [self addItemObservers:_indexedAudioSources[si].playerItem2];
             }
+            [self bstreamAttachProcessingToItem:_indexedAudioSources[si].playerItem2];
             [_player insertItem:_indexedAudioSources[si].playerItem2 afterItem:nil];
         } else if (_loopMode == lmLoopOne) {
             //NSLog(@"### add loop item:%d", _index);
@@ -578,6 +880,7 @@
                 [_indexedAudioSources[_index] preparePlayerItem2];
                 [self addItemObservers:_indexedAudioSources[_index].playerItem2];
             }
+            [self bstreamAttachProcessingToItem:_indexedAudioSources[_index].playerItem2];
             [_player insertItem:_indexedAudioSources[_index].playerItem2 afterItem:nil];
         }
     }
@@ -683,6 +986,8 @@
                   forKeyPath:@"currentItem"
                      options:NSKeyValueObservingOptionNew
                      context:nil];
+        [_player addObserver:self forKeyPath:@"externalPlaybackActive"
+                     options:NSKeyValueObservingOptionNew context:nil];
         // TODO: learn about the different ways to define weakSelf.
         //__weak __typeof__(self) weakSelf = self;
         //typeof(self) __weak weakSelf = self;
@@ -697,6 +1002,7 @@
             ];
         }
     }
+    [self bstreamEnsureTimeObserver];
     // Initialise the AVQueuePlayer with items.
     [self enqueueFrom:_index];
     // Notify each IndexedAudioSource that it's been attached to the player.
@@ -705,7 +1011,7 @@
     }
 
     if (_playing) {
-        _player.rate = _speed;
+        [self bstreamApplyPlaybackRate];
     }
     [_player setVolume:_volume];
     [self broadcastPlaybackEvent];
@@ -904,7 +1210,28 @@
                     break;
             }
         }
+    } else if ([keyPath isEqualToString:@"externalPlaybackActive"]) {
+        [self bstreamCancelScheduledSkip];
+        [self bstreamPublishStatus];
+        [self bstreamProcessingTick];
+    } else if ([keyPath isEqualToString:@"currentItem"] && !_player.currentItem) {
+        [self bstreamCancelScheduledSkip];
+        _bstreamSkipFailures = 0;
+        _bstreamSkipRetryAfter = 0;
+        [self bstreamPublishStatus];
     } else if ([keyPath isEqualToString:@"currentItem"] && _player.currentItem) {
+        _bstreamSkipFailures = 0;
+        _bstreamSkipRetryAfter = 0;
+        [self bstreamCancelScheduledSkip];
+        [self bstreamAttachProcessingToItem:_player.currentItem];
+        [self bstreamApplyPlaybackRate];
+        for (AVPlayerItem *oldItem in _bstreamAnalyzers.keyEnumerator.allObjects) {
+            if (![_player.items containsObject:oldItem]) {
+                [[_bstreamAnalyzers objectForKey:oldItem] invalidate];
+                [_bstreamAnalyzers removeObjectForKey:oldItem];
+            }
+        }
+        [self bstreamPublishStatus];
         //NSLog(@"currentItem -> [%d]", [self indexForItem:_player.currentItem]);
         IndexedPlayerItem *playerItem = (IndexedPlayerItem *)change[NSKeyValueChangeNewKey];
         //IndexedPlayerItem *oldPlayerItem = (IndexedPlayerItem *)change[NSKeyValueChangeOldKey];
@@ -981,6 +1308,7 @@
             _justAdvanced = NO;
         }
     } else if ([keyPath isEqualToString:@"loadedTimeRanges"]) {
+        [self bstreamProcessingTick];
         IndexedPlayerItem *playerItem = (IndexedPlayerItem *)object;
         if (playerItem != _player.currentItem) return;
         int pos = [self getBufferedPosition];
@@ -1046,7 +1374,8 @@
         _playResult = result;
     }
     _playing = YES;
-    _player.rate = _speed;
+    [self bstreamApplyPlaybackRate];
+    [self bstreamProcessingTick];
     [self updatePosition];
     if (@available(macOS 10.12, iOS 10.0, *)) {}
     else {
@@ -1059,6 +1388,7 @@
 
 - (void)pause {
     if (!_playing) return;
+    [self bstreamCancelScheduledSkip];
     _playing = NO;
     [_player pause];
     [self updatePosition];
@@ -1117,7 +1447,7 @@
     // supported.
     _speed = speed;
     if (_playing && _player) {
-        _player.rate = speed;
+        [self bstreamApplyPlaybackRate];
     }
     [self updatePosition];
 }
@@ -1206,6 +1536,11 @@
 }
 
 - (void)seek:(CMTime)position index:(NSNumber *)newIndex completionHandler:(void (^)(BOOL))completionHandler {
+    _bstreamSkipFailures = 0;
+    _bstreamSkipRetryAfter = 0;
+    [self bstreamPublishStatus];
+    [self bstreamCancelScheduledSkip];
+    [[_bstreamProcessors objectForKey:_player.currentItem] resetAfterSeekToTime:kCMTimeInvalid fadeIn:NO];
     if (_processingState == psIdle || _processingState == psLoading) {
         if (completionHandler) {
             completionHandler(NO);
@@ -1265,7 +1600,7 @@
                         }
                     }
                     if (self->_playing) {
-                        self->_player.rate = self->_speed;
+                        [self bstreamApplyPlaybackRate];
                     }
                     self->_seekPos = kCMTimeInvalid;
                     [self broadcastPlaybackEvent];
@@ -1281,9 +1616,9 @@
                         // how to detect buffering when buffered audio is not
                         // immediately available.
                         //[_player playImmediatelyAtRate:_speed];
-                        _player.rate = _speed;
+                        [self bstreamApplyPlaybackRate];
                     } else {
-                        _player.rate = _speed;
+                        [self bstreamApplyPlaybackRate];
                     }
                 }
                 [self broadcastPlaybackEvent];
@@ -1313,9 +1648,9 @@
                     // detect buffering when buffered audio is not immediately
                     // available.
                     //[_player playImmediatelyAtRate:_speed];
-                    self->_player.rate = self->_speed;
+                    [self bstreamApplyPlaybackRate];
                 } else {
-                    self->_player.rate = self->_speed;
+                    [self bstreamApplyPlaybackRate];
                 }
             } else {
                 // If not playing, there is no reliable way to detect
@@ -1342,6 +1677,16 @@
 }
 
 - (void)dispose:(BOOL)calledFromDealloc {
+    _bstreamDisposed = YES;
+    [self bstreamCancelScheduledSkip];
+    if (_bstreamTimeObserver) {
+        [_player removeTimeObserver:_bstreamTimeObserver];
+        _bstreamTimeObserver = nil;
+    }
+    for (BStreamAudioProcessingTap *processor in _bstreamProcessors.objectEnumerator) [processor invalidate];
+    for (BStreamSilenceAnalyzer *analyzer in _bstreamAnalyzers.objectEnumerator) [analyzer invalidate];
+    [_bstreamProcessors removeAllObjects];
+    [_bstreamAnalyzers removeAllObjects];
     if (!_player) return;
     if (_processingState != psIdle) {
         [_player pause];
@@ -1377,6 +1722,7 @@
     _audioSource = nil;
     if (_player) {
         [_player removeObserver:self forKeyPath:@"currentItem"];
+        [_player removeObserver:self forKeyPath:@"externalPlaybackActive"];
         if (@available(macOS 10.12, iOS 10.0, *)) {
             [_player removeObserver:self forKeyPath:@"timeControlStatus"];
         }

@@ -155,6 +155,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   @override
   Future<PlayerSnapshot> build() async {
     final service = ref.watch(playerServiceProvider);
+    ref.read(equalizerRuntimeProvider);
     _activePlaybackIsRemote = service.currentSnapshot.isRemote;
     _playWhenReady = service.currentSnapshot.wantsToPlay;
     ref.listen<({bool enabled, Duration duration})?>(
@@ -1023,9 +1024,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         return;
       }
       final skipSilenceService = service as SkipSilenceCapablePlayer;
-      if (!skipSilenceService.supportsSkipSilence) {
-        return;
-      }
+      // A temporarily unreadable iOS asset must not discard the preference.
+      // Capable engines retain the target and apply it on a supported route.
       await skipSilenceService.configureSkipSilence(enabled: enabled);
     }();
     _skipSilenceConfigurationTail = _skipSilenceConfigurationTail.then<void>(

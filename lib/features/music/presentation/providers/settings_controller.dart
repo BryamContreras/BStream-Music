@@ -133,6 +133,7 @@ class SettingsState {
     this.crossfadeEnabled = false,
     this.crossfadeDuration = defaultCrossfadeDuration,
     this.skipSilenceEnabled = false,
+    this.equalizer = const EqualizerSettings(),
   });
 
   final String downloadDirectory;
@@ -170,6 +171,7 @@ class SettingsState {
   final bool crossfadeEnabled;
   final Duration crossfadeDuration;
   final bool skipSilenceEnabled;
+  final EqualizerSettings equalizer;
 
   SettingsState copyWith({
     String? downloadDirectory,
@@ -203,6 +205,7 @@ class SettingsState {
     bool? crossfadeEnabled,
     Duration? crossfadeDuration,
     bool? skipSilenceEnabled,
+    EqualizerSettings? equalizer,
   }) {
     return SettingsState(
       downloadDirectory: downloadDirectory ?? this.downloadDirectory,
@@ -250,6 +253,7 @@ class SettingsState {
       crossfadeEnabled: crossfadeEnabled ?? this.crossfadeEnabled,
       crossfadeDuration: crossfadeDuration ?? this.crossfadeDuration,
       skipSilenceEnabled: skipSilenceEnabled ?? this.skipSilenceEnabled,
+      equalizer: equalizer ?? this.equalizer,
     );
   }
 }
@@ -302,6 +306,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   static const _crossfadeEnabledKey = 'settings.crossfadeEnabled';
   static const _crossfadeSecondsKey = 'settings.crossfadeSeconds';
   static const _skipSilenceEnabledKey = 'settings.skipSilenceEnabled';
+  static const _equalizerKey = 'settings.equalizer';
   static const _mediaRootDirectoryName = 'BStream-Music';
   Future<void> _lyricsTextAlignmentWriteTail = Future<void>.value();
   Future<void> _enabledLyricsProvidersWriteTail = Future<void>.value();
@@ -316,9 +321,17 @@ class SettingsController extends AsyncNotifier<SettingsState> {
   Future<void> _skipSilenceWriteTail = Future<void>.value();
   Future<void> _appBackgroundWriteTail = Future<void>.value();
   Future<void> _liveWidgetStyleWriteTail = Future<void>.value();
+  Future<void> _equalizerWriteTail = Future<void>.value();
+  Timer? _equalizerSaveTimer;
+  EqualizerSettings? _pendingEqualizer;
+  Completer<void>? _equalizerSaveCompletion;
 
   @override
   Future<SettingsState> build() async {
+    ref.onDispose(() {
+      _equalizerSaveTimer?.cancel();
+      unawaited(_flushEqualizer().catchError((Object _) {}));
+    });
     final prefs = await SharedPreferences.getInstance();
     final defaultDirectory = await _defaultDownloadDirectory();
     final language = AppLanguageLabel.fromCode(prefs.getString(_languageKey));
@@ -448,6 +461,15 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     );
     final crossfadeEnabled = prefs.getBool(_crossfadeEnabledKey) ?? false;
     final skipSilenceEnabled = prefs.getBool(_skipSilenceEnabledKey) ?? false;
+    var equalizer = const EqualizerSettings();
+    final storedEqualizer = prefs.getString(_equalizerKey);
+    if (storedEqualizer != null) {
+      try {
+        equalizer = EqualizerSettings.fromMap(jsonDecode(storedEqualizer));
+      } on FormatException {
+        // A corrupt optional setting must not prevent the app from starting.
+      }
+    }
     final storedDirectory = prefs.getString(_downloadDirectoryKey);
     final encodedMigrationJournal = prefs.getString(
       _downloadDirectoryMigrationJournalKey,
@@ -633,6 +655,7 @@ class SettingsController extends AsyncNotifier<SettingsState> {
       crossfadeEnabled: crossfadeEnabled,
       crossfadeDuration: crossfadeDuration,
       skipSilenceEnabled: skipSilenceEnabled,
+      equalizer: equalizer,
     );
   }
 
@@ -1367,6 +1390,40 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     await write;
   }
 
+  Future<void> setEqualizer(EqualizerSettings settings) async {
+    final current = state.asData?.value ?? await future;
+    final normalized = settings.normalized;
+    if (current.equalizer == normalized) return;
+    state = AsyncData(current.copyWith(equalizer: normalized));
+    _pendingEqualizer = normalized;
+    _equalizerSaveCompletion ??= Completer<void>();
+    final completion = _equalizerSaveCompletion!;
+    _equalizerSaveTimer?.cancel();
+    _equalizerSaveTimer = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_flushEqualizer().catchError((Object _) {}));
+    });
+    return completion.future;
+  }
+
+  Future<void> _flushEqualizer() async {
+    final settings = _pendingEqualizer;
+    final completion = _equalizerSaveCompletion;
+    if (settings == null) return;
+    _pendingEqualizer = null;
+    _equalizerSaveCompletion = null;
+    final write = _equalizerWriteTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_equalizerKey, jsonEncode(settings.toMap()));
+    });
+    _equalizerWriteTail = write.catchError((_) {});
+    try {
+      await write;
+      completion?.complete();
+    } catch (error, stack) {
+      completion?.completeError(error, stack);
+    }
+  }
+
   Future<File> createBackupFile() async {
     final current = await future;
     final player = ref.read(playerControllerProvider.notifier);
@@ -1374,7 +1431,10 @@ class SettingsController extends AsyncNotifier<SettingsState> {
     try {
       return await ref
           .read(backupServiceProvider)
-          .createBackupFile(mediaRoot: current.downloadDirectory);
+          .createBackupFile(
+            mediaRoot: current.downloadDirectory,
+            downloadedFolderName: AppStrings(current.language).downloadedSongs,
+          );
     } finally {
       await player.resumeRecommendationHistoryTracking();
     }

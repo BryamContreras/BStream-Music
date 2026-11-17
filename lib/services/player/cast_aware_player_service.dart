@@ -5,6 +5,7 @@ import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import '../casting/cast_coordinator.dart';
 import 'player_service.dart';
+import 'player_equalizer.dart';
 
 /// Retains the existing local backend and all of its optional capabilities.
 /// Remote transport takes ownership only after the receiver acknowledges a
@@ -15,6 +16,7 @@ class CastAwarePlayerService
         NativeRemoteQueuePlayer,
         CrossfadeCapablePlayer,
         SkipSilenceCapablePlayer,
+        EqualizerCapablePlayer,
         AudioSourceUpgradePlayer {
   CastAwarePlayerService({required PlayerService local, required this.cast})
     // Preserve a named injection point for the local backend.
@@ -42,6 +44,21 @@ class CastAwarePlayerService
   Object? _lastLocalIdentity;
 
   bool get isCasting => _casting;
+
+  @override
+  bool get supportsEqualizer =>
+      _local is EqualizerCapablePlayer &&
+      (_local as EqualizerCapablePlayer).supportsEqualizer;
+
+  @override
+  Future<void> configureEqualizer(EqualizerSettings settings) async {
+    // The receiver decodes its own URL. Retain local tuning for the return
+    // handoff without modifying a remote receiver's volume or processing.
+    if (_local case final EqualizerCapablePlayer equalizer) {
+      await equalizer.configureEqualizer(settings);
+    }
+  }
+
   @override
   Stream<PlayerSnapshot> get snapshotStream => _snapshots.stream;
   @override

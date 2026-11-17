@@ -7538,6 +7538,10 @@ void main() {
     );
     expect(find.byKey(const ValueKey('backup-actions')), findsNothing);
 
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('settings-card-storage')),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('settings-card-storage')));
     await tester.pumpAndSettle();
 
@@ -7616,6 +7620,10 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
 
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('settings-card-storage')),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('settings-card-storage')));
     await tester.pumpAndSettle();
 

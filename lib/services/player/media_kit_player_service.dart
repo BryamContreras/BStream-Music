@@ -9,7 +9,9 @@ import '../../core/platform/app_platform.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import 'crossfade_transition.dart';
+import 'media_kit_equalizer.dart';
 import 'player_audio_output.dart';
+import 'player_equalizer.dart';
 import 'player_service.dart';
 
 typedef MediaKitOperationDeadline = Future<void> Function(Duration duration);
@@ -46,7 +48,10 @@ abstract interface class MediaKitPlayerBackend {
 }
 
 class _MediaKitPlayerBackend
-    implements MediaKitPlayerBackend, PlayerAudioOutput {
+    implements
+        MediaKitPlayerBackend,
+        PlayerAudioOutput,
+        EqualizerCapablePlayer {
   _MediaKitPlayerBackend() {
     _player = _createPlayer();
     _playerInitialization = _headlessInitialization(_player);
@@ -74,6 +79,170 @@ class _MediaKitPlayerBackend
   final _audioOutputs = StreamController<PlayerAudioOutputState>.broadcast();
   List<PlayerAudioDevice> _audioDevices = const [];
   String _audioDeviceId = systemDefaultAudioDeviceId;
+  EqualizerSettings _equalizerSettings = const EqualizerSettings();
+  EqualizerSettings? _appliedEqualizer = const EqualizerSettings();
+  double _logicalVolume = 100;
+  double _equalizerOutputGain = 1;
+  bool _equalizerUnavailable = false;
+  Future<void>? _equalizerRecovery;
+  Future<void> _equalizerTail = Future<void>.value();
+  int _equalizerRevision = 0;
+  Completer<void> _equalizerCancellation = Completer<void>();
+
+  @override
+  bool get supportsEqualizer =>
+      !_equalizerUnavailable && _player.platform is NativePlayer;
+
+  @override
+  Future<void> configureEqualizer(EqualizerSettings settings) {
+    _equalizerSettings = settings.normalized;
+    final revision = ++_equalizerRevision;
+    final player = _player;
+    final epoch = _epoch;
+    final initialization = _playerInitialization;
+    final operation = _equalizerTail.then((_) async {
+      if (_disposed || epoch != _epoch || revision != _equalizerRevision) {
+        return;
+      }
+      if (initialization != null) await initialization;
+      if (_disposed || epoch != _epoch || revision != _equalizerRevision) {
+        return;
+      }
+      final curve = _equalizerSettings;
+      if (_appliedEqualizer == curve) return;
+      if (_equalizerUnavailable && curve.enabled && !curve.isFlat) {
+        throw UnsupportedError('The native equalizer is unavailable.');
+      }
+      final platform = player.platform;
+      if (platform is! NativePlayer) {
+        throw UnsupportedError('This backend has no native equalizer.');
+      }
+      _appliedEqualizer = null;
+      final gain = curve.outputGain;
+      try {
+        // The shipped minimal libavfilter contains equalizer, but not volume.
+        // Process the bands in f64 and reserve output headroom using mpv's own
+        // gain. Linear floating-point filtering commutes with this attenuation
+        // and has no integer clipping between bands.
+        if (gain < _equalizerOutputGain) {
+          await _setEqualizerOutputGain(player, gain);
+        }
+        await MediaKitEqualizerFilter.apply(platform, curve);
+        await _setEqualizerOutputGain(player, gain);
+      } catch (_) {
+        try {
+          await MediaKitEqualizerFilter.apply(
+            platform,
+            const EqualizerSettings(),
+          );
+        } catch (_) {
+          // Preserve the original optional-filter error for the caller.
+        }
+        await _setEqualizerOutputGain(player, 1);
+        rethrow;
+      }
+      if (!_disposed && epoch == _epoch) _appliedEqualizer = curve;
+    });
+    final future = Future.any<void>([operation, _equalizerCancellation.future]);
+    _equalizerTail = future.catchError((Object _) {});
+    return future;
+  }
+
+  Future<void> _setEqualizerOutputGain(Player player, double gain) async {
+    if (_disposed || !identical(player, _player)) return;
+    if (_equalizerOutputGain == gain) return;
+    _equalizerOutputGain = gain;
+    await player.setVolume(_logicalVolume * gain);
+  }
+
+  Future<void> _restorePlayerState(Player player, String deviceId) async {
+    await _restoreAudioOutput(player, deviceId);
+    final curve = _equalizerUnavailable
+        ? const EqualizerSettings()
+        : _equalizerSettings;
+    final platform = player.platform;
+    if (platform is NativePlayer) {
+      try {
+        await MediaKitEqualizerFilter.apply(platform, curve);
+        await player.setVolume(_logicalVolume * curve.outputGain);
+        if (!_disposed && identical(player, _player)) {
+          _equalizerOutputGain = curve.outputGain;
+        }
+        if (!_disposed && identical(player, _player)) _appliedEqualizer = curve;
+      } catch (error, stackTrace) {
+        await player.setVolume(_logicalVolume);
+        if (!_disposed && identical(player, _player)) _equalizerOutputGain = 1;
+        // A filter unavailable in an older libmpv must not prevent a fresh
+        // decoder from recovering after a cancelled or blocked load.
+        developer.log(
+          'Could not restore the native equalizer',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+  }
+
+  void _onNativeEqualizerLog(Player player, int epoch, PlayerLog log) {
+    if (_disposed ||
+        epoch != _epoch ||
+        _equalizerUnavailable ||
+        _equalizerRecovery != null ||
+        log.level != 'error') {
+      return;
+    }
+    final curve = _appliedEqualizer;
+    if (curve == null || !curve.enabled || curve.isFlat) return;
+    final filterError =
+        ((log.prefix.contains('lavfi') || log.prefix == 'af') &&
+            RegExp(
+              'No such filter|initializ|filtergraph|Option.*not found',
+              caseSensitive: false,
+            ).hasMatch(log.text)) ||
+        (log.prefix == 'cplayer' &&
+            log.text.toLowerCase().contains('audio filter'));
+    if (!filterError) return;
+    // af is writable while idle, even when a required FFmpeg filter is absent.
+    // A failure can therefore arrive only when the first audio frame is decoded.
+    // Retire just this optional effect; source ownership stays with playback.
+    _equalizerUnavailable = true;
+    final recovery = _recoverNativeEqualizer(player, epoch);
+    _equalizerRecovery = recovery;
+    unawaited(
+      recovery.whenComplete(() {
+        if (identical(_equalizerRecovery, recovery)) _equalizerRecovery = null;
+      }),
+    );
+  }
+
+  Future<void> _recoverNativeEqualizer(Player player, int epoch) async {
+    bool isCurrent() => !_disposed && epoch == _epoch;
+    try {
+      developer.log(
+        'Bypassing an unavailable native equalizer; retaining the playback source',
+        name: 'BStreamPlayback',
+      );
+      final platform = player.platform;
+      if (platform is NativePlayer) {
+        await MediaKitEqualizerFilter.apply(
+          platform,
+          const EqualizerSettings(),
+        );
+      }
+      if (!isCurrent()) return;
+      _appliedEqualizer = const EqualizerSettings();
+      await _setEqualizerOutputGain(player, 1);
+    } catch (error, stackTrace) {
+      developer.log(
+        'Could not recover playback after bypassing the optional equalizer',
+        name: 'BStreamPlayback',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (isCurrent()) _errors.add(error.toString());
+    }
+  }
 
   @override
   PlayerAudioOutputState get audioOutputState => PlayerAudioOutputState(
@@ -180,7 +349,9 @@ class _MediaKitPlayerBackend
         if (isCurrent()) _durations.add(value);
       }),
       player.stream.volume.listen((value) {
-        if (isCurrent()) _volumes.add(value);
+        // Crossfade envelopes and EQ attenuation belong to this physical deck.
+        // Expose the requested gain rather than the compensated native value.
+        if (isCurrent()) _volumes.add(_logicalVolume);
       }),
       player.stream.buffering.listen((value) {
         if (isCurrent()) _bufferings.add(value);
@@ -192,8 +363,12 @@ class _MediaKitPlayerBackend
         if (isCurrent()) _completions.add(value);
       }),
       player.stream.error.listen((value) {
-        if (isCurrent()) _errors.add(value);
+        if (!isCurrent()) return;
+        _errors.add(value);
       }),
+      player.stream.log.listen(
+        (log) => _onNativeEqualizerLog(player, epoch, log),
+      ),
       player.stream.audioDevices.listen(updateAudioDevices),
       player.stream.audioDevice.listen((_) {
         if (isCurrent()) _publishAudioOutput();
@@ -217,8 +392,14 @@ class _MediaKitPlayerBackend
     final retiredPlayer = _player;
     final retiredSubscriptions = _playerSubscriptions;
     final epoch = ++_epoch;
+    _equalizerRecovery = null;
     _player = _createPlayer();
-    _playerInitialization = _restoreAudioOutput(_player, _audioDeviceId);
+    _equalizerCancellation.complete();
+    _equalizerCancellation = Completer<void>();
+    _equalizerRevision++;
+    _equalizerTail = Future<void>.value();
+    _appliedEqualizer = const EqualizerSettings();
+    _playerInitialization = _restorePlayerState(_player, _audioDeviceId);
     _playerInitialization?.ignore();
     _playerSubscriptions = _forwardEvents(_player, epoch);
     unawaited(_retire(retiredPlayer, retiredSubscriptions));
@@ -274,8 +455,13 @@ class _MediaKitPlayerBackend
   Future<void> seek(Duration position) =>
       _withPlayer((player) => player.seek(position));
   @override
-  Future<void> setVolume(double volume) =>
-      _withPlayer((player) => player.setVolume(volume));
+  Future<void> setVolume(double volume) {
+    _logicalVolume = volume;
+    return _withPlayer(
+      (player) => player.setVolume(_logicalVolume * _equalizerOutputGain),
+    );
+  }
+
   @override
   Future<void> dispose() async {
     if (_disposed) {
@@ -283,6 +469,7 @@ class _MediaKitPlayerBackend
     }
     _disposed = true;
     _epoch++;
+    _equalizerCancellation.complete();
     for (final subscription in _playerSubscriptions) {
       await subscription.cancel();
     }
@@ -305,7 +492,8 @@ class MediaKitPlayerService
         PlayerService,
         CrossfadeCapablePlayer,
         AudioSourceUpgradePlayer,
-        PlayerAudioOutput {
+        PlayerAudioOutput,
+        EqualizerCapablePlayer {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
   static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
 
@@ -342,6 +530,9 @@ class MediaKitPlayerService
   PlayerAudioOutputState _audioOutputState = const PlayerAudioOutputState();
   Future<void> _audioOutputTail = Future<void>.value();
   bool _changingAudioOutput = false;
+  EqualizerSettings _equalizerSettings = const EqualizerSettings();
+  Future<void> _equalizerTail = Future<void>.value();
+  int _equalizerRevision = 0;
   Timer? _missingAudioDeviceTimer;
   final _subscriptions = <StreamSubscription<Object?>>[];
   final _standbySubscriptions = <StreamSubscription<Object?>>[];
@@ -396,6 +587,75 @@ class MediaKitPlayerService
   @override
   Stream<PlayerAudioOutputState> get audioOutputStream =>
       _audioOutputController.stream;
+
+  @override
+  bool get supportsEqualizer =>
+      _player is EqualizerCapablePlayer &&
+      (_player as EqualizerCapablePlayer).supportsEqualizer;
+
+  @override
+  Future<void> configureEqualizer(EqualizerSettings settings) {
+    if (_disposed) return Future<void>.value();
+    _equalizerSettings = settings.normalized;
+    final revision = ++_equalizerRevision;
+    final future = _equalizerTail.then((_) async {
+      if (_disposed || revision != _equalizerRevision) return;
+      if (!supportsEqualizer) {
+        if (_equalizerSettings.enabled) {
+          throw UnsupportedError('This backend has no native equalizer.');
+        }
+        return;
+      }
+      Object? failure;
+      StackTrace? failureStack;
+      for (final backend in <MediaKitPlayerBackend>{_player, ?_standbyPlayer}) {
+        if (_disposed || revision != _equalizerRevision) return;
+        try {
+          if (backend case final EqualizerCapablePlayer equalizer) {
+            await equalizer.configureEqualizer(_equalizerSettings);
+          }
+        } catch (error, stackTrace) {
+          failure ??= error;
+          failureStack ??= stackTrace;
+        }
+      }
+      if (!_disposed && revision == _equalizerRevision && failure != null) {
+        Error.throwWithStackTrace(failure, failureStack!);
+      }
+    });
+    _equalizerTail = future.catchError((Object _) {});
+    return future;
+  }
+
+  Future<void> _synchronizeBackendEqualizer(
+    MediaKitPlayerBackend backend,
+  ) async {
+    if (backend is! EqualizerCapablePlayer) return;
+    final equalizer = backend as EqualizerCapablePlayer;
+    if (!equalizer.supportsEqualizer) return;
+    // A standby deck can be created while a slider update is already queued.
+    // Join that lane and re-check the revision before making the deck audible.
+    var revision = -1;
+    do {
+      final future = _equalizerTail.then((_) async {
+        if (_disposed) return;
+        revision = _equalizerRevision;
+        await equalizer.configureEqualizer(_equalizerSettings);
+      });
+      _equalizerTail = future.catchError((Object _) {});
+      try {
+        await future;
+      } catch (error, stackTrace) {
+        developer.log(
+          'Could not apply the optional native equalizer',
+          name: 'BStreamPlayback',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        return;
+      }
+    } while (!_disposed && revision != _equalizerRevision);
+  }
 
   Future<void> _serializeAudioOutput(Future<void> Function() operation) {
     final future = _audioOutputTail.then((_) async {
@@ -877,6 +1137,11 @@ class MediaKitPlayerService
               !identical(standby, _standbyPlayer)) {
             return;
           }
+        }
+        await _synchronizeBackendEqualizer(standby);
+        if (!_isCrossfadeCurrent(generation) ||
+            !identical(standby, _standbyPlayer)) {
+          return;
         }
         await standby.open(_crossfadeMedia(source), play: false);
       }, cancellation: cancellation);
@@ -1991,6 +2256,10 @@ class MediaKitPlayerService
           return;
         }
         await _configureLinuxAudioClientName();
+        if (!_isCurrentGeneration(generation)) {
+          return;
+        }
+        await _synchronizeBackendEqualizer(_player);
         if (!_isCurrentGeneration(generation)) {
           return;
         }

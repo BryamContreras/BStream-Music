@@ -19,7 +19,14 @@ let package = Package(
             dependencies: [],
             cSettings: [
                 .headerSearchPath("include/just_audio")
+            ],
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("AudioToolbox"),
+                .linkedFramework("MediaToolbox"),
+                .linkedFramework("CoreMedia")
             ]
         )
-    ]
+    ],
+    cLanguageStandard: .c11
 )

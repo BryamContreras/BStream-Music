@@ -3683,6 +3683,10 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Salida de audio'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('player-menu-equalizer')),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('player-menu-cast')), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -7219,6 +7223,11 @@ void main() {
       );
       final shareAction = find.byKey(const ValueKey('player-menu-share'));
       expect(shareAction, findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('player-menu-equalizer')),
+        findsOneWidget,
+        reason: '$style shares the equalizer entry on Android',
+      );
 
       await tester.tap(shareAction);
       await tester.pump();

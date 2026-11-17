@@ -850,16 +850,57 @@ class _ArtistHeader extends StatelessWidget {
                 ),
               ],
             );
+            if (desktop) {
+              final artwork = ClipRRect(
+                borderRadius: BorderRadius.circular(appArtworkRadius),
+                child: SizedBox.square(
+                  key: const ValueKey('artist-profile-artwork'),
+                  dimension: wide ? 224 : 196,
+                  child: ProportionalArtwork(
+                    source: profile.artist.thumbnailUrl,
+                    cacheWidth: wide ? 640 : 512,
+                    fallback: ColoredBox(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: Icon(
+                        Icons.person_rounded,
+                        size: 64,
+                        color: AppColors.contentSubtitleFor(context),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+              return Padding(
+                padding: EdgeInsets.fromLTRB(
+                  wide ? 28 : 20,
+                  MediaQuery.paddingOf(context).top + 24,
+                  wide ? 28 : 20,
+                  20,
+                ),
+                child: wide
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          artwork,
+                          const SizedBox(width: 28),
+                          Expanded(child: details),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          artwork,
+                          const SizedBox(height: 18),
+                          details,
+                        ],
+                      ),
+              );
+            }
             return Stack(
               children: [
                 Positioned.fill(
                   child: ExpandedArtworkHeaderBackground(
                     artworkSource: profile.artist.thumbnailUrl,
                     artworkHeight: artworkHeight,
-                    // Artist sources range from wide banners to portraits.
-                    // Enlarge smaller photos with a limited crop; the shared
-                    // reflection continues into the remaining background.
-                    preserveArtworkAspectRatio: desktop,
                     keyPrefix: 'artist-profile',
                   ),
                 ),

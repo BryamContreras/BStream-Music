@@ -1628,7 +1628,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('skip silence is not presented as supported on iOS', (
+  testWidgets('iOS exposes and saves the shared skip silence preference', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
@@ -1640,18 +1640,78 @@ void main() {
     await tester.pumpWidget(
       _settingsHarness(
         navigationController: navigationController,
-        overrides: [skipSilenceSupportedProvider.overrideWithValue(false)],
+        overrides: [skipSilenceSupportedProvider.overrideWithValue(true)],
       ),
     );
     await tester.pumpAndSettle();
 
     expect(
       find.byKey(const ValueKey('settings-inline-skip-silence')),
-      findsNothing,
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('settings-skip-silence-switch')),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(
+        find.byKey(const ValueKey('settings-inline-skip-silence')),
+      ),
+    );
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .requireValue
+          .skipSilenceEnabled,
+      isTrue,
     );
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets(
+    'an unsupported current iOS audio keeps its preference editable',
+    (tester) async {
+      _configureView(tester, const Size(760, 1400));
+      final navigationController = SettingsNavigationController();
+      addTearDown(navigationController.dispose);
+      await tester.pumpWidget(
+        _settingsHarness(
+          navigationController: navigationController,
+          platform: TargetPlatform.iOS,
+          skipSilenceAvailable: false,
+          overrides: [skipSilenceSupportedProvider.overrideWithValue(true)],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('No disponible para este audio.'), findsOneWidget);
+      final toggle = find.byKey(const ValueKey('settings-skip-silence-switch'));
+      expect(tester.widget<SwitchListTile>(toggle).onChanged, isNotNull);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      final scope = ProviderScope.containerOf(tester.element(toggle));
+      expect(
+        scope.read(settingsControllerProvider).requireValue.skipSilenceEnabled,
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  test(
+    'audio-specific silence availability is translated in every language',
+    () {
+      const english = AppStrings(AppLanguage.english);
+      for (final language in AppLanguage.values.where(
+        (language) => language != AppLanguage.english,
+      )) {
+        expect(
+          AppStrings(language).skipSilenceUnavailableForAudio,
+          isNot(english.skipSilenceUnavailableForAudio),
+        );
+      }
+    },
+  );
 
   testWidgets('skip silence fits a compact Android view at large text', (
     tester,
@@ -3300,6 +3360,7 @@ Widget _settingsHarness({
   SettingsController Function()? settingsControllerBuilder,
   TargetPlatform? platform,
   AppLanguage language = AppLanguage.spanish,
+  bool skipSilenceAvailable = true,
 }) {
   return ProviderScope(
     overrides: [
@@ -3307,6 +3368,7 @@ Widget _settingsHarness({
         settingsControllerBuilder: settingsControllerBuilder,
         language: language,
       ),
+      skipSilenceAvailableProvider.overrideWithValue(skipSilenceAvailable),
       ...overrides,
     ],
     child: MaterialApp(

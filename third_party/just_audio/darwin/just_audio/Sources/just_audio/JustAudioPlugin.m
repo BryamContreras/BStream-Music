@@ -35,7 +35,8 @@
             FlutterError *flutterError = [FlutterError errorWithCode:@"error" message:@"Platform player already exists" details:nil];
             result(flutterError);
         } else {
-            AudioPlayer* player = [[AudioPlayer alloc] initWithRegistrar:_registrar playerId:playerId loadConfiguration:loadConfiguration useLazyPreparation:useLazyPreparation];
+            NSArray *audioEffects = [request[@"darwinAudioEffects"] isKindOfClass:[NSArray class]] ? request[@"darwinAudioEffects"] : @[];
+            AudioPlayer* player = [[AudioPlayer alloc] initWithRegistrar:_registrar playerId:playerId loadConfiguration:loadConfiguration audioEffects:audioEffects useLazyPreparation:useLazyPreparation];
             [_players setValue:player forKey:playerId];
             result(nil);
         }

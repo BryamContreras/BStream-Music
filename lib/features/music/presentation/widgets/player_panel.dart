@@ -39,6 +39,7 @@ import 'animated_artwork_motion.dart';
 import 'artwork_fade_gradients.dart';
 import 'audio_routing_menus.dart';
 import 'classic_vinyl_deck.dart';
+import 'equalizer_settings_page.dart';
 import 'favorite_star_badge.dart';
 import 'lyrics_page_route.dart';
 import 'now_playing_equalizer.dart';
@@ -5527,6 +5528,9 @@ class _PlayerMenu extends ConsumerWidget {
                     case 'audio-output':
                       unawaited(showAudioOutputPicker(actionContext, ref));
                       return;
+                    case 'equalizer':
+                      unawaited(showEqualizerSettings(actionContext));
+                      return;
                     case 'cast':
                       unawaited(showCastDevicesMenu(actionContext));
                       return;
@@ -5806,6 +5810,13 @@ class _PlayerOptionsMenu extends StatelessWidget {
                   ? strings.audioOutput
                   : strings.playerAudioOutput,
             ),
+            if (supportsEqualizerSettings(context))
+              action(
+                key: 'player-menu-equalizer',
+                value: 'equalizer',
+                icon: Icons.equalizer_rounded,
+                label: strings.equalizer,
+              ),
             action(
               key: 'player-menu-share',
               value: 'share',

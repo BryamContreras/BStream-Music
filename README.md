@@ -19,6 +19,7 @@ Current version: **1.3.1+131**.
 
 ## What's new in 1.3.1
 
+- A 5-band equalizer is now available.
 - The player now supports higher quality audio when available.
 - Improved and optimized the layouts of the player styles.
 - Added the new Spotify Style player.
@@ -124,7 +125,7 @@ Current version: **1.3.1+131**.
   compact landscape, large phones, and desktop windows.
 - Crossfade uses coordinated playback decks and supports every whole-second
   duration from 1 through 15 seconds on Android and desktop.
-- Android can conservatively shorten confirmed prolonged silence in streaming
+- Android and iOS can conservatively shorten confirmed prolonged silence in streaming
   or downloaded songs without disabling crossfade or treating quiet music as
   empty audio.
 - Playback queue synchronized with playlists and the library.
@@ -152,6 +153,11 @@ Current version: **1.3.1+131**.
 - Volume is available directly in the player controls.
 - On Windows, Linux, and macOS, choose BStream's audio output device from the
   player's More menu, with independent player volume and crossfade support.
+- A native five-band equalizer is available on Android, iOS, Windows, Linux, and
+  macOS from Settings > Playback and the player's More menu. Presets and custom
+  curves apply live to both playback decks, with headroom compensation and
+  bypass when disabled or flat. Android and iOS use BStream's own PCM DSP without
+  depending on vendor audio effects. See [equalizer architecture and tests](docs/equalizer.md).
 - On desktop, Space toggles Play/Pause from the mini or full player unless an
   editable text field such as Search currently has focus.
 - Synchronized lyrics from Better Lyrics, LyricsPlus, and LRCLIB, with automatic
@@ -533,6 +539,14 @@ playback, downloads, embedded YouTube Music account login, TikTok LIVE, backup
 export, and CSV export are adapted to iOS. The system document picker handles
 exports outside BStream's sandbox.
 
+The five-band equalizer uses an in-place native PCM tap and shares presets and
+settings with the other players. Optional silence skipping uses conservative
+native analysis, bounded to 12 seconds ahead, followed by exact source-clock
+seeks. It does not send PCM to Dart or change the user's volume. Protected,
+live/HLS, and unreadable sources report unavailable processing and retain
+ordinary playback. See [iOS audio processing](docs/ios_audio_processing.md) for
+the buffering, caching, compatibility limits, and Apple-host test commands.
+
 The Now Playing home-screen widget is available on iOS 14 or newer (small and
 medium sizes). Its artwork and metadata are copied into the shared App Group
 `group.com.bstream.bstreamMusic`; the widget never starts an audio engine or
@@ -680,6 +694,12 @@ The workflow verifies all three APK signatures before uploading the artifacts.
   unlikes use the same conservative playlist sync engine, without importing a
   duplicate playlist. “Episodes for later” is ignored during account bootstrap.
 - ZIP backups contain the database, `audio/`, `thumbnails/`, and a manifest.
+  Downloaded tracks are grouped into playlist folders; unassigned tracks get
+  a Downloaded songs folder when playlists are present. Each audio file is
+  included once, with portable M3U8 lists referencing shared songs from their
+  first playlist. Without playlists, audio stays in one folder. Restoring keeps
+  every playlist membership and its order, and older backups remain supported.
+  See [ZIP backup format](docs/backup_format.md).
 - The Storage page separates local ZIP backup transfer from portable CSV
   transfer. BStream CSV preserves playlist membership and order; importing can
   resolve up to three missing tracks concurrently, and BStream Music,

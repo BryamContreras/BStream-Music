@@ -6,6 +6,7 @@ import 'package:bstream_music/features/music/domain/entities/local_track.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/services/player/just_audio_player_service.dart';
 import 'package:bstream_music/services/player/notification_artwork_service.dart';
+import 'package:bstream_music/services/player/player_equalizer.dart';
 import 'package:bstream_music/services/player/player_service.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +14,7 @@ import 'package:just_audio/just_audio.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  _androidEqualizerTests();
 
   MediaItem remoteItem(String id, String queueEntryId) {
     return MediaItem(
@@ -2409,6 +2411,488 @@ void main() {
   });
 }
 
+void _androidEqualizerTests() {
+  group('Mobile BStream PCM processing', () {
+    const curve = EqualizerSettings(enabled: true, gainsDb: [6, 4, 2, 0, -2]);
+    const alternate = EqualizerSettings(
+      enabled: true,
+      gainsDb: [-3, 1.5, 3.5, 2, -1],
+    );
+
+    test(
+      'Darwin asset capability changes retain the skip target and playback',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        final snapshots = <PlayerSnapshot>[];
+        final subscription = fixture.service.snapshotStream.listen(
+          snapshots.add,
+        );
+        try {
+          final effect = fixture.equalizers[fixture.primary]!;
+          await fixture.service.configureSkipSilence(enabled: true);
+          expect(fixture.service.supportsSkipSilence, isTrue);
+          effect.skipSilenceSupported = false;
+          await effect.emitNativeStatus();
+          await _drainEvents();
+          expect(fixture.service.supportsSkipSilence, isFalse);
+          expect(fixture.service.supportsEqualizer, isTrue);
+          expect(snapshots, isNotEmpty);
+
+          await fixture.service.configureSkipSilence(enabled: false);
+          await fixture.service.configureSkipSilence(enabled: true);
+          expect(fixture.primary.skipSilenceCalls.last, isTrue);
+          expect(fixture.service.skipSilenceEnabled, isTrue);
+          expect(fixture.primary.stopCalls, 0);
+          expect(fixture.primary.seekCalls, 0);
+          final writesBeforeRecovery = fixture.primary.skipSilenceCalls.length;
+          effect.skipSilenceSupported = true;
+          await effect.emitNativeStatus();
+          await _waitUntil(
+            () =>
+                fixture.primary.skipSilenceCalls.length > writesBeforeRecovery,
+          );
+          expect(fixture.service.supportsSkipSilence, isTrue);
+          expect(fixture.primary.skipSilenceCalls.last, isTrue);
+        } finally {
+          await subscription.cancel();
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a temporarily unsupported asset does not block a prepared crossfade',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.playCurrent(masterVolume: .72);
+          await fixture.service.configureSkipSilence(enabled: true);
+          final effect = fixture.equalizers[fixture.primary]!;
+          effect.skipSilenceSupported = false;
+          await effect.emitNativeStatus();
+          await fixture.service.prepareCrossfade(
+            RemoteCrossfadePlaybackSource(_remoteSource('next')),
+          );
+          expect(fixture.service.supportsSkipSilence, isFalse);
+          expect(fixture.standby.setAudioSourcesCalls, greaterThan(0));
+          fixture.primary.emitPosition(const Duration(milliseconds: 500));
+          await _waitUntil(() => fixture.standby.playCalls > 0);
+          expect(fixture.service.crossfadeEnabled, isTrue);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'a backend without native support stores preferences without writes',
+      () async {
+        final fixture = await _CrossfadeFixture.create(
+          equalizer: true,
+          supportsSkipSilence: false,
+        );
+        try {
+          await fixture.service.configureSkipSilence(enabled: true);
+          expect(fixture.service.skipSilenceEnabled, isTrue);
+          expect(fixture.service.supportsSkipSilence, isFalse);
+          expect(fixture.primary.skipSilenceCalls, isEmpty);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'stores one complete curve before the first source is loaded',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          final effect = fixture.equalizers[fixture.primary]!;
+          await fixture.service.configureEqualizer(curve);
+          expect(effect.configureCalls, [curve]);
+          expect(effect.nativeSettings, curve);
+          expect(effect.configured, isFalse);
+          expect(fixture.primary.setAudioSourcesCalls, 0);
+          expect(fixture.primary.volumeCalls, isEmpty);
+          fixture.primary.onPlay = () {
+            expect(effect.nativeSettings, curve);
+            expect(effect.enabled, isTrue);
+            expect(fixture.primary.volumeCalls.last, 1);
+          };
+
+          await fixture.service.playRemoteSource(_remoteSource('current'));
+          await _drainEvents();
+
+          expect(fixture.primary.playCalls, 1);
+          expect(fixture.service.currentSnapshot.volume, 1);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'sends exact five-band gains without device interpolation or quantization',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        const exact = EqualizerSettings(
+          enabled: true,
+          gainsDb: [12, 3.5, -4.25, 8, -12],
+        );
+        try {
+          await fixture.service.configureEqualizer(exact);
+          final effect = fixture.equalizers[fixture.primary]!;
+          final status = await effect.readStatus();
+          expect(status.engine, 'bstream-dsp');
+          expect(
+            status.parameters.bands.map((band) => band.centerFrequency),
+            equalizerBandFrequencies,
+          );
+          expect(
+            status.parameters.bands.map((band) => band.gain),
+            exact.gainsDb,
+          );
+          expect(status.preampDb, -12);
+          expect(effect.configureCalls, [exact]);
+
+          await fixture.service.configureEqualizer(exact);
+          expect(effect.configureCalls, [exact]);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'latest aggregate wins and queued intermediate curves are skipped',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          final effect = fixture.equalizers[fixture.primary]!;
+          effect.blockNextConfiguration = true;
+          final first = fixture.service.configureEqualizer(curve);
+          await effect.writeStarted.future;
+          final skipped = fixture.service.configureEqualizer(
+            const EqualizerSettings(enabled: true, gainsDb: [1, 1, 1, 1, 1]),
+          );
+          final latest = fixture.service.configureEqualizer(alternate);
+          effect.releaseWrite.complete();
+          await Future.wait([first, skipped, latest]);
+
+          expect(effect.configureCalls, [curve, alternate]);
+          expect(effect.nativeSettings, alternate);
+          expect(effect.enabled, isTrue);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'returning to the previous preset overwrites a stale blocked aggregate',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.service.configureEqualizer(curve);
+          final effect = fixture.equalizers[fixture.primary]!;
+          effect.blockNextConfiguration = true;
+          final interim = fixture.service.configureEqualizer(alternate);
+          await effect.writeStarted.future;
+          final restore = fixture.service.configureEqualizer(curve);
+          effect.releaseWrite.complete();
+          await Future.wait([interim, restore]);
+
+          expect(effect.configureCalls, [curve, alternate, curve]);
+          expect(effect.nativeSettings, curve);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'failed configuration bypasses DSP without changing playback or master gain',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.playCurrent(masterVolume: .7);
+          fixture.primary.emitPosition(const Duration(milliseconds: 123));
+          await _drainEvents();
+          final effect = fixture.equalizers[fixture.primary]!;
+          final volumeWrites = fixture.primary.volumeCalls.length;
+          final loads = fixture.primary.setAudioSourcesCalls;
+          effect.failNextConfiguration = true;
+
+          await expectLater(
+            fixture.service.configureEqualizer(curve),
+            throwsStateError,
+          );
+
+          expect(effect.configureCalls.last.enabled, isFalse);
+          expect(effect.nativeSettings.enabled, isFalse);
+          expect(fixture.primary.volumeCalls.length, volumeWrites);
+          expect(fixture.primary.volumeCalls.last, closeTo(.7, 1e-9));
+          expect(fixture.primary.setAudioSourcesCalls, loads);
+          expect(
+            fixture.service.currentSnapshot.position,
+            const Duration(milliseconds: 123),
+          );
+          expect(fixture.service.currentSnapshot.volume, .7);
+          expect(fixture.service.currentSnapshot.status, PlayerStatus.playing);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test('a failed aggregate can be retried with the same values', () async {
+      final fixture = await _CrossfadeFixture.create(equalizer: true);
+      try {
+        final effect = fixture.equalizers[fixture.primary]!;
+        effect.failNextConfiguration = true;
+        await expectLater(
+          fixture.service.configureEqualizer(curve),
+          throwsStateError,
+        );
+        final writes = effect.configureCalls.length;
+
+        await fixture.service.configureEqualizer(curve);
+
+        expect(effect.configureCalls.length, writes + 1);
+        expect(effect.nativeSettings, curve);
+        expect(effect.enabled, isTrue);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    for (final badAck in [
+      'engine',
+      'enabled',
+      'preamp',
+      'gain',
+      'center',
+      'bands',
+    ]) {
+      test(
+        'rejects wrong native $badAck ACK and retries the same curve',
+        () async {
+          final fixture = await _CrossfadeFixture.create(equalizer: true);
+          try {
+            await fixture.playCurrent(masterVolume: .7);
+            final effect = fixture.equalizers[fixture.primary]!;
+            effect.nextBadAcknowledgement = badAck;
+            await expectLater(
+              fixture.service.configureEqualizer(curve),
+              throwsStateError,
+            );
+            expect(effect.enabled, isFalse);
+            final writes = effect.configureCalls.length;
+
+            await fixture.service.configureEqualizer(curve);
+
+            expect(effect.configureCalls.length, writes + 1);
+            expect(effect.nativeSettings, curve);
+            expect(effect.enabled, isTrue);
+            expect(fixture.primary.volumeCalls.last, closeTo(.7, 1e-9));
+            expect(fixture.service.currentSnapshot.volume, .7);
+          } finally {
+            await fixture.dispose();
+          }
+        },
+      );
+    }
+
+    test('retrying bypass resends a rejected aggregate disable', () async {
+      final fixture = await _CrossfadeFixture.create(equalizer: true);
+      try {
+        await fixture.playCurrent(masterVolume: .7);
+        await fixture.service.configureEqualizer(curve);
+        final effect = fixture.equalizers[fixture.primary]!;
+        effect.disableFailures = 2;
+        await expectLater(
+          fixture.service.configureEqualizer(const EqualizerSettings()),
+          throwsStateError,
+        );
+        expect(effect.enabled, isTrue);
+
+        await fixture.service.configureEqualizer(const EqualizerSettings());
+
+        expect(effect.enabled, isFalse);
+        expect(fixture.primary.volumeCalls.last, closeTo(.7, 1e-9));
+        expect(fixture.service.currentSnapshot.volume, .7);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    test(
+      'unsupported DSP is reportable and supported status resumes its stored curve',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.playCurrent(masterVolume: .7);
+          final effect = fixture.equalizers[fixture.primary]!;
+          effect.nativeSupported = false;
+
+          await expectLater(
+            fixture.service.configureEqualizer(curve),
+            throwsStateError,
+          );
+
+          expect(fixture.service.supportsEqualizer, isFalse);
+          expect(effect.enabled, isFalse);
+          expect(fixture.primary.volumeCalls.last, closeTo(.7, 1e-9));
+          effect.nativeSupported = true;
+          await effect.emitNativeStatus();
+          await _waitUntil(
+            () => fixture.service.supportsEqualizer && effect.enabled,
+          );
+
+          expect(effect.nativeSettings, curve);
+          expect(fixture.service.currentSnapshot.volume, .7);
+          expect(fixture.service.currentSnapshot.status, PlayerStatus.playing);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'status notifications recover availability without polling on playback ticks',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.playCurrent(masterVolume: .7);
+          await fixture.service.configureEqualizer(curve);
+          final effect = fixture.equalizers[fixture.primary]!;
+          final reads = effect.statusReadCalls;
+          final writes = effect.configureCalls.length;
+          for (var index = 0; index < 12; index++) {
+            fixture.primary.emitPosition(Duration(milliseconds: index * 10));
+          }
+          await _drainEvents();
+          expect(effect.statusReadCalls, reads);
+          expect(effect.configureCalls.length, writes);
+
+          effect.nativeSupported = false;
+          effect.nativeSettings = const EqualizerSettings();
+          await effect.emitNativeStatus();
+          expect(fixture.service.supportsEqualizer, isFalse);
+          effect.nativeSupported = true;
+          await effect.emitNativeStatus();
+          await _waitUntil(
+            () => fixture.service.supportsEqualizer && effect.enabled,
+          );
+
+          expect(effect.nativeSettings, curve);
+          expect(fixture.primary.volumeCalls.last, closeTo(.7, 1e-9));
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'standby and promoted deck preserve aggregate EQ while gains remain master times fade',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.service.configureEqualizer(curve);
+          await fixture.playAndPrepare(masterVolume: .72);
+          final incomingEffect = fixture.equalizers[fixture.standby]!;
+          expect(incomingEffect.nativeSettings, curve);
+          expect(
+            fixture.standby.volumeCalls.every((gain) => gain == 0),
+            isTrue,
+          );
+          fixture.standby.onPlay = () {
+            expect(incomingEffect.nativeSettings, curve);
+            expect(incomingEffect.enabled, isTrue);
+          };
+          final primaryStart = fixture.primary.volumeCalls.length;
+          final standbyStart = fixture.standby.volumeCalls.length;
+          fixture.primary.emitPosition(const Duration(milliseconds: 400));
+          await _waitUntil(
+            () => fixture.service.currentSnapshot.queueEntryId == 'remote:next',
+            attempts: 700,
+          );
+
+          for (final volume in [
+            ...fixture.primary.volumeCalls.skip(primaryStart),
+            ...fixture.standby.volumeCalls.skip(standbyStart),
+          ]) {
+            expect(volume, inInclusiveRange(0, .72 + 1e-9));
+          }
+          expect(fixture.standby.volumeCalls.last, closeTo(.72, 1e-9));
+          expect(fixture.service.currentSnapshot.volume, .72);
+          await fixture.service.configureEqualizer(const EqualizerSettings());
+          expect(incomingEffect.enabled, isFalse);
+          expect(fixture.standby.volumeCalls.last, closeTo(.72, 1e-9));
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'stop, idle changes and resume retain aggregate tuning and user gain',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.playCurrent(masterVolume: .7);
+          await fixture.service.stop();
+          await fixture.service.configureEqualizer(curve);
+          await fixture.service.resume();
+          await _drainEvents();
+
+          expect(fixture.equalizers[fixture.primary]!.nativeSettings, curve);
+          expect(fixture.equalizers[fixture.primary]!.enabled, isTrue);
+          expect(fixture.primary.volumeCalls.last, closeTo(.7, 1e-9));
+          expect(fixture.service.currentSnapshot.volume, .7);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+
+    test(
+      'quality replacement has the same aggregate before becoming audible',
+      () async {
+        final fixture = await _CrossfadeFixture.create(equalizer: true);
+        try {
+          await fixture.service.configureEqualizer(curve);
+          await fixture.service.playRemoteSource(_remoteSource('current'));
+          await fixture.service.setVolume(.7);
+          fixture.primary
+            ..emitDuration(const Duration(minutes: 3))
+            ..emitPosition(const Duration(seconds: 41));
+          await _drainEvents();
+          fixture.standby.onPlay = () {
+            final effect = fixture.equalizers[fixture.standby]!;
+            expect(effect.enabled, isTrue);
+            expect(effect.nativeSettings, curve);
+          };
+
+          expect(
+            await fixture.service.upgradeRemoteSource(_upgradeSource()),
+            isTrue,
+          );
+
+          expect(fixture.standby.volumeCalls.last, closeTo(.7, 1e-9));
+          expect(
+            fixture.service.currentSnapshot.position,
+            const Duration(seconds: 41),
+          );
+          expect(fixture.service.currentSnapshot.volume, .7);
+        } finally {
+          await fixture.dispose();
+        }
+      },
+    );
+  });
+}
+
 RemotePlaybackSource _remoteSource(String id) => RemotePlaybackSource(
   track: TrackInfo(
     id: id,
@@ -2507,6 +2991,7 @@ class _CrossfadeFixture {
     this.standby,
     this.factoryPlayers,
     this.service,
+    this.equalizers,
   );
 
   final Directory directory;
@@ -2515,10 +3000,13 @@ class _CrossfadeFixture {
   final _BlockingAudioPlayer standby;
   final List<_BlockingAudioPlayer> factoryPlayers;
   final JustAudioPlayerService service;
+  final Map<AudioPlayer, _TestBStreamEqualizer> equalizers;
 
   static Future<_CrossfadeFixture> create({
     Duration skipSilenceWriteTimeout = const Duration(seconds: 2),
     JustAudioRemoteDiagnosticProbe? remoteDiagnosticProbe,
+    bool equalizer = false,
+    bool supportsSkipSilence = true,
   }) async {
     final directory = await Directory.systemTemp.createTemp(
       'bstream_just_audio_crossfade_',
@@ -2529,10 +3017,15 @@ class _CrossfadeFixture {
     final primary = _BlockingAudioPlayer();
     final standby = _BlockingAudioPlayer();
     final factoryPlayers = <_BlockingAudioPlayer>[];
+    final equalizers = <AudioPlayer, _TestBStreamEqualizer>{};
+    _TestBStreamEqualizer effectFor(AudioPlayer player) =>
+        equalizers.putIfAbsent(player, () => _TestBStreamEqualizer());
     final service = JustAudioPlayerService(
       audioPlayer: primary,
       crossfadeAudioPlayer: standby,
-      supportsSkipSilence: true,
+      supportsSkipSilence: supportsSkipSilence,
+      supportsEqualizer: equalizer,
+      bstreamEqualizerForPlayer: equalizer ? effectFor : null,
       skipSilenceWriteTimeout: skipSilenceWriteTimeout,
       remoteDiagnosticProbe: remoteDiagnosticProbe,
       crossfadePlayerFactory: () {
@@ -2550,6 +3043,7 @@ class _CrossfadeFixture {
       standby,
       factoryPlayers,
       service,
+      equalizers,
     );
   }
 
@@ -2587,6 +3081,9 @@ class _CrossfadeFixture {
   Future<void> dispose({bool serviceAlreadyDisposed = false}) async {
     if (!primary.releaseMove.isCompleted) primary.releaseMove.complete();
     if (!standby.releaseMove.isCompleted) standby.releaseMove.complete();
+    for (final effect in equalizers.values) {
+      if (!effect.releaseWrite.isCompleted) effect.releaseWrite.complete();
+    }
     for (final backend in [primary, standby, ...factoryPlayers]) {
       if (!backend.releasePlay.isCompleted) backend.releasePlay.complete();
       for (final call in backend.sourceLoadCalls) {
@@ -2594,6 +3091,9 @@ class _CrossfadeFixture {
       }
     }
     if (!serviceAlreadyDisposed) await service.dispose();
+    for (final effect in equalizers.values) {
+      await effect.statusEvents.close();
+    }
     for (final player in factoryPlayers) {
       if (player.disposeCalls == 0) {
         await player.dispose();
@@ -2620,6 +3120,20 @@ class _BlockingAudioPlayer extends AudioPlayer {
   final _durations = StreamController<Duration?>.broadcast(sync: true);
   final _positions = StreamController<Duration>.broadcast(sync: true);
   final _volumes = StreamController<double>.broadcast(sync: true);
+  final _sessions = StreamController<int?>.broadcast(sync: true);
+  int? _nativeSession;
+
+  @override
+  Stream<int?> get androidAudioSessionIdStream => _sessions.stream;
+
+  @override
+  int? get androidAudioSessionId => _nativeSession;
+
+  void emitAndroidSession(int session) {
+    _nativeSession = session;
+    _sessions.add(session);
+  }
+
   final _sequenceStates = StreamController<SequenceState>.broadcast(sync: true);
   final List<AudioSource> _sources = [];
   final List<_SourceLoadCall> sourceLoadCalls = [];
@@ -3072,10 +3586,114 @@ class _BlockingAudioPlayer extends AudioPlayer {
     await _durations.close();
     await _positions.close();
     await _volumes.close();
+    await _sessions.close();
     await _sequenceStates.close();
     await super.dispose();
     await _errors.close();
     await _states.close();
+  }
+}
+
+class _TestBStreamEqualizer extends BStreamEqualizer {
+  final configureCalls = <EqualizerSettings>[];
+  EqualizerSettings nativeSettings = const EqualizerSettings();
+  bool nativeSupported = true;
+  bool? skipSilenceSupported;
+  bool configured = false;
+  bool failNextConfiguration = false;
+  bool blockNextConfiguration = false;
+  int disableFailures = 0;
+  String? nextBadAcknowledgement;
+  int statusReadCalls = 0;
+  final writeStarted = Completer<void>();
+  final releaseWrite = Completer<void>();
+  final statusEvents = StreamController<BStreamEqualizerStatus>.broadcast(
+    sync: true,
+  );
+
+  @override
+  bool get supported => nativeSupported;
+
+  @override
+  bool get enabled =>
+      nativeSupported && nativeSettings.enabled && !nativeSettings.isFlat;
+
+  @override
+  Stream<BStreamEqualizerStatus> get statusStream => statusEvents.stream;
+
+  @override
+  Future<BStreamEqualizerStatus> configure({
+    required bool enabled,
+    required List<double> gainsDb,
+  }) async {
+    final settings = EqualizerSettings(
+      enabled: enabled,
+      gainsDb: gainsDb,
+    ).normalized;
+    configureCalls.add(settings);
+    if (blockNextConfiguration) {
+      blockNextConfiguration = false;
+      if (!writeStarted.isCompleted) writeStarted.complete();
+      await releaseWrite.future;
+    }
+    if (failNextConfiguration) {
+      failNextConfiguration = false;
+      throw StateError('Native PCM aggregate rejected');
+    }
+    if (!enabled && disableFailures > 0) {
+      disableFailures--;
+      throw StateError('Native PCM bypass rejected');
+    }
+    nativeSettings = settings;
+    final badAck = nextBadAcknowledgement;
+    nextBadAcknowledgement = null;
+    return _status(badAck: badAck);
+  }
+
+  BStreamEqualizerStatus _status({String? badAck}) {
+    final active = enabled;
+    final bands = [
+      for (final (index, frequency) in equalizerBandFrequencies.indexed)
+        BStreamEqualizerBand(
+          index: index,
+          centerFrequency:
+              frequency + (badAck == 'center' && index == 0 ? 10 : 0),
+          gain:
+              nativeSettings.gainsDb[index] +
+              (badAck == 'gain' && index == 0 ? 1 : 0),
+        ),
+    ];
+    if (badAck == 'bands') bands.removeLast();
+    return BStreamEqualizerStatus(
+      supported: nativeSupported,
+      enabled: badAck == 'enabled' ? !active : active,
+      configured: configured,
+      skipSilenceSupported: skipSilenceSupported,
+      engine: badAck == 'engine' ? 'system-equalizer' : 'bstream-dsp',
+      preampDb:
+          (active ? nativeSettings.preampDb : 0.0) +
+          (badAck == 'preamp' ? 1.0 : 0.0),
+      parameters: BStreamEqualizerParameters(
+        minDecibels: -12,
+        maxDecibels: 12,
+        bands: bands,
+      ),
+    );
+  }
+
+  @override
+  Future<BStreamEqualizerStatus> readStatus() async {
+    statusReadCalls++;
+    return _status();
+  }
+
+  Future<void> emitNativeStatus() async {
+    statusEvents.add(await readStatus());
+  }
+
+  @override
+  Future<void> setEnabled(bool enabled) async {
+    await configure(enabled: enabled, gainsDb: nativeSettings.gainsDb);
   }
 }
 

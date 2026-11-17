@@ -12,11 +12,12 @@ A flutter plugin for playing audio.
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Your Company' => 'email@example.com' }
   s.source           = { :path => '.' }
-  s.source_files = 'just_audio/Sources/just_audio/**/*.{h,m}'
+  s.source_files = 'just_audio/Sources/just_audio/**/*.{h,m,c}'
+  s.frameworks = 'AVFoundation', 'AudioToolbox', 'MediaToolbox', 'CoreMedia'
   s.public_header_files = 'just_audio/Sources/just_audio/include/**/*.h'
   s.ios.dependency 'Flutter'
   s.osx.dependency 'FlutterMacOS'
   s.ios.deployment_target = '12.0'
   s.osx.deployment_target = '10.14'
-  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
+  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'CLANG_C_LANGUAGE_STANDARD' => 'gnu11' }
 end

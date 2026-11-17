@@ -122,6 +122,7 @@ void main() {
     const english = AppStrings(AppLanguage.english);
     const spanish = AppStrings(AppLanguage.spanish);
     const expectedEnglish = <String>[
+      'A 5-band equalizer is now available.',
       'The player now supports higher quality audio when available.',
       'Improved and optimized player style layouts.',
       'Added the new Spotify Style player.',
@@ -135,10 +136,10 @@ void main() {
       english.whatsNewSummary,
       'Player styles, local music filters, lyrics, and settings',
     );
-    expect(spanish.whatsNewHighlights, hasLength(7));
+    expect(spanish.whatsNewHighlights, hasLength(8));
     expect(
       spanish.whatsNewHighlights.first,
-      'El reproductor ahora es compatible con audio de mayor calidad cuando está disponible.',
+      'Ahora está disponible un ecualizador de 5 bandas.',
     );
     expect(
       spanish.whatsNewHighlights.last,
@@ -150,9 +151,9 @@ void main() {
       final highlights = strings.whatsNewHighlights;
       final title = strings.whatsNewTitle('1.3.1');
       expect(title, contains('1.3.1'), reason: language.code);
-      expect(highlights, hasLength(7), reason: language.code);
+      expect(highlights, hasLength(8), reason: language.code);
       expect(strings.whatsNewSummary.trim(), isNotEmpty, reason: language.code);
-      expect(highlights[2], contains('Spotify Style'), reason: language.code);
+      expect(highlights[3], contains('Spotify Style'), reason: language.code);
       for (var index = 0; index < highlights.length; index++) {
         expect(highlights[index].trim(), isNotEmpty, reason: language.code);
         if (language != AppLanguage.english) {

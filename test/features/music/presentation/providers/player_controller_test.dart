@@ -2041,24 +2041,27 @@ void main() {
     },
   );
 
-  test('skip silence ignores a backend that does not support it', () async {
-    final player = _CrossfadePlayerService(supportsSkipSilence: false);
-    final settings = _CrossfadeSettingsController(
-      const SettingsState(
-        downloadDirectory: '/tmp/bstream-unsupported-skip-silence-test',
-        language: AppLanguage.spanish,
-        skipSilenceEnabled: true,
-      ),
-    );
-    final container = _container(player, settingsController: settings);
-    addTearDown(container.dispose);
+  test(
+    'skip silence retains its target while the current route is unavailable',
+    () async {
+      final player = _CrossfadePlayerService(supportsSkipSilence: false);
+      final settings = _CrossfadeSettingsController(
+        const SettingsState(
+          downloadDirectory: '/tmp/bstream-unsupported-skip-silence-test',
+          language: AppLanguage.spanish,
+          skipSilenceEnabled: true,
+        ),
+      );
+      final container = _container(player, settingsController: settings);
+      addTearDown(container.dispose);
 
-    await container.read(playerControllerProvider.future);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+      await container.read(playerControllerProvider.future);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    expect(player.skipSilenceConfigurations, isEmpty);
-    expect(player.skipSilenceEnabled, isFalse);
-  });
+      expect(player.skipSilenceConfigurations, [true]);
+      expect(player.skipSilenceEnabled, isTrue);
+    },
+  );
 
   test('a failed skip silence write does not poison later changes', () async {
     final player = _CrossfadePlayerService()..skipSilenceFailuresRemaining = 1;

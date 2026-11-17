@@ -1,0 +1,499 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'curve configured before decoder activation is retained without waiting',
+    () async {
+      final equalizer = BStreamEqualizer();
+      final gains = <double>[3.5, -2.5, 0, 12, -12];
+      final status = await equalizer.configure(enabled: true, gainsDb: gains);
+      gains[0] = 9;
+
+      expect(equalizer.enabled, isTrue);
+      expect(status.engine, 'bstream-dsp');
+      expect(status.configured, isFalse);
+      expect(status.parameters.bands.map((band) => band.gain), [
+        3.5,
+        -2.5,
+        0,
+        12,
+        -12,
+      ]);
+      expect(status.preampDb, -12);
+      expect((await equalizer.readStatus()).parameters.bands.first.gain, 3.5);
+
+      final bypass = await equalizer.configure(
+        enabled: false,
+        gainsDb: [3.5, -2.5, 0, 12, -12],
+      );
+      expect(bypass.enabled, isFalse);
+      expect(bypass.preampDb, 0);
+      expect(bypass.parameters.bands.first.gain, 3.5);
+      expect(() => bypass.parameters.bands.clear(), throwsUnsupportedError);
+    },
+  );
+
+  test('invalid client curves cannot reach the native processor', () async {
+    final equalizer = BStreamEqualizer();
+    await expectLater(
+      equalizer.configure(enabled: true, gainsDb: [1, 2]),
+      throwsArgumentError,
+    );
+    for (final invalid in [double.nan, double.infinity, -double.infinity]) {
+      await expectLater(
+        equalizer.configure(enabled: true, gainsDb: [0, 0, invalid, 0, 0]),
+        throwsArgumentError,
+      );
+    }
+    final clamped = await equalizer.configure(
+      enabled: true,
+      gainsDb: [99, -99, .5, -.5, 0],
+    );
+    expect(clamped.parameters.bands.map((band) => band.gain), [
+      12,
+      -12,
+      .5,
+      -.5,
+      0,
+    ]);
+  });
+
+  test('native diagnostics retain processed format and applied revision', () {
+    final status = BStreamEqualizerStatus.fromMap({
+      'supported': true,
+      'enabled': true,
+      'configured': true,
+      'engine': 'bstream-dsp',
+      'preampDb': -3.5,
+      'processedFrames': 96000,
+      'sampleRate': 48000,
+      'channelCount': 2,
+      'pcmEncoding': 4,
+      'revision': 8,
+      'appliedRevision': 7,
+      'parameters': {
+        'minDecibels': -12,
+        'maxDecibels': 12,
+        'bands': [
+          {'index': 0, 'centerFrequency': 60, 'gain': 3.5},
+        ],
+      },
+    });
+    expect(status.supported, isTrue);
+    expect(status.configured, isTrue);
+    expect(status.processedFrames, 96000);
+    expect(status.sampleRate, 48000);
+    expect(status.channelCount, 2);
+    expect(status.pcmEncoding, 4);
+    expect(status.revision, 8);
+    expect(status.appliedRevision, 7);
+    expect(status.parameters.bands.single.gain, 3.5);
+    expect(status.skipSilenceSupported, isNull);
+  });
+
+  test(
+    'Darwin initializes the shared DSP and retains skip targets per asset',
+    () async {
+      final bridge = _NativeBridge(darwin: true);
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer, darwin: true);
+      addTearDown(() async {
+        await player.dispose();
+        bridge.dispose();
+      });
+      await equalizer.configure(enabled: true, gainsDb: [3.5, 1, -2, 0, 4]);
+      await player.setSkipSilenceEnabled(true);
+      await _load(player);
+      final request = bridge.initArguments.single;
+      expect(request['androidAudioEffects'], isEmpty);
+      final effects = request['darwinAudioEffects'] as List<dynamic>;
+      expect(effects, hasLength(1));
+      expect(effects.single, {
+        'type': 'bstreamAudioEqualizer',
+        'enabled': true,
+        'gainsDb': [3.5, 1.0, -2.0, 0.0, 4.0],
+      });
+      final engine = bridge.engines.single;
+      expect(engine.requestedSkipSilence, isTrue);
+      expect((await equalizer.readStatus()).parameters.bands.first.gain, 3.5);
+
+      engine.skipSilenceSupported = false;
+      await engine.emitStatus();
+      expect((await equalizer.readStatus()).skipSilenceSupported, isFalse);
+      // Unsupported current assets still acknowledge the preference. The next
+      // native item receives the latest value instead of an earlier cached one.
+      await player.setSkipSilenceEnabled(false);
+      expect(engine.requestedSkipSilence, isFalse);
+      await player.setSkipSilenceEnabled(true);
+      expect(engine.requestedSkipSilence, isTrue);
+      engine.skipSilenceSupported = true;
+      await engine.emitStatus();
+      expect((await equalizer.readStatus()).skipSilenceSupported, isTrue);
+      expect(equalizer.supported, isTrue);
+    },
+  );
+
+  test(
+    'a released engine cannot block writes or overwrite a new engine ACK',
+    () async {
+      final bridge = _NativeBridge();
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer);
+      addTearDown(() async {
+        await player.dispose();
+        bridge.dispose();
+      });
+      await _load(player);
+      final oldEngine = bridge.engines.single;
+      final delayed = oldEngine.blockConfigure();
+      final oldWrite = equalizer.configure(
+        enabled: true,
+        gainsDb: [6, 3, 0, 0, 0],
+      );
+      await delayed.started.future;
+      await player.stop();
+      await _load(player);
+      final currentEngine = bridge.engines.last;
+      expect(currentEngine.id, isNot(oldEngine.id));
+
+      // The old reply is still held: this must use a fresh native write lane,
+      // rather than waiting for the retired engine's two-second timeout.
+      final current = await equalizer
+          .configure(enabled: true, gainsDb: [-3, 0, 2.5, 0, -1])
+          .timeout(const Duration(seconds: 1));
+      expect(current.supported, isTrue);
+      expect(current.parameters.bands.map((band) => band.gain), [
+        -3,
+        0,
+        2.5,
+        0,
+        -1,
+      ]);
+      delayed.complete(oldEngine.status(supported: false));
+      final retiredReply = await oldWrite;
+      expect(equalizer.supported, isTrue);
+      expect(retiredReply.supported, isTrue);
+      expect(retiredReply.configured, isFalse);
+      expect(retiredReply.parameters.bands.map((band) => band.gain), [
+        -3,
+        0,
+        2.5,
+        0,
+        -1,
+      ]);
+      expect((await equalizer.readStatus()).supported, isTrue);
+      expect(currentEngine.gains, [-3, 0, 2.5, 0, -1]);
+    },
+  );
+
+  test(
+    'stale reads and callbacks cannot cross native player identities',
+    () async {
+      final bridge = _NativeBridge();
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer);
+      final statuses = <BStreamEqualizerStatus>[];
+      final subscription = equalizer.statusStream.listen(statuses.add);
+      addTearDown(() async {
+        await subscription.cancel();
+        await player.dispose();
+        bridge.dispose();
+      });
+      await _load(player);
+      final oldEngine = bridge.engines.single;
+      final delayed = oldEngine.blockRead();
+      final oldRead = equalizer.readStatus();
+      await delayed.started.future;
+      await player.stop();
+      await _load(player);
+      final currentEngine = bridge.engines.last;
+      await equalizer.configure(enabled: true, gainsDb: [0, 0, -6, 0, 0]);
+      delayed.complete(oldEngine.status(supported: false));
+      expect((await oldRead).configured, isFalse);
+      expect(equalizer.supported, isTrue);
+
+      await oldEngine.emitStatus(supported: false);
+      expect(statuses, isEmpty);
+      expect(equalizer.supported, isTrue);
+      await currentEngine.emitStatus();
+      expect(statuses, hasLength(1));
+      expect(statuses.single.parameters.bands[2].gain, -6);
+      expect(statuses.single.supported, isTrue);
+      // Playback ready events have already traversed the separate event channel;
+      // installing the equalizer's method callback must preserve that path.
+      expect(player.processingState, ProcessingState.ready);
+    },
+  );
+
+  test(
+    'disposal ignores an in-flight read and rejects subsequent writes',
+    () async {
+      final bridge = _NativeBridge();
+      final equalizer = BStreamEqualizer();
+      final player = _player(equalizer);
+      addTearDown(() async {
+        await player.dispose();
+        bridge.dispose();
+      });
+      await _load(player);
+      final engine = bridge.engines.single;
+      final delayed = engine.blockRead();
+      final read = equalizer.readStatus();
+      await delayed.started.future;
+      await player.dispose();
+      delayed.complete(engine.status(supported: false));
+      final result = await read;
+      expect(result.configured, isFalse);
+      expect(equalizer.supported, isTrue);
+      await expectLater(
+        equalizer.configure(enabled: true, gainsDb: [0, 0, 0, 0, 0]),
+        throwsStateError,
+      );
+    },
+  );
+
+  test('a timed-out native write does not poison later writes', () async {
+    final bridge = _NativeBridge();
+    final equalizer = BStreamEqualizer();
+    final player = _player(equalizer);
+    addTearDown(() async {
+      await player.dispose();
+      bridge.dispose();
+    });
+    await _load(player);
+    final engine = bridge.engines.single;
+    final delayed = engine.blockConfigure();
+    final timeout = expectLater(
+      equalizer.configure(enabled: true, gainsDb: [6, 0, 0, 0, 0]),
+      throwsA(isA<TimeoutException>()),
+    );
+    await delayed.started.future;
+    await timeout;
+    final recovered = await equalizer
+        .configure(enabled: true, gainsDb: [0, -3.5, 0, 1.5, 0])
+        .timeout(const Duration(seconds: 1));
+    expect(recovered.parameters.bands.map((band) => band.gain), [
+      0,
+      -3.5,
+      0,
+      1.5,
+      0,
+    ]);
+    delayed.complete(engine.status(supported: false));
+    await Future<void>.delayed(Duration.zero);
+    expect(equalizer.supported, isTrue);
+  });
+}
+
+AudioPlayer _player(BStreamEqualizer equalizer, {bool darwin = false}) =>
+    AudioPlayer(
+      audioPipeline: darwin
+          ? AudioPipeline(darwinAudioEffects: [equalizer])
+          : AudioPipeline(androidAudioEffects: [equalizer]),
+      handleInterruptions: false,
+      androidApplyAudioAttributes: false,
+      handleAudioSessionActivation: false,
+      useProxyForRequestHeaders: false,
+    );
+
+Future<Duration?> _load(AudioPlayer player) => player.setAudioSource(
+  AudioSource.uri(Uri.parse('file:///bstream-bridge-fixture.wav')),
+);
+
+/// Drive the public AudioPlayer API through its real method/event codecs. Only
+/// the native implementation is replaced; effect activation stays production.
+class _NativeBridge {
+  _NativeBridge({this.darwin = false}) {
+    messenger.setMockMethodCallHandler(_main, (call) async {
+      if (call.method == 'init') {
+        final arguments = call.arguments as Map<dynamic, dynamic>;
+        initArguments.add(arguments);
+        final engine = _NativeEngine(arguments['id'] as String, this);
+        final effects =
+            arguments[darwin ? 'darwinAudioEffects' : 'androidAudioEffects']
+                as List<dynamic>;
+        final equalizer = effects.cast<Map<dynamic, dynamic>>().singleWhere(
+          (effect) => effect['type'] == 'bstreamAudioEqualizer',
+        );
+        engine.enabled = equalizer['enabled'] == true;
+        engine.gains = (equalizer['gainsDb'] as List<dynamic>)
+            .map((gain) => (gain as num).toDouble())
+            .toList();
+        engines.add(engine);
+        install(engine.methods, engine.handle);
+        install(engine.events, (_) async => null);
+        install(engine.data, (_) async => null);
+        return null;
+      }
+      if (call.method == 'disposePlayer' ||
+          call.method == 'disposeAllPlayers') {
+        return <String, Object?>{};
+      }
+      throw StateError('Unexpected native player method: ${call.method}');
+    });
+  }
+
+  static const _main = MethodChannel('com.ryanheise.just_audio.methods');
+  final bool darwin;
+  final initArguments = <Map<dynamic, dynamic>>[];
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  final engines = <_NativeEngine>[];
+  final channels = <MethodChannel>[];
+  final blocked = <_BlockedReply>[];
+
+  void install(
+    MethodChannel channel,
+    Future<dynamic> Function(MethodCall) handler,
+  ) {
+    channels.add(channel);
+    messenger.setMockMethodCallHandler(channel, handler);
+  }
+
+  void dispose() {
+    for (final reply in blocked) {
+      reply.complete(<String, Object?>{'supported': false});
+    }
+    messenger.setMockMethodCallHandler(_main, null);
+    for (final channel in channels) {
+      messenger.setMockMethodCallHandler(channel, null);
+    }
+  }
+}
+
+class _NativeEngine {
+  _NativeEngine(this.id, this.bridge);
+
+  final String id;
+  final _NativeBridge bridge;
+  bool enabled = false;
+  List<double> gains = [0, 0, 0, 0, 0];
+  bool requestedSkipSilence = false;
+  bool? skipSilenceSupported;
+  int revision = 0;
+  _BlockedReply? _configureReply;
+  _BlockedReply? _readReply;
+  MethodChannel get methods =>
+      MethodChannel('com.ryanheise.just_audio.methods.$id');
+  MethodChannel get events =>
+      MethodChannel('com.ryanheise.just_audio.events.$id');
+  MethodChannel get data => MethodChannel('com.ryanheise.just_audio.data.$id');
+
+  _BlockedReply blockConfigure() {
+    final reply = _BlockedReply();
+    bridge.blocked.add(reply);
+    return _configureReply = reply;
+  }
+
+  _BlockedReply blockRead() {
+    final reply = _BlockedReply();
+    bridge.blocked.add(reply);
+    return _readReply = reply;
+  }
+
+  Future<dynamic> handle(MethodCall call) async {
+    if (call.method == 'setSkipSilence') {
+      final arguments = call.arguments as Map<dynamic, dynamic>;
+      requestedSkipSilence = arguments['enabled'] == true;
+      return <String, Object?>{};
+    }
+    if (call.method == 'bstreamEqualizerConfigure') {
+      final arguments = call.arguments as Map<dynamic, dynamic>;
+      enabled = arguments['enabled'] == true;
+      gains = (arguments['gainsDb'] as List<dynamic>)
+          .map((gain) => (gain as num).toDouble())
+          .toList();
+      revision++;
+      final reply = _configureReply;
+      _configureReply = null;
+      if (reply != null) {
+        reply.started.complete();
+        return reply.result.future;
+      }
+      return status();
+    }
+    if (call.method == 'bstreamEqualizerReadStatus') {
+      final reply = _readReply;
+      _readReply = null;
+      if (reply != null) {
+        reply.started.complete();
+        return reply.result.future;
+      }
+      return status();
+    }
+    if (call.method == 'load') {
+      await bridge.messenger.handlePlatformMessage(
+        events.name,
+        const StandardMethodCodec().encodeSuccessEnvelope({
+          'processingState': 3,
+          'updateTime': DateTime.now().millisecondsSinceEpoch,
+          'updatePosition': 0,
+          'bufferedPosition': 180000000,
+          'duration': 180000000,
+          'currentIndex': 0,
+        }),
+        null,
+      );
+      return <String, Object?>{'duration': 180000000};
+    }
+    return <String, Object?>{};
+  }
+
+  Future<void> emitStatus({bool supported = true}) async {
+    await bridge.messenger.handlePlatformMessage(
+      methods.name,
+      const StandardMethodCodec().encodeMethodCall(
+        MethodCall(
+          'bstreamEqualizerStatusChanged',
+          status(supported: supported),
+        ),
+      ),
+      null,
+    );
+  }
+
+  Map<String, Object?> status({bool supported = true}) => {
+    if (skipSilenceSupported != null)
+      'skipSilenceSupported': skipSilenceSupported,
+    'supported': supported,
+    'enabled': supported && enabled && gains.any((gain) => gain.abs() >= .01),
+    'configured': true,
+    'engine': 'bstream-dsp',
+    'preampDb': enabled
+        ? -gains.fold<double>(0, (value, gain) => value > gain ? value : gain)
+        : 0,
+    'processedFrames': 48000,
+    'sampleRate': 48000,
+    'channelCount': 2,
+    'pcmEncoding': 2,
+    'revision': revision,
+    'appliedRevision': revision,
+    'parameters': {
+      'minDecibels': -12,
+      'maxDecibels': 12,
+      'bands': [
+        for (var index = 0; index < 5; index++)
+          {
+            'index': index,
+            'centerFrequency': BStreamEqualizer.frequencies[index],
+            'gain': gains[index],
+          },
+      ],
+    },
+  };
+}
+
+class _BlockedReply {
+  final started = Completer<void>();
+  final result = Completer<Map<String, Object?>>();
+
+  void complete(Map<String, Object?> status) {
+    if (!result.isCompleted) result.complete(status);
+  }
+}

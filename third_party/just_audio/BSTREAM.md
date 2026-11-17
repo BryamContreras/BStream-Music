@@ -1,8 +1,41 @@
-# BStream Android customization
+# BStream mobile audio customizations
 
 This directory vendors `just_audio` 0.10.6 under its original BSD-3-Clause
-license. BStream keeps the public Dart API and all non-Android implementations
-unchanged.
+license. BStream preserves compatibility with the existing Dart API. Native
+processing extensions are isolated in the Android and Darwin implementations.
+
+## iOS PCM processing and silence skipping
+
+`darwinAudioEffects` carries the same `bstreamAudioEqualizer` marker as Android.
+The existing per-player method channel accepts the aggregate configure/read
+methods and emits availability changes, including `skipSilenceSupported`.
+Parameters, diagnostics and counters cross this channel; PCM never does.
+
+`BStreamAudioProcessingTap` installs one mix per enqueued item and gates initial
+audibility until installation completes or explicitly falls back. It changes
+atomic parameter snapshots thereafter, preserving the item and media clock.
+The render callback processes native packed PCM in place without allocating or
+locking. Unsupported formats preserve the source audio and report unavailable;
+a route that advances without ever delivering PCM cannot silently claim EQ.
+Mix cleanup checks ownership so item reuse/clipping can install a fresh tap.
+
+`BStreamAudioDSP.c` contains the independent five-band biquads, internal
+headroom, 25 ms transition and conservative RMS/peak silence classifier.
+AVPlayer taps must preserve frame counts: silence is removed through bounded
+`AVAssetReader` lookahead and exact AVPlayerItem seeks, not through tap sample
+compaction. Analysis is optional, limited to 12 seconds ahead and to contiguous
+buffered remote media; readers refill in batches. A bounded shared cache avoids
+repeating confirmed analysis. The decoder classifies original, unequalized PCM.
+The player's timeline, crossfade gains and playback intent remain authoritative.
+
+HLS/live, protected, multitrack and unreadable assets are not claimed as
+processable. Disabling analysis cancels the optional reader and restores its
+buffer hint. Late work and seeks are guarded by item identity and generations;
+failed seeks back off instead of looping. Core tests run without Apple APIs;
+native wrappers and shared simulator scenarios require a Mac with Xcode.
+See [iOS audio processing](../../docs/ios_audio_processing.md).
+
+## Android processing and routing
 
 The small `BStreamAudioOutput` native facade shares a media-output preference
 across the active and standby/crossfade players using weak references. It calls
@@ -11,12 +44,55 @@ when an engine is initialized. A disconnected/invalid device falls back to the
 system default. This is a best-effort AudioTrack preference, not a promise from
 the hardware; no communication mode, SCO or global Bluetooth setting is used.
 The app's native output menu controls Android's media stream volume separately
-from the player's per-track gain. The public just_audio Dart API is unchanged.
+from the player's per-track gain. The public output-routing API is unchanged.
 
 The Android audio engine explicitly disables Media3 video-track selection.
 A resolver may return a muxed container, but only its selected audio track is
 decoded; bitrate/format selection is unchanged. Animated artwork and Spotify
 Canvas continue through the separate `video_player` engine.
+
+The app installs `BStreamEqualizer` through the existing `AudioPipeline`, with
+one independent five-band PCM DSP per deck. It does not use Android's vendor
+`Equalizer`. The legacy public `AndroidEqualizer` API remains available to
+other consumers of the fork, unchanged. No new decoder or Dart PCM processing
+is introduced.
+
+`BStreamEqualizerConfiguration` hands immutable five-band snapshots to the
+native audio thread. `BStreamEqualizerAudioProcessor` uses five Q=1 biquads at
+60, 230, 910, 3600 and 14000 Hz, with gains from -12 to +12 dB. It applies
+`-max(0, gains)` headroom before the filters/quantization and interpolates
+changes over 25 ms. Headroom reduces clipping risk; overlapping boosts and
+extreme transients can still clip. Bands at or above Nyquist are identity.
+Each channel has independent reusable filter history and buffers. Flush/seek
+resets history. PCM16, PCM24/32 and float are supported, including the endian
+variants recognized by Media3. Disabled/flat bypass preserves input bytes
+after an outstanding transition settles.
+
+`BStreamAudioProcessorChain` keeps silence detection and Sonic before EQ.
+Media3 1.4.1 skips custom processor chains on high-resolution float output;
+`BStreamEqualizerAudioSink` covers that route without changing its encoding,
+channels, sample count or timestamps. It preserves original input-buffer
+identity under backpressure and never processes a retained buffer twice.
+The wrapper delegates PCM16 processing to the normal chain. Registered DSP
+players always decline compressed passthrough and disable offload, even when
+disabled, so changing the curve never needs a decoder-route restart.
+
+Dart sends aggregate settings with `bstreamEqualizerConfigure` and can query
+`bstreamEqualizerReadStatus` over the existing per-player method channel.
+`bstreamEqualizerStatusChanged` uses that same channel, without a second
+EventChannel or polling timer. Snapshots include the acknowledged curve,
+headroom, PCM format, processed-frame count, requested revision and applied
+revision; the latter catches up after the 25 ms transition. The service
+validates native acknowledgments, serializes updates, and retries incomplete
+curves instead of trusting optimistic UI state. Failures bypass DSP while
+leaving playback and the user/crossfade volumes independent. Disposal removes
+the method handler and status subscription.
+
+JVM tests measure generated PCM frequency response and check formats,
+headroom, bypass, channel separation, fragmented buffers, transitions,
+Nyquist, flush and high-resolution sink backpressure. Flutter integration
+selects every preset through the real settings page, verifies native status
+and flowing samples, and exercises stop/restart and source upgrades.
 
 The Android player replaces Media3's default silence detector with BStream's
 PCM16 RMS processor. It evaluates 100 ms windows every 25 ms, smooths their

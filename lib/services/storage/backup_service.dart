@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/background_work.dart';
+import 'backup_audio_layout.dart';
 import 'backup_restore_transaction.dart';
 import 'library_operation_coordinator.dart';
 import 'local_database_service.dart';
@@ -18,6 +19,12 @@ const int _backupMaxExpandedBytes = 16 * 1024 * 1024 * 1024;
 const int _backupMaxSingleEntryBytes = 8 * 1024 * 1024 * 1024;
 const int _backupMaxExpansionRatio = 200;
 const int _backupMinimumExpansionAllowance = 64 * 1024 * 1024;
+const int _backupMaximumAudioIndexBytes = 16 * 1024 * 1024;
+final _backupInvalidPathCharacters = RegExp(r'[<>:"|?*\x00-\x1f\x7f]');
+final _backupReservedDevice = RegExp(
+  r'^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)',
+  caseSensitive: false,
+);
 
 /// Validates declared ZIP sizes before any backup entry is expanded to disk.
 ///
@@ -78,12 +85,14 @@ class BackupService {
   Future<File> createBackupFile({
     required String mediaRoot,
     String? outputPath,
+    String downloadedFolderName = 'Downloaded songs',
   }) {
     return _coordinator.runExclusive(
       LibraryMaintenancePhase.preparingBackup,
       () => _createBackupFileInternal(
         mediaRoot: mediaRoot,
         outputPath: outputPath,
+        downloadedFolderName: downloadedFolderName,
       ),
     );
   }
@@ -113,6 +122,7 @@ class BackupService {
   Future<File> _createBackupFileInternal({
     required String mediaRoot,
     String? outputPath,
+    required String downloadedFolderName,
   }) async {
     await Directory(mediaRoot).create(recursive: true);
     await Directory(p.join(mediaRoot, 'audio')).create(recursive: true);
@@ -139,6 +149,7 @@ class BackupService {
     try {
       await snapshotRoot.create(recursive: true);
       final databasePath = await _databaseService.databasePath();
+      final audioMetadata = await _databaseService.getBackupAudioMetadata();
 
       _coordinator.updatePhase(LibraryMaintenancePhase.snapshotting);
 
@@ -192,9 +203,15 @@ class BackupService {
       }
 
       // Async file I/O does not move ZIP compression off the UI isolate.
-      // The worker sees only snapshot/output paths, never the live database.
+      // The worker sees plain metadata and file paths, never a live database.
       await runBackgroundWork<void>(
-        _BackupArchiveWriter(snapshotRoot.path, destination.path).write,
+        _BackupArchiveWriter(
+          snapshotRoot.path,
+          destination.path,
+          mediaRoot,
+          audioMetadata,
+          downloadedFolderName,
+        ).write,
       );
     } finally {
       if (await snapshotRoot.exists()) {
@@ -241,8 +258,17 @@ class BackupService {
         );
       }
 
-      await _validateBackupManifest(temporaryRoot);
+      final audioIndex = await _validateBackupManifest(temporaryRoot);
       await _databaseService.validateBackupDatabase(extractedDatabase.path);
+      if (audioIndex != null) {
+        // Portable playlists belong in the exported ZIP. The app restores
+        // membership from SQLite and regenerates M3Us on its next export.
+        for (final path in audioIndex.playlistFiles) {
+          await File(
+            p.join(temporaryRoot.path, p.joinAll(path.split('/'))),
+          ).delete();
+        }
+      }
 
       _coordinator.updatePhase(LibraryMaintenancePhase.committingRestore);
       final mediaDirectory = Directory(mediaRoot);
@@ -259,6 +285,12 @@ class BackupService {
         await transaction.commit();
         await _databaseService.initialize();
         await _databaseService.rewriteLocalTrackMediaRoot(mediaRoot: mediaRoot);
+        if (audioIndex != null) {
+          await _applyRestoredAudioPaths(
+            audioIndex.tracks,
+            mediaRoot: mediaRoot,
+          );
+        }
         await _databaseService.rebasePlaylistSyncAfterRestore();
       } catch (error, stackTrace) {
         Object? rollbackError;
@@ -300,6 +332,52 @@ class BackupService {
         await temporaryRoot.delete(recursive: true);
       }
     }
+  }
+
+  Future<void> _applyRestoredAudioPaths(
+    Map<String, String> audioPaths, {
+    required String mediaRoot,
+  }) async {
+    // Schema 2 identifies every included download by ID. A row without a
+    // mapping had no owned audio in the snapshot; rebasing it by basename
+    // could accidentally attach an unrelated file after flattening folders.
+    // Keep such rows unavailable beneath a directory absent from the payload.
+    final audioRoot = p.join(mediaRoot, 'audio');
+    var unavailableRoot = p.join(audioRoot, '.bstream-unavailable');
+    var suffix = 2;
+    while (await FileSystemEntity.type(unavailableRoot, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      unavailableRoot = p.join(audioRoot, '.bstream-unavailable-${suffix++}');
+    }
+    await _databaseService.withDatabase(
+      (db) => db.transaction((transaction) async {
+        final rows = await transaction.query('local_tracks', columns: ['id']);
+        final unmatched = audioPaths.keys.toSet();
+        final batch = transaction.batch();
+        var unavailableIndex = 0;
+        for (final row in rows) {
+          final id = row['id'] as String;
+          final relative = audioPaths[id];
+          unmatched.remove(id);
+          batch.update(
+            'local_tracks',
+            {
+              'file_path': relative == null
+                  ? p.join(unavailableRoot, '${unavailableIndex++}.missing')
+                  : p.join(mediaRoot, p.joinAll(relative.split('/'))),
+            },
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+        }
+        if (unmatched.isNotEmpty) {
+          throw const FormatException(
+            'El índice de audio no coincide con la biblioteca del respaldo.',
+          );
+        }
+        await batch.commit(noResult: true);
+      }),
+    );
   }
 
   static Future<void> _copyDirectory({
@@ -391,6 +469,13 @@ Future<void> _extractBackupArchive({
       final entry = approved.entry;
       final destination = File(p.join(outputPath, relative));
       await destination.parent.create(recursive: true);
+      if (await destination.exists()) {
+        // The destination filesystem may equate Unicode variants that have
+        // different ZIP names. Reject aliases before any active data is touched.
+        throw FormatException(
+          'El respaldo contiene una ruta equivalente: $relative',
+        );
+      }
       final output = _BoundedBackupOutputStream(
         OutputFileStream(destination.path),
         maximumBytes: entry.size,
@@ -571,13 +656,25 @@ class _BoundedBackupOutputStream extends OutputStream {
   }
 }
 
-Future<void> _validateBackupManifest(Directory extractedRoot) async {
+class _BackupAudioIndex {
+  const _BackupAudioIndex(this.tracks, this.playlistFiles);
+
+  final Map<String, String> tracks;
+  final List<String> playlistFiles;
+}
+
+Future<_BackupAudioIndex?> _validateBackupManifest(
+  Directory extractedRoot,
+) async {
   const maximumManifestBytes = 64 * 1024;
   final manifest = File(p.join(extractedRoot.path, 'manifest.json'));
   if (!await manifest.exists()) {
     // Backups created before manifests were introduced remain importable; the
     // SQLite integrity and schema checks are still authoritative.
-    return;
+    if (await File(p.join(extractedRoot.path, 'audio-index.json')).exists()) {
+      throw const FormatException('El índice de audio no tiene manifiesto.');
+    }
+    return null;
   }
   if (await manifest.length() > maximumManifestBytes) {
     throw const FormatException(
@@ -587,14 +684,29 @@ Future<void> _validateBackupManifest(Directory extractedRoot) async {
 
   try {
     final decoded = jsonDecode(await manifest.readAsString());
-    if (decoded is! Map ||
+    if (decoded is! Map<String, dynamic> ||
         decoded['app'] != AppConstants.appName ||
-        decoded['schema'] != 1 ||
+        (decoded['schema'] != 1 && decoded['schema'] != 2) ||
         decoded['database'] != AppConstants.databaseName) {
       throw const FormatException(
         'El manifiesto del respaldo no es compatible.',
       );
     }
+    if (decoded['schema'] == 1) {
+      if (decoded.containsKey('audioIndex') ||
+          await File(p.join(extractedRoot.path, 'audio-index.json')).exists()) {
+        throw const FormatException(
+          'El formato del índice de audio no coincide.',
+        );
+      }
+      return null;
+    }
+    if (decoded['audioIndex'] != 'audio-index.json') {
+      throw const FormatException(
+        'El respaldo no declara un índice de audio válido.',
+      );
+    }
+    return await _readBackupAudioIndex(extractedRoot);
   } on FormatException {
     rethrow;
   } catch (error) {
@@ -602,16 +714,183 @@ Future<void> _validateBackupManifest(Directory extractedRoot) async {
   }
 }
 
+Future<_BackupAudioIndex> _readBackupAudioIndex(Directory root) async {
+  final file = File(p.join(root.path, 'audio-index.json'));
+  if (!await file.exists() ||
+      await file.length() > _backupMaximumAudioIndexBytes) {
+    throw const FormatException('El índice de audio falta o excede el límite.');
+  }
+  final decoded = jsonDecode(await file.readAsString());
+  if (decoded is! Map<String, dynamic> ||
+      decoded['schema'] != 1 ||
+      decoded['audioFiles'] is! List ||
+      decoded['playlistFiles'] is! List ||
+      decoded['tracks'] is! Map<String, dynamic>) {
+    throw const FormatException('El índice de audio no es compatible.');
+  }
+  final audioFiles = <String>{};
+  final allPaths = <String>{};
+  final canonicalPaths = <String>{};
+  for (final field in ['audioFiles', 'playlistFiles']) {
+    for (final raw in decoded[field] as List<dynamic>) {
+      if (raw is! String || !_isPortableIndexedAudioPath(raw)) {
+        throw const FormatException(
+          'El índice contiene una ruta de audio no segura.',
+        );
+      }
+      if (!canonicalPaths.add(_canonicalBackupDestinationKey(raw))) {
+        throw const FormatException('El índice contiene una ruta duplicada.');
+      }
+      allPaths.add(raw);
+      if (field == 'audioFiles') audioFiles.add(raw);
+      if (allPaths.length > _backupMaxEntries ||
+          !await File(p.join(root.path, p.joinAll(raw.split('/')))).exists()) {
+        throw const FormatException(
+          'Un archivo del índice no existe en el respaldo.',
+        );
+      }
+      if (field == 'playlistFiles' &&
+          (p.posix.basename(raw) != 'playlist.m3u8' ||
+              !await _hasBackupPlaylistHeader(
+                File(p.join(root.path, p.joinAll(raw.split('/')))),
+              ))) {
+        throw const FormatException(
+          'El índice contiene una lista auxiliar no válida.',
+        );
+      }
+    }
+  }
+  final rawTracks = decoded['tracks'] as Map<String, dynamic>;
+  if (rawTracks.length > _backupMaxEntries) {
+    throw const FormatException('El índice contiene demasiadas canciones.');
+  }
+  final tracks = <String, String>{};
+  for (final entry in rawTracks.entries) {
+    final path = entry.value;
+    if (entry.key.isEmpty || path is! String || !audioFiles.contains(path)) {
+      throw const FormatException(
+        'Una canción del índice no tiene audio válido.',
+      );
+    }
+    tracks[entry.key] = path;
+  }
+  final audioRoot = Directory(p.join(root.path, 'audio'));
+  if (await audioRoot.exists()) {
+    await for (final entity in audioRoot.list(
+      recursive: true,
+      followLinks: false,
+    )) {
+      if (entity is! File) continue;
+      final relative = p
+          .split(p.relative(entity.path, from: root.path))
+          .join('/');
+      if (!allPaths.contains(relative)) {
+        throw const FormatException(
+          'El respaldo contiene audio fuera del índice.',
+        );
+      }
+    }
+  }
+  return _BackupAudioIndex(
+    tracks,
+    (decoded['playlistFiles'] as List<dynamic>).cast<String>(),
+  );
+}
+
+Future<bool> _hasBackupPlaylistHeader(File file) async {
+  final input = await file.open();
+  try {
+    return ascii.decode(await input.read(8), allowInvalid: true) == '#EXTM3U\n';
+  } finally {
+    await input.close();
+  }
+}
+
+bool _isPortableIndexedAudioPath(String path) {
+  if (!path.startsWith('audio/') ||
+      path.contains(r'\') ||
+      path.trim() != path) {
+    return false;
+  }
+  final safe = _safeBackupEntryName(path);
+  if (safe == null || p.split(safe).join('/') != path) return false;
+  for (final part in path.split('/').skip(1)) {
+    if (part.endsWith('.') ||
+        part.endsWith(' ') ||
+        _backupInvalidPathCharacters.hasMatch(part) ||
+        utf8.encode(part).length > 255 ||
+        _backupReservedDevice.hasMatch(part.split('.').first.trim())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 class _BackupArchiveWriter {
-  const _BackupArchiveWriter(this.snapshotPath, this.destinationPath);
+  const _BackupArchiveWriter(
+    this.snapshotPath,
+    this.destinationPath,
+    this.originalMediaRoot,
+    this.metadata,
+    this.downloadedFolderName,
+  );
 
   final String snapshotPath;
   final String destinationPath;
+  final String originalMediaRoot;
+  final BackupAudioMetadata metadata;
+  final String downloadedFolderName;
 
   Future<void> write() async {
     final databaseSnapshot = File(
       p.join(snapshotPath, 'database', AppConstants.databaseName),
     );
+    final audioRoot = p.join(snapshotPath, 'audio');
+    final layout = await BackupAudioLayout.build(
+      snapshotAudioRoot: audioRoot,
+      originalMediaRoot: originalMediaRoot,
+      metadata: metadata,
+      downloadedFolderName: downloadedFolderName,
+    );
+    final indexed =
+        layout.grouped ||
+        metadata.tracks.any(
+          (row) => !layout.trackPaths.containsKey(row['id']),
+        ) ||
+        layout.audioFiles.any((file) {
+          final original = p.posix.join(
+            'audio',
+            p.split(p.relative(file.sourcePath, from: audioRoot)).join('/'),
+          );
+          return original != file.archivePath;
+        });
+    String? audioIndex;
+    if (indexed) {
+      audioIndex = jsonEncode({
+        'schema': 1,
+        'audioFiles': [for (final file in layout.audioFiles) file.archivePath],
+        'playlistFiles': [
+          for (final file in layout.playlists) file.archivePath,
+        ],
+        'tracks': layout.trackPaths,
+      });
+      if (utf8.encode(audioIndex).length > _backupMaximumAudioIndexBytes ||
+          layout.trackPaths.length > _backupMaxEntries ||
+          layout.audioFiles.length + layout.playlists.length + 3 >
+              _backupMaxEntries) {
+        throw const FormatException(
+          'El índice de audio excede el límite permitido.',
+        );
+      }
+      if ([
+        ...layout.audioFiles.map((file) => file.archivePath),
+        ...layout.playlists.map((file) => file.archivePath),
+      ].any((path) => !_isPortableIndexedAudioPath(path))) {
+        throw const FormatException(
+          'El respaldo contiene un nombre de audio no portable.',
+        );
+      }
+    }
     final encoder = ZipFileEncoder();
     encoder.create(destinationPath, level: ZipFileEncoder.gzip);
     var closed = false;
@@ -621,12 +900,18 @@ class _BackupArchiveWriter {
           'manifest.json',
           jsonEncode({
             'app': AppConstants.appName,
-            'schema': 1,
+            'schema': indexed ? 2 : 1,
             'database': AppConstants.databaseName,
             'exportedAt': DateTime.now().toIso8601String(),
+            if (indexed) 'audioIndex': 'audio-index.json',
           }),
         ),
       );
+      if (audioIndex != null) {
+        encoder.addArchiveFile(
+          ArchiveFile.string('audio-index.json', audioIndex),
+        );
+      }
       if (await databaseSnapshot.exists()) {
         await encoder.addFile(
           databaseSnapshot,
@@ -634,7 +919,19 @@ class _BackupArchiveWriter {
           ZipFileEncoder.gzip,
         );
       }
-      for (final folder in const ['audio', 'thumbnails']) {
+      for (final file in layout.audioFiles) {
+        await encoder.addFile(
+          File(file.sourcePath),
+          file.archivePath,
+          ZipFileEncoder.store,
+        );
+      }
+      for (final file in layout.playlists) {
+        encoder.addArchiveFile(
+          ArchiveFile.string(file.archivePath, file.contents),
+        );
+      }
+      for (final folder in const ['thumbnails']) {
         final directory = Directory(p.join(snapshotPath, folder));
         if (await directory.exists()) {
           await encoder.addDirectory(
@@ -660,8 +957,8 @@ class _BackupArchiveWriter {
 
 String? _safeBackupEntryName(String name) {
   final normalized = name.replaceAll(r'\', '/').trim();
-  if (normalized == 'manifest.json') {
-    return 'manifest.json';
+  if (normalized == 'manifest.json' || normalized == 'audio-index.json') {
+    return normalized;
   }
   if (normalized == 'database/${AppConstants.databaseName}') {
     return p.join('database', AppConstants.databaseName);

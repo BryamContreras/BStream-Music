@@ -70,6 +70,18 @@ jobs:
       - name: Run tests
         run: flutter test --coverage
 
+      - name: Verify portable iOS audio DSP
+        shell: bash
+        run: |
+          set -euo pipefail
+          dsp_test_binary="$RUNNER_TEMP/bstream-audio-dsp-tests"
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+            -Ithird_party/just_audio/darwin/just_audio/Sources/just_audio/include/just_audio \
+            test/native/bstream_audio_dsp_test.c \
+            third_party/just_audio/darwin/just_audio/Sources/just_audio/BStreamAudioDSP.c \
+            -lm -o "$dsp_test_binary"
+          "$dsp_test_binary"
+
       - name: Smoke-test LIVE overlay layouts
         run: node tool/live_overlay_browser_smoke.mjs
 

@@ -209,7 +209,10 @@ void main() {
       final download = (await target.getLocalTracks()).singleWhere(
         (track) => track.id == 'download-a',
       );
-      expect(download.filePath, p.join(targetMedia, 'audio', 'a.m4a'));
+      expect(
+        download.filePath,
+        p.join(targetMedia, 'audio', 'Imported favorites', 'a.m4a'),
+      );
       expect(await File(download.filePath).readAsString(), 'saved audio');
     },
   );

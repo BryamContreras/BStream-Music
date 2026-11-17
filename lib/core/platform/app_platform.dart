@@ -42,15 +42,12 @@ class AppPlatform {
   static bool isMobileTargetPlatform(TargetPlatform platform) =>
       platform == TargetPlatform.android || platform == TargetPlatform.iOS;
 
-  /// Native silence skipping is currently provided by Media3/ExoPlayer.
-  ///
-  /// Do not advertise this on iOS or desktop until their playback backends
-  /// expose an equivalent that preserves media timestamps. Timestamp-changing
-  /// audio filters can make the dual-deck crossfade start at the wrong point.
+  /// Native silence skipping preserves the original media timeline on mobile.
+  /// Desktop backends do not yet expose the same music-safe behavior.
   static bool get supportsSkipSilence => supportsSkipSilenceOn(current);
 
   static bool supportsSkipSilenceOn(AppPlatformType platform) =>
-      platform == AppPlatformType.android;
+      platform == AppPlatformType.android || platform == AppPlatformType.ios;
 
   /// Platforms where the in-process Dart TikTok LIVE transport is exposed.
   ///

@@ -27,6 +27,7 @@ import '../../../../services/storage/library_csv_service.dart';
 import '../providers/live_overlay_controller.dart';
 import '../providers/music_providers.dart';
 import 'app_update_dialog.dart';
+import 'equalizer_settings_page.dart';
 import 'library_csv_import_dialog.dart';
 import 'lyrics_animation_transition.dart';
 import 'live_widget_style_settings.dart';
@@ -684,6 +685,16 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
             _SettingsGroup(
               title: strings.playback,
               children: [
+                if (supportsEqualizerSettings(context)) ...[
+                  _SettingsEntryCard(
+                    key: const ValueKey('settings-card-equalizer'),
+                    icon: Icons.equalizer_rounded,
+                    title: strings.equalizer,
+                    subtitle: strings.equalizerSummary,
+                    onTap: () => unawaited(showEqualizerSettings(context)),
+                  ),
+                  const SizedBox(height: appCardGap),
+                ],
                 KeyedSubtree(
                   key: const ValueKey('settings-inline-timer'),
                   child: _SleepTimerSettingsScope(
@@ -709,6 +720,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                   _SkipSilenceSettings(
                     key: const ValueKey('settings-inline-skip-silence'),
                     enabled: state.skipSilenceEnabled,
+                    available: ref.watch(skipSilenceAvailableProvider),
                     strings: strings,
                     onEnabledChanged: ref
                         .read(settingsControllerProvider.notifier)
@@ -3798,12 +3810,14 @@ class _CrossfadeSettings extends StatelessWidget {
 class _SkipSilenceSettings extends StatelessWidget {
   const _SkipSilenceSettings({
     required this.enabled,
+    required this.available,
     required this.strings,
     required this.onEnabledChanged,
     super.key,
   });
 
   final bool enabled;
+  final bool available;
   final AppStrings strings;
   final ValueChanged<bool> onEnabledChanged;
 
@@ -3827,7 +3841,9 @@ class _SkipSilenceSettings extends StatelessWidget {
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
           subtitle: Text(
-            strings.skipSilenceSummary,
+            available
+                ? strings.skipSilenceSummary
+                : strings.skipSilenceUnavailableForAudio,
             style: appListCardSubtitleStyle(context),
           ),
         ),

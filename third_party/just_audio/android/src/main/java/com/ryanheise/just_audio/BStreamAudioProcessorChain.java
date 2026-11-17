@@ -12,12 +12,16 @@ final class BStreamAudioProcessorChain implements AudioProcessorChain {
     private final AudioProcessor[] audioProcessors;
 
     BStreamAudioProcessorChain() {
+        this(null);
+    }
+
+    BStreamAudioProcessorChain(BStreamEqualizerConfiguration equalizer) {
         silenceSkippingAudioProcessor = BStreamSilenceSkippingProfile.createProcessor();
         sonicAudioProcessor = new SonicAudioProcessor();
-        audioProcessors = new AudioProcessor[] {
-            silenceSkippingAudioProcessor,
-            sonicAudioProcessor,
-        };
+        audioProcessors = equalizer == null
+            ? new AudioProcessor[] {silenceSkippingAudioProcessor, sonicAudioProcessor}
+            : new AudioProcessor[] {silenceSkippingAudioProcessor, sonicAudioProcessor,
+                new BStreamEqualizerAudioProcessor(equalizer)};
     }
 
     @Override

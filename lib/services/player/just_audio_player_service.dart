@@ -12,6 +12,7 @@ import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import 'crossfade_transition.dart';
 import 'notification_artwork_service.dart';
+import 'player_equalizer.dart';
 import 'player_service.dart';
 
 typedef JustAudioOperationDeadline = Future<void> Function(Duration duration);
@@ -28,6 +29,7 @@ class JustAudioPlayerService
         NativeRemoteQueuePlayer,
         CrossfadeCapablePlayer,
         SkipSilenceCapablePlayer,
+        EqualizerCapablePlayer,
         AudioSourceUpgradePlayer {
   static const _crossfadeShutdownGrace = Duration(seconds: 2);
   static const _crossfadeRetirementGrace = Duration(milliseconds: 250);
@@ -59,6 +61,8 @@ class JustAudioPlayerService
     AudioPlayer? audioPlayer,
     AudioPlayer? crossfadeAudioPlayer,
     JustAudioPlayerFactory? crossfadePlayerFactory,
+    bool? supportsEqualizer,
+    BStreamEqualizer? Function(AudioPlayer player)? bstreamEqualizerForPlayer,
     bool? supportsSkipSilence,
     Duration skipSilenceWriteTimeout = const Duration(seconds: 2),
     Duration operationTimeout = const Duration(seconds: 45),
@@ -66,11 +70,16 @@ class JustAudioPlayerService
     JustAudioRemoteDiagnosticProbe? remoteDiagnosticProbe,
   }) : _notificationArtworkService =
            notificationArtworkService ?? NotificationArtworkService.instance,
-       _player = audioPlayer ?? _createAudioPlayer(),
        _injectedCrossfadePlayer = crossfadeAudioPlayer,
-       _crossfadePlayerFactory =
-           crossfadePlayerFactory ?? _createCrossfadeAudioPlayer,
-       _supportsSkipSilence = supportsSkipSilence ?? Platform.isAndroid,
+       // Public hooks intentionally keep their constructor names.
+       // ignore: prefer_initializing_formals
+       _crossfadePlayerFactory = crossfadePlayerFactory,
+       _supportsEqualizer =
+           supportsEqualizer ?? (Platform.isAndroid || Platform.isIOS),
+       // ignore: prefer_initializing_formals
+       _bstreamEqualizerForPlayer = bstreamEqualizerForPlayer,
+       _supportsSkipSilence =
+           supportsSkipSilence ?? (Platform.isAndroid || Platform.isIOS),
        _skipSilenceWriteTimeout = skipSilenceWriteTimeout,
        _operationTimeout = operationTimeout,
        // Public injection names are intentional; stored hooks stay private.
@@ -80,6 +89,10 @@ class JustAudioPlayerService
        _operationDeadline = operationDeadline,
        assert(operationTimeout > Duration.zero),
        assert(skipSilenceWriteTimeout > Duration.zero) {
+    _player = audioPlayer ?? _createAudioPlayer();
+    if (audioPlayer != null) {
+      _registerInjectedEqualizer(audioPlayer);
+    }
     // main() starts this before the mobile UI is shown. Keep this best-effort
     // warmup for tests and alternate entry points that construct the service
     // directly; image generation itself is deferred to the system request.
@@ -161,6 +174,10 @@ class JustAudioPlayerService
       player.playerStateStream.listen((state) {
         if (!identical(player, _player)) {
           return;
+        }
+        if (_supportsEqualizer &&
+            state.processingState == ProcessingState.ready) {
+          unawaited(_scheduleEqualizerApply());
         }
         final wasPlaying = _lastPrimaryPlaying;
         _lastPrimaryPlaying = state.playing;
@@ -400,24 +417,34 @@ class JustAudioPlayerService
     );
   }
 
-  static AudioPlayer _createAudioPlayer() => AudioPlayer(
-    // Preserve the resolver's per-stream User-Agent. A player-wide value
-    // overrides that header in just_audio and can invalidate signed YouTube
-    // media URLs on Android.
-    useProxyForRequestHeaders: false,
-    audioLoadConfiguration: _androidAudioLoadConfiguration,
-  );
-
-  static AudioPlayer _createCrossfadeAudioPlayer() => AudioPlayer(
-    // Either deck can become authoritative after a crossfade. Keep audio
-    // session activation and interruption handling enabled on both roles.
-    useProxyForRequestHeaders: false,
-    audioLoadConfiguration: _androidAudioLoadConfiguration,
-  );
+  AudioPlayer _createAudioPlayer() {
+    final equalizer = _supportsEqualizer ? BStreamEqualizer() : null;
+    final player = AudioPlayer(
+      // Preserve the resolver's per-stream User-Agent. A player-wide value
+      // overrides that header in just_audio and can invalidate signed YouTube
+      // media URLs on Android.
+      useProxyForRequestHeaders: false,
+      audioLoadConfiguration: _androidAudioLoadConfiguration,
+      audioPipeline: equalizer == null
+          ? null
+          : Platform.isIOS
+          ? AudioPipeline(darwinAudioEffects: [equalizer])
+          : AudioPipeline(androidAudioEffects: [equalizer]),
+    );
+    if (equalizer != null) _registerEqualizer(player, equalizer);
+    return player;
+  }
 
   late AudioPlayer _player;
   final AudioPlayer? _injectedCrossfadePlayer;
-  final JustAudioPlayerFactory _crossfadePlayerFactory;
+  final JustAudioPlayerFactory? _crossfadePlayerFactory;
+  final bool _supportsEqualizer;
+  final BStreamEqualizer? Function(AudioPlayer player)?
+  _bstreamEqualizerForPlayer;
+  final Map<AudioPlayer, _BStreamEqualizerDeck> _equalizerDecks = {};
+  EqualizerSettings _equalizerSettings = const EqualizerSettings();
+  Future<void> _equalizerWriteTail = Future<void>.value();
+  int _equalizerRevision = 0;
   final bool _supportsSkipSilence;
   final Duration _skipSilenceWriteTimeout;
   AudioPlayer? _crossfadePlayer;
@@ -520,6 +547,137 @@ class JustAudioPlayerService
   bool _disposed = false;
   bool _appInBackground = false;
 
+  @override
+  bool get supportsEqualizer =>
+      _supportsEqualizer &&
+      (_equalizerDecks[_player]?.effect.supported ?? true) &&
+      !(_equalizerDecks[_player]?.unavailable ?? false);
+
+  void _registerInjectedEqualizer(AudioPlayer player) {
+    if (!_supportsEqualizer || _equalizerDecks.containsKey(player)) return;
+    final effect = _bstreamEqualizerForPlayer?.call(player);
+    if (effect != null) _registerEqualizer(player, effect);
+  }
+
+  void _registerEqualizer(AudioPlayer player, BStreamEqualizer effect) {
+    final deck = _BStreamEqualizerDeck(effect);
+    _equalizerDecks[player] = deck;
+    deck.statusSubscription = effect.statusStream.listen((status) {
+      if (_disposed || !identical(_equalizerDecks[player], deck)) return;
+      final wasUnavailable = deck.unavailable;
+      final previousSkipSilenceSupport = deck.skipSilenceSupported;
+      deck.skipSilenceSupported = status.skipSilenceSupported;
+      deck.unavailable = !status.supported;
+      if (deck.unavailable) {
+        deck.applied = null;
+      } else if (wasUnavailable) {
+        // A fresh supported PCM format can resume the stored curve.
+        deck.applied = null;
+        unawaited(_scheduleEqualizerApply());
+      }
+      if (previousSkipSilenceSupport == false &&
+          deck.skipSilenceSupported == true &&
+          _supportsSkipSilence) {
+        // Darwin retains the desired value even while an asset cannot be
+        // analyzed. Reconcile it when a readable item becomes current again.
+        unawaited(_scheduleSkipSilenceApply(_skipSilenceRevision));
+      }
+      if ((wasUnavailable != deck.unavailable ||
+              previousSkipSilenceSupport != deck.skipSilenceSupported) &&
+          identical(player, _player)) {
+        _emit(_snapshot);
+      }
+    });
+  }
+
+  @override
+  Future<void> configureEqualizer(EqualizerSettings settings) {
+    if (!_supportsEqualizer || _disposed) return Future<void>.value();
+    _equalizerSettings = settings.normalized;
+    ++_equalizerRevision;
+    return _scheduleEqualizerApply(reportFailure: true);
+  }
+
+  Future<void> _scheduleEqualizerApply({bool reportFailure = false}) {
+    if (!_supportsEqualizer || _disposed || _equalizerDecks.isEmpty) {
+      return Future<void>.value();
+    }
+    final revision = _equalizerRevision;
+    final write = _equalizerWriteTail.then<void>((_) async {
+      if (_disposed || revision != _equalizerRevision) return;
+      Object? failure;
+      StackTrace? failureStack;
+      for (final entry in List.of(_equalizerDecks.entries)) {
+        if (_disposed || revision != _equalizerRevision) return;
+        if (!identical(entry.key, _player) &&
+            !identical(entry.key, _crossfadePlayer)) {
+          continue;
+        }
+        final deck = entry.value;
+        if (deck.applied == _equalizerSettings && !deck.unavailable) continue;
+        final desired = _equalizerSettings;
+        // Native configuration is a single immutable five-band update. Clearing
+        // the cache first makes returning to an earlier curve safe after errors.
+        deck.applied = null;
+        try {
+          final status = await deck.effect
+              .configure(enabled: desired.enabled, gainsDb: desired.gainsDb)
+              .timeout(const Duration(seconds: 2));
+          if (_disposed || revision != _equalizerRevision) return;
+          deck.unavailable = !status.supported;
+          if (!_matchesEqualizerStatus(status, desired)) {
+            throw StateError(
+              'The native PCM processor did not accept the curve.',
+            );
+          }
+          deck.applied = desired;
+        } catch (error, stack) {
+          failure ??= error;
+          failureStack ??= stack;
+          // DSP owns headroom and bypass. The user/fade gains stay untouched.
+          try {
+            await deck.effect
+                .configure(enabled: false, gainsDb: desired.gainsDb)
+                .timeout(const Duration(seconds: 2));
+          } catch (_) {}
+          if (identical(entry.key, _player)) _emit(_snapshot);
+        }
+      }
+      if (failure != null) Error.throwWithStackTrace(failure, failureStack!);
+    });
+    _equalizerWriteTail = write.catchError((Object error, StackTrace stack) {
+      developer.log(
+        'Could not apply BStream PCM equalizer',
+        name: 'BStreamPlayback',
+        error: error,
+        stackTrace: stack,
+      );
+    });
+    return reportFailure ? write : _equalizerWriteTail;
+  }
+
+  bool _matchesEqualizerStatus(
+    BStreamEqualizerStatus status,
+    EqualizerSettings desired,
+  ) {
+    if (!status.supported ||
+        status.engine != 'bstream-dsp' ||
+        status.enabled != (desired.enabled && !desired.isFlat) ||
+        status.parameters.bands.length != equalizerBandFrequencies.length) {
+      return false;
+    }
+    final preamp = desired.enabled && !desired.isFlat ? desired.preampDb : 0.0;
+    if ((status.preampDb - preamp).abs() > .011) return false;
+    for (var i = 0; i < equalizerBandFrequencies.length; i++) {
+      final band = status.parameters.bands[i];
+      if ((band.centerFrequency - equalizerBandFrequencies[i]).abs() > .01 ||
+          (band.gain - desired.gainsDb[i]).abs() > .011) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   bool _shouldPublishPositionSnapshot(Duration position) {
     if (!_appInBackground) {
       return true;
@@ -556,7 +714,9 @@ class JustAudioPlayerService
   bool get crossfadeEnabled => _crossfadeEnabled;
 
   @override
-  bool get supportsSkipSilence => _supportsSkipSilence;
+  bool get supportsSkipSilence =>
+      _supportsSkipSilence &&
+      _equalizerDecks[_player]?.skipSilenceSupported != false;
 
   @override
   bool get skipSilenceEnabled => _skipSilenceEnabled;
@@ -571,7 +731,7 @@ class JustAudioPlayerService
     if (_crossfadeRamp != null ||
         _crossfadeStartGeneration != null ||
         _crossfadePromotionInProgress) {
-      // Reconfiguring ExoPlayer's AudioSink while both decks are audible can
+      // Reconfiguring a native audio route while both decks are audible can
       // produce a discontinuity. Keep this transition untouched and apply the
       // newest value immediately after its atomic promotion or reset.
       _skipSilenceConfigurationPending = true;
@@ -1178,6 +1338,7 @@ class JustAudioPlayerService
             shuffleOrder: plan.shuffleOrder,
           )
           .timeout(_operationTimeout);
+      await _scheduleEqualizerApply();
       if (!_isCrossfadeCurrent(generation) ||
           !identical(incoming, _crossfadePlayer)) {
         return;
@@ -1215,9 +1376,14 @@ class JustAudioPlayerService
     final injected = _injectedCrossfadePlayer;
     if (injected != null && !_injectedCrossfadePlayerUsed) {
       _injectedCrossfadePlayerUsed = true;
+      _registerInjectedEqualizer(injected);
       return injected;
     }
-    return _crossfadePlayerFactory();
+    final factory = _crossfadePlayerFactory;
+    if (factory == null) return _createAudioPlayer();
+    final player = factory();
+    _registerInjectedEqualizer(player);
+    return player;
   }
 
   _JustAudioCrossfadeLoadPlan _crossfadeLoadPlan(
@@ -1339,6 +1505,9 @@ class JustAudioPlayerService
       // A setter already in flight may still reference the detached deck.
       // Let that in-flight native write finish before teardown.
       await _skipSilenceWriteTail;
+      await _equalizerWriteTail;
+      final equalizerDeck = _equalizerDecks.remove(incoming);
+      await equalizerDeck?.cancelSubscriptions();
       _uncertainSkipSilencePlayers.remove(incoming);
       _timedOutSkipSilenceWriteTokens.remove(incoming);
       _crossfadePlayLeases.remove(incoming);
@@ -2801,7 +2970,7 @@ class JustAudioPlayerService
       );
       return;
     }
-    await _player.setVolume(normalized);
+    await _writePrimaryCrossfadeVolume(normalized);
   }
 
   @override
@@ -2842,6 +3011,9 @@ class JustAudioPlayerService
     _uncertainSkipSilencePlayers.clear();
     _timedOutSkipSilenceWriteTokens.clear();
     _crossfadePlayLeases.clear();
+    final equalizerDecks = List.of(_equalizerDecks.values);
+    _equalizerDecks.clear();
+    await Future.wait(equalizerDecks.map((deck) => deck.cancelSubscriptions()));
     await _crossfadeErrorSubscription?.cancel();
     _crossfadeErrorSubscription = null;
     await _detachPrimaryPlayer();
@@ -3055,6 +3227,15 @@ class JustAudioPlayerService
 
   Future<void> _playAndReportFailure(int generation, int intentRevision) async {
     try {
+      if (_supportsEqualizer) {
+        await _scheduleEqualizerApply();
+      }
+      if (_disposed ||
+          generation != _playbackGeneration ||
+          intentRevision != _playIntentRevision ||
+          !_playWhenReady) {
+        return;
+      }
       await _player.play();
     } catch (error, stackTrace) {
       await _reportPlaybackFailure(
@@ -3457,6 +3638,18 @@ class _FixedShuffleOrder extends ShuffleOrder {
 
   @override
   void clear() => indices.clear();
+}
+
+class _BStreamEqualizerDeck {
+  _BStreamEqualizerDeck(this.effect);
+  final BStreamEqualizer effect;
+  bool unavailable = false;
+  bool? skipSilenceSupported;
+  EqualizerSettings? applied;
+  StreamSubscription<BStreamEqualizerStatus>? statusSubscription;
+  Future<void> cancelSubscriptions() async {
+    await statusSubscription?.cancel();
+  }
 }
 
 class _JustAudioOperationLease {

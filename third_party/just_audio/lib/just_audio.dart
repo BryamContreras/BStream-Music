@@ -15,6 +15,8 @@ import 'package:rxdart/rxdart.dart';
 import 'package:synchronized/synchronized.dart';
 import 'package:uuid/uuid.dart';
 
+part 'bstream_equalizer.dart';
+
 const _uuid = Uuid();
 
 JustAudioPlatform? _pluginPlatformCache;
@@ -1181,8 +1183,8 @@ class AudioPlayer {
     await (await _platform).setVolume(SetVolumeRequest(volume: volume));
   }
 
-  /// Sets whether silence should be skipped in audio playback. (Currently
-  /// Android only).
+  /// Sets whether silence should be skipped in audio playback on Android and
+  /// iOS. Native engines retain the target if the current asset is unsupported.
   Future<void> setSkipSilenceEnabled(bool enabled) async {
     if (_disposed) return;
     final previouslyEnabled = skipSilenceEnabled;
@@ -1433,6 +1435,9 @@ class AudioPlayer {
       await _currentIndexSubscription?.cancel();
       await _errorsSubscription?.cancel();
       await _errorsResetSubscription?.cancel();
+      for (final effect in _audioPipeline._audioEffects) {
+        await effect._dispose();
+      }
 
       await _playerEventSubject.close();
 
@@ -4359,6 +4364,8 @@ abstract class AudioEffect {
 
   /// Called when [_player] is connected to the platform.
   Future<void> _activate(AudioPlayerPlatform platform) async {}
+
+  Future<void> _dispose() async {}
 
   /// Whether the effect is enabled. When `true`, and if the effect is part
   /// of an [AudioPipeline] attached to an [AudioPlayer], the effect will modify

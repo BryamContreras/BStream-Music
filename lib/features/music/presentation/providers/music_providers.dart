@@ -47,6 +47,8 @@ import '../../../../services/media_session/desktop_media_session_factory.dart';
 import '../../../../services/player/just_audio_player_service.dart';
 import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
+import '../../../../services/player/player_equalizer.dart';
+import 'equalizer_providers.dart';
 import '../../../../services/recommendations/recommendations.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
 import '../../../../services/sharing/incoming_csv_file_service.dart';
@@ -129,6 +131,7 @@ import 'player/remote_prefetch_coordinator.dart';
 import 'player/remote_playback_retry_coordinator.dart';
 
 export 'app_strings.dart';
+export '../../../../services/player/player_equalizer.dart';
 export 'home_feed_activity_provider.dart';
 export 'lyrics_animation_style.dart';
 export 'live_widget_style.dart';
@@ -378,6 +381,35 @@ final playerServiceProvider = Provider<PlayerService>((ref) {
 
 final skipSilenceSupportedProvider = Provider<bool>(
   (ref) => AppPlatform.supportsSkipSilence,
+);
+
+bool _skipSilenceAvailableOn(PlayerService service) =>
+    service is SkipSilenceCapablePlayer &&
+    (service as SkipSilenceCapablePlayer).supportsSkipSilence &&
+    (service is! CastAwarePlayerService || !service.isCasting);
+
+final skipSilenceRouteAvailabilityProvider = StreamProvider.autoDispose<bool>((
+  ref,
+) {
+  final service = ref.watch(playerServiceProvider);
+  if (service is! SkipSilenceCapablePlayer) {
+    return Stream<bool>.value(false);
+  }
+  return Stream<bool>.multi((controller) {
+    final subscription = service.snapshotStream.listen(
+      (_) => controller.add(_skipSilenceAvailableOn(service)),
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.add(_skipSilenceAvailableOn(service));
+    controller.onCancel = subscription.cancel;
+  }).distinct();
+});
+
+final skipSilenceAvailableProvider = Provider.autoDispose<bool>(
+  (ref) =>
+      ref.watch(skipSilenceRouteAvailabilityProvider).asData?.value ??
+      _skipSilenceAvailableOn(ref.watch(playerServiceProvider)),
 );
 
 final trackShareServiceProvider = Provider<TrackShareService>((ref) {
