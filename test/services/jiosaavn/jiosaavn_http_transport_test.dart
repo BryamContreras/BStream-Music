@@ -34,6 +34,20 @@ void main() {
           if (!disconnected.isCompleted) disconnected.complete();
         }
 
+        // Aborting the deliberately unfinished response can reset the peer on
+        // Linux. Handle the fixture's write-side completion as well as its
+        // read stream; an input onError does not consume IOSink.done failures.
+        unawaited(
+          socket.done.then<void>(
+            (_) => closed(),
+            onError: (Object error, StackTrace stackTrace) {
+              if (error is! SocketException) {
+                Error.throwWithStackTrace(error, stackTrace);
+              }
+              closed();
+            },
+          ),
+        );
         socket.listen(
           (_) {
             if (drip != null) return;
