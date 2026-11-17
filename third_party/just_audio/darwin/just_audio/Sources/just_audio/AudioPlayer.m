@@ -991,7 +991,7 @@
         // TODO: learn about the different ways to define weakSelf.
         //__weak __typeof__(self) weakSelf = self;
         //typeof(self) __weak weakSelf = self;
-        __unsafe_unretained typeof(self) weakSelf = self;
+        __unsafe_unretained __typeof__(self) weakSelf = self;
         if (@available(macOS 10.12, iOS 10.0, *)) {}
         else {
             _timeObserver = [_player addPeriodicTimeObserverForInterval:CMTimeMake(200, 1000)
