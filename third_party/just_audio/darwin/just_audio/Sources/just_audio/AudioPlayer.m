@@ -293,6 +293,7 @@
     BStreamAudioProcessingTap *existing = [_bstreamProcessors objectForKey:item];
     if (existing) {
         [existing configureEnabled:_bstreamEqualizerEnabled gains:_bstreamGains revision:_bstreamRevision];
+        [existing configureOutputVolume:_volume enabled:existing.supported && !_player.externalPlaybackActive];
         [existing cancelFade];
         return;
     }
@@ -300,14 +301,33 @@
     if (!processor) return;
     [_bstreamProcessors setObject:processor forKey:item];
     [processor configureEnabled:_bstreamEqualizerEnabled gains:_bstreamGains revision:_bstreamRevision];
+    [processor configureOutputVolume:_volume enabled:!_player.externalPlaybackActive];
     __weak AudioPlayer *weakSelf = self;
     __weak AVPlayerItem *weakItem = item;
     processor.onStatusChange = ^{
         AudioPlayer *owner = weakSelf;
         if (!owner || owner->_bstreamDisposed || owner->_player.currentItem != weakItem) return;
+        [owner bstreamApplyVolume];
         [owner bstreamPublishStatus];
         [owner bstreamApplyPlaybackRate];
     };
+}
+
+- (void)bstreamApplyVolume {
+    if (!_player) return;
+    BOOL external = _player.externalPlaybackActive;
+    BStreamAudioProcessingTap *current = [_bstreamProcessors objectForKey:_player.currentItem];
+    BOOL usesTap = _bstreamRegistered && current.supported && current.outputVolumeSupported && !external;
+    // Restore the native attenuation before releasing tap ownership. Transfer
+    // back only after the atomic gain is initialized, never with two unity gains.
+    if (!usesTap && _player.volume != _volume) _player.volume = _volume;
+    for (BStreamAudioProcessingTap *processor in _bstreamProcessors.objectEnumerator) {
+        // Prime queued/pending taps before their first frame, including mute.
+        // Failed routes acknowledge native ownership immediately.
+        BOOL ownsGain = _bstreamRegistered && processor.supported && !external;
+        [processor configureOutputVolume:_volume enabled:ownsGain];
+    }
+    if (usesTap && _player.volume != 1) _player.volume = 1;
 }
 
 - (NSDictionary *)bstreamEqualizerStatus {
@@ -478,7 +498,10 @@
     if (_playing && _player.rate > 0 && CMTIME_IS_INVALID(_seekPos) && !_bstreamSkipSeeking) {
         [processor validatePlaybackAtTime:item.currentTime];
     }
-    if ([processor consumeStatusChange]) [self bstreamPublishStatus];
+    if ([processor consumeStatusChange]) {
+        [self bstreamApplyVolume];
+        [self bstreamPublishStatus];
+    }
     if (_player.externalPlaybackActive) {
         [self bstreamCancelScheduledSkip];
         return;
@@ -1051,7 +1074,7 @@
     if (_playing) {
         [self bstreamApplyPlaybackRate];
     }
-    [_player setVolume:_volume];
+    [self bstreamApplyVolume];
     [self broadcastPlaybackEvent];
 
     if (_loadResult && (_indexedAudioSources.count == 0 || !_player.currentItem ||
@@ -1251,10 +1274,12 @@
             }
         }
     } else if ([keyPath isEqualToString:@"externalPlaybackActive"]) {
+        [self bstreamApplyVolume];
         [self bstreamCancelScheduledSkip];
         [self bstreamPublishStatus];
         [self bstreamProcessingTick];
     } else if ([keyPath isEqualToString:@"currentItem"] && !_player.currentItem) {
+        [self bstreamApplyVolume];
         [self bstreamCancelScheduledSkip];
         _bstreamSkipFailures = 0;
         _bstreamSkipRetryAfter = 0;
@@ -1353,6 +1378,7 @@
             }
             _justAdvanced = NO;
         }
+        [self bstreamApplyVolume];
         [self bstreamApplyPlaybackRate];
         // Pair the successor's index/duration with its own clock, after any
         // loop-item flip. Initial attachment keeps its existing load events.
@@ -1472,9 +1498,7 @@
 
 - (void)setVolume:(float)volume {
     _volume = volume;
-    if (_player) {
-        [_player setVolume:volume];
-    }
+    [self bstreamApplyVolume];
 }
 
 - (void)setSpeed:(float)speed {
@@ -1748,6 +1772,8 @@
 
 - (void)dispose:(BOOL)calledFromDealloc {
     _bstreamDisposed = YES;
+    // Stop audibility before removing the mix that owns output attenuation.
+    [_player pause];
     [self bstreamCancelScheduledSkip];
     if (_bstreamTimeObserver) {
         [_player removeTimeObserver:_bstreamTimeObserver];
@@ -1759,8 +1785,6 @@
     [_bstreamAnalyzers removeAllObjects];
     if (!_player) return;
     if (_processingState != psIdle) {
-        [_player pause];
-
         [self updatePosition];
         if (!calledFromDealloc) {
             [self broadcastPlaybackEvent];

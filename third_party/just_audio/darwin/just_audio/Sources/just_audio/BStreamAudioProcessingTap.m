@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct {
     atomic_bool invalidated;
@@ -22,10 +23,16 @@ typedef struct {
     atomic_int encoding;
     atomic_int_fast64_t fadeOutUs;
     atomic_int_fast64_t fadeInUs;
+    atomic_int outputGain; // -1: native owns volume; otherwise millionths.
+    atomic_bool outputVolumeSupported;
     BStreamDSP *dsp; // Only the tap's prepare/process/unprepare thread owns DSP.
     AudioStreamBasicDescription format;
     uint64_t observedSequence;
     uint64_t observedReset;
+    int observedGain;
+    double currentGain;
+    double gainStep;
+    size_t gainFramesRemaining;
     bool interleaved;
     int sampleKind;
 } BStreamTapState;
@@ -92,9 +99,14 @@ static void BSTapPrepare(MTAudioProcessingTapRef tap, CMItemCount maxFrames,
     }
     size_t packedFrameBytes = (format->mBitsPerChannel / 8) * (state->interleaved ? format->mChannelsPerFrame : 1);
     if (format->mBytesPerFrame != packedFrameBytes || format->mFramesPerPacket != 1 ||
-        !(format->mFormatFlags & kAudioFormatFlagIsPacked)) state->sampleKind = 0;
+        !(format->mFormatFlags & kAudioFormatFlagIsPacked) || !isfinite(format->mSampleRate) ||
+        format->mSampleRate <= 0 || format->mChannelsPerFrame == 0 ||
+        format->mChannelsPerFrame > BSTREAM_DSP_MAX_CHANNELS) state->sampleKind = 0;
     if (state->sampleKind) state->dsp = BStreamDSPCreate(format->mSampleRate, format->mChannelsPerFrame);
     bool supported = state->dsp != NULL;
+    // Keep this confirmation across unprepare; transient decoder rebuilds
+    // must not transfer volume ownership back and forth.
+    atomic_store(&state->outputVolumeSupported, state->sampleKind != 0);
     atomic_store(&state->supported, supported);
     atomic_store(&state->sampleRate, supported ? (int)format->mSampleRate : 0);
     atomic_store(&state->channels, supported ? (int)format->mChannelsPerFrame : 0);
@@ -105,6 +117,9 @@ static void BSTapPrepare(MTAudioProcessingTapRef tap, CMItemCount maxFrames,
     atomic_store(&state->statusChanged, true);
     state->observedSequence = UINT64_MAX;
     state->observedReset = atomic_load(&state->resetEpoch);
+    state->observedGain = atomic_load(&state->outputGain);
+    state->currentGain = state->observedGain < 0 ? 1 : state->observedGain / 1000000.0;
+    state->gainFramesRemaining = 0;
     if (supported) BSApplyParameters(state, true);
     // Prepare may allocate and report format changes. Process below never does.
     BStreamAudioProcessingTap *owner = (__bridge BStreamAudioProcessingTap *)MTAudioProcessingTapGetStorage(tap);
@@ -122,13 +137,29 @@ static void BSTapUnprepare(MTAudioProcessingTapRef tap) {
 
 static void BSApplyFade(BStreamTapState *state, void *const buffers[], size_t frames,
                         double startSeconds, double secondsPerFrame, int64_t fadeOut, int64_t fadeIn) {
-    if (fadeOut < 0 && fadeIn < 0) return;
+    int command = atomic_load(&state->outputGain);
+    double targetGain = command < 0 ? 1 : command / 1000000.0;
+    if ((command < 0) != (state->observedGain < 0)) {
+        state->observedGain = command;
+        state->currentGain = targetGain;
+        state->gainFramesRemaining = 0;
+    } else if (command != state->observedGain) {
+        state->observedGain = command;
+        state->gainFramesRemaining = (size_t)fmax(1, ceil(state->format.mSampleRate * 0.02));
+        state->gainStep = (targetGain - state->currentGain) / state->gainFramesRemaining;
+    }
+    if (!isfinite(startSeconds)) fadeOut = fadeIn = -1;
+    if (fadeOut < 0 && fadeIn < 0 && !state->gainFramesRemaining && state->currentGain == 1) return;
     size_t channels = state->format.mChannelsPerFrame;
     for (size_t frame = 0; frame < frames; frame++) {
+        if (state->gainFramesRemaining) {
+            state->currentGain += state->gainStep;
+            if (--state->gainFramesRemaining == 0) state->currentGain = targetGain;
+        }
         double timeUs = (startSeconds + frame * secondsPerFrame) * 1000000.0;
-        double gain = 1;
-        if (fadeOut >= 0 && timeUs >= fadeOut - 20000) gain = fmax(0, fmin(1, (fadeOut - timeUs) / 20000));
-        if (fadeIn >= 0 && timeUs >= fadeIn) gain = fmax(0, fmin(1, (timeUs - fadeIn) / 20000));
+        double gain = state->currentGain;
+        if (fadeOut >= 0 && timeUs >= fadeOut - 20000) gain *= fmax(0, fmin(1, (fadeOut - timeUs) / 20000));
+        if (fadeIn >= 0 && timeUs >= fadeIn) gain *= fmax(0, fmin(1, (timeUs - fadeIn) / 20000));
         if (gain == 1) continue;
         for (size_t channel = 0; channel < channels; channel++) {
             size_t index = state->interleaved ? frame * channels + channel : frame;
@@ -143,6 +174,30 @@ static void BSApplyFade(BStreamTapState *state, void *const buffers[], size_t fr
     }
 }
 
+static void BSWithholdUnprocessedGain(BStreamTapState *state, AudioBufferList *buffers) {
+    if (atomic_load(&state->outputGain) < 0) return;
+    // The main-thread status callback restores native attenuation. Until that
+    // acknowledgement, never pass a tap-owned muted/attenuated buffer at unity.
+    size_t channelsPerBuffer = state->interleaved ? state->format.mChannelsPerFrame : 1;
+    size_t sampleBytes = channelsPerBuffer ? state->format.mBytesPerFrame / channelsPerBuffer : 0;
+    BOOL unsignedPCM = state->format.mFormatID == kAudioFormatLinearPCM &&
+        !(state->format.mFormatFlags & (kAudioFormatFlagIsFloat | kAudioFormatFlagIsSignedInteger));
+    size_t midpointBit = state->format.mFormatFlags & kAudioFormatFlagIsAlignedHigh
+        ? sampleBytes * 8 - 1 : state->format.mBitsPerChannel - 1;
+    for (UInt32 i = 0; i < buffers->mNumberBuffers; i++) {
+        AudioBuffer buffer = buffers->mBuffers[i];
+        if (!buffer.mData) continue;
+        memset(buffer.mData, 0, buffer.mDataByteSize);
+        if (unsignedPCM && sampleBytes > 0 && sampleBytes <= 8 && midpointBit < sampleBytes * 8) {
+            size_t byte = state->format.mFormatFlags & kAudioFormatFlagIsBigEndian
+                ? sampleBytes - 1 - midpointBit / 8 : midpointBit / 8;
+            for (size_t offset = 0; offset + sampleBytes <= buffer.mDataByteSize; offset += sampleBytes) {
+                ((uint8_t *)buffer.mData)[offset + byte] = (uint8_t)(1u << (midpointBit % 8));
+            }
+        }
+    }
+}
+
 static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
                          MTAudioProcessingTapFlags flags, AudioBufferList *buffers,
                          CMItemCount *produced, MTAudioProcessingTapFlags *outputFlags) {
@@ -150,12 +205,18 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
     OSStatus status = MTAudioProcessingTapGetSourceAudio(tap, requested, buffers, outputFlags, &timeRange, produced);
     if (status != noErr) { *produced = 0; return; }
     BStreamTapState *state = BSTapState(tap);
-    if (atomic_load(&state->invalidated) || !atomic_load(&state->supported) || !state->dsp || *produced <= 0) return;
+    if (atomic_load(&state->invalidated) || *produced <= 0) return;
+    if (!state->sampleKind) {
+        BSWithholdUnprocessedGain(state, buffers);
+        return;
+    }
     size_t count = state->interleaved ? 1 : state->format.mChannelsPerFrame;
     if (count > BSTREAM_DSP_MAX_CHANNELS || buffers->mNumberBuffers < count) {
         atomic_store(&state->supported, false);
         atomic_store(&state->configured, false);
+        atomic_store(&state->outputVolumeSupported, false);
         atomic_store(&state->statusChanged, true);
+        BSWithholdUnprocessedGain(state, buffers);
         return;
     }
     void *data[BSTREAM_DSP_MAX_CHANNELS];
@@ -166,27 +227,31 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
         if (!data[i] || buffers->mBuffers[i].mDataByteSize < needed) {
             atomic_store(&state->supported, false);
             atomic_store(&state->configured, false);
+            atomic_store(&state->outputVolumeSupported, false);
             atomic_store(&state->statusChanged, true);
+            BSWithholdUnprocessedGain(state, buffers);
             return;
         }
     }
-    uint64_t reset = atomic_load(&state->resetEpoch);
-    if (reset != state->observedReset || ((flags | *outputFlags) & kMTAudioProcessingTapFlag_StartOfStream)) {
-        BStreamDSPReset(state->dsp);
-        state->observedReset = reset;
-        BSApplyParameters(state, true);
-    } else {
-        BSApplyParameters(state, false);
+    if (atomic_load(&state->supported) && state->dsp) {
+        uint64_t reset = atomic_load(&state->resetEpoch);
+        if (reset != state->observedReset || ((flags | *outputFlags) & kMTAudioProcessingTapFlag_StartOfStream)) {
+            BStreamDSPReset(state->dsp);
+            state->observedReset = reset;
+            BSApplyParameters(state, true);
+        } else {
+            BSApplyParameters(state, false);
+        }
+        switch (state->sampleKind) {
+            case 1: BStreamDSPProcessFloat32(state->dsp, data, (size_t)*produced, state->interleaved); break;
+            case 2: BStreamDSPProcessFloat64(state->dsp, data, (size_t)*produced, state->interleaved); break;
+            case 3: BStreamDSPProcessInt16(state->dsp, data, (size_t)*produced, state->interleaved); break;
+            case 4: BStreamDSPProcessInt32(state->dsp, data, (size_t)*produced, state->interleaved); break;
+        }
+        BStreamDSPStatus result = BStreamDSPGetStatus(state->dsp);
+        atomic_store(&state->appliedRevision, result.appliedRevision == UINT64_MAX ? -1 : (int64_t)result.appliedRevision);
     }
-    switch (state->sampleKind) {
-        case 1: BStreamDSPProcessFloat32(state->dsp, data, (size_t)*produced, state->interleaved); break;
-        case 2: BStreamDSPProcessFloat64(state->dsp, data, (size_t)*produced, state->interleaved); break;
-        case 3: BStreamDSPProcessInt16(state->dsp, data, (size_t)*produced, state->interleaved); break;
-        case 4: BStreamDSPProcessInt32(state->dsp, data, (size_t)*produced, state->interleaved); break;
-    }
-    BStreamDSPStatus result = BStreamDSPGetStatus(state->dsp);
     atomic_fetch_add(&state->frames, (uint64_t)*produced);
-    atomic_store(&state->appliedRevision, result.appliedRevision == UINT64_MAX ? -1 : (int64_t)result.appliedRevision);
     double start = CMTimeGetSeconds(timeRange.start);
     int_fast64_t fadeIn = atomic_load(&state->fadeInUs);
     if (isfinite(start) && fadeIn >= 0 && start * 1000000 >= fadeIn + 20000) {
@@ -196,10 +261,10 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
     double sourceDuration = CMTimeGetSeconds(timeRange.duration);
     double secondsPerFrame = isfinite(sourceDuration) && sourceDuration > 0
         ? sourceDuration / *produced : 1.0 / state->format.mSampleRate;
-    if (isfinite(start)) BSApplyFade(state, data, (size_t)*produced, start, secondsPerFrame,
-                                   atomic_load(&state->fadeOutUs), fadeIn);
-    // AVPlayer owns the timeline: preserve every frame and buffer unchanged in
-    // bypass. Silence removal is scheduled separately as exact source seeks.
+    BSApplyFade(state, data, (size_t)*produced, start, secondsPerFrame,
+                atomic_load(&state->fadeOutUs), fadeIn);
+    // AVPlayer owns the timeline: preserve every frame. Unity-gain EQ bypass
+    // leaves data unchanged; silence removal uses separately scheduled seeks.
 }
 
 @implementation BStreamAudioProcessingTap
@@ -227,6 +292,8 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
     atomic_init(&_state->encoding, 0);
     atomic_init(&_state->fadeOutUs, -1);
     atomic_init(&_state->fadeInUs, -1);
+    atomic_init(&_state->outputGain, -1);
+    atomic_init(&_state->outputVolumeSupported, false);
     [self installIfPossible];
     return self;
 }
@@ -234,6 +301,7 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
 - (BOOL)supported { return atomic_load(&_state->supported) && !atomic_load(&_state->invalidated); }
 - (BOOL)configured { return atomic_load(&_state->configured); }
 - (BOOL)ready { return _finishedInstalling; }
+- (BOOL)outputVolumeSupported { return atomic_load(&_state->outputVolumeSupported); }
 - (BOOL)consumeStatusChange { return atomic_exchange(&_state->statusChanged, false); }
 - (NSString *)error { return _error ?: (self.supported ? nil : @"Unsupported PCM processing route"); }
 
@@ -319,6 +387,11 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
     for (int i = 0; i < 5; i++) atomic_store(&_state->gains[i], (int)llround(gains[i].doubleValue * 1000));
     atomic_store(&_state->revision, revision);
     atomic_fetch_add_explicit(&_state->sequence, 1, memory_order_release);
+}
+
+- (void)configureOutputVolume:(float)volume enabled:(BOOL)enabled {
+    int gain = enabled && isfinite(volume) ? (int)llround(fmax(0, fmin(1, volume)) * 1000000) : -1;
+    atomic_store(&_state->outputGain, gain);
 }
 
 - (NSDictionary *)diagnostics {

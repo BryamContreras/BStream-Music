@@ -331,6 +331,75 @@ static void TestTapLifecycleAndWatchdog(NSURL *url) {
     puts("Darwin audio-tap lifecycle, reclip and route watchdog passed");
 }
 
+static double ReadTapLevel(NSURL *url, float volume, BOOL ownsVolume) {
+    AVPlayerItem *item = Item(url);
+    BStreamAudioProcessingTap *tap = [[BStreamAudioProcessingTap alloc] initWithItem:item];
+    [tap configureEnabled:NO gains:@[@0, @0, @0, @0, @0] revision:1];
+    [tap configureOutputVolume:volume enabled:ownsVolume];
+    CHECK(WaitUntil(^BOOL { return tap.ready; }, 10));
+    CHECK(tap.supported);
+    AVAudioMix *installed = item.audioMix;
+    NSError *error = nil;
+    AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:item.asset error:&error];
+    CHECK(reader != nil);
+    AVAssetReaderAudioMixOutput *output = [[AVAssetReaderAudioMixOutput alloc]
+        initWithAudioTracks:[item.asset tracksWithMediaType:AVMediaTypeAudio]
+        audioSettings:@{
+            AVFormatIDKey: @(kAudioFormatLinearPCM), AVLinearPCMIsFloatKey: @YES,
+            AVLinearPCMBitDepthKey: @32, AVLinearPCMIsBigEndianKey: @NO,
+            AVLinearPCMIsNonInterleaved: @NO,
+        }];
+    output.audioMix = installed;
+    CHECK([reader canAddOutput:output]);
+    [reader addOutput:output];
+    reader.timeRange = CMTimeRangeMake(kCMTimeZero, Time(0.25));
+    CHECK([reader startReading]);
+    double squareSum = 0;
+    uint64_t samples = 0;
+    for (;;) {
+        CMSampleBufferRef sample = [output copyNextSampleBuffer];
+        if (!sample) break;
+        AudioBufferList buffers;
+        CMBlockBufferRef retained = NULL;
+        CHECK(CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sample, NULL,
+            &buffers, sizeof(buffers), kCFAllocatorDefault, kCFAllocatorDefault,
+            kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &retained) == noErr);
+        CHECK(buffers.mNumberBuffers == 1 && buffers.mBuffers[0].mNumberChannels == 1);
+        const float *data = buffers.mBuffers[0].mData;
+        CHECK(data != NULL);
+        size_t count = buffers.mBuffers[0].mDataByteSize / sizeof(float);
+        for (size_t i = 0; i < count; i++) squareSum += (double)data[i] * data[i];
+        samples += count;
+        if (retained) CFRelease(retained);
+        CFRelease(sample);
+    }
+    CHECK(reader.status == AVAssetReaderStatusCompleted);
+    CHECK(samples >= (uint64_t)(0.24 * Rate));
+    CHECK(Counter(tap.diagnostics, @"processedFrames") >= samples);
+    CHECK(tap.outputVolumeSupported);
+    CHECK(item.audioMix == installed);
+    [tap invalidate];
+    return sqrt(squareSum / samples);
+}
+
+static void TestTapOutputVolume(NSURL *url) {
+    // Isolated offline readers render the real tap, never a second consumer of
+    // a tap attached to AVPlayer. EQ remains bypassed throughout these checks.
+    double unity;
+    double quarter;
+    double muted;
+    double nativeOwned;
+    @autoreleasepool { unity = ReadTapLevel(url, 1, YES); }
+    @autoreleasepool { quarter = ReadTapLevel(url, 0.25, YES); }
+    @autoreleasepool { muted = ReadTapLevel(url, 0, YES); }
+    @autoreleasepool { nativeOwned = ReadTapLevel(url, 0.25, NO); }
+    CHECK(unity > 0.01);
+    CHECK(fabs(quarter / unity - 0.25) < 0.005);
+    CHECK(muted == 0); // Includes the very first rendered sample.
+    CHECK(fabs(nativeOwned / unity - 1) < 0.005); // No double attenuation.
+    puts("Darwin tap output gain, initial mute, and native bypass passed");
+}
+
 int main(void) {
     @autoreleasepool {
         CHECK(NSThread.isMainThread);
@@ -345,6 +414,7 @@ int main(void) {
         TestBoundedSharedAnalysis(fixture);
         TestBackwardSeekDuringReaderStart(fixture);
         TestTapLifecycleAndWatchdog(fixture);
+        TestTapOutputVolume(fixture);
         CHECK([[NSFileManager defaultManager] removeItemAtURL:directory error:&error]);
         puts("BStream Darwin AVFoundation processing: all tests passed");
     }

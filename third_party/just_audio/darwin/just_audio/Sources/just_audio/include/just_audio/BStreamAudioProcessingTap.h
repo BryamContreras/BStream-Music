@@ -9,9 +9,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL supported;
 @property(nonatomic, readonly) BOOL configured;
 @property(nonatomic, readonly) BOOL ready;
+@property(nonatomic, readonly) BOOL outputVolumeSupported;
 @property(nonatomic, readonly, nullable) NSString *error;
 - (instancetype)initWithItem:(AVPlayerItem *)item;
 - (void)configureEnabled:(BOOL)enabled gains:(NSArray<NSNumber *> *)gains revision:(uint64_t)revision;
+/// Keep AVPlayer volume at unity while this tap owns the deck's output gain.
+/// Ownership changes are immediate; subsequent volume changes ramp over 20 ms.
+- (void)configureOutputVolume:(float)volume enabled:(BOOL)enabled;
 - (NSDictionary *)diagnostics;
 - (BOOL)consumeStatusChange;
 - (void)validatePlaybackAtTime:(CMTime)time;

@@ -186,6 +186,77 @@ void main() {
     }
   });
 
+  testWidgets('native volume ramps keep the recording clock advancing', (
+    tester,
+  ) async {
+    if (!Platform.isAndroid &&
+        !Platform.isIOS &&
+        !Platform.isWindows &&
+        !Platform.isLinux &&
+        !Platform.isMacOS) {
+      return;
+    }
+    final directory = await Directory.systemTemp.createTemp(
+      'bstream_native_volume_ramp_',
+    );
+    final PlayerService service = Platform.isAndroid || Platform.isIOS
+        ? JustAudioPlayerService()
+        : MediaKitPlayerService();
+    final positions = <Duration>[];
+    var recording = false;
+    final subscription = service.snapshotStream.listen((snapshot) {
+      if (recording && snapshot.status == PlayerStatus.playing) {
+        positions.add(snapshot.position);
+      }
+    });
+    try {
+      const duration = Duration(seconds: 8);
+      final file = File('${directory.path}${Platform.pathSeparator}volume.wav');
+      await file.writeAsBytes(_toneWave(duration, frequency: 330));
+      await service.setVolume(0.01);
+      await service.playLocal(
+        _track('native-volume-ramp', file.path, duration: duration),
+      );
+      await _waitUntil(
+        () =>
+            service.currentSnapshot.status == PlayerStatus.playing &&
+            service.currentSnapshot.position >=
+                const Duration(milliseconds: 400),
+        timeout: const Duration(seconds: 12),
+      );
+      final start = service.currentSnapshot.position;
+      positions.add(start);
+      recording = true;
+      final watch = Stopwatch()..start();
+      for (var step = 0; step < 24; step++) {
+        await service.setVolume(0.01 + (step % 6) * 0.004);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+      watch.stop();
+      final end = service.currentSnapshot;
+      expect(end.status, PlayerStatus.playing);
+      expect(end.volume, closeTo(0.03, 0.001));
+      expect(
+        end.position - start,
+        greaterThanOrEqualTo(watch.elapsed - const Duration(milliseconds: 200)),
+        reason:
+            'Volume updates must not stall the native recording clock. '
+            'wall=${watch.elapsed}, positions=$positions',
+      );
+      for (var index = 1; index < positions.length; index++) {
+        expect(
+          positions[index] + const Duration(milliseconds: 150),
+          greaterThanOrEqualTo(positions[index - 1]),
+          reason: 'A volume update must not restart the recording clock.',
+        );
+      }
+    } finally {
+      await subscription.cancel();
+      await service.dispose();
+      if (await directory.exists()) await directory.delete(recursive: true);
+    }
+  });
+
   testWidgets('native crossfade keeps clock and queue order across handoffs', (
     tester,
   ) async {
@@ -273,7 +344,9 @@ void main() {
 
       for (var nextIndex = 1; nextIndex < tracks.length; nextIndex++) {
         final next = tracks[nextIndex];
-        await service.seek(crossfadeTrigger);
+        // Preload ahead of the fade window. Decoder preparation is separate
+        // from the audible overlap whose clock is checked below.
+        await service.seek(const Duration(milliseconds: 600));
         await crossfade.prepareCrossfade(LocalCrossfadePlaybackSource(next));
         await _waitUntil(
           () => service.currentSnapshot.trackId == next.id,
