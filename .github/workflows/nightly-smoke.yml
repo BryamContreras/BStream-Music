@@ -242,22 +242,69 @@ jobs:
             diagnostics="$RUNNER_TEMP/ios-native-diagnostics"
             mkdir -p "$diagnostics"
             sudo /usr/sbin/DevToolsSecurity -enable || true
-            xcrun lldb --batch \
-              -o 'settings set auto-confirm true' \
-              -o 'process attach --name Runner --waitfor' \
-              -o 'process handle -s false -n false -p true SIGPIPE SIGUSR1 SIGUSR2 SIGPROF SIGTERM' \
-              -o 'continue' \
-              -o 'thread backtrace all' \
-              -o 'register read' \
-              -o 'process kill' \
-              -o 'quit' \
-              > "$diagnostics/lldb.log" 2>&1 < /dev/null &
+            (
+              set +e
+              xcrun lldb --batch \
+                -o 'settings set auto-confirm true' \
+                -o 'process attach --name Runner --waitfor' \
+                -o 'process handle -s false -n false -p true SIGPIPE SIGUSR1 SIGUSR2 SIGPROF SIGTERM' \
+                -o 'continue' \
+                -k 'thread backtrace all' \
+                -k 'register read' \
+                -k 'process kill' \
+                -o 'quit' \
+                > "$diagnostics/lldb.log" 2>&1 < /dev/null
+              printf '%s\n' "$?" > "$diagnostics/lldb-finished"
+            ) &
             native_debugger_pid=$!
           fi
           trap 'if [[ -n "$native_debugger_pid" ]]; then kill "$native_debugger_pid" 2>/dev/null || true; fi' EXIT
-          flutter drive --driver=test_driver/integration_test.dart \
-            --target=integration_test/skip_silence_native_test.dart \
-            -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
+          if [[ -n "$native_debugger_pid" ]]; then
+            python3 - "$diagnostics" <<'PY'
+          import os
+          from pathlib import Path
+          import signal
+          import subprocess
+          import sys
+          import time
+
+          diagnostics = Path(sys.argv[1])
+          command = ["flutter", "drive", "--driver=test_driver/integration_test.dart",
+                     "--target=integration_test/skip_silence_native_test.dart",
+                     "-d", os.environ["BSTREAM_IOS_SIMULATOR_ID"], "--no-dds"]
+          driver = subprocess.Popen(command, start_new_session=True)
+          deadline = time.monotonic() + 1200
+          failure = None
+          try:
+              while driver.poll() is None:
+                  if (diagnostics / "lldb-finished").exists():
+                      failure = "Native debugger stopped; collecting its backtrace."
+                      break
+                  if time.monotonic() >= deadline:
+                      failure = "Native diagnostic exceeded its twenty-minute limit."
+                      break
+                  time.sleep(1)
+              if failure:
+                  print(failure, flush=True)
+                  log = diagnostics / "lldb.log"
+                  if log.exists():
+                      print(log.read_text(errors="replace"), flush=True)
+                  sys.exit(124)
+              sys.exit(driver.returncode)
+          finally:
+              if driver.poll() is None:
+                  os.killpg(driver.pid, signal.SIGTERM)
+                  try:
+                      driver.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      os.killpg(driver.pid, signal.SIGKILL)
+                      driver.wait()
+          PY
+          else
+            flutter drive --driver=test_driver/integration_test.dart \
+              --target=integration_test/skip_silence_native_test.dart \
+              -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
+          fi
 
       - name: Run native iOS crossfade scenarios
         if: github.event_name == 'schedule' || inputs.ios_scenario == 'all' || inputs.ios_scenario == 'crossfade'
@@ -268,7 +315,7 @@ jobs:
           -d "$BSTREAM_IOS_SIMULATOR_ID" --no-dds
 
       - name: Collect iOS failure diagnostics
-        if: failure()
+        if: always() && (failure() || cancelled())
         shell: bash
         run: |
           diagnostics="$RUNNER_TEMP/ios-native-diagnostics"
@@ -293,7 +340,7 @@ jobs:
           done
 
       - name: Upload iOS failure diagnostics
-        if: failure()
+        if: always() && (failure() || cancelled())
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-native-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}

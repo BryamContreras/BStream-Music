@@ -450,6 +450,10 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
         @autoreleasepool {
             CMSampleBufferRef sample = [output copyNextSampleBuffer];
             if (!sample) break;
+            if (![self isCurrentGeneration:generation]) {
+                CFRelease(sample);
+                break;
+            }
             CMItemCount sampleCount = CMSampleBufferGetNumSamples(sample);
             if (sampleCount <= 0) {
                 // Marker buffers do not contain PCM and cannot prove silence.
@@ -458,8 +462,12 @@ static NSCache<NSString *, id> *BStreamSilenceCache(void) {
                 CFRelease(sample);
                 continue;
             }
-            const AudioStreamBasicDescription *format = CMAudioFormatDescriptionGetStreamBasicDescription(
-                CMSampleBufferGetFormatDescription(sample));
+            CMFormatDescriptionRef description = CMSampleBufferGetFormatDescription(sample);
+            // A sample buffer may have no format description. Validate it
+            // before calling the audio-specific CoreMedia accessor.
+            const AudioStreamBasicDescription *format = description &&
+                CMFormatDescriptionGetMediaType(description) == kCMMediaType_Audio
+                ? CMAudioFormatDescriptionGetStreamBasicDescription(description) : NULL;
             double sampleTime = BStreamSeconds(CMSampleBufferGetPresentationTimeStamp(sample));
             BOOL acceptable = format && format->mFormatID == kAudioFormatLinearPCM &&
                 (format->mFormatFlags & kAudioFormatFlagIsFloat) &&
