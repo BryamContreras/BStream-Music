@@ -15,6 +15,8 @@ import 'package:rxdart/rxdart.dart';
 import 'package:synchronized/synchronized.dart';
 import 'package:uuid/uuid.dart';
 
+import 'bstream_equalizer_tuning.dart';
+
 part 'bstream_equalizer.dart';
 
 const _uuid = Uuid();

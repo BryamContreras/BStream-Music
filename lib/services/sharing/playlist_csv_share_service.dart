@@ -4,11 +4,11 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show compute;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/utils/background_work.dart';
 import '../../features/music/domain/entities/catalog_playlist.dart';
 import '../../features/music/domain/entities/catalog_track.dart';
 import '../../features/music/domain/entities/local_track.dart';
@@ -103,9 +103,10 @@ class SharePlusPlaylistCsvShareService implements PlaylistCsvShareService {
     if (playlist.playlist.deletedAt != null) {
       throw const FormatException('The playlist has been deleted.');
     }
-    final bytes = await compute(
-      _encodePlaylistCsv,
+    final bytes = await runBackgroundTransform(
       _PlaylistCsvExportRequest(playlist, localTracks, csvService),
+      _encodePlaylistCsv,
+      debugName: 'BStream playlist CSV export',
     );
     final temporaryDirectory = await temporaryDirectoryFactory();
     final exportRoot = await Directory(

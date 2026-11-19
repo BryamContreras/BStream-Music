@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/bstream_widget_repeat" />
+    <item android:width="6dp" android:height="9dp" android:gravity="center">
+        <vector android:width="6dp" android:height="9dp"
+            android:viewportWidth="6" android:viewportHeight="9">
+            <path android:fillColor="#FFFFFFFF"
+                android:pathData="M1,2.3L3.3,0.5H5V9H3V3L1,4.4Z" />
+        </vector>
+    </item>
+</layer-list>

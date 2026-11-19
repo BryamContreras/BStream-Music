@@ -393,7 +393,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         }
         _observePlaybackHistory(decorated);
         state = AsyncData(decorated);
-        _maybeStartAudioQualityUpgrade(decorated);
+        _maybeStartAudioQualityUpgrade(decorated, snapshot);
       }
       if (queueIndexChanged && decorated.isRemote) {
         _remotePrefetch.invalidate();

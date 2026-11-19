@@ -1,6 +1,6 @@
 # Procesamiento de audio en iOS
 
-iOS comparte los controles, los ajustes persistidos, las cinco bandas y los
+iOS comparte los controles, los ajustes persistidos, las diez bandas y los
 dieciséis presets con Android y escritorio. No se añade otro reproductor:
 `just_audio` conserva `AVQueuePlayer`, las sesiones de audio, el bloqueo de
 pantalla, los fundidos y las mejoras de fuente. El mínimo de la app sigue siendo
@@ -19,10 +19,14 @@ tiempo. Los siguientes cambios actualizan parámetros atómicos. El callback de
 audio no toma bloqueos, no asigna memoria y no llama a Dart. Los buffers y el
 historial se preparan fuera del procesamiento de muestras.
 
-El núcleo C utiliza cinco biquads Q=1, frecuencias de 60, 230, 910, 3600 y
-14000 Hz, ganancias de −12 a +12 dB y transiciones de 25 ms. Aplica
-`−max(0, ganancias)` dB antes de los filtros. Esta compensación reduce la
-saturación; no es un limitador para curvas extremas. Las bandas que alcanzan
+El núcleo C utiliza diez biquads Q=1, frecuencias de 31, 62, 125, 250, 500, 1000,
+2000, 4000, 8000 y 16000 Hz, ganancias de −12 a +12 dB y transiciones de 25 ms. Aplica
+una compensación basada en la respuesta combinada de los realces antes de los
+filtros: con uno se reserva su ganancia exacta; con varios se estima el máximo
+en 257 puntos logarítmicos y los diez centros, con margen de 0.1 dB y cota en
+la suma de ganancias positivas. Se ignoran los cortes para mantener un margen
+conservador. Se calcula una vez por configuración, nunca por muestra. Reduce
+la saturación, pero no sustituye un limitador. Las bandas que alcanzan
 Nyquist quedan sin filtro. El volumen y las ganancias de fundido se conservan.
 
 Se admiten float32/64 y PCM16/32 nativos, planos o intercalados, hasta ocho

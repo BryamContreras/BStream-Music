@@ -10,20 +10,49 @@ import '../player/notification_artwork_service.dart';
 import '../player/player_service.dart';
 import 'desktop_media_session.dart';
 
+const notificationRepeatAction = 'bstream.repeat';
+const notificationFavoriteAction = 'bstream.favorite';
+
 @visibleForTesting
 PlaybackState buildAudioServicePlaybackState(DesktopMediaSessionState state) {
   final snapshot = state.snapshot;
   final wantsToPlay = snapshot.wantsToPlay;
+  final labels = state.controlLabels;
   final controls = <MediaControl>[
+    MediaControl.custom(
+      androidIcon: switch (snapshot.repeatMode) {
+        PlaybackRepeatMode.off => 'drawable/bstream_widget_repeat',
+        PlaybackRepeatMode.all => 'drawable/bstream_notification_repeat_all',
+        PlaybackRepeatMode.one => 'drawable/bstream_notification_repeat_one',
+      },
+      label: switch (snapshot.repeatMode) {
+        PlaybackRepeatMode.off => labels.repeatQueue,
+        PlaybackRepeatMode.all => labels.repeatOne,
+        PlaybackRepeatMode.one => labels.disableRepeat,
+      },
+      name: notificationRepeatAction,
+    ),
     if (state.hasPrevious) MediaControl.skipToPrevious,
     wantsToPlay ? MediaControl.pause : MediaControl.play,
     if (state.hasNext) MediaControl.skipToNext,
+    if (!snapshot.isExternal)
+      MediaControl.custom(
+        androidIcon: state.isFavorite
+            ? 'drawable/bstream_widget_heart_filled'
+            : 'drawable/bstream_widget_heart_outline',
+        label: state.isFavorite
+            ? labels.removeFromFavorites
+            : labels.addToFavorites,
+        name: notificationFavoriteAction,
+      ),
   ];
-  final compactActions = List<int>.generate(
-    controls.length.clamp(0, 3),
-    (index) => index,
-    growable: false,
-  );
+  // Older Android notifications retain the widget's five-control order.
+  // Their compact view keeps only the three transport controls. Android 13+
+  // places standard transport/custom actions in its own system-defined slots.
+  final compactActions = [
+    for (var index = 0; index < controls.length; index++)
+      if (controls[index].action != MediaAction.custom) index,
+  ];
 
   return PlaybackState(
     controls: controls,
@@ -172,6 +201,16 @@ class AudioServiceMediaSessionCallbackBridge {
 
   Future<void> setRepeatMode(PlaybackRepeatMode mode) =>
       _dispatch((callbacks) => callbacks.setRepeatMode(mode));
+
+  Future<void> customAction(String name) => switch (name) {
+    notificationRepeatAction => _dispatch((callbacks) async {
+      await callbacks.cycleRepeatMode?.call();
+    }),
+    notificationFavoriteAction => _dispatch((callbacks) async {
+      await callbacks.toggleFavorite?.call();
+    }),
+    _ => Future<void>.value(),
+  };
 }
 
 class _PendingMediaSessionCommand {
@@ -196,6 +235,8 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
   bool? _lastWantsToPlay;
   bool? _lastShuffleEnabled;
   PlaybackRepeatMode? _lastRepeatMode;
+  bool? _lastIsFavorite;
+  DesktopMediaControlLabels? _lastControlLabels;
   DateTime? _lastPositionUpdate;
 
   static Future<void> ensureInitialized() async {
@@ -282,12 +323,14 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
         snapshot.status != _lastStatus ||
         snapshot.wantsToPlay != _lastWantsToPlay ||
         snapshot.shuffleEnabled != _lastShuffleEnabled ||
-        snapshot.repeatMode != _lastRepeatMode;
+        snapshot.repeatMode != _lastRepeatMode ||
+        state.isFavorite != _lastIsFavorite ||
+        state.controlLabels != _lastControlLabels;
 
     if (requiresImmediateSync || _positionIsDue) {
       _positionTimer?.cancel();
       _positionTimer = null;
-      await _sync(state, force: requiresImmediateSync);
+      await _sync(state);
       return;
     }
 
@@ -377,6 +420,8 @@ class AudioServiceDesktopMediaSession implements DesktopMediaSession {
     _lastWantsToPlay = snapshot.wantsToPlay;
     _lastShuffleEnabled = snapshot.shuffleEnabled;
     _lastRepeatMode = snapshot.repeatMode;
+    _lastIsFavorite = state.isFavorite;
+    _lastControlLabels = state.controlLabels;
   }
 
   bool _hasTrack(PlayerSnapshot snapshot) =>
@@ -478,4 +523,8 @@ class _DesktopAudioHandler extends BaseAudioHandler with SeekHandler {
         AudioServiceRepeatMode.all ||
         AudioServiceRepeatMode.group => PlaybackRepeatMode.all,
       });
+
+  @override
+  Future<dynamic> customAction(String name, [Map<String, dynamic>? extras]) =>
+      _callbacks.customAction(name);
 }

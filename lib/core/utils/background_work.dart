@@ -10,7 +10,7 @@ const _maximumWorkers = 2;
 final _waiting = Queue<Completer<void>>();
 int _active = 0;
 
-/// Shares a bounded CPU-work queue across catalog, account and lyrics tasks.
+/// Shares a bounded CPU-work queue across independent app services.
 /// Workers terminate after each job; none keeps running while the app is idle.
 ///
 /// Pass a top-level function or a data-only job's tear-off. Do not capture a
@@ -43,11 +43,16 @@ Future<R> transformInBackground<T, R>(
   required int inputSize,
 }) async {
   if (inputSize < backgroundParsingThreshold) return transform(input);
-  return _transformWorker(input, transform);
+  return runBackgroundTransform(input, transform);
 }
 
-Future<R> _transformWorker<T, R>(T input, R Function(T) transform) =>
-    runBackgroundWork(() => transform(input));
+/// Runs an expensive transform even when the input is small. Form the isolate
+/// closure here so the caller sends only its input and transform function.
+Future<R> runBackgroundTransform<T, R>(
+  T input,
+  FutureOr<R> Function(T) transform, {
+  String debugName = 'BStream background work',
+}) => runBackgroundWork(() => transform(input), debugName: debugName);
 
 /// Keeps JSON decoding and model reduction together so large intermediate
 /// trees need not return to the UI isolate. FormatException is preserved.

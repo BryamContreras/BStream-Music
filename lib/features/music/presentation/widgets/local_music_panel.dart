@@ -249,12 +249,12 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
         }
 
         final tracks = result.tracks;
-        final folders = result.folders;
         return switch (_route.type) {
           _LocalMusicRouteType.root => _LocalMusicRootView(
             bottomContentPadding: widget.bottomContentPadding,
             tracks: tracks,
-            folders: folders,
+            folders: result.folders,
+            totalDuration: result.totalDuration,
             refreshBusy: _catalogActionBusy,
             onRefresh: () => _refresh(query),
             onOpenAll: tracks.isEmpty
@@ -268,6 +268,7 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
             bottomContentPadding: widget.bottomContentPadding,
             title: strings.allLocalSongs,
             tracks: tracks,
+            totalDuration: result.totalDuration,
             filterController: _filterController,
             filterFocus: _filterFocus,
             filterVisible: _filterVisible,
@@ -278,7 +279,7 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
             onOpenPlayer: widget.onOpenPlayer,
           ),
           _LocalMusicRouteType.folder => _buildFolderDetail(
-            folders,
+            result.folders,
             widget.bottomContentPadding,
           ),
         };
@@ -303,6 +304,7 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
       bottomContentPadding: bottomContentPadding,
       title: folder?.name ?? strings.localMusicFolders,
       tracks: folder?.tracks ?? const <DeviceAudioTrack>[],
+      totalDuration: folder?.totalDuration,
       filterController: _filterController,
       filterFocus: _filterFocus,
       filterVisible: _filterVisible,
@@ -363,6 +365,7 @@ class _LocalMusicRootView extends ConsumerWidget {
     required this.bottomContentPadding,
     required this.tracks,
     required this.folders,
+    required this.totalDuration,
     required this.refreshBusy,
     required this.onRefresh,
     required this.onOpenAll,
@@ -373,6 +376,7 @@ class _LocalMusicRootView extends ConsumerWidget {
   final double bottomContentPadding;
   final List<DeviceAudioTrack> tracks;
   final List<DeviceAudioFolder> folders;
+  final Duration? totalDuration;
   final bool refreshBusy;
   final VoidCallback onRefresh;
   final VoidCallback? onOpenAll;
@@ -424,7 +428,7 @@ class _LocalMusicRootView extends ConsumerWidget {
               title: strings.allLocalSongs,
               subtitle: strings.songCountWithDuration(
                 tracks.length,
-                sumKnownDurations(tracks.map((track) => track.duration)),
+                totalDuration,
               ),
               onTap: onOpenAll,
               trailing: TrackPlayButton(
@@ -474,9 +478,7 @@ class _LocalMusicRootView extends ConsumerWidget {
                   title: folder.name,
                   subtitle: strings.songCountWithDuration(
                     folder.tracks.length,
-                    sumKnownDurations(
-                      folder.tracks.map((track) => track.duration),
-                    ),
+                    folder.totalDuration,
                   ),
                   onTap: () => onOpenFolder(folder.id),
                   trailing: TrackPlayButton(
@@ -543,6 +545,7 @@ class _LocalTrackDetailView extends ConsumerWidget {
     required this.bottomContentPadding,
     required this.title,
     required this.tracks,
+    required this.totalDuration,
     required this.filterController,
     required this.filterFocus,
     required this.filterVisible,
@@ -556,6 +559,7 @@ class _LocalTrackDetailView extends ConsumerWidget {
   final double bottomContentPadding;
   final String title;
   final List<DeviceAudioTrack> tracks;
+  final Duration? totalDuration;
   final TextEditingController filterController;
   final FocusNode filterFocus;
   final bool filterVisible;
@@ -573,19 +577,12 @@ class _LocalTrackDetailView extends ConsumerWidget {
         ? tracks
         : tracks
               .where(
-                (track) => [track.title, track.artist, track.album]
-                    .whereType<String>()
-                    .any((value) => value.toLowerCase().contains(query)),
+                (track) =>
+                    track.title.toLowerCase().contains(query) ||
+                    (track.artist?.toLowerCase().contains(query) ?? false) ||
+                    (track.album?.toLowerCase().contains(query) ?? false),
               )
               .toList();
-    final playback = ref.watch(
-      playerControllerProvider.select(
-        (value) => (
-          trackId: value.value?.trackId,
-          status: value.value?.status ?? PlayerStatus.idle,
-        ),
-      ),
-    );
     return ScrolledUnderTabFrame(
       surfaceKey: const ValueKey('local-detail-header-surface'),
       header: Row(
@@ -651,10 +648,7 @@ class _LocalTrackDetailView extends ConsumerWidget {
               10,
             ),
             child: Text(
-              strings.songCountWithDuration(
-                tracks.length,
-                sumKnownDurations(tracks.map((track) => track.duration)),
-              ),
+              strings.songCountWithDuration(tracks.length, totalDuration),
               style: appListCardSubtitleStyle(context),
             ),
           ),
@@ -674,20 +668,14 @@ class _LocalTrackDetailView extends ConsumerWidget {
             separatorBuilder: (_, _) => const SizedBox(height: appTrackRowGap),
             itemBuilder: (context, index) {
               final track = visibleTracks[index];
-              final isCurrent = playback.trackId == track.id;
-              final isPlaying =
-                  isCurrent && playback.status == PlayerStatus.playing;
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: _DeviceAudioTrackCard(
                   track: track,
-                  isCurrent: isCurrent,
-                  isPlaying: isPlaying,
                   playTooltip: strings.play,
                   pauseTooltip: strings.pause,
                   onTap: () => _openOrPlay(context, ref, track),
-                  onPlayPause: () =>
-                      _toggleOrPlay(context, ref, track, isCurrent, isPlaying),
+                  onPlayPause: () => _toggleOrPlay(context, ref, track),
                 ),
               );
             },
@@ -717,12 +705,11 @@ class _LocalTrackDetailView extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     DeviceAudioTrack track,
-    bool isCurrent,
-    bool isPlaying,
   ) async {
     final player = ref.read(playerControllerProvider.notifier);
-    if (isCurrent) {
-      if (isPlaying) {
+    final snapshot = ref.read(playerControllerProvider).value;
+    if (snapshot?.trackId == track.id) {
+      if (snapshot?.status == PlayerStatus.playing) {
         await player.pause();
       } else {
         await player.resume();
@@ -835,11 +822,21 @@ class _LocalSearchFooter extends StatelessWidget {
   }
 }
 
-class _DeviceAudioTrackCard extends StatelessWidget {
+final _localCardPlaybackProvider = Provider.autoDispose((ref) {
+  return ref.watch(
+    playerControllerProvider.select((player) {
+      final snapshot = player.value;
+      return (
+        trackId: snapshot?.trackId,
+        playing: snapshot?.status == PlayerStatus.playing,
+      );
+    }),
+  );
+});
+
+class _DeviceAudioTrackCard extends ConsumerWidget {
   const _DeviceAudioTrackCard({
     required this.track,
-    required this.isCurrent,
-    required this.isPlaying,
     required this.playTooltip,
     required this.pauseTooltip,
     required this.onTap,
@@ -847,15 +844,21 @@ class _DeviceAudioTrackCard extends StatelessWidget {
   });
 
   final DeviceAudioTrack track;
-  final bool isCurrent;
-  final bool isPlaying;
   final String playTooltip;
   final String pauseTooltip;
   final VoidCallback onTap;
   final VoidCallback onPlayPause;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final playback = ref.watch(
+      _localCardPlaybackProvider.select((value) {
+        final current = value.trackId == track.id;
+        return (current: current, playing: current && value.playing);
+      }),
+    );
+    final isCurrent = playback.current;
+    final isPlaying = playback.playing;
     final colors = Theme.of(context).colorScheme;
     final artist = track.artist?.trim();
     final album = track.album?.trim();

@@ -1,6 +1,6 @@
 import '../../../../services/audio_sources/audio_format_details.dart';
 
-enum PlaybackAudioQualityTier { low, standard, high }
+enum PlaybackAudioQualityTier { low, standard, high, lossless, hiRes }
 
 /// Classifies the audible format, independently from the requested profile or
 /// provider. A provider selection cannot prove that an upgrade was available.
@@ -8,9 +8,19 @@ PlaybackAudioQualityTier? playbackAudioQualityTier({
   String? codec,
   String? mimeType,
   int? bitrate,
+  int? sampleRate,
+  int? bitDepth,
 }) {
-  if (AudioFormatDetails(codec: codec, mimeType: mimeType).isLossless) {
-    return PlaybackAudioQualityTier.high;
+  final format = AudioFormatDetails(
+    codec: codec,
+    mimeType: mimeType,
+    sampleRate: sampleRate,
+    bitDepth: bitDepth,
+  );
+  if (format.isLossless) {
+    return format.isHighResolution
+        ? PlaybackAudioQualityTier.hiRes
+        : PlaybackAudioQualityTier.lossless;
   }
   if (bitrate == null || bitrate <= 0) return null;
   if (bitrate >= 256000) return PlaybackAudioQualityTier.high;
@@ -28,9 +38,11 @@ String? playbackAudioQualityLabel({
   int? bitrate,
   int? sampleRate,
   int? channels,
+  int? bitDepth,
   String stereoLabel = 'Stereo',
   String monoLabel = 'Mono',
   String Function(int)? channelCountLabel,
+  String Function(int)? bitDepthLabel,
   String? localSource,
 }) {
   final normalizedCodec = codec?.trim().toLowerCase() ?? '';
@@ -74,7 +86,15 @@ String? playbackAudioQualityLabel({
       channelCountLabel?.call(count) ?? '$count channels',
     _ => null,
   };
-  final details = [?format, ?sampleRateLabel, ?bitrateLabel].join(' \u00B7 ');
+  final precision = bitDepth != null && bitDepth > 0 && bitDepth <= 64
+      ? bitDepthLabel?.call(bitDepth) ?? '$bitDepth-bit'
+      : null;
+  final details = [
+    ?format,
+    ?precision,
+    ?sampleRateLabel,
+    ?bitrateLabel,
+  ].join(' \u00B7 ');
   if (channelLabel != null && channelLabel.trim().isNotEmpty) {
     return details.isEmpty ? channelLabel : '$details - $channelLabel';
   }

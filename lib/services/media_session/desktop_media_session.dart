@@ -20,6 +20,8 @@ class DesktopMediaSessionCallbacks {
     required this.setShuffleEnabled,
     required this.setRepeatMode,
     required this.playQueueIndex,
+    this.cycleRepeatMode,
+    this.toggleFavorite,
   });
 
   final DesktopMediaAction play;
@@ -33,6 +35,43 @@ class DesktopMediaSessionCallbacks {
   final DesktopMediaShuffleAction setShuffleEnabled;
   final DesktopMediaRepeatAction setRepeatMode;
   final DesktopMediaQueueAction playQueueIndex;
+  final DesktopMediaAction? cycleRepeatMode;
+  final DesktopMediaAction? toggleFavorite;
+}
+
+/// Translated action descriptions for system playback controls.
+class DesktopMediaControlLabels {
+  const DesktopMediaControlLabels({
+    this.repeatQueue = 'Repeat queue',
+    this.repeatOne = 'Repeat one',
+    this.disableRepeat = 'Disable repeat',
+    this.addToFavorites = 'Add to favorites',
+    this.removeFromFavorites = 'Remove from favorites',
+  });
+
+  final String repeatQueue;
+  final String repeatOne;
+  final String disableRepeat;
+  final String addToFavorites;
+  final String removeFromFavorites;
+
+  @override
+  bool operator ==(Object other) =>
+      other is DesktopMediaControlLabels &&
+      repeatQueue == other.repeatQueue &&
+      repeatOne == other.repeatOne &&
+      disableRepeat == other.disableRepeat &&
+      addToFavorites == other.addToFavorites &&
+      removeFromFavorites == other.removeFromFavorites;
+
+  @override
+  int get hashCode => Object.hash(
+    repeatQueue,
+    repeatOne,
+    disableRepeat,
+    addToFavorites,
+    removeFromFavorites,
+  );
 }
 
 class DesktopMediaQueueItem {
@@ -80,18 +119,24 @@ class DesktopMediaSessionState {
     required this.snapshot,
     required this.queue,
     required this.currentIndex,
+    this.isFavorite = false,
+    this.controlLabels = const DesktopMediaControlLabels(),
   }) : _queueFingerprint = null;
 
   DesktopMediaSessionState.withQueue({
     required this.snapshot,
     required DesktopMediaQueue queue,
     required this.currentIndex,
+    this.isFavorite = false,
+    this.controlLabels = const DesktopMediaControlLabels(),
   }) : queue = queue.items,
        _queueFingerprint = queue.fingerprint;
 
   final PlayerSnapshot snapshot;
   final List<DesktopMediaQueueItem> queue;
   final int currentIndex;
+  final bool isFavorite;
+  final DesktopMediaControlLabels controlLabels;
   final int? _queueFingerprint;
 
   String get queueKey =>

@@ -2594,10 +2594,13 @@ void main() {
 
 void _androidEqualizerTests() {
   group('Mobile BStream PCM processing', () {
-    const curve = EqualizerSettings(enabled: true, gainsDb: [6, 4, 2, 0, -2]);
+    const curve = EqualizerSettings(
+      enabled: true,
+      gainsDb: [6, 4, 2, 0, -2, -1, 1, 2, 1, 0],
+    );
     const alternate = EqualizerSettings(
       enabled: true,
-      gainsDb: [-3, 1.5, 3.5, 2, -1],
+      gainsDb: [-3, 1.5, 3.5, 2, -1, 1, 2, 1, 0, -1],
     );
 
     test(
@@ -2713,12 +2716,12 @@ void _androidEqualizerTests() {
     );
 
     test(
-      'sends exact five-band gains without device interpolation or quantization',
+      'sends exact ten-band gains without device interpolation or quantization',
       () async {
         final fixture = await _CrossfadeFixture.create(equalizer: true);
         const exact = EqualizerSettings(
           enabled: true,
-          gainsDb: [12, 3.5, -4.25, 8, -12],
+          gainsDb: [12, 3.5, -4.25, 8, -12, 1, -1.5, 2.25, -3.75, 4.5],
         );
         try {
           await fixture.service.configureEqualizer(exact);
@@ -2733,7 +2736,7 @@ void _androidEqualizerTests() {
             status.parameters.bands.map((band) => band.gain),
             exact.gainsDb,
           );
-          expect(status.preampDb, -12);
+          expect(status.preampDb, exact.preampDb);
           expect(effect.configureCalls, [exact]);
 
           await fixture.service.configureEqualizer(exact);
@@ -2754,7 +2757,10 @@ void _androidEqualizerTests() {
           final first = fixture.service.configureEqualizer(curve);
           await effect.writeStarted.future;
           final skipped = fixture.service.configureEqualizer(
-            const EqualizerSettings(enabled: true, gainsDb: [1, 1, 1, 1, 1]),
+            const EqualizerSettings(
+              enabled: true,
+              gainsDb: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ),
           );
           final latest = fixture.service.configureEqualizer(alternate);
           effect.releaseWrite.complete();

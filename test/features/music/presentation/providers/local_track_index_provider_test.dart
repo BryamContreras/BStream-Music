@@ -40,6 +40,12 @@ void main() {
     expect(index.firstById('same'), same(first));
     expect(index.firstBySourceUrl(first.sourceUrl), same(first));
     expect(index.firstMatching(sourceId: 'video'), same(first));
+    expect(
+      index.forPlaylist(localId: ' same ', sourceId: 'video'),
+      same(duplicate),
+    );
+    expect(index.forPlaylist(localId: null, sourceId: 'video'), same(first));
+    expect(index.forPlaylist(localId: 'missing', sourceId: 'video'), isNull);
   });
 
   test('resolves any number of cards with one library traversal', () {

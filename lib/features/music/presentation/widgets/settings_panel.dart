@@ -30,6 +30,7 @@ import 'app_update_dialog.dart';
 import 'equalizer_settings_page.dart';
 import 'library_csv_import_dialog.dart';
 import 'lyrics_animation_transition.dart';
+import 'lyrics_background_selector.dart';
 import 'live_widget_style_settings.dart';
 import 'scrolled_under_tab_frame.dart';
 import 'player_style_gallery.dart';
@@ -41,6 +42,8 @@ typedef DownloadDirectoryPicker =
 bool _usesSingleAudioQuality(BuildContext context) =>
     AppPlatform.isDesktop &&
     !AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
+
+enum _AudioQualitySetting { wifi, mobile, downloads }
 
 double _settingsContentMaxWidth(BuildContext context, double compactWidth) {
   final desktopLayout =
@@ -526,6 +529,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         enabledProviders: state.enabledLyricsProviders,
         onOpenProviders: () => _openRoute(_SettingsRoute.lyricsProviders),
         animationStyle: state.lyricsAnimationStyle,
+        backgroundStyle: state.lyricsBackgroundStyle,
         alignment: state.lyricsTextAlignment,
         romanizationEnabled: state.lyricsRomanizationEnabled,
         romanizationLanguages: state.lyricsRomanizationLanguages,
@@ -533,6 +537,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onAnimationChanged: (style) => ref
             .read(settingsControllerProvider.notifier)
             .setLyricsAnimationStyle(style),
+        onBackgroundChanged: (style) => ref
+            .read(settingsControllerProvider.notifier)
+            .setLyricsBackgroundStyle(style),
         onAlignmentChanged: (alignment) => ref
             .read(settingsControllerProvider.notifier)
             .setLyricsTextAlignment(alignment),
@@ -561,8 +568,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         state: state,
         strings: strings,
         singleProfile: _usesSingleAudioQuality(context),
-        onWifiTap: () => _chooseAudioQuality(wifi: true),
-        onMobileTap: () => _chooseAudioQuality(wifi: false),
+        onQualityTap: _chooseAudioQuality,
       ),
       _SettingsRoute.storage => _StorageSettings(
         strings: strings,
@@ -782,9 +788,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                   key: const ValueKey('storage-data-saving'),
                   icon: Icons.data_saver_on_rounded,
                   title: strings.dataSaving,
-                  subtitle: _usesSingleAudioQuality(context)
-                      ? strings.desktopDataSavingSummary
-                      : strings.dataSavingSummary,
+                  subtitle: strings.dataSavingSummary,
                   onTap: () => _openRoute(_SettingsRoute.dataSaving),
                 ),
                 const SizedBox(height: appCardGap),
@@ -949,21 +953,35 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     await ref.read(settingsControllerProvider.notifier).setLanguage(selected);
   }
 
-  Future<void> _chooseAudioQuality({required bool wifi}) async {
+  Future<void> _chooseAudioQuality(_AudioQualitySetting setting) async {
     final state = ref.read(settingsControllerProvider).value;
     if (state == null) return;
     final strings = ref.read(appStringsProvider);
-    final saved = wifi ? state.wifiAudioQuality : state.mobileAudioQuality;
+    final (title, saved) = switch (setting) {
+      _AudioQualitySetting.wifi => (
+        _usesSingleAudioQuality(context)
+            ? strings.audioQuality
+            : strings.wifiNetwork,
+        state.wifiAudioQuality,
+      ),
+      _AudioQualitySetting.mobile => (
+        strings.mobileNetwork,
+        state.mobileAudioQuality,
+      ),
+      _AudioQualitySetting.downloads => (
+        strings.downloadAudioQuality,
+        state.downloadAudioQuality,
+      ),
+    };
     final selected = await showAppDialog<AudioQualityProfile>(
       context: context,
       builder: (_) => _AudioQualityProfileDialog(
-        networkLabel: _usesSingleAudioQuality(context)
-            ? strings.audioQuality
-            : wifi
-            ? strings.wifiNetwork
-            : strings.mobileNetwork,
+        title: title,
         selected: state.jioSaavnEnabled ? saved : AudioQualityProfile.standard,
         jioSaavnEnabled: state.jioSaavnEnabled,
+        highQualitySource: setting == _AudioQualitySetting.downloads
+            ? strings.downloadHighQualitySource
+            : 'JioSaavn',
         strings: strings,
       ),
     );
@@ -976,11 +994,13 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       return;
     }
     final controller = ref.read(settingsControllerProvider.notifier);
-    if (wifi) {
-      await controller.setWifiAudioQuality(selected);
-    } else {
-      await controller.setMobileAudioQuality(selected);
-    }
+    await switch (setting) {
+      _AudioQualitySetting.wifi => controller.setWifiAudioQuality(selected),
+      _AudioQualitySetting.mobile => controller.setMobileAudioQuality(selected),
+      _AudioQualitySetting.downloads => controller.setDownloadAudioQuality(
+        selected,
+      ),
+    };
   }
 
   Future<void> _chooseLocalMusicFilters({
@@ -2555,39 +2575,10 @@ class _AppearanceSettings extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-                child: SegmentedButton<AppThemeMode>(
-                  selected: {themeMode},
-                  style: ButtonStyle(
-                    minimumSize: WidgetStateProperty.all(const Size(0, 50)),
-                    padding: WidgetStateProperty.all(
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    ),
-                    textStyle: WidgetStateProperty.all(
-                      Theme.of(context).textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    iconSize: WidgetStateProperty.all(22),
-                  ),
-                  segments: [
-                    ButtonSegment(
-                      value: AppThemeMode.system,
-                      icon: const Icon(Icons.settings_suggest_rounded),
-                      label: Text(strings.themeSystem),
-                    ),
-                    ButtonSegment(
-                      value: AppThemeMode.light,
-                      icon: const Icon(Icons.light_mode_rounded),
-                      label: Text(strings.themeLight),
-                    ),
-                    ButtonSegment(
-                      value: AppThemeMode.dark,
-                      icon: const Icon(Icons.dark_mode_rounded),
-                      label: Text(strings.themeDark),
-                    ),
-                  ],
-                  onSelectionChanged: (selection) =>
-                      onThemeModeChanged(selection.first),
+                child: _ThemeModeSelector(
+                  selected: themeMode,
+                  strings: strings,
+                  onChanged: onThemeModeChanged,
                 ),
               ),
             ],
@@ -2597,16 +2588,17 @@ class _AppearanceSettings extends StatelessWidget {
             title: strings.accentColor,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                padding: const EdgeInsets.fromLTRB(0, 6, 0, 12),
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 328),
+                    constraints: const BoxConstraints(maxWidth: 384),
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        final columnCount = ((constraints.maxWidth + 8) / 56)
-                            .floor()
-                            .clamp(1, 6);
+                        final columnCount =
+                            ((constraints.maxWidth / 48).floor().clamp(1, 8) -
+                                    1)
+                                .clamp(1, 7);
                         return GridView.builder(
                           key: const ValueKey('accent-palette-grid'),
                           shrinkWrap: true,
@@ -2616,8 +2608,6 @@ class _AppearanceSettings extends StatelessWidget {
                           gridDelegate:
                               SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: columnCount,
-                                crossAxisSpacing: 8,
-                                mainAxisSpacing: 8,
                               ),
                           itemCount: AppAccent.values.length,
                           itemBuilder: (context, index) {
@@ -2924,11 +2914,13 @@ class _LyricsAppearanceSettings extends StatelessWidget {
     required this.enabledProviders,
     required this.onOpenProviders,
     required this.animationStyle,
+    required this.backgroundStyle,
     required this.alignment,
     required this.romanizationEnabled,
     required this.romanizationLanguages,
     required this.strings,
     required this.onAnimationChanged,
+    required this.onBackgroundChanged,
     required this.onAlignmentChanged,
     required this.onRomanizationEnabledChanged,
     required this.onRomanizationLanguagesChanged,
@@ -2937,11 +2929,13 @@ class _LyricsAppearanceSettings extends StatelessWidget {
   final Set<LyricsProvider> enabledProviders;
   final VoidCallback onOpenProviders;
   final LyricsAnimationStyle animationStyle;
+  final LyricsBackgroundStyle backgroundStyle;
   final LyricsTextAlignment alignment;
   final bool romanizationEnabled;
   final Set<LyricsRomanizationLanguage> romanizationLanguages;
   final AppStrings strings;
   final ValueChanged<LyricsAnimationStyle> onAnimationChanged;
+  final ValueChanged<LyricsBackgroundStyle> onBackgroundChanged;
   final ValueChanged<LyricsTextAlignment> onAlignmentChanged;
   final ValueChanged<bool> onRomanizationEnabledChanged;
   final ValueChanged<Set<LyricsRomanizationLanguage>>
@@ -2974,23 +2968,34 @@ class _LyricsAppearanceSettings extends StatelessWidget {
           ),
           const SizedBox(height: appSectionGap),
           _SettingsSectionPanel(
+            title: strings.lyricsBackground,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                child: LyricsBackgroundSelector(
+                  value: backgroundStyle,
+                  strings: strings,
+                  onChanged: onBackgroundChanged,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: appSectionGap),
+          _SettingsSectionPanel(
             title: strings.lyricsAnimation,
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-                child: Wrap(
-                  key: const ValueKey('lyrics-animation-options'),
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
+                child: LyricsAppearanceSelector<LyricsAnimationStyle>(
+                  keyPrefix: 'lyrics-animation',
+                  value: animationStyle,
+                  onChanged: onAnimationChanged,
+                  options: [
                     for (final option in LyricsAnimationStyle.values)
-                      ChoiceChip(
-                        key: ValueKey('lyrics-animation-option-${option.code}'),
-                        selected: animationStyle == option,
-                        showCheckmark: true,
-                        avatar: Icon(_lyricsAnimationIcon(option), size: 18),
-                        label: Text(strings.lyricsAnimationLabel(option)),
-                        onSelected: (_) => onAnimationChanged(option),
+                      (
+                        value: option,
+                        code: option.code,
+                        label: strings.lyricsAnimationLabel(option),
                       ),
                   ],
                 ),
@@ -3204,12 +3209,6 @@ class _LyricsProvidersSettings extends StatelessWidget {
     );
   }
 }
-
-IconData _lyricsAnimationIcon(LyricsAnimationStyle style) => switch (style) {
-  LyricsAnimationStyle.smooth => Icons.auto_awesome_rounded,
-  LyricsAnimationStyle.slide => Icons.swipe_up_rounded,
-  LyricsAnimationStyle.highlight => Icons.zoom_in_rounded,
-};
 
 class _LyricsAnimationPreview extends ConsumerStatefulWidget {
   const _LyricsAnimationPreview({
@@ -3492,6 +3491,109 @@ List<String> _lyricsRomanizationPreviewLines(
   ],
 };
 
+class _ThemeModeSelector extends StatelessWidget {
+  const _ThemeModeSelector({
+    required this.selected,
+    required this.strings,
+    required this.onChanged,
+  });
+
+  final AppThemeMode selected;
+  final AppStrings strings;
+  final ValueChanged<AppThemeMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final textStyle = Theme.of(
+      context,
+    ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800);
+    final options = [
+      (
+        value: AppThemeMode.system,
+        icon: Icons.settings_suggest_rounded,
+        label: strings.themeSystem,
+      ),
+      (
+        value: AppThemeMode.light,
+        icon: Icons.light_mode_rounded,
+        label: strings.themeLight,
+      ),
+      (
+        value: AppThemeMode.dark,
+        icon: Icons.dark_mode_rounded,
+        label: strings.themeDark,
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          locale: Localizations.maybeLocaleOf(context),
+          maxLines: 1,
+        );
+        var widestLabel = 0.0;
+        try {
+          for (final option in options) {
+            painter.text = TextSpan(text: option.label, style: textStyle);
+            painter.layout();
+            if (painter.width > widestLabel) widestLabel = painter.width;
+          }
+        } finally {
+          painter.dispose();
+        }
+        // Keep full labels at the user's text size. Stack icons on compact
+        // screens, then use vertical segments if enlarged text needs more room.
+        final compact =
+            (widestLabel + 22 + 8 + 28) * options.length > constraints.maxWidth;
+        final vertical =
+            compact &&
+            (widestLabel + 16) * options.length > constraints.maxWidth;
+        final stacked = compact && !vertical;
+        return SizedBox(
+          width: constraints.maxWidth,
+          child: SegmentedButton<AppThemeMode>(
+            key: const ValueKey('settings-theme-mode-selector'),
+            selected: {selected},
+            direction: vertical ? Axis.vertical : Axis.horizontal,
+            expandedInsets: vertical ? null : EdgeInsets.zero,
+            showSelectedIcon: !stacked,
+            style: ButtonStyle(
+              minimumSize: WidgetStateProperty.all(const Size(0, 50)),
+              padding: WidgetStateProperty.all(
+                EdgeInsets.symmetric(
+                  horizontal: stacked ? 8 : 14,
+                  vertical: 10,
+                ),
+              ),
+              textStyle: WidgetStateProperty.all(textStyle),
+              iconSize: WidgetStateProperty.all(22),
+            ),
+            segments: [
+              for (final option in options)
+                ButtonSegment(
+                  value: option.value,
+                  icon: stacked ? null : Icon(option.icon),
+                  label: stacked
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(option.icon),
+                            const SizedBox(height: 5),
+                            Text(option.label, textAlign: TextAlign.center),
+                          ],
+                        )
+                      : Text(option.label),
+                ),
+            ],
+            onSelectionChanged: (selection) => onChanged(selection.first),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _AccentSwatch extends StatelessWidget {
   const _AccentSwatch({
     required this.accent,
@@ -3517,42 +3619,45 @@ class _AccentSwatch extends StatelessWidget {
         message: label,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(appListCardIconRadius),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            width: 48,
-            height: 48,
-            padding: const EdgeInsets.all(5),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [accent.seedColor, accent.darkColor],
+          customBorder: const CircleBorder(),
+          child: Center(
+            child: AnimatedContainer(
+              key: ValueKey('accent-swatch-${accent.code}'),
+              duration: const Duration(milliseconds: 180),
+              width: 42,
+              height: 42,
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [accent.seedColor, accent.darkColor],
+                ),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected ? scheme.onSurface : scheme.outlineVariant,
+                  width: selected ? 3 : 1,
+                ),
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: accent.seedColor.withValues(alpha: 0.38),
+                          blurRadius: 10,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
               ),
-              borderRadius: BorderRadius.circular(appListCardIconRadius),
-              border: Border.all(
-                color: selected ? scheme.onSurface : scheme.outlineVariant,
-                width: selected ? 3 : 1,
-              ),
-              boxShadow: selected
-                  ? [
-                      BoxShadow(
-                        color: accent.seedColor.withValues(alpha: 0.38),
-                        blurRadius: 10,
-                        spreadRadius: 1,
-                      ),
-                    ]
+              child: selected
+                  ? Icon(
+                      Icons.check_rounded,
+                      color: accent.seedColor.computeLuminance() > 0.58
+                          ? Colors.black
+                          : Colors.white,
+                      size: 20,
+                    )
                   : null,
             ),
-            child: selected
-                ? Icon(
-                    Icons.check_rounded,
-                    color: accent.seedColor.computeLuminance() > 0.58
-                        ? Colors.black
-                        : Colors.white,
-                    size: 22,
-                  )
-                : null,
           ),
         ),
       ),
@@ -4514,15 +4619,13 @@ class _DataSavingSettings extends StatelessWidget {
     required this.state,
     required this.strings,
     required this.singleProfile,
-    required this.onWifiTap,
-    required this.onMobileTap,
+    required this.onQualityTap,
   });
 
   final SettingsState state;
   final AppStrings strings;
   final bool singleProfile;
-  final VoidCallback onWifiTap;
-  final VoidCallback onMobileTap;
+  final ValueChanged<_AudioQualitySetting> onQualityTap;
 
   String _selectionLabel(AudioQualityProfile saved) {
     final high = state.jioSaavnEnabled && saved == AudioQualityProfile.high;
@@ -4532,49 +4635,69 @@ class _DataSavingSettings extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => _SettingsSectionPanel(
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
     children: [
-      _SettingsEntryCard(
-        key: ValueKey(
-          singleProfile ? 'data-saving-quality' : 'data-saving-wifi',
-        ),
-        icon: singleProfile ? Icons.headphones_rounded : Icons.wifi_rounded,
-        title: singleProfile ? strings.audioQuality : strings.wifiNetwork,
-        subtitle: _selectionLabel(state.wifiAudioQuality),
-        onTap: onWifiTap,
+      _SettingsGroup(
+        title: strings.streamingAudio,
+        children: [
+          _SettingsEntryCard(
+            key: ValueKey(
+              singleProfile ? 'data-saving-quality' : 'data-saving-wifi',
+            ),
+            icon: singleProfile ? Icons.headphones_rounded : Icons.wifi_rounded,
+            title: singleProfile ? strings.audioQuality : strings.wifiNetwork,
+            subtitle: _selectionLabel(state.wifiAudioQuality),
+            onTap: () => onQualityTap(_AudioQualitySetting.wifi),
+          ),
+          if (!singleProfile) ...[
+            const SizedBox(height: appCardGap),
+            _SettingsEntryCard(
+              key: const ValueKey('data-saving-mobile'),
+              icon: Icons.signal_cellular_alt_rounded,
+              title: strings.mobileNetwork,
+              subtitle: _selectionLabel(state.mobileAudioQuality),
+              onTap: () => onQualityTap(_AudioQualitySetting.mobile),
+            ),
+          ],
+        ],
       ),
-      if (!singleProfile) ...[
-        const SizedBox(height: appCardGap),
-        _SettingsEntryCard(
-          key: const ValueKey('data-saving-mobile'),
-          icon: Icons.signal_cellular_alt_rounded,
-          title: strings.mobileNetwork,
-          subtitle: _selectionLabel(state.mobileAudioQuality),
-          onTap: onMobileTap,
-        ),
-      ],
+      _SettingsSectionPanel(
+        title: strings.downloads,
+        children: [
+          _SettingsEntryCard(
+            key: const ValueKey('data-saving-download-quality'),
+            icon: Icons.download_rounded,
+            title: strings.downloadAudioQuality,
+            subtitle: _selectionLabel(state.downloadAudioQuality),
+            onTap: () => onQualityTap(_AudioQualitySetting.downloads),
+          ),
+        ],
+      ),
     ],
   );
 }
 
 class _AudioQualityProfileDialog extends StatelessWidget {
   const _AudioQualityProfileDialog({
-    required this.networkLabel,
+    required this.title,
     required this.selected,
     required this.jioSaavnEnabled,
+    required this.highQualitySource,
     required this.strings,
   });
 
-  final String networkLabel;
+  final String title;
   final AudioQualityProfile selected;
   final bool jioSaavnEnabled;
+  final String highQualitySource;
   final AppStrings strings;
 
   @override
   Widget build(BuildContext context) => AppAlertDialog(
     key: const ValueKey('audio-quality-profile-dialog'),
     scrollable: true,
-    title: Text(networkLabel),
+    title: Text(title),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
       child: Column(
@@ -4585,7 +4708,7 @@ class _AudioQualityProfileDialog extends StatelessWidget {
               context,
               profile: AudioQualityProfile.high,
               title: strings.highAudioQuality,
-              provider: 'JioSaavn',
+              provider: highQualitySource,
               icon: Icons.high_quality_rounded,
             ),
             const SizedBox(height: appCardGap),

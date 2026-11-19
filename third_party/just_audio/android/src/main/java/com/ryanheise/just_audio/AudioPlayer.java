@@ -31,6 +31,7 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.exoplayer.NoSampleRenderer;
 import androidx.media3.exoplayer.Renderer;
 import androidx.media3.exoplayer.RenderersFactory;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.audio.AudioSink;
 import androidx.media3.exoplayer.audio.DefaultAudioSink;
 import androidx.media3.extractor.DefaultExtractorsFactory;
@@ -143,6 +144,9 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private Map<String, AudioEffect> audioEffectsMap = new HashMap<String, AudioEffect>();
     private final BStreamEqualizerConfiguration bstreamEqualizer = new BStreamEqualizerConfiguration();
     private boolean bstreamEqualizerRegistered;
+    private BStreamAudioRenderersFactory bstreamRenderersFactory;
+    private AudioSink.AudioTrackConfig lastAudioTrackConfig;
+    private PlaybackParameters bstreamPlaybackParameters = PlaybackParameters.DEFAULT;
     private final AtomicBoolean bstreamEqualizerStatusPending = new AtomicBoolean();
     private volatile boolean bstreamEqualizerDisposed;
     private int lastPlaylistLength = 0;
@@ -220,7 +224,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             if ("bstreamAudioEqualizer".equals(effect.get("type"))) {
                 bstreamEqualizerRegistered = true;
                 bstreamEqualizer.configure(Boolean.TRUE.equals(effect.get("enabled")),
-                        effect.get("gainsDb") == null ? new double[5] : decodeEqualizerGains(effect.get("gainsDb")));
+                        effect.get("gainsDb") == null ? new double[BStreamEqualizerConfiguration.FREQUENCIES.length] : decodeEqualizerGains(effect.get("gainsDb")));
             }
         }
         this.offloadSchedulingEnabled = offloadSchedulingEnabled != null ? offloadSchedulingEnabled : false;
@@ -899,23 +903,24 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private void ensurePlayerInitialized() {
         if (player == null) {
             RenderersFactory renderersFactory = (eventHandler, videoListener, audioListener, textOutput, metadataOutput) -> {
-                DefaultRenderersFactory defaultRenderersFactory = new DefaultRenderersFactory(context) {
+                DefaultRenderersFactory defaultRenderersFactory = bstreamEqualizerRegistered
+                        ? new BStreamAudioRenderersFactory(context, bstreamEqualizer)
+                        : new DefaultRenderersFactory(context) {
                     @Override
                     protected AudioSink buildAudioSink(
                             Context context,
                             boolean enableFloatOutput,
                             boolean enableAudioTrackPlaybackParams) {
-                        AudioSink sink = new DefaultAudioSink.Builder(context)
-                            .setAudioProcessorChain(new BStreamAudioProcessorChain(
-                                    bstreamEqualizerRegistered ? bstreamEqualizer : null))
+                        return new DefaultAudioSink.Builder(context)
+                            .setAudioProcessorChain(new BStreamAudioProcessorChain())
                             .setEnableFloatOutput(enableFloatOutput)
                             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                             .build();
-                        return bstreamEqualizerRegistered
-                                ? new BStreamEqualizerAudioSink(sink, bstreamEqualizer, enableFloatOutput)
-                                : sink;
                     }
                 };
+                if (defaultRenderersFactory instanceof BStreamAudioRenderersFactory) {
+                    bstreamRenderersFactory = (BStreamAudioRenderersFactory) defaultRenderersFactory;
+                }
                 Renderer[] defaultRenderers = defaultRenderersFactory
                     .createRenderers(eventHandler, videoListener, audioListener, textOutput, metadataOutput);
                 Renderer[] allRenderers = Arrays.copyOf(defaultRenderers, defaultRenderers.length + 1);
@@ -931,6 +936,15 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 builder.setLivePlaybackSpeedControl(livePlaybackSpeedControl);
             }
             player = builder.build();
+            if (bstreamEqualizerRegistered) {
+                player.addAnalyticsListener(new AnalyticsListener() {
+                    @Override
+                    public void onAudioTrackInitialized(
+                            EventTime eventTime, AudioSink.AudioTrackConfig audioTrackConfig) {
+                        lastAudioTrackConfig = audioTrackConfig;
+                    }
+                });
+            }
             player.setPreferredAudioDevice(findBStreamAudioDevice(context, bstreamPreferredDeviceId));
             player.setTrackSelectionParameters(
                 player.getTrackSelectionParameters()
@@ -998,10 +1012,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     private static double[] decodeEqualizerGains(Object raw) {
-        if (!(raw instanceof List) || ((List<?>)raw).size() != 5) {
-            throw new IllegalArgumentException("Equalizer needs five gains");
+        if (!(raw instanceof List) || ((List<?>)raw).size() != BStreamEqualizerConfiguration.FREQUENCIES.length) {
+            throw new IllegalArgumentException("Equalizer needs ten gains");
         }
-        double[] gains = new double[5];
+        double[] gains = new double[BStreamEqualizerConfiguration.FREQUENCIES.length];
         for (int i = 0; i < gains.length; i++) {
             Object value = ((List<?>)raw).get(i);
             if (!(value instanceof Number)) throw new IllegalArgumentException("Invalid EQ gain");
@@ -1018,7 +1032,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             bands.add(mapOf("index", i, "centerFrequency", center,
                     "lowerFrequency", i == 0 ? 20.0 : Math.sqrt(
                             BStreamEqualizerConfiguration.FREQUENCIES[i - 1] * center),
-                    "upperFrequency", i == 4 ? 20000.0 : Math.sqrt(
+                    "upperFrequency", i == settings.gainsDb.length - 1 ? 20000.0 : Math.sqrt(
                             BStreamEqualizerConfiguration.FREQUENCIES[i + 1] * center),
                     "gain", settings.gainsDb[i]));
         }
@@ -1031,6 +1045,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 "sampleRate", bstreamEqualizer.sampleRate(),
                 "channelCount", bstreamEqualizer.channelCount(),
                 "pcmEncoding", bstreamEqualizer.encoding(),
+                "lastAudioTrackEncoding", lastAudioTrackConfig == null ? 0 : lastAudioTrackConfig.encoding,
+                "lastAudioTrackSampleRate", lastAudioTrackConfig == null ? 0 : lastAudioTrackConfig.sampleRate,
                 "revision", settings.revision, "appliedRevision", bstreamEqualizer.appliedRevision(),
                 "parameters", mapOf("minDecibels", -12.0, "maxDecibels", 12.0, "bands", bands));
     }
@@ -1202,27 +1218,46 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     public void setSpeed(final float speed) {
-        PlaybackParameters params = player.getPlaybackParameters();
+        PlaybackParameters params = bstreamEqualizerRegistered
+                ? bstreamPlaybackParameters : player.getPlaybackParameters();
         if (params.speed == speed) return;
-        player.setPlaybackParameters(new PlaybackParameters(speed, params.pitch));
+        bstreamPlaybackParameters = new PlaybackParameters(speed, params.pitch);
+        player.setPlaybackParameters(bstreamPlaybackParameters);
+        updateBStreamOutputPolicy();
         if (player.getPlayWhenReady())
             updatePosition();
         enqueuePlaybackEvent();
     }
 
     public void setPitch(final float pitch) {
-        PlaybackParameters params = player.getPlaybackParameters();
+        PlaybackParameters params = bstreamEqualizerRegistered
+                ? bstreamPlaybackParameters : player.getPlaybackParameters();
         if (params.pitch == pitch) return;
-        player.setPlaybackParameters(new PlaybackParameters(params.speed, pitch));
+        bstreamPlaybackParameters = new PlaybackParameters(params.speed, pitch);
+        player.setPlaybackParameters(bstreamPlaybackParameters);
+        updateBStreamOutputPolicy();
         enqueuePlaybackEvent();
     }
 
     public void setSkipSilenceEnabled(final boolean enabled) {
         player.setSkipSilenceEnabled(enabled);
         skipSilenceEnabled = enabled;
+        updateBStreamOutputPolicy();
         updatePosition();
         enqueuePlaybackEvent();
         startWatchingBuffer();
+    }
+
+    private void updateBStreamOutputPolicy() {
+        if (bstreamRenderersFactory == null) return;
+        if (bstreamRenderersFactory.setPlaybackProcessing(skipSilenceEnabled, bstreamPlaybackParameters)
+                && player.getPlaybackState() != Player.STATE_IDLE) {
+            // A prepared AudioTrack cannot switch precision in place. Media3
+            // retains the current item, position, play intent and playlist.
+            updatePosition();
+            player.stop();
+            player.prepare();
+        }
     }
 
     public void setLoopMode(final int mode) {

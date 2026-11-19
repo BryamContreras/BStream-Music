@@ -344,6 +344,20 @@ abstract final class AppColors {
     return baseSurface.withValues(alpha: cardSurfaceOpacityFor(context));
   }
 
+  /// Shared selection fill for search categories and horizontal preset cards.
+  static LinearGradient selectedCardGradientFor(BuildContext context) {
+    final surface = cardSurfaceFor(context);
+    final selected = Theme.of(context).colorScheme.primaryContainer;
+    return LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color.lerp(surface, selected, 0.40)!,
+        Color.lerp(surface, selected, 0.58)!,
+      ],
+    );
+  }
+
   static Color cardBorderFor(
     BuildContext context, {
     bool solidInLiquidGlass = false,

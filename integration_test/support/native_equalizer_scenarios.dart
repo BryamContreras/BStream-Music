@@ -58,8 +58,14 @@ void registerNativeEqualizerScenarios({required bool supportedPlatform}) {
       duration: const Duration(seconds: 12),
       addedAt: DateTime(2026),
     );
-    const boosted = EqualizerSettings(enabled: true, gainsDb: [8, 4, -2, 3, 6]);
-    const cut = EqualizerSettings(enabled: true, gainsDb: [-4, -2, 0, -3, -5]);
+    const boosted = EqualizerSettings(
+      enabled: true,
+      gainsDb: [8, 8, 6, 4, 0, -2, 1, 3, 5, 6],
+    );
+    const cut = EqualizerSettings(
+      enabled: true,
+      gainsDb: [-4, -4, -3, -2, -1, 0, -2, -3, -4, -5],
+    );
     const masterVolume = .35;
     try {
       // A saved target must not wait for decoded PCM or the audio session.
@@ -253,12 +259,11 @@ void registerNativeEqualizerScenarios({required bool supportedPlatform}) {
       )) {
         final before = audio.position;
         final selector = find.byKey(const ValueKey('equalizer-presets'));
-        await tester.ensureVisible(selector);
+        await _reveal(tester, selector);
         await tester.tap(selector);
         await tester.pumpAndSettle();
         final option = find.byKey(ValueKey('equalizer-preset-${preset.name}'));
-        await tester.ensureVisible(option);
-        await tester.pumpAndSettle();
+        await _reveal(tester, option);
         await tester.tap(option);
         await tester.pumpAndSettle();
         final settings = scope
@@ -293,7 +298,7 @@ void registerNativeEqualizerScenarios({required bool supportedPlatform}) {
       // Exercise a real vertical gesture as well as preset selection. Native
       // readback must preserve half-dB custom values without OEM rounding.
       final band = find.byKey(const ValueKey('equalizer-band-2'));
-      await tester.ensureVisible(band);
+      await _reveal(tester, band);
       await tester.drag(band, const Offset(0, -35));
       await tester.pumpAndSettle();
       final custom = scope
@@ -308,7 +313,7 @@ void registerNativeEqualizerScenarios({required bool supportedPlatform}) {
         requireProcessedAudio: true,
       );
       final reset = find.byKey(const ValueKey('equalizer-reset'));
-      await tester.ensureVisible(reset);
+      await _reveal(tester, reset);
       await tester.tap(reset);
       await tester.pumpAndSettle();
       await _waitForNativeSettings(
@@ -332,7 +337,7 @@ void registerNativeEqualizerScenarios({required bool supportedPlatform}) {
         EqualizerSettings(enabled: true, gainsDb: EqualizerPreset.rock.gainsDb),
       );
       final toggle = find.byKey(const ValueKey('equalizer-enabled'));
-      await tester.ensureVisible(toggle);
+      await _reveal(tester, toggle);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
       final disabled = scope
@@ -361,7 +366,7 @@ void registerNativeEqualizerScenarios({required bool supportedPlatform}) {
         () => audio.position > const Duration(milliseconds: 200),
       );
       await _waitForNativeSettings(tester, effect, disabled);
-      await tester.ensureVisible(toggle);
+      await _reveal(tester, toggle);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
       await _waitForNativeSettings(
@@ -431,7 +436,7 @@ void registerNativeEqualizerScenarios({required bool supportedPlatform}) {
     );
     const settings = EqualizerSettings(
       enabled: true,
-      gainsDb: [1.5, -2.5, 3.5, -1.5, 4.5],
+      gainsDb: [1.5, 1, -1.5, -2.5, 0.5, 3.5, 1, -1.5, 2.5, 4.5],
     );
     try {
       await service.setVolume(.2);
@@ -526,6 +531,7 @@ Future<BStreamEqualizerStatus> _waitForNativeSettings(
                 status.appliedRevision == status.revision)) &&
         (!requireProcessedAudio || status.processedFrames > 0)) {
       expect(status.engine, 'bstream-dsp');
+      expect(status.parameters.bands, hasLength(10));
       expect(status.parameters.minDecibels, -12);
       expect(status.parameters.maxDecibels, 12);
       expect(status.preampDb, closeTo(enabled ? settings.preampDb : 0, .011));
@@ -561,6 +567,11 @@ Future<BStreamEqualizerStatus> _waitForNativeSettings(
 AudioPipeline _nativePipeline(BStreamEqualizer effect) => Platform.isIOS
     ? AudioPipeline(darwinAudioEffects: [effect])
     : AudioPipeline(androidAudioEffects: [effect]);
+
+Future<void> _reveal(WidgetTester tester, Finder target) async {
+  await Scrollable.ensureVisible(tester.element(target), alignment: .3);
+  await tester.pumpAndSettle();
+}
 
 class _PresetTestSettings extends SettingsController {
   @override

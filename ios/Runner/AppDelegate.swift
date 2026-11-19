@@ -40,7 +40,6 @@ final class BStreamWidgetActionRelay {
   private var localAudioQualityPlugin: IOSLocalAudioQualityPlugin?
   private var castPlugin: BStreamCastPlugin?
   private let widgetGroup = "group.com.bstream.bstreamMusic"
-  private let widgetKind = "BStreamNowPlaying"
   private let widgetArtworkQueue = DispatchQueue(label: "com.bstream.homeWidget.artwork", qos: .utility)
 
   private func widgetCoverName(_ trackId: String) -> String {
@@ -66,7 +65,7 @@ final class BStreamWidgetActionRelay {
       defaults.set(coverName, forKey: "coverFile")
       defaults.set(true, forKey: "hasCover")
       if #available(iOS 14.0, *) {
-        WidgetCenter.shared.reloadTimelines(ofKind: self.widgetKind)
+        WidgetCenter.shared.reloadAllTimelines()
       }
       if let previous, previous != coverName {
         self.removeObsoleteWidgetCover(previous, defaults: defaults, container: container)
@@ -166,11 +165,15 @@ final class BStreamWidgetActionRelay {
         defaults.set(data["title"] as? String ?? "", forKey: "title")
         defaults.set(data["artist"] as? String ?? "", forKey: "artist")
         defaults.set(data["isPlaying"] as? Bool ?? false, forKey: "playing")
+        let hasTrack = !trackId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+          !(data["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        defaults.set(hasTrack && (data["isLoading"] as? Bool ?? false), forKey: "loading")
+        defaults.set(data["loadingLabel"] as? String ?? "", forKey: "loadingLabel")
         defaults.set(data["isFavorite"] as? Bool ?? false, forKey: "favorite")
         defaults.set(data["repeatMode"] as? String ?? "off", forKey: "repeatMode")
         defaults.set(data["accentColor"] as? Int ?? 0xFFF5F7F5, forKey: "accent")
         defaults.set(data["languageCode"] as? String ?? "es", forKey: "language")
-        if #available(iOS 14.0, *) { WidgetCenter.shared.reloadTimelines(ofKind: self.widgetKind) }
+        if #available(iOS 14.0, *) { WidgetCenter.shared.reloadAllTimelines() }
         result(nil)
       case "updateArtwork":
         guard let data = call.arguments as? [String: Any],

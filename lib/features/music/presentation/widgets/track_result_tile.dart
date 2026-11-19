@@ -148,8 +148,8 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                   : () => _play(ref, openPlayer: true),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 7,
+                  horizontal: appTrackRowPaddingHorizontal,
+                  vertical: appTrackRowPaddingVertical,
                 ),
                 child: Row(
                   children: [

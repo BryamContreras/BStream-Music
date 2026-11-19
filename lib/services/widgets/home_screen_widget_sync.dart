@@ -22,6 +22,8 @@ class HomeScreenWidgetSync {
   }
 
   final MethodChannel _channel;
+  static final _queueWhitespace = RegExp(r'\s+');
+  static const _queueArtworkRetryDelay = Duration(seconds: 20);
   final Future<void> Function(String action)? onAction;
 
   /// Only Android currently exposes a queue in its native home-screen widget.
@@ -32,6 +34,10 @@ class HomeScreenWidgetSync {
   String? _lastIdentity;
   String? _currentArtworkIdentity;
   String? _lastArtworkIdentity;
+  String? _currentQueueJson;
+  int _queueRevision = 0;
+  DateTime? _queueArtworkRetryAt;
+  Map<String, Object?> _currentWidgetData = const {};
   final Map<String, ({String? path, DateTime checkedAt})>
   _queueArtworkPathCache = {};
 
@@ -72,11 +78,13 @@ class HomeScreenWidgetSync {
     required String? artist,
     required String? artworkUrl,
     required bool isPlaying,
+    bool isLoading = false,
+    String? loadingLabel,
     required bool isFavorite,
     required String repeatMode,
     required int accentColor,
     required String languageCode,
-    List<Map<String, String>> queue = const [],
+    Iterable<Map<String, String>> queue = const [],
     int currentQueueIndex = -1,
   }) {
     final queueJson = supportsQueue
@@ -84,10 +92,18 @@ class HomeScreenWidgetSync {
         : '[]';
     final identity =
         '$trackId\u0000$title\u0000$artist\u0000$artworkUrl\u0000'
-        '$isPlaying\u0000$isFavorite\u0000$repeatMode\u0000'
+        '$isPlaying\u0000$isLoading\u0000$loadingLabel\u0000$isFavorite\u0000$repeatMode\u0000'
         '$accentColor\u0000$languageCode\u0000$queueJson';
     if (identity == _lastIdentity) return;
     _lastIdentity = identity;
+    final queueChanged = supportsQueue && queueJson != _currentQueueJson;
+    if (queueChanged) {
+      _currentQueueJson = queueJson;
+      _queueRevision++;
+    }
+    final retryAt = _queueArtworkRetryAt;
+    final retryArtwork = retryAt != null && !DateTime.now().isBefore(retryAt);
+    if (queueChanged || retryArtwork) _queueArtworkRetryAt = null;
     final artworkIdentity = '$trackId\u0000$artworkUrl';
     // Transport/favorite updates must not cancel or duplicate an artwork load
     // that is already in progress for this same source.
@@ -106,67 +122,53 @@ class HomeScreenWidgetSync {
         artworkUrl: artworkUrl,
         artworkIdentity: artworkIdentity,
         isPlaying: isPlaying,
+        isLoading: isLoading,
+        loadingLabel: loadingLabel,
         isFavorite: isFavorite,
         repeatMode: repeatMode,
         accentColor: accentColor,
         languageCode: languageCode,
-        queueJson: queueJson,
-        snapshotIdentity: identity,
+        queueJson: queueChanged || retryArtwork ? queueJson : null,
+        queueChanged: queueChanged,
+        queueRevision: _queueRevision,
       ),
     );
   }
 
-  String _encodeQueue(List<Map<String, String>> queue, int currentIndex) {
-    if (queue.isEmpty) return '[]';
-    final focusedIndex = currentIndex >= 0 && currentIndex < queue.length
+  String _encodeQueue(Iterable<Map<String, String>> queue, int currentIndex) {
+    final count = queue.length;
+    if (count == 0) return '[]';
+    final focusedIndex = currentIndex >= 0 && currentIndex < count
         ? currentIndex
         : 0;
-    final indexedQueue = queue
-        .asMap()
-        .entries
-        .map((item) {
-          return <String, String>{
-            ...item.value,
-            'queueIndex': item.value['queueIndex'] ?? '${item.key}',
-          };
-        })
-        .toList(growable: false);
     // Keep the two tracks immediately before playback visible above the
     // current track, followed by the upcoming queue in its original order.
     final firstVisibleIndex = (focusedIndex - 2).clamp(0, focusedIndex).toInt();
-    final ordered = indexedQueue
-        .skip(firstVisibleIndex)
-        .take(100)
-        .toList(growable: false);
-    return jsonEncode(
-      ordered
-          .asMap()
-          .entries
-          .map((orderedEntry) {
-            final visibleIndex = firstVisibleIndex + orderedEntry.key;
-            final entry = orderedEntry.value;
-            String compact(String key, [int maxLength = 160]) {
-              final normalized = (entry[key] ?? '')
-                  .replaceAll(RegExp(r'\s+'), ' ')
-                  .trim();
-              return String.fromCharCodes(normalized.runes.take(maxLength));
-            }
+    final rows = <Map<String, Object>>[];
+    for (final (offset, entry)
+        in queue.skip(firstVisibleIndex).take(100).indexed) {
+      final index = firstVisibleIndex + offset;
+      String compact(String key, [int maxLength = 160]) {
+        final normalized = (entry[key] ?? '')
+            .replaceAll(_queueWhitespace, ' ')
+            .trim();
+        return String.fromCharCodes(normalized.runes.take(maxLength));
+      }
 
-            final title = compact('title');
-            final artist = compact('artist');
-            final id = compact('id', 256);
-            final artworkUrl = (entry['artworkUrl'] ?? '').trim();
-            return <String, Object>{
-              'id': id.isEmpty ? '$title\u0000$artist' : id,
-              'queueIndex': entry['queueIndex'] ?? '0',
-              'isCurrent': visibleIndex == focusedIndex,
-              'title': title,
-              'artist': artist,
-              if (artworkUrl.isNotEmpty) 'artworkUrl': artworkUrl,
-            };
-          })
-          .toList(growable: false),
-    );
+      final title = compact('title');
+      final artist = compact('artist');
+      final id = compact('id', 256);
+      final artworkUrl = (entry['artworkUrl'] ?? '').trim();
+      rows.add({
+        'id': id.isEmpty ? '$title\u0000$artist' : id,
+        'queueIndex': entry['queueIndex'] ?? '$index',
+        'isCurrent': index == focusedIndex,
+        'title': title,
+        'artist': artist,
+        if (artworkUrl.isNotEmpty) 'artworkUrl': artworkUrl,
+      });
+    }
+    return jsonEncode(rows);
   }
 
   Future<void> _publishSnapshot({
@@ -177,35 +179,43 @@ class HomeScreenWidgetSync {
     required String? artworkUrl,
     required String artworkIdentity,
     required bool isPlaying,
+    required bool isLoading,
+    required String? loadingLabel,
     required bool isFavorite,
     required String repeatMode,
     required int accentColor,
     required String languageCode,
-    required String queueJson,
-    required String snapshotIdentity,
+    required String? queueJson,
+    required bool queueChanged,
+    required int queueRevision,
   }) async {
     var ownsArtworkRequest = false;
+    var updatedWidget = false;
     try {
       final updateData = <String, Object?>{
         'title': title ?? '',
         'trackId': trackId ?? title ?? '',
         'artist': artist ?? '',
         'isPlaying': isPlaying,
+        'isLoading': isLoading,
+        'loadingLabel': ?loadingLabel,
         'isFavorite': isFavorite,
         'repeatMode': repeatMode,
         'accentColor': accentColor,
         'languageCode': languageCode,
-        if (supportsQueue) 'queueJson': queueJson,
       };
-      await _channel.invokeMethod<void>('update', updateData);
-      if (supportsQueue) {
+      _currentWidgetData = updateData;
+      await _channel.invokeMethod<void>('update', <String, Object?>{
+        ...updateData,
+        if (queueChanged) 'queueJson': queueJson,
+      });
+      updatedWidget = true;
+      if (queueJson != null && queueRevision == _queueRevision) {
         unawaited(
           _publishCachedQueueArtworkPaths(
-            updateData: updateData,
             queueJson: queueJson,
-            generation: generation,
-            artworkIdentity: artworkIdentity,
-            snapshotIdentity: snapshotIdentity,
+            queueRevision: queueRevision,
+            publishProgress: queueChanged,
           ),
         );
       }
@@ -260,6 +270,10 @@ class HomeScreenWidgetSync {
     } catch (error) {
       debugPrint('Home widget update failed: $error');
     } finally {
+      if (!updatedWidget && queueRevision == _queueRevision) {
+        if (queueChanged) _currentQueueJson = null;
+        if (!queueChanged && queueJson != null) _deferQueueArtworkRetry();
+      }
       if (ownsArtworkRequest && _artworkRequestGeneration == generation) {
         _artworkRequestGeneration = null;
       }
@@ -267,12 +281,11 @@ class HomeScreenWidgetSync {
   }
 
   Future<void> _publishCachedQueueArtworkPaths({
-    required Map<String, Object?> updateData,
     required String queueJson,
-    required int generation,
-    required String artworkIdentity,
-    required String snapshotIdentity,
+    required int queueRevision,
+    required bool publishProgress,
   }) async {
+    var needsRetry = false;
     try {
       final entries = jsonDecode(queueJson);
       if (entries is! List || entries.isEmpty) return;
@@ -289,49 +302,38 @@ class HomeScreenWidgetSync {
       const batchSize = 4;
       const publishEvery = 8;
       for (var start = 0; start < entries.length; start += batchSize) {
-        if (!_isCurrentQueueArtworkRequest(
-          generation,
-          artworkIdentity,
-          snapshotIdentity,
-        )) {
-          return;
-        }
+        if (queueRevision != _queueRevision) return;
         final end = start + batchSize < entries.length
             ? start + batchSize
             : entries.length;
         final batch = await Future.wait(
-          entries.sublist(start, end).asMap().entries.map((entry) async {
-            final index = start + entry.key;
-            final raw = entry.value;
-            final item = resolvedEntries[index];
-            if (raw is! Map) return (item: item, hasArtwork: false);
+          List.generate(end - start, (offset) async {
+            final index = start + offset;
+            final raw = entries[index];
+            if (raw is! Map) return false;
             final source = raw['artworkUrl']?.toString().trim() ?? '';
-            if (source.isEmpty) return (item: item, hasArtwork: false);
+            if (source.isEmpty) return false;
             final path = await _cachedQueueArtworkPath(
               source,
               allowNetworkDownload: true,
             );
-            if (path != null) {
-              item['artworkPath'] = path;
-              return (item: item, hasArtwork: true);
+            if (path == null) {
+              needsRetry = true;
+              return false;
             }
-            return (item: item, hasArtwork: false);
+            resolvedEntries[index]['artworkPath'] = path;
+            return true;
           }),
         );
-        pathsAwaitingPublish |= batch.any((result) => result.hasArtwork);
+        pathsAwaitingPublish |= batch.any((hasArtwork) => hasArtwork);
 
         final shouldPublish =
-            start == 0 || end == entries.length || end % publishEvery == 0;
+            end == entries.length ||
+            (publishProgress && (start == 0 || end % publishEvery == 0));
         if (shouldPublish && pathsAwaitingPublish) {
-          if (!_isCurrentQueueArtworkRequest(
-            generation,
-            artworkIdentity,
-            snapshotIdentity,
-          )) {
-            return;
-          }
+          if (queueRevision != _queueRevision) return;
           await _channel.invokeMethod<void>('update', <String, Object?>{
-            ...updateData,
+            ..._currentWidgetData,
             'queueJson': jsonEncode(resolvedEntries),
           });
           pathsAwaitingPublish = false;
@@ -346,18 +348,18 @@ class HomeScreenWidgetSync {
     } on MissingPluginException {
       // Desktop builds do not include native home-screen widgets.
     } catch (error) {
+      needsRetry = true;
       debugPrint('Home widget cached queue artwork lookup failed: $error');
+    } finally {
+      if (needsRetry && queueRevision == _queueRevision) {
+        _deferQueueArtworkRetry();
+      }
     }
   }
 
-  bool _isCurrentQueueArtworkRequest(
-    int generation,
-    String artworkIdentity,
-    String snapshotIdentity,
-  ) =>
-      generation == _generation &&
-      artworkIdentity == _currentArtworkIdentity &&
-      snapshotIdentity == _lastIdentity;
+  void _deferQueueArtworkRetry() {
+    _queueArtworkRetryAt = DateTime.now().add(_queueArtworkRetryDelay);
+  }
 
   Future<String?> _cachedQueueArtworkPath(
     String source, {
@@ -369,7 +371,7 @@ class HomeScreenWidgetSync {
       final path = previous.path;
       if (path != null && await File(path).exists()) return path;
       if (path == null &&
-          now.difference(previous.checkedAt) < const Duration(seconds: 20)) {
+          now.difference(previous.checkedAt) < _queueArtworkRetryDelay) {
         return null;
       }
     }
@@ -382,7 +384,7 @@ class HomeScreenWidgetSync {
         final bytes = await const MethodChannel('bstream_music/local_audio')
             .invokeMethod<Uint8List>('loadArtwork', <String, Object>{
               'audioUri': deviceAudioUri,
-              'targetWidth': 128,
+              'targetWidth': 256,
             });
         if (bytes != null && bytes.isNotEmpty) {
           final directory = Directory.systemTemp;
@@ -403,7 +405,7 @@ class HomeScreenWidgetSync {
         final previewCandidates = youtubeThumbnailPreviewCandidates(source);
         final videoId = youtubeVideoIdFromThumbnailSource(source);
         final candidates = <String>{
-          if (videoId != null) ...previewCandidates.skip(1).take(2),
+          if (videoId != null) ...youtubeThumbnailCandidates(source).take(4),
           sizedGoogleArtworkSource(source, 256) ?? source,
           source,
           sizedGoogleArtworkSource(source, 128) ?? source,
@@ -420,7 +422,10 @@ class HomeScreenWidgetSync {
         if (path == null && allowNetworkDownload) {
           // Resolve missing artwork so songs farther down a large queue are
           // ready when they scroll into view. Requests run in small batches.
-          for (final candidate in candidates.take(3)) {
+          final downloadCandidates = videoId != null
+              ? previewCandidates.take(3)
+              : candidates.take(3);
+          for (final candidate in downloadCandidates) {
             try {
               final cached = await cache.getSingleFile(candidate);
               if (await cached.exists() && await cached.length() > 0) {
@@ -455,6 +460,7 @@ class HomeScreenWidgetSync {
 
   void dispose() {
     _generation++;
+    _queueRevision++;
     _channel.setMethodCallHandler(null);
   }
 }

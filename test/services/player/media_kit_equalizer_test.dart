@@ -4,17 +4,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 
 void main() {
-  const bass = EqualizerSettings(enabled: true, gainsDb: [6, 3, 0, 0, 0]);
+  const bass = EqualizerSettings(
+    enabled: true,
+    gainsDb: [6, 3, 0, 0, 0, 0, 0, 0, 0, 0],
+  );
 
-  test('native curve uses five Q=1 bands in floating-point precision', () {
-    const curve = EqualizerSettings(enabled: true, gainsDb: [6, -3, 2, -1, 4]);
+  test('native curve uses ten Q=1 bands in floating-point precision', () {
+    const curve = EqualizerSettings(
+      enabled: true,
+      gainsDb: [6, -3, 2, -1, 4, 1, -2, 3, -4, 5],
+    );
     final graph = MediaKitEqualizerFilter.graph(curve)!;
     expect(graph, isNot(contains('volume=')));
     for (final frequency in equalizerBandFrequencies) {
       expect(graph, contains('equalizer=f=${frequency.toInt()}:t=q:w=1:g='));
     }
-    expect(graph.split('equalizer='), hasLength(6));
-    expect(RegExp(':r=f64').allMatches(graph), hasLength(5));
+    expect(graph.split('equalizer='), hasLength(11));
+    expect(RegExp(':r=f64').allMatches(graph), hasLength(10));
   });
 
   test('disabled and flat curves have no DSP graph', () {
@@ -29,12 +35,12 @@ void main() {
     final graph = MediaKitEqualizerFilter.graph(
       EqualizerSettings(
         enabled: true,
-        gainsDb: [double.nan, 100, -100, double.infinity, 2],
+        gainsDb: [double.nan, 100, -100, double.infinity, 2, 0, 0, 0, 0, 0],
       ),
     )!;
     expect(graph, isNot(contains('volume=')));
-    expect(graph, contains('f=230:t=q:w=1:g=12.000'));
-    expect(graph, contains('f=910:t=q:w=1:g=-12.000'));
+    expect(graph, contains('f=62:t=q:w=1:g=12.000'));
+    expect(graph, contains('f=125:t=q:w=1:g=-12.000'));
     expect(graph, isNot(contains('NaN')));
     expect(graph, isNot(contains('Infinity')));
   });
@@ -48,7 +54,10 @@ void main() {
       expect(player.commands.single.take(2), ['af', 'add']);
       expect(player.equalizer, contains('g=6.000:r=f64'));
 
-      const cut = EqualizerSettings(enabled: true, gainsDb: [-6, -3, 0, 0, 0]);
+      const cut = EqualizerSettings(
+        enabled: true,
+        gainsDb: [-6, -3, 0, 0, 0, 0, 0, 0, 0, 0],
+      );
       await MediaKitEqualizerFilter.apply(player, cut);
       expect(player.equalizer, isNot(contains('volume=')));
       expect(player.equalizer, contains('g=-6.000'));
@@ -75,7 +84,10 @@ void main() {
       await expectLater(
         MediaKitEqualizerFilter.apply(
           player,
-          const EqualizerSettings(enabled: true, gainsDb: [1, 2, 3, 4, 5]),
+          const EqualizerSettings(
+            enabled: true,
+            gainsDb: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+          ),
         ),
         throwsStateError,
       );

@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define BSTREAM_DSP_BANDS 5
+#define BSTREAM_DSP_BANDS 10
 #define BSTREAM_DSP_MAX_CHANNELS 8
 
 typedef struct BStreamDSP BStreamDSP;
@@ -25,6 +25,10 @@ typedef struct {
 } BStreamDSPStatus;
 
 extern const double BStreamDSPFrequencies[BSTREAM_DSP_BANDS];
+
+/* Estimate combined positive-band headroom once per parameter snapshot.
+ * Inputs must already be finite and clamped to the supported gain range. */
+double BStreamDSPHeadroomDb(const double gainsDb[BSTREAM_DSP_BANDS]);
 
 /* Allocate/release during setup/prepare, never in the realtime process callback.
  * Mutable state has one owner:

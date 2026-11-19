@@ -364,6 +364,7 @@ class PlaybackVisualCache extends ChangeNotifier {
       final response = await request.close().timeout(
         const Duration(seconds: 12),
       );
+      if (transfer.cancelled) return null;
       final mime = response.headers.contentType?.mimeType;
       if (response.statusCode != HttpStatus.ok ||
           (response.contentLength >= 0 && response.contentLength > maxBytes) ||

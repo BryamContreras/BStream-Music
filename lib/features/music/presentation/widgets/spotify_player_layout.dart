@@ -74,7 +74,9 @@ class _SpotifyPlayerLayout extends StatelessWidget {
         );
         final landscape = constraints.maxWidth > constraints.maxHeight;
         final twoColumn =
-            constraints.maxWidth >= (mobile ? 640 : 800) && landscape;
+            constraints.maxWidth >= (mobile ? 480 : 800) &&
+            constraints.maxHeight >= 240 &&
+            landscape;
         final padding = twoColumn ? 24.0 : 20.0;
         final availableWidth = math.max(
           0.0,
@@ -500,10 +502,10 @@ class _SpotifyPlayerControls extends ConsumerWidget {
                     iconSize: 42,
                     padding: EdgeInsets.zero,
                     constraints: BoxConstraints.tight(Size.square(primary)),
-                    icon: Icon(
-                      isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
+                    icon: PlaybackControlIcon(
+                      isLoading: snapshot.status == PlayerStatus.loading,
+                      isPlaying: isPlaying,
+                      loadingLabel: strings.playbackLoading,
                     ),
                     onPressed: hasTrack ? () => player.togglePlayPause() : null,
                   ),

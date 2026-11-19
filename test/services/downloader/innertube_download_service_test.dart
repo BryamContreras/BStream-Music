@@ -733,6 +733,7 @@ class _UpgradeRecordingTransfer extends HttpAudioTransfer {
     HttpAudioRangePlan? rangePlan,
     HttpAudioTransferProgressCallback? onProgress,
     HttpAudioTransferCancellationCallback? isCancelled,
+    Stream<void>? cancellationEvents,
   }) async {
     requests.add(uri.toString());
     if (uri.host == 'jio.example' && failUpgrade) {
@@ -792,6 +793,7 @@ final class _RecordingAudioTransfer extends HttpAudioTransfer {
     HttpAudioRangePlan? rangePlan,
     HttpAudioTransferProgressCallback? onProgress,
     HttpAudioTransferCancellationCallback? isCancelled,
+    Stream<void>? cancellationEvents,
   }) async {
     this.rangePlan = rangePlan;
     await destination.parent.create(recursive: true);
@@ -818,6 +820,7 @@ final class _CancellableAudioTransfer extends HttpAudioTransfer {
     HttpAudioRangePlan? rangePlan,
     HttpAudioTransferProgressCallback? onProgress,
     HttpAudioTransferCancellationCallback? isCancelled,
+    Stream<void>? cancellationEvents,
   }) async {
     await destination.parent.create(recursive: true);
     await HttpAudioTransfer.partialFileFor(
@@ -826,10 +829,10 @@ final class _CancellableAudioTransfer extends HttpAudioTransfer {
     await File(
       '${destination.path}.part.if-range',
     ).writeAsString('etag\n"cancel-test"', flush: true);
+    final cancellation = cancellationEvents!.first;
     if (!started.isCompleted) started.complete();
-    while (isCancelled?.call() != true) {
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-    }
+    await cancellation;
+    expect(isCancelled?.call(), isTrue);
     throw const HttpAudioTransferException(
       'cancelled by test',
       kind: HttpAudioTransferFailureKind.cancelled,

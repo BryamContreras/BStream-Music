@@ -648,6 +648,43 @@ void main() {
     expect(fixture.player.currentSnapshot.status, PlayerStatus.playing);
   });
 
+  for (final nativeQueue in [false, true]) {
+    test('uses the loaded duration when the catalog omits it '
+        '(nativeQueue=$nativeQueue)', () async {
+      final fixture = _Fixture(nativeQueue: nativeQueue);
+      addTearDown(fixture.dispose);
+      await fixture.ready();
+      final track = _track('missing-duration', duration: null);
+      await fixture.controller.playRemote(track);
+      await _flush();
+      expect(fixture.lookupRequests, isEmpty);
+      expect(fixture.player.currentSnapshot.status, PlayerStatus.playing);
+
+      fixture.player.emit(
+        fixture.player.currentSnapshot.copyWith(duration: Duration.zero),
+      );
+      await _flush();
+      expect(fixture.lookupRequests, isEmpty);
+
+      const duration = Duration(minutes: 4, seconds: 18);
+      const position = Duration(seconds: 12);
+      fixture.player.emit(
+        fixture.player.currentSnapshot.copyWith(
+          duration: duration,
+          position: position,
+        ),
+      );
+      await _until(() => fixture.lookupRequests.isNotEmpty);
+      expect(fixture.lookupRequests.single.track.duration, duration);
+      expect(fixture.lookupRequests.single.shouldContinue!(), isTrue);
+      fixture.complete(track.id, _upgrade(track.id));
+      await _until(() => fixture.player.upgraded.isNotEmpty);
+      expect(fixture.player.currentSnapshot.position, position);
+      expect(fixture.player.started, hasLength(1));
+      expect(fixture.lookupRequests, hasLength(1));
+    });
+  }
+
   for (final outcome in [
     'missing',
     'error',
@@ -806,7 +843,10 @@ SettingsState _settings({
   mobileAudioQuality: mobileAudioQuality,
 );
 
-TrackInfo _track(String id) => TrackInfo(
+TrackInfo _track(
+  String id, {
+  Duration? duration = const Duration(minutes: 3),
+}) => TrackInfo(
   id: id,
   title: 'Catalog $id',
   artist: 'BStream Music',
@@ -815,7 +855,7 @@ TrackInfo _track(String id) => TrackInfo(
   album: 'Catalog album',
   url: 'https://music.youtube.com/watch?v=$id',
   thumbnailUrl: 'https://art.example/$id.jpg',
-  duration: const Duration(minutes: 3),
+  duration: duration,
   streamUrl: 'https://yt.example/$id.m4a',
   streamSource: 'innerTube',
   streamBitrate: 128000,

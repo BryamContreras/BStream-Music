@@ -118,7 +118,7 @@ void main() {
   );
 
   test(
-    'audio quality visibility defaults off and preserves an explicit saved value',
+    'audio quality visibility defaults on and preserves an explicit saved value',
     () async {
       SharedPreferences.setMockInitialValues({});
       final first = ProviderContainer(
@@ -130,14 +130,14 @@ void main() {
       );
       expect(
         (await first.read(settingsControllerProvider.future)).showAudioQuality,
-        isFalse,
+        isTrue,
       );
       await first
           .read(settingsControllerProvider.notifier)
-          .setShowAudioQuality(true);
+          .setShowAudioQuality(false);
       expect(
         first.read(settingsControllerProvider).value?.showAudioQuality,
-        isTrue,
+        isFalse,
       );
       first.dispose();
 
@@ -151,7 +151,7 @@ void main() {
       addTearDown(second.dispose);
       expect(
         (await second.read(settingsControllerProvider.future)).showAudioQuality,
-        isTrue,
+        isFalse,
       );
     },
   );

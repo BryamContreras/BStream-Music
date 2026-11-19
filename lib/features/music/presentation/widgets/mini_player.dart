@@ -24,6 +24,7 @@ import '../providers/playback_visual_cache_provider.dart';
 import 'favorite_star_badge.dart';
 import 'decorative_progress_transition.dart';
 import 'playback_progress_line.dart';
+import 'playback_control_icon.dart';
 import 'source_image.dart';
 import 'track_change_transition.dart';
 
@@ -281,13 +282,11 @@ class MiniPlayer extends ConsumerWidget {
         iconSize: playIconSize,
         padding: EdgeInsets.zero,
         constraints: BoxConstraints.tight(Size.square(playControlSize)),
-        icon: Transform.translate(
-          offset: windowsLayout && !isPlaying
-              ? const Offset(1, 0)
-              : Offset.zero,
-          child: Icon(
-            isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          ),
+        icon: PlaybackControlIcon(
+          isLoading: presentation.status == PlayerStatus.loading,
+          isPlaying: isPlaying,
+          loadingLabel: strings.playbackLoading,
+          playOffset: windowsLayout ? const Offset(1, 0) : Offset.zero,
         ),
         onPressed: () =>
             ref.read(playerControllerProvider.notifier).togglePlayPause(),

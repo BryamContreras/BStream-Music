@@ -1,9 +1,10 @@
-import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/artwork_progress_color_provider.dart';
+import 'artwork_header_snapshot.dart';
 import 'source_image.dart';
 
 /// Artwork-derived, softly blurred background shared by collection and artist
@@ -30,7 +31,7 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
     final colors = Theme.of(context).colorScheme;
     final isDark = colors.brightness == Brightness.dark;
     final surfaceColors = _artworkSurfaceColors(context, ref, source);
-    return ClipRect(
+    Widget header(ValueChanged<ui.Image?>? onFrame) => ClipRect(
       key: ValueKey('$keyPrefix-background-photo'),
       // Reveal the existing page gradient instead of ending on a fixed color.
       // This stays continuous at every header height and while it scrolls.
@@ -69,7 +70,7 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
                   ExcludeSemantics(
                     child: ImageFiltered(
                       key: ValueKey('$keyPrefix-background-blur'),
-                      imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                      imageFilter: ui.ImageFilter.blur(sigmaX: 30, sigmaY: 30),
                       child: Transform.scale(
                         scale: 1.16,
                         child:
@@ -80,7 +81,18 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
                               fit: BoxFit.cover,
                               // Foreground and background share the bounded image cache.
                               cacheWidth: cacheWidth,
-                              fallback: const SizedBox.expand(),
+                              fallback: Builder(
+                                builder: (context) {
+                                  onFrame?.call(null);
+                                  return const SizedBox.expand();
+                                },
+                              ),
+                              imageBuilder: onFrame == null
+                                  ? null
+                                  : (_, image) {
+                                      onFrame(image.image);
+                                      return image;
+                                    },
                             ),
                       ),
                     ),
@@ -105,6 +117,13 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
           ),
         ),
       ),
+    );
+    if (source == null || source.isEmpty || backgroundArtwork != null) {
+      return header(null);
+    }
+    return ArtworkHeaderSnapshot(
+      revision: (source, cacheWidth, colors.surface, isDark, surfaceColors.top),
+      builder: (_, onFrame) => header(onFrame),
     );
   }
 }

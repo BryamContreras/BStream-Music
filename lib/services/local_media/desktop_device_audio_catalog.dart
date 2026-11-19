@@ -1,9 +1,9 @@
 import 'dart:io';
-import 'dart:isolate';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:path/path.dart' as p;
 
+import '../../core/utils/background_work.dart';
 import '../../features/music/domain/entities/device_audio_track.dart';
 import 'device_audio_catalog.dart';
 import 'device_audio_filter.dart';
@@ -14,9 +14,9 @@ class DesktopDeviceAudioCatalog implements DeviceAudioCatalog {
   DesktopDeviceAudioCatalog([this._rootsProvider = _defaultDesktopMusicRoots]);
 
   final DesktopMusicRootsProvider _rootsProvider;
-  List<DeviceAudioTrack>? _rawTracks;
+  DeviceAudioCatalogSnapshot? _rawSnapshot;
   String? _rawBstreamRoot;
-  Future<List<DeviceAudioTrack>>? _scanInFlight;
+  Future<DeviceAudioCatalogSnapshot>? _scanInFlight;
   String? _scanInFlightRoot;
 
   @override
@@ -24,15 +24,8 @@ class DesktopDeviceAudioCatalog implements DeviceAudioCatalog {
     DeviceAudioFilterOptions options = const DeviceAudioFilterOptions(),
     String? bstreamRoot,
   }) async {
-    final tracks = await _rawCatalog(bstreamRoot: bstreamRoot);
-    return DeviceAudioCatalogResult(
-      status: DeviceAudioPermissionStatus.notRequired,
-      tracks: filterDeviceAudioTracks(
-        tracks,
-        options: options,
-        bstreamRoot: bstreamRoot,
-      ),
-    );
+    final snapshot = await _rawCatalog(bstreamRoot: bstreamRoot);
+    return snapshot.prepare(options: options, bstreamRoot: bstreamRoot);
   }
 
   @override
@@ -40,8 +33,11 @@ class DesktopDeviceAudioCatalog implements DeviceAudioCatalog {
     DeviceAudioFilterOptions options = const DeviceAudioFilterOptions(),
     String? bstreamRoot,
   }) async {
-    await _rawCatalog(bstreamRoot: bstreamRoot, forceRefresh: true);
-    return load(options: options, bstreamRoot: bstreamRoot);
+    final snapshot = await _rawCatalog(
+      bstreamRoot: bstreamRoot,
+      forceRefresh: true,
+    );
+    return snapshot.prepare(options: options, bstreamRoot: bstreamRoot);
   }
 
   @override
@@ -50,12 +46,12 @@ class DesktopDeviceAudioCatalog implements DeviceAudioCatalog {
     String? bstreamRoot,
   }) => load(options: options, bstreamRoot: bstreamRoot);
 
-  Future<List<DeviceAudioTrack>> _rawCatalog({
+  Future<DeviceAudioCatalogSnapshot> _rawCatalog({
     required String? bstreamRoot,
     bool forceRefresh = false,
   }) {
     final rootIdentity = _pathIdentityOrNull(bstreamRoot);
-    final cached = _rawTracks;
+    final cached = _rawSnapshot;
     if (!forceRefresh && cached != null && _rawBstreamRoot == rootIdentity) {
       return Future.value(cached);
     }
@@ -74,7 +70,7 @@ class DesktopDeviceAudioCatalog implements DeviceAudioCatalog {
 
     // Reserve the whole operation before resolving the roots. A second load
     // can arrive while that asynchronous lookup is still pending.
-    late final Future<List<DeviceAudioTrack>> request;
+    late final Future<DeviceAudioCatalogSnapshot> request;
     request = _scanCatalog(bstreamRoot, rootIdentity).whenComplete(() {
       if (identical(_scanInFlight, request)) {
         _scanInFlight = null;
@@ -86,7 +82,7 @@ class DesktopDeviceAudioCatalog implements DeviceAudioCatalog {
     return request;
   }
 
-  Future<List<DeviceAudioTrack>> _scanCatalog(
+  Future<DeviceAudioCatalogSnapshot> _scanCatalog(
     String? bstreamRoot,
     String? rootIdentity,
   ) async {
@@ -95,12 +91,17 @@ class DesktopDeviceAudioCatalog implements DeviceAudioCatalog {
         .map((directory) => directory.absolute.path)
         .toSet()
         .toList(growable: false);
-    final tracks = List<DeviceAudioTrack>.unmodifiable(
-      await Isolate.run(() => _scanDesktopAudio(rootPaths, bstreamRoot)),
+    final tracks = await runBackgroundWork(
+      () => _scanDesktopAudio(rootPaths, bstreamRoot),
+      debugName: 'BStream desktop music scan',
     );
-    _rawTracks = tracks;
+    final snapshot = DeviceAudioCatalogSnapshot(
+      DeviceAudioPermissionStatus.notRequired,
+      tracks,
+    );
+    _rawSnapshot = snapshot;
     _rawBstreamRoot = rootIdentity;
-    return tracks;
+    return snapshot;
   }
 }
 
@@ -172,7 +173,7 @@ Future<List<DeviceAudioTrack>> _scanDesktopAudio(
     final title = left.title.toLowerCase().compareTo(right.title.toLowerCase());
     return title != 0 ? title : left.uri.compareTo(right.uri);
   });
-  return List<DeviceAudioTrack>.unmodifiable(tracks);
+  return tracks;
 }
 
 DeviceAudioTrack _desktopTrack({

@@ -48,6 +48,105 @@ void main() {
     expect(fixture.controller.calls, ['seek:57000']);
   });
 
+  for (final action in ['repeat', 'favorite']) {
+    test('a cold media $action waits for the restored track', () async {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      final callbacks = fixture.session.callbacks!;
+      final invoke = action == 'repeat'
+          ? callbacks.cycleRepeatMode
+          : callbacks.toggleFavorite;
+      expect(invoke, isNotNull);
+      final pending = invoke!();
+      await Future<void>.delayed(Duration.zero);
+      expect(fixture.controller.calls, isEmpty);
+
+      fixture.completeRestore();
+      await pending;
+
+      expect(fixture.controller.calls, ['$action:restored-track']);
+    });
+  }
+
+  test(
+    'favorite changes update controls without replacing track or queue',
+    () async {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      fixture.container.read(playbackQueueProvider.notifier).replace(const [
+        PlaybackQueueEntry(
+          id: 'restored-track',
+          title: 'Restored track',
+          artist: 'BStream Music',
+          isRemote: false,
+        ),
+        PlaybackQueueEntry(
+          id: 'next-track',
+          title: 'Next track',
+          artist: 'BStream Music',
+          isRemote: false,
+        ),
+      ], 0);
+      fixture.completeRestore();
+      await fixture.container.read(playerControllerProvider.future);
+      await fixture.flush();
+      final initial = fixture.session.states.last;
+      final initialUpdateCount = fixture.session.states.length;
+      expect(initial.isFavorite, isFalse);
+
+      fixture.container.read(_favoriteIdsProvider.notifier).replace({
+        'restored-track',
+      });
+      await fixture.flush();
+      expect(fixture.session.states.length, greaterThan(initialUpdateCount));
+      final favorite = fixture.session.states.last;
+      expect(favorite.isFavorite, isTrue);
+      expect(favorite.snapshot, same(initial.snapshot));
+      expect(favorite.queue, same(initial.queue));
+      expect(favorite.currentIndex, initial.currentIndex);
+
+      fixture.container.read(_favoriteIdsProvider.notifier).replace({
+        'other-track',
+      });
+      await fixture.flush();
+      final removed = fixture.session.states.last;
+      expect(removed.isFavorite, isFalse);
+      expect(removed.snapshot, same(initial.snapshot));
+      expect(removed.queue, same(initial.queue));
+      expect(fixture.controller.calls, isEmpty);
+    },
+  );
+
+  test('notification control labels follow every supported language', () async {
+    final fixture = _Fixture();
+    addTearDown(fixture.dispose);
+    fixture.completeRestore();
+    await fixture.container.read(playerControllerProvider.future);
+    await fixture.flush();
+    final initial = fixture.session.states.last;
+
+    for (final language in AppLanguage.values) {
+      fixture.container.read(_languageProvider.notifier).select(language);
+      await fixture.flush();
+      final published = fixture.session.states.last;
+      final strings = AppStrings(language);
+      expect(
+        published.controlLabels,
+        DesktopMediaControlLabels(
+          repeatQueue: strings.repeatQueue,
+          repeatOne: strings.repeatOne,
+          disableRepeat: strings.disableRepeat,
+          addToFavorites: strings.addToFavorites,
+          removeFromFavorites: strings.removeFromFavorites,
+        ),
+        reason: language.code,
+      );
+      expect(published.snapshot, same(initial.snapshot));
+      expect(published.queue, same(initial.queue));
+    }
+    expect(fixture.controller.calls, isEmpty);
+  });
+
   test('restoring metadata alone does not request playback', () async {
     final fixture = _Fixture();
     addTearDown(fixture.dispose);
@@ -82,15 +181,29 @@ class _Fixture {
       overrides: [
         playerControllerProvider.overrideWith(() => controller),
         desktopMediaSessionFactoryProvider.overrideWithValue(() => session),
+        favoriteTrackIdsProvider.overrideWith(
+          (ref) => ref.watch(_favoriteIdsProvider),
+        ),
+        appStringsProvider.overrideWith(
+          (ref) => AppStrings(ref.watch(_languageProvider)),
+        ),
       ],
     );
-    container.read(desktopMediaSessionProvider);
+    // The app watches this provider for its whole lifetime. Keep an active
+    // subscription here too: Riverpod pauses dependency listeners after a
+    // standalone read, so later favorite/language changes would be deferred.
+    sessionSubscription = container.listen(
+      desktopMediaSessionProvider,
+      (_, _) {},
+      fireImmediately: true,
+    );
   }
 
   final restoration = Completer<PlayerSnapshot>();
   final session = _Session();
   late final _RestoringController controller;
   late final ProviderContainer container;
+  late final ProviderSubscription<DesktopMediaSession?> sessionSubscription;
 
   void completeRestore() => restoration.complete(
     const PlayerSnapshot(
@@ -104,7 +217,15 @@ class _Fixture {
     ),
   );
 
-  void dispose() => container.dispose();
+  Future<void> flush() async {
+    await container.pump();
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  void dispose() {
+    sessionSubscription.close();
+    container.dispose();
+  }
 }
 
 class _RestoringController extends PlayerController {
@@ -127,6 +248,37 @@ class _RestoringController extends PlayerController {
   @override
   Future<void> seek(Duration position) async =>
       calls.add('seek:${position.inMilliseconds}');
+
+  @override
+  void cycleRepeatMode() => calls.add('repeat:${state.requireValue.trackId}');
+
+  @override
+  Future<bool> toggleCurrentFavorite() async {
+    calls.add('favorite:${state.requireValue.trackId}');
+    return true;
+  }
+}
+
+final _favoriteIdsProvider = NotifierProvider<_FavoriteIds, Set<String>>(
+  _FavoriteIds.new,
+);
+
+class _FavoriteIds extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const {};
+
+  void replace(Set<String> ids) => state = Set<String>.unmodifiable(ids);
+}
+
+final _languageProvider = NotifierProvider<_Language, AppLanguage>(
+  _Language.new,
+);
+
+class _Language extends Notifier<AppLanguage> {
+  @override
+  AppLanguage build() => AppLanguage.spanish;
+
+  void select(AppLanguage language) => state = language;
 }
 
 class _Session implements DesktopMediaSession {

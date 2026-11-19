@@ -7,8 +7,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  const initial = EqualizerSettings(enabled: true, gainsDb: [3, 1, 0, 1, 3]);
-  const latest = EqualizerSettings(enabled: true, gainsDb: [6, 2, 0, -1, 0]);
+  const initial = EqualizerSettings(
+    enabled: true,
+    gainsDb: [3, 3, 2, 1, 0, 0, 1, 1, 2, 3],
+  );
+  const latest = EqualizerSettings(
+    enabled: true,
+    gainsDb: [6, 6, 4, 2, 1, 0, -1, -1, 0, 0],
+  );
   Future<void> settle() =>
       Future<void>.delayed(const Duration(milliseconds: 110));
 

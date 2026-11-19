@@ -217,10 +217,8 @@ class PersonalizedRecommendationEngine {
 
     final recentKeys = recentSeeds.map((seed) => seed.trackKey).toSet();
     for (final pool in pools.take(config.becauseSeedCount)) {
-      final ranked = pool.candidates.toList(growable: false)
-        ..sort(_compareCandidates);
       final becauseItems = allocation.trySelect(
-        ranked
+        pool.candidates
             .where((candidate) => !recentKeys.contains(candidate.trackKey))
             .map(PersonalizedTrackItem.fromCandidate),
         minimum: config.becauseMinimum,

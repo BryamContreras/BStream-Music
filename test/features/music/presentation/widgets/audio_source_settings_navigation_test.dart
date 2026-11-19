@@ -104,7 +104,7 @@ void main() {
   });
 
   testWidgets(
-    'desktop exposes one quality choice and uses it for every transport',
+    'desktop exposes separate streaming and download quality choices',
     (tester) async {
       tester.view.physicalSize = const Size(1000, 1400);
       tester.view.devicePixelRatio = 1;
@@ -123,6 +123,18 @@ void main() {
       expect(find.byKey(const ValueKey('data-saving-quality')), findsOneWidget);
       expect(find.byKey(const ValueKey('data-saving-wifi')), findsNothing);
       expect(find.byKey(const ValueKey('data-saving-mobile')), findsNothing);
+      await _open(tester, 'data-saving-download-quality');
+      await tester.tap(
+        find.byKey(const ValueKey('audio-quality-profile-standard')),
+      );
+      await tester.pumpAndSettle();
+      final afterDownload = container
+          .read(settingsControllerProvider)
+          .requireValue;
+      expect(afterDownload.downloadAudioQuality, AudioQualityProfile.standard);
+      expect(afterDownload.wifiAudioQuality, AudioQualityProfile.high);
+      expect(afterDownload.mobileAudioQuality, AudioQualityProfile.high);
+
       await _open(tester, 'data-saving-quality');
       expect(find.text('Calidad de audio'), findsNWidgets(2));
       await tester.tap(
@@ -146,6 +158,13 @@ void main() {
       for (final network in AudioNetworkKind.values) {
         expect(high.profileFor(network), AudioQualityProfile.high);
       }
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .requireValue
+            .downloadAudioQuality,
+        AudioQualityProfile.standard,
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -179,8 +198,31 @@ void main() {
         lessThan(tester.getTopLeft(backup).dy),
       );
       await _open(tester, 'storage-data-saving');
-      expect(find.text('Alta calidad · JioSaavn'), findsOneWidget);
+      expect(find.text('Audio en streaming'), findsOneWidget);
+      expect(find.text('Descargas'), findsOneWidget);
+      expect(find.text('Alta calidad · JioSaavn'), findsNWidgets(2));
       expect(find.text('Calidad estándar · YouTube Music'), findsOneWidget);
+      await _open(tester, 'data-saving-download-quality');
+      expect(find.text('JioSaavn + fallback YTMusic'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('audio-quality-profile-standard')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .requireValue
+            .downloadAudioQuality,
+        AudioQualityProfile.standard,
+      );
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .requireValue
+            .wifiAudioQuality,
+        AudioQualityProfile.high,
+      );
+
       await _open(tester, 'data-saving-mobile');
       expect(
         find.byKey(const ValueKey('audio-quality-profile-high')),
@@ -202,6 +244,16 @@ void main() {
           .read(settingsControllerProvider.notifier)
           .setJioSaavnEnabled(false);
       await tester.pumpAndSettle();
+      await _open(tester, 'data-saving-download-quality');
+      expect(
+        find.byKey(const ValueKey('audio-quality-profile-high')),
+        findsNothing,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('audio-quality-profile-standard')),
+      );
+      await tester.pumpAndSettle();
+
       await _open(tester, 'data-saving-wifi');
       expect(
         find.byKey(const ValueKey('audio-quality-profile-high')),

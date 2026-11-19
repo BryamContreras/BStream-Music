@@ -2638,8 +2638,8 @@ class _LiquidNavigationSelectionPainter extends CustomPainter {
           end: Alignment.bottomRight,
           colors: [
             Colors.white.withValues(alpha: dark ? 0.15 : 0.2),
-            Colors.transparent,
-            Colors.black.withValues(alpha: dark ? 0.11 : 0.065),
+            dark ? const Color(0x08000000) : Colors.transparent,
+            Colors.black.withValues(alpha: dark ? 0.125 : 0.065),
             Colors.white.withValues(alpha: dark ? 0.075 : 0.1),
           ],
           stops: const [0, 0.3, 0.72, 1],

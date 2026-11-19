@@ -44,6 +44,7 @@ import 'favorite_star_badge.dart';
 import 'lyrics_page_route.dart';
 import 'now_playing_equalizer.dart';
 import 'playback_audio_quality.dart';
+import 'playback_control_icon.dart';
 import 'playback_dark_theme.dart';
 import 'playback_gradient_background.dart';
 import 'playback_menu_bottom_sheet.dart';
@@ -437,7 +438,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             fullBleedArtwork &&
             artworkSource?.trim().isNotEmpty == true;
         final stackedDesktop = !mobile && AppPlatform.isDesktop && wide;
-        final showSideQueue = AppPlatform.isDesktop && _showPlaybackQueue;
+        // A queue rail must leave enough width for the player's controls.
+        // Narrow windows use the same separate queue page as phones.
+        final canShowSideQueue = !mobile && AppPlatform.isDesktop && wide;
+        final showSideQueue = canShowSideQueue && _showPlaybackQueue;
         final disableAnimations = MediaQuery.disableAnimationsOf(context);
         final queueTransitionDuration = disableAnimations
             ? Duration.zero
@@ -491,8 +495,8 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
             ? mobileHorizontalContentPadding
             : 20.0;
         void toggleQueue() {
-          if (mobile) {
-            unawaited(_openMobilePlaybackQueue(context));
+          if (!canShowSideQueue) {
+            unawaited(_openPlaybackQueuePage(context));
             return;
           }
           setState(() {
@@ -1263,7 +1267,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     );
   }
 
-  Future<void> _openMobilePlaybackQueue(BuildContext context) async {
+  Future<void> _openPlaybackQueuePage(BuildContext context) async {
     _hideKeyboard();
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(builder: (_) => const _MobilePlaybackQueuePage()),
@@ -2164,6 +2168,7 @@ class _AppleMusicControls extends ConsumerWidget {
         _AppleTransportControls(
           hasTrack: hasTrack,
           isPlaying: isPlaying,
+          isLoading: snapshot.status == PlayerStatus.loading,
           compactness: compactness,
           tightLandscape: tightLandscape,
           strings: strings,
@@ -2192,6 +2197,7 @@ class _AppleTransportControls extends ConsumerWidget {
   const _AppleTransportControls({
     required this.hasTrack,
     required this.isPlaying,
+    required this.isLoading,
     required this.compactness,
     this.tightLandscape = false,
     required this.strings,
@@ -2199,6 +2205,7 @@ class _AppleTransportControls extends ConsumerWidget {
 
   final bool hasTrack;
   final bool isPlaying;
+  final bool isLoading;
   final double compactness;
   final bool tightLandscape;
   final AppStrings strings;
@@ -2249,12 +2256,11 @@ class _AppleTransportControls extends ConsumerWidget {
                 color: foreground,
                 disabledColor: foreground.withValues(alpha: 0.38),
                 iconSize: primaryIconSize,
-                icon: Transform.translate(
-                  offset: isPlaying ? Offset.zero : const Offset(1.5, 0),
-                  transformHitTests: false,
-                  child: Icon(
-                    isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                  ),
+                icon: PlaybackControlIcon(
+                  isLoading: isLoading,
+                  isPlaying: isPlaying,
+                  loadingLabel: strings.playbackLoading,
+                  playOffset: const Offset(1.5, 0),
                 ),
                 onPressed: hasTrack
                     ? () => ref
@@ -2869,16 +2875,19 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
                                           .togglePlayPause(),
                                     )
                                   : null,
-                              icon: Icon(
-                                isPlaying
-                                    ? Icons.pause_rounded
-                                    : Icons.play_arrow_rounded,
+                              icon: PlaybackControlIcon(
+                                isLoading:
+                                    playback.status == PlayerStatus.loading,
+                                isPlaying: isPlaying,
+                                loadingLabel: strings.playbackLoading,
                                 size: 19,
                               ),
                               label: FittedBox(
                                 fit: BoxFit.scaleDown,
                                 child: Text(
-                                  isPlaying
+                                  playback.status == PlayerStatus.loading
+                                      ? strings.playbackLoading
+                                      : isPlaying
                                       ? strings.pause
                                       : strings.playbackPaused,
                                   maxLines: 1,
@@ -4973,12 +4982,11 @@ class _PlaybackButtons extends ConsumerWidget {
             padding: EdgeInsets.zero,
             constraints: BoxConstraints.tight(Size.square(enlargedPlaySize)),
             iconSize: enlargedPlayIconSize,
-            icon: Transform.translate(
-              offset: isPlaying ? Offset.zero : Offset(mobile ? 1.25 : 1.5, 0),
-              transformHitTests: false,
-              child: Icon(
-                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              ),
+            icon: PlaybackControlIcon(
+              isLoading: snapshot.status == PlayerStatus.loading,
+              isPlaying: isPlaying,
+              loadingLabel: strings.playbackLoading,
+              playOffset: Offset(mobile ? 1.25 : 1.5, 0),
             ),
             onPressed: hasTrack
                 ? () => ref
@@ -6201,6 +6209,8 @@ String? _audioQualityForSnapshot(
     bitrate: format?.bitrate,
     sampleRate: format?.sampleRate,
     channels: format?.channels,
+    bitDepth: format?.bitDepth,
+    bitDepthLabel: strings.audioQualityBits,
     stereoLabel: strings.audioQualityStereo,
     monoLabel: strings.audioQualityMono,
     channelCountLabel: strings.audioQualityChannels,
@@ -6268,6 +6278,8 @@ class _PlaybackTimelineQuality extends ConsumerWidget {
             codec: track?.streamCodec ?? localFormat?.codec,
             mimeType: track?.streamMimeType ?? localFormat?.mimeType,
             bitrate: track?.streamBitrate ?? localFormat?.bitrate,
+            sampleRate: track?.streamSampleRate ?? localFormat?.sampleRate,
+            bitDepth: localFormat?.bitDepth,
           ),
           localSource: enabled
               ? _localAudioQualitySource(snapshot, controller)
@@ -6296,6 +6308,8 @@ class _PlaybackTimelineQuality extends ConsumerWidget {
           codec: quality.codec,
           mimeType: quality.mimeType,
           bitrate: quality.bitrate,
+          sampleRate: quality.sampleRate,
+          bitDepth: quality.bitDepth,
         );
       }
     }
@@ -6305,6 +6319,8 @@ class _PlaybackTimelineQuality extends ConsumerWidget {
       PlaybackAudioQualityTier.low => strings.lowAudioQuality,
       PlaybackAudioQualityTier.standard => strings.standardAudioQuality,
       PlaybackAudioQualityTier.high => strings.highAudioQuality,
+      PlaybackAudioQualityTier.lossless => strings.losslessAudioQuality,
+      PlaybackAudioQualityTier.hiRes => strings.hiResAudioQuality,
       null => null,
     };
     final style = Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -6353,8 +6369,18 @@ class _PlaybackTimelineQuality extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  Icons.headphones_rounded,
-                  key: const ValueKey('player-audio-quality-headphones'),
+                  switch (upgrading ? null : tier) {
+                    PlaybackAudioQualityTier.lossless => Icons.album_rounded,
+                    PlaybackAudioQualityTier.hiRes => Icons.graphic_eq_rounded,
+                    _ => Icons.headphones_rounded,
+                  },
+                  key: ValueKey(switch (upgrading ? null : tier) {
+                    PlaybackAudioQualityTier.lossless =>
+                      'player-audio-quality-lossless-icon',
+                    PlaybackAudioQualityTier.hiRes =>
+                      'player-audio-quality-hi-res-icon',
+                    _ => 'player-audio-quality-headphones',
+                  }),
                   size: 14,
                   color: style?.color,
                 ),
@@ -6417,6 +6443,8 @@ class _ArtworkAudioQualityOverlay extends ConsumerWidget {
             sampleRate: quality.sampleRate,
             bitrate: quality.bitrate,
             channels: quality.channels,
+            bitDepth: quality.bitDepth,
+            bitDepthLabel: strings.audioQualityBits,
             localSource: localSource,
             stereoLabel: strings.audioQualityStereo,
             monoLabel: strings.audioQualityMono,

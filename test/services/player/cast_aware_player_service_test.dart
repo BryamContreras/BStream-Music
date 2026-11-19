@@ -58,7 +58,10 @@ void main() {
   test(
     'equalizer tuning stays local while a cast receiver owns playback',
     () async {
-      const curve = EqualizerSettings(enabled: true, gainsDb: [6, 3, 0, 1, 0]);
+      const curve = EqualizerSettings(
+        enabled: true,
+        gainsDb: [6, 3, 0, 1, 0, 0, 0, 0, 0, 0],
+      );
       expect(player.supportsEqualizer, isTrue);
       await player.configureEqualizer(curve);
       expect(local.equalizer, curve);

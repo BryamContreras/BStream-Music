@@ -3,6 +3,7 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/platform/app_platform.dart';
 import '../../domain/entities/lyrics_romanization_language.dart';
 import 'lyrics_animation_style.dart';
+import 'lyrics_background_style.dart';
 import 'live_widget_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
@@ -419,6 +420,7 @@ class AppStrings {
     count == 1 ? '1 song' : '$count songs',
   );
   String get play => choose('Reproducir', 'Play');
+  String get playbackLoading => choose('Cargando canción', 'Loading song');
   String get pause => choose('Pausar', 'Pause');
   String get previous => choose('Anterior', 'Previous');
   String get next => choose('Siguiente', 'Next');
@@ -506,6 +508,12 @@ class AppStrings {
   String get lyricsShareBlur => choose('Desenfoque', 'Blur');
   String get lyricsShareCover => choose('Portada', 'Artwork');
   String get lyricsShareGradient => choose('Gradiente', 'Gradient');
+  String get lyricsBackground => choose('Fondo de letras', 'Lyrics background');
+  String lyricsBackgroundLabel(LyricsBackgroundStyle style) => switch (style) {
+    LyricsBackgroundStyle.blur => lyricsShareBlur,
+    LyricsBackgroundStyle.gradient => lyricsShareGradient,
+    LyricsBackgroundStyle.animatedGradient => choose('Animado', 'Animated'),
+  };
   String get lyricsShareTextColor => choose('Color del texto', 'Text color');
   String get lyricsShareTextAuto => choose('Automático', 'Automatic');
   String get lyricsShareTextLight => choose('Claro', 'Light');
@@ -1305,17 +1313,24 @@ class AppStrings {
       choose('Siempre activada', 'Always enabled');
   String get dataSaving => choose('Ahorro de datos', 'Data saving');
   String get audioQuality => choose('Calidad de audio', 'Audio quality');
-  String get desktopDataSavingSummary => choose(
-    'Elige la calidad para reproducir y descargar.',
-    'Choose audio quality for playback and downloads.',
-  );
+  String get streamingAudio => choose('Audio en streaming', 'Streaming audio');
+  String get downloadAudioQuality =>
+      choose('Calidad de descarga', 'Download quality');
+  String get downloadHighQualitySource =>
+      choose('JioSaavn + fallback YTMusic', 'JioSaavn + YTMusic fallback');
   String get dataSavingSummary => choose(
-    'Elige la calidad para Wi-Fi y datos móviles.',
-    'Choose audio quality for Wi-Fi and mobile data.',
+    'Ajusta por separado la calidad de streaming y de descarga.',
+    'Set streaming and download quality separately.',
   );
   String get wifiNetwork => choose('Wi-Fi', 'Wi-Fi');
   String get mobileNetwork => choose('Datos móviles', 'Mobile data');
   String get highAudioQuality => choose('Alta calidad', 'High quality');
+  String get losslessAudioQuality =>
+      choose('Alta calidad - Lossless', 'High quality - Lossless');
+  String get hiResAudioQuality =>
+      choose('Alta calidad - Hi-Res', 'High quality - Hi-Res');
+  String audioQualityBits(int bits) =>
+      choose('{bits} bits', '{bits}-bit').replaceAll('{bits}', '$bits');
   String get standardAudioQuality =>
       choose('Calidad estándar', 'Standard quality');
   String get lowAudioQuality => choose('Baja calidad', 'Low quality');
@@ -1340,16 +1355,14 @@ class AppStrings {
       choose('No disponible para este audio.', 'Unavailable for this audio.');
   String get equalizerCurve =>
       choose('Curva de ecualización', 'Equalizer curve');
-  String get equalizerCurveHint => choose(
-    'Vista aproximada de los ajustes',
-    'Approximate view of your settings',
-  );
   String get equalizerSummary => choose(
-    'Ajusta el sonido con presets o cinco bandas.',
-    'Adjust the sound with presets or five bands.',
+    'Ajusta el sonido con presets o diez bandas.',
+    'Adjust the sound with presets or ten bands.',
   );
   String get equalizerEnabled =>
       choose('Activar ecualizador', 'Enable equalizer');
+  String get equalizerActive => choose('Activado', 'Enabled');
+  String get equalizerInactive => choose('Desactivado', 'Disabled');
   String get equalizerPresets => choose('Presets', 'Presets');
   String get equalizerReset =>
       choose('Restablecer ecualizador', 'Reset equalizer');
@@ -1387,8 +1400,18 @@ class AppStrings {
     EqualizerPreset.lateNight => choose('Noche', 'Late night'),
     EqualizerPreset.custom => choose('Personalizado', 'Custom'),
   };
-  String equalizerBandName(int index) =>
-      const ['60 Hz', '230 Hz', '910 Hz', '3.6 kHz', '14 kHz'][index];
+  String equalizerBandName(int index) => const [
+    '31 Hz',
+    '62 Hz',
+    '125 Hz',
+    '250 Hz',
+    '500 Hz',
+    '1 kHz',
+    '2 kHz',
+    '4 kHz',
+    '8 kHz',
+    '16 kHz',
+  ][index];
   String get crossfadeSummary => choose(
     'Superpone suavemente el final de una canción con el inicio de la siguiente.',
     'Smoothly overlaps the end of one song with the start of the next.',
@@ -1670,8 +1693,8 @@ class AppStrings {
   );
   List<String> get whatsNewHighlights => [
     choose(
-      'Ahora está disponible un ecualizador de 5 bandas.',
-      'A 5-band equalizer is now available.',
+      'Ahora está disponible un ecualizador de 10 bandas.',
+      'A 10-band equalizer is now available.',
     ),
     choose(
       'Compatibilidad con audio de mayor calidad, siempre que esté disponible.',

@@ -179,6 +179,8 @@ class HttpAudioTransfer {
   /// a small sidecar and sent as `If-Range`; a caller may also provide its own
   /// `If-Range` header. A legacy partial without either validator is retained
   /// until valid media bytes arrive, then safely restarted from byte zero.
+  /// [cancellationEvents] aborts an active transfer on demand. Use
+  /// [isCancelled] to also detect cancellation before a listener is attached.
   Future<HttpAudioTransferResult> download({
     required Uri uri,
     required File destination,
@@ -186,6 +188,7 @@ class HttpAudioTransfer {
     HttpAudioRangePlan? rangePlan,
     HttpAudioTransferProgressCallback? onProgress,
     HttpAudioTransferCancellationCallback? isCancelled,
+    Stream<void>? cancellationEvents,
   }) {
     if (uri.scheme != 'http' && uri.scheme != 'https') {
       throw ArgumentError.value(uri, 'uri', 'Only HTTP(S) URLs are supported.');
@@ -219,6 +222,7 @@ class HttpAudioTransfer {
       rangePlan: rangePlan,
       onProgress: onProgress,
       isCancelled: isCancelled,
+      cancellationEvents: cancellationEvents,
     ).run();
     return result.whenComplete(() {
       _activeDestinationPaths.remove(destinationKey);
@@ -248,6 +252,7 @@ class _HttpAudioTransferRun {
     required this.rangePlan,
     required this.onProgress,
     required this.isCancelled,
+    required this.cancellationEvents,
   }) : partFile = HttpAudioTransfer.partialFileFor(destination),
        validatorFile = File('${destination.path}.part.if-range');
 
@@ -260,10 +265,12 @@ class _HttpAudioTransferRun {
   final HttpAudioRangePlan? rangePlan;
   final HttpAudioTransferProgressCallback? onProgress;
   final HttpAudioTransferCancellationCallback? isCancelled;
+  final Stream<void>? cancellationEvents;
 
   final Completer<void> _terminalAbort = Completer<void>();
   Timer? _totalTimer;
   Timer? _cancellationTimer;
+  StreamSubscription<void>? _cancellationSubscription;
   HttpClient? _activeClient;
   HttpClientRequest? _activeRequest;
   HttpAudioTransferException? _terminalException;
@@ -273,8 +280,8 @@ class _HttpAudioTransferRun {
   bool _resumed = false;
 
   Future<HttpAudioTransferResult> run() async {
-    _startWatchdogs();
     try {
+      _startWatchdogs();
       _pollCancellation();
       _throwIfTerminal();
       await destination.parent.create(recursive: true);
@@ -911,7 +918,13 @@ class _HttpAudioTransferRun {
         ),
       );
     });
-    if (isCancelled != null) {
+    final events = cancellationEvents;
+    if (events != null) {
+      _cancellationSubscription = events.listen(
+        (_) => _cancelTransfer(),
+        onError: _abortForCancellationError,
+      );
+    } else if (isCancelled != null) {
       _cancellationTimer = Timer.periodic(
         owner.cancellationPollInterval,
         (_) => _pollCancellation(),
@@ -924,6 +937,8 @@ class _HttpAudioTransferRun {
     _totalTimer = null;
     _cancellationTimer?.cancel();
     _cancellationTimer = null;
+    unawaited(_cancellationSubscription?.cancel());
+    _cancellationSubscription = null;
   }
 
   void _pollCancellation() {
@@ -934,21 +949,26 @@ class _HttpAudioTransferRun {
     }
     try {
       if (isCancelled!()) {
-        _requestTerminalAbort(
-          const HttpAudioTransferException(
-            'The audio transfer was cancelled.',
-            kind: HttpAudioTransferFailureKind.cancelled,
-          ),
-        );
+        _cancelTransfer();
       }
     } catch (error, stackTrace) {
-      _cancellationCallbackError = error;
-      _cancellationCallbackStack = stackTrace;
-      _abortActive(error, stackTrace);
-      if (!_terminalAbort.isCompleted) {
-        _terminalAbort.complete();
-      }
+      _abortForCancellationError(error, stackTrace);
     }
+  }
+
+  void _cancelTransfer() => _requestTerminalAbort(
+    const HttpAudioTransferException(
+      'The audio transfer was cancelled.',
+      kind: HttpAudioTransferFailureKind.cancelled,
+    ),
+  );
+
+  void _abortForCancellationError(Object error, StackTrace stackTrace) {
+    if (_hasTerminalFailure) return;
+    _cancellationCallbackError = error;
+    _cancellationCallbackStack = stackTrace;
+    _abortActive(error, stackTrace);
+    if (!_terminalAbort.isCompleted) _terminalAbort.complete();
   }
 
   void _throwIfTerminal() {

@@ -1,4 +1,3 @@
-import '../../features/music/domain/entities/device_audio_track.dart';
 import '../../platform_channels/ios_local_media_channel.dart';
 import 'device_audio_catalog.dart';
 import 'device_audio_filter.dart';
@@ -8,8 +7,8 @@ class IosDeviceAudioCatalog implements DeviceAudioCatalog {
   IosDeviceAudioCatalog([this._channel = const IosLocalMediaChannel()]);
 
   final IosLocalMediaChannel _channel;
-  List<DeviceAudioTrack>? _rawTracks;
-  Future<List<DeviceAudioTrack>>? _queryInFlight;
+  DeviceAudioCatalogSnapshot? _rawSnapshot;
+  Future<DeviceAudioCatalogSnapshot>? _queryInFlight;
 
   @override
   Future<DeviceAudioCatalogResult> load({
@@ -61,35 +60,31 @@ class IosDeviceAudioCatalog implements DeviceAudioCatalog {
     bool forceRefresh = false,
   }) async {
     if (status != DeviceAudioPermissionStatus.granted) {
-      _rawTracks = null;
+      _rawSnapshot = null;
       return DeviceAudioCatalogResult(status: status);
     }
-    final tracks = await _rawCatalog(forceRefresh: forceRefresh);
-    return DeviceAudioCatalogResult(
-      status: status,
-      tracks: filterDeviceAudioTracks(
-        tracks,
-        options: options,
-        bstreamRoot: bstreamRoot,
-      ),
-    );
+    final snapshot = await _rawCatalog(forceRefresh: forceRefresh);
+    return snapshot.prepare(options: options, bstreamRoot: bstreamRoot);
   }
 
-  Future<List<DeviceAudioTrack>> _rawCatalog({required bool forceRefresh}) {
-    final cached = _rawTracks;
+  Future<DeviceAudioCatalogSnapshot> _rawCatalog({required bool forceRefresh}) {
+    final cached = _rawSnapshot;
     if (!forceRefresh && cached != null) {
-      return Future<List<DeviceAudioTrack>>.value(cached);
+      return Future.value(cached);
     }
     final active = _queryInFlight;
     if (active != null) {
       return active;
     }
-    final request = _channel.queryTracks();
-    _queryInFlight = request;
-    return request
+    late final Future<DeviceAudioCatalogSnapshot> request;
+    request = _channel
+        .queryTracks()
         .then((tracks) {
-          final snapshot = List<DeviceAudioTrack>.unmodifiable(tracks);
-          _rawTracks = snapshot;
+          final snapshot = DeviceAudioCatalogSnapshot(
+            DeviceAudioPermissionStatus.granted,
+            tracks,
+          );
+          _rawSnapshot = snapshot;
           return snapshot;
         })
         .whenComplete(() {
@@ -97,5 +92,7 @@ class IosDeviceAudioCatalog implements DeviceAudioCatalog {
             _queryInFlight = null;
           }
         });
+    _queryInFlight = request;
+    return request;
   }
 }

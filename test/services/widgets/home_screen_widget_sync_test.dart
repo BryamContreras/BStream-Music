@@ -19,6 +19,78 @@ void main() {
     messenger.setMockMethodCallHandler(artworkChannel, null);
   });
 
+  test(
+    'loading transitions publish immediately and share the pending cover',
+    () async {
+      final updates = <Map<Object?, Object?>>[];
+      final cover = Completer<Uint8List>();
+      var coverLoads = 0;
+      final artworkUpdates = <Map<Object?, Object?>>[];
+      messenger.setMockMethodCallHandler(artworkChannel, (call) async {
+        coverLoads++;
+        return cover.future;
+      });
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'update') {
+          updates.add(call.arguments as Map<Object?, Object?>);
+        }
+        if (call.method == 'updateArtworkBytes') {
+          artworkUpdates.add(call.arguments as Map<Object?, Object?>);
+        }
+        return null;
+      });
+      final sync = HomeScreenWidgetSync(channel: channel);
+      addTearDown(sync.dispose);
+      void publish({required bool loading, required bool playing}) =>
+          sync.publish(
+            trackId: 'pending-song',
+            title: 'Pending song',
+            artist: 'Artist',
+            artworkUrl: deviceAudioArtworkSourceForUri(
+              'content://media/audio/pending-song',
+            ),
+            isLoading: loading,
+            isPlaying: playing,
+            isFavorite: false,
+            repeatMode: 'off',
+            accentColor: 0xFF22D3EE,
+            languageCode: 'es',
+          );
+
+      publish(loading: true, playing: false);
+      await Future<void>.delayed(Duration.zero);
+      expect(updates, hasLength(1));
+      expect(updates.single['isLoading'], isTrue);
+      expect(coverLoads, 1);
+
+      publish(loading: true, playing: false);
+      publish(loading: false, playing: true);
+      await Future<void>.delayed(Duration.zero);
+      expect(updates, hasLength(2));
+      expect(updates.last['isLoading'], isFalse);
+      expect(updates.last['isPlaying'], isTrue);
+      expect(coverLoads, 1);
+
+      cover.complete(Uint8List.fromList([1, 2, 3]));
+      await Future<void>.delayed(Duration.zero);
+      expect(artworkUpdates, hasLength(1));
+      expect(updates.last['isLoading'], isFalse);
+      expect(
+        updates,
+        hasLength(2),
+        reason: 'Finishing artwork must not restore an older loading state.',
+      );
+
+      publish(loading: true, playing: true);
+      publish(loading: false, playing: false);
+      await Future<void>.delayed(Duration.zero);
+      expect(updates, hasLength(4));
+      expect(updates.last['isLoading'], isFalse);
+      expect(updates.last['isPlaying'], isFalse);
+      expect(coverLoads, 1);
+    },
+  );
+
   test('publishes only playback changes, not position ticks', () async {
     final updates = <Map<Object?, Object?>>[];
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -225,12 +297,124 @@ void main() {
     ]);
   });
 
+  test('only builds widget rows inside the visible queue window', () async {
+    Map<Object?, Object?>? published;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'update') {
+        published = call.arguments as Map<Object?, Object?>;
+      }
+      return null;
+    });
+    final sync = HomeScreenWidgetSync(channel: channel, supportsQueue: true);
+    addTearDown(sync.dispose);
+    final built = <int>[];
+
+    sync.publish(
+      trackId: 'track-6000',
+      title: 'Song',
+      artist: 'Artist',
+      artworkUrl: null,
+      isPlaying: true,
+      isFavorite: false,
+      repeatMode: 'off',
+      accentColor: 0xFF22D3EE,
+      languageCode: 'es',
+      queue: Iterable.generate(10000, (index) {
+        built.add(index);
+        return {'id': 'track-$index', 'title': 'Song', 'artist': 'Artist'};
+      }),
+      currentQueueIndex: 6000,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final rows = jsonDecode(published!['queueJson']! as String) as List;
+    expect(built, List.generate(100, (index) => 5998 + index));
+    expect(rows, hasLength(100));
+    expect(rows.first['queueIndex'], '5998');
+    expect(rows[2]['queueIndex'], '6000');
+    expect(rows[2]['isCurrent'], isTrue);
+    expect(rows.last['queueIndex'], '6097');
+  });
+
+  test(
+    'Android control updates preserve the same queue artwork request',
+    () async {
+      final updates = <Map<Object?, Object?>>[];
+      final coverStarted = Completer<void>();
+      final cover = Completer<Uint8List>();
+      final queueResolved = Completer<String>();
+      var artworkLoads = 0;
+      messenger.setMockMethodCallHandler(artworkChannel, (call) async {
+        artworkLoads++;
+        if (!coverStarted.isCompleted) coverStarted.complete();
+        return cover.future;
+      });
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method != 'update') return null;
+        final data = call.arguments as Map<Object?, Object?>;
+        updates.add(data);
+        final queueJson = data['queueJson'] as String?;
+        if (queueJson != null) {
+          final row = (jsonDecode(queueJson) as List).single as Map;
+          final path = row['artworkPath'] as String?;
+          if (path != null && !queueResolved.isCompleted) {
+            queueResolved.complete(path);
+          }
+        }
+        return null;
+      });
+      final sync = HomeScreenWidgetSync(channel: channel, supportsQueue: true);
+      addTearDown(sync.dispose);
+      final queue = [
+        {
+          'id': 'current',
+          'title': 'Song',
+          'artworkUrl': deviceAudioArtworkSourceForUri(
+            'content://media/audio/widget-pending-cover',
+          )!,
+        },
+      ];
+      void publish({required bool playing, required bool favorite}) =>
+          sync.publish(
+            trackId: 'current',
+            title: 'Song',
+            artist: 'Artist',
+            artworkUrl: null,
+            isPlaying: playing,
+            isFavorite: favorite,
+            repeatMode: 'off',
+            accentColor: 0xFF22D3EE,
+            languageCode: 'es',
+            queue: queue,
+          );
+
+      publish(playing: true, favorite: false);
+      await coverStarted.future.timeout(const Duration(seconds: 3));
+      publish(playing: false, favorite: true);
+      expect(updates.last['isPlaying'], isFalse);
+      expect(updates.last.containsKey('queueJson'), isFalse);
+      cover.complete(Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9]));
+      final path = await queueResolved.future.timeout(
+        const Duration(seconds: 3),
+      );
+      addTearDown(() => File(path).delete());
+      expect(updates.last['isPlaying'], isFalse);
+      expect(updates.last['isFavorite'], isTrue);
+      publish(playing: true, favorite: true);
+      await Future<void>.delayed(Duration.zero);
+      expect(updates, hasLength(4));
+      expect(updates.last.containsKey('queueJson'), isFalse);
+      expect(artworkLoads, 1);
+    },
+  );
+
   test(
     'Android resolves covers beyond the first page of a large widget queue',
     () async {
       final resolvedQueue = Completer<List<dynamic>>();
       messenger.setMockMethodCallHandler(artworkChannel, (call) async {
         expect(call.method, 'loadArtwork');
+        expect(call.arguments['targetWidth'], 256);
         expect(
           (call.arguments['audioUri'] as String).startsWith(
             'content://media/audio/',

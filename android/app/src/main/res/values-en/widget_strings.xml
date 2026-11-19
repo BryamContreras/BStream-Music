@@ -11,4 +11,5 @@
     <string name="widget_favorite">Favorites</string>
     <string name="widget_queue_title">Playback queue</string>
     <string name="widget_queue_empty">No songs in the queue</string>
+    <string name="widget_loading">Loading song</string>
 </resources>

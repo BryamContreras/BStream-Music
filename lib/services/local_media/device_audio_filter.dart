@@ -53,28 +53,28 @@ List<DeviceAudioTrack> filterDeviceAudioTracks(
           _belongsToRoot(track.relativePath, excludedRelativeRoot)) {
         return false;
       }
-      if (options.excludeWhatsAppAudio && _isWhatsAppAudio(track)) {
-        return false;
-      }
-      if (options.excludeTelegramAudio && _isTelegramAudio(track)) {
-        return false;
-      }
-      if (options.excludeAudioRecordings && _isAudioRecording(track)) {
-        return false;
-      }
       final duration = track.duration;
       if (options.excludeShortAudio &&
           duration != null &&
           duration < options.minimumDuration) {
         return false;
       }
+      if (options.excludeWhatsAppAudio ||
+          options.excludeTelegramAudio ||
+          options.excludeAudioRecordings) {
+        final sourcePath = _trackPath(track);
+        if ((options.excludeWhatsAppAudio && _isWhatsAppAudio(sourcePath)) ||
+            (options.excludeTelegramAudio && _isTelegramAudio(sourcePath)) ||
+            (options.excludeAudioRecordings && _isAudioRecording(sourcePath))) {
+          return false;
+        }
+      }
       return true;
     }),
   );
 }
 
-bool _isWhatsAppAudio(DeviceAudioTrack track) {
-  final path = _trackPath(track);
+bool _isWhatsAppAudio(String path) {
   if (path.isEmpty) {
     return false;
   }
@@ -85,8 +85,7 @@ bool _isWhatsAppAudio(DeviceAudioTrack track) {
       path.contains('whatsapp voice notes');
 }
 
-bool _isTelegramAudio(DeviceAudioTrack track) {
-  final path = _trackPath(track);
+bool _isTelegramAudio(String path) {
   if (path.isEmpty) {
     return false;
   }
@@ -97,8 +96,11 @@ bool _isTelegramAudio(DeviceAudioTrack track) {
       path.contains('telegram voice');
 }
 
-bool _isAudioRecording(DeviceAudioTrack track) {
-  final path = _trackPath(track);
+final _recordingPathPattern = RegExp(
+  r'(?:^|/)(?:recording|recordings|recorder|voice recording|voice recordings|voice recorder|audio recording|audio recordings|audio recorder|call recording|call recordings|call recorder|sound recorder|sound_recorder|soundrecorder|voicerecorder|voicerecordings|callrecord|call_record)(?:/|$)',
+);
+
+bool _isAudioRecording(String path) {
   if (path.isEmpty) {
     return false;
   }
@@ -113,9 +115,7 @@ bool _isAudioRecording(DeviceAudioTrack track) {
   ].any(path.contains)) {
     return true;
   }
-  return RegExp(
-    r'(?:^|/)(?:recording|recordings|recorder|voice recording|voice recordings|voice recorder|audio recording|audio recordings|audio recorder|call recording|call recordings|call recorder|sound recorder|sound_recorder|soundrecorder|voicerecorder|voicerecordings|callrecord|call_record)(?:/|$)',
-  ).hasMatch(path);
+  return _recordingPathPattern.hasMatch(path);
 }
 
 String _trackPath(DeviceAudioTrack track) => <String?>[

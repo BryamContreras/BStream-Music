@@ -8,6 +8,7 @@
 #import "./include/just_audio/LoopingAudioSource.h"
 #import "./include/just_audio/ClippingAudioSource.h"
 #import "./include/just_audio/BStreamAudioProcessingTap.h"
+#import "./include/just_audio/BStreamAudioDSP.h"
 #import "./include/just_audio/BStreamAudioStatus.h"
 #import "./include/just_audio/BStreamSilenceAnalyzer.h"
 #import <AVFoundation/AVFoundation.h>
@@ -64,6 +65,7 @@
     BOOL _bstreamSkipSeeking;
     BOOL _bstreamWaitingForTap;
     NSArray<NSNumber *> *_bstreamGains;
+    double _bstreamPreampDb;
     uint64_t _bstreamRevision;
     uint64_t _bstreamSkipEpoch;
     uint64_t _bstreamSkipCount;
@@ -140,7 +142,9 @@
     _errorMessage = (NSString *)[NSNull null];
     _bstreamProcessors = [NSMapTable weakToStrongObjectsMapTable];
     _bstreamAnalyzers = [NSMapTable weakToStrongObjectsMapTable];
-    _bstreamGains = @[@0, @0, @0, @0, @0];
+    NSMutableArray<NSNumber *> *initialGains = [NSMutableArray arrayWithCapacity:BSTREAM_DSP_BANDS];
+    for (int i = 0; i < BSTREAM_DSP_BANDS; i++) [initialGains addObject:@0];
+    _bstreamGains = initialGains.copy;
     _bstreamBoundaryTime = kCMTimeInvalid;
     for (NSDictionary *effect in audioEffects) {
         if ([effect[@"type"] isEqual:@"bstreamAudioEqualizer"]) {
@@ -250,10 +254,10 @@
 
 - (void)bstreamConfigureEqualizer:(NSDictionary *)request {
     NSArray *raw = request[@"gainsDb"];
-    if (![raw isKindOfClass:[NSArray class]] || raw.count != 5) {
-        @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"Five equalizer gains are required" userInfo:nil];
+    if (![raw isKindOfClass:[NSArray class]] || raw.count != BSTREAM_DSP_BANDS) {
+        @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"Ten equalizer gains are required" userInfo:nil];
     }
-    NSMutableArray<NSNumber *> *gains = [NSMutableArray arrayWithCapacity:5];
+    NSMutableArray<NSNumber *> *gains = [NSMutableArray arrayWithCapacity:BSTREAM_DSP_BANDS];
     for (id value in raw) {
         if (![value isKindOfClass:[NSNumber class]] || !isfinite([value doubleValue])) {
             @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"Equalizer gains must be finite" userInfo:nil];
@@ -263,6 +267,9 @@
     BOOL enabled = [request[@"enabled"] boolValue];
     if (enabled != _bstreamEqualizerEnabled || ![_bstreamGains isEqualToArray:gains]) ++_bstreamRevision;
     _bstreamGains = gains.copy;
+    double nativeGains[BSTREAM_DSP_BANDS];
+    for (int i = 0; i < BSTREAM_DSP_BANDS; i++) nativeGains[i] = gains[i].doubleValue;
+    _bstreamPreampDb = BStreamDSPHeadroomDb(nativeGains);
     _bstreamEqualizerEnabled = enabled;
     for (AVPlayerItem *item in _player.items) {
         BStreamAudioProcessingTap *processor = [_bstreamProcessors objectForKey:item];
@@ -336,14 +343,11 @@
     BOOL external = _player && _player.externalPlaybackActive;
     BOOL supported = _bstreamRegistered && !external && (!item || processor.supported);
     BOOL active = NO;
-    double maximum = 0;
-    NSMutableArray *bands = [NSMutableArray arrayWithCapacity:5];
-    const double frequencies[] = {60, 230, 910, 3600, 14000};
-    for (int i = 0; i < 5; i++) {
+    NSMutableArray *bands = [NSMutableArray arrayWithCapacity:BSTREAM_DSP_BANDS];
+    for (int i = 0; i < BSTREAM_DSP_BANDS; i++) {
         double gain = _bstreamGains[i].doubleValue;
         active |= fabs(gain) >= .01;
-        maximum = fmax(maximum, gain);
-        [bands addObject:@{@"index": @(i), @"centerFrequency": @(frequencies[i]), @"gain": @(gain)}];
+        [bands addObject:@{@"index": @(i), @"centerFrequency": @(BStreamDSPFrequencies[i]), @"gain": @(gain)}];
     }
     active = supported && _bstreamEqualizerEnabled && active;
     NSMutableDictionary *status = processor ? [[processor diagnostics] mutableCopy] : [NSMutableDictionary dictionary];
@@ -351,7 +355,7 @@
     status[@"configured"] = BStreamAudioStatusBoolean(processor && processor.configured);
     status[@"enabled"] = @(active);
     status[@"engine"] = @"bstream-dsp";
-    status[@"preampDb"] = @(active ? -maximum : 0);
+    status[@"preampDb"] = @(active ? _bstreamPreampDb : 0);
     status[@"revision"] = @(_bstreamRevision);
     status[@"parameters"] = @{@"minDecibels": @(-12), @"maxDecibels": @12, @"bands": bands};
     BStreamSilenceAnalyzer *analyzer = item ? [_bstreamAnalyzers objectForKey:item] : nil;

@@ -4,7 +4,7 @@ import java.util.Arrays;
 
 /** Immutable parameter handoff from Flutter's thread to each deck's audio thread. */
 final class BStreamEqualizerConfiguration {
-    static final double[] FREQUENCIES = {60, 230, 910, 3600, 14000};
+    static final double[] FREQUENCIES = {31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
     static final double MIN_GAIN_DB = -12;
     static final double MAX_GAIN_DB = 12;
 
@@ -18,9 +18,7 @@ final class BStreamEqualizerConfiguration {
             this.enabled = enabled;
             this.gainsDb = gainsDb.clone();
             this.revision = revision;
-            double maximum = 0;
-            for (double gain : gainsDb) maximum = Math.max(maximum, gain);
-            preampDb = -maximum;
+            preampDb = headroomDb(this.gainsDb);
         }
 
         boolean active() {
@@ -30,7 +28,41 @@ final class BStreamEqualizerConfiguration {
         }
     }
 
-    private volatile Snapshot current = new Snapshot(false, new double[5], 0);
+    /** Conservative combined response estimate, computed only for a new snapshot. */
+    private static double headroomDb(double[] gainsDb) {
+        double total = 0;
+        int boosts = 0;
+        double[] amplitudeSquared = new double[FREQUENCIES.length];
+        for (int band = 0; band < FREQUENCIES.length; band++) {
+            if (gainsDb[band] < .01) continue;
+            total += gainsDb[band];
+            boosts++;
+            amplitudeSquared[band] = Math.pow(10, gainsDb[band] / 20);
+        }
+        if (boosts < 2) return -total;
+        double maximum = 0;
+        double start = Math.log(FREQUENCIES[0]);
+        double range = Math.log(FREQUENCIES[FREQUENCIES.length - 1]) - start;
+        for (int point = 0; point <= 256 + FREQUENCIES.length; point++) {
+            double frequency = point <= 256
+                    ? Math.exp(start + range * point / 256.0)
+                    : FREQUENCIES[point - 257];
+            double response = 0;
+            for (int band = 0; band < FREQUENCIES.length; band++) {
+                double a2 = amplitudeSquared[band];
+                if (a2 == 0) continue;
+                double ratio = frequency / FREQUENCIES[band];
+                double r2 = ratio * ratio;
+                double difference = 1 - r2;
+                double d = difference * difference;
+                response += 10 * Math.log10((d + r2 * a2) / (d + r2 / a2));
+            }
+            maximum = Math.max(maximum, response);
+        }
+        return -Math.min(total, maximum + .1);
+    }
+
+    private volatile Snapshot current = new Snapshot(false, new double[FREQUENCIES.length], 0);
     private volatile boolean configured;
     private volatile boolean available = true;
     private volatile String failure;
@@ -47,7 +79,7 @@ final class BStreamEqualizerConfiguration {
     boolean isActive() { return current.active(); }
 
     synchronized void configure(boolean enabled, double[] gainsDb) {
-        if (gainsDb.length != 5) throw new IllegalArgumentException("Equalizer needs five bands");
+        if (gainsDb.length != FREQUENCIES.length) throw new IllegalArgumentException("Equalizer needs ten bands");
         double[] normalized = gainsDb.clone();
         for (int i = 0; i < normalized.length; i++) {
             if (!Double.isFinite(normalized[i])) {

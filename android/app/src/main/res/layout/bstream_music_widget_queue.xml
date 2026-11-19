@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_surface"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:layout_marginStart="4dp"
@@ -96,16 +97,34 @@
                         android:src="@drawable/bstream_widget_previous"
                         android:tint="#FFFFFFFF" />
 
-                    <ImageView
+                    <FrameLayout
                         android:id="@+id/widget_play_pause"
                         android:layout_width="48dp"
                         android:layout_height="match_parent"
                         android:background="@android:color/transparent"
-                        android:contentDescription="@string/widget_play_pause"
-                        android:padding="5dp"
-                        android:scaleType="fitCenter"
-                        android:src="@drawable/bstream_widget_play"
-                        android:tint="#FFFFFFFF" />
+                        android:contentDescription="@string/widget_play_pause">
+
+                        <ImageView
+                            android:id="@+id/widget_play_pause_icon"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:importantForAccessibility="no"
+                            android:padding="5dp"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/bstream_widget_play"
+                            android:tint="#FFFFFFFF" />
+
+                        <ProgressBar
+                            android:id="@+id/widget_play_pause_loading"
+                            style="?android:attr/progressBarStyleSmall"
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:indeterminate="true"
+                            android:indeterminateTint="#FFFFFFFF"
+                            android:visibility="gone" />
+                    </FrameLayout>
 
                     <ImageView
                         android:id="@+id/widget_next"

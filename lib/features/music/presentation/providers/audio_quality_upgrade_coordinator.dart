@@ -1,7 +1,10 @@
 part of 'music_providers.dart';
 
 extension _PlayerAudioQualityUpgrade on PlayerController {
-  void _maybeStartAudioQualityUpgrade(PlayerSnapshot snapshot) {
+  void _maybeStartAudioQualityUpgrade(
+    PlayerSnapshot snapshot,
+    PlayerSnapshot playbackSnapshot,
+  ) {
     var track = _playingRemoteTrack;
     final entryId = _currentRemoteQueueEntryId;
     final prepared = _preparedRemoteAudioSources[entryId];
@@ -30,6 +33,21 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
             (policy.useSingleProfile ||
                 policy.mobileAudioQuality == AudioQualityProfile.standard))) {
       return;
+    }
+    var recordingDuration = track.duration;
+    if (recordingDuration == null || recordingDuration <= Duration.zero) {
+      // The catalog can omit runtime. Use the loaded source's duration after
+      // checking its identity before UI decoration substitutes catalog fields.
+      if ((playbackSnapshot.queueEntryId != null &&
+              playbackSnapshot.queueEntryId != entryId) ||
+          !(_snapshotBelongsToTrack(playbackSnapshot, track) ||
+              _isCachedRemoteSnapshot(playbackSnapshot, track))) {
+        return;
+      }
+      recordingDuration = playbackSnapshot.duration;
+      if (recordingDuration == null || recordingDuration <= Duration.zero) {
+        return;
+      }
     }
     final requestId = _playRequestId;
     final pending = _audioQualityUpgradeJob;
@@ -70,7 +88,9 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
       entryId: entryId,
       requestId: requestId,
     );
-    unawaited(_improveAudioQuality(track, entryId, requestId, token));
+    unawaited(
+      _improveAudioQuality(track, entryId, requestId, token, recordingDuration),
+    );
   }
 
   Future<void> _improveAudioQuality(
@@ -78,6 +98,7 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
     String entryId,
     int requestId,
     Object token,
+    Duration recordingDuration,
   ) async {
     final monitor =
         _audioSourceRef.read(audioSourcePolicyProvider).useSingleProfile
@@ -151,7 +172,9 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
       announced = true;
       final candidate =
           await _audioSourceRef.read(audioSourceUpgradeLookupProvider)(
-            original,
+            original.duration == recordingDuration
+                ? original
+                : original.copyWith(duration: recordingDuration),
             currentBitrate: original.streamBitrate,
             shouldContinue: allowed,
           );

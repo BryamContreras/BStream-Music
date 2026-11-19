@@ -25,6 +25,7 @@ val hasReleaseSigning = listOf(
     releaseKeyPassword,
 ).all { it != null }
 val splitPerAbi = providers.gradleProperty("split-per-abi").orNull == "true"
+val armOnly = providers.gradleProperty("bstream-arm-only").orNull == "true"
 
 plugins {
     id("com.android.application")
@@ -52,7 +53,12 @@ android {
         testInstrumentationRunner = "com.bstream.bstream_music.WidgetLayoutInstrumentation"
         if (!splitPerAbi) {
             ndk {
-                abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
+                if (armOnly) {
+                    abiFilters.clear()
+                    abiFilters += setOf("armeabi-v7a", "arm64-v8a")
+                } else {
+                    abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
+                }
             }
         }
     }

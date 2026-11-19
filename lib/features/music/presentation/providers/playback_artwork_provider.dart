@@ -46,7 +46,7 @@ final playbackArtworkProvider =
       );
     });
 
-/// Playback waves and menus share one palette request/cache for the cover.
+/// Playback waves, menus and lyrics share one palette request/cache for the cover.
 /// Position updates do not invalidate this provider or resample the image.
 final playbackArtworkColorProvider = Provider.autoDispose<Color?>((ref) {
   final source = ref.watch(playbackArtworkProvider).source;

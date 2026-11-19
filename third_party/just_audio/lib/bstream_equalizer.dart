@@ -14,6 +14,8 @@ class BStreamEqualizerStatus {
     this.sampleRate = 0,
     this.channelCount = 0,
     this.pcmEncoding = 0,
+    this.lastAudioTrackEncoding = 0,
+    this.lastAudioTrackSampleRate = 0,
     this.revision = 0,
     this.appliedRevision = -1,
     this.skipSilenceSupported,
@@ -28,6 +30,10 @@ class BStreamEqualizerStatus {
   final int sampleRate;
   final int channelCount;
   final int pcmEncoding;
+
+  /// The last format opened with Android's audio output, after processing.
+  final int lastAudioTrackEncoding;
+  final int lastAudioTrackSampleRate;
   final int revision;
   final int appliedRevision;
 
@@ -53,6 +59,10 @@ class BStreamEqualizerStatus {
       sampleRate: (map['sampleRate'] as num?)?.toInt() ?? 0,
       channelCount: (map['channelCount'] as num?)?.toInt() ?? 0,
       pcmEncoding: (map['pcmEncoding'] as num?)?.toInt() ?? 0,
+      lastAudioTrackEncoding:
+          (map['lastAudioTrackEncoding'] as num?)?.toInt() ?? 0,
+      lastAudioTrackSampleRate:
+          (map['lastAudioTrackSampleRate'] as num?)?.toInt() ?? 0,
       revision: (map['revision'] as num?)?.toInt() ?? 0,
       appliedRevision: (map['appliedRevision'] as num?)?.toInt() ?? -1,
       skipSilenceSupported: map['skipSilenceSupported'] as bool?,
@@ -103,12 +113,12 @@ class BStreamEqualizerBand {
       );
 }
 
-/// Five-band DSP installed in the player's decoded PCM path on Android and iOS.
+/// Ten-band DSP installed in the player's decoded PCM path on Android and iOS.
 /// No vendor-provided or system-wide Equalizer effect is instantiated.
 class BStreamEqualizer extends AudioEffect
     with AndroidAudioEffect, DarwinAudioEffect {
-  static const frequencies = <double>[60, 230, 910, 3600, 14000];
-  List<double> _gains = const [0, 0, 0, 0, 0];
+  static const frequencies = bstreamEqualizerFrequencies;
+  List<double> _gains = const [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   MethodChannel? _channel;
   String? _boundId;
   bool _supported = true;
@@ -134,12 +144,12 @@ class BStreamEqualizer extends AudioEffect
       supported: _supported,
       enabled: active,
       configured: false,
-      preampDb: active ? -_gains.fold<double>(0, max) : 0,
+      preampDb: active ? bstreamEqualizerPreampDb(_gains) : 0,
       parameters: BStreamEqualizerParameters(
         minDecibels: -12,
         maxDecibels: 12,
         bands: List.unmodifiable(List.generate(
-            5,
+            frequencies.length,
             (index) => BStreamEqualizerBand(
                   index: index,
                   centerFrequency: frequencies[index],
@@ -185,8 +195,9 @@ class BStreamEqualizer extends AudioEffect
   Future<BStreamEqualizerStatus> configure(
       {required bool enabled, required List<double> gainsDb}) async {
     if (_disposed) throw StateError('BStream equalizer has been disposed.');
-    if (gainsDb.length != 5 || gainsDb.any((gain) => !gain.isFinite)) {
-      throw ArgumentError('BStream equalizer requires five finite gains.');
+    if (gainsDb.length != frequencies.length ||
+        gainsDb.any((gain) => !gain.isFinite)) {
+      throw ArgumentError('BStream equalizer requires ten finite gains.');
     }
     _gains = List.unmodifiable(gainsDb.map((gain) => gain.clamp(-12.0, 12.0)));
     _enabledSubject.add(enabled);

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="widget_glass_name" translatable="false">BStream Music · Liquid Glass</string>
     <string name="widget_player_name">BStream Music</string>
     <string name="widget_description">BStream Music: canción actual y controles</string>
     <string name="widget_artwork_description">Portada de la canción</string>
@@ -12,4 +13,5 @@
     <string name="widget_favorite">Favoritos</string>
     <string name="widget_queue_title">Cola de reproducción</string>
     <string name="widget_queue_empty">No hay canciones en la cola</string>
+    <string name="widget_loading">Cargando canción</string>
 </resources>

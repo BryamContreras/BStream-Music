@@ -41,6 +41,7 @@ void main() {
     () async {
       final result = await read(_wave(rate: 44100, channels: 2), 'stereo.wav');
       expect(result?.codec, 'pcm_s16le');
+      expect(result?.bitDepth, 16);
       expect(result?.sampleRate, 44100);
       expect(result?.channels, 2);
       expect(result?.bitrate, 1411200);
@@ -71,6 +72,7 @@ void main() {
         ...streamInfo.buffer.asUint8List(),
       ], 'surround.flac');
       expect(result?.codec, 'flac');
+      expect(result?.bitDepth, 24);
       expect(result?.sampleRate, 96000);
       expect(result?.channels, 6);
       expect(result?.bitrate, isNull);
@@ -394,10 +396,38 @@ void main() {
         ..setUint32(20, 44100);
       final entry = _sampleEntry('alac', 44100, 2, [
         ..._atom('alac', [0, 0, 0, 0, ...config.buffer.asUint8List()]),
-      ], bitDepth: 24);
+      ], bitDepth: 16);
       final result = await read(_mp4([entry]), 'lossless.m4a');
       expect(result?.codec, 'alac');
+      expect(result?.bitDepth, 24);
       expect(result?.sampleRate, 44100);
+      expect(result?.channels, 2);
+      expect(result?.bitrate, isNull);
+    },
+  );
+
+  test(
+    'MP4 FLAC uses STREAMINFO precision rather than the container sample size',
+    () async {
+      final streamInfo = ByteData(34)
+        ..setUint64(10, (96000 << 44) | (1 << 41) | (23 << 36) | 96000);
+      final entry = _sampleEntry('fLaC', 44100, 2, [
+        ..._atom('dfLa', [
+          0,
+          0,
+          0,
+          0,
+          0x80,
+          0,
+          0,
+          34,
+          ...streamInfo.buffer.asUint8List(),
+        ]),
+      ], bitDepth: 16);
+      final result = await read(_mp4([entry]), 'hires-flac.mp4');
+      expect(result?.codec, 'flac');
+      expect(result?.bitDepth, 24);
+      expect(result?.sampleRate, 96000);
       expect(result?.channels, 2);
       expect(result?.bitrate, isNull);
     },

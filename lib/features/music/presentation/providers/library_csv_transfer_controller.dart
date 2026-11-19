@@ -68,7 +68,11 @@ class LibraryCsvTransferController extends Notifier<LibraryCsvTransferState> {
       phase: LibraryCsvTransferPhase.parsing,
     );
     try {
-      final document = await compute(_parseLibraryCsvFile, path);
+      final document = await runBackgroundTransform(
+        path,
+        _parseLibraryCsvFile,
+        debugName: 'BStream library CSV import',
+      );
       state = LibraryCsvTransferState(
         phase: LibraryCsvTransferPhase.completed,
         document: document,

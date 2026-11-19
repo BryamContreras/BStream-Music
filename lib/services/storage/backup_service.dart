@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
@@ -242,11 +241,12 @@ class BackupService {
 
     try {
       _coordinator.updatePhase(LibraryMaintenancePhase.preparingRestore);
-      await Isolate.run(
+      await runBackgroundWork(
         () => _extractBackupArchive(
           backupPath: backup.path,
           outputPath: temporaryRoot.path,
         ),
+        debugName: 'BStream backup extraction',
       );
 
       final extractedDatabase = File(

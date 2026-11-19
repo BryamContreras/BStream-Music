@@ -1078,6 +1078,73 @@ void main() {
   });
 
   test(
+    'an explicit cancel aborts a stalled body without periodic checks',
+    () async {
+      final chunk = <int>[0x49, 0x44, 0x33, 1, 2, 3];
+      final release = Completer<void>();
+      final written = Completer<void>();
+      final events = StreamController<void>.broadcast(sync: true);
+      final server = await _startServer((request) async {
+        request.response
+          ..bufferOutput = false
+          ..headers.contentType = ContentType('audio', 'mpeg')
+          ..add(chunk);
+        await request.response.flush();
+        await release.future;
+        await request.response.close();
+      });
+      addTearDown(() async {
+        release.complete();
+        await events.close();
+        await server.close();
+      });
+      var checks = 0;
+      final result =
+          HttpAudioTransfer(
+            maxRetries: 0,
+            cancellationPollInterval: const Duration(milliseconds: 5),
+          ).download(
+            uri: server.uri,
+            destination: destination,
+            isCancelled: () {
+              checks++;
+              return false;
+            },
+            cancellationEvents: events.stream,
+            onProgress: (progress) {
+              if (progress.transferredBytes == chunk.length &&
+                  !written.isCompleted) {
+                written.complete();
+              }
+            },
+          );
+      final cancelled = expectLater(
+        result,
+        throwsA(
+          isA<HttpAudioTransferException>().having(
+            (error) => error.kind,
+            'kind',
+            HttpAudioTransferFailureKind.cancelled,
+          ),
+        ),
+      );
+      await written.future.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final initialChecks = checks;
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(checks, initialChecks);
+      events.add(null);
+      await cancelled.timeout(const Duration(seconds: 2));
+      expect(events.hasListener, isFalse);
+      expect(
+        await HttpAudioTransfer.partialFileFor(destination).readAsBytes(),
+        chunk,
+      );
+      expect(await destination.exists(), isFalse);
+    },
+  );
+
+  test(
     'total timeout aborts an active stream and keeps partial bytes',
     () async {
       final initialChunk = List<int>.filled(16 * 1024, 1)

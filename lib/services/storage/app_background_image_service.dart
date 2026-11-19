@@ -4,10 +4,11 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as image;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
+
+import '../../core/utils/background_work.dart';
 
 enum AppBackgroundImageError { tooLarge, tooManyPixels, invalidImage }
 
@@ -72,7 +73,11 @@ class AppBackgroundImageService {
       input.add(chunk);
     }
 
-    final optimized = await compute(_optimizePhoto, input.takeBytes());
+    final optimized = await runBackgroundTransform(
+      input.takeBytes(),
+      _optimizePhoto,
+      debugName: 'BStream background image',
+    );
     final directory = await _appBackgroundDirectory();
     await directory.create(recursive: true);
     final fileName =

@@ -4,7 +4,6 @@ import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.text.SpannableString
 import android.text.style.StyleSpan
 import android.graphics.Typeface
@@ -12,16 +11,19 @@ import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import java.io.File
 import java.util.LinkedHashMap
+import kotlin.math.roundToInt
 import org.json.JSONArray
 
 /** Supplies the lightweight, locally cached queue rows for the tall widget. */
 class BStreamMusicQueueWidgetService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory =
-        QueueFactory(applicationContext)
+        QueueFactory(applicationContext, intent.getIntExtra(
+            AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID,
+        ))
 }
 
-internal class QueueFactory(private val context: Context) : RemoteViewsService.RemoteViewsFactory {
-    private data class Entry(
+internal object BStreamWidgetQueue {
+    data class Entry(
         val id: String,
         val queueIndex: Int,
         val title: String,
@@ -30,45 +32,88 @@ internal class QueueFactory(private val context: Context) : RemoteViewsService.R
         val isCurrent: Boolean,
     )
 
-    private var entries: List<Entry> = emptyList()
-    private var accent: Int = 0xFF448AFF.toInt()
-    private val artworkBitmaps = object : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean =
-            size > 24
-    }
+    data class Snapshot(
+        val entries: List<Entry>,
+        val selectedPosition: Int?,
+        val focus: String,
+    )
 
-    override fun onCreate() = Unit
+    val empty = Snapshot(emptyList(), null, ":")
+    private var cachedJson = "[]"
+    private var cachedSnapshot = empty
 
-    override fun onDataSetChanged() {
-        val prefs = context.getSharedPreferences("bstream_home_widget", Context.MODE_PRIVATE)
-        accent = prefs.getInt("accent", accent)
-        entries = runCatching {
-            val json = JSONArray(prefs.getString("queueJson", "[]"))
-            List(json.length()) { index ->
-                val item = json.getJSONObject(index)
+    @Synchronized
+    fun read(json: String): Snapshot {
+        if (json == cachedJson) return cachedSnapshot
+        val snapshot = runCatching {
+            val array = JSONArray(json)
+            var selectedPosition: Int? = null
+            val entries = (0 until array.length()).mapNotNull { index ->
+                val item = array.optJSONObject(index) ?: return@mapNotNull null
+                val isCurrent = item.optBoolean("isCurrent", false)
+                if (isCurrent && selectedPosition == null) selectedPosition = index
                 Entry(
                     id = item.optString("id", index.toString()),
                     queueIndex = item.optInt("queueIndex", index),
                     title = item.optString("title").ifBlank { "—" },
                     artist = item.optString("artist"),
                     artworkPath = item.optString("artworkPath"),
-                    isCurrent = item.optBoolean("isCurrent", false),
+                    isCurrent = isCurrent,
                 )
             }
-        }.getOrDefault(emptyList())
+            val current = array.optJSONObject(selectedPosition ?: 0)
+            Snapshot(
+                entries.takeIf { it.size == array.length() }.orEmpty(),
+                selectedPosition,
+                "${current?.optString("queueIndex").orEmpty()}:${current?.optString("id").orEmpty()}",
+            )
+        }.getOrElse { empty.copy(focus = "") }
+        cachedJson = json
+        cachedSnapshot = snapshot
+        return snapshot
+    }
+}
+
+internal class QueueFactory(
+    private val context: Context,
+    private val widgetId: Int = AppWidgetManager.INVALID_APPWIDGET_ID,
+) : RemoteViewsService.RemoteViewsFactory {
+    private data class ArtworkKey(
+        val path: String,
+        val modifiedAt: Long,
+        val length: Long,
+        val size: Int,
+    )
+
+    companion object {
+        private val artworkBitmaps = object : LinkedHashMap<ArtworkKey, Bitmap>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<ArtworkKey, Bitmap>?): Boolean =
+                size > 24
+        }
+    }
+
+    private var queue = BStreamWidgetQueue.empty
+    private var accent: Int = 0xFF448AFF.toInt()
+
+    override fun onCreate() = Unit
+
+    override fun onDataSetChanged() {
+        val prefs = context.getSharedPreferences("bstream_home_widget", Context.MODE_PRIVATE)
+        accent = prefs.getInt("accent", accent)
+        queue = BStreamWidgetQueue.read(prefs.getString("queueJson", "[]").orEmpty())
     }
 
     override fun onDestroy() {
-        entries = emptyList()
-        artworkBitmaps.clear()
+        queue = BStreamWidgetQueue.empty
     }
 
-    override fun getCount(): Int = entries.size
+    override fun getCount(): Int = queue.entries.size
 
     override fun getViewAt(position: Int): RemoteViews? {
-        val entry = entries.getOrNull(position) ?: return null
+        val snapshot = queue
+        val entry = snapshot.entries.getOrNull(position) ?: return null
         val views = RemoteViews(context.packageName, R.layout.bstream_music_widget_queue_item)
-        val current = entry.isCurrent || (entries.none { it.isCurrent } && position == 0)
+        val current = entry.isCurrent || (snapshot.selectedPosition == null && position == 0)
         val styledTitle = SpannableString(entry.title)
         if (current && entry.title.isNotEmpty()) {
             styledTitle.setSpan(StyleSpan(Typeface.BOLD), 0, entry.title.length, 0)
@@ -117,26 +162,23 @@ internal class QueueFactory(private val context: Context) : RemoteViewsService.R
             R.id.widget_queue_item_title,
             R.id.widget_queue_item_artist,
         ).forEach { viewId -> views.setOnClickFillInIntent(viewId, fillInIntent) }
+        if (current && widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            BStreamMusicWidget.onCurrentQueueRowReady(context, widgetId, "${entry.queueIndex}:${entry.id}")
+        }
         return views
     }
 
-    private fun loadQueueArtwork(path: String): Bitmap? {
-        artworkBitmaps[path]?.let { return it }
+    internal fun loadQueueArtwork(path: String): Bitmap? {
         val file = File(path)
         if (!file.isFile) return null
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (bounds.outWidth / sample > 96 || bounds.outHeight / sample > 96) {
-            sample *= 2
+        val targetSize = (52 * context.resources.displayMetrics.density).roundToInt()
+            .coerceIn(52, 256)
+        val key = ArtworkKey(path, file.lastModified(), file.length(), targetSize)
+        return synchronized(artworkBitmaps) {
+            artworkBitmaps[key] ?: BStreamWidgetArtwork.decode(file, targetSize)?.also {
+                artworkBitmaps[key] = it
+            }
         }
-        val bitmap = BitmapFactory.decodeFile(
-            path,
-            BitmapFactory.Options().apply { inSampleSize = sample },
-        ) ?: return null
-        artworkBitmaps[path] = bitmap
-        return bitmap
     }
 
     private fun currentArtworkPath(): String? {
@@ -155,7 +197,7 @@ internal class QueueFactory(private val context: Context) : RemoteViewsService.R
     override fun getViewTypeCount(): Int = 1
 
     override fun getItemId(position: Int): Long {
-        val entry = entries.getOrNull(position) ?: return position.toLong()
+        val entry = queue.entries.getOrNull(position) ?: return position.toLong()
         return (entry.id.hashCode().toLong() shl 32) xor position.toLong()
     }
 

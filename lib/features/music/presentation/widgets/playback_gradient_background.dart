@@ -67,7 +67,12 @@ class BrowsingTabBackground extends ConsumerWidget {
 }
 
 class PlayerPlaybackGradientBackground extends ConsumerWidget {
-  const PlayerPlaybackGradientBackground({super.key});
+  const PlayerPlaybackGradientBackground({
+    this.additionalScrimAlpha = 0,
+    super.key,
+  });
+
+  final double additionalScrimAlpha;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -75,6 +80,7 @@ class PlayerPlaybackGradientBackground extends ConsumerWidget {
     return PlaybackArtworkBackdrop(
       source: artwork.source,
       fallbackSource: artwork.fallback,
+      additionalScrimAlpha: additionalScrimAlpha,
     );
   }
 }

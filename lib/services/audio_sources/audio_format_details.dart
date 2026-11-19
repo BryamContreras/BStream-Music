@@ -7,6 +7,7 @@ class AudioFormatDetails {
     this.sampleRate,
     this.bitrate,
     this.channels,
+    this.bitDepth,
   });
 
   final String? codec;
@@ -14,6 +15,13 @@ class AudioFormatDetails {
   final int? sampleRate;
   final int? bitrate;
   final int? channels;
+
+  /// Source precision; never the decoded/output PCM precision of the device.
+  final int? bitDepth;
+
+  /// Source resolution above 16-bit/48 kHz, only for verified lossless codecs.
+  bool get isHighResolution =>
+      isLossless && ((bitDepth ?? 0) > 16 || (sampleRate ?? 0) > 48000);
 
   bool get isLossless {
     final name = codec?.trim().toLowerCase();
@@ -57,12 +65,14 @@ class AudioFormatDetails {
       sampleRate: integer(map['sampleRate'], 0x7fffffff),
       bitrate: integer(map['bitrate'], 0x7fffffff),
       channels: integer(map['channels'], 64),
+      bitDepth: integer(map['bitDepth'], 64),
     );
     return result.codec == null &&
             result.mimeType == null &&
             result.sampleRate == null &&
             result.bitrate == null &&
-            result.channels == null
+            result.channels == null &&
+            result.bitDepth == null
         ? null
         : result;
   }
@@ -73,6 +83,7 @@ class AudioFormatDetails {
     'sampleRate': sampleRate,
     'bitrate': bitrate,
     'channels': channels,
+    if (bitDepth != null) 'bitDepth': bitDepth,
   };
 
   @override
@@ -82,9 +93,10 @@ class AudioFormatDetails {
       mimeType == other.mimeType &&
       sampleRate == other.sampleRate &&
       bitrate == other.bitrate &&
-      channels == other.channels;
+      channels == other.channels &&
+      bitDepth == other.bitDepth;
 
   @override
   int get hashCode =>
-      Object.hash(codec, mimeType, sampleRate, bitrate, channels);
+      Object.hash(codec, mimeType, sampleRate, bitrate, channels, bitDepth);
 }

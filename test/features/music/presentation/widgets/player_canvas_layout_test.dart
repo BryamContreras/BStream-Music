@@ -20,6 +20,119 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 void main() {
+  for (final style in [
+    PlayerStyle.bstreamMusic,
+    PlayerStyle.appleMusic,
+    PlayerStyle.spotifyMusic,
+  ]) {
+    testWidgets('$style video covers the upper still artwork after loading', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 820);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final originalVideoPlatform = VideoPlayerPlatform.instance;
+      final videoPlatform = _LayoutVideoPlatform(position: Duration.zero);
+      VideoPlayerPlatform.instance = videoPlatform;
+      addTearDown(() => VideoPlayerPlatform.instance = originalVideoPlatform);
+      final container = _canvasTestContainer(_CompletedCanvasCache());
+      addTearDown(container.dispose);
+      final captureKey = GlobalKey();
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: ThemeData(platform: TargetPlatform.android),
+            home: Scaffold(
+              body: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(390, 820),
+                  padding: EdgeInsets.only(top: 47, bottom: 34),
+                  viewPadding: EdgeInsets.only(top: 47, bottom: 34),
+                ),
+                child: RepaintBoundary(
+                  key: captureKey,
+                  child: ColoredBox(
+                    color: const Color(0xFF763C2F),
+                    child: PlayerPanel(
+                      style: style,
+                      artworkStyle: PlayerArtworkStyle.expanded,
+                      spotifyCanvasEnabled: true,
+                      animatedArtworkEnabled: false,
+                      drawBackground: false,
+                      trackTransitionsEnabled: false,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      final video = find.byType(SpotifyCanvasVideo);
+      expect(video, findsOneWidget);
+      final opacity = find.descendant(
+        of: video,
+        matching: find.byType(AnimatedOpacity),
+      );
+      expect(tester.widget<AnimatedOpacity>(opacity.first).opacity, 0);
+      final videoRect = tester.getRect(
+        find.byKey(const ValueKey('player-expanded-artwork-video-fade')),
+      );
+      final points = <Offset>[
+        for (final xFraction in [.2, .8])
+          for (final y in [12.0, 22.0, 40.0])
+            Offset(
+              videoRect.left + videoRect.width * xFraction,
+              videoRect.top + y,
+            ),
+      ];
+      final loadingPixels = await _capturePixels(tester, captureKey, points);
+
+      videoPlatform.position = const Duration(seconds: 1);
+      for (var attempt = 0; attempt < 10; attempt++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (tester.widget<AnimatedOpacity>(opacity.first).opacity == 1) break;
+      }
+      expect(tester.widget<AnimatedOpacity>(opacity.first).opacity, 1);
+      await tester.pump(const Duration(milliseconds: 300));
+      final readyPixels = await _capturePixels(tester, captureKey, points);
+      final expected = <int>[
+        (Colors.cyan.r * 255).round(),
+        (Colors.cyan.g * 255).round(),
+        (Colors.cyan.b * 255).round(),
+        255,
+      ];
+      for (var point = 0; point < points.length; point++) {
+        for (var channel = 0; channel < 4; channel++) {
+          expect(
+            readyPixels[point][channel],
+            closeTo(expected[channel], 1),
+            reason:
+                'The decoded video must cover the still artwork near the '
+                'system bar at ${points[point]}, channel $channel.',
+          );
+        }
+        expect(
+          [
+            for (var channel = 0; channel < 3; channel++)
+              (loadingPixels[point][channel] - expected[channel]).abs(),
+          ].any((difference) => difference > 32),
+          isTrue,
+          reason:
+              'The still fallback must remain visible before a video frame.',
+        );
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    }, skip: AppPlatform.current == AppPlatformType.linux);
+  }
+
   for (final style in [PlayerStyle.bstreamMusic, PlayerStyle.appleMusic]) {
     for (final scenario in [
       (
@@ -405,6 +518,10 @@ class _LayoutAudio implements PlayerService {
 }
 
 class _LayoutVideoPlatform extends VideoPlayerPlatform {
+  _LayoutVideoPlatform({this.position = const Duration(seconds: 1)});
+
+  Duration position;
+
   late final StreamController<VideoEvent> _events =
       StreamController<VideoEvent>(
         sync: true,
@@ -447,8 +564,7 @@ class _LayoutVideoPlatform extends VideoPlayerPlatform {
   Future<void> pause(int playerId) => SynchronousFuture(null);
 
   @override
-  Future<Duration> getPosition(int playerId) =>
-      SynchronousFuture(const Duration(seconds: 1));
+  Future<Duration> getPosition(int playerId) => SynchronousFuture(position);
 
   @override
   Future<void> seekTo(int playerId, Duration position) =>

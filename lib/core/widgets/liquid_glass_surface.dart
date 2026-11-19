@@ -107,17 +107,14 @@ class LiquidGlassSurface extends StatelessWidget {
   }) {
     assert(intensity >= 0 && intensity <= 2);
     assert(materialOpacity >= 0 && materialOpacity <= 1);
-    final brightness = Theme.brightnessOf(context);
+    final dark = Theme.brightnessOf(context) == Brightness.dark;
     final highContrast = MediaQuery.maybeHighContrastOf(context) ?? false;
-    final tint = brightness == Brightness.dark
-        ? const Color(0xFF121212)
-        : const Color(0xFFFAFAFA);
+    final tint = dark ? const Color(0xFF101010) : const Color(0xFFFAFAFA);
+    final opacity = dark ? 0.43 : 0.4;
     // A neutral veil preserves the backdrop hue while giving controls contrast.
     final alpha =
-        (0.4 * intensity * materialOpacity * (highContrast ? 1.16 : 1.0)).clamp(
-          0.0,
-          0.52,
-        );
+        (opacity * intensity * materialOpacity * (highContrast ? 1.16 : 1.0))
+            .clamp(0.0, 0.52);
     return tint.withValues(alpha: alpha);
   }
 
@@ -1046,15 +1043,15 @@ class _LiquidGlassBackdrop extends StatefulWidget {
 }
 
 class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
-  static final Expando<Map<double, ui.ImageFilter>> _groupedBlurFilters =
-      Expando<Map<double, ui.ImageFilter>>('liquid-glass-grouped-blurs');
-  static const _maximumGroupedSigmaEntries = 8;
+  // Sharing the filter does not group captures. BackdropKey still determines
+  // which surfaces can sample the same backdrop in the engine.
+  static final _blurFilters = <double, ui.ImageFilter>{};
+  static const _maximumBlurEntries = 8;
 
   double? _cachedBlurSigma;
   Offset? _cachedSurfaceOriginPx;
   Size? _cachedSurfaceSizePx;
   double? _cachedIntensity;
-  BackdropKey? _cachedBackdropGroupKey;
   BorderRadius? _cachedBorderRadius;
   LiquidGlassEdgeTreatment? _cachedTreatment;
   bool? _cachedHighContrast;
@@ -1133,18 +1130,26 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
     super.dispose();
   }
 
-  ui.ImageFilter _blurFilterForGroup(BackdropKey? groupKey) {
-    if (_cachedBlurFilter == null ||
-        _cachedBlurSigma != widget.blurSigma ||
-        _cachedBackdropGroupKey != groupKey) {
-      _cachedBlurSigma = widget.blurSigma;
-      _cachedBackdropGroupKey = groupKey;
-      _cachedBlurFilter = _sharedBlurFilterFor(
-        sigma: widget.blurSigma,
-        groupKey: groupKey,
+  ui.ImageFilter _blurFilter() {
+    final sigma = widget.blurSigma;
+    if (_cachedBlurSigma == sigma) return _cachedBlurFilter!;
+    final cached = _blurFilters[sigma];
+    final ui.ImageFilter filter;
+    if (cached != null) {
+      filter = cached;
+    } else {
+      filter = ui.ImageFilter.blur(
+        sigmaX: sigma,
+        sigmaY: sigma,
+        tileMode: TileMode.clamp,
       );
+      if (_blurFilters.length >= _maximumBlurEntries) {
+        _blurFilters.remove(_blurFilters.keys.first);
+      }
+      _blurFilters[sigma] = filter;
     }
-    return _cachedBlurFilter!;
+    _cachedBlurSigma = sigma;
+    return _cachedBlurFilter = filter;
   }
 
   bool get _usesRefraction =>
@@ -1158,10 +1163,9 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
     required Rect surfaceBoundsPx,
     required double devicePixelRatio,
     required BorderRadius borderRadius,
-    required BackdropKey? groupKey,
     bool boundedBackdrop = false,
   }) {
-    final blur = _blurFilterForGroup(groupKey);
+    final blur = _blurFilter();
     if (!_usesRefraction) {
       return widget.lensBounds == null ? blur : _envelopeFailureFilter();
     }
@@ -1294,31 +1298,6 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
     );
   }
 
-  static ui.ImageFilter _sharedBlurFilterFor({
-    required double sigma,
-    required BackdropKey? groupKey,
-  }) {
-    ui.ImageFilter create() => ui.ImageFilter.blur(
-      sigmaX: sigma,
-      sigmaY: sigma,
-      tileMode: TileMode.clamp,
-    );
-    if (groupKey == null) {
-      return create();
-    }
-
-    final filters = _groupedBlurFilters[groupKey] ??=
-        <double, ui.ImageFilter>{};
-    final existing = filters[sigma];
-    if (existing != null) {
-      return existing;
-    }
-    if (filters.length >= _maximumGroupedSigmaEntries) {
-      filters.remove(filters.keys.first);
-    }
-    return filters[sigma] = create();
-  }
-
   bool _materialIsRefractive() => _usesRefraction;
 
   Widget _buildBoundedForeground(BuildContext context) {
@@ -1341,7 +1320,6 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
         surfaceBoundsPx: bounds,
         devicePixelRatio: devicePixelRatio,
         borderRadius: radius,
-        groupKey: bounded ? null : widget.backdropGroupKey,
         boundedBackdrop: bounded,
       );
     }
@@ -1356,7 +1334,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
             Theme.of(context).platform == TargetPlatform.android,
         devicePixelRatio: devicePixelRatio,
         viewportSize: MediaQuery.sizeOf(context),
-        blurFilter: _blurFilterForGroup(null),
+        blurFilter: _blurFilter(),
         backdropGroupKey: widget.backdropGroupKey,
         resolveMaterial: _boundedMaterialResolver!,
         materialIsRefractive: _materialIsRefractive,
@@ -1427,14 +1405,12 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
               ),
               devicePixelRatio: devicePixelRatio,
               borderRadius: borderRadius,
-              groupKey: effectiveBackdropGroupKey,
             ),
           );
           _boundedMaterialResolver = (bounds, bounded) => _materialFilter(
             surfaceBoundsPx: bounds,
             devicePixelRatio: devicePixelRatio,
             borderRadius: borderRadius,
-            groupKey: bounded ? null : effectiveBackdropGroupKey,
             boundedBackdrop: bounded,
           );
         }
@@ -1447,7 +1423,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
                   Theme.of(context).platform == TargetPlatform.android,
               devicePixelRatio: devicePixelRatio,
               viewportSize: MediaQuery.sizeOf(context),
-              blurFilter: _blurFilterForGroup(null),
+              blurFilter: _blurFilter(),
               backdropGroupKey: effectiveBackdropGroupKey,
               resolveMaterial: _boundedMaterialResolver!,
               materialIsRefractive: _materialIsRefractive,
@@ -1464,7 +1440,7 @@ class _LiquidGlassBackdropState extends State<_LiquidGlassBackdrop> {
           filter: widget.lensBounds != null && !_usesRefraction
               ? _envelopeFailureFilter()
               : positionAwareFilter == null
-              ? _blurFilterForGroup(effectiveBackdropGroupKey)
+              ? _blurFilter()
               : null,
           filterConfig: positionAwareFilter,
           backdropGroupKey: effectiveBackdropGroupKey,
@@ -1561,6 +1537,8 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
   final _composition = LayerHandle<_LiquidGlassCompositionLayer>();
   final _outer = LayerHandle<_LiquidGlassOuterBackdropLayer>();
   final _inner = LayerHandle<_ConditionalLiquidGlassLensLayer>();
+  final _scenePath = <RenderObject>[];
+  final _sceneTransform = Matrix4.identity();
 
   void updateConfiguration({
     required double devicePixelRatio,
@@ -1600,29 +1578,59 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
     logical.bottom * _devicePixelRatio,
   );
 
-  Rect? _boundedLensBounds(Rect surface, Matrix4 transform) {
-    if (MatrixUtils.getAsTranslation(transform) == null) return null;
-    var capture = surface.intersect(
-      Offset.zero & (_viewportSize * _devicePixelRatio),
-    );
-    RenderObject descendant = this;
-    while (descendant.parent != null) {
-      final ancestor = descendant.parent!;
-      final clip = ancestor.describeApproximatePaintClip(descendant);
-      if (clip != null) {
-        final clipTransform = ancestor.getTransformTo(null);
-        if (MatrixUtils.getAsTranslation(clipTransform) == null) return null;
-        capture = capture.intersect(
-          _physicalRect(MatrixUtils.transformRect(clipTransform, clip)),
-        );
-      }
-      descendant = ancestor;
+  ({Rect surface, Rect? bounded}) _lensGeometry({required bool useBounded}) {
+    final root = owner!.rootNode!;
+    RenderObject ancestor = this;
+    while (!identical(ancestor, root)) {
+      _scenePath.add(ancestor);
+      ancestor = ancestor.parent!;
     }
-    if (!capture.isFinite || capture.isEmpty) return null;
+    _scenePath.add(root);
+    final transform = _sceneTransform..setIdentity();
+    var capture = Offset.zero & (_viewportSize * _devicePixelRatio);
+    try {
+      // Each ancestor's transform is a prefix of the lens transform. Walk it
+      // once so clip bounds and the lens use the same live paint transforms.
+      for (var index = _scenePath.length - 1; index > 0; index--) {
+        final parent = _scenePath[index];
+        final child = _scenePath[index - 1];
+        final clip = useBounded
+            ? parent.describeApproximatePaintClip(child)
+            : null;
+        if (clip != null) {
+          if (MatrixUtils.getAsTranslation(transform) == null) {
+            useBounded = false;
+          } else {
+            capture = capture.intersect(
+              _physicalRect(MatrixUtils.transformRect(transform, clip)),
+            );
+          }
+        }
+        // Like getTransformTo(null), stop in the root's logical coordinates.
+        if (!identical(parent, root)) {
+          parent.applyPaintTransform(child, transform);
+        }
+      }
+    } finally {
+      _scenePath.clear();
+    }
+    final surface = _physicalRect(
+      MatrixUtils.transformRect(transform, Offset.zero & size),
+    );
+    capture = capture.intersect(surface);
+    if (!useBounded ||
+        MatrixUtils.getAsTranslation(transform) == null ||
+        !capture.isFinite ||
+        capture.isEmpty) {
+      return (surface: surface, bounded: null);
+    }
     // Impeller rounds the native blur target out to whole physical pixels.
     // Preserve the full logical lens size, even if the target clips one side.
-    return surface.shift(
-      -Offset(capture.left.floorToDouble(), capture.top.floorToDouble()),
+    return (
+      surface: surface,
+      bounded: surface.shift(
+        -Offset(capture.left.floorToDouble(), capture.top.floorToDouble()),
+      ),
     );
   }
 
@@ -1674,13 +1682,7 @@ class _RenderLiquidGlassBackdrop extends RenderProxyBox {
     } else {
       // Paused fade frames only paint their retained foreground. Resolve the
       // transforms and clipping chain when the live material is needed again.
-      final transform = getTransformTo(null);
-      final surface = _physicalRect(
-        MatrixUtils.transformRect(transform, Offset.zero & size),
-      );
-      final bounded = partialOpacity
-          ? null
-          : _boundedLensBounds(surface, transform);
+      final (:surface, :bounded) = _lensGeometry(useBounded: !partialOpacity);
       debugResolvedBounds = bounded ?? surface;
       debugUsesBoundedInput = bounded != null;
       if (bounded == null) {
@@ -2184,7 +2186,7 @@ class LiquidGlassHoverPainter extends CustomPainter {
     return dark
         ? [
             Colors.white.withValues(alpha: (0.028 * strength).clamp(0.0, 0.08)),
-            Colors.transparent,
+            Colors.black.withValues(alpha: (0.03 * strength).clamp(0.0, 0.06)),
             Colors.black.withValues(alpha: (0.065 * strength).clamp(0.0, 0.14)),
           ]
         : [

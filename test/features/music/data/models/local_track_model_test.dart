@@ -6,6 +6,38 @@ import 'package:bstream_music/services/audio_sources/audio_format_details.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'lossless source precision survives the existing library JSON field',
+    () {
+      const format = AudioFormatDetails(
+        codec: 'flac',
+        mimeType: 'audio/flac',
+        sampleRate: 96000,
+        channels: 2,
+        bitDepth: 24,
+      );
+      final original = LocalTrackModel(
+        id: 'hires',
+        title: 'Local Hi-Res',
+        artist: 'Artist',
+        filePath: r'C:\Music\hires.flac',
+        addedAt: DateTime.utc(2026),
+        audioFormat: format,
+      );
+      final restored = LocalTrackModel.fromMap(original.toMap());
+      expect(restored.audioFormat, format);
+      expect(restored.audioFormat!.isHighResolution, isTrue);
+      for (final invalid in [0, -24, 65, 24.5, double.nan]) {
+        expect(
+          AudioFormatDetails.fromMap({
+            'codec': 'flac',
+            'bitDepth': invalid,
+          })!.bitDepth,
+          isNull,
+        );
+      }
+    },
+  );
   group('LocalTrackModel metadata persistence', () {
     test('round-trips complete InnerTube metadata', () {
       final addedAt = DateTime.utc(2026, 8, 13, 12, 30);

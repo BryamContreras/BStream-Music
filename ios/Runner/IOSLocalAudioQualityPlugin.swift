@@ -200,6 +200,19 @@ final class IOSLocalAudioQualityReader {
     }
     if let sampleRate = positiveInt(basic.mSampleRate) { result["sampleRate"] = sampleRate }
     if basic.mChannelsPerFrame > 0 { result["channels"] = Int(basic.mChannelsPerFrame) }
+    if [kAudioFormatFLAC, kAudioFormatAppleLossless, kAudioFormatLinearPCM].contains(basic.mFormatID) {
+      if basic.mBitsPerChannel > 0 && basic.mBitsPerChannel <= 64 {
+        result["bitDepth"] = Int(basic.mBitsPerChannel)
+      } else if basic.mFormatID == kAudioFormatAppleLossless {
+        switch basic.mFormatFlags {
+        case kAppleLosslessFormatFlag_16BitSourceData: result["bitDepth"] = 16
+        case kAppleLosslessFormatFlag_20BitSourceData: result["bitDepth"] = 20
+        case kAppleLosslessFormatFlag_24BitSourceData: result["bitDepth"] = 24
+        case kAppleLosslessFormatFlag_32BitSourceData: result["bitDepth"] = 32
+        default: break
+        }
+      }
+    }
     // AVAssetTrack's estimate describes this encoded audio track. Do not use
     // file size/duration or AVAudioFile.processingFormat (decoded PCM).
     if let bitsPerSecond = positiveInt(Double(bitrate)) {

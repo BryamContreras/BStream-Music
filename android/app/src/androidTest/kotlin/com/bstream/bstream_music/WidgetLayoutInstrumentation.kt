@@ -21,6 +21,7 @@ import android.view.animation.Transformation
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.ViewFlipper
 import java.io.File
@@ -45,12 +46,17 @@ class WidgetLayoutInstrumentation : Instrumentation() {
                 cases = when (selectedSuite) {
                     null -> verifyLayouts() + HomeWidgetBridgeNativeChecks.verify(targetContext)
                     "home-widget-bridge" -> HomeWidgetBridgeNativeChecks.verify(targetContext)
+                    "notification-controls" -> com.ryanheise.audioservice.NotificationCustomActionNativeChecks.verify(targetContext)
+                    "widget-loading" -> verifyLoadingStates(
+                        targetContext,
+                        File(targetContext.cacheDir, "widget_loading_native_test").apply { mkdirs() },
+                    )
                     else -> error("Unknown widget instrumentation suite: $selectedSuite")
                 }
             } catch (error: Throwable) {
                 failure = error
             } finally {
-                if (selectedSuite == null || selectedSuite == "home-widget-bridge") try {
+                if (selectedSuite == null || selectedSuite == "home-widget-bridge" || selectedSuite == "widget-loading") try {
                     // Queue/artwork fixtures intentionally exercise update()
                     // against the real launcher provider; restore its host
                     // view from the app's untouched production preferences.
@@ -66,12 +72,18 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             }
         }
         val result = Bundle()
-        val resultPrefix = if (selectedSuite == "home-widget-bridge") "HOME_WIDGET_BRIDGE" else "WIDGET_LAYOUT"
+        val resultPrefix = when (selectedSuite) {
+            "home-widget-bridge" -> "HOME_WIDGET_BRIDGE"
+            "notification-controls" -> "NOTIFICATION_CONTROLS"
+            "widget-loading" -> "WIDGET_LOADING"
+            else -> "WIDGET_LAYOUT"
+        }
         if (failure == null) {
-            val detail = if (selectedSuite == "home-widget-bridge") {
-                "headless updates, metadata/artwork ordering, action relay, lifecycle, media controls"
-            } else {
-                "sizes, text, controls, rotation, font scaling, artwork transitions"
+            val detail = when (selectedSuite) {
+                "home-widget-bridge" -> "headless updates, metadata/artwork ordering, action relay, lifecycle, media controls"
+                "notification-controls" -> "legacy custom actions, icons and stable PendingIntents"
+                "widget-loading" -> "five layouts, seven languages, native indeterminate progress, reapply and playback controls"
+                else -> "sizes, text, controls, rotation, font scaling, artwork transitions"
             }
             result.putString("stream", "${resultPrefix}_OK: $cases production cases passed ($detail).")
             finish(Activity.RESULT_OK, result)
@@ -112,7 +124,7 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             Case("landscape-large", 370, 220, landscape = true),
             Case("rotate-portrait", 370, 220, rangedOptions = true),
             Case("rotate-landscape", 250, 80, landscape = true, rangedOptions = true),
-        )
+        ).flatMap { listOf(it, it.copy(name = "glass-${it.name}", glassBackground = true)) }
         for (case in cases) {
             val configuration = Configuration(base.resources.configuration).apply {
                 orientation = if (case.landscape) Configuration.ORIENTATION_LANDSCAPE else Configuration.ORIENTATION_PORTRAIT
@@ -138,7 +150,7 @@ class WidgetLayoutInstrumentation : Instrumentation() {
                 putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, if (case.rangedOptions) 80 else case.height)
                 putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, if (case.rangedOptions) 220 else case.height)
             }
-            val views = BStreamMusicWidget.renderForOptions(context, options)
+            val views = BStreamMusicWidget.renderForOptions(context, options, glassBackground = case.glassBackground)
             val parent = FrameLayout(context)
             val content = views.apply(context, parent)
             parent.addView(content)
@@ -200,7 +212,7 @@ class WidgetLayoutInstrumentation : Instrumentation() {
                 check(controlsBounds.bottom <= height) { "${case.name}: controls clipped vertically" }
                 if (size == BStreamWidgetLayout.LARGE || size == BStreamWidgetLayout.EXPANDED) {
                     val expectedBottomInset = when (size) {
-                        BStreamWidgetLayout.LARGE -> if (case.fontScale > 1f) 8 else 14
+                        BStreamWidgetLayout.LARGE -> if (case.fontScale > 1f) 4 else 14
                         else -> if (case.fontScale > 1f) 10 else 16
                     }
                     val card = content.findViewById<View>(R.id.widget_card)
@@ -247,12 +259,158 @@ class WidgetLayoutInstrumentation : Instrumentation() {
             }
             val image = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             parent.draw(Canvas(image))
+            if (case.glassBackground) {
+                check(content.findViewById<View>(R.id.widget_backdrop).visibility == View.GONE)
+                check(content.findViewById<ImageView>(R.id.widget_backdrop_first).drawable == null)
+                val surface = bounds(content.findViewById(R.id.widget_surface), parent)
+                val alpha = Color.alpha(image.getPixel(surface.centerX(), surface.top + (2 * density).roundToInt()))
+                check(alpha in 135..183) { "${case.name}: glass surface is not sufficiently translucent ($alpha)" }
+            }
             File(screenshots, "${case.name}.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
             image.recycle()
         }
         return cases.size + verifyArtworkTransitions(base, privateFiles, screenshots) +
             verifyQueueClickTemplate(base) + verifyQueueRowPresentation(base, privateFiles, screenshots) +
-            verifyQueueHistoryPresentation(base, privateFiles)
+            verifyQueueHistoryPresentation(base, privateFiles) + verifyLoadingStates(base, privateFiles) +
+            verifyQueueArtwork(base, privateFiles)
+    }
+
+    private fun verifyQueueArtwork(base: Context, directory: File): Int {
+        val context = FixtureContext(base, directory)
+        val file = File(directory, "queue-letterbox.png")
+        val source = Bitmap.createBitmap(480, 360, Bitmap.Config.ARGB_8888)
+        source.eraseColor(Color.BLACK)
+        // A square album embedded in a 16:9 thumbnail, itself inside a 4:3
+        // rendition. It must fill the row without the surrounding black frame.
+        Canvas(source).drawRect(105f, 45f, 375f, 315f, android.graphics.Paint().apply { color = Color.CYAN })
+        file.outputStream().use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        source.recycle()
+        val targetSize = (52 * context.resources.displayMetrics.density).roundToInt().coerceIn(52, 256)
+        val prefs = context.getSharedPreferences("bstream_home_widget", Context.MODE_PRIVATE)
+        prefs.edit().clear().putString(
+            "queueJson",
+            org.json.JSONArray().put(org.json.JSONObject()
+                .put("id", "letterbox").put("title", "Album")
+                .put("artworkPath", file.path).put("isCurrent", true)).toString(),
+        ).commit()
+        val factory = QueueFactory(context)
+        factory.onDataSetChanged()
+        fun cover(factory: QueueFactory): Bitmap {
+            val row = factory.getViewAt(0)!!.apply(context, FrameLayout(context))
+            val image = row.findViewById<ImageView>(R.id.widget_queue_item_artwork)
+            check(image.scaleType == ImageView.ScaleType.CENTER_CROP)
+            return (image.drawable as BitmapDrawable).bitmap
+        }
+        val decoded = cover(factory)
+        check(decoded.width == targetSize && decoded.height == targetSize) {
+            "Queue artwork must match its 52dp square in physical pixels: ${decoded.width}/${decoded.height} vs $targetSize"
+        }
+        for ((x, y) in listOf(2 to 2, targetSize - 3 to 2, 2 to targetSize - 3, targetSize - 3 to targetSize - 3)) {
+            check(Color.green(decoded.getPixel(x, y)) > 240) { "Letterboxing left an unfilled corner" }
+        }
+        check(cover(factory).sameAs(decoded)) { "Rebinding unchanged artwork changed its image" }
+        val cached = factory.loadQueueArtwork(file.path)
+        check(cached != null && cached.sameAs(decoded))
+        val secondFactory = QueueFactory(context)
+        secondFactory.onDataSetChanged()
+        factory.onDestroy()
+        check(secondFactory.loadQueueArtwork(file.path) === cached) { "A second widget should reuse the queue bitmap" }
+
+        // A square original with dark borders keeps them; only verified 4:3
+        // thumbnail padding is removed. Large sources retain enough pixels.
+        val original = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
+        original.eraseColor(Color.BLACK)
+        Canvas(original).drawRect(96f, 96f, 416f, 416f, android.graphics.Paint().apply { color = Color.RED })
+        file.outputStream().use { original.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        original.recycle()
+        val updated = cover(secondFactory)
+        check(Color.red(updated.getPixel(targetSize / 2, targetSize / 2)) > 240) {
+            "Changing the artwork file should replace the cached bitmap"
+        }
+        secondFactory.onDestroy()
+        val square = BStreamWidgetArtwork.decode(file, 256)!!
+        check(square.width == 256 && square.height == 256)
+        check(Color.red(square.getPixel(2, 2)) < 10 && Color.red(square.getPixel(128, 128)) > 240)
+        square.recycle()
+        check(BStreamWidgetArtwork.decode(File(directory, "missing-cover"), 256) == null)
+        return 7
+    }
+
+    private fun verifyLoadingStates(base: Context, directory: File): Int {
+        val context = FixtureContext(base, directory)
+        val prefs = context.getSharedPreferences("bstream_home_widget", Context.MODE_PRIVATE)
+        val languages = mapOf(
+            "es" to "Cargando canción", "en" to "Loading song", "pt" to "Carregando música",
+            "fr" to "Chargement du morceau", "ko" to "노래 불러오는 중",
+            "zh" to "正在加载歌曲", "ja" to "曲を読み込み中",
+        )
+        val sizes = listOf(250 to 64, 280 to 80, 250 to 150, 370 to 220, 370 to 300)
+        var checked = 0
+        for ((width, height) in sizes) {
+            val options = Bundle().apply {
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, width)
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, width)
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, height)
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, height)
+            }
+            for ((language, description) in languages) {
+                prefs.edit().clear().putString("trackId", "loading-fixture")
+                    .putString("title", "Loading fixture").putString("artist", "BStream Music")
+                    .putString("language", language).putBoolean("loading", true).commit()
+                val parent = FrameLayout(context)
+                val content = BStreamMusicWidget.renderForOptions(context, options).apply(context, parent)
+                parent.addView(content)
+                val density = context.resources.displayMetrics.density
+                parent.measure(
+                    View.MeasureSpec.makeMeasureSpec((width * density).roundToInt(), View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec((height * density).roundToInt(), View.MeasureSpec.EXACTLY),
+                )
+                parent.layout(0, 0, parent.measuredWidth, parent.measuredHeight)
+                val button = content.findViewById<View>(R.id.widget_play_pause)
+                val icon = content.findViewById<ImageView>(R.id.widget_play_pause_icon)
+                val progress = content.findViewById<ProgressBar>(R.id.widget_play_pause_loading)
+                check(button.hasOnClickListeners()) { "Loading play control lost its action: $width/$height" }
+                check(button.contentDescription.toString() == description) { "Loading label did not use app language $language" }
+                check(icon.visibility == View.INVISIBLE && progress.visibility == View.VISIBLE)
+                check(progress.isIndeterminate && progress.indeterminateDrawable != null)
+                check(!progress.isClickable && !progress.isFocusable)
+                val buttonBounds = bounds(button, parent)
+                val spinnerBounds = bounds(progress, parent)
+                check(buttonBounds.contains(spinnerBounds)) { "Loading indicator escapes its play control" }
+
+                // Reapply to the launcher's same tree, covering the end of a load,
+                // paused playback, and stale loading preferences with no track.
+                for (playing in listOf(true, false)) {
+                    prefs.edit().putBoolean("loading", false).putBoolean("playing", playing).commit()
+                    BStreamMusicWidget.renderForOptions(context, options).reapply(context, content)
+                    check(progress.visibility == View.GONE && icon.visibility == View.VISIBLE)
+                    check(button.hasOnClickListeners())
+                }
+                prefs.edit().putBoolean("loading", true).putString("trackId", "").putString("title", "").commit()
+                BStreamMusicWidget.renderForOptions(context, options).reapply(context, content)
+                check(progress.visibility == View.GONE && icon.visibility == View.VISIBLE)
+                checked++
+            }
+        }
+        // Missing flags from an older/headless caller must clear a previous
+        // transient state instead of preserving a loading indicator forever.
+        BStreamMusicWidget.update(context, mapOf(
+            "trackId" to "flag-fixture", "title" to "Song", "isLoading" to true,
+            "loadingLabel" to "Bridge loading label",
+        ))
+        check(prefs.getBoolean("loading", false))
+        val labelOptions = Bundle().apply {
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 250)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 64)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 64)
+        }
+        val labelView = BStreamMusicWidget.renderForOptions(context, labelOptions).apply(context, FrameLayout(context))
+        check(labelView.findViewById<View>(R.id.widget_play_pause).contentDescription.toString() == "Bridge loading label")
+        BStreamMusicWidget.update(context, mapOf("trackId" to "flag-fixture", "title" to "Song"))
+        check(!prefs.getBoolean("loading", true))
+        check(prefs.getString("loadingLabel", null) == "")
+        return checked + 3
     }
 
     private fun verifyQueueClickTemplate(context: Context): Int {
@@ -472,5 +630,6 @@ class WidgetLayoutInstrumentation : Instrumentation() {
         val fontScale: Float = 1f, val longText: Boolean = false,
         val empty: Boolean = false, val english: Boolean = false,
         val landscape: Boolean = false, val rangedOptions: Boolean = false,
+        val glassBackground: Boolean = false,
     )
 }

@@ -1,3 +1,4 @@
+import '../../../../core/utils/duration_formatter.dart';
 import 'local_track.dart';
 
 /// A playable audio file discovered on the device, outside BStream's library.
@@ -102,16 +103,29 @@ class DeviceAudioFolder {
     required this.id,
     required this.name,
     required this.tracks,
-  });
+  }) : _durationSummary = null;
+
+  DeviceAudioFolder.withSummary({
+    required this.id,
+    required this.name,
+    required this.tracks,
+  }) : _durationSummary = (
+         value: sumKnownDurations(tracks.map((track) => track.duration)),
+       );
 
   final String id;
   final String name;
   final List<DeviceAudioTrack> tracks;
+  final ({Duration? value})? _durationSummary;
 
   int get songCount => tracks.length;
 
-  Duration get knownDuration => tracks.fold(
-    Duration.zero,
-    (total, track) => total + (track.duration ?? Duration.zero),
-  );
+  Duration? get totalDuration {
+    final summary = _durationSummary;
+    return summary == null
+        ? sumKnownDurations(tracks.map((track) => track.duration))
+        : summary.value;
+  }
+
+  Duration get knownDuration => totalDuration ?? Duration.zero;
 }

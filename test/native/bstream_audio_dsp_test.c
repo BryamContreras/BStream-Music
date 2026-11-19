@@ -30,7 +30,7 @@ static void test_frequency_response(void) {
         CHECK(samples != NULL);
         for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) {
             for (int boost = 0; boost <= 1; ++boost) {
-                double gains[5] = {0};
+                double gains[BSTREAM_DSP_BANDS] = {0};
                 gains[band] = boost ? 6 : -6;
                 for (size_t frame = 0; frame < frames; ++frame)
                     samples[frame] = (float)(.2 * sin(2 * PI * BStreamDSPFrequencies[band] * (double)frame / rate));
@@ -55,7 +55,7 @@ static void test_bypass_is_exact(void) {
                         0x40000000u, 0x12345678u, 0xffffffffu, 0x00000001u};
     uint32_t expected[sizeof(words) / sizeof(words[0])];
     memcpy(expected, words, sizeof(words));
-    double gains[5] = {0};
+    double gains[BSTREAM_DSP_BANDS] = {0};
     BStreamDSP *dsp = BStreamDSPCreate(48000, 1);
     void *buffers[] = {words};
     BStreamDSPProcessFloat32(dsp, buffers, sizeof(words) / sizeof(words[0]), true);
@@ -82,8 +82,37 @@ static void test_bypass_is_exact(void) {
     BStreamDSPDestroy(dsp);
 }
 
+static void test_combined_boost_headroom(void) {
+    double gains[BSTREAM_DSP_BANDS];
+    for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) gains[band] = 6;
+    CHECK(fabs(BStreamDSPHeadroomDb(gains) - -10.977777129356811) < .000001);
+    BStreamDSP *dsp = BStreamDSPCreate(48000, 1);
+    CHECK(dsp && BStreamDSPSetEqualizer(dsp, true, gains, 1, true));
+    const size_t frames = 36000;
+    float *samples = (float *)malloc(frames * sizeof(float));
+    CHECK(samples);
+    for (size_t frame = 0; frame < frames; ++frame)
+        samples[frame] = (float)(.8 * sin(2 * PI * 1000 * (double)frame / 48000));
+    void *buffers[] = {samples};
+    BStreamDSPProcessFloat32(dsp, buffers, frames, true);
+    double maximum = 0;
+    for (size_t frame = 0; frame < frames; ++frame)
+        maximum = fmax(maximum, fabs(samples[frame]));
+    CHECK(maximum < .85);
+    CHECK(amplitude(samples, frames, 48000, 1000) < .8);
+    CHECK(fabs(BStreamDSPGetStatus(dsp).preampDb - -10.977777129356811) < .000001);
+    free(samples);
+    BStreamDSPDestroy(dsp);
+
+    for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) gains[band] = -12;
+    gains[4] = gains[5] = 6;
+    CHECK(fabs(BStreamDSPHeadroomDb(gains) - -8.204714309118318) < .000001);
+    gains[4] = -12;
+    CHECK(BStreamDSPHeadroomDb(gains) == -6);
+}
+
 static void test_channels_and_pcm_types(void) {
-    double gains[5] = {0, 0, -6, 0, 0};
+    double gains[BSTREAM_DSP_BANDS] = {0, 0, 0, 0, 0, -6, 0, 0, 0, 0};
     const size_t frames = 4800;
     double *planar[6];
     void *planes[6];
@@ -93,7 +122,7 @@ static void test_channels_and_pcm_types(void) {
         planes[channel] = planar[channel];
         if (channel == 4)
             for (size_t frame = 0; frame < frames; ++frame)
-                planar[channel][frame] = .2 * sin(2 * PI * 910 * (double)frame / 48000);
+                planar[channel][frame] = .2 * sin(2 * PI * 1000 * (double)frame / 48000);
     }
     BStreamDSP *dsp = BStreamDSPCreate(48000, 6);
     CHECK(BStreamDSPSetEqualizer(dsp, true, gains, 1, true));
@@ -112,7 +141,7 @@ static void test_channels_and_pcm_types(void) {
     int16_t pcm16[9600];
     int32_t pcm32[9600];
     for (size_t frame = 0; frame < frames; ++frame) {
-        const double value = .2 * sin(2 * PI * 910 * (double)frame / 48000);
+        const double value = .2 * sin(2 * PI * 1000 * (double)frame / 48000);
         pcm16[frame * 2] = (int16_t)round(value * 32768);
         pcm32[frame * 2] = (int32_t)round(value * 2147483648.0);
         pcm16[frame * 2 + 1] = 0;
@@ -142,7 +171,7 @@ static void test_channels_and_pcm_types(void) {
 
 static void test_glide_reset_and_validation(void) {
     BStreamDSP *dsp = BStreamDSPCreate(48000, 1);
-    double gains[5] = {0, 0, -6, 0, 0};
+    double gains[BSTREAM_DSP_BANDS] = {0, 0, 0, 0, 0, -6, 0, 0, 0, 0};
     CHECK(BStreamDSPSetEqualizer(dsp, true, gains, 4, false));
     float samples[1200];
     for (unsigned frame = 0; frame < 1200; ++frame) samples[frame] = .2f;
@@ -164,7 +193,7 @@ static void test_glide_reset_and_validation(void) {
     BStreamDSPDestroy(dsp);
 
     dsp = BStreamDSPCreate(8000, 1);
-    double highBand[5] = {0, 0, 0, 0, -6};
+    double highBand[BSTREAM_DSP_BANDS] = {0, 0, 0, 0, 0, 0, 0, 0, 0, -6};
     CHECK(BStreamDSPSetEqualizer(dsp, true, highBand, 8, true));
     float original[1200];
     for (unsigned frame = 0; frame < 1200; ++frame)
@@ -177,6 +206,137 @@ static void test_glide_reset_and_validation(void) {
     BStreamDSPDestroy(dsp);
     CHECK(!BStreamDSPCreate(NAN, 1) && !BStreamDSPCreate(48000, 0));
     CHECK(!BStreamDSPCreate(48000, 9));
+}
+
+static void test_neutral_sections_preserve_fragmented_tails(void) {
+    /* Retiring a neutral section is safe only after its two delay elements
+     * drain. Exercise immediate changes, the 25 ms boundary, reset, planar
+     * routing and block sizes shorter than that residual tail. */
+    enum { frames = 4096, channels = 2 };
+    float input[frames * channels], whole[frames * channels], fragmented[frames * channels];
+    float warm_whole[frames * channels], warm_fragmented[frames * channels];
+    const size_t chunks[] = {1, 1198, 1, 1, 1, 2, 1, 17, 511, 3, 7};
+    for (unsigned i = 0; i < frames * channels; ++i)
+        input[i] = (float)(.08 * sin(2 * PI * 997 * i / 96000.0) + .001);
+    for (unsigned planar = 0; planar < 2; ++planar) {
+        for (unsigned immediate = 0; immediate < 2; ++immediate) {
+            BStreamDSP *left = BStreamDSPCreate(48000, channels);
+            BStreamDSP *right = BStreamDSPCreate(48000, channels);
+            CHECK(left && right);
+            double previous[BSTREAM_DSP_BANDS], sparse[BSTREAM_DSP_BANDS] = {0};
+            for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) previous[band] = -3;
+            sparse[7] = 6;
+            CHECK(BStreamDSPSetEqualizer(left, true, previous, 1, true));
+            CHECK(BStreamDSPSetEqualizer(right, true, previous, 1, true));
+            memcpy(warm_whole, input, sizeof(input));
+            memcpy(warm_fragmented, input, sizeof(input));
+            void *warm_left[] = {warm_whole, warm_whole + frames};
+            void *warm_right[] = {warm_fragmented, warm_fragmented + frames};
+            BStreamDSPProcessFloat32(left, warm_left, frames, !planar);
+            BStreamDSPProcessFloat32(right, warm_right, frames, !planar);
+            CHECK(BStreamDSPSetEqualizer(left, true, sparse, 2, immediate != 0));
+            CHECK(BStreamDSPSetEqualizer(right, true, sparse, 2, immediate != 0));
+            memcpy(whole, input, sizeof(input));
+            memcpy(fragmented, input, sizeof(input));
+            void *left_buffers[] = {whole, whole + frames};
+            BStreamDSPProcessFloat32(left, left_buffers, frames, !planar);
+            size_t cursor = 0, chunk = 0;
+            while (cursor < frames) {
+                size_t count = chunks[chunk++ % (sizeof(chunks) / sizeof(chunks[0]))];
+                if (count > frames - cursor) count = frames - cursor;
+                void *right_buffers[] = {
+                    fragmented + (planar ? cursor : cursor * channels),
+                    fragmented + frames + cursor,
+                };
+                BStreamDSPProcessFloat32(right, right_buffers, count, !planar);
+                cursor += count;
+            }
+            CHECK(memcmp(whole, fragmented, sizeof(whole)) == 0);
+            CHECK(BStreamDSPGetStatus(left).appliedRevision == 2);
+            CHECK(BStreamDSPGetStatus(right).appliedRevision == 2);
+            BStreamDSPReset(left);
+            BStreamDSPReset(right);
+            memcpy(whole, input, sizeof(input));
+            memcpy(fragmented, input, sizeof(input));
+            void *reset_left[] = {whole, whole + frames};
+            void *reset_right[] = {fragmented, fragmented + frames};
+            BStreamDSPProcessFloat32(left, reset_left, frames, !planar);
+            BStreamDSPProcessFloat32(right, reset_right, frames, !planar);
+            CHECK(memcmp(whole, fragmented, sizeof(whole)) == 0);
+            BStreamDSPDestroy(left);
+            BStreamDSPDestroy(right);
+        }
+    }
+}
+
+static void test_sparse_identity_keeps_ieee_zero_history(void) {
+    enum { frames = 384, channels = 2 };
+    const double rates[] = {8000, 48000};
+    for (unsigned rate_index = 0; rate_index < 2; ++rate_index) {
+        const double rate = rates[rate_index];
+        /* At 8 kHz the adjusted high section is beyond Nyquist, leaving ten
+         * identities in an active processor. At 48 kHz one audible section
+         * also checks skipped gaps both before and after a live biquad. */
+        const unsigned adjusted = rate_index ? 4 : BSTREAM_DSP_BANDS - 1;
+        double gains[BSTREAM_DSP_BANDS] = {0};
+        gains[adjusted] = -6;
+        double coefficients[BSTREAM_DSP_BANDS][5] = {{0}};
+        double z1[BSTREAM_DSP_BANDS][channels] = {{0}};
+        double z2[BSTREAM_DSP_BANDS][channels] = {{0}};
+        for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) coefficients[band][0] = 1;
+        if (rate_index) {
+            const double a = pow(10, -6.0 / 40);
+            const double omega = 2 * PI * BStreamDSPFrequencies[adjusted] / rate;
+            const double alpha = sin(omega) / 2;
+            const double a0 = 1 + alpha / a;
+            coefficients[adjusted][0] = (1 + alpha * a) / a0;
+            coefficients[adjusted][1] = -2 * cos(omega) / a0;
+            coefficients[adjusted][2] = (1 - alpha * a) / a0;
+            coefficients[adjusted][3] = -2 * cos(omega) / a0;
+            coefficients[adjusted][4] = (1 - alpha / a) / a0;
+        }
+        double input[frames * channels], expected[frames * channels], actual[frames * channels];
+        for (unsigned i = 0; i < frames * channels; ++i) {
+            input[i] = i % 3 ? -0.0 : 0.0;
+            if (i > 256 && i % 127 == 0) input[i] = .01;
+            double sample = input[i];
+            const unsigned channel = i % channels;
+            for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) {
+                const double *c = coefficients[band];
+                const double filtered = c[0] * sample + z1[band][channel];
+                z1[band][channel] = c[1] * sample - c[3] * filtered + z2[band][channel];
+                z2[band][channel] = c[2] * sample - c[4] * filtered;
+                sample = filtered;
+            }
+            expected[i] = sample;
+        }
+        memcpy(actual, input, sizeof(input));
+        BStreamDSP *dsp = BStreamDSPCreate(rate, channels);
+        CHECK(dsp && BStreamDSPSetEqualizer(dsp, true, gains, 1, true));
+        const size_t chunks[] = {1, 2, 1, 47, 3, 1, 11};
+        size_t cursor = 0, chunk = 0;
+        while (cursor < frames) {
+            size_t count = chunks[chunk++ % (sizeof(chunks) / sizeof(chunks[0]))];
+            if (count > frames - cursor) count = frames - cursor;
+            void *buffers[] = {actual + cursor * channels};
+            BStreamDSPProcessFloat64(dsp, buffers, count, true);
+            cursor += count;
+        }
+        CHECK(memcmp(expected, actual, sizeof(expected)) == 0);
+        BStreamDSPDestroy(dsp);
+        float output32[frames * channels];
+        for (unsigned i = 0; i < frames * channels; ++i) output32[i] = (float)input[i];
+        dsp = BStreamDSPCreate(rate, channels);
+        CHECK(dsp && BStreamDSPSetEqualizer(dsp, true, gains, 1, true));
+        void *buffers32[] = {output32};
+        BStreamDSPProcessFloat32(dsp, buffers32, frames, true);
+        /* The exact signed-zero prefix is independent of float rounding. */
+        for (unsigned i = 0; i < 256; ++i) {
+            const float reference = (float)expected[i];
+            CHECK(memcmp(&reference, &output32[i], sizeof(reference)) == 0);
+        }
+        BStreamDSPDestroy(dsp);
+    }
 }
 
 typedef struct { BStreamSilenceInterval values[32]; unsigned count; } Intervals;
@@ -316,10 +476,13 @@ static void test_seek_and_sparse_channel_guard(void) {
 int main(void) {
     test_frequency_response();
     test_bypass_is_exact();
+    test_combined_boost_headroom();
     test_channels_and_pcm_types();
     test_glide_reset_and_validation();
+    test_neutral_sections_preserve_fragmented_tails();
+    test_sparse_identity_keeps_ieee_zero_history();
     test_silence_music_and_margins();
     test_seek_and_sparse_channel_guard();
-    puts("BStream portable audio DSP: all 6 test groups passed");
+    puts("BStream portable audio DSP: all 9 test groups passed");
     return 0;
 }

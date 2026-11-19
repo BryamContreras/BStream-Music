@@ -10,7 +10,9 @@ import android.os.Looper
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.DataInputStream
 import java.io.File
+import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
@@ -57,6 +59,8 @@ class LocalAudioQualityPlugin(context: Context, messenger: BinaryMessenger) {
 
     private fun read(source: String): Map<String, Any>? {
         val uri = if (source.startsWith("/")) Uri.fromFile(File(source)) else Uri.parse(source)
+        val triedFlacHeader = uri.path?.endsWith(".flac", ignoreCase = true) == true
+        if (triedFlacHeader) readFlacHeader(uri)?.let { return it }
         val extractor = MediaExtractor()
         try {
             // Android opens content providers through their existing read grant;
@@ -81,11 +85,39 @@ class LocalAudioQualityPlugin(context: Context, messenger: BinaryMessenger) {
             val format = selectedFormat ?: return null
             extractor.selectTrack(selectedIndex)
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
+            val codec = LocalAudioQualityPolicy.codecForMime(mime)
+            // Android can expose already-decoded PCM for a FLAC file. Read
+            // STREAMINFO to report the original resolution, including for
+            // MediaStore content URIs that have no filename in the path.
+            if (!triedFlacHeader && (codec == "PCM" || codec == "FLAC")) {
+                readFlacHeader(uri)?.let { return it }
+            }
             val values = LinkedHashMap<String, Any>()
             values["mimeType"] = mime
-            LocalAudioQualityPolicy.codecForMime(mime)?.let { values["codec"] = it }
+            codec?.let { values["codec"] = it }
             positiveNumber(format, MediaFormat.KEY_SAMPLE_RATE)?.let { values["sampleRate"] = it }
             positiveNumber(format, MediaFormat.KEY_CHANNEL_COUNT)?.let { values["channels"] = it }
+            val lossless = values["codec"] in setOf("FLAC", "ALAC", "PCM")
+            if (lossless) {
+                val bitDepth = positiveNumber(format, "bits-per-sample")?.toInt()
+                    ?: if (values["codec"] == "FLAC") {
+                        LocalAudioQualityPolicy.flacStreamInfo(
+                            runCatching { format.getByteBuffer("csd-0") }.getOrNull(),
+                        )?.bitDepth
+                    } else if (values["codec"] == "PCM") {
+                        // Extractor audio/raw describes source PCM. Do not use
+                        // a compressed decoder's output encoding as its depth.
+                        when (positiveNumber(format, MediaFormat.KEY_PCM_ENCODING)?.toInt()) {
+                            android.media.AudioFormat.ENCODING_PCM_8BIT -> 8
+                            android.media.AudioFormat.ENCODING_PCM_16BIT -> 16
+                            android.media.AudioFormat.ENCODING_PCM_24BIT_PACKED -> 24
+                            android.media.AudioFormat.ENCODING_PCM_32BIT,
+                            android.media.AudioFormat.ENCODING_PCM_FLOAT -> 32
+                            else -> null
+                        }
+                    } else null
+                bitDepth?.takeIf { it in 1..64 }?.let { values["bitDepth"] = it }
+            }
             val bitrate = positiveNumber(format, MediaFormat.KEY_BIT_RATE)
                 ?: if (LocalAudioQualityPolicy.canUseContainerBitrate(count, audioTrackCount)) {
                     containerBitrate(uri)
@@ -96,6 +128,30 @@ class LocalAudioQualityPlugin(context: Context, messenger: BinaryMessenger) {
             runCatching { extractor.release() }
         }
     }
+
+    private fun readFlacHeader(uri: Uri): Map<String, Any>? = runCatching {
+        context.contentResolver.openInputStream(uri)?.let(::DataInputStream)?.use { input ->
+            val bytes = ByteArray(42)
+            input.readFully(bytes, 0, 4)
+            if (bytes[0] == 0x49.toByte() && bytes[1] == 0x44.toByte() && bytes[2] == 0x33.toByte()) {
+                input.readFully(bytes, 4, 6)
+                var size = 0
+                for (index in 6..9) {
+                    val part = bytes[index].toInt()
+                    if (part < 0) return@use null
+                    size = (size shl 7) or part
+                }
+                if (bytes[5].toInt() and 0x10 != 0) size += 10
+                if (size > 16 * 1024 * 1024 || input.skipBytes(size) != size) return@use null
+                input.readFully(bytes, 0, 4)
+            }
+            if (ByteBuffer.wrap(bytes).getInt(0) != 0x664c6143) return@use null
+            input.readFully(bytes, 4, 38)
+            val info = LocalAudioQualityPolicy.flacStreamInfo(ByteBuffer.wrap(bytes)) ?: return@use null
+            mapOf("codec" to "flac", "mimeType" to "audio/flac",
+                "bitDepth" to info.bitDepth, "sampleRate" to info.sampleRate, "channels" to info.channels)
+        }
+    }.getOrNull()
 
     private fun positiveNumber(format: MediaFormat, key: String): Long? {
         if (!format.containsKey(key)) return null

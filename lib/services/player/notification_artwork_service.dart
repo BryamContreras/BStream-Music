@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
@@ -11,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/utils/background_work.dart';
 import '../../core/utils/bounded_byte_stream.dart';
 import '../../core/utils/cached_artwork_image_provider.dart';
 import '../../core/utils/image_source.dart';
@@ -291,12 +291,13 @@ class NotificationArtworkService {
       final transformInput = input.bytes;
       final transformSize = outputSize;
       final allowUpscale = !input.fromSharedCache;
-      var encoded = await Isolate.run(
+      var encoded = await runBackgroundWork(
         () => _centerCropJpeg(
           transformInput,
           transformSize,
           allowUpscale: allowUpscale,
         ),
+        debugName: 'BStream notification artwork',
       );
       if (!_disposed &&
           encoded == null &&
@@ -306,8 +307,9 @@ class NotificationArtworkService {
         // contain a truncated frame. Fetch a suitable source before fallback.
         final fresh = await _loadNetworkBytes(source, skipSharedCache: true);
         if (!_disposed && fresh != null && fresh.bytes.isNotEmpty) {
-          encoded = await Isolate.run(
+          encoded = await runBackgroundWork(
             () => _centerCropJpeg(fresh.bytes, transformSize),
+            debugName: 'BStream notification artwork',
           );
         }
       }

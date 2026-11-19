@@ -45,6 +45,49 @@ void main() {
     expect(result.tracks, isEmpty);
     expect(channel.queryCalls, 0);
   });
+
+  test(
+    'shares a large prepared catalog until a filter or scan changes',
+    () async {
+      const songCount = 1200;
+      final channel = _FakeAndroidLocalMediaChannel(
+        tracks: [
+          for (var index = songCount - 1; index >= 0; index--)
+            _track(
+              'Song ${index.toString().padLeft(4, '0')}',
+              folder: 'Music/',
+            ),
+          _track('Voice message', folder: 'WhatsApp/Media/WhatsApp Audio/'),
+        ],
+      );
+      final catalog = AndroidDeviceAudioCatalog(channel);
+      final [first, concurrent] = await Future.wait([
+        catalog.load(),
+        catalog.load(),
+      ]);
+      expect(channel.queryCalls, 1);
+      expect(concurrent, same(first));
+      expect(first.tracks, hasLength(songCount));
+      expect(first.tracks.first.title, 'Song 1199');
+      expect(first.folders.single.tracks.first.title, 'Song 0000');
+      expect(
+        first.folders.single.totalDuration,
+        const Duration(minutes: songCount * 3),
+      );
+      expect(first.totalDuration, first.folders.single.totalDuration);
+      expect(first.folders, same(first.folders));
+
+      final unfiltered = await catalog.load(
+        options: const DeviceAudioFilterOptions(excludeWhatsAppAudio: false),
+      );
+      expect(unfiltered.tracks, hasLength(songCount + 1));
+      expect(channel.queryCalls, 1);
+      final refreshed = await catalog.refresh();
+      expect(channel.queryCalls, 2);
+      expect(refreshed, isNot(same(first)));
+      expect(await catalog.load(), same(refreshed));
+    },
+  );
 }
 
 class _FakeAndroidLocalMediaChannel extends AndroidLocalMediaChannel {

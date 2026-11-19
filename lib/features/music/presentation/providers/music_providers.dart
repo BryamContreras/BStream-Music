@@ -23,6 +23,7 @@ import '../../../../services/player/cast_aware_player_service.dart';
 import 'audio_route_providers.dart';
 import 'audio_source_providers.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/utils/background_work.dart';
 import '../../../../core/utils/bounded_byte_stream.dart';
 import '../../../../core/utils/cached_artwork_image_provider.dart';
 import '../../../../core/utils/image_source.dart';
@@ -49,6 +50,7 @@ import '../../../../services/player/media_kit_player_service.dart';
 import '../../../../services/player/player_service.dart';
 import '../../../../services/player/playback_session_store.dart';
 import '../../../../services/player/player_equalizer.dart';
+import 'equalizer_profiles.dart';
 import 'equalizer_providers.dart';
 import '../../../../services/recommendations/recommendations.dart';
 import '../../../../services/sharing/bstream_track_link.dart';
@@ -114,6 +116,7 @@ import 'home_feed_activity_provider.dart';
 import 'local_audio_availability.dart';
 import 'local_audio_quality_provider.dart';
 import 'lyrics_animation_style.dart';
+import 'lyrics_background_style.dart';
 import 'live_widget_style.dart';
 import 'mini_player_background_mode.dart';
 import 'mini_player_mode.dart';
@@ -133,8 +136,10 @@ import 'player/remote_playback_retry_coordinator.dart';
 
 export 'app_strings.dart';
 export '../../../../services/player/player_equalizer.dart';
+export 'equalizer_profiles.dart';
 export 'home_feed_activity_provider.dart';
 export 'lyrics_animation_style.dart';
+export 'lyrics_background_style.dart';
 export 'live_widget_style.dart';
 export 'mini_player_background_mode.dart';
 export 'mini_player_mode.dart';
@@ -248,30 +253,28 @@ final homeScreenWidgetSyncProvider = Provider<void>((ref) {
       artist: hasTrack ? snapshot?.artist : null,
       artworkUrl: hasTrack ? snapshot?.thumbnailUrl : null,
       isPlaying: snapshot?.status == PlayerStatus.playing,
+      isLoading: hasTrack && snapshot?.status == PlayerStatus.loading,
+      loadingLabel: AppStrings(language).playbackLoading,
       isFavorite: isFavorite,
       repeatMode: snapshot?.repeatMode.name ?? 'off',
       accentColor: accent.seedColor.toARGB32(),
       languageCode: language.code,
       queue: playbackQueue == null
           ? const []
-          : playbackQueue.entries
-                .asMap()
-                .entries
-                .map(
-                  (queueItem) => <String, String>{
-                    'queueIndex': '${queueItem.key}',
-                    'id':
-                        queueItem.value.logicalEntryId?.trim().isNotEmpty ==
-                            true
-                        ? queueItem.value.logicalEntryId!.trim()
-                        : queueItem.value.id,
-                    'title': queueItem.value.title,
-                    'artist': queueItem.value.artist,
-                    if (queueItem.value.thumbnailUrl?.trim().isNotEmpty == true)
-                      'artworkUrl': queueItem.value.thumbnailUrl!.trim(),
-                  },
-                )
-                .toList(growable: false),
+          : Iterable.generate(playbackQueue.entries.length, (index) {
+              final entry = playbackQueue.entries[index];
+              final logicalId = entry.logicalEntryId?.trim();
+              final artwork = entry.thumbnailUrl?.trim();
+              return <String, String>{
+                'id': logicalId != null && logicalId.isNotEmpty
+                    ? logicalId
+                    : entry.id,
+                'title': entry.title,
+                'artist': entry.artist,
+                if (artwork != null && artwork.isNotEmpty)
+                  'artworkUrl': artwork,
+              };
+            }),
       currentQueueIndex: currentQueueIndex,
     );
   }
@@ -341,25 +344,23 @@ final downloaderServiceProvider = Provider<DownloaderService>((ref) {
     playback: ref.watch(innerTubePlaybackServiceProvider),
     catalog: ref.watch(youtubeMusicSearchProvider),
     audioUpgrade: (url, metadata, baseline, shouldContinue) async {
-      final policy = ref.read(audioSourcePolicyProvider);
-      final monitor = policy.useSingleProfile
-          ? null
-          : ref.read(audioNetworkMonitorProvider);
-      final network = await monitor?.current() ?? AudioNetworkKind.unknown;
-      if (!shouldContinue() || !policy.allowsUpgrade(network)) return null;
+      bool canUpgrade() {
+        if (!shouldContinue()) return false;
+        final settings = ref.read(settingsControllerProvider).value;
+        return settings != null &&
+            settings.jioSaavnEnabled &&
+            settings.downloadAudioQuality == AudioQualityProfile.high;
+      }
+
+      if (!canUpgrade()) return null;
       final track = metadata ?? await service.getInfo(url);
-      if (!shouldContinue()) return null;
-      return ref.read(audioSourceUpgradeLookupProvider)(
+      if (!canUpgrade()) return null;
+      final upgrade = await ref.read(audioSourceUpgradeLookupProvider)(
         track,
         currentBitrate: baseline.bitrate,
-        shouldContinue: () =>
-            shouldContinue() &&
-            ref
-                .read(audioSourcePolicyProvider)
-                .allowsUpgrade(
-                  monitor?.lastKnownKind ?? AudioNetworkKind.unknown,
-                ),
+        shouldContinue: canUpgrade,
       );
+      return canUpgrade() ? upgrade : null;
     },
   );
   ref.onDispose(() => unawaited(service.dispose()));
@@ -822,6 +823,11 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
         withReadyPlayer((player) => player.setShuffleEnabled(enabled)),
     setRepeatMode: (mode) =>
         withReadyPlayer((player) => player.setRepeatMode(mode)),
+    cycleRepeatMode: () =>
+        withReadyPlayer((player) => player.cycleRepeatMode()),
+    toggleFavorite: () => withReadyPlayer((player) async {
+      await player.toggleCurrentFavorite();
+    }),
     playQueueIndex: (index) =>
         withReadyPlayer((player) => player.playQueueIndex(index)),
   );
@@ -837,12 +843,23 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
       return;
     }
     final queue = latestQueue;
+    final strings = ref.read(appStringsProvider);
     unawaited(
       binding.update(
         DesktopMediaSessionState.withQueue(
           snapshot: snapshot,
           queue: sessionQueue,
           currentIndex: queue.currentIndex,
+          isFavorite: ref
+              .read(favoriteTrackIdsProvider)
+              .contains(snapshot.trackId),
+          controlLabels: DesktopMediaControlLabels(
+            repeatQueue: strings.repeatQueue,
+            repeatOne: strings.repeatOne,
+            disableRepeat: strings.disableRepeat,
+            addToFavorites: strings.addToFavorites,
+            removeFromFavorites: strings.removeFromFavorites,
+          ),
         ),
       ),
     );
@@ -872,6 +889,8 @@ final desktopMediaSessionProvider = Provider<DesktopMediaSession?>((ref) {
     latestQueue = next;
     publishState();
   }, fireImmediately: true);
+  ref.listen(favoriteTrackIdsProvider, (_, _) => publishState());
+  ref.listen(appStringsProvider, (_, _) => publishState());
 
   binding.start();
   ref.onDispose(() {

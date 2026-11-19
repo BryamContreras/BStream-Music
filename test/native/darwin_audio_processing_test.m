@@ -284,8 +284,8 @@ static void TestTapLifecycleAndWatchdog(NSURL *url) {
         CHECK(item.audioMix.inputParameters.count == 1);
         CHECK(item.audioMix.inputParameters.firstObject.audioTapProcessor != NULL);
         AVAudioMix *installed = item.audioMix;
-        [tap configureEnabled:YES gains:@[@6, @3, @0, @0, @0] revision:1];
-        [tap configureEnabled:YES gains:@[@0, @0, @(-3.5), @0, @0] revision:2];
+        [tap configureEnabled:YES gains:@[@6, @5, @3, @2, @1, @0, @0, @0, @0, @0] revision:1];
+        [tap configureEnabled:YES gains:@[@0, @0, @0, @0, @0, @(-3.5), @0, @0, @0, @0] revision:2];
         CHECK(item.audioMix == installed); // preset changes never replace the mix
         [tap fadeOutAtTime:Time(5)];
         [tap resetAfterSeekToTime:Time(9) fadeIn:YES];
@@ -303,7 +303,7 @@ static void TestTapLifecycleAndWatchdog(NSURL *url) {
         BStreamAudioProcessingTap *replacement = [[BStreamAudioProcessingTap alloc] initWithItem:item];
         CHECK(WaitUntil(^BOOL { return replacement.ready; }, 10));
         CHECK(replacement.supported && item.audioMix != nil);
-        [replacement configureEnabled:YES gains:@[@3, @0, @0, @0, @0] revision:3];
+        [replacement configureEnabled:YES gains:@[@3, @0, @0, @0, @0, @0, @0, @0, @0, @0] revision:3];
         // No AVPlayer or output device is used by this executable. Supplying
         // advancing source-clock observations while zero PCM frames arrive
         // exercises the route watchdog without requiring physical audio.

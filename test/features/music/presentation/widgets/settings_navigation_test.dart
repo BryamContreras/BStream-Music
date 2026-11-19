@@ -25,6 +25,7 @@ import 'package:bstream_music/services/youtube_music/auth/youtube_music_auth_mod
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_session_store.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter/services.dart';
@@ -614,7 +615,7 @@ void main() {
       if (width >= 1200) {
         expect(tester.getSize(quality).width, greaterThan(1200));
       }
-      expect(tester.widget<Switch>(qualitySwitch).value, isFalse);
+      expect(tester.widget<Switch>(qualitySwitch).value, isTrue);
       expect(
         tester.getTopLeft(quality).dy,
         greaterThan(tester.getBottomLeft(style).dy),
@@ -633,13 +634,13 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(tester.widget<Switch>(qualitySwitch).value, isTrue);
+      expect(tester.widget<Switch>(qualitySwitch).value, isFalse);
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getBool('settings.showAudioQuality'), isTrue);
+      expect(prefs.getBool('settings.showAudioQuality'), isFalse);
       await tester.tap(qualitySwitch);
       await tester.pumpAndSettle();
-      expect(tester.widget<Switch>(qualitySwitch).value, isFalse);
-      expect(prefs.getBool('settings.showAudioQuality'), isFalse);
+      expect(tester.widget<Switch>(qualitySwitch).value, isTrue);
+      expect(prefs.getBool('settings.showAudioQuality'), isTrue);
       expect(tester.takeException(), isNull);
     });
   }
@@ -1836,6 +1837,55 @@ void main() {
       );
       expect(find.text('Better Lyrics · LyricsPlus · LRCLIB'), findsOneWidget);
 
+      final gradientChoice = find.byKey(
+        const ValueKey('lyrics-background-option-gradient'),
+      );
+      // Gradient is the default; choose another mode before testing a save.
+      final initialBlur = find.byKey(
+        const ValueKey('lyrics-background-option-blur'),
+      );
+      await _ensureSettingsVisible(tester, initialBlur);
+      await tester.tap(initialBlur);
+      await tester.pumpAndSettle();
+      await _ensureSettingsVisible(tester, gradientChoice);
+      await tester.tap(gradientChoice);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<SegmentedButton<LyricsBackgroundStyle>>(
+              find.byKey(const ValueKey('lyrics-background-options')),
+            )
+            .selected,
+        {LyricsBackgroundStyle.gradient},
+      );
+      expect(
+        (await SharedPreferences.getInstance()).getString(
+          'settings.lyricsBackground',
+        ),
+        'gradient',
+      );
+      final blurChoice = find.byKey(
+        const ValueKey('lyrics-background-option-blur'),
+      );
+      await _ensureSettingsVisible(tester, blurChoice);
+      await tester.tap(blurChoice);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<SegmentedButton<LyricsBackgroundStyle>>(
+              find.byKey(const ValueKey('lyrics-background-options')),
+            )
+            .selected,
+        {LyricsBackgroundStyle.blur},
+      );
+      expect(
+        (await SharedPreferences.getInstance()).getString(
+          'settings.lyricsBackground',
+        ),
+        'blur',
+      );
+
+      await _ensureSettingsVisible(tester, providersCard);
       await tester.tap(providersCard);
       await tester.pumpAndSettle();
       expect(
@@ -2082,11 +2132,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester
-          .widget<ChoiceChip>(
-            find.byKey(const ValueKey('lyrics-animation-option-slide')),
+          .widget<SegmentedButton<LyricsAnimationStyle>>(
+            find.byKey(const ValueKey('lyrics-animation-options')),
           )
           .selected,
-      isTrue,
+      {LyricsAnimationStyle.slide},
     );
 
     await tester.tap(find.text('Centrada'));
@@ -2107,7 +2157,7 @@ void main() {
     final romanizationToggle = find.byKey(
       const ValueKey('lyrics-romanization-toggle'),
     );
-    await tester.ensureVisible(romanizationToggle);
+    await _ensureSettingsVisible(tester, romanizationToggle);
     await tester.tap(romanizationToggle);
     await tester.pumpAndSettle();
     expect(
@@ -2571,6 +2621,111 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     },
   );
+
+  testWidgets('theme labels fit narrow phones at the selected text size', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    _configureView(tester, const Size(320, 720));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+    });
+    for (final language in [AppLanguage.spanish, AppLanguage.french]) {
+      for (final scale in [1.0, 1.3, 2.0]) {
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        final navigationController = SettingsNavigationController();
+        addTearDown(navigationController.dispose);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpWidget(
+          _settingsHarness(
+            navigationController: navigationController,
+            language: language,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final appearance = find.byKey(
+          const ValueKey('settings-card-appearance'),
+        );
+        await _ensureSettingsVisible(tester, appearance);
+        await tester.tap(appearance);
+        await tester.pumpAndSettle();
+
+        final selector = find.byKey(
+          const ValueKey('settings-theme-mode-selector'),
+        );
+        final strings = AppStrings(language);
+        for (final label in [
+          strings.themeSystem,
+          strings.themeLight,
+          strings.themeDark,
+        ]) {
+          final paragraph = tester.renderObject<RenderParagraph>(
+            find.descendant(of: selector, matching: find.text(label)),
+          );
+          expect(
+            paragraph.getMaxIntrinsicWidth(double.infinity),
+            lessThanOrEqualTo(paragraph.size.width + .01),
+            reason: '$label at $scale in $language',
+          );
+          expect(paragraph.didExceedMaxLines, isFalse);
+        }
+        expect(tester.getRect(selector).left, greaterThanOrEqualTo(0));
+        expect(tester.getRect(selector).right, lessThanOrEqualTo(320));
+        expect(tester.takeException(), isNull);
+      }
+    }
+    debugDefaultTargetPlatformOverride = null;
+    tester.platformDispatcher.clearTextScaleFactorTestValue();
+  });
+
+  testWidgets('larger accent circles keep comfortable rows and tap targets', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    _configureView(tester, const Size(430, 900));
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final navigationController = SettingsNavigationController();
+    addTearDown(navigationController.dispose);
+    await tester.pumpWidget(
+      _settingsHarness(navigationController: navigationController),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('settings-card-appearance')));
+    await tester.pumpAndSettle();
+
+    final grid = tester.widget<GridView>(
+      find.byKey(const ValueKey('accent-palette-grid')),
+    );
+    final delegate =
+        grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
+    expect(delegate.crossAxisCount, inInclusiveRange(6, 7));
+    for (final accent in AppAccent.values) {
+      final target = find.byKey(ValueKey('accent-${accent.code}'));
+      expect(tester.getSize(target).shortestSide, greaterThanOrEqualTo(48));
+      final swatch = find.byKey(ValueKey('accent-swatch-${accent.code}'));
+      expect(tester.getSize(swatch), const Size.square(42));
+      expect(
+        (tester.widget<AnimatedContainer>(swatch).decoration! as BoxDecoration)
+            .shape,
+        BoxShape.circle,
+      );
+    }
+    final lastAccent = find.byKey(const ValueKey('accent-ocean'));
+    await tester.ensureVisible(lastAccent);
+    await tester.pumpAndSettle();
+    await tester.tap(lastAccent);
+    await tester.pumpAndSettle();
+    expect(
+      ProviderScope.containerOf(
+        tester.element(lastAccent),
+      ).read(settingsControllerProvider).requireValue.accent,
+      AppAccent.ocean,
+    );
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   testWidgets('playback settings and storage fit a 320 px Android phone', (
     tester,

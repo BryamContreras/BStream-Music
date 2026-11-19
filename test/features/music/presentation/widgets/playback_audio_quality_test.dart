@@ -3,6 +3,60 @@ import 'package:bstream_music/features/music/presentation/widgets/playback_audio
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Hi-Res requires lossless source resolution above 16-bit/48 kHz', () {
+    for (final sample in [
+      (bits: 16, rate: 44100, tier: PlaybackAudioQualityTier.lossless),
+      (bits: 16, rate: 48000, tier: PlaybackAudioQualityTier.lossless),
+      (bits: 24, rate: 44100, tier: PlaybackAudioQualityTier.hiRes),
+      (bits: 24, rate: 96000, tier: PlaybackAudioQualityTier.hiRes),
+      (bits: 16, rate: 88200, tier: PlaybackAudioQualityTier.hiRes),
+      (bits: 32, rate: 192000, tier: PlaybackAudioQualityTier.hiRes),
+    ]) {
+      expect(
+        playbackAudioQualityTier(
+          codec: 'flac',
+          sampleRate: sample.rate,
+          bitDepth: sample.bits,
+        ),
+        sample.tier,
+      );
+    }
+    expect(
+      playbackAudioQualityTier(
+        codec: 'aac',
+        bitrate: 320000,
+        sampleRate: 96000,
+        bitDepth: 24,
+      ),
+      PlaybackAudioQualityTier.high,
+    );
+    expect(playbackAudioQualityTier(sampleRate: 192000, bitDepth: 32), isNull);
+  });
+
+  test('lossless precision and quality labels are localized', () {
+    for (final language in AppLanguage.values) {
+      final strings = AppStrings(language);
+      expect(strings.losslessAudioQuality, isNotEmpty);
+      expect(strings.hiResAudioQuality, contains('Hi-Res'));
+      expect(strings.audioQualityBits(24), contains('24'));
+      expect(strings.audioQualityBits(24), isNot(contains('{bits}')));
+    }
+    const strings = AppStrings(AppLanguage.spanish);
+    expect(strings.losslessAudioQuality, 'Alta calidad - Lossless');
+    expect(strings.hiResAudioQuality, 'Alta calidad - Hi-Res');
+    expect(
+      playbackAudioQualityLabel(
+        codec: 'flac',
+        bitDepth: 24,
+        sampleRate: 96000,
+        channels: 2,
+        bitDepthLabel: strings.audioQualityBits,
+        stereoLabel: strings.audioQualityStereo,
+      ),
+      'FLAC · 24 bits · 96 kHz - Estéreo',
+    );
+  });
+
   test('quality tiers reflect actual bitrate boundaries', () {
     for (final bitrate in [1, 64000, 96000, 127999]) {
       expect(
@@ -30,13 +84,13 @@ void main() {
       for (final codec in ['flac', 'ALAC', 'pcm', 'pcm_s16le']) {
         expect(
           playbackAudioQualityTier(codec: codec),
-          PlaybackAudioQualityTier.high,
+          PlaybackAudioQualityTier.lossless,
         );
       }
       for (final mime in ['audio/flac', 'audio/x-flac', 'audio/alac']) {
         expect(
           playbackAudioQualityTier(mimeType: mime),
-          PlaybackAudioQualityTier.high,
+          PlaybackAudioQualityTier.lossless,
         );
       }
       for (final codec in [null, 'opus', 'aac', 'unknown']) {

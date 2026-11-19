@@ -1,6 +1,27 @@
 // Static UI translations generated for the app's supported languages.
 // Static UI labels are translated locally; dynamic content is handled separately.
 const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
+  'High quality - Lossless': <String>[
+    'Alta qualidade - Sem perdas',
+    'Haute qualité - Sans perte',
+    '고음질 - 무손실',
+    '高音质 - 无损',
+    '高音質 - ロスレス',
+  ],
+  'High quality - Hi-Res': <String>[
+    'Alta qualidade - Hi-Res',
+    'Haute qualité - Hi-Res',
+    '고음질 - Hi-Res',
+    '高音质 - Hi-Res',
+    '高音質 - Hi-Res',
+  ],
+  '{bits}-bit': <String>[
+    '{bits} bits',
+    '{bits} bits',
+    '{bits}비트',
+    '{bits} 位',
+    '{bits}ビット',
+  ],
   'Equalizer curve': <String>[
     'Curva de equalização',
     'Courbe d’égalisation',
@@ -8,20 +29,13 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '均衡器曲线',
     'イコライザーカーブ',
   ],
-  'Approximate view of your settings': <String>[
-    'Visualização aproximada dos ajustes',
-    'Vue approximative des réglages',
-    '설정의 대략적인 곡선',
-    '设置的近似视图',
-    '設定のおおよその表示',
-  ],
   'Equalizer': <String>['Equalizador', 'Égaliseur', '이퀄라이저', '均衡器', 'イコライザー'],
-  'Adjust the sound with presets or five bands.': <String>[
-    'Ajuste o som com predefinições ou cinco bandas.',
-    'Réglez le son avec des préréglages ou cinq bandes.',
-    '프리셋이나 5개 밴드로 사운드를 조절하세요.',
-    '使用预设或五个频段调整声音。',
-    'プリセットまたは5つのバンドで音を調整します。',
+  'Adjust the sound with presets or ten bands.': <String>[
+    'Ajuste o som com predefinições ou dez bandas.',
+    'Réglez le son avec des préréglages ou dix bandes.',
+    '프리셋이나 10개 밴드로 사운드를 조절하세요.',
+    '使用预设或十个频段调整声音。',
+    'プリセットまたは10個のバンドで音を調整します。',
   ],
   'Enable equalizer': <String>[
     'Ativar equalizador',
@@ -30,6 +44,8 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '启用均衡器',
     'イコライザーを有効にする',
   ],
+  'Enabled': <String>['Ativado', 'Activé', '활성화됨', '已启用', '有効'],
+  'Disabled': <String>['Desativado', 'Désactivé', '비활성화됨', '已停用', '無効'],
   'Presets': <String>['Predefinições', 'Préréglages', '프리셋', '预设', 'プリセット'],
   'Reset equalizer': <String>[
     'Redefinir equalizador',
@@ -166,19 +182,33 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '音质',
     '音質',
   ],
-  'Choose audio quality for playback and downloads.': <String>[
-    'Escolha a qualidade do áudio para reprodução e downloads.',
-    'Choisissez la qualité audio pour la lecture et les téléchargements.',
-    '재생 및 다운로드 음질을 선택하세요.',
-    '选择播放和下载的音质。',
-    '再生とダウンロードの音質を選択します。',
+  'Streaming audio': <String>[
+    'Áudio em streaming',
+    'Audio en streaming',
+    '스트리밍 오디오',
+    '流式音频',
+    'ストリーミング音声',
   ],
-  'Choose audio quality for Wi-Fi and mobile data.': <String>[
-    'Escolha a qualidade do áudio para Wi-Fi e dados móveis.',
-    'Choisissez la qualité audio pour le Wi-Fi et les données mobiles.',
-    'Wi-Fi 및 모바일 데이터의 음질을 선택하세요.',
-    '选择 Wi-Fi 和移动数据下的音质。',
-    'Wi-Fiとモバイルデータ通信の音質を選択します。',
+  'Download quality': <String>[
+    'Qualidade do download',
+    'Qualité de téléchargement',
+    '다운로드 음질',
+    '下载音质',
+    'ダウンロード音質',
+  ],
+  'JioSaavn + YTMusic fallback': <String>[
+    'JioSaavn + YTMusic de reserva',
+    'JioSaavn + YTMusic en secours',
+    'JioSaavn + 대체 YTMusic',
+    'JioSaavn + 备用 YTMusic',
+    'JioSaavn + 代替 YTMusic',
+  ],
+  'Set streaming and download quality separately.': <String>[
+    'Ajuste separadamente a qualidade do streaming e dos downloads.',
+    'Réglez séparément la qualité du streaming et des téléchargements.',
+    '스트리밍과 다운로드의 음질을 따로 설정하세요.',
+    '分别设置流式播放和下载的音质。',
+    'ストリーミングとダウンロードの音質を個別に設定します。',
   ],
   'Wi-Fi': <String>['Wi-Fi', 'Wi-Fi', 'Wi-Fi', 'Wi-Fi', 'Wi-Fi'],
   'Mobile data': <String>[
@@ -273,6 +303,14 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     'ZXQPH0X/5行',
   ],
   'Background': <String>['Fundo', 'Fond', '배경', '背景', '背景'],
+  'Lyrics background': <String>[
+    'Fundo das letras',
+    'Arrière-plan des paroles',
+    '가사 배경',
+    '歌词背景',
+    '歌詞の背景',
+  ],
+  'Animated': <String>['Animado', 'Animé', '애니메이션', '动态', 'アニメーション'],
   'Text color': <String>[
     'Cor do texto',
     'Couleur du texte',
@@ -1211,6 +1249,13 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     'ZXQPH0X曲',
   ],
   'Play': <String>['Play', 'Lecture', '재생', '播放', '再生'],
+  'Loading song': <String>[
+    'Carregando música',
+    'Chargement du morceau',
+    '노래 로드 중',
+    '正在加载歌曲',
+    '曲を読み込み中',
+  ],
   'Pause': <String>['Pause', 'Pause', '일시 중지', '暂停', '一時停止'],
   'Previous': <String>['Anterior', 'Précédent', '이전', '上一个', '前'],
   'Next': <String>['Próximo', 'Suivant', '다음', '下一个', '次'],
@@ -3657,12 +3702,12 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '播放器样式、本地音乐筛选、歌词和设置',
     'プレーヤースタイル、ローカル音楽のフィルター、歌詞、設定',
   ],
-  'A 5-band equalizer is now available.': <String>[
-    'Agora está disponível um equalizador de 5 bandas.',
-    'Un égaliseur à 5 bandes est désormais disponible.',
-    '이제 5밴드 이퀄라이저를 사용할 수 있습니다.',
-    '现已提供五段均衡器。',
-    '5バンドイコライザーが利用できるようになりました。',
+  'A 10-band equalizer is now available.': <String>[
+    'Agora está disponível um equalizador de 10 bandas.',
+    'Un égaliseur à 10 bandes est désormais disponible.',
+    '이제 10밴드 이퀄라이저를 사용할 수 있습니다.',
+    '现已提供十段均衡器。',
+    '10バンドイコライザーが利用できるようになりました。',
   ],
   'Support for higher quality audio whenever available.': <String>[
     'Suporte a áudio de maior qualidade, sempre que disponível.',

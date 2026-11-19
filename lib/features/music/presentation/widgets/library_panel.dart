@@ -24,6 +24,7 @@ import '../../domain/entities/playlist.dart';
 import '../../domain/entities/playlist_entry.dart';
 import '../../domain/entities/track_info.dart';
 import '../providers/local_audio_availability.dart';
+import '../providers/local_track_index_provider.dart';
 import '../providers/music_providers.dart';
 import '../providers/playback_queue_selection_provider.dart';
 import '../providers/subscribed_artists_controller.dart';
@@ -1792,22 +1793,20 @@ final _catalogDisplayItemsProvider = Provider.autoDispose
       List<_CatalogDisplayItem>,
       ({CatalogPlaylist playlist, List<LocalTrack> libraryTracks})
     >((ref, request) {
-      return _catalogDisplayItems(request.playlist, request.libraryTracks);
+      final index = ref.watch(localTrackIndexProvider);
+      return List<_CatalogDisplayItem>.unmodifiable(
+        catalogPlaylistResolvedEntries(
+          request.playlist,
+          request.libraryTracks,
+          libraryIndex: index,
+        ).map(
+          (resolved) => _CatalogDisplayItem(
+            entry: resolved.entry,
+            playback: resolved.playback,
+          ),
+        ),
+      );
     });
-
-List<_CatalogDisplayItem> _catalogDisplayItems(
-  CatalogPlaylist playlist,
-  Iterable<LocalTrack> libraryTracks,
-) {
-  return List<_CatalogDisplayItem>.unmodifiable(
-    catalogPlaylistResolvedEntries(playlist, libraryTracks).map(
-      (resolved) => _CatalogDisplayItem(
-        entry: resolved.entry,
-        playback: resolved.playback,
-      ),
-    ),
-  );
-}
 
 List<PlaylistArtworkSource> _catalogPlaylistThumbnailSources(
   String playlistId,
@@ -3910,10 +3909,6 @@ class _PlaylistSummaryRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final playlistTracks = playlist.trackIds
-        .map((id) => tracksById[id])
-        .whereType<LocalTrack>()
-        .toList(growable: false);
     final currentCatalog = catalog;
     final catalogItems = currentCatalog == null
         ? const <_CatalogDisplayItem>[]
@@ -3923,6 +3918,13 @@ class _PlaylistSummaryRow extends ConsumerWidget {
               libraryTracks: libraryTracks,
             )),
           );
+    final needsLegacyTracks = currentCatalog == null || catalogItems.isEmpty;
+    final playlistTracks = needsLegacyTracks
+        ? playlist.trackIds
+              .map((id) => tracksById[id])
+              .whereType<LocalTrack>()
+              .toList(growable: false)
+        : const <LocalTrack>[];
     final itemCount = currentCatalog == null
         ? playlistTracks.length
         : catalogItems.length;

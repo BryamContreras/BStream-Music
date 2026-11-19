@@ -25,18 +25,21 @@ const expandedArtworkHeroEdgeFadeGradient = LinearGradient(
     Colors.transparent,
     Colors.transparent,
   ],
-  // Finish the video blend before its texture is clipped. A transparent guard
-  // keeps bright frames and fractional texture bounds from exposing a seam.
+  // The video includes the blurred tail and is taller than the focused still
+  // cover. Its upper blend must finish before that cover begins to appear;
+  // sharing the cover's percentage would leave a strip of still artwork above
+  // both animated artwork and Canvas. Retain a small soft guard at the top and
+  // finish the lower blend before fractional texture bounds can expose a seam.
   stops: [
     0,
-    0.05,
-    0.06,
-    0.07,
-    0.08,
-    0.09,
-    0.10,
-    0.11,
-    0.12,
+    0.002,
+    0.004,
+    0.006,
+    0.008,
+    0.010,
+    0.012,
+    0.014,
+    0.016,
     0.66,
     0.72,
     0.78,

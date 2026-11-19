@@ -449,7 +449,7 @@ void main() {
         final revisionAfterSwitch = cache.revision;
         release.complete();
         await finished.future.timeout(const Duration(seconds: 5));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+        await waitFor(() => directory.listSync().whereType<File>().isEmpty);
         expect(cache.coverPathFor(source), low.path);
         expect(cache.revision, revisionAfterSwitch);
         expect(await low.exists(), isTrue);

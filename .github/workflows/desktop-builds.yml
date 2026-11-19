@@ -326,6 +326,20 @@ jobs:
           --split-per-abi
           --target-platform android-arm,android-arm64,android-x64
 
+      - name: Build universal ARM APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          aapt2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
+          test -x "$aapt2"
+          arm64="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          # Match the highest ARM version code so users can upgrade from either split APK.
+          version_code="$("$aapt2" dump badging "$arm64" |
+            sed -nE "s/^package: .* versionCode='([0-9]+)'.*/\1/p")"
+          test -n "$version_code"
+          flutter build apk --release --target-platform android-arm,android-arm64 \
+            --build-number "$version_code" -Pdisable-abi-filtering=true -Pbstream-arm-only=true
+
       - name: Verify and name Android APKs
         shell: bash
         run: |
@@ -334,9 +348,11 @@ jobs:
           arm32="$output/app-armeabi-v7a-release.apk"
           arm64="$output/app-arm64-v8a-release.apk"
           x64="$output/app-x86_64-release.apk"
+          universal_arm="$output/app-release.apk"
           test -f "$arm32"
           test -f "$arm64"
           test -f "$x64"
+          test -f "$universal_arm"
 
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           aapt2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
@@ -345,18 +361,24 @@ jobs:
           "$apksigner" verify --verbose "$arm32"
           "$apksigner" verify --verbose "$arm64"
           "$apksigner" verify --verbose "$x64"
+          "$apksigner" verify --verbose "$universal_arm"
 
-          verify_abi() {
-            apk="$1"
-            abi="$2"
+          verify_abis() {
+            local apk="$1"
+            shift
+            local entries actual expected abi
             entries="$(unzip -Z1 "$apk")"
-            printf '%s\n' "$entries" | grep -Fx "lib/$abi/libflutter.so"
-            if printf '%s\n' "$entries" |
-              awk -F/ -v expected="$abi" '$1 == "lib" && $2 != expected { print; found=1 } END { exit !found }'
-            then
-              echo "APK contains native libraries for an unexpected ABI: $apk" >&2
+            actual="$(awk -F/ '$1 == "lib" && $3 ~ /\.so$/ { print $2 }' <<<"$entries" | sort -u)"
+            expected="$(printf '%s\n' "$@" | sort -u)"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Unexpected native ABIs in $apk" >&2
+              printf 'Expected:\n%s\nFound:\n%s\n' "$expected" "$actual" >&2
               exit 1
             fi
+            for abi in "$@"; do
+              grep -Fx "lib/$abi/libflutter.so" <<<"$entries"
+              grep -Fx "lib/$abi/libapp.so" <<<"$entries"
+            done
           }
 
           verify_no_obsolete_resolver() {
@@ -388,25 +410,37 @@ jobs:
               exit 1
             fi
           }
-          verify_abi "$arm32" "armeabi-v7a"
-          verify_abi "$arm64" "arm64-v8a"
-          verify_abi "$x64" "x86_64"
+          verify_abis "$arm32" "armeabi-v7a"
+          verify_abis "$arm64" "arm64-v8a"
+          verify_abis "$x64" "x86_64"
+          verify_abis "$universal_arm" "armeabi-v7a" "arm64-v8a"
           verify_no_obsolete_resolver "$arm32"
           verify_no_obsolete_resolver "$arm64"
           verify_no_obsolete_resolver "$x64"
+          verify_no_obsolete_resolver "$universal_arm"
 
           mkdir -p dist
           cp "$arm32" "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk"
           cp "$arm64" "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk"
           cp "$x64" "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk"
+          cp "$universal_arm" "dist/BStream-Music-$APP_VERSION-Android-Universal-ARM.apk"
 
       - name: Enforce Android artifact size budgets
         run: |
-          # 1.3.1 baseline: about 50.0/51.3/53.0 MiB with audio sources and
-          # file metadata support. Keep tight per-ABI caps, including IPADIC.
-          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk" 50.5
-          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk" 52
-          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 53.5
+          # Signed Android builds with the current player previews weigh about
+          # 50.9/52.3/53.9 MiB. Keep a small margin on the per-ABI downloads.
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-armeabi-v7a.apk" 51.5
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-arm64-v8a.apk" 53
+          dart run tool/check_artifact_size.dart "dist/BStream-Music-$APP_VERSION-Android-x86_64.apk" 54.5
+
+      - name: Upload Android Universal ARM APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: BStream-Music-${{ env.APP_VERSION }}-Android-Universal-ARM
+          path: dist/BStream-Music-${{ env.APP_VERSION }}-Android-Universal-ARM.apk
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
 
       - name: Upload Android ARMv7 APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

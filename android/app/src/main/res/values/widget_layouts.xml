@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- New RemoteViews identities prevent launchers from reapplying the new
+         container/icon/progress actions to a cached pre-spinner ImageView tree.
+         Aliases reuse the existing XML instead of maintaining duplicate layouts. -->
+    <item name="bstream_music_widget_v2" type="layout">@layout/bstream_music_widget</item>
+    <item name="bstream_music_widget_compact_v2" type="layout">@layout/bstream_music_widget_compact</item>
+    <item name="bstream_music_widget_compact_small_v2" type="layout">@layout/bstream_music_widget_compact_small</item>
+    <item name="bstream_music_widget_expanded_v2" type="layout">@layout/bstream_music_widget_expanded</item>
+    <item name="bstream_music_widget_queue_v2" type="layout">@layout/bstream_music_widget_queue</item>
+</resources>

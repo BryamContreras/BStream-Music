@@ -311,7 +311,7 @@ void main() {
     },
   );
 
-  testWidgets('narrow desktop opens its queue without overflowing', (
+  testWidgets('narrow desktop opens the queue page without overflowing', (
     tester,
   ) async {
     _configureView(tester);
@@ -322,10 +322,22 @@ void main() {
 
     final rail = find.byKey(const ValueKey('desktop-playback-queue-rail'));
     final surface = find.byKey(const ValueKey('desktop-player-surface'));
-    expect(rail, findsOneWidget);
-    expect(tester.getRect(rail).right, closeTo(720, 0.1));
-    expect(tester.getRect(rail).left, tester.getRect(surface).right);
-    expect(tester.getSize(surface).width, greaterThan(0));
+    expect(rail, findsNothing);
+    expect(tester.getSize(surface).width, closeTo(720, 0.1));
+
+    await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(rail, findsNothing);
+    expect(find.byKey(const ValueKey('queue-current-title')), findsOneWidget);
+    expect(find.text('Siguiente cancion'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byKey(const ValueKey('queue-close')));
+    await tester.pumpAndSettle();
+
+    expect(surface, findsOneWidget);
+    expect(rail, findsNothing);
     expect(tester.takeException(), isNull);
   });
 

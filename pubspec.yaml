@@ -72,7 +72,8 @@ dependencies:
   video_player_win: ^3.3.0
   video_player_platform_interface: 6.9.0
   audio_metadata_reader: ^1.8.1
-  audio_service: ^0.18.18
+  audio_service:
+    path: third_party/audio_service
   audio_service_mpris: ^0.2.1
   smtc_windows: ^1.1.0
   archive: ^4.0.9
@@ -98,6 +99,8 @@ dev_dependencies:
     sdk: flutter
   integration_test:
     sdk: flutter
+  # Windows CPU measurements in the opt-in integration benchmark only.
+  ffi: ^2.2.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -120,6 +123,8 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/icons/bstream_icon.png
+    - assets/player_styles/dark/
+    - assets/player_styles/light/
     - assets/fonts/Roboto-LICENSE.txt
     - assets/fonts/Nunito-OFL.txt
     - assets/fonts/Lora-OFL.txt

@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
+import '../../core/utils/background_work.dart';
 import '../audio_sources/audio_format_details.dart';
 import '../audio_sources/mp4_audio_format.dart';
 import '../audio_sources/webm_audio_format.dart';
@@ -134,7 +134,11 @@ class LocalAudioQualityService {
     }
     if (!source.isFile) return null;
     final path = source.source;
-    return Isolate.run(() => _probeLocalFile(path));
+    return runBackgroundTransform(
+      path,
+      _probeLocalFile,
+      debugName: 'BStream local audio headers',
+    );
   }
 
   Future<bool> _acquire() {
@@ -312,6 +316,7 @@ LocalAudioQuality? _readWave(_HeaderReader reader, Uint8List signature) {
       if (fmt == null) return null;
       final data = _data(fmt);
       var format = data.getUint16(0, endian);
+      final extensible = format == 0xfffe;
       if (format == 0xfffe && fmt.length >= 40) {
         format = data.getUint16(24, endian);
       }
@@ -330,6 +335,11 @@ LocalAudioQuality? _readWave(_HeaderReader reader, Uint8List signature) {
         'channels': data.getUint16(2, endian),
         'sampleRate': data.getUint32(4, endian),
         'bitrate': data.getUint32(8, endian) * 8,
+        if (format == 1 || format == 3)
+          'bitDepth':
+              extensible && fmt.length >= 40 && data.getUint16(18, endian) > 0
+              ? data.getUint16(18, endian)
+              : bits,
       });
     }
     offset += 8 + size + (size & 1);
@@ -353,6 +363,7 @@ LocalAudioQuality _flacInfo(Uint8List info) {
     mimeType: 'audio/flac',
     sampleRate: (packed >> 44) & 0xfffff,
     channels: ((packed >> 41) & 7) + 1,
+    bitDepth: ((packed >> 36) & 31) + 1,
     // STREAMINFO has no compressed average bitrate. PCM bit depth times rate
     // is not the bitrate of the FLAC stream, particularly with embedded covers.
   );

@@ -1747,6 +1747,18 @@ void main() {
           find.byKey(const ValueKey('lyrics-offset-control')),
           findsOneWidget,
         );
+        for (final style in LyricsBackgroundStyle.values) {
+          final choice = find.byKey(
+            ValueKey('lyrics-menu-background-option-${style.code}'),
+          );
+          await tester.ensureVisible(choice);
+          await tester.pump();
+          expect(choice.hitTestable(), findsOneWidget);
+          expect(
+            find.byKey(const ValueKey('lyrics-settings-close')).hitTestable(),
+            findsOneWidget,
+          );
+        }
         await tester.ensureVisible(
           find.byKey(const ValueKey('lyrics-menu-translation-toggle')),
         );
@@ -2015,6 +2027,94 @@ void main() {
     );
   }
 
+  for (final platform in [
+    TargetPlatform.android,
+    TargetPlatform.iOS,
+    TargetPlatform.windows,
+  ]) {
+    testWidgets('lyrics menu changes and saves its background on $platform', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = platform == TargetPlatform.windows
+          ? const Size(960, 720)
+          : const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final container = await _pumpLyricsPage(
+        tester,
+        player: _FakePlayerService(lookupSnapshot),
+        lyrics: _FakeLyricsService(syncedDocument),
+        platform: platform,
+      );
+      await _openLyricsSettings(tester);
+      final alignment = find.byKey(
+        const ValueKey('lyrics-menu-alignment-options'),
+      );
+      final background = find.byKey(
+        const ValueKey('lyrics-menu-background-options'),
+      );
+      expect(
+        tester.getRect(background).top,
+        greaterThan(tester.getRect(alignment).bottom),
+      );
+      for (final style in [
+        LyricsBackgroundStyle.blur,
+        LyricsBackgroundStyle.animatedGradient,
+        LyricsBackgroundStyle.gradient,
+      ]) {
+        final choice = find.byKey(
+          ValueKey('lyrics-menu-background-option-${style.code}'),
+        );
+        await tester.ensureVisible(choice);
+        await tester.pump();
+        await tester.tap(choice);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(
+          container
+              .read(settingsControllerProvider)
+              .requireValue
+              .lyricsBackgroundStyle,
+          style,
+        );
+        expect(
+          (await SharedPreferences.getInstance()).getString(
+            'settings.lyricsBackground',
+          ),
+          style.code,
+        );
+        final renderKey = switch (style) {
+          LyricsBackgroundStyle.blur => 'lyrics-background-blur',
+          LyricsBackgroundStyle.gradient => 'lyrics-background-gradient',
+          LyricsBackgroundStyle.animatedGradient =>
+            'lyrics-background-animated-gradient',
+        };
+        expect(find.byKey(ValueKey(renderKey)), findsOneWidget);
+        final close = find.byKey(const ValueKey('lyrics-settings-close'));
+        expect(close.hitTestable(), findsOneWidget);
+        await tester.tap(close);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(
+          find.byKey(const ValueKey('lyrics-settings-menu')),
+          findsNothing,
+        );
+        await _openLyricsSettings(tester);
+        expect(
+          tester
+              .widget<SegmentedButton<LyricsBackgroundStyle>>(background)
+              .selected,
+          {style},
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('lyrics-settings-close')));
+      await _settleLyricsAnimations(tester);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('menu translation and romanization are mutually exclusive', (
     tester,
   ) async {
@@ -2031,6 +2131,10 @@ void main() {
       lyricsTranslationService: service,
     );
     await _openLyricsSettings(tester);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('lyrics-menu-translation-toggle')),
+    );
+    await tester.pump();
     await tester.tap(
       find.byKey(const ValueKey('lyrics-menu-translation-toggle')),
     );
@@ -2059,6 +2163,10 @@ void main() {
       find.byKey(const ValueKey('lyrics-line-romanization-0')),
       findsNothing,
     );
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('lyrics-menu-romanization-toggle')),
+    );
+    await tester.pump();
     await tester.tap(
       find.byKey(const ValueKey('lyrics-menu-romanization-toggle')),
     );
@@ -2186,6 +2294,10 @@ void main() {
       lyricsTranslationService: service,
     );
     await _openLyricsSettings(tester);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('lyrics-menu-translation-toggle')),
+    );
+    await tester.pump();
     await tester.tap(
       find.byKey(const ValueKey('lyrics-menu-translation-toggle')),
     );
@@ -4738,10 +4850,18 @@ void main() {
       // A remote refresh can temporarily expose no snapshot value. That is
       // not a song change and must not discard the manual selection.
       player.emit(const PlayerSnapshot(status: PlayerStatus.loading));
-      await _settleLyricsAnimations(tester);
+      // Loading intentionally animates until the next playback snapshot, so
+      // advance the finite transition without waiting for global quietude.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final loadingIndicator = find.byKey(
+        const ValueKey('playback-loading-indicator'),
+      );
+      expect(loadingIndicator, findsWidgets);
       expect(container.read(selectedLyricsControllerProvider), alternative);
       player.emit(lookupSnapshot);
       await _settleLyricsAnimations(tester);
+      expect(loadingIndicator, findsNothing);
       expect(find.text('Selected first line'), findsOneWidget);
 
       player.emit(

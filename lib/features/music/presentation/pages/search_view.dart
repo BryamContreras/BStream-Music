@@ -1806,7 +1806,6 @@ class _SearchCategoryTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     final textScaler = MediaQuery.textScalerOf(context);
     final scaledLabelHeight = textScaler.scale(13);
     final cardHeight = (scaledLabelHeight + 46).clamp(60.0, 84.0).toDouble();
@@ -1843,7 +1842,6 @@ class _SearchCategoryTabs extends StatelessWidget {
                       icon: _categoryIcon(categories[index]),
                       label: _categoryLabel(strings, categories[index]),
                       selected: categories[index] == selectedCategory,
-                      selectedColor: colors.primaryContainer,
                       onSelected: onSelected,
                     ),
                   ),
@@ -1863,7 +1861,6 @@ class _SearchCategoryTab extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.selected,
-    required this.selectedColor,
     required this.onSelected,
   });
 
@@ -1871,7 +1868,6 @@ class _SearchCategoryTab extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool selected;
-  final Color selectedColor;
   final ValueChanged<SearchCategory> onSelected;
 
   @override
@@ -1887,14 +1883,7 @@ class _SearchCategoryTab extends StatelessWidget {
         : AppColors.contentTitleFor(context);
     final surfaceColor = AppColors.cardSurfaceFor(context);
     final borderColor = AppColors.cardBorderFor(context);
-    final selectedGradient = LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [
-        Color.lerp(surfaceColor, selectedColor, 0.40)!,
-        Color.lerp(surfaceColor, selectedColor, 0.58)!,
-      ],
-    );
+    final selectedGradient = AppColors.selectedCardGradientFor(context);
     final selectedBorderColor = Color.lerp(borderColor, colors.primary, 0.52)!;
 
     return Semantics(

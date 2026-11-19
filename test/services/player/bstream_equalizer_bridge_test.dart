@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio/bstream_equalizer_tuning.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -11,7 +12,7 @@ void main() {
     'curve configured before decoder activation is retained without waiting',
     () async {
       final equalizer = BStreamEqualizer();
-      final gains = <double>[3.5, -2.5, 0, 12, -12];
+      final gains = <double>[3.5, -2.5, 0, 12, -12, 1, -1, 2, -2, .5];
       final status = await equalizer.configure(enabled: true, gainsDb: gains);
       gains[0] = 9;
 
@@ -24,14 +25,36 @@ void main() {
         0,
         12,
         -12,
+        1,
+        -1,
+        2,
+        -2,
+        .5,
       ]);
-      expect(status.preampDb, -12);
+      expect(status.parameters.bands.map((band) => band.centerFrequency), [
+        31,
+        62,
+        125,
+        250,
+        500,
+        1000,
+        2000,
+        4000,
+        8000,
+        16000,
+      ]);
+      expect(
+        status.preampDb,
+        bstreamEqualizerPreampDb(
+          status.parameters.bands.map((b) => b.gain).toList(),
+        ),
+      );
       expect((await equalizer.readStatus()).parameters.bands.first.gain, 3.5);
       expect(await equalizer.readSkipSilenceStatus(), isNull);
 
       final bypass = await equalizer.configure(
         enabled: false,
-        gainsDb: [3.5, -2.5, 0, 12, -12],
+        gainsDb: [3.5, -2.5, 0, 12, -12, 1, -1, 2, -2, .5],
       );
       expect(bypass.enabled, isFalse);
       expect(bypass.preampDb, 0);
@@ -46,21 +69,33 @@ void main() {
       equalizer.configure(enabled: true, gainsDb: [1, 2]),
       throwsArgumentError,
     );
+    await expectLater(
+      equalizer.configure(enabled: true, gainsDb: [0, 0, 0, 0, 0]),
+      throwsArgumentError,
+    );
     for (final invalid in [double.nan, double.infinity, -double.infinity]) {
       await expectLater(
-        equalizer.configure(enabled: true, gainsDb: [0, 0, invalid, 0, 0]),
+        equalizer.configure(
+          enabled: true,
+          gainsDb: [0, 0, invalid, 0, 0, 0, 0, 0, 0, 0],
+        ),
         throwsArgumentError,
       );
     }
     final clamped = await equalizer.configure(
       enabled: true,
-      gainsDb: [99, -99, .5, -.5, 0],
+      gainsDb: [99, -99, .5, -.5, 0, 0, 0, 0, 0, 0],
     );
     expect(clamped.parameters.bands.map((band) => band.gain), [
       12,
       -12,
       .5,
       -.5,
+      0,
+      0,
+      0,
+      0,
+      0,
       0,
     ]);
   });
@@ -82,7 +117,7 @@ void main() {
         'minDecibels': -12,
         'maxDecibels': 12,
         'bands': [
-          {'index': 0, 'centerFrequency': 60, 'gain': 3.5},
+          {'index': 0, 'centerFrequency': 31, 'gain': 3.5},
         ],
       },
     });
@@ -264,7 +299,10 @@ void main() {
         await player.dispose();
         bridge.dispose();
       });
-      await equalizer.configure(enabled: true, gainsDb: [3.5, 1, -2, 0, 4]);
+      await equalizer.configure(
+        enabled: true,
+        gainsDb: [3.5, 1, -2, 0, 4, 1, -1, 2, -2, .5],
+      );
       await player.setSkipSilenceEnabled(true);
       await _load(player);
       final request = bridge.initArguments.single;
@@ -274,7 +312,7 @@ void main() {
       expect(effects.single, {
         'type': 'bstreamAudioEqualizer',
         'enabled': true,
-        'gainsDb': [3.5, 1.0, -2.0, 0.0, 4.0],
+        'gainsDb': [3.5, 1.0, -2.0, 0.0, 4.0, 1.0, -1.0, 2.0, -2.0, .5],
       });
       final engine = bridge.engines.single;
       expect(engine.requestedSkipSilence, isTrue);
@@ -306,7 +344,10 @@ void main() {
         await player.dispose();
         bridge.dispose();
       });
-      await equalizer.configure(enabled: true, gainsDb: [3.5, 1, -2, 0, 4]);
+      await equalizer.configure(
+        enabled: true,
+        gainsDb: [3.5, 1, -2, 0, 4, 1, -1, 2, -2, .5],
+      );
       await _load(player);
       final engine = bridge.engines.single;
       final revision = engine.revision;
@@ -331,7 +372,7 @@ void main() {
       expect(equalizer.supported, isTrue);
       expect(equalizer.enabled, isTrue);
       expect(engine.revision, revision);
-      expect(engine.gains, [3.5, 1, -2, 0, 4]);
+      expect(engine.gains, [3.5, 1, -2, 0, 4, 1, -1, 2, -2, .5]);
     },
   );
 
@@ -391,7 +432,7 @@ void main() {
       final delayed = oldEngine.blockConfigure();
       final oldWrite = equalizer.configure(
         enabled: true,
-        gainsDb: [6, 3, 0, 0, 0],
+        gainsDb: [6, 3, 0, 0, 0, 0, 0, 0, 0, 0],
       );
       await delayed.started.future;
       await player.stop();
@@ -402,7 +443,7 @@ void main() {
       // The old reply is still held: this must use a fresh native write lane,
       // rather than waiting for the retired engine's two-second timeout.
       final current = await equalizer
-          .configure(enabled: true, gainsDb: [-3, 0, 2.5, 0, -1])
+          .configure(enabled: true, gainsDb: [-3, 0, 2.5, 0, -1, 1, 2, 3, 4, 5])
           .timeout(const Duration(seconds: 1));
       expect(current.supported, isTrue);
       expect(current.parameters.bands.map((band) => band.gain), [
@@ -411,6 +452,11 @@ void main() {
         2.5,
         0,
         -1,
+        1,
+        2,
+        3,
+        4,
+        5,
       ]);
       delayed.complete(oldEngine.status(supported: false));
       final retiredReply = await oldWrite;
@@ -423,9 +469,14 @@ void main() {
         2.5,
         0,
         -1,
+        1,
+        2,
+        3,
+        4,
+        5,
       ]);
       expect((await equalizer.readStatus()).supported, isTrue);
-      expect(currentEngine.gains, [-3, 0, 2.5, 0, -1]);
+      expect(currentEngine.gains, [-3, 0, 2.5, 0, -1, 1, 2, 3, 4, 5]);
     },
   );
 
@@ -450,7 +501,10 @@ void main() {
       await player.stop();
       await _load(player);
       final currentEngine = bridge.engines.last;
-      await equalizer.configure(enabled: true, gainsDb: [0, 0, -6, 0, 0]);
+      await equalizer.configure(
+        enabled: true,
+        gainsDb: [0, 0, -6, 0, 0, 0, 0, 0, 0, 0],
+      );
       delayed.complete(oldEngine.status(supported: false));
       expect((await oldRead).configured, isFalse);
       expect(equalizer.supported, isTrue);
@@ -489,7 +543,10 @@ void main() {
       expect(result.configured, isFalse);
       expect(equalizer.supported, isTrue);
       await expectLater(
-        equalizer.configure(enabled: true, gainsDb: [0, 0, 0, 0, 0]),
+        equalizer.configure(
+          enabled: true,
+          gainsDb: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
         throwsStateError,
       );
     },
@@ -507,19 +564,27 @@ void main() {
     final engine = bridge.engines.single;
     final delayed = engine.blockConfigure();
     final timeout = expectLater(
-      equalizer.configure(enabled: true, gainsDb: [6, 0, 0, 0, 0]),
+      equalizer.configure(
+        enabled: true,
+        gainsDb: [6, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      ),
       throwsA(isA<TimeoutException>()),
     );
     await delayed.started.future;
     await timeout;
     final recovered = await equalizer
-        .configure(enabled: true, gainsDb: [0, -3.5, 0, 1.5, 0])
+        .configure(enabled: true, gainsDb: [0, -3.5, 0, 1.5, 0, 0, 0, 0, 0, 0])
         .timeout(const Duration(seconds: 1));
     expect(recovered.parameters.bands.map((band) => band.gain), [
       0,
       -3.5,
       0,
       1.5,
+      0,
+      0,
+      0,
+      0,
+      0,
       0,
     ]);
     delayed.complete(engine.status(supported: false));
@@ -613,7 +678,7 @@ class _NativeEngine {
   final String id;
   final _NativeBridge bridge;
   bool enabled = false;
-  List<double> gains = [0, 0, 0, 0, 0];
+  List<double> gains = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   bool requestedSkipSilence = false;
   bool? skipSilenceSupported;
   int revision = 0;
@@ -746,9 +811,7 @@ class _NativeEngine {
     'enabled': supported && enabled && gains.any((gain) => gain.abs() >= .01),
     'configured': true,
     'engine': 'bstream-dsp',
-    'preampDb': enabled
-        ? -gains.fold<double>(0, (value, gain) => value > gain ? value : gain)
-        : 0,
+    'preampDb': enabled ? bstreamEqualizerPreampDb(gains) : 0,
     'processedFrames': 48000,
     'sampleRate': 48000,
     'channelCount': 2,
@@ -759,7 +822,11 @@ class _NativeEngine {
       'minDecibels': -12,
       'maxDecibels': 12,
       'bands': [
-        for (var index = 0; index < 5; index++)
+        for (
+          var index = 0;
+          index < BStreamEqualizer.frequencies.length;
+          index++
+        )
           {
             'index': index,
             'centerFrequency': BStreamEqualizer.frequencies[index],

@@ -3,6 +3,7 @@ import '../../../domain/entities/catalog_track.dart';
 import '../../../domain/entities/local_track.dart';
 import '../../../domain/entities/playlist_entry.dart';
 import '../../../domain/entities/track_info.dart';
+import '../local_track_index_provider.dart';
 import 'catalog_playback_item.dart';
 
 /// Shared resolution for playlist presentation and playback. Unavailable
@@ -16,9 +17,13 @@ class CatalogPlaylistResolvedEntry {
 
 List<CatalogPlaylistResolvedEntry> catalogPlaylistResolvedEntries(
   CatalogPlaylist playlist,
-  Iterable<LocalTrack> libraryTracks,
-) {
-  final resolver = _CatalogPlaylistResolver(playlist, libraryTracks);
+  Iterable<LocalTrack> libraryTracks, {
+  LocalTrackIndex? libraryIndex,
+}) {
+  final resolver = _CatalogPlaylistResolver(
+    playlist,
+    libraryIndex ?? LocalTrackIndex(libraryTracks, indexSourceUrls: false),
+  );
   return List<CatalogPlaylistResolvedEntry>.unmodifiable([
     for (final entry in resolver.entries)
       CatalogPlaylistResolvedEntry(
@@ -32,7 +37,10 @@ List<CatalogPlaybackItem> catalogPlaylistPlaybackItems(
   CatalogPlaylist playlist,
   Iterable<LocalTrack> libraryTracks,
 ) {
-  final resolver = _CatalogPlaylistResolver(playlist, libraryTracks);
+  final resolver = _CatalogPlaylistResolver(
+    playlist,
+    LocalTrackIndex(libraryTracks, indexSourceUrls: false),
+  );
   final result = <CatalogPlaybackItem>[];
   for (final entry in resolver.entries) {
     final item = resolver.resolve(entry);
@@ -42,17 +50,7 @@ List<CatalogPlaybackItem> catalogPlaylistPlaybackItems(
 }
 
 class _CatalogPlaylistResolver {
-  _CatalogPlaylistResolver(
-    CatalogPlaylist playlist,
-    Iterable<LocalTrack> libraryTracks,
-  ) {
-    for (final track in libraryTracks) {
-      localsById[track.id] = track;
-      final videoId = track.sourceId?.trim();
-      if (videoId != null && videoId.isNotEmpty) {
-        localsByVideoId.putIfAbsent(videoId, () => track);
-      }
-    }
+  _CatalogPlaylistResolver(CatalogPlaylist playlist, this.libraryIndex) {
     entries = playlist.entries.where((entry) => !entry.isDeleted).toList()
       ..sort((left, right) {
         final byPosition = left.position.compareTo(right.position);
@@ -60,8 +58,7 @@ class _CatalogPlaylistResolver {
       });
   }
 
-  final localsById = <String, LocalTrack>{};
-  final localsByVideoId = <String, LocalTrack>{};
+  final LocalTrackIndex libraryIndex;
   late final List<PlaylistEntry> entries;
 
   CatalogPlaybackItem? resolve(PlaylistEntry entry) {
@@ -70,12 +67,10 @@ class _CatalogPlaylistResolver {
     final videoId = rawVideoId == null || rawVideoId.isEmpty
         ? catalog.youtubeVideoId
         : rawVideoId;
-    final localId = entry.localTrackId?.trim();
-    final local = localId != null && localId.isNotEmpty
-        ? localsById[localId]
-        : videoId == null
-        ? null
-        : localsByVideoId[videoId];
+    final local = libraryIndex.forPlaylist(
+      localId: entry.localTrackId,
+      sourceId: videoId,
+    );
     final remote = videoId == null
         ? null
         : trackInfoFromCatalogTrack(catalog, videoId: videoId);

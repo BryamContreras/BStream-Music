@@ -327,7 +327,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final darkTint = _surfaceTintDecoration(tester).color!;
-    expect(darkTint, const Color(0xFF121212).withValues(alpha: 0.4));
+    expect(darkTint, const Color(0xFF101010).withValues(alpha: 0.43));
   });
 
   testWidgets('dark hover droplet preserves backdrop chroma at full reveal', (
@@ -353,7 +353,7 @@ void main() {
     expect(painter.debugShadowColor, Colors.black.withValues(alpha: 0.1));
     expect(painter.debugFillGradientColors, <Color>[
       Colors.white.withValues(alpha: 0.028),
-      Colors.transparent,
+      Colors.black.withValues(alpha: 0.03),
       Colors.black.withValues(alpha: 0.065),
     ]);
     expect(painter.debugRimGradientColors, <Color>[
@@ -728,9 +728,10 @@ void main() {
   }
 
   testWidgets(
-    'grouped sheets reuse one native blur without separate rim captures',
+    'sheets share the same blur while keeping separate capture groups',
     (tester) async {
       final sharedBackdrop = BackdropKey();
+      final otherBackdrop = BackdropKey();
       await tester.pumpWidget(
         _baseHarness(
           platform: TargetPlatform.windows,
@@ -751,6 +752,13 @@ void main() {
                   child: const Text('Navegación'),
                 ),
               ),
+              Expanded(
+                child: LiquidGlassSurface(
+                  blurSigma: 12,
+                  backdropGroupKey: otherBackdrop,
+                  child: const Text('Buscar'),
+                ),
+              ),
             ],
           ),
         ),
@@ -761,15 +769,16 @@ void main() {
             find.byKey(LiquidGlassSurface.backdropKey),
           )
           .toList(growable: false);
-      expect(groupedBlurs, hasLength(2));
-      expect(
-        identical(groupedBlurs.first.filter, groupedBlurs.last.filter),
-        isTrue,
-        reason:
-            'Equal grouped sheets should submit the same immutable filter to '
-            'the engine instead of allocating one native blur per sheet.',
-      );
-      expect(find.byType(BackdropFilter), findsNWidgets(2));
+      expect(groupedBlurs, hasLength(3));
+      for (final blur in groupedBlurs.skip(1)) {
+        expect(blur.filter, same(groupedBlurs.first.filter));
+      }
+      expect(groupedBlurs.map((blur) => blur.backdropGroupKey), [
+        sharedBackdrop,
+        sharedBackdrop,
+        otherBackdrop,
+      ]);
+      expect(find.byType(BackdropFilter), findsNWidgets(3));
       expect(find.byKey(LiquidGlassSurface.adaptiveEdgeKey), findsNothing);
     },
   );

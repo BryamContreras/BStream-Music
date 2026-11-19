@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 import androidx.media3.common.C;
 import androidx.media3.common.audio.AudioProcessor;
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
@@ -16,7 +17,7 @@ import org.junit.Test;
 
 /** Tests decoded samples, independently of status readback or coefficient formulas. */
 public final class BStreamEqualizerAudioProcessorTest {
-    private static final double[] CENTERS = {60, 230, 910, 3600, 14000};
+    private static final double[] CENTERS = {31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
     private static final int[] ENCODINGS = {
         C.ENCODING_PCM_16BIT, C.ENCODING_PCM_FLOAT,
         C.ENCODING_PCM_24BIT, C.ENCODING_PCM_32BIT,
@@ -26,13 +27,123 @@ public final class BStreamEqualizerAudioProcessorTest {
     private static final int[] FRAME_CHUNKS = {1, 37, 257, 1024, 173};
 
     @Test
+    public void sparseStableBandsPreserveDenseOutputIncludingSignedZeroAndNonFiniteInput() throws Exception {
+        for (int selected : new int[] {0, 5, 9}) {
+            double[] gains = new double[CENTERS.length];
+            gains[selected] = -6;
+            BStreamEqualizerAudioProcessor processor = processor(state(true, gains), 48000, 2, C.ENCODING_PCM_FLOAT);
+            try {
+                DenseSnapshot reference = new DenseSnapshot(processor, 2);
+                ByteBuffer input = ByteBuffer.allocate(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN);
+                Random random = new Random(4171);
+                for (int sample = 0; sample < 2048; sample++) {
+                    float value = (random.nextFloat() - .5f) * .4f;
+                    // Include special payloads after an initially sparse region,
+                    // with mixed channels and fragmented queue input windows.
+                    if (sample > 200) {
+                        switch (sample % 61) {
+                            case 0: value = -0.0f; break;
+                            case 1: value = 0.0f; break;
+                            case 2: value = Float.intBitsToFloat(0x7fc00007); break;
+                            case 3: value = Float.POSITIVE_INFINITY; break;
+                            case 4: value = Float.NEGATIVE_INFINITY; break;
+                            case 5: value = Float.MIN_VALUE; break;
+                            case 6: value = -Float.MIN_VALUE; break;
+                        }
+                    }
+                    input.putFloat(value);
+                }
+                byte[] bytes = input.array();
+                assertArrayEquals("sparse band " + selected, reference.process(bytes),
+                        queue(processor, bytes, new int[] {1, 39, 207, 1024, 173}, false));
+            } finally {
+                processor.reset();
+            }
+        }
+    }
+
+    @Test
+    public void becomingNeutralDrainsDelayedSamplesBeforeOmittingTheBand() throws Exception {
+        double[] gains = new double[CENTERS.length];
+        gains[0] = -3;
+        gains[5] = -6;
+        BStreamEqualizerConfiguration state = state(true, gains);
+        BStreamEqualizerAudioProcessor processor = processor(state, 48000, 2, C.ENCODING_PCM_FLOAT);
+        try {
+            queue(processor, tone(48000, 2, C.ENCODING_PCM_FLOAT, 0, 1000, .3, 4800, 0),
+                    frameChunks(C.ENCODING_PCM_FLOAT, 2), false);
+            gains[5] = 0;
+            state.configure(true, gains);
+            queue(processor, tone(48000, 2, C.ENCODING_PCM_FLOAT, 0, 1000, .3, 1200, 4800),
+                    new int[] {1200 * 2 * 4}, false);
+            DenseSnapshot reference = new DenseSnapshot(processor, 2);
+            assertTrue("new identity filter must still contain its delayed sample",
+                    reference.z1[5 * 2] != 0 || reference.z2[5 * 2] != 0);
+            for (int pass = 0; pass < 3; pass++) {
+                byte[] input = tone(48000, 2, C.ENCODING_PCM_FLOAT, 0, 735, .2, 256, pass * 256);
+                assertArrayEquals("neutral tail pass " + pass, reference.process(input),
+                        queue(processor, input, new int[] {5, 43, 207, 257}, false));
+            }
+        } finally {
+            processor.reset();
+        }
+    }
+
+    /** Original dense recurrence, with independent copies of a stable state.
+     * Used only to check omitted identity filters and their delayed samples. */
+    private static final class DenseSnapshot {
+        final int channels;
+        final double[] coefficients;
+        final double[] z1;
+        final double[] z2;
+        final double preamp;
+
+        DenseSnapshot(BStreamEqualizerAudioProcessor processor, int channels) throws Exception {
+            this.channels = channels;
+            coefficients = ((double[])field(processor, "coefficients")).clone();
+            z1 = ((double[])field(processor, "z1")).clone();
+            z2 = ((double[])field(processor, "z2")).clone();
+            preamp = (double)field(processor, "preamp");
+        }
+
+        byte[] process(byte[] input) {
+            ByteBuffer source = ByteBuffer.wrap(input).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer output = ByteBuffer.allocate(input.length).order(ByteOrder.LITTLE_ENDIAN);
+            int channel = 0;
+            while (source.hasRemaining()) {
+                double sample = source.getFloat();
+                if (!Double.isFinite(sample)) sample = 0;
+                sample *= preamp;
+                for (int band = 0; band < CENTERS.length; band++) {
+                    int state = band * channels + channel;
+                    int c = band * 5;
+                    double filtered = coefficients[c] * sample + z1[state];
+                    z1[state] = coefficients[c + 1] * sample - coefficients[c + 3] * filtered + z2[state];
+                    z2[state] = coefficients[c + 2] * sample - coefficients[c + 4] * filtered;
+                    sample = filtered;
+                }
+                if (!Double.isFinite(sample)) sample = 0;
+                output.putFloat((float)Math.max(-1, Math.min(1, sample)));
+                channel = (channel + 1) % channels;
+            }
+            return output.array();
+        }
+
+        private static Object field(Object owner, String name) throws Exception {
+            Field field = owner.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(owner);
+        }
+    }
+
+    @Test
     public void isolatedSixDbCutsAttenuateEveryBandAtItsCenter() throws Exception {
         // Measuring each center with a single cut avoids reproducing the
         // implementation's biquad equations or depending on boost headroom.
         for (int sampleRate : new int[] {44100, 48000}) {
             for (int encoding : ENCODINGS) {
                 for (int band = 0; band < CENTERS.length; band++) {
-                    double[] gains = new double[5];
+                    double[] gains = new double[CENTERS.length];
                     gains[band] = -6;
                     BStreamEqualizerConfiguration state = state(true, gains);
                     BStreamEqualizerAudioProcessor processor = processor(
@@ -60,15 +171,15 @@ public final class BStreamEqualizerAudioProcessorTest {
     @Test
     public void boostHeadroomIsAppliedBeforePcmQuantization() throws Exception {
         for (int encoding : ENCODINGS) {
-            BStreamEqualizerConfiguration state = state(true, new double[] {0, 0, 6, 0, 0});
+            BStreamEqualizerConfiguration state = state(true, new double[] {0, 0, 0, 0, 0, 6, 0, 0, 0, 0});
             BStreamEqualizerAudioProcessor processor = processor(state, 48000, 1, encoding);
             try {
                 // A +6 dB filter without its -6 dB input margin would clip this
                 // 0.8-amplitude signal before the player's master-volume stage.
-                byte[] input = tone(48000, 1, encoding, 0, 910, .8, 36000, 0);
+                byte[] input = tone(48000, 1, encoding, 0, 1000, .8, 36000, 0);
                 byte[] output = queue(processor, input, frameChunks(encoding, 1), true);
                 assertEquals(0, measuredGainDb(input, output, encoding,
-                    1, 0, 48000, 910, 12000), .04);
+                    1, 0, 48000, 1000, 12000), .04);
                 assertTrue("headroom must avoid clipped peaks", maxAbs(output, encoding) < .85);
                 assertEquals(-6, state.snapshot().preampDb, 0);
             } finally {
@@ -78,28 +189,64 @@ public final class BStreamEqualizerAudioProcessorTest {
     }
 
     @Test
+    public void overlappingBoostsReserveCombinedHeadroomBeforeQuantization() throws Exception {
+        double[] gains = new double[CENTERS.length];
+        Arrays.fill(gains, 6);
+        BStreamEqualizerConfiguration state = state(true, gains);
+        assertEquals(-10.977777129356811, state.snapshot().preampDb, .000001);
+        for (int encoding : ENCODINGS) {
+            BStreamEqualizerAudioProcessor processor = processor(state, 48000, 1, encoding);
+            try {
+                byte[] input = tone(48000, 1, encoding, 0, 1000, .8, 36000, 0);
+                byte[] output = queue(processor, input, frameChunks(encoding, 1), true);
+                assertTrue("combined boosts must not clip a near-full-scale tone",
+                    maxAbs(output, encoding) < .85);
+                assertTrue(measuredGainDb(input, output, encoding,
+                    1, 0, 48000, 1000, 12000) < 0);
+            } finally {
+                processor.reset();
+            }
+        }
+
+        // Ignoring cuts keeps the margin conservative and stable when another
+        // band is lowered. A single positive band retains its exact margin.
+        Arrays.fill(gains, -12);
+        gains[4] = gains[5] = 6;
+        state.configure(true, gains);
+        assertEquals(-8.204714309118318, state.snapshot().preampDb, .000001);
+        gains[4] = -12;
+        state.configure(true, gains);
+        assertEquals(-6, state.snapshot().preampDb, 0);
+    }
+
+    @Test
     public void bandsAboveNyquistDoNotRetuneOrAliasIntoLowRateAudio() throws Exception {
         for (int rate : new int[] {8000, 16000, 22050}) {
             for (int encoding : new int[] {C.ENCODING_PCM_16BIT, C.ENCODING_PCM_FLOAT}) {
-                for (double gain : new double[] {-6, 6}) {
-                    BStreamEqualizerAudioProcessor processor = processor(
-                        state(true, new double[] {0, 0, 0, 0, gain}), rate, 1, encoding);
-                    try {
-                        byte[] input = tone(rate, 1, encoding, 0, 1000, .4, rate / 2, 0);
-                        byte[] output = queue(processor, input, frameChunks(encoding, 1), true);
-                        if (gain < 0) {
-                            // 14 kHz cannot exist in these sources. Its cut must
-                            // not move to a lower, audible center frequency.
-                            assertArrayEquals(input, output);
-                        } else {
-                            // The declared boost still reserves its global
-                            // headroom, but contributes no out-of-range filter.
-                            assertEquals(-6, measuredGainDb(input, output, encoding,
-                                1, 0, rate, 1000, 0), .04);
-                            assertTrue(maxAbs(output, encoding) < .21);
+                for (int band = 0; band < CENTERS.length; band++) {
+                    if (CENTERS[band] < rate * .5) continue;
+                    for (double gain : new double[] {-6, 6}) {
+                        double[] gains = new double[CENTERS.length];
+                        gains[band] = gain;
+                        BStreamEqualizerAudioProcessor processor = processor(
+                            state(true, gains), rate, 1, encoding);
+                        try {
+                            byte[] input = tone(rate, 1, encoding, 0, 1000, .4, rate / 2, 0);
+                            byte[] output = queue(processor, input, frameChunks(encoding, 1), true);
+                            if (gain < 0) {
+                                // This band cannot exist in the source. Its cut must
+                                // not move to a lower, audible center frequency.
+                                assertArrayEquals(input, output);
+                            } else {
+                                // The declared boost still reserves its global
+                                // headroom, but contributes no out-of-range filter.
+                                assertEquals(-6, measuredGainDb(input, output, encoding,
+                                    1, 0, rate, 1000, 0), .04);
+                                assertTrue(maxAbs(output, encoding) < .21);
+                            }
+                        } finally {
+                            processor.reset();
                         }
-                    } finally {
-                        processor.reset();
                     }
                 }
             }
@@ -110,7 +257,7 @@ public final class BStreamEqualizerAudioProcessorTest {
     public void bypassPreservesEveryByteForEveryPcmEncoding() throws Exception {
         for (int encoding : ENCODINGS) {
             for (boolean enabled : new boolean[] {false, true}) {
-                double[] gains = enabled ? new double[5] : new double[] {6, -3, 2, 4, -5};
+                double[] gains = enabled ? new double[CENTERS.length] : new double[] {6, 4, -3, 2, 0, 1, 4, 2, -2, -5};
                 BStreamEqualizerConfiguration state = state(enabled, gains);
                 BStreamEqualizerAudioProcessor processor = processor(state, 48000, 2, encoding);
                 try {
@@ -133,14 +280,14 @@ public final class BStreamEqualizerAudioProcessorTest {
     public void splitBuffersCannotDropFramesOrChangeFilterHistory() throws Exception {
         for (int encoding : ENCODINGS) {
             for (boolean active : new boolean[] {false, true}) {
-                double[] gains = {-3.5, 0, -6, 1.5, -2};
+                double[] gains = {-3.5, 0, -2, 0, 0, -6, 0, 1.5, 0, -2};
                 BStreamEqualizerAudioProcessor reference = processor(
                     state(active, gains), 48000, 2, encoding);
                 BStreamEqualizerConfiguration fragmentedState = state(active, gains);
                 BStreamEqualizerAudioProcessor fragmented = processor(
                     fragmentedState, 48000, 2, encoding);
                 try {
-                    byte[] input = tone(48000, 2, encoding, 1, 910, .2, 4099, 0);
+                    byte[] input = tone(48000, 2, encoding, 1, 1000, .2, 4099, 0);
                     byte[] expected = queue(reference, input, new int[] {input.length}, true);
                     // These boundaries intentionally split both samples and
                     // interleaved frames, including 24-bit and stereo PCM.
@@ -162,13 +309,13 @@ public final class BStreamEqualizerAudioProcessorTest {
         for (int channels : new int[] {2, 6}) {
             for (int encoding : new int[] {C.ENCODING_PCM_16BIT, C.ENCODING_PCM_FLOAT}) {
                 BStreamEqualizerAudioProcessor processor = processor(
-                    state(true, new double[] {0, -6, 0, 0, 0}), 48000, channels, encoding);
+                    state(true, new double[] {0, 0, 0, -6, 0, 0, 0, 0, 0, 0}), 48000, channels, encoding);
                 try {
                     int selected = channels - 1;
-                    byte[] input = tone(48000, channels, encoding, selected, 230, .3, 36000, 0);
+                    byte[] input = tone(48000, channels, encoding, selected, 250, .3, 36000, 0);
                     byte[] output = queue(processor, input, frameChunks(encoding, channels), true);
                     assertEquals(-6, measuredGainDb(input, output, encoding,
-                        channels, selected, 48000, 230, 12000), .04);
+                        channels, selected, 48000, 250, 12000), .04);
                     double[] decoded = decode(output, encoding);
                     for (int sample = 0; sample < decoded.length; sample++) {
                         if (sample % channels != selected) {
@@ -185,7 +332,7 @@ public final class BStreamEqualizerAudioProcessorTest {
 
     @Test
     public void seekFlushClearsRingingAndFormatResetStartsFresh() throws Exception {
-        BStreamEqualizerConfiguration state = state(true, new double[] {-12, 0, 0, 0, 0});
+        BStreamEqualizerConfiguration state = state(true, new double[] {-12, 0, 0, 0, 0, 0, 0, 0, 0, 0});
         BStreamEqualizerAudioProcessor processor = processor(state, 48000, 1, C.ENCODING_PCM_16BIT);
         try {
             byte[] impulse = new byte[200];
@@ -197,16 +344,16 @@ public final class BStreamEqualizerAudioProcessorTest {
                 queue(processor, silence, frameChunks(C.ENCODING_PCM_16BIT, 1), false));
 
             processor.reset();
-            state.configure(true, new double[] {0, 0, -6, 0, 0});
+            state.configure(true, new double[] {0, 0, 0, 0, 0, -6, 0, 0, 0, 0});
             processor.configure(new AudioProcessor.AudioFormat(44100, 2, C.ENCODING_PCM_FLOAT));
             processor.flush();
             byte[] input = tone(44100, 2, C.ENCODING_PCM_FLOAT,
-                1, 910, .2, 33075, 0);
+                1, 1000, .2, 33075, 0);
             byte[] output = queue(processor, input,
                 frameChunks(C.ENCODING_PCM_FLOAT, 2), true);
             assertEquals(input.length, output.length);
             assertEquals(-6, measuredGainDb(input, output, C.ENCODING_PCM_FLOAT,
-                2, 1, 44100, 910, 11025), .04);
+                2, 1, 44100, 1000, 11025), .04);
             assertEquals(44100, state.sampleRate());
             assertEquals(2, state.channelCount());
             assertEquals(C.ENCODING_PCM_FLOAT, state.encoding());
@@ -218,13 +365,13 @@ public final class BStreamEqualizerAudioProcessorTest {
     @Test
     public void liveChangesGlideThenReturnToBitExactBypass() throws Exception {
         for (int encoding : new int[] {C.ENCODING_PCM_16BIT, C.ENCODING_PCM_FLOAT}) {
-            BStreamEqualizerConfiguration state = state(false, new double[5]);
+            BStreamEqualizerConfiguration state = state(false, new double[CENTERS.length]);
             BStreamEqualizerAudioProcessor processor = processor(state, 48000, 1, encoding);
             try {
-                byte[] warm = tone(48000, 1, encoding, 0, 910, .3, 4800, 0);
+                byte[] warm = tone(48000, 1, encoding, 0, 1000, .3, 4800, 0);
                 assertArrayEquals(warm, queue(processor, warm, frameChunks(encoding, 1), false));
-                state.configure(true, new double[] {0, 0, -12, 0, 0});
-                byte[] transition = tone(48000, 1, encoding, 0, 910, .3, 12000, 4800);
+                state.configure(true, new double[] {0, 0, 0, 0, 0, -12, 0, 0, 0, 0});
+                byte[] transition = tone(48000, 1, encoding, 0, 1000, .3, 12000, 4800);
                 byte[] output = queue(processor, transition, frameChunks(encoding, 1), false);
                 double[] inputSamples = decode(transition, encoding);
                 double[] outputSamples = decode(output, encoding);
@@ -232,10 +379,10 @@ public final class BStreamEqualizerAudioProcessorTest {
                 // would change this sample by much more than the gradual ramp.
                 assertEquals(inputSamples[0], outputSamples[0], .001);
                 assertEquals(-12, measuredGainDb(transition, output, encoding,
-                    1, 0, 48000, 910, 7200), .05);
+                    1, 0, 48000, 1000, 7200), .05);
 
-                state.configure(false, new double[] {0, 0, -12, 0, 0});
-                byte[] returning = tone(48000, 1, encoding, 0, 910, .3, 4800, 16800);
+                state.configure(false, new double[] {0, 0, 0, 0, 0, -12, 0, 0, 0, 0});
+                byte[] returning = tone(48000, 1, encoding, 0, 1000, .3, 4800, 16800);
                 byte[] bypassed = queue(processor, returning, frameChunks(encoding, 1), false);
                 int settledOffset = 2400 * bytesPerSample(encoding);
                 assertArrayEquals(Arrays.copyOfRange(returning, settledOffset, returning.length),
@@ -251,17 +398,17 @@ public final class BStreamEqualizerAudioProcessorTest {
 
     @Test
     public void extremeCurvesAndRapidUpdatesKeepBoundedSignalsFinite() throws Exception {
-        BStreamEqualizerConfiguration state = state(true, new double[] {12, 12, 12, 12, 12});
+        BStreamEqualizerConfiguration state = state(true, new double[] {12, 12, 12, 12, 12, 12, 12, 12, 12, 12});
         BStreamEqualizerAudioProcessor processor = processor(state, 48000, 2, C.ENCODING_PCM_FLOAT);
         try {
             for (int block = 0; block < 160; block++) {
                 if (block % 2 == 0) {
-                    state.configure(true, new double[] {-12, 12, -12, 12, -12});
+                    state.configure(true, new double[] {-12, 12, -12, 12, -12, 12, -12, 12, -12, 12});
                 } else {
-                    state.configure(true, new double[] {12, -12, 12, -12, 12});
+                    state.configure(true, new double[] {12, -12, 12, -12, 12, -12, 12, -12, 12, -12});
                 }
                 byte[] input = tone(48000, 2, C.ENCODING_PCM_FLOAT,
-                    block % 2, CENTERS[block % 5], .05, 257, block * 257);
+                    block % 2, CENTERS[block % CENTERS.length], .05, 257, block * 257);
                 byte[] output = queue(processor, input, new int[] {input.length}, false);
                 assertEquals(input.length, output.length);
                 assertTrue("bounded input must not reach PCM clipping rails",
@@ -281,9 +428,9 @@ public final class BStreamEqualizerAudioProcessorTest {
     @Test
     public void outputStorageIsReusedForEqualSizedAudioBlocks() throws Exception {
         BStreamEqualizerAudioProcessor processor = processor(
-            state(true, new double[] {0, 0, -6, 0, 0}), 48000, 1, C.ENCODING_PCM_FLOAT);
+            state(true, new double[] {0, 0, 0, 0, 0, -6, 0, 0, 0, 0}), 48000, 1, C.ENCODING_PCM_FLOAT);
         try {
-            byte[] input = tone(48000, 1, C.ENCODING_PCM_FLOAT, 0, 910, .2, 257, 0);
+            byte[] input = tone(48000, 1, C.ENCODING_PCM_FLOAT, 0, 1000, .2, 257, 0);
             processor.queueInput(buffer(input, 0, input.length));
             ByteBuffer first = processor.getOutput();
             assertEquals(input.length, first.remaining());

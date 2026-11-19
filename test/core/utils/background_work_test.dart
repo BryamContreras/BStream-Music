@@ -109,7 +109,10 @@ void main() {
         final failing = _ObservedWork(events.sendPort, fail: true);
         final body = '${' ' * backgroundParsingThreshold}{}';
         await Future.wait<void>([
-          expectLater(runBackgroundWork(job.runAsync), completion(1)),
+          expectLater(
+            runBackgroundTransform('cover', job.parse),
+            completion(1),
+          ),
           expectLater(parseInnerTubeJson(body, job.parse), completion(1)),
           expectLater(
             parseJsonInBackground(body, failing.parse),

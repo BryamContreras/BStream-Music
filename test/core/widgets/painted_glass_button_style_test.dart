@@ -41,15 +41,15 @@ void main() {
                       .decoration
                   as BoxDecoration;
           expect(decoration.color, tint);
+          final dark = brightness == Brightness.dark;
+          final expectedAlpha = dark ? 0.339184 : 0.31552;
           expect(
             tint!.a,
-            closeTo(highContrast ? 0.3660032 : 0.31552, 0.000001),
+            closeTo(expectedAlpha * (highContrast ? 1.16 : 1), 0.000001),
           );
           expect(
             tint!.withValues(alpha: 1),
-            brightness == Brightness.dark
-                ? const Color(0xFF121212)
-                : const Color(0xFFFAFAFA),
+            dark ? const Color(0xFF101010) : const Color(0xFFFAFAFA),
           );
           expect(tester.takeException(), isNull);
         },

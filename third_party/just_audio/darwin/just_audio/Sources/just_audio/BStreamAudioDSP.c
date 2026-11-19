@@ -8,7 +8,7 @@
 #define BSTREAM_SILENCE_EVENTS 64
 #define BSTREAM_SMOOTH_WINDOWS 10
 
-const double BStreamDSPFrequencies[BSTREAM_DSP_BANDS] = {60, 230, 910, 3600, 14000};
+const double BStreamDSPFrequencies[BSTREAM_DSP_BANDS] = {31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
 
 struct BStreamDSP {
     double rate;
@@ -26,6 +26,7 @@ struct BStreamDSP {
     double preamp;
     double targetPreamp;
     double preampStep;
+    unsigned targetBandCount;
     uint64_t transitionFrames;
     uint64_t processedFrames;
     uint64_t revision;
@@ -64,15 +65,46 @@ BStreamDSP *BStreamDSPCreate(double sampleRate, uint32_t channels) {
 
 void BStreamDSPDestroy(BStreamDSP *dsp) { free(dsp); }
 
-bool BStreamDSPSetEqualizer(BStreamDSP *dsp, bool enabled, const double gainsDb[5],
+double BStreamDSPHeadroomDb(const double gainsDb[BSTREAM_DSP_BANDS]) {
+    double total = 0;
+    unsigned boosts = 0;
+    double amplitudeSquared[BSTREAM_DSP_BANDS] = {0};
+    for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) {
+        if (gainsDb[band] < .01) continue;
+        total += gainsDb[band];
+        ++boosts;
+        amplitudeSquared[band] = pow(10, gainsDb[band] / 20);
+    }
+    if (boosts < 2) return -total;
+    double maximum = 0;
+    const double start = log(BStreamDSPFrequencies[0]);
+    const double range = log(BStreamDSPFrequencies[BSTREAM_DSP_BANDS - 1]) - start;
+    for (unsigned point = 0; point <= 256 + BSTREAM_DSP_BANDS; ++point) {
+        const double frequency = point <= 256
+            ? exp(start + range * point / 256.0) : BStreamDSPFrequencies[point - 257];
+        double response = 0;
+        for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) {
+            const double a2 = amplitudeSquared[band];
+            if (a2 == 0) continue;
+            const double ratio = frequency / BStreamDSPFrequencies[band];
+            const double r2 = ratio * ratio;
+            const double difference = 1 - r2;
+            const double d = difference * difference;
+            response += 10 * log10((d + r2 * a2) / (d + r2 / a2));
+        }
+        maximum = fmax(maximum, response);
+    }
+    return -fmin(total, maximum + .1);
+}
+
+bool BStreamDSPSetEqualizer(BStreamDSP *dsp, bool enabled, const double gainsDb[BSTREAM_DSP_BANDS],
                           uint64_t revision, bool immediate) {
     if (!dsp || !gainsDb) return false;
-    double gains[5], maximum = 0;
+    double gains[BSTREAM_DSP_BANDS];
     bool active = false;
     for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) {
         if (!isfinite(gainsDb[band])) return false;
         gains[band] = bounded(gainsDb[band], -12, 12);
-        if (gains[band] > maximum) maximum = gains[band];
         if (fabs(gains[band]) >= 0.01) active = true;
     }
     active = active && enabled;
@@ -85,15 +117,17 @@ bool BStreamDSPSetEqualizer(BStreamDSP *dsp, bool enabled, const double gainsDb[
     dsp->enabled = enabled;
     dsp->active = active;
     memcpy(dsp->gains, gains, sizeof(gains));
-    dsp->preampDb = active ? -maximum : 0;
-    dsp->targetPreamp = active ? pow(10, -maximum / 20) : 1;
+    dsp->preampDb = active ? BStreamDSPHeadroomDb(gains) : 0;
+    dsp->targetPreamp = active ? pow(10, dsp->preampDb / 20) : 1;
     /* Two bypass configurations need no transition through sample arithmetic. */
     if (!active && dsp->bypass) immediate = true;
     identity(dsp->target);
+    dsp->targetBandCount = 0;
     for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) {
         const double frequency = BStreamDSPFrequencies[band];
         const double gain = active ? gains[band] : 0;
         if (frequency >= dsp->rate * .5 || fabs(gain) < .01) continue;
+        ++dsp->targetBandCount;
         const double amplitude = pow(10, gain / 40);
         const double omega = 2 * BSTREAM_PI * frequency / dsp->rate;
         const double alpha = sin(omega) / 2; /* peaking Q=1 */
@@ -183,7 +217,34 @@ static bool valid_buffers(const void *const buffers[], uint32_t channels, bool i
     return true;
 }
 
-static void process(BStreamDSP *dsp, void *const buffers[], size_t frames,
+/* Neutral sections do not need sample arithmetic once both delay elements have
+ * drained. Keep all sections during a glide, and retain identity sections with
+ * history for the entire block: retiring them early would discard their tail.
+ * The bounded scan is performed once per stable block, never per sample. */
+static unsigned processing_bands(const BStreamDSP *dsp, unsigned bands[BSTREAM_DSP_BANDS]) {
+    unsigned count = 0;
+    for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band) {
+        const double *c = dsp->coefficients[band];
+        bool required = c[0] != 1;
+        for (unsigned i = 1; !required && i < 5; ++i)
+            required = c[i] != 0 || signbit(c[i]);
+        for (uint32_t channel = 0; !required && channel < dsp->channels; ++channel)
+            required = dsp->z1[band][channel] != 0 || signbit(dsp->z1[band][channel]) ||
+                dsp->z2[band][channel] != 0 || signbit(dsp->z2[band][channel]);
+        if (required) bands[count++] = band;
+    }
+    return count;
+}
+
+static inline double filter_band(BStreamDSP *dsp, unsigned band, uint32_t channel, double sample) {
+    const double *c = dsp->coefficients[band];
+    const double filtered = c[0] * sample + dsp->z1[band][channel];
+    dsp->z1[band][channel] = c[1] * sample - c[3] * filtered + dsp->z2[band][channel];
+    dsp->z2[band][channel] = c[2] * sample - c[4] * filtered;
+    return filtered;
+}
+
+static void process_dense_original(BStreamDSP *dsp, void *const buffers[], size_t frames,
                     bool interleaved, BStreamPCMType type) {
     if (!dsp || !frames || !valid_buffers((const void *const *)buffers, dsp->channels, interleaved)) return;
     if (!dsp->bypass) {
@@ -226,6 +287,64 @@ static void process(BStreamDSP *dsp, void *const buffers[], size_t frames,
     dsp->appliedRevision = dsp->transitionFrames ? UINT64_MAX : dsp->revision;
 }
 
+/* The stable sparse path has no glide bookkeeping inside its sample loop.
+ * A negative-zero/non-finite exception rejoins the dense sequence for the
+ * current tail and the remainder of this block, preserving IEEE history. */
+static void process_sparse(BStreamDSP *dsp, void *const buffers[], size_t frames,
+                           bool interleaved, BStreamPCMType type,
+                           const unsigned bands[BSTREAM_DSP_BANDS], unsigned count) {
+    bool denseRemainder = false;
+    for (size_t frame = 0; frame < frames; ++frame) {
+        for (uint32_t channel = 0; channel < dsp->channels; ++channel) {
+            void *buffer = buffers[interleaved ? 0 : channel];
+            const size_t index = interleaved ? frame * dsp->channels + channel : frame;
+            double sample = read_sample(buffer, index, type);
+            if (!isfinite(sample)) sample = 0;
+            sample *= dsp->preamp;
+            if (denseRemainder) {
+                for (unsigned band = 0; band < BSTREAM_DSP_BANDS; ++band)
+                    sample = filter_band(dsp, band, channel, sample);
+            } else {
+                unsigned first = 0;
+                for (unsigned i = 0; i < count; ++i) {
+                    if (bands[i] > first && ((sample == 0 && signbit(sample)) || !isfinite(sample))) {
+                        for (unsigned band = first; band < BSTREAM_DSP_BANDS; ++band)
+                            sample = filter_band(dsp, band, channel, sample);
+                        denseRemainder = true;
+                        first = BSTREAM_DSP_BANDS;
+                        break;
+                    }
+                    sample = filter_band(dsp, bands[i], channel, sample);
+                    first = bands[i] + 1;
+                }
+                if (first < BSTREAM_DSP_BANDS && ((sample == 0 && signbit(sample)) || !isfinite(sample))) {
+                    for (unsigned band = first; band < BSTREAM_DSP_BANDS; ++band)
+                        sample = filter_band(dsp, band, channel, sample);
+                    denseRemainder = true;
+                }
+            }
+            write_sample(buffer, index, type, sample);
+        }
+    }
+    dsp->processedFrames += frames;
+    dsp->appliedRevision = dsp->revision;
+}
+
+/* Select once per block. Full curves, glides, bypass and invalid buffers retain
+ * the original dense kernel and its compiler specialization decisions. */
+static void process(BStreamDSP *dsp, void *const buffers[], size_t frames,
+                    bool interleaved, BStreamPCMType type) {
+    if (dsp && frames && !dsp->bypass && !dsp->transitionFrames && dsp->targetBandCount < 7 &&
+        valid_buffers((const void *const *)buffers, dsp->channels, interleaved)) {
+        unsigned bands[BSTREAM_DSP_BANDS];
+        const unsigned count = processing_bands(dsp, bands);
+        if (count < 7) {
+            process_sparse(dsp, buffers, frames, interleaved, type, bands, count);
+            return;
+        }
+    }
+    process_dense_original(dsp, buffers, frames, interleaved, type);
+}
 #define DSP_PROCESS_FUNCTION(NAME, TYPE) \
     void NAME(BStreamDSP *dsp, void *const buffers[], size_t frames, bool interleaved) { \
         process(dsp, buffers, frames, interleaved, TYPE); \

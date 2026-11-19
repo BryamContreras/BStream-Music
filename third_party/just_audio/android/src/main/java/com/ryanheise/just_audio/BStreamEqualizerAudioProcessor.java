@@ -7,16 +7,19 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
 
-/** Five independent native peaking biquads; no Android AudioEffect or Dart PCM. */
+/** Ten independent native peaking biquads; no Android AudioEffect or Dart PCM. */
 final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
-    private static final int BANDS = 5;
+    private static final int BANDS = BStreamEqualizerConfiguration.FREQUENCIES.length;
     private static final int COEFFICIENTS = 5;
+    // Direct iteration is cheaper than sparse indexing for mostly full curves.
+    private static final int MIN_DENSE_BANDS = 7;
     private static final double Q = 1;
     private static final double TRANSITION_SECONDS = 0.025;
     private final BStreamEqualizerConfiguration configuration;
     private final double[] coefficients = new double[BANDS * COEFFICIENTS];
     private final double[] target = new double[BANDS * COEFFICIENTS];
     private final double[] coefficientStep = new double[BANDS * COEFFICIENTS];
+    private final int[] processingBands = new int[BANDS];
     private double[] z1 = new double[0];
     private double[] z2 = new double[0];
     private long revision = -1;
@@ -26,6 +29,7 @@ final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
     private double preampStep;
     private boolean bypass = true;
     private boolean targetBypass = true;
+    private boolean denseTarget;
     private ByteBuffer pendingFrame = EMPTY_BUFFER;
     private int pendingBytes;
     private long pendingRouteGeneration;
@@ -65,6 +69,7 @@ final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
         revision = -1;
         transitionFrames = 0;
         bypass = true;
+        denseTarget = false;
         targetBypass = true;
         preamp = targetPreamp = 1;
         identity(coefficients);
@@ -100,6 +105,7 @@ final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
         revision = settings.revision;
         targetBypass = !settings.active();
         targetPreamp = targetBypass ? 1 : Math.pow(10, settings.preampDb / 20);
+        int nonNeutralBands = 0;
         for (int band = 0; band < BANDS; band++) {
             int offset = band * COEFFICIENTS;
             double gain = targetBypass ? 0 : settings.gainsDb[band];
@@ -111,6 +117,7 @@ final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
                 for (int i = 1; i < COEFFICIENTS; i++) target[offset + i] = 0;
                 continue;
             }
+            nonNeutralBands++;
             double amplitude = Math.pow(10, gain / 40);
             double omega = 2 * Math.PI * frequency / inputAudioFormat.sampleRate;
             double alpha = Math.sin(omega) / (2 * Q);
@@ -122,6 +129,7 @@ final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
             target[offset + 3] = -2 * cosine / a0;
             target[offset + 4] = (1 - alpha / amplitude) / a0;
         }
+        denseTarget = nonNeutralBands >= MIN_DENSE_BANDS;
         if (immediate) {
             System.arraycopy(target, 0, coefficients, 0, target.length);
             preamp = targetPreamp;
@@ -184,6 +192,26 @@ final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
     }
 
     private void processFrames(ByteBuffer input, int frames, ByteBuffer output) {
+        if (frames == 0) return;
+        if (bypass) {
+            copyFrames(input, frames, output);
+            return;
+        }
+        if (transitionFrames > 0 || denseTarget) {
+            processFramesDense(input, frames, output);
+            return;
+        }
+        // Scan only sparse targets. Full curves retain the original constant
+        // ten-band kernel, dispatched once per block rather than per sample.
+        int count = selectProcessingBands();
+        if (count >= MIN_DENSE_BANDS) processFramesDense(input, frames, output);
+        else processFramesSparse(input, frames, output, count);
+    }
+
+    // Intentionally retain this original dense loop separately: a mutable
+    // sparse/dense condition inside the sample loop regresses ART throughput.
+    // Configuration, PCM conversion and filter state are shared by both paths.
+    private void processFramesDense(ByteBuffer input, int frames, ByteBuffer output) {
         if (bypass) {
             copyFrames(input, frames, output);
         } else {
@@ -220,6 +248,75 @@ final class BStreamEqualizerAudioProcessor extends BaseAudioProcessor {
                 }
             }
         }
+    }
+
+    private void processFramesSparse(ByteBuffer input, int frames, ByteBuffer output, int processingBandCount) {
+        for (int frame = 0; frame < frames; frame++) {
+            for (int channel = 0; channel < inputAudioFormat.channelCount; channel++) {
+                double sample = readSample(input, inputAudioFormat.encoding);
+                if (!Double.isFinite(sample)) sample = 0;
+                sample *= preamp;
+                if (processingBandCount == BANDS) {
+                    sample = filterRemaining(sample, 0, channel);
+                } else {
+                    int previousBand = -1;
+                    for (int index = 0; index < processingBandCount; index++) {
+                        int band = processingBands[index];
+                        if (sample == 0 && Double.doubleToRawLongBits(sample) != 0 && band > previousBand + 1) {
+                            // A negative zero can change a neutral filter's
+                            // signed-zero history. Preserve the exact dense
+                            // recurrence for this channel and remaining block.
+                            sample = filterRemaining(sample, previousBand + 1, channel);
+                            processingBandCount = BANDS;
+                            previousBand = BANDS - 1;
+                            break;
+                        }
+                        int state = band * inputAudioFormat.channelCount + channel;
+                        int c = band * COEFFICIENTS;
+                        double filtered = coefficients[c] * sample + z1[state];
+                        z1[state] = coefficients[c + 1] * sample - coefficients[c + 3] * filtered + z2[state];
+                        z2[state] = coefficients[c + 2] * sample - coefficients[c + 4] * filtered;
+                        sample = filtered;
+                        previousBand = band;
+                    }
+                    if (sample == 0 && Double.doubleToRawLongBits(sample) != 0 && previousBand < BANDS - 1) {
+                        sample = filterRemaining(sample, previousBand + 1, channel);
+                        processingBandCount = BANDS;
+                    }
+                }
+                writeSample(output, inputAudioFormat.encoding, sample);
+            }
+        }
+    }
+
+    private int selectProcessingBands() {
+        int count = 0;
+        for (int band = 0; band < BANDS; band++) {
+            int c = band * COEFFICIENTS;
+            boolean identity = coefficients[c] == 1;
+            for (int index = 1; identity && index < COEFFICIENTS; index++) {
+                identity = Double.doubleToRawLongBits(coefficients[c + index]) == 0;
+            }
+            for (int channel = 0; identity && channel < inputAudioFormat.channelCount; channel++) {
+                int state = band * inputAudioFormat.channelCount + channel;
+                identity = Double.doubleToRawLongBits(z1[state]) == 0 &&
+                        Double.doubleToRawLongBits(z2[state]) == 0;
+            }
+            if (!identity) processingBands[count++] = band;
+        }
+        return count;
+    }
+
+    private double filterRemaining(double sample, int startBand, int channel) {
+        for (int band = startBand; band < BANDS; band++) {
+            int state = band * inputAudioFormat.channelCount + channel;
+            int c = band * COEFFICIENTS;
+            double filtered = coefficients[c] * sample + z1[state];
+            z1[state] = coefficients[c + 1] * sample - coefficients[c + 3] * filtered + z2[state];
+            z2[state] = coefficients[c + 2] * sample - coefficients[c + 4] * filtered;
+            sample = filtered;
+        }
+        return sample;
     }
 
     private static double readSample(ByteBuffer input, int encoding) {

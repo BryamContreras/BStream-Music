@@ -66,6 +66,74 @@ void main() {
   });
 
   test(
+    'lyrics background defaults to animated gradient for absent or unknown preferences',
+    () async {
+      expect(
+        (await container().read(
+          settingsControllerProvider.future,
+        )).lyricsBackgroundStyle,
+        LyricsBackgroundStyle.animatedGradient,
+      );
+      SharedPreferences.setMockInitialValues({
+        'settings.lyricsBackground': 'unknown',
+      });
+      expect(
+        (await container().read(
+          settingsControllerProvider.future,
+        )).lyricsBackgroundStyle,
+        LyricsBackgroundStyle.animatedGradient,
+      );
+      for (final style in LyricsBackgroundStyle.values) {
+        expect(LyricsBackgroundStyle.fromCode(style.code), style);
+      }
+    },
+  );
+
+  test(
+    'lyrics background changes publish immediately and survive restart',
+    () async {
+      final first = container();
+      final before = await first.read(settingsControllerProvider.future);
+      final controller = first.read(settingsControllerProvider.notifier);
+      final pending = controller.setLyricsBackgroundStyle(
+        LyricsBackgroundStyle.gradient,
+      );
+      expect(
+        first
+            .read(settingsControllerProvider)
+            .requireValue
+            .lyricsBackgroundStyle,
+        LyricsBackgroundStyle.gradient,
+      );
+      await pending;
+      final restored = await container().read(
+        settingsControllerProvider.future,
+      );
+      expect(restored.lyricsBackgroundStyle, LyricsBackgroundStyle.gradient);
+      expect(restored.lyricsAnimationStyle, before.lyricsAnimationStyle);
+      expect(restored.lyricsTextAlignment, before.lyricsTextAlignment);
+      expect(
+        restored.copyWith(showAudioQuality: true).lyricsBackgroundStyle,
+        LyricsBackgroundStyle.gradient,
+      );
+
+      await Future.wait([
+        controller.setLyricsBackgroundStyle(LyricsBackgroundStyle.blur),
+        controller.setLyricsBackgroundStyle(LyricsBackgroundStyle.gradient),
+        controller.setLyricsBackgroundStyle(LyricsBackgroundStyle.blur),
+      ]);
+      final preferences = await SharedPreferences.getInstance();
+      expect(preferences.getString('settings.lyricsBackground'), 'blur');
+      expect(
+        (await container().read(
+          settingsControllerProvider.future,
+        )).lyricsBackgroundStyle,
+        LyricsBackgroundStyle.blur,
+      );
+    },
+  );
+
+  test(
     'existing installs default to all providers without overwriting prefs',
     () async {
       final initial = await container().read(settingsControllerProvider.future);

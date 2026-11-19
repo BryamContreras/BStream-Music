@@ -19,7 +19,7 @@ locking. Unsupported formats preserve the source audio and report unavailable;
 a route that advances without ever delivering PCM cannot silently claim EQ.
 Mix cleanup checks ownership so item reuse/clipping can install a fresh tap.
 
-`BStreamAudioDSP.c` contains the independent five-band biquads, internal
+`BStreamAudioDSP.c` contains the independent ten-band biquads, internal
 headroom, 25 ms transition and conservative RMS/peak silence classifier.
 AVPlayer taps must preserve frame counts: silence is removed through bounded
 `AVAssetReader` lookahead and exact AVPlayerItem seeks, not through tap sample
@@ -52,16 +52,20 @@ decoded; bitrate/format selection is unchanged. Animated artwork and Spotify
 Canvas continue through the separate `video_player` engine.
 
 The app installs `BStreamEqualizer` through the existing `AudioPipeline`, with
-one independent five-band PCM DSP per deck. It does not use Android's vendor
+one independent ten-band PCM DSP per deck. It does not use Android's vendor
 `Equalizer`. The legacy public `AndroidEqualizer` API remains available to
 other consumers of the fork, unchanged. No new decoder or Dart PCM processing
 is introduced.
 
-`BStreamEqualizerConfiguration` hands immutable five-band snapshots to the
-native audio thread. `BStreamEqualizerAudioProcessor` uses five Q=1 biquads at
-60, 230, 910, 3600 and 14000 Hz, with gains from -12 to +12 dB. It applies
-`-max(0, gains)` headroom before the filters/quantization and interpolates
-changes over 25 ms. Headroom reduces clipping risk; overlapping boosts and
+`BStreamEqualizerConfiguration` hands immutable ten-band snapshots to the
+native audio thread. `BStreamEqualizerAudioProcessor` uses ten Q=1 biquads at
+31, 62, 125, 250, 500, 1000, 2000, 4000, 8000 and 16000 Hz, with gains from -12 to +12 dB. It applies
+combined-response headroom before the filters/quantization and interpolates
+changes over 25 ms. One positive band reserves its exact gain. Multiple boosts
+use the largest estimated combined Q=1 response across 257 logarithmic points
+and all ten centers, plus 0.1 dB, capped by the sum of positive gains. Cuts are
+ignored to keep the estimate conservative. This runs once per configuration,
+never per sample. Headroom reduces clipping risk without replacing a limiter;
 extreme transients can still clip. Bands at or above Nyquist are identity.
 Each channel has independent reusable filter history and buffers. Flush/seek
 resets history. PCM16, PCM24/32 and float are supported, including the endian

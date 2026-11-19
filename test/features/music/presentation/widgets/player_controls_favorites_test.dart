@@ -49,6 +49,109 @@ void main() {
     volume: 0.72,
   );
 
+  for (final style in PlayerStyle.values) {
+    for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+      testWidgets(
+        '$style on $platform keeps play interactive while showing loading',
+        (tester) async {
+          _configureView(
+            tester,
+            platform == TargetPlatform.android
+                ? const Size(390, 844)
+                : const Size(1100, 820),
+          );
+          final loading = snapshot.copyWith(status: PlayerStatus.loading);
+          final controller = _TestPlayerController(loading);
+          await tester.pumpWidget(
+            _playerHarness(
+              platform: platform,
+              snapshot: loading,
+              localTrack: localTrack,
+              playlists: _TestPlaylistsController(),
+              playerController: controller,
+              style: style,
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          final primary = find.byKey(const ValueKey('player-primary-control'));
+          final spinner = find.descendant(
+            of: primary,
+            matching: find.byKey(const ValueKey('playback-loading-indicator')),
+          );
+          expect(spinner, findsOneWidget);
+          expect(tester.widget<IconButton>(primary).onPressed, isNotNull);
+          final bounds = tester.getRect(primary);
+          await tester.tap(primary);
+          await tester.pump();
+          expect(controller.togglePlayPauseCalls, 1);
+          expect(spinner, findsNothing);
+          expect(tester.getRect(primary), bounds);
+
+          for (final status in [
+            PlayerStatus.loading,
+            PlayerStatus.paused,
+            PlayerStatus.loading,
+            PlayerStatus.failed,
+            PlayerStatus.playing,
+          ]) {
+            controller.emit(
+              snapshot.copyWith(
+                status: status,
+                errorMessage: status == PlayerStatus.failed
+                    ? 'Test source unavailable'
+                    : null,
+              ),
+            );
+            await tester.pump(const Duration(milliseconds: 180));
+            expect(
+              spinner,
+              status == PlayerStatus.loading ? findsOneWidget : findsNothing,
+              reason: status.name,
+            );
+          }
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump();
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  testWidgets(
+    'queue play button reflects loading without blocking its action',
+    (tester) async {
+      _configureView(tester, const Size(390, 844));
+      final loading = snapshot.copyWith(status: PlayerStatus.loading);
+      final controller = _TestPlayerController(loading);
+      await tester.pumpWidget(
+        _playerHarness(
+          platform: TargetPlatform.android,
+          snapshot: loading,
+          localTrack: localTrack,
+          playlists: _TestPlaylistsController(),
+          playerController: controller,
+          style: PlayerStyle.spotifyMusic,
+          playbackQueue: const PlaybackQueueState(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.byKey(const ValueKey('player-queue-toggle')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      final toggle = find.byKey(const ValueKey('queue-playback-toggle'));
+      final spinner = find.descendant(
+        of: toggle,
+        matching: find.byKey(const ValueKey('playback-loading-indicator')),
+      );
+      expect(spinner, findsOneWidget);
+      await tester.tap(toggle);
+      await tester.pump();
+      expect(controller.togglePlayPauseCalls, 1);
+      expect(spinner, findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   for (final style in [
     PlayerStyle.bstreamMusic,
     PlayerStyle.spotifyMusic,
@@ -1367,6 +1470,79 @@ void main() {
     expect(calls, 1);
     expect(tester.takeException(), isNull);
   });
+
+  for (final style in PlayerStyle.values) {
+    testWidgets(
+      '$style shows lossless source precision and the matching quality icon',
+      (tester) async {
+        _configureView(tester, const Size(960, 720));
+        for (final hiRes in [false, true]) {
+          final file = localTrack.copyWith(
+            filePath: '/tmp/local-lossless.flac',
+            isExternal: true,
+            audioFormat: LocalAudioQuality(
+              codec: 'flac',
+              mimeType: 'audio/flac',
+              sampleRate: hiRes ? 96000 : 44100,
+              bitDepth: hiRes ? 24 : 16,
+              channels: 2,
+            ),
+          );
+          final playing = snapshot.copyWith(sourceUrl: file.filePath);
+          await tester.pumpWidget(
+            _playerHarness(
+              key: ValueKey('$style-$hiRes'),
+              platform: TargetPlatform.windows,
+              snapshot: playing,
+              localTrack: file,
+              playlists: _TestPlaylistsController(),
+              playerController: _TestPlayerController(
+                playing,
+                localTrack: file,
+              ),
+              style: style,
+              showAudioQuality: true,
+              disableAnimations: true,
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          expect(
+            find.text(
+              hiRes ? 'Alta calidad - Hi-Res' : 'Alta calidad - Lossless',
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byIcon(hiRes ? Icons.graphic_eq_rounded : Icons.album_rounded),
+            findsWidgets,
+          );
+          expect(
+            find.byKey(
+              ValueKey(
+                hiRes
+                    ? 'player-audio-quality-hi-res-icon'
+                    : 'player-audio-quality-lossless-icon',
+              ),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.text(
+              hiRes
+                  ? 'FLAC · 24 bits · 96 kHz - Estéreo'
+                  : 'FLAC · 16 bits · 44.1 kHz - Estéreo',
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('player-audio-quality-headphones')),
+            findsNothing,
+          );
+          expect(tester.takeException(), isNull);
+        }
+      },
+    );
+  }
 
   testWidgets('late local metadata never replaces the newly selected track', (
     tester,
@@ -6243,6 +6419,66 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+  }
+
+  for (final style in PlayerStyle.values) {
+    testWidgets('$style keeps metadata actions visible in small viewports', (
+      tester,
+    ) async {
+      for (final variant in const [
+        (size: Size(384, 748.8), platform: TargetPlatform.android),
+        (size: Size(320, 568), platform: TargetPlatform.android),
+        (size: Size(568, 320), platform: TargetPlatform.android),
+        (size: Size(480, 360), platform: TargetPlatform.windows),
+      ]) {
+        _configureView(tester, variant.size, topPadding: 24, bottomPadding: 24);
+        for (final artworkStyle in PlayerArtworkStyle.values) {
+          await tester.pumpWidget(
+            _playerHarness(
+              key: ValueKey((variant, artworkStyle)),
+              platform: variant.platform,
+              snapshot: snapshot.copyWith(
+                thumbnailUrl: '/fixture/control-visibility.png',
+                title: 'A long song title that must leave room for its actions',
+                artist: 'An artist with a deliberately long name',
+              ),
+              localTrack: localTrack,
+              playlists: _TestPlaylistsController(),
+              style: style,
+              artworkStyle: artworkStyle,
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+          for (final key in [
+            'player-favorite-control',
+            'player-menu-control',
+          ]) {
+            final action = find.byKey(ValueKey(key));
+            // Exceptionally short windows may scroll vertically, but must
+            // never clip the actions horizontally or remove them.
+            if (variant.size.height < 400) {
+              await tester.ensureVisible(action);
+              await tester.pump();
+            }
+            expect(
+              action.hitTestable(),
+              findsOneWidget,
+              reason: '$key, $variant, $artworkStyle',
+            );
+            final bounds = tester.getRect(action);
+            expect(bounds.left, greaterThanOrEqualTo(0));
+            expect(bounds.right, lessThanOrEqualTo(variant.size.width));
+            expect(bounds.top, greaterThanOrEqualTo(24));
+            expect(bounds.bottom, lessThanOrEqualTo(variant.size.height - 24));
+            expect(tester.widget<IconButton>(action).onPressed, isNotNull);
+          }
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump();
+        }
+      }
+    });
   }
 
   testWidgets('320x568 player keeps text scale 3 controls reachable', (

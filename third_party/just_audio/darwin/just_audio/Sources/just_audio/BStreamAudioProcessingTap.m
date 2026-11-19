@@ -13,7 +13,7 @@ typedef struct {
     atomic_bool statusChanged;
     atomic_uint_fast64_t sequence;
     atomic_bool enabled;
-    atomic_int gains[5]; // milli-dB; atomic integers are lock-free on iOS.
+    atomic_int gains[BSTREAM_DSP_BANDS]; // milli-dB; atomic integers are lock-free on iOS.
     atomic_uint_fast64_t revision;
     atomic_uint_fast64_t resetEpoch;
     atomic_uint_fast64_t frames;
@@ -70,8 +70,8 @@ static void BSApplyParameters(BStreamTapState *state, bool immediate) {
     uint64_t before = atomic_load_explicit(&state->sequence, memory_order_acquire);
     if (before == state->observedSequence && !immediate) return;
     if (before & 1) return; // Never wait for the UI writer on the render thread.
-    double gains[5];
-    for (int i = 0; i < 5; i++) gains[i] = atomic_load(&state->gains[i]) / 1000.0;
+    double gains[BSTREAM_DSP_BANDS];
+    for (int i = 0; i < BSTREAM_DSP_BANDS; i++) gains[i] = atomic_load(&state->gains[i]) / 1000.0;
     bool enabled = atomic_load(&state->enabled);
     uint64_t revision = atomic_load(&state->revision);
     if (before != atomic_load_explicit(&state->sequence, memory_order_acquire)) return;
@@ -282,7 +282,7 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
     atomic_init(&_state->statusChanged, false);
     atomic_init(&_state->sequence, 0);
     atomic_init(&_state->enabled, false);
-    for (int i = 0; i < 5; i++) atomic_init(&_state->gains[i], 0);
+    for (int i = 0; i < BSTREAM_DSP_BANDS; i++) atomic_init(&_state->gains[i], 0);
     atomic_init(&_state->revision, 0);
     atomic_init(&_state->resetEpoch, 0);
     atomic_init(&_state->frames, 0);
@@ -379,12 +379,12 @@ static void BSTapProcess(MTAudioProcessingTapRef tap, CMItemCount requested,
 - (void)configureEnabled:(BOOL)enabled gains:(NSArray<NSNumber *> *)gains revision:(uint64_t)revision {
     if (atomic_load(&_state->revision) == revision && atomic_load(&_state->enabled) == enabled) {
         BOOL same = YES;
-        for (int i = 0; i < 5; i++) same &= atomic_load(&_state->gains[i]) == (int)llround(gains[i].doubleValue * 1000);
+        for (int i = 0; i < BSTREAM_DSP_BANDS; i++) same &= atomic_load(&_state->gains[i]) == (int)llround(gains[i].doubleValue * 1000);
         if (same) return;
     }
     atomic_fetch_add_explicit(&_state->sequence, 1, memory_order_acq_rel);
     atomic_store(&_state->enabled, enabled);
-    for (int i = 0; i < 5; i++) atomic_store(&_state->gains[i], (int)llround(gains[i].doubleValue * 1000));
+    for (int i = 0; i < BSTREAM_DSP_BANDS; i++) atomic_store(&_state->gains[i], (int)llround(gains[i].doubleValue * 1000));
     atomic_store(&_state->revision, revision);
     atomic_fetch_add_explicit(&_state->sequence, 1, memory_order_release);
 }

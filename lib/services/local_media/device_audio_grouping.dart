@@ -18,7 +18,7 @@ List<DeviceAudioFolder> groupDeviceAudioTracksByFolder(
             );
             return title != 0 ? title : left.id.compareTo(right.id);
           });
-        return DeviceAudioFolder(
+        return DeviceAudioFolder.withSummary(
           id: entry.key,
           name: names[entry.key] ?? 'Audio',
           tracks: List<DeviceAudioTrack>.unmodifiable(folderTracks),

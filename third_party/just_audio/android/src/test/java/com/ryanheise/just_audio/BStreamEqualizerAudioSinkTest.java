@@ -24,7 +24,28 @@ import org.junit.Test;
 public final class BStreamEqualizerAudioSinkTest {
     private static final int RATE = 48_000;
     private static final int CHANNELS = 2;
-    private static final double[] CUT = {0, 0, -6, 0, 0};
+    private static final double[] CUT = {0, 0, 0, 0, 0, -6, 0, 0, 0, 0};
+
+    @Test
+    public void unsupportedFloatAndAudioTrackRejectionUseInt16WithoutLosingFrames() throws Exception {
+        for (boolean canOpenFloat : new boolean[] {false, true}) {
+            FakeSink delegate = new FakeSink();
+            delegate.failFloatInitialization = canOpenFloat;
+            delegate.maxBytesPerCall = 32;
+            BStreamEqualizerConfiguration state = new BStreamEqualizerConfiguration();
+            BStreamEqualizerAudioSink sink = new BStreamEqualizerAudioSink(
+                    delegate.audioSink, state, true, format -> canOpenFloat);
+            sink.configure(format(C.ENCODING_PCM_FLOAT), 0, null);
+
+            ByteBuffer input = tone(128);
+            finish(sink, input, 1234);
+
+            assertEquals(C.ENCODING_PCM_16BIT, delegate.format.pcmEncoding);
+            assertEquals(RATE, delegate.format.sampleRate);
+            assertEquals(128 * CHANNELS * 2, delegate.written.size());
+            for (long timestamp : delegate.timestamps) assertEquals(1234, timestamp);
+        }
+    }
 
     @Test
     public void offAndFlatForwardEveryOriginalPcmByteAndBuffer() throws Exception {
@@ -34,7 +55,7 @@ public final class BStreamEqualizerAudioSinkTest {
                 C.ENCODING_PCM_24BIT_BIG_ENDIAN, C.ENCODING_PCM_32BIT_BIG_ENDIAN}) {
             for (boolean flat : new boolean[] {false, true}) {
                 BStreamEqualizerConfiguration state = new BStreamEqualizerConfiguration();
-                state.configure(flat, flat ? new double[5] : CUT);
+                state.configure(flat, flat ? new double[BStreamEqualizerConfiguration.FREQUENCIES.length] : CUT);
                 FakeSink delegate = new FakeSink();
                 BStreamEqualizerAudioSink sink = sink(delegate, state, encoding, true);
                 ByteBuffer input = patterned(encoding, 32);
@@ -71,7 +92,7 @@ public final class BStreamEqualizerAudioSinkTest {
         assertEquals(4096, state.processedFrames());
         assertEquals(C.ENCODING_PCM_FLOAT, state.encoding());
         double ratio = rms(output, 512) / rms(original, 512);
-        assertTrue("910 Hz should be attenuated by the selected -6 dB band: " + ratio,
+        assertTrue("1000 Hz should be attenuated by the selected -6 dB band: " + ratio,
                 ratio > .4 && ratio < .65);
         // Sample processing reads the decoder buffer; it never modifies it.
         input.rewind();
@@ -381,7 +402,7 @@ public final class BStreamEqualizerAudioSinkTest {
     private static ByteBuffer tone(int frames) {
         ByteBuffer result = ByteBuffer.allocateDirect(frames * CHANNELS * 4).order(ByteOrder.LITTLE_ENDIAN);
         for (int frame = 0; frame < frames; frame++) {
-            float sample = (float)(.2 * Math.sin(2 * Math.PI * 910 * frame / RATE));
+            float sample = (float)(.2 * Math.sin(2 * Math.PI * 1000 * frame / RATE));
             for (int channel = 0; channel < CHANNELS; channel++) result.putFloat(sample);
         }
         result.flip();
@@ -422,6 +443,7 @@ public final class BStreamEqualizerAudioSinkTest {
         int flushCalls;
         int resetCalls;
         int releaseCalls;
+        boolean failFloatInitialization;
         Format format;
 
         final AudioSink audioSink = (AudioSink)Proxy.newProxyInstance(
@@ -434,6 +456,10 @@ public final class BStreamEqualizerAudioSinkTest {
                         case "getFormatSupport": return rawSupport;
                         case "supportsFormat": return true;
                         case "handleBuffer":
+                            if (failFloatInitialization && format.pcmEncoding == C.ENCODING_PCM_FLOAT) {
+                                throw new AudioSink.InitializationException(
+                                        0, RATE, CHANNELS, 0, format, false, null);
+                            }
                             ByteBuffer buffer = (ByteBuffer)arguments[0];
                             buffers.add(buffer);
                             timestamps.add((Long)arguments[1]);

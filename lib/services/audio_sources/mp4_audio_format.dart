@@ -157,6 +157,9 @@ AudioFormatDetails? _readAudioSampleEntry(
   }
   var channels = data.getUint16(16);
   var sampleRate = data.getUint32(24) >> 16;
+  // The ALAC sample entry can say 16 even for a 24-bit source. Only its
+  // codec-specific configuration establishes the original precision.
+  int? bitDepth;
   int? bitrate;
   var offset = entry.payload + (version == 1 ? 44 : 28);
   for (var count = 0; offset + 8 <= entry.end && count < 64; count++) {
@@ -174,6 +177,29 @@ AudioFormatDetails? _readAudioSampleEntry(
         sampleRate = config.sampleRate ?? sampleRate;
         channels = config.channels ?? channels;
       }
+    } else if (atom.type == 'alac' && codec == 'alac') {
+      final bytes = reader.read(atom.payload, 28);
+      if (bytes != null &&
+          bytes[8] == 0 &&
+          const {16, 20, 24, 32}.contains(bytes[9]) &&
+          bytes[13] > 0 &&
+          bytes[13] <= 64 &&
+          _data(bytes).getUint32(24) > 0) {
+        bitDepth = bytes[9];
+        channels = bytes[13];
+        bitrate = _data(bytes).getUint32(20);
+        sampleRate = _data(bytes).getUint32(24);
+      }
+    } else if (atom.type == 'dfLa' && codec == 'flac') {
+      final bytes = reader.read(atom.payload, 42);
+      if (bytes != null &&
+          bytes[4] & 0x7f == 0 &&
+          (bytes[5] << 16 | bytes[6] << 8 | bytes[7]) == 34) {
+        final packed = _data(bytes).getUint64(18);
+        sampleRate = (packed >> 44) & 0xfffff;
+        channels = ((packed >> 41) & 7) + 1;
+        bitDepth = ((packed >> 36) & 31) + 1;
+      }
     } else if (atom.type == 'dOps') {
       final bytes = reader.read(atom.payload, 11);
       if (bytes != null) channels = bytes[1];
@@ -190,6 +216,7 @@ AudioFormatDetails? _readAudioSampleEntry(
     'sampleRate': sampleRate,
     'channels': channels,
     'bitrate': bitrate,
+    'bitDepth': bitDepth,
   });
 }
 

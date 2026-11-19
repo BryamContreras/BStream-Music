@@ -138,10 +138,23 @@ class _LyricsWordTimingTextState extends State<LyricsWordTimingText>
 
   void _tick(Duration _) {
     final position = _positionNow();
-    if (_paintClock.position != position) {
-      _paintClock.update(position);
-    }
+    _updatePaintPosition(position);
     if (!_hasSingingWord(position)) _synchronizeClock();
+  }
+
+  void _updatePaintPosition(Duration position) {
+    final previous = _paintClock.position;
+    if (!_visible || !_validWords || position == previous) return;
+    final earlier = previous < position ? previous : position;
+    final later = previous < position ? position : previous;
+    // Native position samples also arrive between words. The existing clip
+    // already represents this gap, so only invalidate when pixels can change.
+    final changed = widget.words.any(
+      (word) => _reducedMotion
+          ? earlier < word.start && later >= word.start
+          : earlier < word.end && later >= word.start,
+    );
+    if (changed) _paintClock.update(position);
   }
 
   bool _hasSingingWord(Duration position) =>
@@ -151,7 +164,7 @@ class _LyricsWordTimingTextState extends State<LyricsWordTimingText>
     _boundaryTimer?.cancel();
     _boundaryTimer = null;
     final position = _positionNow();
-    _paintClock.update(position, notify: _visible);
+    _updatePaintPosition(position);
     _vsync.enabled = _visible;
     if (!_visible || !_validWords || !widget.playback.value.isPlaying) {
       _ticker.stop();
@@ -293,9 +306,9 @@ bool _validateWords(String text, List<LyricWord> words) {
 class _WordPaintClock extends ChangeNotifier {
   Duration position = Duration.zero;
 
-  void update(Duration value, {bool notify = true}) {
+  void update(Duration value) {
     position = value;
-    if (notify) notifyListeners();
+    notifyListeners();
   }
 }
 
@@ -383,10 +396,12 @@ class _WordTimingPainter extends CustomPainter {
       return;
     }
     paragraph.background.paint(canvas, Offset.zero);
+    final firstStart = paragraph.tokens.first.word.start;
+    if (reducedMotion ? position < firstStart : position <= firstStart) return;
     final clip = Path();
     for (final token in paragraph.tokens) {
       final word = token.word;
-      if (position < word.start) continue;
+      if (position < word.start) break;
       final progress = reducedMotion || position >= word.end
           ? 1.0
           : (position - word.start).inMicroseconds /

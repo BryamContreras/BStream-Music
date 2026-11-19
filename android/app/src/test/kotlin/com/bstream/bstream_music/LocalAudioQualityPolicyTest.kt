@@ -7,6 +7,21 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LocalAudioQualityPolicyTest {
+    @Test fun readsOriginalFlacPrecisionWithoutChangingTheCodecBuffer() {
+        for (depth in listOf(16, 20, 24, 32)) {
+            val header = java.nio.ByteBuffer.allocate(42)
+                .putInt(0x664c6143).putInt(34)
+            header.putLong(18, (96000L shl 44) or (1L shl 41) or ((depth - 1L) shl 36))
+            header.position(0)
+            val expected = LocalAudioQualityPolicy.FlacStreamInfo(depth, 96000, 2)
+            assertEquals(expected, LocalAudioQualityPolicy.flacStreamInfo(header))
+            assertEquals(0, header.position())
+            val streamInfo = header.duplicate().apply { position(8) }.slice()
+            assertEquals(expected, LocalAudioQualityPolicy.flacStreamInfo(streamInfo))
+        }
+        assertNull(LocalAudioQualityPolicy.flacStreamInfo(null))
+        assertNull(LocalAudioQualityPolicy.flacStreamInfo(java.nio.ByteBuffer.allocate(8)))
+    }
     @Test fun acceptsOnlyAccessibleLocalSourceKinds() {
         listOf("/storage/emulated/0/Music/song.mp3", "file:///data/user/0/app/song%20name.m4a",
             "file://localhost/storage/song.flac", "content://media/external/audio/media/12")

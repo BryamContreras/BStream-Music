@@ -19,7 +19,7 @@ Current version: **1.3.1+131**.
 
 ## What's new in 1.3.1
 
-- A 5-band equalizer is now available.
+- A 10-band equalizer is now available.
 - Support for higher quality audio whenever available.
 - Improved and optimized the layouts of the player styles.
 - Added the new Spotify Style player.
@@ -153,7 +153,7 @@ Current version: **1.3.1+131**.
 - Volume is available directly in the player controls.
 - On Windows, Linux, and macOS, choose BStream's audio output device from the
   player's More menu, with independent player volume and crossfade support.
-- A native five-band equalizer is available on Android, iOS, Windows, Linux, and
+- A native ten-band equalizer is available on Android, iOS, Windows, Linux, and
   macOS from Settings > Playback and the player's More menu. Presets and custom
   curves apply live to both playback decks, with headroom compensation and
   bypass when disabled or flat. Android and iOS use BStream's own PCM DSP without
@@ -539,7 +539,7 @@ playback, downloads, embedded YouTube Music account login, TikTok LIVE, backup
 export, and CSV export are adapted to iOS. The system document picker handles
 exports outside BStream's sandbox.
 
-The five-band equalizer uses an in-place native PCM tap and shares presets and
+The ten-band equalizer uses an in-place native PCM tap and shares presets and
 settings with the other players. Optional silence skipping uses conservative
 native analysis, bounded to 12 seconds ahead, followed by exact source-clock
 seeks. It does not send PCM to Dart or change the user's volume. Protected,
@@ -681,7 +681,7 @@ BSTREAM_ANDROID_KEY_ALIAS
 BSTREAM_ANDROID_KEY_PASSWORD
 ```
 
-The workflow verifies all three APK signatures before uploading the artifacts.
+The workflow verifies the signature and architectures of each APK before uploading it.
 
 ## Database, favorites, and backups
 
@@ -772,6 +772,7 @@ application and needs no additional runtime. Artifacts are retained for 30
 days:
 
 ```text
+BStream-Music-<version>-Android-Universal-ARM.apk
 BStream-Music-<version>-Android-armeabi-v7a.apk
 BStream-Music-<version>-Android-arm64-v8a.apk
 BStream-Music-<version>-Android-x86_64.apk
@@ -785,7 +786,9 @@ BStream-Music-<version>-iOS-unsigned.ipa
 
 ### Which file should I install?
 
-- **Most Android phones and tablets:** install `BStream-Music-<version>-Android-arm64-v8a.apk`.
+- **Android phones and tablets when unsure:** install `BStream-Music-<version>-Android-Universal-ARM.apk`.
+  It supports both 32-bit and 64-bit ARM. Use an architecture-specific APK for a smaller download.
+- **64-bit ARM Android devices:** install `BStream-Music-<version>-Android-arm64-v8a.apk`.
 - **Older 32-bit ARM Android devices:** install `BStream-Music-<version>-Android-armeabi-v7a.apk`.
 - **Android x86_64 devices and emulators:** install `BStream-Music-<version>-Android-x86_64.apk`.
 - **iPhone and iPad:** download

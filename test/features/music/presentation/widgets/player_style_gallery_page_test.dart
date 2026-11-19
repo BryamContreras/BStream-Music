@@ -1,52 +1,113 @@
+import 'package:bstream_music/core/theme/app_theme.dart';
+import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/features/music/presentation/providers/app_strings.dart';
 import 'package:bstream_music/features/music/presentation/providers/player_style.dart';
 import 'package:bstream_music/features/music/presentation/widgets/player_style_gallery.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('previews match mobile dark players without changing settings', (
+  testWidgets('miniatures stay static with every surface material', (
     tester,
   ) async {
-    for (final platform in [
-      TargetPlatform.android,
-      TargetPlatform.iOS,
-      TargetPlatform.windows,
-    ]) {
+    _configureView(tester, const Size(320, 720));
+    for (final mode in SurfaceBackgroundMode.values) {
       for (final style in PlayerStyle.values) {
         await tester.pumpWidget(
           MaterialApp(
-            key: ValueKey('preview-$platform-$style'),
-            theme: ThemeData(brightness: Brightness.light, platform: platform),
+            theme: ThemeData(
+              extensions: [AppSurfaceTheme(backgroundMode: mode)],
+            ),
             home: Scaffold(
               body: Center(
                 child: SizedBox(
-                  width: 190,
-                  height: 400,
+                  width: 152,
+                  height: 320,
                   child: PlayerStylePreview(style: style),
                 ),
               ),
             ),
           ),
         );
-        await tester.pump();
-        expect(
-          Theme.of(
-            tester.element(
-              find.byKey(ValueKey('player-style-preview-${style.code}')),
-            ),
-          ).brightness,
-          platform == TargetPlatform.windows
-              ? Brightness.light
-              : Brightness.dark,
-        );
-        expect(
-          Theme.of(tester.element(find.byType(Scaffold))).brightness,
-          Brightness.light,
-        );
+        await tester.pumpAndSettle();
+        final miniature = find.byType(PlayerStylePreview);
+        for (final effect in [
+          find.byType(BackdropFilter),
+          find.byType(ImageFiltered),
+          find.byType(LiquidGlassSurface),
+        ]) {
+          expect(
+            find.descendant(of: miniature, matching: effect),
+            findsNothing,
+            reason: '$style / $mode must not sample or filter live surfaces',
+          );
+        }
+        expect(tester.binding.hasScheduledFrame, isFalse);
         expect(tester.takeException(), isNull);
       }
     }
+  });
+
+  testWidgets('bundled previews match mobile and desktop palettes', (
+    tester,
+  ) async {
+    final verifiedAssets = <String>{};
+    for (final platform in [
+      TargetPlatform.android,
+      TargetPlatform.iOS,
+      TargetPlatform.windows,
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+    ]) {
+      for (final brightness in Brightness.values) {
+        for (final style in PlayerStyle.values) {
+          await tester.pumpWidget(
+            MaterialApp(
+              key: ValueKey('preview-$platform-$brightness-$style'),
+              theme: ThemeData(brightness: brightness, platform: platform),
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 190,
+                    height: 400,
+                    child: PlayerStylePreview(style: style),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          final preview = find.byKey(
+            ValueKey('player-style-preview-${style.code}'),
+          );
+          final image = tester.widget<Image>(
+            find.descendant(of: preview, matching: find.byType(Image)),
+          );
+          final dark =
+              platform == TargetPlatform.android ||
+              platform == TargetPlatform.iOS ||
+              brightness == Brightness.dark;
+          final path =
+              'assets/player_styles/${dark ? 'dark' : 'light'}/${style.code}.png';
+          expect((image.image as AssetImage).assetName, path);
+          expect(image.excludeFromSemantics, isTrue);
+          if (verifiedAssets.add(path)) {
+            final bytes = await rootBundle.load(path);
+            // PNG dimensions are part of its IHDR. This also guards accidental
+            // exports at 2x/3x, which multiply thumbnail decode memory.
+            expect(bytes.getUint32(16), 380);
+            expect(bytes.getUint32(20), 800);
+          }
+          expect(
+            Theme.of(tester.element(find.byType(Scaffold))).brightness,
+            brightness,
+          );
+          expect(tester.takeException(), isNull);
+        }
+      }
+    }
+    expect(verifiedAssets.length, PlayerStyle.values.length * 2);
   });
 
   testWidgets('gallery saves styles immediately and stays open', (
@@ -62,16 +123,19 @@ void main() {
       find.byType(PlayerStylePreview),
       findsNWidgets(PlayerStyle.values.length),
     );
+    expect(
+      find.text(const AppStrings(AppLanguage.spanish).playerStylePreview),
+      findsNothing,
+    );
+    expect(find.byIcon(Icons.check_circle_rounded), findsNothing);
+    expect(find.byIcon(Icons.radio_button_unchecked_rounded), findsNothing);
     for (final style in PlayerStyle.values) {
       final previewFinder = find.byKey(
         ValueKey('player-style-preview-${style.code}'),
       );
       expect(
-        find.descendant(
-          of: previewFinder,
-          matching: find.text('BStream Music'),
-        ),
-        findsNWidgets(2),
+        find.descendant(of: previewFinder, matching: find.byType(Image)),
+        findsOneWidget,
       );
       final preview = tester.getRect(previewFinder);
       expect(preview.top, greaterThanOrEqualTo(0));
@@ -90,6 +154,44 @@ void main() {
       findsOneWidget,
     );
     expect(saved, [PlayerStyle.appleMusic]);
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pump();
+      const strings = AppStrings(AppLanguage.spanish);
+      for (final selection in [
+        (
+          code: 'apple-music',
+          label: strings.playerStyleAppleMusic,
+          selected: true,
+        ),
+        (
+          code: 'bstream-music',
+          label: strings.playerStyleBStreamMusic,
+          selected: false,
+        ),
+      ]) {
+        final card = find.byKey(
+          ValueKey('settings-player-style-option-${selection.code}'),
+        );
+        expect(
+          tester.getSemantics(card),
+          matchesSemantics(
+            label: selection.label,
+            isButton: true,
+            isSelected: selection.selected,
+            hasSelectedState: true,
+            hasTapAction: true,
+          ),
+        );
+        final material = tester.widget<Material>(
+          find.descendant(of: card, matching: find.byType(Material)).first,
+        );
+        final border = (material.shape! as RoundedRectangleBorder).side;
+        expect(border.width, selection.selected ? 2 : 1);
+      }
+    } finally {
+      semantics.dispose();
+    }
     expect(
       find.byKey(const ValueKey('settings-player-style-apply')),
       findsNothing,

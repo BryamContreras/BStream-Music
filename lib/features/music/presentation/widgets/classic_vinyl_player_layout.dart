@@ -642,6 +642,7 @@ class _ClassicVinylControls extends ConsumerWidget {
     final transport = _ClassicVinylTransportControls(
       hasTrack: hasTrack,
       isPlaying: isPlaying,
+      isLoading: snapshot.status == PlayerStatus.loading,
       shuffleEnabled: snapshot.shuffleEnabled,
       repeatMode: snapshot.repeatMode,
       compact: compact,
@@ -717,6 +718,7 @@ class _ClassicVinylTransportControls extends ConsumerWidget {
   const _ClassicVinylTransportControls({
     required this.hasTrack,
     required this.isPlaying,
+    required this.isLoading,
     required this.shuffleEnabled,
     required this.repeatMode,
     required this.compact,
@@ -727,6 +729,7 @@ class _ClassicVinylTransportControls extends ConsumerWidget {
 
   final bool hasTrack;
   final bool isPlaying;
+  final bool isLoading;
   final bool shuffleEnabled;
   final PlaybackRepeatMode repeatMode;
   final bool compact;
@@ -851,16 +854,11 @@ class _ClassicVinylTransportControls extends ConsumerWidget {
                           Size.square(fittedPrimaryButtonSize),
                         ),
                         iconSize: primaryIconSize,
-                        icon: Transform.translate(
-                          offset: isPlaying
-                              ? Offset.zero
-                              : const Offset(1.25, 0),
-                          transformHitTests: false,
-                          child: Icon(
-                            isPlaying
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
-                          ),
+                        icon: PlaybackControlIcon(
+                          isLoading: isLoading,
+                          isPlaying: isPlaying,
+                          loadingLabel: strings.playbackLoading,
+                          playOffset: const Offset(1.25, 0),
                         ),
                         onPressed: hasTrack
                             ? () => ref

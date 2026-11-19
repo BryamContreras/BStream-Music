@@ -61,6 +61,7 @@ final class InnerTubeDownloadService
       StreamController<DownloadProgress>.broadcast(sync: true);
   final Set<String> _cancelledTaskIds = <String>{};
   final Map<String, Timer> _cancelledTaskTimers = <String, Timer>{};
+  final _cancellationEvents = StreamController<String?>.broadcast(sync: true);
   bool _disposed = false;
 
   @override
@@ -81,6 +82,7 @@ final class InnerTubeDownloadService
       _cancelledTaskIds.remove(normalizedTaskId);
       _cancelledTaskTimers.remove(normalizedTaskId);
     });
+    _cancellationEvents.add(normalizedTaskId);
   }
 
   @override
@@ -278,6 +280,7 @@ final class InnerTubeDownloadService
             headers: resolved.headers,
             rangePlan: _googleVideoRangePlan(resolved),
             isCancelled: () => _disposed || _isTaskCancelled(taskId),
+            cancellationEvents: _cancellationFor(taskId),
             onProgress: (value) {
               if (_isTaskCancelled(taskId)) return;
               final fraction = value.fraction;
@@ -392,6 +395,10 @@ final class InnerTubeDownloadService
 
   bool _isTaskCancelled(String taskId) => _cancelledTaskIds.contains(taskId);
 
+  Stream<void> _cancellationFor(String taskId) => _cancellationEvents.stream
+      .where((cancelledId) => cancelledId == null || cancelledId == taskId)
+      .map<void>((_) {});
+
   Future<DownloadResult> _downloadUpgradedAudio(
     String url,
     DownloadOptions options,
@@ -420,6 +427,7 @@ final class InnerTubeDownloadService
       destination: destination,
       headers: source.httpHeaders ?? const {},
       isCancelled: () => _disposed || _isTaskCancelled(taskId),
+      cancellationEvents: _cancellationFor(taskId),
       onProgress: (progress) {
         if (_disposed || _isTaskCancelled(taskId)) return;
         _emit(
@@ -622,11 +630,13 @@ final class InnerTubeDownloadService
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _cancellationEvents.add(null);
     for (final timer in _cancelledTaskTimers.values) {
       timer.cancel();
     }
     _cancelledTaskTimers.clear();
     _cancelledTaskIds.clear();
+    await _cancellationEvents.close();
     if (disposePlaybackService) await playback.dispose();
     await _progress.close();
   }

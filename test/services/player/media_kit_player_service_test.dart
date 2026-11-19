@@ -98,10 +98,13 @@ void main() {
   });
 
   group('native equalizer', () {
-    const bass = EqualizerSettings(enabled: true, gainsDb: [6, 3, 0, 0, 0]);
+    const bass = EqualizerSettings(
+      enabled: true,
+      gainsDb: [6, 3, 0, 0, 0, 0, 0, 0, 0, 0],
+    );
     const vocal = EqualizerSettings(
       enabled: true,
-      gainsDb: [-3, 0, 3.5, 2, -1],
+      gainsDb: [-3, 0, 3.5, 2, -1, 1, 2, 0, -1, -2],
     );
 
     test('optional capability leaves existing backends compatible', () async {
@@ -204,7 +207,7 @@ void main() {
         await _waitUntil(() => active.equalizerCalls.contains(bass));
         const skipped = EqualizerSettings(
           enabled: true,
-          gainsDb: [1, 2, 3, 4, 5],
+          gainsDb: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         );
         final intermediate = service.configureEqualizer(skipped);
         final latest = service.configureEqualizer(vocal);

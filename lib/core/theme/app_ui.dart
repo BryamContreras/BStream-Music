@@ -35,6 +35,10 @@ const double appCardGap = 6.0;
 /// Small external gap between consecutive song rows, preserving their hit area.
 const double appTrackRowGap = 2.0;
 
+/// Insets shared by song rows and compact playback settings.
+const double appTrackRowPaddingHorizontal = 10.0;
+const double appTrackRowPaddingVertical = 7.0;
+
 /// Horizontal padding inside a list card's content area.
 const double appListCardPaddingHorizontal = 16.0;
 

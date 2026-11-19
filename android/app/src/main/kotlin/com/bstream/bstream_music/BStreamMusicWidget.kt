@@ -18,6 +18,8 @@ import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.system.Os
 import android.text.Spannable
 import android.text.SpannableStringBuilder
@@ -29,11 +31,22 @@ import android.view.View
 import android.widget.RemoteViews
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.roundToInt
-import org.json.JSONArray
 
-class BStreamMusicWidget : AppWidgetProvider() {
+class BStreamMusicGlassWidget : BStreamMusicWidget() {
+    override val glassBackground = true
+}
+
+open class BStreamMusicWidget : AppWidgetProvider() {
+    protected open val glassBackground = false
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        appWidgetIds.forEach { pendingQueueFocus.remove(it) }
+    }
+
     override fun onUpdate(
         context: Context,
         appWidgetManager: AppWidgetManager,
@@ -55,11 +68,25 @@ class BStreamMusicWidget : AppWidgetProvider() {
         notifyQueueChanged(context, appWidgetManager, appWidgetId)
     }
 
+    private fun render(context: Context, manager: AppWidgetManager, id: Int): RemoteViews =
+        renderForOptions(
+            context, manager.getAppWidgetOptions(id),
+            appWidgetId = id, focusQueue = true, glassBackground = glassBackground,
+        )
+
     companion object {
         private const val PREFS = "bstream_home_widget"
         private const val COVER_FILE = "bstream_widget_cover.jpg"
-        private data class ArtworkFrame(val key: String, val cover: Bitmap?, val background: Bitmap)
+        private class ArtworkFrame(val key: String, val cover: Bitmap?, backdrop: () -> Bitmap) {
+            val background by lazy(backdrop)
+        }
+        private val widgetProviders = mapOf(
+            BStreamMusicWidget::class.java.name to false,
+            BStreamMusicGlassWidget::class.java.name to true,
+        )
         private val artworkFrames = arrayOfNulls<ArtworkFrame>(2)
+        private val pendingQueueFocus = ConcurrentHashMap<Int, String>()
+        private val queueFocusHandler = Handler(Looper.getMainLooper())
 
         private fun coverFile(context: Context, slot: Int): File = File(
             context.filesDir,
@@ -72,20 +99,25 @@ class BStreamMusicWidget : AppWidgetProvider() {
             val previousQueue = prefs.getString("queueJson", "[]").orEmpty()
             val nextQueue = data["queueJson"] as? String ?: previousQueue
             val queueChanged = previousQueue != nextQueue
-            val focusChanged = queueFocus(previousQueue) != queueFocus(nextQueue)
-            val currentQueuePosition = queueCurrentPosition(nextQueue)
+            val previousFocus = if (queueChanged) BStreamWidgetQueue.read(previousQueue).focus else null
+            val queue = if (queueChanged || !prefs.contains("queueCurrentPosition")) {
+                BStreamWidgetQueue.read(nextQueue)
+            } else null
+            val focusChanged = previousFocus != null && previousFocus != queue?.focus
             prefs.edit()
                 .putString("trackId", trackId)
                 .putString("title", data["title"] as? String ?: "")
                 .putString("artist", data["artist"] as? String ?: "")
                 .putBoolean("playing", data["isPlaying"] as? Boolean ?: false)
+                .putBoolean("loading", data["isLoading"] as? Boolean ?: false)
+                .putString("loadingLabel", data["loadingLabel"] as? String ?: "")
                 .putBoolean("favorite", data["isFavorite"] as? Boolean ?: false)
                 .putString("repeatMode", data["repeatMode"] as? String ?: "off")
                 .putInt("accent", data["accentColor"] as? Int ?: 0xFFF5F7F5.toInt())
                 .putString("language", data["languageCode"] as? String ?: "es")
-                .putString("queueJson", nextQueue)
-                .putInt("queueCurrentPosition", currentQueuePosition)
                 .apply {
+                    if (queueChanged) putString("queueJson", nextQueue)
+                    if (queue != null) putInt("queueCurrentPosition", queue.selectedPosition ?: 0)
                     // Keep the last complete cover and palette during a track
                     // change. The replacement arrives asynchronously.
                     if (trackId.isEmpty()) putBoolean("hasCover", false)
@@ -101,7 +133,7 @@ class BStreamMusicWidget : AppWidgetProvider() {
             val path = data["artworkPath"] as? String ?: return
             val source = File(path)
             if (!source.isFile) return
-            val bitmap = decodeSampled(source) ?: return
+            val bitmap = BStreamWidgetArtwork.decode(source, 384) ?: return
             saveArtwork(context, prefs, trackId, bitmap)
         }
 
@@ -148,20 +180,6 @@ class BStreamMusicWidget : AppWidgetProvider() {
             }
         }
 
-        private fun decodeSampled(file: File): Bitmap? {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.path, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            var sample = 1
-            while (bounds.outWidth / sample > 384 || bounds.outHeight / sample > 384) {
-                sample *= 2
-            }
-            return BitmapFactory.decodeFile(
-                file.path,
-                BitmapFactory.Options().apply { inSampleSize = sample },
-            )
-        }
-
         fun refresh(
             context: Context,
             animateArtwork: Boolean = false,
@@ -169,27 +187,25 @@ class BStreamMusicWidget : AppWidgetProvider() {
             focusQueue: Boolean = false,
         ) {
             val manager = AppWidgetManager.getInstance(context)
-            val ids = manager.getAppWidgetIds(ComponentName(context, BStreamMusicWidget::class.java))
-            ids.forEach { id ->
+            widgetProviders.forEach { (provider, glassBackground) ->
                 // Publish a complete stable snapshot for metadata changes. Android
                 // merges partial updates into its cached views, which would replay
                 // a cached setDisplayedChild animation even for a button update.
-                manager.updateAppWidget(
-                    id,
-                    renderForOptions(
-                        context,
-                        manager.getAppWidgetOptions(id),
-                        animateArtwork,
-                        appWidgetId = id,
-                        focusQueue = focusQueue,
-                    ),
-                )
-                if (queueChanged || focusQueue) notifyQueueChanged(context, manager, id)
+                manager.getAppWidgetIds(ComponentName(context, provider)).forEach { id ->
+                    manager.updateAppWidget(
+                        id,
+                        renderForOptions(
+                            context,
+                            manager.getAppWidgetOptions(id),
+                            animateArtwork,
+                            appWidgetId = id,
+                            focusQueue = focusQueue,
+                            glassBackground = glassBackground,
+                        ),
+                    )
+                    if (queueChanged || focusQueue) notifyQueueChanged(context, manager, id)
+                }
             }
-        }
-
-        private fun render(context: Context, manager: AppWidgetManager, id: Int): RemoteViews {
-            return renderForOptions(context, manager.getAppWidgetOptions(id), appWidgetId = id)
         }
 
         internal fun renderForOptions(
@@ -198,11 +214,14 @@ class BStreamMusicWidget : AppWidgetProvider() {
             animateArtwork: Boolean = false,
             appWidgetId: Int? = null,
             focusQueue: Boolean = false,
+            glassBackground: Boolean = false,
         ): RemoteViews {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val title = prefs.getString("title", "").orEmpty()
             val artist = prefs.getString("artist", "").orEmpty()
             val isPlaying = prefs.getBoolean("playing", false)
+            val isLoading = prefs.getBoolean("loading", false) && title.isNotEmpty() &&
+                !prefs.getString("trackId", "").isNullOrEmpty()
             val isFavorite = prefs.getBoolean("favorite", false)
             val repeatMode = prefs.getString("repeatMode", "off").orEmpty()
             val accent = prefs.getInt("accent", 0xFFF5F7F5.toInt())
@@ -227,22 +246,26 @@ class BStreamMusicWidget : AppWidgetProvider() {
             )
             val sizeCategory = BStreamWidgetLayout.forSize(currentWidth, currentHeight)
             val layout = when (sizeCategory) {
-                BStreamWidgetLayout.COMPACT_SMALL -> R.layout.bstream_music_widget_compact_small
-                BStreamWidgetLayout.COMPACT -> R.layout.bstream_music_widget_compact
-                BStreamWidgetLayout.EXPANDED -> R.layout.bstream_music_widget_expanded
-                BStreamWidgetLayout.QUEUE -> R.layout.bstream_music_widget_queue
-                BStreamWidgetLayout.LARGE -> R.layout.bstream_music_widget
+                BStreamWidgetLayout.COMPACT_SMALL -> R.layout.bstream_music_widget_compact_small_v2
+                BStreamWidgetLayout.COMPACT -> R.layout.bstream_music_widget_compact_v2
+                BStreamWidgetLayout.EXPANDED -> R.layout.bstream_music_widget_expanded_v2
+                BStreamWidgetLayout.QUEUE -> R.layout.bstream_music_widget_queue_v2
+                BStreamWidgetLayout.LARGE -> R.layout.bstream_music_widget_v2
             }
             return RemoteViews(context.packageName, layout).apply {
-                bindArtwork(context, prefs, this, accent, animateArtwork)
+                if (glassBackground) {
+                    setInt(R.id.widget_surface, "setBackgroundResource", R.drawable.bstream_widget_glass_background)
+                    setViewVisibility(R.id.widget_backdrop, View.GONE)
+                }
+                bindArtwork(context, prefs, this, accent, animateArtwork, showBackdrop = !glassBackground)
                 // Keep the extra lower breathing room at normal text scale. At
-                // accessibility font sizes, restore the previous inset so the
+                // accessibility font sizes, reduce the inset so the
                 // three metadata lines retain enough vertical space.
                 val fontScale = context.resources.configuration.fontScale
                 val density = context.resources.displayMetrics.density
                 when (sizeCategory) {
                     BStreamWidgetLayout.LARGE -> {
-                        val bottom = if (fontScale > 1f) 8 else 14
+                        val bottom = if (fontScale > 1f) 4 else 14
                         setViewPadding(
                             R.id.widget_card,
                             (10 * density).roundToInt(),
@@ -326,7 +349,7 @@ class BStreamMusicWidget : AppWidgetProvider() {
                             // Bump the adapter identity when the collection row
                             // RemoteViews schema changes so launchers discard
                             // rows cached from the previous widget version.
-                            data = Uri.parse("bstream-widget://queue/$appWidgetId/rows-v4")
+                            data = Uri.parse("bstream-widget://queue/$appWidgetId/rows-v5")
                         }
                         setRemoteAdapter(R.id.widget_queue_list, adapterIntent)
                         setEmptyView(R.id.widget_queue_list, R.id.widget_queue_empty)
@@ -335,16 +358,34 @@ class BStreamMusicWidget : AppWidgetProvider() {
                         )
                         setPendingIntentTemplate(R.id.widget_queue_list, queueClickTemplate)
                         if (focusQueue) {
+                            pendingQueueFocus[appWidgetId] = queueFocus(prefs.getString("queueJson", "[]").orEmpty())
+                            // History remains in the adapter, but the scroll
+                            // target is the playing row, not its predecessors.
                             setScrollPosition(
                                 R.id.widget_queue_list,
-                                (prefs.getInt("queueCurrentPosition", 0) - 2).coerceAtLeast(0),
+                                prefs.getInt("queueCurrentPosition", 0).coerceAtLeast(0),
                             )
                         }
                     }
                 }
                 setImageViewResource(
-                    R.id.widget_play_pause,
+                    R.id.widget_play_pause_icon,
                     if (isPlaying) R.drawable.bstream_widget_pause else R.drawable.bstream_widget_play,
+                )
+                // ProgressBar animates in the launcher while visible. No timer,
+                // Dart frames or repeated widget broadcasts drive the spinner.
+                setViewVisibility(R.id.widget_play_pause_icon, if (isLoading) View.INVISIBLE else View.VISIBLE)
+                setViewVisibility(R.id.widget_play_pause_loading, if (isLoading) View.VISIBLE else View.GONE)
+                setContentDescription(
+                    R.id.widget_play_pause,
+                    if (isLoading) {
+                        prefs.getString("loadingLabel", "")?.takeIf { it.isNotBlank() } ?: run {
+                            val configuration = Configuration(context.resources.configuration).apply {
+                                setLocale(Locale.forLanguageTag(prefs.getString("language", "es") ?: "es"))
+                            }
+                            context.createConfigurationContext(configuration).getString(R.string.widget_loading)
+                        }
+                    } else context.getString(R.string.widget_play_pause),
                 )
                 setInt(
                     R.id.widget_repeat,
@@ -391,21 +432,27 @@ class BStreamMusicWidget : AppWidgetProvider() {
             }
         }
 
-        private fun queueFocus(json: String): String = runCatching {
-            val queue = JSONArray(json)
-            val current = (0 until queue.length())
-                .mapNotNull(queue::optJSONObject)
-                .firstOrNull { it.optBoolean("isCurrent", false) }
-                ?: queue.optJSONObject(0)
-            "${current?.optString("queueIndex").orEmpty()}:${current?.optString("id").orEmpty()}"
-        }.getOrDefault("")
+        private fun queueFocus(json: String): String = BStreamWidgetQueue.read(json).focus
 
-        private fun queueCurrentPosition(json: String): Int = runCatching {
-            val queue = JSONArray(json)
-            (0 until queue.length()).firstOrNull { index ->
-                queue.optJSONObject(index)?.optBoolean("isCurrent", false) == true
-            } ?: 0
-        }.getOrDefault(0)
+        /** Complete a focus request after the launcher has fetched the current row. */
+        internal fun onCurrentQueueRowReady(context: Context, widgetId: Int, identity: String) {
+            if (!pendingQueueFocus.remove(widgetId, identity)) return
+            // One native callback lets the row cross Binder and reach layout.
+            // There is no polling, playback-position timer or artwork resend.
+            queueFocusHandler.postDelayed({
+                val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                if (queueFocus(prefs.getString("queueJson", "[]").orEmpty()) != identity) return@postDelayed
+                val manager = AppWidgetManager.getInstance(context)
+                val provider = manager.getAppWidgetInfo(widgetId)?.provider ?: return@postDelayed
+                if (provider.packageName != context.packageName || provider.className !in widgetProviders) return@postDelayed
+                manager.partiallyUpdateAppWidget(
+                    widgetId,
+                    RemoteViews(context.packageName, R.layout.bstream_music_widget_queue_v2).apply {
+                        setScrollPosition(R.id.widget_queue_list, prefs.getInt("queueCurrentPosition", 0).coerceAtLeast(0))
+                    },
+                )
+            }, 160)
+        }
 
         private fun notifyQueueChanged(context: Context, manager: AppWidgetManager, id: Int) {
             val options = manager.getAppWidgetOptions(id)
@@ -441,17 +488,25 @@ class BStreamMusicWidget : AppWidgetProvider() {
             val highlight = palette?.second ?: if (artwork != null) prefs.getInt("paletteHighlight$slot", accent) else accent
             // At most two small cover/backdrop pairs; metadata updates reuse
             // them without decoding files or rebuilding gradients each time.
-            return ArtworkFrame(cacheKey(), artwork, backdrop(base, highlight)).also { artworkFrames[slot] = it }
+            return ArtworkFrame(cacheKey(), artwork) { backdrop(base, highlight) }
+                .also { artworkFrames[slot] = it }
         }
 
-        private fun bindArtwork(context: Context, prefs: android.content.SharedPreferences, views: RemoteViews, accent: Int, animateArtwork: Boolean) {
+        private fun bindArtwork(
+            context: Context,
+            prefs: android.content.SharedPreferences,
+            views: RemoteViews,
+            accent: Int,
+            animateArtwork: Boolean,
+            showBackdrop: Boolean,
+        ) {
             val hasCover = prefs.getBoolean("hasCover", false)
             val activeSlot = if (hasCover) prefs.getInt("coverSlot", 0).coerceIn(0, 1) else 0
             for (slot in 0..1) {
                 val frame = artworkFrame(context, prefs, slot, hasCover, accent)
                 val coverId = if (slot == 0) R.id.widget_artwork_first else R.id.widget_artwork_second
                 val backdropId = if (slot == 0) R.id.widget_backdrop_first else R.id.widget_backdrop_second
-                views.setImageViewBitmap(backdropId, frame.background)
+                if (showBackdrop) views.setImageViewBitmap(backdropId, frame.background)
                 if (frame.cover != null) {
                     views.setImageViewBitmap(coverId, frame.cover)
                 } else {
@@ -460,14 +515,14 @@ class BStreamMusicWidget : AppWidgetProvider() {
                 if (!animateArtwork) {
                     val visibility = if (slot == activeSlot) View.VISIBLE else View.GONE
                     views.setViewVisibility(coverId, visibility)
-                    views.setViewVisibility(backdropId, visibility)
+                    if (showBackdrop) views.setViewVisibility(backdropId, visibility)
                 }
             }
             // The launcher performs the short native fade; there are no frame
             // timers or repeated bitmap IPC updates in the application.
             if (animateArtwork) {
                 views.setDisplayedChild(R.id.widget_artwork, activeSlot)
-                views.setDisplayedChild(R.id.widget_backdrop, activeSlot)
+                if (showBackdrop) views.setDisplayedChild(R.id.widget_backdrop, activeSlot)
             }
         }
 

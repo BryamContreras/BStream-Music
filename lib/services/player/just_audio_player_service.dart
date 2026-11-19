@@ -619,7 +619,7 @@ class JustAudioPlayerService
         final deck = entry.value;
         if (deck.applied == _equalizerSettings && !deck.unavailable) continue;
         final desired = _equalizerSettings;
-        // Native configuration is a single immutable five-band update. Clearing
+        // Native configuration is a single immutable ten-band update. Clearing
         // the cache first makes returning to an earlier curve safe after errors.
         deck.applied = null;
         try {

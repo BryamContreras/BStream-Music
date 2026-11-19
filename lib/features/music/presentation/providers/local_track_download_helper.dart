@@ -127,7 +127,8 @@ class LocalTrackDownloadHelper {
       }
 
       final track = _trackInfoFromLocalTrack(localTrack);
-      final candidates = _thumbnailCandidates(track).toList(growable: false);
+      final sources = _acceptedThumbnailSources(track);
+      final candidates = _thumbnailCandidates(sources).toList(growable: false);
       if (candidates.isEmpty) {
         continue;
       }
@@ -141,7 +142,7 @@ class LocalTrackDownloadHelper {
       final storedSourceIsCurrent =
           storedSource != null &&
           storedSource.isNotEmpty &&
-          _acceptedThumbnailSources(track).contains(storedSource);
+          sources.contains(storedSource);
       if (hasStoredArtwork && storedSourceIsCurrent) {
         consecutiveFailures = 0;
         continue;
@@ -154,6 +155,7 @@ class LocalTrackDownloadHelper {
         track,
         thumbnailsDirectory,
         identityDigest,
+        artworkCandidates: candidates,
       );
       if (savedThumbnail == null) {
         consecutiveFailures++;
@@ -1163,9 +1165,14 @@ class LocalTrackDownloadHelper {
     String directoryPath,
     String identityDigest, {
     bool Function()? isCancelled,
+    List<Uri>? artworkCandidates,
   }) async {
     _throwIfDownloadCancelled(isCancelled);
-    final candidates = _thumbnailCandidates(track).toList(growable: false);
+    final candidates =
+        artworkCandidates ??
+        _thumbnailCandidates(
+          _acceptedThumbnailSources(track),
+        ).toList(growable: false);
     if (candidates.isEmpty) {
       return null;
     }
@@ -1478,22 +1485,9 @@ class LocalTrackDownloadHelper {
     return '$destination.$operation-$sequence.part';
   }
 
-  Iterable<Uri> _thumbnailCandidates(TrackInfo track) sync* {
+  Iterable<Uri> _thumbnailCandidates(Iterable<String> sources) sync* {
     final seen = <String>{};
-    final direct = track.thumbnailUrl?.trim();
-    final catalog = track.catalogThumbnailUrl?.trim();
-    final videoArtwork = youtubeThumbnailSourceForVideoId(
-      _youtubeVideoId(track),
-    );
-    // catalogThumbnailUrl is explicitly the square music-catalog cover. Some
-    // legacy rows predate metadataSource persistence, so its presence is more
-    // authoritative than the enum when choosing artwork.
-    final candidates = <String>[
-      ...artworkDownloadSourceCandidates(catalog),
-      ...artworkDownloadSourceCandidates(direct),
-      ...artworkDownloadSourceCandidates(videoArtwork),
-    ];
-    for (final source in candidates) {
+    for (final source in sources) {
       final uri = Uri.tryParse(source);
       if (uri != null && uri.hasScheme && seen.add(uri.toString())) {
         yield uri;
@@ -1507,6 +1501,8 @@ class LocalTrackDownloadHelper {
     final videoArtwork = youtubeThumbnailSourceForVideoId(
       _youtubeVideoId(track),
     );
+    // The square catalog cover takes precedence, including on legacy rows
+    // created before metadataSource was persisted.
     return <String>{
       ...artworkDownloadSourceCandidates(catalog),
       ...artworkDownloadSourceCandidates(direct),
@@ -1557,7 +1553,11 @@ class LocalTrackDownloadHelper {
       // from post-frame library maintenance can race Android surface startup,
       // while the CPU decoder verifies the complete frame safely.
       return await (_thumbnailValidator?.call(data) ??
-          compute(_validatedThumbnailExtension, data));
+          runBackgroundTransform(
+            data,
+            _validatedThumbnailExtension,
+            debugName: 'BStream download cover validation',
+          ));
     } catch (_) {
       // A matching filename or magic prefix is insufficient: truncated image
       // data would otherwise become the permanent local-first cover.
