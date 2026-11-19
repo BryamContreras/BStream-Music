@@ -334,13 +334,21 @@ private struct NowPlayingWidgetView: View {
 @main
 struct BStreamNowPlayingWidgets: WidgetBundle {
   var body: some Widget {
-    BStreamNowPlayingWidget(usesArtworkBackdrop: true)
+    BStreamNowPlayingWidget()
     BStreamNowPlayingWidget(usesArtworkBackdrop: false)
   }
 }
 
 struct BStreamNowPlayingWidget: Widget {
   let usesArtworkBackdrop: Bool
+
+  init() {
+    self.init(usesArtworkBackdrop: true)
+  }
+
+  init(usesArtworkBackdrop: Bool) {
+    self.usesArtworkBackdrop = usesArtworkBackdrop
+  }
 
   var body: some WidgetConfiguration {
     StaticConfiguration(

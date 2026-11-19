@@ -320,11 +320,21 @@ jobs:
           flutter pub get --enforce-lockfile
 
       - name: Build ARMv7, ARMv8, and x86_64 APKs
-        run: >-
-          flutter build apk
-          --release
-          --split-per-abi
-          --target-platform android-arm,android-arm64,android-x64
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/android-apk-build.log"
+          for attempt in 1 2 3; do
+            if flutter build apk --release --split-per-abi \
+              --target-platform android-arm,android-arm64,android-x64 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if [[ "$attempt" == 3 ]] || ! grep -Eq 'SDK package NDK.*Error reading Zip content' "$log"; then
+              exit 1
+            fi
+            echo "Retrying after an incomplete Android NDK download (attempt $((attempt + 1)))."
+            sleep 5
+          done
 
       - name: Build universal ARM APK
         shell: bash
