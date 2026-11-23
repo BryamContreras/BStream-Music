@@ -1628,7 +1628,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
     bool automaticTransition = false,
     Duration initialPosition = Duration.zero,
   }) async {
-    if (track.streamSource == AudioStreamSource.jioSaavn.name) {
+    if (AudioStreamSource.isOptionalName(track.streamSource)) {
       track = track.withoutAudioTransport();
       _replaceCurrentRemoteTrack(track);
     }
@@ -2185,6 +2185,7 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       AudioStreamSource.innerTube => 'InnerTube principal',
       AudioStreamSource.innerTubeFallback => 'InnerTube alternativo',
       AudioStreamSource.jioSaavn => 'JioSaavn',
+      AudioStreamSource.audioExtension => 'Audio extension',
     };
     final detail = readableAudioStreamError(error);
     debugPrint(
@@ -2481,12 +2482,10 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   AudioStreamSource _streamSourceFor(TrackInfo track) {
-    if (track.streamSource == AudioStreamSource.jioSaavn.name) {
-      return AudioStreamSource.jioSaavn;
-    }
-    return track.streamSource == AudioStreamSource.innerTubeFallback.name
-        ? AudioStreamSource.innerTubeFallback
-        : AudioStreamSource.innerTube;
+    return AudioStreamSource.values.firstWhere(
+      (source) => source.name == track.streamSource,
+      orElse: () => AudioStreamSource.innerTube,
+    );
   }
 
   bool _isFallbackInnerTubeStream(TrackInfo track) {

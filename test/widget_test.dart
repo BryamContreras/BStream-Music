@@ -7904,6 +7904,16 @@ void main() {
       find.byKey(const ValueKey('settings-about-whats-new-dialog')),
       findsOneWidget,
     );
+    final externalAddons = find.text(
+      'Se agregó compatibilidad con complementos de fuentes de audio externas.',
+    );
+    expect(externalAddons, findsOneWidget);
+    expect(
+      tester.getTopLeft(externalAddons).dy,
+      lessThan(
+        tester.getTopLeft(find.textContaining('ecualizador de 10 bandas')).dy,
+      ),
+    );
     expect(
       find.textContaining(
         'optimizaron los diseños de los estilos del reproductor',
@@ -8485,6 +8495,69 @@ void main() {
       Colors.transparent,
     );
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playing a search result leaves unrelated rows unchanged', (
+    tester,
+  ) async {
+    const selected = TrackInfo(
+      id: 'selected-result',
+      title: 'Resultado elegido',
+      artist: 'BStream Music',
+      url: 'https://example.com/selected-result',
+    );
+    const unrelated = TrackInfo(
+      id: 'unrelated-result',
+      title: 'Otro resultado',
+      artist: 'BStream Music',
+      url: 'https://example.com/unrelated-result',
+    );
+    final player = _RecordingHomePlayerController();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          downloaderServiceProvider.overrideWithValue(_FakeDownloaderService()),
+          playerControllerProvider.overrideWith(() => player),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                TrackResultTile(track: selected, onOpenPlayer: _noop),
+                TrackResultTile(track: unrelated, onOpenPlayer: _noop),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final selectedSurface = find.byKey(
+      const ValueKey('track-result-surface-selected-result'),
+    );
+    final unrelatedSurface = find.byKey(
+      const ValueKey('track-result-surface-unrelated-result'),
+    );
+    final selectedBefore = tester.widget<AnimatedContainer>(selectedSurface);
+    final unrelatedBefore = tester.widget<AnimatedContainer>(unrelatedSurface);
+
+    await player.playRemote(selected);
+    await tester.pump();
+
+    expect(
+      tester.widget<AnimatedContainer>(selectedSurface),
+      isNot(same(selectedBefore)),
+    );
+    expect(
+      tester.widget<AnimatedContainer>(unrelatedSurface),
+      same(unrelatedBefore),
+    );
+    expect(
+      find.byKey(const ValueKey('track-result-now-playing-selected-result')),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('current search result retains visible hover feedback', (

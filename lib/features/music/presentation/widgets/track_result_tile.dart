@@ -61,8 +61,10 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
 
   @override
   Widget build(BuildContext context) {
+    final trackId = track.id;
+    final sourceUrl = track.url;
     final downloadState = ref.watch(
-      downloadControllerProvider.select((tasks) => tasks[track.url]),
+      downloadControllerProvider.select((tasks) => tasks[sourceUrl]),
     );
     final strings = ref.watch(appStringsProvider);
     final scope = widget.selectionScope;
@@ -71,25 +73,25 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
         : ref.watch(trackSelectionProvider(scope));
     final selecting = selection?.active == true;
     final selected = selection?.contains(track) == true;
-    final playback = ref.watch(
+    // Only rows whose visible playback state changed need to rebuild.
+    final (:isCurrent, :isPlaying) = ref.watch(
       playerControllerProvider.select((player) {
         final snapshot = player.value;
+        final matchesCurrent =
+            snapshot?.trackId == trackId || snapshot?.sourceUrl == sourceUrl;
+        final status = snapshot?.status;
+        final isCurrent =
+            matchesCurrent &&
+            (status == PlayerStatus.loading ||
+                status == PlayerStatus.playing ||
+                status == PlayerStatus.paused);
         return (
-          trackId: snapshot?.trackId,
-          sourceUrl: snapshot?.sourceUrl,
-          status: snapshot?.status,
+          isCurrent: isCurrent,
+          isPlaying: isCurrent && status == PlayerStatus.playing,
         );
       }),
     );
-    final matchesCurrent =
-        playback.trackId == track.id || playback.sourceUrl == track.url;
-    final isCurrent =
-        matchesCurrent &&
-        (playback.status == PlayerStatus.loading ||
-            playback.status == PlayerStatus.playing ||
-            playback.status == PlayerStatus.paused);
-    final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
-    final identity = track.id.trim().isNotEmpty ? track.id : track.url;
+    final identity = trackId.trim().isNotEmpty ? trackId : sourceUrl;
     final colors = Theme.of(context).colorScheme;
     final borderRadius = BorderRadius.circular(appCardRadius);
     final cardSurface = AppColors.cardSurfaceFor(context);
@@ -121,7 +123,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
         width: _hovered ? 1.4 : 1,
         child: AnimatedContainer(
           key: ValueKey(
-            'track-result-surface-${track.id.isNotEmpty ? track.id : track.url}',
+            'track-result-surface-${trackId.isNotEmpty ? trackId : sourceUrl}',
           ),
           duration: const Duration(milliseconds: 240),
           curve: Curves.easeOutCubic,
@@ -243,6 +245,7 @@ class _TrackResultTileState extends ConsumerState<TrackResultTile> {
                         key: ValueKey('track-result-menu-$identity'),
                         track: track,
                         strings: strings,
+                        canCancelDownload: downloadState?.isCancellable == true,
                       ),
                     ],
                   ],
@@ -323,11 +326,13 @@ class _TrackResultMenu extends ConsumerWidget {
   const _TrackResultMenu({
     required this.track,
     required this.strings,
+    required this.canCancelDownload,
     super.key,
   });
 
   final TrackInfo track;
   final AppStrings strings;
+  final bool canCancelDownload;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -336,11 +341,6 @@ class _TrackResultMenu extends ConsumerWidget {
     final buttonWidth = compactMobile ? 36.0 : 40.0;
     final iconSize = compactMobile ? 32.0 : 24.0;
     final menuIconColor = AppColors.menuIconFor(context);
-    final downloadTask = ref.watch(
-      downloadControllerProvider.select((tasks) => tasks[track.url]),
-    );
-    final canCancelDownload = downloadTask?.isCancellable == true;
-
     return SizedBox(
       width: buttonWidth,
       height: buttonSize,

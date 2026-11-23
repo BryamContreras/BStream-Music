@@ -18,6 +18,7 @@ class TrackInfoModel extends TrackInfo {
     super.streamBitrate,
     super.streamSampleRate,
     super.streamChannels,
+    super.streamBitDepth,
     super.streamClientProfileKey,
     super.extractor,
     super.album,
@@ -78,6 +79,7 @@ class TrackInfoModel extends TrackInfo {
           _positiveIntValue(json['stream_channels']) ??
           _positiveIntValue((selectedFormat ?? json)['audio_channels']) ??
           _positiveIntValue((selectedFormat ?? json)['audioChannels']),
+      streamBitDepth: _positiveIntValue(json['stream_bit_depth']),
       streamClientProfileKey: _stringValue(json['stream_client_profile_key']),
       extractor:
           _stringValue(json['extractor']) ??
@@ -121,6 +123,7 @@ class TrackInfoModel extends TrackInfo {
       'stream_bitrate': streamBitrate,
       'stream_sample_rate': streamSampleRate,
       'stream_channels': streamChannels,
+      if (streamBitDepth != null) 'stream_bit_depth': streamBitDepth,
       'stream_client_profile_key': streamClientProfileKey,
       'extractor': extractor,
       'album': album,

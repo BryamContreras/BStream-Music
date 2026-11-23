@@ -943,6 +943,10 @@ class RemotePlaybackCache {
           '$source\u0000jioSaavn:${track.streamFormatId}:${track.streamBitrate}';
       return 'jio_${sha256.convert(utf8.encode(variant))}';
     }
+    if (track.streamSource == AudioStreamSource.audioExtension.name) {
+      final variant = '$source\u0000extension:${track.streamFormatId}';
+      return 'addon_${sha256.convert(utf8.encode(variant))}';
+    }
     return _cacheKeyFromSource(source);
   }
 

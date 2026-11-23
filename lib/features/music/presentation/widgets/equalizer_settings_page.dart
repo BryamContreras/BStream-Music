@@ -8,9 +8,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_ui.dart';
 import '../../../../core/widgets/app_shared_widgets.dart';
-import '../../../../core/widgets/horizontal_shelf_scroll_behavior.dart';
 import 'equalizer_band_guides.dart';
 import 'equalizer_fader_shapes.dart';
+import 'equalizer_preset_icon.dart';
+import 'glass_popup_menu_button.dart';
 import 'playback_gradient_background.dart';
 import 'scrolled_under_tab_frame.dart';
 import '../providers/equalizer_providers.dart';
@@ -226,7 +227,7 @@ class EqualizerSettingsPage extends ConsumerWidget {
                                 ],
                               ),
                             ),
-                            presets: _EqualizerPresetStrip(
+                            presets: _EqualizerPresetControls(
                               selected: state.equalizerProfiles.selectedFor(
                                 equalizer,
                               ),
@@ -374,7 +375,7 @@ class _EqualizerBands extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SliderTheme(
     data: SliderTheme.of(context).copyWith(
-      trackHeight: 2,
+      trackHeight: 4,
       trackShape: const EqualizerFaderTrackShape(),
       thumbShape: const EqualizerFaderThumbShape(),
       overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
@@ -656,8 +657,8 @@ class _EqualizerSurface extends StatelessWidget {
   );
 }
 
-class _EqualizerPresetStrip extends StatefulWidget {
-  const _EqualizerPresetStrip({
+class _EqualizerPresetControls extends StatefulWidget {
+  const _EqualizerPresetControls({
     required this.selected,
     required this.strings,
     required this.available,
@@ -670,133 +671,105 @@ class _EqualizerPresetStrip extends StatefulWidget {
   final ValueChanged<EqualizerPreset> onChoose;
 
   @override
-  State<_EqualizerPresetStrip> createState() => _EqualizerPresetStripState();
+  State<_EqualizerPresetControls> createState() =>
+      _EqualizerPresetControlsState();
 }
 
-class _EqualizerPresetStripState extends State<_EqualizerPresetStrip> {
-  final _scroll = ScrollController();
-  final _keys = {
-    for (final preset in EqualizerPreset.values) preset: GlobalKey(),
-  };
-  ({
-    AppLanguage language,
-    TextStyle style,
-    TextScaler scaler,
-    TextDirection direction,
-  })?
-  _metricsKey;
-  Size? _presetSize;
-
-  Size _sizeFor(BuildContext context, TextStyle style) {
-    final key = (
-      language: widget.strings.appLanguage,
-      style: style,
-      scaler: MediaQuery.textScalerOf(context),
-      direction: Directionality.of(context),
-    );
-    if (_metricsKey == key) return _presetSize!;
-
-    // Measure only when typography or language changes, never per fader edit.
-    final painter = TextPainter(
-      textDirection: key.direction,
-      textScaler: key.scaler,
-    );
-    final labels = [
-      for (final preset in EqualizerPreset.values)
-        widget.strings.equalizerPresetName(preset),
-    ];
-    var widest = 0.0;
-    for (final label in labels) {
-      painter.text = TextSpan(text: label, style: style);
-      painter.layout();
-      widest = math.max(widest, painter.width);
-    }
-    final width = (widest + 28).clamp(124.0, 208.0).toDouble();
-    var tallest = 0.0;
-    for (final label in labels) {
-      painter.text = TextSpan(text: label, style: style);
-      painter.layout(maxWidth: width - 24);
-      tallest = math.max(tallest, painter.height);
-    }
-    painter.dispose();
-    _metricsKey = key;
-    return _presetSize = Size(width, math.max(48, tallest + 20));
-  }
+class _EqualizerPresetControlsState extends State<_EqualizerPresetControls> {
+  late EqualizerPreset _lastBuiltIn = widget.selected == EqualizerPreset.custom
+      ? EqualizerPreset.flat
+      : widget.selected;
 
   @override
-  void initState() {
-    super.initState();
-    _revealSelected();
-  }
-
-  @override
-  void didUpdateWidget(covariant _EqualizerPresetStrip oldWidget) {
+  void didUpdateWidget(covariant _EqualizerPresetControls oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.selected != widget.selected) _revealSelected();
+    if (widget.selected != EqualizerPreset.custom) {
+      _lastBuiltIn = widget.selected;
+    }
   }
 
-  void _revealSelected() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients) return;
-      final target = _keys[widget.selected]?.currentContext?.findRenderObject();
-      if (target == null) return;
-      // Reveal only within the horizontal strip, keeping the faders stationary.
-      unawaited(
-        _scroll.position.ensureVisible(
-          target,
-          alignment: .5,
-          duration: MediaQuery.disableAnimationsOf(context)
-              ? Duration.zero
-              : const Duration(milliseconds: 200),
-        ),
-      );
-    });
-  }
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
+  List<PopupMenuEntry<EqualizerPreset>> _buildMenu(BuildContext context) {
+    final iconColor = AppColors.menuIconFor(context);
+    final selectedColor = Theme.of(context).colorScheme.primary;
+    return [
+      for (final preset in EqualizerPreset.values)
+        if (preset != EqualizerPreset.custom)
+          PopupMenuItem(
+            key: ValueKey('equalizer-preset-${preset.name}'),
+            value: preset,
+            child: Row(
+              children: [
+                EqualizerPresetIcon(preset: preset, color: iconColor),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(widget.strings.equalizerPresetName(preset)),
+                ),
+                if (preset == widget.selected) ...[
+                  const SizedBox(width: 8),
+                  Icon(Icons.check_rounded, size: 18, color: selectedColor),
+                ],
+              ],
+            ),
+          ),
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
-    final style = (Theme.of(context).textTheme.labelMedium ?? const TextStyle())
-        .copyWith(fontSize: 13, fontWeight: FontWeight.w700);
-    final size = _sizeFor(context, style);
+    final customSelected = widget.selected == EqualizerPreset.custom;
+    final strings = widget.strings;
     return Semantics(
-      label: widget.strings.equalizerPresets,
-      child: HorizontalShelfScroll(
-        child: SingleChildScrollView(
-          key: const ValueKey('equalizer-presets'),
-          controller: _scroll,
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: Row(
-            children: [
-              for (final preset in [
-                EqualizerPreset.custom,
-                ...EqualizerPreset.values.where(
-                  (p) => p != EqualizerPreset.custom,
-                ),
-              ])
-                Padding(
-                  key: _keys[preset],
-                  padding: const EdgeInsets.only(right: 8),
-                  child: SizedBox.fromSize(
-                    size: size,
-                    child: _EqualizerPresetButton(
-                      key: ValueKey('equalizer-preset-${preset.name}'),
-                      label: widget.strings.equalizerPresetName(preset),
-                      selected: widget.selected == preset,
-                      style: style,
+      key: const ValueKey('equalizer-presets'),
+      label: strings.equalizerPresets,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1060),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _EqualizerPresetCard(
+                    key: const ValueKey('equalizer-preset-custom'),
+                    label: strings.equalizerPresetName(EqualizerPreset.custom),
+                    selected: customSelected,
+                    enabled: widget.available,
+                    buttonBuilder: (radius, label) => InkWell(
+                      borderRadius: radius,
                       onTap: widget.available
-                          ? () => widget.onChoose(preset)
+                          ? () => widget.onChoose(EqualizerPreset.custom)
                           : null,
+                      child: label,
                     ),
                   ),
                 ),
-            ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _EqualizerPresetCard(
+                    key: const ValueKey('equalizer-preset-picker'),
+                    label: strings.equalizerPresetName(_lastBuiltIn),
+                    selected: !customSelected,
+                    enabled: widget.available,
+                    trailing: const Icon(Icons.expand_more_rounded, size: 18),
+                    buttonBuilder: (radius, label) =>
+                        GlassPopupMenuButton<EqualizerPreset>(
+                          borderRadius: radius,
+                          position: PopupMenuPosition.under,
+                          offset: const Offset(0, 4),
+                          tooltip: strings.equalizerPresets,
+                          constraints: const BoxConstraints(
+                            minWidth: 216,
+                            maxWidth: 320,
+                          ),
+                          enabled: widget.available,
+                          onSelected: widget.onChoose,
+                          itemBuilder: _buildMenu,
+                          child: label,
+                        ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -804,31 +777,44 @@ class _EqualizerPresetStripState extends State<_EqualizerPresetStrip> {
   }
 }
 
-class _EqualizerPresetButton extends StatelessWidget {
-  const _EqualizerPresetButton({
+class _EqualizerPresetCard extends StatelessWidget {
+  const _EqualizerPresetCard({
     required this.label,
     required this.selected,
-    required this.style,
-    required this.onTap,
+    required this.enabled,
+    required this.buttonBuilder,
+    this.trailing,
     super.key,
   });
 
   final String label;
   final bool selected;
-  final TextStyle style;
-  final VoidCallback? onTap;
+  final bool enabled;
+  final Widget Function(BorderRadius radius, Widget label) buttonBuilder;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final color = !enabled
+        ? colors.onSurface.withValues(alpha: .38)
+        : selected
+        ? colors.onPrimaryContainer
+        : AppColors.contentTitleFor(context);
     final duration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : const Duration(milliseconds: 200);
     final radius = BorderRadius.circular(appCardRadius);
+    final style = (theme.textTheme.labelMedium ?? const TextStyle()).copyWith(
+      fontSize: 13,
+      color: color,
+      fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+    );
     return Semantics(
       button: true,
       selected: selected,
-      enabled: onTap != null,
+      enabled: enabled,
       inMutuallyExclusiveGroup: true,
       child: AppCardGradientBorder(
         emphasized: selected,
@@ -847,27 +833,36 @@ class _EqualizerPresetButton extends StatelessWidget {
           child: Material(
             color: Colors.transparent,
             borderRadius: radius,
-            child: InkWell(
-              borderRadius: radius,
-              onTap: onTap,
-              child: Center(
+            child: buttonBuilder(
+              radius,
+              ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 48),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 10,
                   ),
-                  child: AnimatedDefaultTextStyle(
-                    duration: duration,
-                    curve: Curves.easeOutCubic,
-                    style: style.copyWith(
-                      color: onTap == null
-                          ? colors.onSurface.withValues(alpha: .38)
-                          : selected
-                          ? colors.onPrimaryContainer
-                          : AppColors.contentTitleFor(context),
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
-                    ),
-                    child: Text(label, textAlign: TextAlign.center),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: AnimatedDefaultTextStyle(
+                          duration: duration,
+                          curve: Curves.easeOutCubic,
+                          style: style,
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                      if (trailing != null)
+                        IconTheme.merge(
+                          data: IconThemeData(color: color),
+                          child: trailing!,
+                        ),
+                    ],
                   ),
                 ),
               ),

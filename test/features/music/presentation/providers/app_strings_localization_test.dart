@@ -49,6 +49,41 @@ void main() {
   });
 
   test(
+    'audio extension labels are translated for every supported language',
+    () {
+      List<String> labels(AppStrings strings) => [
+        strings.addAudioSource,
+        strings.audioExtensionUrl,
+        strings.audioExtensionUrlHelp,
+        strings.audioExtensionInvalidUrl,
+        strings.audioExtensionUnavailable,
+        strings.audioExtensionUnsupported,
+        strings.audioExtensionRestricted,
+        strings.audioExtensionOfficialClientOnly,
+        strings.audioExtensionOutputRequired,
+        strings.audioExtensionModuleIndex,
+        strings.audioExtensionNoAvailableSources,
+        strings.audioExtensionStreamingOnly,
+        strings.audioExtensionsWithFallback,
+        strings.removeAudioSource,
+      ];
+      final english = labels(const AppStrings(AppLanguage.english));
+      for (final language in AppLanguage.values) {
+        final translated = labels(AppStrings(language));
+        expect(translated, everyElement(isNotEmpty), reason: language.code);
+        if (language == AppLanguage.english) continue;
+        for (var index = 0; index < english.length; index++) {
+          expect(
+            translated[index],
+            isNot(english[index]),
+            reason: language.code,
+          );
+        }
+      }
+    },
+  );
+
+  test(
     'playlist artwork controls are localized in every supported language',
     () {
       List<String> labels(AppStrings strings) => [
@@ -122,6 +157,7 @@ void main() {
     const english = AppStrings(AppLanguage.english);
     const spanish = AppStrings(AppLanguage.spanish);
     const expectedEnglish = <String>[
+      'Added support for external audio source add-ons.',
       'A 10-band equalizer is now available.',
       'Support for higher quality audio whenever available.',
       'Improved and optimized player style layouts.',
@@ -136,13 +172,17 @@ void main() {
       english.whatsNewSummary,
       'Player styles, local music filters, lyrics, and settings',
     );
-    expect(spanish.whatsNewHighlights, hasLength(8));
+    expect(spanish.whatsNewHighlights, hasLength(expectedEnglish.length));
     expect(
       spanish.whatsNewHighlights.first,
-      'Ahora está disponible un ecualizador de 10 bandas.',
+      'Se agregó compatibilidad con complementos de fuentes de audio externas.',
     );
     expect(
       spanish.whatsNewHighlights[1],
+      'Ahora está disponible un ecualizador de 10 bandas.',
+    );
+    expect(
+      spanish.whatsNewHighlights[2],
       'Compatibilidad con audio de mayor calidad, siempre que esté disponible.',
     );
     expect(
@@ -155,9 +195,13 @@ void main() {
       final highlights = strings.whatsNewHighlights;
       final title = strings.whatsNewTitle('1.3.1');
       expect(title, contains('1.3.1'), reason: language.code);
-      expect(highlights, hasLength(8), reason: language.code);
+      expect(
+        highlights,
+        hasLength(expectedEnglish.length),
+        reason: language.code,
+      );
       expect(strings.whatsNewSummary.trim(), isNotEmpty, reason: language.code);
-      expect(highlights[3], contains('Spotify Style'), reason: language.code);
+      expect(highlights[4], contains('Spotify Style'), reason: language.code);
       for (var index = 0; index < highlights.length; index++) {
         expect(highlights[index].trim(), isNotEmpty, reason: language.code);
         if (language != AppLanguage.english) {

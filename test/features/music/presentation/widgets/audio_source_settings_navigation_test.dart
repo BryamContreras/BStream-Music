@@ -1,8 +1,13 @@
+import 'dart:convert';
+
+import 'package:bstream_music/core/theme/app_dialog.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/audio_source_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/equalizer_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/youtube_music_auth_controller.dart';
 import 'package:bstream_music/features/music/presentation/widgets/settings_panel.dart';
+import 'package:bstream_music/services/audio_sources/audio_extension.dart';
+import 'package:bstream_music/services/audio_sources/audio_extension_resolver.dart';
 import 'package:bstream_music/services/audio_sources/audio_source_policy.dart';
 import 'package:bstream_music/services/live/tiktok_live_command_service.dart';
 import 'package:bstream_music/services/youtube_music/auth/youtube_music_account_client.dart';
@@ -103,6 +108,84 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('extension dialog can be dismissed, validates, and installs', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const strings = AppStrings(AppLanguage.spanish);
+    final uri = Uri.https('example.com', '/manifest.json');
+    final extension = AudioExtension(
+      id: 'cd-source',
+      name: 'CD source',
+      manifestUri: uri,
+      allowDownloads: false,
+    );
+    await tester.pumpWidget(
+      _harness(
+        extensionResolver: _TestAudioExtensionResolver(uri.toString(), [
+          extension,
+        ]),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(SettingsPanel)),
+    );
+    await _open(tester, 'settings-card-audio-sources');
+    final sources = find.byKey(
+      const ValueKey('settings-detail-scroll-audioSources'),
+    );
+    final dialog = find.byType(AppAlertDialog);
+    final field = find.byKey(const ValueKey('audio-extension-url'));
+    await _open(tester, 'settings-add-audio-source');
+    expect(sources, findsOneWidget);
+    expect(dialog, findsOneWidget);
+    expect(find.descendant(of: dialog, matching: field), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(sources, findsOneWidget);
+
+    await _open(tester, 'settings-add-audio-source');
+    await tester.enterText(field, 'not a link');
+    await _open(tester, 'audio-extension-submit');
+    expect(dialog, findsOneWidget);
+    expect(find.text(strings.audioExtensionInvalidUrl), findsOneWidget);
+    expect(
+      container.read(settingsControllerProvider).requireValue.audioExtensions,
+      isEmpty,
+    );
+
+    await tester.enterText(field, uri.toString());
+    await _open(tester, 'audio-extension-submit');
+    expect(dialog, findsNothing);
+    expect(sources, findsOneWidget);
+    final installed = find.byKey(ValueKey(uri));
+    expect(installed, findsOneWidget);
+    expect(find.text(extension.name), findsOneWidget);
+    expect(find.text(strings.audioExtensionStreamingOnly), findsOneWidget);
+    final toggle = find.descendant(
+      of: installed,
+      matching: find.byType(Switch),
+    );
+    expect(tester.widget<Switch>(toggle).value, isTrue);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(toggle).value, isFalse);
+
+    await tester.tap(find.byTooltip(strings.removeAudioSource));
+    await tester.pumpAndSettle();
+    expect(installed, findsNothing);
+    expect(
+      container.read(settingsControllerProvider).requireValue.audioExtensions,
+      isEmpty,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'desktop exposes separate streaming and download quality choices',
     (tester) async {
@@ -134,9 +217,18 @@ void main() {
       expect(afterDownload.downloadAudioQuality, AudioQualityProfile.standard);
       expect(afterDownload.wifiAudioQuality, AudioQualityProfile.high);
       expect(afterDownload.mobileAudioQuality, AudioQualityProfile.high);
+      _expectQualityPage('downloadQuality');
+      _expectQualitySelected(const ValueKey('audio-quality-profile-standard'));
+      await _returnToDataSaving(tester);
 
       await _open(tester, 'data-saving-quality');
-      expect(find.text('Calidad de audio'), findsNWidgets(2));
+      expect(find.text('Calidad de audio'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('settings-detail-scroll-wifiQuality')),
+        findsOneWidget,
+      );
+      expect(find.byType(Dialog), findsNothing);
+      _expectQualitySelected(const ValueKey('audio-quality-profile-jiosaavn'));
       await tester.tap(
         find.byKey(const ValueKey('audio-quality-profile-standard')),
       );
@@ -149,11 +241,13 @@ void main() {
       for (final network in AudioNetworkKind.values) {
         expect(policy.profileFor(network), AudioQualityProfile.standard);
       }
-      await _open(tester, 'data-saving-quality');
+      _expectQualityPage('wifiQuality');
       await tester.tap(
-        find.byKey(const ValueKey('audio-quality-profile-high')),
+        find.byKey(const ValueKey('audio-quality-profile-jiosaavn')),
       );
       await tester.pumpAndSettle();
+      _expectQualityPage('wifiQuality');
+      _expectQualitySelected(const ValueKey('audio-quality-profile-jiosaavn'));
       final high = container.read(audioSourcePolicyProvider);
       for (final network in AudioNetworkKind.values) {
         expect(high.profileFor(network), AudioQualityProfile.high);
@@ -168,6 +262,69 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('catalog import keeps existing choices and adds new sources', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const catalog = 'https://example.com/catalog.json';
+    final first = AudioExtension(
+      id: 'cd-source',
+      name: 'Updated source',
+      manifestUri: Uri.https('first.example', '/manifest.json'),
+      allowDownloads: false,
+    );
+    final second = AudioExtension(
+      id: 'new-source',
+      name: 'New source',
+      manifestUri: Uri.https('second.example', '/manifest.json'),
+    );
+    await tester.pumpWidget(
+      _harness(
+        extensionResolver: _TestAudioExtensionResolver(catalog, [
+          first,
+          second,
+        ]),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(SettingsPanel)),
+    );
+    await container
+        .read(settingsControllerProvider.notifier)
+        .addAudioExtension(
+          AudioExtension(
+            id: first.id,
+            name: 'Old source',
+            manifestUri: first.manifestUri,
+            enabled: false,
+          ),
+        );
+    await tester.pumpAndSettle();
+    await _open(tester, 'settings-card-audio-sources');
+    await _open(tester, 'settings-add-audio-source');
+    await tester.enterText(
+      find.byKey(const ValueKey('audio-extension-url')),
+      catalog,
+    );
+    await _open(tester, 'audio-extension-submit');
+    expect(find.byType(AppAlertDialog), findsNothing);
+    expect(find.text(first.name), findsOneWidget);
+    expect(find.text(second.name), findsOneWidget);
+    expect(find.text('Old source'), findsNothing);
+
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('settings.audioExtensions')!;
+    expect(saved.map((item) => jsonDecode(item)), [
+      first.copyWith(enabled: false).toJson(),
+      second.toJson(),
+    ]);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'network profiles select enabled providers and keep route hierarchy',
@@ -201,9 +358,18 @@ void main() {
       expect(find.text('Audio en streaming'), findsOneWidget);
       expect(find.text('Descargas'), findsOneWidget);
       expect(find.text('Alta calidad · JioSaavn'), findsNWidgets(2));
-      expect(find.text('Calidad estándar · YouTube Music'), findsOneWidget);
+      expect(find.text('Calidad estándar · YTMusic'), findsOneWidget);
       await _open(tester, 'data-saving-download-quality');
-      expect(find.text('JioSaavn + fallback YTMusic'), findsOneWidget);
+      _expectQualityPage('downloadQuality');
+      expect(find.byType(Dialog), findsNothing);
+      _expectQualitySelected(const ValueKey('audio-quality-profile-jiosaavn'));
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('audio-quality-profile-jiosaavn')),
+          matching: find.text('JioSaavn → YTMusic'),
+        ),
+        findsOneWidget,
+      );
       await tester.tap(
         find.byKey(const ValueKey('audio-quality-profile-standard')),
       );
@@ -222,14 +388,28 @@ void main() {
             .wifiAudioQuality,
         AudioQualityProfile.high,
       );
+      _expectQualityPage('downloadQuality');
+      _expectQualitySelected(const ValueKey('audio-quality-profile-standard'));
+      await _returnToDataSaving(tester);
 
       await _open(tester, 'data-saving-mobile');
+      _expectQualityPage('mobileQuality');
+      await _returnToDataSaving(tester);
+      expect(find.byKey(const ValueKey('data-saving-mobile')), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('audio-quality-profile-high')),
+        container
+            .read(settingsControllerProvider)
+            .requireValue
+            .mobileAudioQuality,
+        AudioQualityProfile.standard,
+      );
+      await _open(tester, 'data-saving-mobile');
+      expect(
+        find.byKey(const ValueKey('audio-quality-profile-jiosaavn')),
         findsOneWidget,
       );
       await tester.tap(
-        find.byKey(const ValueKey('audio-quality-profile-high')),
+        find.byKey(const ValueKey('audio-quality-profile-jiosaavn')),
       );
       await tester.pumpAndSettle();
       expect(
@@ -239,26 +419,21 @@ void main() {
             .mobileAudioQuality,
         AudioQualityProfile.high,
       );
+      _expectQualityPage('mobileQuality');
+      _expectQualitySelected(const ValueKey('audio-quality-profile-jiosaavn'));
+      await _returnToDataSaving(tester);
 
       await container
           .read(settingsControllerProvider.notifier)
           .setJioSaavnEnabled(false);
       await tester.pumpAndSettle();
       await _open(tester, 'data-saving-download-quality');
-      expect(
-        find.byKey(const ValueKey('audio-quality-profile-high')),
-        findsNothing,
-      );
-      await tester.tap(
-        find.byKey(const ValueKey('audio-quality-profile-standard')),
-      );
-      await tester.pumpAndSettle();
+      _expectQualityPage('downloadQuality');
+      expect(find.text('Alta calidad'), findsNothing);
+      await _returnToDataSaving(tester);
 
       await _open(tester, 'data-saving-wifi');
-      expect(
-        find.byKey(const ValueKey('audio-quality-profile-high')),
-        findsNothing,
-      );
+      expect(find.text('Alta calidad'), findsNothing);
       final standard = find.byKey(
         const ValueKey('audio-quality-profile-standard'),
       );
@@ -272,6 +447,28 @@ void main() {
             .wifiAudioQuality,
         AudioQualityProfile.standard,
       );
+      _expectQualityPage('wifiQuality');
+
+      await container
+          .read(settingsControllerProvider.notifier)
+          .addAudioExtension(
+            AudioExtension(
+              id: 'stream-only',
+              name: 'Streaming extension',
+              manifestUri: Uri.https('example.com', '/manifest.json'),
+              allowDownloads: false,
+            ),
+          );
+      await tester.pumpAndSettle();
+      _expectQualityPage('wifiQuality');
+      expect(find.text('Alta calidad'), findsOneWidget);
+      expect(find.text('Streaming extension'), findsOneWidget);
+      await _returnToDataSaving(tester);
+      await _open(tester, 'data-saving-download-quality');
+      _expectQualityPage('downloadQuality');
+      expect(find.text('Alta calidad'), findsNothing);
+      await _returnToDataSaving(tester);
+
       expect(navigation.maybePop(), isTrue);
       await tester.pumpAndSettle();
       await _reveal(tester, 'storage-data-saving');
@@ -290,6 +487,151 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('each profile can choose its own audio source priority', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final navigation = SettingsNavigationController();
+    addTearDown(navigation.dispose);
+    await tester.pumpWidget(_harness(navigation: navigation));
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(SettingsPanel)),
+    );
+    final streaming = AudioExtension(
+      id: 'streaming',
+      name: 'Streaming extension',
+      manifestUri: Uri.https('stream.example', '/manifest.json'),
+      allowDownloads: false,
+    );
+    final downloads = AudioExtension(
+      id: 'downloads',
+      name: 'Download extension',
+      manifestUri: Uri.https('download.example', '/manifest.json'),
+    );
+    final controller = container.read(settingsControllerProvider.notifier);
+    await controller.addAudioExtensions([streaming, downloads]);
+    await tester.pumpAndSettle();
+
+    await _open(tester, 'storage-data-saving');
+    expect(find.text('Alta calidad · Streaming extension'), findsOneWidget);
+    expect(find.text('Alta calidad · Download extension'), findsOneWidget);
+    await _open(tester, 'data-saving-wifi');
+    _expectQualityPage('wifiQuality');
+    _expectQualitySelected(ValueKey(streaming.manifestUri));
+    expect(
+      find.text('YTMusic → Streaming extension → Otras extensiones → JioSaavn'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(ValueKey(streaming.manifestUri)));
+    await tester.pumpAndSettle();
+    _expectQualityPage('wifiQuality');
+    _expectQualitySelected(ValueKey(streaming.manifestUri));
+    await _returnToDataSaving(tester);
+
+    await _open(tester, 'data-saving-mobile');
+    expect(find.text('YTMusic → JioSaavn'), findsOneWidget);
+    await _open(tester, 'audio-quality-profile-jiosaavn');
+    _expectQualityPage('mobileQuality');
+    _expectQualitySelected(const ValueKey('audio-quality-profile-jiosaavn'));
+    await _returnToDataSaving(tester);
+    expect(find.text('Alta calidad · JioSaavn'), findsOneWidget);
+
+    await _open(tester, 'data-saving-download-quality');
+    expect(find.byKey(ValueKey(streaming.manifestUri)), findsNothing);
+    _expectQualitySelected(ValueKey(downloads.manifestUri));
+    expect(
+      find.text('Download extension → JioSaavn → YTMusic'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(ValueKey(downloads.manifestUri)));
+    await tester.pumpAndSettle();
+    _expectQualityPage('downloadQuality');
+    _expectQualitySelected(ValueKey(downloads.manifestUri));
+    await _returnToDataSaving(tester);
+    expect(find.text('Alta calidad · Download extension'), findsOneWidget);
+
+    final state = container.read(settingsControllerProvider).requireValue;
+    expect(
+      state.wifiAudioSourcePreference,
+      AudioSourcePreference.audioExtension(streaming.manifestUri),
+    );
+    expect(
+      state.mobileAudioSourcePreference,
+      const AudioSourcePreference.jioSaavn(),
+    );
+    expect(
+      state.downloadAudioSourcePreference,
+      AudioSourcePreference.audioExtension(downloads.manifestUri),
+    );
+
+    await controller.setAudioExtensionEnabled(streaming.manifestUri, false);
+    await controller.setJioSaavnEnabled(false);
+    await tester.pumpAndSettle();
+    final unavailableExtension =
+        'Streaming extension no está disponible. Alta calidad · Download extension';
+    expect(find.text(unavailableExtension), findsOneWidget);
+    final unavailableJio =
+        'JioSaavn no está disponible. Calidad estándar · YTMusic';
+    expect(find.text(unavailableJio), findsOneWidget);
+    await _open(tester, 'data-saving-wifi');
+    _expectQualitySelected(ValueKey(downloads.manifestUri));
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .requireValue
+          .wifiAudioSourcePreference,
+      AudioSourcePreference.audioExtension(streaming.manifestUri),
+    );
+    await _returnToDataSaving(tester);
+    await _open(tester, 'data-saving-mobile');
+    expect(
+      find.byKey(const ValueKey('audio-quality-profile-jiosaavn')),
+      findsNothing,
+    );
+    expect(find.byKey(ValueKey(downloads.manifestUri)), findsOneWidget);
+    _expectQualitySelected(const ValueKey('audio-quality-profile-standard'));
+    expect(tester.takeException(), isNull);
+  });
+}
+
+void _expectQualityPage(String route) {
+  expect(find.byKey(ValueKey('settings-detail-scroll-$route')), findsOneWidget);
+  final standardSection = find.byKey(
+    const ValueKey('settings-section-panel-Calidad estándar'),
+  );
+  expect(
+    find.descendant(
+      of: standardSection,
+      matching: find.byKey(const ValueKey('audio-quality-profile-standard')),
+    ),
+    findsOneWidget,
+  );
+  expect(
+    find.descendant(of: standardSection, matching: find.text('YTMusic')),
+    findsOneWidget,
+  );
+  expect(find.text('Automática'), findsNothing);
+}
+
+void _expectQualitySelected(Key key) {
+  expect(
+    find.descendant(
+      of: find.byKey(key),
+      matching: find.byIcon(Icons.check_circle_rounded),
+    ),
+    findsOneWidget,
+  );
+}
+
+Future<void> _returnToDataSaving(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('settings-detail-back')));
+  await tester.pumpAndSettle();
+  expect(find.text('Ahorro de datos'), findsOneWidget);
 }
 
 Future<void> _open(WidgetTester tester, String key) async {
@@ -312,9 +654,12 @@ Future<void> _reveal(WidgetTester tester, String key) async {
 Widget _harness({
   SettingsNavigationController? navigation,
   bool desktop = false,
+  AudioExtensionResolver? extensionResolver,
 }) => ProviderScope(
   overrides: [
     audioSourceUsesSingleProfileProvider.overrideWithValue(desktop),
+    if (extensionResolver != null)
+      audioExtensionResolverProvider.overrideWithValue(extensionResolver),
     settingsControllerProvider.overrideWith(_TestSettingsController.new),
     equalizerRuntimeProvider.overrideWith(_SupportedRuntime.new),
     equalizerAvailableProvider.overrideWithValue(true),
@@ -334,6 +679,22 @@ Widget _harness({
     home: Scaffold(body: SettingsPanel(navigationController: navigation)),
   ),
 );
+
+class _TestAudioExtensionResolver extends Fake
+    implements AudioExtensionResolver {
+  _TestAudioExtensionResolver(this.link, this.extensions);
+
+  final String link;
+  final List<AudioExtension> extensions;
+
+  @override
+  Future<List<AudioExtension>> loadSources(String url) async {
+    if (url != link) {
+      throw const AudioExtensionException(AudioExtensionError.invalidUrl);
+    }
+    return extensions;
+  }
+}
 
 class _TestSettingsController extends SettingsController {
   @override

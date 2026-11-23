@@ -10,6 +10,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../../../services/player/visual_load_diagnostics.dart';
 import 'artwork_inset_detector.dart';
+import 'artwork_video_palette.dart';
 
 const animatedArtworkIntroOffset = Duration(seconds: 8);
 
@@ -64,6 +65,7 @@ class SpotifyCanvasVideo extends StatefulWidget {
     this.durationHint = Duration.zero,
     this.autoFitInsetArtwork = false,
     this.coverPath,
+    this.onPaletteChanged,
     super.key,
   });
 
@@ -74,6 +76,7 @@ class SpotifyCanvasVideo extends StatefulWidget {
   final Duration durationHint;
   final bool autoFitInsetArtwork;
   final String? coverPath;
+  final ValueChanged<ArtworkVideoPalette?>? onPaletteChanged;
 
   @override
   State<SpotifyCanvasVideo> createState() => _SpotifyCanvasVideoState();
@@ -88,7 +91,11 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
   static const _loopFrameDecodeGuard = Duration(milliseconds: 120);
   static const _loopFrameMaxSide = 480.0;
   static const _insetProbeMaxSide = 192.0;
+  static const _paletteProbeMaxSide = 32.0;
+  static const _paletteUpdateInterval = Duration(milliseconds: 180);
+  static const _maximumCachedPalettes = 24;
   static final LinkedHashMap<String, double> _insetZoomCache = LinkedHashMap();
+  static final _paletteCache = <_PaletteKey, ArtworkVideoPaletteTimeline>{};
 
   VideoPlayerController? _controller;
   final GlobalKey _videoFrameBoundaryKey = GlobalKey();
@@ -111,8 +118,14 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
   bool _fastForwardingIntro = false;
   bool _insetFitAttempted = false;
   bool _insetFitResolved = true;
+  bool _videoDurationEstimated = false;
   double _insetZoom = 1;
   final Stopwatch _startupTimer = Stopwatch();
+  _PaletteProbe? _paletteProbe;
+  ArtworkVideoPalette? _presentedPalette;
+  ArtworkVideoPalette? _pendingPalette;
+  Duration? _palettePresentationPosition;
+  bool _paletteNotificationScheduled = false;
 
   @override
   void initState() {
@@ -177,6 +190,10 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
       track: widget.identity ?? widget.url.toString(),
     );
     final previous = _controller;
+    _finishPaletteProbe();
+    _paletteProbe = null;
+    _palettePresentationPosition = null;
+    _publishPalette(null);
     _controller = null;
     _ready = false;
     _clearLoopFrame();
@@ -189,6 +206,7 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
     _loopHasAdvancedSinceRestart = false;
     _fastForwardingIntro = false;
     _loopFrameCaptureUnavailable = false;
+    _videoDurationEstimated = false;
     _resetInsetFit();
     if (mounted) setState(() {});
     if (previous != null) unawaited(previous.dispose());
@@ -242,6 +260,7 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
         controller.value = controller.value.copyWith(
           duration: widget.durationHint,
         );
+        _videoDurationEstimated = true;
       }
       logVisualLoad(
         'video timeline requested=${widget.startOffset.inMilliseconds}ms effective=${startOffset.inMilliseconds}ms duration=${controller.value.duration.inMilliseconds}ms hint=${widget.durationHint.inMilliseconds}ms',
@@ -289,6 +308,8 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
     final controller = _controller;
     if (!mounted || controller == null) return;
     if (controller.value.hasError) {
+      _finishPaletteProbe();
+      _publishPalette(null);
       _controller = null;
       setState(() => _ready = false);
       unawaited(controller.dispose());
@@ -381,6 +402,258 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
         );
       }
     }
+    if (_ready && _insetFitResolved && !_fastForwardingIntro) {
+      _updatePalette(controller);
+    }
+  }
+
+  bool get _paletteWanted =>
+      mounted &&
+      _active &&
+      _tickerEnabled &&
+      widget.isPlaying &&
+      widget.onPaletteChanged != null;
+
+  RenderRepaintBoundary? get _paintedVideoBoundary {
+    final renderObject = _videoFrameBoundaryKey.currentContext
+        ?.findRenderObject();
+    return renderObject is RenderRepaintBoundary &&
+            renderObject.hasSize &&
+            !renderObject.debugNeedsPaint &&
+            !renderObject.size.isEmpty
+        ? renderObject
+        : null;
+  }
+
+  _PaletteProbe? _paletteProbeFor(VideoPlayerController controller) {
+    final current = _paletteProbe;
+    if (current != null) return current;
+    final boundary = _paintedVideoBoundary;
+    if (boundary == null) return null;
+    final duration = controller.value.duration;
+    final zoom = effectivePortraitArtworkZoom(
+      controller.value.size,
+      _insetZoom,
+    );
+    final key = (
+      url: widget.url,
+      start: _effectiveStartOffset,
+      aspect: (boundary.size.aspectRatio * 1000).round(),
+      zoom: (zoom * 1000).round(),
+    );
+    final cached = _paletteCache.remove(key);
+    if (cached != null) {
+      _paletteCache[key] = cached;
+      logVisualLoad(
+        'video palette cache hit samples=${cached.samples.length}',
+        track: widget.identity ?? widget.url.toString(),
+      );
+    }
+    final extent = 1 / zoom;
+    final probe = _PaletteProbe(
+      key,
+      !_videoDurationEstimated && duration > _effectiveStartOffset
+          ? duration
+          : null,
+      // Account for the same alignment used by Transform.scale in build.
+      Rect.fromLTWH((1 - extent) * .5, (1 - extent) * .4, extent, extent),
+      cached,
+    );
+    _paletteProbe = probe;
+    return probe;
+  }
+
+  void _updatePalette(VideoPlayerController controller) {
+    if (!_paletteWanted || !controller.value.isPlaying || _restartingLoop) {
+      return;
+    }
+    final position = controller.value.position;
+    if (position < _effectiveStartOffset) return;
+    final probe = _paletteProbeFor(controller);
+    if (probe == null) return;
+    final previous = probe.lastPosition;
+    if (previous != null &&
+        position + const Duration(milliseconds: 250) < previous) {
+      _finishPaletteProbe(observedEnd: previous);
+    }
+    probe.lastPosition = position;
+
+    final presentedAt = _palettePresentationPosition;
+    if (presentedAt == null ||
+        (position - presentedAt).abs() >= _paletteUpdateInterval) {
+      _palettePresentationPosition = position;
+      _publishPalette(probe.timeline.paletteAt(position));
+    }
+
+    if (!probe.canCapture(position)) return;
+    probe.reserve(position);
+    unawaited(_capturePaletteProbe(probe, controller));
+  }
+
+  Future<void> _capturePaletteProbe(
+    _PaletteProbe probe,
+    VideoPlayerController controller,
+  ) async {
+    ui.Image? image;
+    final timing = visualLoadTimingsEnabled ? _PaletteReadTiming() : null;
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!_canFinishPaletteRead(probe, controller)) return;
+      final boundary = _paintedVideoBoundary;
+      if (boundary == null) return;
+      final position = controller.value.position;
+      timing?.start();
+      image = await boundary.toImage(
+        pixelRatio: math.min(
+          1,
+          _paletteProbeMaxSide / boundary.size.longestSide,
+        ),
+      );
+      timing?.markRaster();
+      if (!_canFinishPaletteRead(probe, controller)) return;
+      final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      timing?.markReadback();
+      if (!_canFinishPaletteRead(probe, controller)) return;
+      final frame = data == null
+          ? null
+          : ArtworkInsetFrame(
+              data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+              image.width,
+              image.height,
+            );
+      _acceptPaletteRead(probe, frame, position, 'probe', timing);
+    } catch (_) {
+      // Some textures cannot be captured by the current Flutter renderer.
+      if (_canFinishPaletteRead(probe, controller)) probe.rejectedReads++;
+      _logPaletteRead('probe', null, timing, false);
+    } finally {
+      image?.dispose();
+      probe.capturing = false;
+      if (identical(_paletteProbe, probe) && probe.atLimit) {
+        _finishPaletteProbe();
+      }
+    }
+  }
+
+  bool _canFinishPaletteRead(
+    _PaletteProbe probe,
+    VideoPlayerController controller,
+  ) =>
+      _paletteWanted &&
+      _ready &&
+      !_restartingLoop &&
+      !probe.finished &&
+      identical(probe, _paletteProbe) &&
+      identical(controller, _controller) &&
+      controller.value.isPlaying;
+
+  void _reusePaletteRead(_CapturedPaletteFrame sample, String source) {
+    final controller = _controller;
+    if (!_paletteWanted || controller == null || !_ready) return;
+    final probe = _paletteProbeFor(controller);
+    if (probe == null ||
+        !probe.canCapture(sample.position, allowInitialFrame: true)) {
+      return;
+    }
+    probe.reserve(sample.position);
+    _acceptPaletteRead(
+      probe,
+      sample.frame,
+      sample.position,
+      source,
+      sample.timing,
+    );
+    probe.capturing = false;
+    if (probe.atLimit) _finishPaletteProbe();
+  }
+
+  void _acceptPaletteRead(
+    _PaletteProbe probe,
+    ArtworkInsetFrame? frame,
+    Duration position,
+    String source,
+    _PaletteReadTiming? timing,
+  ) {
+    final extraction = visualLoadTimingsEnabled ? (Stopwatch()..start()) : null;
+    final palette = frame == null
+        ? null
+        : ArtworkVideoPalette.fromRgba(
+            frame.rgba,
+            frame.width,
+            frame.height,
+            crop: probe.crop,
+          );
+    _logPaletteRead(source, frame, timing, palette != null, extraction);
+    if (palette == null) {
+      probe.rejectedReads++;
+      return;
+    }
+    probe.add(ArtworkVideoPaletteSample(position, palette));
+    _publishPalette(
+      probe.timeline.paletteAt(_controller?.value.position ?? position),
+    );
+  }
+
+  void _logPaletteRead(
+    String source,
+    ArtworkInsetFrame? frame,
+    _PaletteReadTiming? timing,
+    bool success, [
+    Stopwatch? extraction,
+  ]) {
+    if (!visualLoadTimingsEnabled) return;
+    logVisualLoad(
+      'video palette sample source=$source '
+      'size=${frame?.width ?? 0}x${frame?.height ?? 0} '
+      'raster_us=${timing?.rasterUs ?? 0} '
+      'readback_us=${timing?.readbackUs ?? 0} '
+      'extraction_us=${extraction?.elapsedMicroseconds ?? 0} '
+      'success=$success',
+      track: widget.identity ?? widget.url.toString(),
+    );
+  }
+
+  void _finishPaletteProbe({Duration? observedEnd}) {
+    final probe = _paletteProbe;
+    if (probe == null ||
+        (probe.finished &&
+            (observedEnd == null || probe.timeline.loopEnd != null))) {
+      return;
+    }
+    final timeline = probe.finish(observedEnd);
+    // Remember an unsupported texture when it rejected multiple actual
+    // attempts. A route closed before sampling gets a new chance.
+    if (timeline.samples.isEmpty && probe.rejectedReads < 2) return;
+    _paletteCache[probe.key] = timeline;
+    while (_paletteCache.length > _maximumCachedPalettes) {
+      _paletteCache.remove(_paletteCache.keys.first);
+    }
+  }
+
+  void _publishPalette(ArtworkVideoPalette? palette) {
+    final previous = _paletteNotificationScheduled
+        ? _pendingPalette
+        : _presentedPalette;
+    if (previous == palette ||
+        (previous != null && palette != null && previous.isCloseTo(palette))) {
+      return;
+    }
+    _pendingPalette = palette;
+    if (widget.onPaletteChanged == null || _paletteNotificationScheduled) {
+      return;
+    }
+    _paletteNotificationScheduled = true;
+    final binding = WidgetsBinding.instance;
+    binding.addPostFrameCallback((_) {
+      _paletteNotificationScheduled = false;
+      if (!mounted) return;
+      // A capture that finished just before a pause should keep the previous
+      // background frozen until the artwork resumes.
+      if (_pendingPalette != null && !_paletteWanted) return;
+      _presentedPalette = _pendingPalette;
+      widget.onPaletteChanged?.call(_presentedPalette);
+    });
+    binding.ensureVisualUpdate();
   }
 
   Future<void> _restartArtworkLoop(
@@ -414,6 +687,7 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
         heldFrame?.dispose();
         return;
       }
+      _finishPaletteProbe(observedEnd: _paletteProbe?.lastPosition);
       if (heldFrame != null) {
         _loopFrameFadeTimer?.cancel();
         _loopFrameReleaseTimer?.cancel();
@@ -545,12 +819,15 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
     String cacheKey,
     String? coverPath,
   ) async {
-    var frame = await _captureInsetProbeFrame();
+    _CapturedPaletteFrame? reusedFrame;
+    void rememberSample(_CapturedPaletteFrame sample) => reusedFrame ??= sample;
+    final capturePalette = _paletteWanted ? rememberSample : null;
+    var frame = await _captureInsetProbeFrame(capturePalette);
     if (frame == null) {
       // Some texture renderers need one more presented frame before a
       // screenshot contains video. Do not retry continuously during playback.
       await Future<void>.delayed(const Duration(milliseconds: 90));
-      frame = await _captureInsetProbeFrame();
+      frame = await _captureInsetProbeFrame(capturePalette);
     }
     final cover = frame == null || coverPath == null
         ? null
@@ -576,31 +853,47 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
       _insetZoom = zoom;
       _insetFitResolved = true;
     });
+    if (reusedFrame case final sample?) _reusePaletteRead(sample, 'inset');
   }
 
-  Future<ArtworkInsetFrame?> _captureInsetProbeFrame() async {
+  Future<ArtworkInsetFrame?> _captureInsetProbeFrame(
+    ValueChanged<_CapturedPaletteFrame>? onPaletteFrame,
+  ) async {
     try {
       await Future<void>.delayed(const Duration(milliseconds: 40));
       await WidgetsBinding.instance.endOfFrame;
-      final renderObject = _videoFrameBoundaryKey.currentContext
-          ?.findRenderObject();
-      if (renderObject is! RenderRepaintBoundary ||
-          renderObject.debugNeedsPaint ||
-          renderObject.size.isEmpty) {
-        return null;
-      }
+      final renderObject = _paintedVideoBoundary;
+      if (renderObject == null) return null;
+      final position = _controller?.value.position ?? Duration.zero;
+      final timing = visualLoadTimingsEnabled && onPaletteFrame != null
+          ? (_PaletteReadTiming()..start())
+          : null;
       final image = await renderObject.toImage(
         pixelRatio: math.min(
           1,
           _insetProbeMaxSide / renderObject.size.longestSide,
         ),
       );
+      timing?.markRaster();
       try {
         final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        timing?.markReadback();
         if (data == null) return null;
         final center =
             ((image.height ~/ 2) * image.width + image.width ~/ 2) * 4;
         if (data.getUint8(center + 3) < 240) return null;
+        final frame = ArtworkInsetFrame(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+          image.width,
+          image.height,
+        );
+        // A uniform but opaque frame can supply colors without giving the
+        // inset detector enough edges to establish a crop.
+        onPaletteFrame?.call((
+          frame: frame,
+          position: position,
+          timing: timing,
+        ));
         var darkest = 255;
         var lightest = 0;
         for (var y = 1; y <= 5; y++) {
@@ -618,11 +911,7 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
           }
         }
         if (lightest - darkest < 12) return null;
-        return ArtworkInsetFrame(
-          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-          image.width,
-          image.height,
-        );
+        return frame;
       } finally {
         image.dispose();
       }
@@ -658,27 +947,32 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
   }
 
   Future<ui.Image?> _captureLoopFrame() async {
+    ui.Image? image;
+    var retained = false;
     try {
       await WidgetsBinding.instance.endOfFrame;
-      final renderObject = _videoFrameBoundaryKey.currentContext
-          ?.findRenderObject();
-      if (renderObject is! RenderRepaintBoundary ||
-          renderObject.debugNeedsPaint ||
-          renderObject.size.isEmpty) {
-        return null;
-      }
+      final renderObject = _paintedVideoBoundary;
+      if (renderObject == null) return null;
+      final controller = _controller;
+      final position = controller?.value.position ?? Duration.zero;
+      final reuse =
+          _paletteWanted &&
+          controller != null &&
+          _paletteProbe?.canCapture(position, allowInitialFrame: true) == true;
+      final timing = visualLoadTimingsEnabled && reuse
+          ? (_PaletteReadTiming()..start())
+          : null;
       final pixelRatio = math.min(
         1.0,
         _loopFrameMaxSide / renderObject.size.longestSide,
       );
-      final image = await renderObject.toImage(pixelRatio: pixelRatio);
+      image = await renderObject.toImage(pixelRatio: pixelRatio);
+      timing?.markRaster();
       final pixelData = await image.toByteData(
         format: ui.ImageByteFormat.rawRgba,
       );
-      if (pixelData == null) {
-        image.dispose();
-        return null;
-      }
+      timing?.markReadback();
+      if (pixelData == null) return null;
       final centerPixel =
           ((image.height ~/ 2) * image.width + image.width ~/ 2) * 4;
       final centerAlpha = pixelData.getUint8(centerPixel + 3);
@@ -686,13 +980,27 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
         'video loop frame captured ${image.width}x${image.height} centerAlpha=$centerAlpha',
         track: widget.identity ?? widget.url.toString(),
       );
-      if (centerAlpha < 240) {
-        image.dispose();
-        return null;
+      if (centerAlpha < 240) return null;
+      if (reuse && identical(controller, _controller)) {
+        _reusePaletteRead((
+          frame: ArtworkInsetFrame(
+            pixelData.buffer.asUint8List(
+              pixelData.offsetInBytes,
+              pixelData.lengthInBytes,
+            ),
+            image.width,
+            image.height,
+          ),
+          position: position,
+          timing: timing,
+        ), 'loop');
       }
+      retained = true;
       return image;
     } catch (_) {
       return null;
+    } finally {
+      if (!retained) image?.dispose();
     }
   }
 
@@ -776,6 +1084,7 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
   @override
   void dispose() {
     _generation++;
+    _finishPaletteProbe();
     _loopFrameFadeTimer?.cancel();
     _loopFrameReleaseTimer?.cancel();
     _loopFrame?.dispose();
@@ -859,4 +1168,88 @@ class _SpotifyCanvasVideoState extends State<SpotifyCanvasVideo>
       ),
     );
   }
+}
+
+typedef _PaletteKey = ({Uri url, Duration start, int aspect, int zoom});
+
+typedef _CapturedPaletteFrame = ({
+  ArtworkInsetFrame frame,
+  Duration position,
+  _PaletteReadTiming? timing,
+});
+
+/// One bounded sampling pass through the visible clip. Keep the clock and
+/// capture budget alongside its tiny timeline so looping needs no readbacks.
+class _PaletteProbe {
+  _PaletteProbe(
+    this.key,
+    this.end,
+    this.crop,
+    ArtworkVideoPaletteTimeline? cached,
+  ) : finished = cached != null,
+      timeline =
+          cached ?? ArtworkVideoPaletteTimeline(const [], loopStart: key.start),
+      interval = Duration(
+        milliseconds: end == null
+            ? 3000
+            : math.max(750, ((end - key.start).inMilliseconds / 3).round()),
+      );
+
+  static const _maximumAttempts = 3;
+  static const _revealLead = Duration(milliseconds: 250);
+
+  final _PaletteKey key;
+  final Duration? end;
+  final Rect crop;
+  final Duration interval;
+  ArtworkVideoPaletteTimeline timeline;
+  Duration? lastPosition;
+  Duration? _lastAttempt;
+  int _attempts = 0;
+  int rejectedReads = 0;
+  bool capturing = false;
+  bool finished;
+
+  bool get atLimit => _attempts >= _maximumAttempts;
+
+  bool canCapture(Duration position, {bool allowInitialFrame = false}) =>
+      !finished &&
+      !atLimit &&
+      !capturing &&
+      position >=
+          (_lastAttempt == null
+              ? key.start + (allowInitialFrame ? Duration.zero : _revealLead)
+              : _lastAttempt! + interval);
+
+  void reserve(Duration position) {
+    _attempts++;
+    _lastAttempt = position;
+    capturing = true;
+  }
+
+  void add(ArtworkVideoPaletteSample sample) {
+    timeline = ArtworkVideoPaletteTimeline([
+      ...timeline.samples,
+      sample,
+    ], loopStart: key.start);
+  }
+
+  ArtworkVideoPaletteTimeline finish(Duration? observedEnd) {
+    finished = true;
+    return timeline = ArtworkVideoPaletteTimeline(
+      timeline.samples,
+      loopStart: key.start,
+      loopEnd: end ?? observedEnd,
+    );
+  }
+}
+
+class _PaletteReadTiming {
+  final Stopwatch _clock = Stopwatch();
+  int rasterUs = 0;
+  int readbackUs = 0;
+
+  void start() => _clock.start();
+  void markRaster() => rasterUs = _clock.elapsedMicroseconds;
+  void markReadback() => readbackUs = _clock.elapsedMicroseconds - rasterUs;
 }

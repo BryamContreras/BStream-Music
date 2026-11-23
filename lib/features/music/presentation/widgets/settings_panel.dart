@@ -21,9 +21,12 @@ import '../../../../platform_channels/android_file_export_channel.dart';
 import '../../../../platform_channels/android_supported_links_settings_channel.dart';
 import '../../../../platform_channels/ios_file_export_channel.dart';
 import '../../../../services/app_update/github_release_checker.dart';
+import '../../../../services/audio_sources/audio_extension.dart';
+import '../../../../services/audio_sources/audio_extension_resolver.dart';
 import '../../../../services/audio_sources/audio_source_policy.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/storage/library_csv_service.dart';
+import '../providers/audio_source_providers.dart';
 import '../providers/live_overlay_controller.dart';
 import '../providers/music_providers.dart';
 import 'app_update_dialog.dart';
@@ -42,8 +45,6 @@ typedef DownloadDirectoryPicker =
 bool _usesSingleAudioQuality(BuildContext context) =>
     AppPlatform.isDesktop &&
     !AppPlatform.isMobileTargetPlatform(Theme.of(context).platform);
-
-enum _AudioQualitySetting { wifi, mobile, downloads }
 
 double _settingsContentMaxWidth(BuildContext context, double compactWidth) {
   final desktopLayout =
@@ -147,7 +148,9 @@ final settingsSupportedLinksLauncherProvider =
 
 enum _SettingsRoute {
   root,
+  language,
   appearance,
+  playerFont,
   playerStyles,
   liveWidget,
   lyrics,
@@ -155,6 +158,9 @@ enum _SettingsRoute {
   storage,
   audioSources,
   dataSaving,
+  wifiQuality,
+  mobileQuality,
+  downloadQuality,
   live,
   about,
 }
@@ -410,8 +416,12 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     setState(() {
       _route = switch (_route) {
         _SettingsRoute.liveWidget ||
+        _SettingsRoute.playerFont ||
         _SettingsRoute.playerStyles => _SettingsRoute.appearance,
         _SettingsRoute.lyricsProviders => _SettingsRoute.lyrics,
+        _SettingsRoute.wifiQuality ||
+        _SettingsRoute.mobileQuality ||
+        _SettingsRoute.downloadQuality => _SettingsRoute.dataSaving,
         _ => _SettingsRoute.root,
       };
     });
@@ -421,7 +431,9 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
   String _routeTitle(_SettingsRoute route, AppStrings strings) {
     return switch (route) {
       _SettingsRoute.root => strings.settings,
+      _SettingsRoute.language => strings.language,
       _SettingsRoute.appearance => strings.appearance,
+      _SettingsRoute.playerFont => strings.playerFont,
       _SettingsRoute.playerStyles => strings.playerStyles,
       _SettingsRoute.liveWidget => strings.liveWidget,
       _SettingsRoute.lyrics => strings.lyricsAppearance,
@@ -429,6 +441,12 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       _SettingsRoute.storage => strings.storage,
       _SettingsRoute.audioSources => strings.audioSources,
       _SettingsRoute.dataSaving => strings.dataSaving,
+      _SettingsRoute.wifiQuality =>
+        _usesSingleAudioQuality(context)
+            ? strings.audioQuality
+            : strings.wifiNetwork,
+      _SettingsRoute.mobileQuality => strings.mobileNetwork,
+      _SettingsRoute.downloadQuality => strings.downloadAudioQuality,
       _SettingsRoute.live => strings.liveConnection,
       _SettingsRoute.about => strings.aboutApplication,
     };
@@ -441,6 +459,25 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     required AppStrings strings,
   }) {
     final content = switch (_route) {
+      _SettingsRoute.language => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        spacing: appCardGap,
+        children: [
+          for (final language in AppLanguage.values)
+            _SettingsChoiceOption(
+              key: ValueKey('settings-language-option-${language.name}'),
+              selected: state.language == language,
+              icon: Icons.language_rounded,
+              label: language.label,
+              onTap: () {
+                if (state.language == language) return;
+                ref
+                    .read(settingsControllerProvider.notifier)
+                    .setLanguage(language);
+              },
+            ),
+        ],
+      ),
       _SettingsRoute.appearance => _AppearanceSettings(
         themeMode: state.themeMode,
         accent: state.accent,
@@ -476,8 +513,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onAppBackgroundCleared: () => ref
             .read(settingsControllerProvider.notifier)
             .clearAppBackgroundPhoto(),
-        onPlayerFontChanged: (font) =>
-            ref.read(settingsControllerProvider.notifier).setPlayerFont(font),
+        onOpenPlayerFont: () => _openRoute(_SettingsRoute.playerFont),
         onOpenPlayerStyles: () => _openRoute(_SettingsRoute.playerStyles),
         onShowAudioQualityChanged: (enabled) => ref
             .read(settingsControllerProvider.notifier)
@@ -500,6 +536,24 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
         onMiniPlayerBackgroundModeChanged: (mode) => ref
             .read(settingsControllerProvider.notifier)
             .setMiniPlayerBackgroundMode(mode),
+      ),
+      _SettingsRoute.playerFont => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        spacing: appCardGap,
+        children: [
+          for (final font in PlayerFont.values)
+            _SettingsChoiceOption(
+              key: ValueKey('settings-player-font-option-${font.code}'),
+              selected: state.playerFont == font,
+              icon: Icons.text_fields_rounded,
+              label: strings.playerFontLabel(font),
+              subtitle: strings.playerFontDescription(font),
+              fontFamily: font.fontFamily,
+              onTap: () => ref
+                  .read(settingsControllerProvider.notifier)
+                  .setPlayerFont(font),
+            ),
+        ],
       ),
       _SettingsRoute.playerStyles => PlayerStyleGalleryPage(
         style: state.playerStyle,
@@ -559,16 +613,30 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
       ),
       _SettingsRoute.audioSources => _AudioSourcesSettings(
         jioSaavnEnabled: state.jioSaavnEnabled,
+        extensions: state.audioExtensions,
         strings: strings,
+        onAdd: () => _showAddAudioSourceDialog(strings),
         onJioSaavnChanged: (enabled) => ref
             .read(settingsControllerProvider.notifier)
             .setJioSaavnEnabled(enabled),
+        onExtensionChanged: (extension, enabled) => ref
+            .read(settingsControllerProvider.notifier)
+            .setAudioExtensionEnabled(extension.manifestUri, enabled),
+        onRemove: (extension) => ref
+            .read(settingsControllerProvider.notifier)
+            .removeAudioExtension(extension.manifestUri),
       ),
       _SettingsRoute.dataSaving => _DataSavingSettings(
         state: state,
         strings: strings,
         singleProfile: _usesSingleAudioQuality(context),
-        onQualityTap: _chooseAudioQuality,
+        onQualityTap: _openRoute,
+      ),
+      _SettingsRoute.wifiQuality ||
+      _SettingsRoute.mobileQuality ||
+      _SettingsRoute.downloadQuality => _buildAudioQualityOptions(
+        state,
+        strings,
       ),
       _SettingsRoute.storage => _StorageSettings(
         strings: strings,
@@ -655,10 +723,7 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
                   icon: Icons.language_rounded,
                   title: strings.language,
                   subtitle: state.language.label,
-                  onTap: () => _chooseLanguage(
-                    currentLanguage: state.language,
-                    strings: strings,
-                  ),
+                  onTap: () => _openRoute(_SettingsRoute.language),
                 ),
               ],
             ),
@@ -938,69 +1003,69 @@ class _SettingsPanelState extends ConsumerState<SettingsPanel> {
     }
   }
 
-  Future<void> _chooseLanguage({
-    required AppLanguage currentLanguage,
-    required AppStrings strings,
-  }) async {
-    final selected = await showAppDialog<AppLanguage>(
-      context: context,
-      builder: (_) =>
-          _LanguageSelectorDialog(language: currentLanguage, strings: strings),
+  Widget _buildAudioQualityOptions(SettingsState state, AppStrings strings) {
+    final route = _route;
+    final downloads = route == _SettingsRoute.downloadQuality;
+    final controller = ref.read(settingsControllerProvider.notifier);
+    final (saved, preference, apply) = switch (route) {
+      _SettingsRoute.wifiQuality => (
+        state.wifiAudioQuality,
+        state.wifiAudioSourcePreference,
+        controller.setWifiAudioQuality,
+      ),
+      _SettingsRoute.mobileQuality => (
+        state.mobileAudioQuality,
+        state.mobileAudioSourcePreference,
+        controller.setMobileAudioQuality,
+      ),
+      _SettingsRoute.downloadQuality => (
+        state.downloadAudioQuality,
+        state.downloadAudioSourcePreference,
+        controller.setDownloadAudioQuality,
+      ),
+      _ => throw StateError('Expected an audio quality route'),
+    };
+    return _AudioQualityProfileSettings(
+      choices: _AudioQualityChoices(
+        state,
+        profile: saved,
+        preference: preference,
+        downloads: downloads,
+      ),
+      strings: strings,
+      onChanged: (profile, sourcePreference) async {
+        if (route != _route) return;
+        final current = ref.read(settingsControllerProvider).value;
+        if (current == null ||
+            (sourcePreference != null &&
+                !_AudioQualityChoices(
+                  current,
+                  profile: profile,
+                  preference: sourcePreference,
+                  downloads: downloads,
+                ).preferredAvailable)) {
+          return;
+        }
+        await apply(profile, sourcePreference: sourcePreference);
+      },
     );
-    if (!mounted || selected == null || selected == currentLanguage) {
-      return;
-    }
-    await ref.read(settingsControllerProvider.notifier).setLanguage(selected);
   }
 
-  Future<void> _chooseAudioQuality(_AudioQualitySetting setting) async {
-    final state = ref.read(settingsControllerProvider).value;
-    if (state == null) return;
-    final strings = ref.read(appStringsProvider);
-    final (title, saved) = switch (setting) {
-      _AudioQualitySetting.wifi => (
-        _usesSingleAudioQuality(context)
-            ? strings.audioQuality
-            : strings.wifiNetwork,
-        state.wifiAudioQuality,
-      ),
-      _AudioQualitySetting.mobile => (
-        strings.mobileNetwork,
-        state.mobileAudioQuality,
-      ),
-      _AudioQualitySetting.downloads => (
-        strings.downloadAudioQuality,
-        state.downloadAudioQuality,
-      ),
-    };
-    final selected = await showAppDialog<AudioQualityProfile>(
+  Future<void> _showAddAudioSourceDialog(AppStrings strings) async {
+    final resolver = ref.read(audioExtensionResolverProvider);
+    final extensions = await showAppDialog<List<AudioExtension>>(
       context: context,
-      builder: (_) => _AudioQualityProfileDialog(
-        title: title,
-        selected: state.jioSaavnEnabled ? saved : AudioQualityProfile.standard,
-        jioSaavnEnabled: state.jioSaavnEnabled,
-        highQualitySource: setting == _AudioQualitySetting.downloads
-            ? strings.downloadHighQualitySource
-            : 'JioSaavn',
-        strings: strings,
-      ),
+      builder: (_) =>
+          _AddAudioSourceDialog(strings: strings, onLoad: resolver.loadSources),
     );
-    if (!mounted || selected == null) return;
-    // The source may be disabled while a dialog is open. Never select an
-    // unavailable provider; the mandatory YouTube Music choice stays usable.
-    final current = ref.read(settingsControllerProvider).value;
-    if (current == null ||
-        (selected == AudioQualityProfile.high && !current.jioSaavnEnabled)) {
-      return;
+    if (!mounted || extensions == null) return;
+    try {
+      await ref
+          .read(settingsControllerProvider.notifier)
+          .addAudioExtensions(extensions);
+    } catch (_) {
+      if (mounted) _showSnackBar(strings.audioExtensionUnavailable);
     }
-    final controller = ref.read(settingsControllerProvider.notifier);
-    await switch (setting) {
-      _AudioQualitySetting.wifi => controller.setWifiAudioQuality(selected),
-      _AudioQualitySetting.mobile => controller.setMobileAudioQuality(selected),
-      _AudioQualitySetting.downloads => controller.setDownloadAudioQuality(
-        selected,
-      ),
-    };
   }
 
   Future<void> _chooseLocalMusicFilters({
@@ -1801,68 +1866,14 @@ class _AboutApplicationSettings extends StatelessWidget {
   }
 }
 
-class _LanguageSelectorDialog extends StatelessWidget {
-  const _LanguageSelectorDialog({
-    required this.language,
-    required this.strings,
-  });
-
-  final AppLanguage language;
-  final AppStrings strings;
-
-  @override
-  Widget build(BuildContext context) {
-    final options = Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var index = 0; index < AppLanguage.values.length; index++) ...[
-          if (index > 0) const SizedBox(height: 8),
-          _SettingsDialogOption(
-            key: ValueKey(
-              'settings-language-option-${AppLanguage.values[index].name}',
-            ),
-            selected: language == AppLanguage.values[index],
-            icon: Icons.language_rounded,
-            label: AppLanguage.values[index].label,
-            onTap: () => Navigator.of(context).pop(AppLanguage.values[index]),
-          ),
-        ],
-      ],
-    );
-    final standardAndroidText =
-        Theme.of(context).platform == TargetPlatform.android &&
-        MediaQuery.textScalerOf(context).scale(16) <= 16;
-    return AppAlertDialog(
-      key: const ValueKey('settings-language-dialog'),
-      scrollable: true,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      title: Text(strings.language),
-      // At the standard Android text size the seven endonyms fit in Material's
-      // 280 dp minimum, minus its two 24 dp content insets. Giving that width
-      // to the column avoids a second intrinsic pass over every option.
-      content: standardAndroidText
-          ? SizedBox(width: 232, child: options)
-          : ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: options,
-            ),
-      actions: [
-        TextButton(
-          key: const ValueKey('settings-language-cancel'),
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(strings.cancel),
-        ),
-      ],
-    );
-  }
-}
-
-class _SettingsDialogOption extends StatelessWidget {
-  const _SettingsDialogOption({
+class _SettingsChoiceOption extends StatelessWidget {
+  const _SettingsChoiceOption({
     required this.selected,
     this.icon,
     this.leading,
     required this.label,
+    this.subtitle,
+    this.fontFamily,
     required this.onTap,
     super.key,
   }) : assert(icon != null || leading != null);
@@ -1871,15 +1882,20 @@ class _SettingsDialogOption extends StatelessWidget {
   final IconData? icon;
   final Widget? leading;
   final String label;
+  final String? subtitle;
+  final String? fontFamily;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
     return Semantics(
       button: true,
       selected: selected,
       label: label,
+      hint: subtitle,
+      onTap: onTap,
       excludeSemantics: true,
       child: Material(
         color: selected
@@ -1920,12 +1936,30 @@ class _SettingsDialogOption extends StatelessWidget {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      label,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: selected ? colors.onPrimaryContainer : null,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          label,
+                          style: textTheme.titleMedium?.copyWith(
+                            fontFamily: fontFamily,
+                            color: selected ? colors.onPrimaryContainer : null,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (subtitle != null)
+                          Text(
+                            subtitle!,
+                            style: textTheme.bodySmall?.copyWith(
+                              color: selected
+                                  ? colors.onPrimaryContainer.withValues(
+                                      alpha: 0.8,
+                                    )
+                                  : colors.onSurfaceVariant,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1937,154 +1971,6 @@ class _SettingsDialogOption extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PlayerFontSelectorDialog extends StatefulWidget {
-  const _PlayerFontSelectorDialog({required this.font, required this.strings});
-
-  final PlayerFont font;
-  final AppStrings strings;
-
-  @override
-  State<_PlayerFontSelectorDialog> createState() =>
-      _PlayerFontSelectorDialogState();
-}
-
-class _PlayerFontSelectorDialogState extends State<_PlayerFontSelectorDialog> {
-  late PlayerFont selected = widget.font;
-
-  @override
-  Widget build(BuildContext context) {
-    return AppAlertDialog(
-      key: const ValueKey('settings-player-font-dialog'),
-      scrollable: true,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      title: Text(widget.strings.playerFont),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final font in PlayerFont.values) ...[
-              if (font != PlayerFont.current) const SizedBox(height: 8),
-              _PlayerFontOption(
-                key: ValueKey('settings-player-font-option-${font.code}'),
-                font: font,
-                selected: selected == font,
-                strings: widget.strings,
-                onTap: () => setState(() => selected = font),
-              ),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(widget.strings.cancel),
-        ),
-        FilledButton(
-          key: const ValueKey('settings-player-font-apply'),
-          onPressed: () => Navigator.of(context).pop(selected),
-          child: Text(widget.strings.apply),
-        ),
-      ],
-    );
-  }
-}
-
-class _PlayerFontOption extends StatelessWidget {
-  const _PlayerFontOption({
-    required this.font,
-    required this.selected,
-    required this.strings,
-    required this.onTap,
-    super.key,
-  });
-
-  final PlayerFont font;
-  final bool selected;
-  final AppStrings strings;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: strings.playerFontLabel(font),
-      excludeSemantics: true,
-      child: Material(
-        color: selected
-            ? colors.primaryContainer.withValues(
-                alpha: AppColors.cardSurfaceOpacityFor(context),
-              )
-            : AppColors.cardSurfaceFor(context),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(appListCardIconRadius),
-          side: BorderSide(
-            color: selected ? colors.primary : colors.outlineVariant,
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.text_fields_rounded,
-                  color: selected ? colors.primary : colors.onSurfaceVariant,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        strings.playerFontLabel(font),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontFamily: font.fontFamily,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: selected
-                              ? colors.onPrimaryContainer
-                              : colors.onSurface,
-                        ),
-                      ),
-                      Text(
-                        strings.playerFontDescription(font),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: selected
-                              ? colors.onPrimaryContainer.withValues(alpha: 0.8)
-                              : colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  selected
-                      ? Icons.check_circle_rounded
-                      : Icons.radio_button_unchecked_rounded,
-                  color: selected ? colors.primary : colors.onSurfaceVariant,
-                ),
-              ],
             ),
           ),
         ),
@@ -2114,7 +2000,7 @@ class _PlayerArtworkStyleSelectorDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-player-artwork-style-option-classic',
               ),
@@ -2125,7 +2011,7 @@ class _PlayerArtworkStyleSelectorDialog extends StatelessWidget {
                   Navigator.of(context).pop(PlayerArtworkStyle.classic),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-player-artwork-style-option-expanded',
               ),
@@ -2170,7 +2056,7 @@ class _MiniPlayerModeSelectorDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey('settings-mini-player-option-default'),
               selected: mode == MiniPlayerMode.standard,
               leading: const _MiniPlayerStyleIcon(
@@ -2181,7 +2067,7 @@ class _MiniPlayerModeSelectorDialog extends StatelessWidget {
               onTap: () => Navigator.of(context).pop(MiniPlayerMode.standard),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey('settings-mini-player-option-capsule'),
               selected: mode == MiniPlayerMode.capsule,
               leading: const _MiniPlayerStyleIcon(
@@ -2226,7 +2112,7 @@ class _SurfaceBackgroundSelectorDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey('settings-surface-background-option-accent'),
               selected: mode == SurfaceBackgroundMode.accent,
               icon: Icons.format_color_fill_rounded,
@@ -2235,7 +2121,7 @@ class _SurfaceBackgroundSelectorDialog extends StatelessWidget {
                   Navigator.of(context).pop(SurfaceBackgroundMode.accent),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-surface-background-option-transparent',
               ),
@@ -2246,7 +2132,7 @@ class _SurfaceBackgroundSelectorDialog extends StatelessWidget {
                   Navigator.of(context).pop(SurfaceBackgroundMode.transparent),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-surface-background-option-liquid-glass',
               ),
@@ -2293,7 +2179,7 @@ class _AppBackgroundSelectorDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey('settings-app-background-option-none'),
               selected: !customSelected,
               icon: Icons.hide_image_rounded,
@@ -2301,7 +2187,7 @@ class _AppBackgroundSelectorDialog extends StatelessWidget {
               onTap: () => Navigator.of(context).pop(_AppBackgroundChoice.none),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey('settings-app-background-option-custom'),
               selected: customSelected,
               icon: Icons.add_photo_alternate_rounded,
@@ -2344,7 +2230,7 @@ class _MiniPlayerBackgroundSelectorDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-mini-player-background-option-accent',
               ),
@@ -2355,7 +2241,7 @@ class _MiniPlayerBackgroundSelectorDialog extends StatelessWidget {
                   Navigator.of(context).pop(MiniPlayerBackgroundMode.accent),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-mini-player-background-option-artwork',
               ),
@@ -2366,7 +2252,7 @@ class _MiniPlayerBackgroundSelectorDialog extends StatelessWidget {
                   Navigator.of(context).pop(MiniPlayerBackgroundMode.artwork),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-mini-player-background-option-transparent',
               ),
@@ -2378,7 +2264,7 @@ class _MiniPlayerBackgroundSelectorDialog extends StatelessWidget {
               ).pop(MiniPlayerBackgroundMode.transparent),
             ),
             const SizedBox(height: 8),
-            _SettingsDialogOption(
+            _SettingsChoiceOption(
               key: const ValueKey(
                 'settings-mini-player-background-option-liquid-glass',
               ),
@@ -2427,7 +2313,7 @@ class _AppearanceSettings extends StatelessWidget {
     required this.onPickAppBackgroundPhoto,
     required this.onAppBackgroundPhotoSelected,
     required this.onAppBackgroundCleared,
-    required this.onPlayerFontChanged,
+    required this.onOpenPlayerFont,
     required this.onOpenPlayerStyles,
     required this.onShowAudioQualityChanged,
     required this.onAnimatedArtworkEnabledChanged,
@@ -2461,7 +2347,7 @@ class _AppearanceSettings extends StatelessWidget {
   final AppBackgroundPhotoPicker onPickAppBackgroundPhoto;
   final Future<void> Function(File) onAppBackgroundPhotoSelected;
   final Future<void> Function() onAppBackgroundCleared;
-  final Future<void> Function(PlayerFont) onPlayerFontChanged;
+  final VoidCallback onOpenPlayerFont;
   final VoidCallback onOpenPlayerStyles;
   final Future<void> Function(bool) onShowAudioQualityChanged;
   final Future<void> Function(bool) onAnimatedArtworkEnabledChanged;
@@ -2482,16 +2368,6 @@ class _AppearanceSettings extends StatelessWidget {
       return;
     }
     await onMiniPlayerModeChanged(selected);
-  }
-
-  Future<void> _choosePlayerFont(BuildContext context) async {
-    final selected = await showAppDialog<PlayerFont>(
-      context: context,
-      builder: (_) =>
-          _PlayerFontSelectorDialog(font: playerFont, strings: strings),
-    );
-    if (!context.mounted || selected == null || selected == playerFont) return;
-    await onPlayerFontChanged(selected);
   }
 
   Future<void> _choosePlayerArtworkStyle(BuildContext context) async {
@@ -2669,7 +2545,7 @@ class _AppearanceSettings extends StatelessWidget {
                 icon: Icons.text_fields_rounded,
                 title: strings.playerFont,
                 subtitle: strings.playerFontLabel(playerFont),
-                onTap: () => _choosePlayerFont(context),
+                onTap: onOpenPlayerFont,
               ),
             ],
           ),
@@ -4573,13 +4449,21 @@ class _SettingsItemSurface extends StatelessWidget {
 class _AudioSourcesSettings extends StatelessWidget {
   const _AudioSourcesSettings({
     required this.jioSaavnEnabled,
+    required this.extensions,
     required this.strings,
+    required this.onAdd,
     required this.onJioSaavnChanged,
+    required this.onExtensionChanged,
+    required this.onRemove,
   });
 
   final bool jioSaavnEnabled;
+  final List<AudioExtension> extensions;
   final AppStrings strings;
+  final VoidCallback onAdd;
   final ValueChanged<bool> onJioSaavnChanged;
+  final void Function(AudioExtension, bool) onExtensionChanged;
+  final ValueChanged<AudioExtension> onRemove;
 
   @override
   Widget build(BuildContext context) => _SettingsSectionPanel(
@@ -4618,8 +4502,238 @@ class _AudioSourcesSettings extends StatelessWidget {
           onChanged: onJioSaavnChanged,
         ),
       ),
+      for (final extension in extensions) ...[
+        const SizedBox(height: appCardGap),
+        _SettingsEntryCard(
+          key: ValueKey(extension.manifestUri),
+          icon: Icons.extension_rounded,
+          title: extension.name,
+          subtitle: extension.allowDownloads
+              ? extension.manifestUri.host
+              : strings.audioExtensionStreamingOnly,
+          onTap: () => onExtensionChanged(extension, !extension.enabled),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Switch.adaptive(
+                value: extension.enabled,
+                onChanged: (value) => onExtensionChanged(extension, value),
+              ),
+              IconButton(
+                tooltip: strings.removeAudioSource,
+                onPressed: () => onRemove(extension),
+                icon: const Icon(Icons.delete_outline_rounded),
+              ),
+            ],
+          ),
+        ),
+      ],
+      const SizedBox(height: appCardGap),
+      _SettingsEntryCard(
+        key: const ValueKey('settings-add-audio-source'),
+        icon: Icons.add_rounded,
+        title: strings.addAudioSource,
+        subtitle: '',
+        onTap: onAdd,
+      ),
     ],
   );
+}
+
+class _AddAudioSourceDialog extends StatefulWidget {
+  const _AddAudioSourceDialog({required this.strings, required this.onLoad});
+
+  final AppStrings strings;
+  final Future<List<AudioExtension>> Function(String url) onLoad;
+
+  @override
+  State<_AddAudioSourceDialog> createState() => _AddAudioSourceDialogState();
+}
+
+class _AddAudioSourceDialogState extends State<_AddAudioSourceDialog> {
+  final _url = TextEditingController();
+  AudioExtensionError? _error;
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _url.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_loading) return;
+    FocusScope.of(context).unfocus();
+    final url = _url.text;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final extensions = await widget.onLoad(url);
+      if (extensions.isEmpty) {
+        throw const AudioExtensionException(
+          AudioExtensionError.noAvailableSources,
+        );
+      }
+      if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.of(context).pop(extensions);
+      }
+    } on AudioExtensionException catch (error) {
+      if (mounted) setState(() => _error = error.reason);
+    } catch (_) {
+      if (mounted) setState(() => _error = AudioExtensionError.unavailable);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = widget.strings;
+    final errorText = switch (_error) {
+      AudioExtensionError.invalidUrl => strings.audioExtensionInvalidUrl,
+      AudioExtensionError.unavailable => strings.audioExtensionUnavailable,
+      AudioExtensionError.unsupported => strings.audioExtensionUnsupported,
+      AudioExtensionError.restricted => strings.audioExtensionRestricted,
+      AudioExtensionError.officialClientOnly =>
+        strings.audioExtensionOfficialClientOnly,
+      AudioExtensionError.outputRequired =>
+        strings.audioExtensionOutputRequired,
+      AudioExtensionError.moduleIndex => strings.audioExtensionModuleIndex,
+      AudioExtensionError.noAvailableSources =>
+        strings.audioExtensionNoAvailableSources,
+      null => null,
+    };
+    return AppAlertDialog(
+      title: Text(strings.addAudioSource),
+      scrollable: true,
+      content: SizedBox(
+        width: 400,
+        child: TextField(
+          key: const ValueKey('audio-extension-url'),
+          controller: _url,
+          enabled: !_loading,
+          keyboardType: TextInputType.url,
+          textInputAction: TextInputAction.done,
+          autocorrect: false,
+          enableSuggestions: false,
+          onSubmitted: (_) => _submit(),
+          onChanged: (_) {
+            if (_error != null) setState(() => _error = null);
+          },
+          decoration: InputDecoration(
+            labelText: strings.audioExtensionUrl,
+            helper: Text(strings.audioExtensionUrlHelp),
+            errorText: errorText,
+            errorMaxLines: 3,
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(strings.cancel),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('audio-extension-submit'),
+          onPressed: _loading ? null : _submit,
+          icon: _loading
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.add_rounded),
+          label: Text(strings.addAudioSource),
+        ),
+      ],
+    );
+  }
+}
+
+class _AudioQualityChoices {
+  _AudioQualityChoices(
+    SettingsState state, {
+    required this.profile,
+    required this.preference,
+    required this.downloads,
+  }) : jioSaavnEnabled = state.jioSaavnEnabled,
+       extensions = automatic.orderedExtensions(
+         state.audioExtensions,
+         forDownload: downloads,
+       ),
+       savedExtension = state.audioExtensions
+           .where(
+             (item) => item.manifestUri == preference.preferredExtensionUri,
+           )
+           .firstOrNull;
+
+  static const automatic = AudioSourcePreference.automatic();
+  static const standardSourceLabel = 'YTMusic';
+
+  final AudioQualityProfile profile;
+  final AudioSourcePreference preference;
+  final bool downloads;
+  final bool jioSaavnEnabled;
+  final List<AudioExtension> extensions;
+  final AudioExtension? savedExtension;
+
+  bool get hasOptionalSource => _hasSource(automatic);
+
+  bool get preferredAvailable {
+    if (preference.preferredExtensionUri != null) {
+      return extensions.contains(savedExtension);
+    }
+    return _hasSource(preference);
+  }
+
+  bool get hasUnavailablePreference =>
+      profile == AudioQualityProfile.high &&
+      preference != automatic &&
+      !preferredAvailable;
+
+  bool get usesStandard =>
+      profile == AudioQualityProfile.standard || !_hasSource(preference);
+
+  AudioExtension? get _effectiveExtension {
+    if (preference.isJioSaavnOnly) return null;
+    return extensions.contains(savedExtension)
+        ? savedExtension
+        : extensions.firstOrNull;
+  }
+
+  AudioSourcePreference? get effectivePreference {
+    if (usesStandard) return null;
+    final extension = _effectiveExtension;
+    return extension == null
+        ? const AudioSourcePreference.jioSaavn()
+        : AudioSourcePreference.audioExtension(extension.manifestUri);
+  }
+
+  bool _hasSource(AudioSourcePreference preference) => preference.hasSource(
+    jioSaavnEnabled: jioSaavnEnabled,
+    hasExtensions: extensions.isNotEmpty,
+  );
+
+  String summary(AppStrings strings) {
+    final effective = usesStandard
+        ? '${strings.standardAudioQuality} · $standardSourceLabel'
+        : '${strings.highAudioQuality} · ${_effectiveExtension?.name ?? 'JioSaavn'}';
+    if (!hasUnavailablePreference) return effective;
+    final preferred = preference.isJioSaavnOnly
+        ? 'JioSaavn'
+        : savedExtension?.name ?? strings.audioSourcePreferredAddon;
+    return '${strings.unavailableAudioSource(preferred)} $effective';
+  }
+
+  String path(AppStrings strings, {AudioExtension? preferred}) => [
+    if (!downloads) standardSourceLabel,
+    if (preferred != null) preferred.name,
+    if (preferred != null && extensions.length > 1)
+      strings.audioSourceOtherAddons,
+    if (jioSaavnEnabled) 'JioSaavn',
+    if (downloads) standardSourceLabel,
+  ].join(' → ');
 }
 
 class _DataSavingSettings extends StatelessWidget {
@@ -4633,14 +4747,18 @@ class _DataSavingSettings extends StatelessWidget {
   final SettingsState state;
   final AppStrings strings;
   final bool singleProfile;
-  final ValueChanged<_AudioQualitySetting> onQualityTap;
+  final ValueChanged<_SettingsRoute> onQualityTap;
 
-  String _selectionLabel(AudioQualityProfile saved) {
-    final high = state.jioSaavnEnabled && saved == AudioQualityProfile.high;
-    return high
-        ? '${strings.highAudioQuality} · JioSaavn'
-        : '${strings.standardAudioQuality} · YouTube Music';
-  }
+  String _selectionLabel(
+    AudioQualityProfile profile,
+    AudioSourcePreference preference, {
+    bool downloads = false,
+  }) => _AudioQualityChoices(
+    state,
+    profile: profile,
+    preference: preference,
+    downloads: downloads,
+  ).summary(strings);
 
   @override
   Widget build(BuildContext context) => Column(
@@ -4655,8 +4773,11 @@ class _DataSavingSettings extends StatelessWidget {
             ),
             icon: singleProfile ? Icons.headphones_rounded : Icons.wifi_rounded,
             title: singleProfile ? strings.audioQuality : strings.wifiNetwork,
-            subtitle: _selectionLabel(state.wifiAudioQuality),
-            onTap: () => onQualityTap(_AudioQualitySetting.wifi),
+            subtitle: _selectionLabel(
+              state.wifiAudioQuality,
+              state.wifiAudioSourcePreference,
+            ),
+            onTap: () => onQualityTap(_SettingsRoute.wifiQuality),
           ),
           if (!singleProfile) ...[
             const SizedBox(height: appCardGap),
@@ -4664,8 +4785,11 @@ class _DataSavingSettings extends StatelessWidget {
               key: const ValueKey('data-saving-mobile'),
               icon: Icons.signal_cellular_alt_rounded,
               title: strings.mobileNetwork,
-              subtitle: _selectionLabel(state.mobileAudioQuality),
-              onTap: () => onQualityTap(_AudioQualitySetting.mobile),
+              subtitle: _selectionLabel(
+                state.mobileAudioQuality,
+                state.mobileAudioSourcePreference,
+              ),
+              onTap: () => onQualityTap(_SettingsRoute.mobileQuality),
             ),
           ],
         ],
@@ -4677,8 +4801,12 @@ class _DataSavingSettings extends StatelessWidget {
             key: const ValueKey('data-saving-download-quality'),
             icon: Icons.download_rounded,
             title: strings.downloadAudioQuality,
-            subtitle: _selectionLabel(state.downloadAudioQuality),
-            onTap: () => onQualityTap(_AudioQualitySetting.downloads),
+            subtitle: _selectionLabel(
+              state.downloadAudioQuality,
+              state.downloadAudioSourcePreference,
+              downloads: true,
+            ),
+            onTap: () => onQualityTap(_SettingsRoute.downloadQuality),
           ),
         ],
       ),
@@ -4686,78 +4814,107 @@ class _DataSavingSettings extends StatelessWidget {
   );
 }
 
-class _AudioQualityProfileDialog extends StatelessWidget {
-  const _AudioQualityProfileDialog({
-    required this.title,
-    required this.selected,
-    required this.jioSaavnEnabled,
-    required this.highQualitySource,
+class _AudioQualityProfileSettings extends StatelessWidget {
+  const _AudioQualityProfileSettings({
+    required this.choices,
     required this.strings,
+    required this.onChanged,
   });
 
-  final String title;
-  final AudioQualityProfile selected;
-  final bool jioSaavnEnabled;
-  final String highQualitySource;
+  final _AudioQualityChoices choices;
   final AppStrings strings;
+  final void Function(AudioQualityProfile, AudioSourcePreference?) onChanged;
 
   @override
-  Widget build(BuildContext context) => AppAlertDialog(
-    key: const ValueKey('audio-quality-profile-dialog'),
-    scrollable: true,
-    title: Text(title),
-    content: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 480),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (choices.hasUnavailablePreference)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, appCardGap),
+          child: Text(choices.summary(strings)),
+        ),
+      _SettingsSectionPanel(
+        title: strings.standardAudioQuality,
         children: [
-          if (jioSaavnEnabled) ...[
-            _option(
-              context,
-              profile: AudioQualityProfile.high,
-              title: strings.highAudioQuality,
-              provider: highQualitySource,
-              icon: Icons.high_quality_rounded,
-            ),
-            const SizedBox(height: appCardGap),
-          ],
           _option(
             context,
-            profile: AudioQualityProfile.standard,
-            title: strings.standardAudioQuality,
-            provider: 'YouTube Music',
+            key: const ValueKey('audio-quality-profile-standard'),
+            title: _AudioQualityChoices.standardSourceLabel,
             icon: Icons.play_circle_rounded,
           ),
         ],
       ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(),
-        child: Text(strings.cancel),
-      ),
+      if (choices.hasOptionalSource) ...[
+        const SizedBox(height: appSectionGap),
+        _SettingsSectionPanel(
+          title: strings.highAudioQuality,
+          children: [
+            if (choices.jioSaavnEnabled)
+              _option(
+                context,
+                key: const ValueKey('audio-quality-profile-jiosaavn'),
+                title: 'JioSaavn',
+                subtitle: choices.path(strings),
+                icon: Icons.headphones_rounded,
+                preference: const AudioSourcePreference.jioSaavn(),
+              ),
+            for (final (index, extension) in choices.extensions.indexed) ...[
+              if (choices.jioSaavnEnabled || index > 0)
+                const SizedBox(height: appCardGap),
+              _extensionOption(context, extension),
+            ],
+          ],
+        ),
+      ],
     ],
   );
 
+  Widget _extensionOption(BuildContext context, AudioExtension extension) {
+    final preference = AudioSourcePreference.audioExtension(
+      extension.manifestUri,
+    );
+    return _option(
+      context,
+      key: ValueKey(extension.manifestUri),
+      title: extension.name,
+      subtitle: choices.path(strings, preferred: extension),
+      icon: Icons.extension_rounded,
+      preference: preference,
+    );
+  }
+
   Widget _option(
     BuildContext context, {
-    required AudioQualityProfile profile,
+    required Key key,
     required String title,
-    required String provider,
+    String subtitle = '',
     required IconData icon,
-  }) => _SettingsEntryCard(
-    key: ValueKey('audio-quality-profile-${profile.name}'),
-    icon: icon,
-    title: title,
-    subtitle: provider,
-    onTap: () => Navigator.of(context).pop(profile),
-    trailing: Icon(
-      selected == profile
-          ? Icons.check_circle_rounded
-          : Icons.radio_button_unchecked_rounded,
-      color: selected == profile ? Theme.of(context).colorScheme.primary : null,
-    ),
-  );
+    AudioSourcePreference? preference,
+  }) {
+    final selected = choices.effectivePreference == preference;
+    return Semantics(
+      selected: selected,
+      child: _SettingsEntryCard(
+        key: key,
+        icon: icon,
+        title: title,
+        subtitle: subtitle,
+        onTap: () => onChanged(
+          preference == null
+              ? AudioQualityProfile.standard
+              : AudioQualityProfile.high,
+          preference,
+        ),
+        trailing: Icon(
+          selected
+              ? Icons.check_circle_rounded
+              : Icons.radio_button_unchecked_rounded,
+          color: selected ? Theme.of(context).colorScheme.primary : null,
+        ),
+      ),
+    );
+  }
 }
 
 class _StorageSettings extends StatelessWidget {

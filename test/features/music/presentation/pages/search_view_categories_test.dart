@@ -568,9 +568,24 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    final cards = find.byWidgetPredicate(
+      (widget) => switch (widget.key) {
+        ValueKey<String>(:final value) => value.startsWith(
+          'search-browse-card-',
+        ),
+        _ => false,
+      },
+    );
+    expect(cards.evaluate().length, lessThan(20));
     expect(requested, isNotEmpty);
     expect(requested.length, lessThan(12));
     expect(requested, isNot(contains('card-20')));
+    final scrollable = tester.state<ScrollableState>(
+      find.byType(Scrollable).first,
+    );
+    scrollable.position.jumpTo(scrollable.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(requested, contains('card-39'));
     expect(tester.takeException(), isNull);
   });
 

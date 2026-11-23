@@ -87,7 +87,7 @@ class _BandGuidesPainter extends CustomPainter {
       curve,
       Paint()
         ..color = curveColor
-        ..strokeWidth = 1.2
+        ..strokeWidth = 2.4
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke,
     );

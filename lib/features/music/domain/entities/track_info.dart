@@ -18,6 +18,7 @@ class TrackInfo {
     this.streamBitrate,
     this.streamSampleRate,
     this.streamChannels,
+    this.streamBitDepth,
     this.streamClientProfileKey,
     this.extractor,
     this.album,
@@ -54,6 +55,9 @@ class TrackInfo {
 
   /// Number of channels reported for the selected audio stream.
   final int? streamChannels;
+
+  /// Bit depth of the selected audio when known.
+  final int? streamBitDepth;
 
   /// Exact InnerTube client profile that produced [streamUrl].
   final String? streamClientProfileKey;
@@ -108,6 +112,7 @@ class TrackInfo {
     int? streamBitrate,
     int? streamSampleRate,
     int? streamChannels,
+    int? streamBitDepth,
     String? streamClientProfileKey,
     String? extractor,
     String? album,
@@ -135,6 +140,7 @@ class TrackInfo {
       streamBitrate: streamBitrate ?? this.streamBitrate,
       streamSampleRate: streamSampleRate ?? this.streamSampleRate,
       streamChannels: streamChannels ?? this.streamChannels,
+      streamBitDepth: streamBitDepth ?? this.streamBitDepth,
       streamClientProfileKey:
           streamClientProfileKey ?? this.streamClientProfileKey,
       extractor: extractor ?? this.extractor,

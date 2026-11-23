@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui';
 import 'dart:ui' as ui show Image;
 
@@ -11,6 +12,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../providers/music_providers.dart';
 import '../providers/playback_artwork_provider.dart';
 import 'app_background_photo.dart';
+import 'artwork_video_palette.dart';
 import 'reflected_artwork_image.dart';
 import 'source_image.dart';
 import 'track_change_transition.dart';
@@ -97,6 +99,55 @@ class PlayerPlaybackGradientBackground extends ConsumerWidget {
   }
 }
 
+/// Connects the mounted clip to the full player without rebuilding its controls.
+class ArtworkVideoPaletteBinding extends ValueNotifier<ArtworkVideoPalette?> {
+  ArtworkVideoPaletteBinding({required this.url, required this.identity})
+    : super(null);
+
+  final Uri url;
+  final String identity;
+  var _closed = false;
+
+  void publish(ArtworkVideoPalette? palette) {
+    if (!_closed) value = palette;
+  }
+
+  @override
+  void dispose() {
+    _closed = true;
+    super.dispose();
+  }
+}
+
+class ArtworkVideoPaletteScope extends InheritedWidget {
+  const ArtworkVideoPaletteScope({
+    required this.binding,
+    required super.child,
+    super.key,
+  });
+
+  final ArtworkVideoPaletteBinding? binding;
+
+  static ArtworkVideoPaletteBinding? maybeOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<ArtworkVideoPaletteScope>()
+      ?.binding;
+
+  static ValueChanged<ArtworkVideoPalette?>? callbackFor(
+    BuildContext context,
+    Uri url,
+    String identity,
+  ) {
+    final binding = maybeOf(context);
+    return binding != null && binding.url == url && binding.identity == identity
+        ? binding.publish
+        : null;
+  }
+
+  @override
+  bool updateShouldNotify(ArtworkVideoPaletteScope oldWidget) =>
+      binding != oldWidget.binding;
+}
+
 /// Shared artwork background for playback surfaces. Full-bleed covers use a
 /// retained reflection with progressive blur; other surfaces use the same
 /// photographic blur, with a small decode available to menus.
@@ -107,6 +158,7 @@ class PlaybackArtworkBackdrop extends StatelessWidget {
     this.cacheWidth = 1280,
     this.additionalScrimAlpha = 0,
     this.animateTrackChanges = true,
+    this.followArtworkVideo = false,
     this.cacheSmallBlur = false,
     this.blurSigma = _artworkBlurSigma,
     this.reflectionArtworkRect,
@@ -118,6 +170,7 @@ class PlaybackArtworkBackdrop extends StatelessWidget {
   final int cacheWidth;
   final double additionalScrimAlpha;
   final bool animateTrackChanges;
+  final bool followArtworkVideo;
   final bool cacheSmallBlur;
   final double blurSigma;
 
@@ -127,31 +180,35 @@ class PlaybackArtworkBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final artwork = _AnimatedPlaybackArtwork(
+      source: source,
+      fallbackSource: fallbackSource,
+      cacheWidth: cacheSmallBlur && reflectionArtworkRect == null
+          ? math.min(cacheWidth, 384)
+          : cacheWidth,
+      scale: 1.28,
+      fallback: const _PlayerBackgroundFallback(),
+      animateTrackChanges: animateTrackChanges,
+      cacheSmallBlur: cacheSmallBlur,
+      blurSigma: blurSigma,
+      reflectionArtworkRect: reflectionArtworkRect,
+    );
+    final videoColor = followArtworkVideo
+        ? ArtworkVideoPaletteScope.maybeOf(context)
+        : null;
+    final overlayGradient = playerPlaybackOverlayGradient(
+      context,
+      reflected: reflectionArtworkRect != null,
+    );
     return RepaintBoundary(
       child: Stack(
         fit: StackFit.expand,
         children: [
-          _AnimatedPlaybackArtwork(
-            source: source,
-            fallbackSource: fallbackSource,
-            cacheWidth: cacheSmallBlur && reflectionArtworkRect == null
-                ? math.min(cacheWidth, 384)
-                : cacheWidth,
-            scale: 1.28,
-            fallback: const _PlayerBackgroundFallback(),
-            animateTrackChanges: animateTrackChanges,
-            cacheSmallBlur: cacheSmallBlur,
-            blurSigma: blurSigma,
-            reflectionArtworkRect: reflectionArtworkRect,
-          ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: playerPlaybackOverlayGradient(
-                context,
-                reflected: reflectionArtworkRect != null,
-              ),
-            ),
-          ),
+          if (videoColor == null)
+            artwork
+          else
+            _VideoArtworkBackground(colors: videoColor, fallback: artwork),
+          DecoratedBox(decoration: BoxDecoration(gradient: overlayGradient)),
           if (additionalScrimAlpha > 0)
             ColoredBox(
               color: Colors.black.withValues(alpha: additionalScrimAlpha),
@@ -160,6 +217,142 @@ class PlaybackArtworkBackdrop extends StatelessWidget {
       ),
     );
   }
+}
+
+class _VideoArtworkBackground extends StatelessWidget {
+  const _VideoArtworkBackground({required this.colors, required this.fallback});
+
+  final ValueListenable<ArtworkVideoPalette?> colors;
+  final Widget fallback;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return ValueListenableBuilder<ArtworkVideoPalette?>(
+      valueListenable: colors,
+      child: fallback,
+      builder: (context, palette, fallback) => AnimatedSwitcher(
+        duration: reduceMotion
+            ? Duration.zero
+            : const Duration(milliseconds: 500),
+        layoutBuilder: (current, previous) =>
+            Stack(fit: StackFit.expand, children: [...previous, ?current]),
+        transitionBuilder: noDimmingFadeTransitionBuilder,
+        child: palette == null
+            ? fallback!
+            : TweenAnimationBuilder<ArtworkVideoPalette>(
+                key: const ValueKey('player-video-palette-mesh'),
+                tween: _ArtworkVideoPaletteTween(palette),
+                duration: reduceMotion
+                    ? Duration.zero
+                    : const Duration(milliseconds: 300),
+                curve: Curves.easeOut,
+                builder: (context, palette, _) =>
+                    CustomPaint(painter: _ArtworkVideoMeshPainter(palette)),
+              ),
+      ),
+    );
+  }
+}
+
+class _ArtworkVideoPaletteTween extends Tween<ArtworkVideoPalette> {
+  _ArtworkVideoPaletteTween(ArtworkVideoPalette palette)
+    : super(begin: palette, end: palette);
+
+  @override
+  ArtworkVideoPalette lerp(double t) =>
+      ArtworkVideoPalette.lerp(begin!, end!, t);
+}
+
+/// A single draw using colors already captured for the clip's timeline.
+class _ArtworkVideoMeshPainter extends CustomPainter {
+  const _ArtworkVideoMeshPainter(this.palette);
+
+  static const _segments = 12;
+  static const _stride = _segments + 1;
+  static const _artworkEdge = .58;
+
+  static final _positions = Float32List.fromList([
+    for (var y = 0; y <= _segments; y++)
+      for (var x = 0; x <= _segments; x++) ...[x / _segments, y / _segments],
+  ]);
+
+  static final _indices = Uint16List.fromList([
+    for (var y = 0; y < _segments; y++)
+      for (var x = 0; x < _segments; x++) ...[
+        y * _stride + x,
+        y * _stride + x + 1,
+        (y + 1) * _stride + x,
+        (y + 1) * _stride + x,
+        y * _stride + x + 1,
+        (y + 1) * _stride + x + 1,
+      ],
+  ]);
+
+  static final _columns = [
+    for (var x = 0; x <= _segments; x++) _sampleAt(x / _segments),
+  ];
+  static final _rows = [
+    for (var y = 0; y <= _segments; y++) _sampleAt(_reflect(y / _segments)),
+  ];
+
+  final ArtworkVideoPalette palette;
+
+  // Extend the lower part of the artwork softly below its faded edge.
+  static double _reflect(double y) => y <= _artworkEdge
+      ? y / _artworkEdge
+      : 1 - .63 * (y - _artworkEdge) / (1 - _artworkEdge);
+
+  static ({int index, double weight}) _sampleAt(double fraction) {
+    const extent = ArtworkVideoPalette.meshExtent;
+    final position = (fraction * extent - .5).clamp(0.0, extent - 1.0);
+    final index = math.min(position.floor(), extent - 2);
+    final t = position - index;
+    return (index: index, weight: t * t * (3 - 2 * t));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const extent = ArtworkVideoPalette.meshExtent;
+    final cells =
+        palette.cells ?? List.generate(extent * extent, palette.colorForCell);
+    final across = [
+      for (var row = 0; row < extent; row++)
+        for (final column in _columns)
+          Color.lerp(
+            cells[row * extent + column.index],
+            cells[row * extent + column.index + 1],
+            column.weight,
+          ),
+    ];
+    final colors = Int32List(_stride * _stride);
+    var index = 0;
+    for (final row in _rows) {
+      for (var column = 0; column < _stride; column++) {
+        final upper = row.index * _stride + column;
+        colors[index++] = Color.lerp(
+          across[upper],
+          across[upper + _stride],
+          row.weight,
+        )!.toARGB32();
+      }
+    }
+    final vertices = Vertices.raw(
+      VertexMode.triangles,
+      _positions,
+      colors: colors,
+      indices: _indices,
+    );
+    canvas.save();
+    canvas.scale(size.width, size.height);
+    canvas.drawVertices(vertices, BlendMode.dst, Paint());
+    canvas.restore();
+    vertices.dispose();
+  }
+
+  @override
+  bool shouldRepaint(covariant _ArtworkVideoMeshPainter oldDelegate) =>
+      oldDelegate.palette != palette;
 }
 
 /// Shared overlay for playback surfaces. Keep the artwork visible beneath the

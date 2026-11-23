@@ -232,6 +232,22 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
   bool _albumNavigationBusy = false;
   final Map<String, _AlbumNavigationTarget> _albumNavigationTargets = {};
   final Set<String> _albumNavigationMisses = {};
+  ArtworkVideoPaletteBinding? _videoPalette;
+
+  ArtworkVideoPaletteBinding? _bindVideoPalette(Uri? url, String identity) {
+    final current = _videoPalette;
+    if (current?.url == url && current?.identity == identity) return current;
+    current?.dispose();
+    return _videoPalette = url == null
+        ? null
+        : ArtworkVideoPaletteBinding(url: url, identity: identity);
+  }
+
+  @override
+  void dispose() {
+    _videoPalette?.dispose();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -383,6 +399,10 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
     final canvasUrl = visualActive
         ? visualCache.videoFileFor(visualIdentity, resolvedCanvasUrl)
         : null;
+    final videoPalette = _bindVideoPalette(
+      widget.drawBackground ? canvasUrl : null,
+      visualIdentity,
+    );
     final hasTrack =
         snapshot.title != null ||
         snapshot.artist != null ||
@@ -633,6 +653,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                     source: artworkSource,
                                     fallbackSource: artworkFallbackSource,
                                     animateTrackChanges: false,
+                                    followArtworkVideo: true,
                                     cacheSmallBlur:
                                         AppPlatform.current ==
                                         AppPlatformType.android,
@@ -1265,7 +1286,7 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
       child: PlayerDismissRegion(
         active: widget.active,
         onDismiss: widget.onCollapse,
-        child: panel,
+        child: ArtworkVideoPaletteScope(binding: videoPalette, child: panel),
       ),
     );
   }
@@ -1839,6 +1860,7 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                       source: artworkSource,
                       fallbackSource: artworkFallbackSource,
                       animateTrackChanges: false,
+                      followArtworkVideo: true,
                       cacheSmallBlur:
                           AppPlatform.current == AppPlatformType.android,
                       reflectionArtworkRect: useExpandedArtworkHero
@@ -3456,6 +3478,11 @@ class _ExpandedArtworkHeroSurface extends StatelessWidget {
                     identity: identity,
                     startOffset: videoStartOffset,
                     durationHint: videoDurationHint,
+                    onPaletteChanged: ArtworkVideoPaletteScope.callbackFor(
+                      context,
+                      canvasUrl!,
+                      identity,
+                    ),
                     autoFitInsetArtwork: autoFitInsetArtwork,
                     coverPath: cacheSource == null
                         ? null
@@ -3907,6 +3934,12 @@ class _PlayerArtworkSurface extends StatelessWidget {
                                 identity: identity,
                                 startOffset: videoStartOffset,
                                 durationHint: videoDurationHint,
+                                onPaletteChanged:
+                                    ArtworkVideoPaletteScope.callbackFor(
+                                      context,
+                                      canvasUrl!,
+                                      identity,
+                                    ),
                               ),
                             ),
                           )
@@ -3917,6 +3950,12 @@ class _PlayerArtworkSurface extends StatelessWidget {
                             identity: identity,
                             startOffset: videoStartOffset,
                             durationHint: videoDurationHint,
+                            onPaletteChanged:
+                                ArtworkVideoPaletteScope.callbackFor(
+                                  context,
+                                  canvasUrl!,
+                                  identity,
+                                ),
                           ),
                   ),
                 ),
@@ -6178,6 +6217,7 @@ class _Timeline extends ConsumerWidget {
           current.streamExtension != preparedTrack.streamExtension ||
           current.streamSampleRate != preparedTrack.streamSampleRate ||
           current.streamBitrate != preparedTrack.streamBitrate ||
+          current.streamBitDepth != preparedTrack.streamBitDepth ||
           current.streamChannels != preparedTrack.streamChannels)) {
     // Native lookahead can replace an old resolved queue entry, while a
     // later recovery can refresh only the current entry. Neither URL alone
@@ -6216,6 +6256,8 @@ String? _audioQualityForSnapshot(
       bitrate: track.streamBitrate,
       sampleRate: track.streamSampleRate,
       channels: track.streamChannels,
+      bitDepth: track.streamBitDepth,
+      bitDepthLabel: strings.audioQualityBits,
       stereoLabel: strings.audioQualityStereo,
       monoLabel: strings.audioQualityMono,
       channelCountLabel: strings.audioQualityChannels,
@@ -6302,7 +6344,7 @@ class _PlaybackTimelineQuality extends ConsumerWidget {
             mimeType: track?.streamMimeType ?? localFormat?.mimeType,
             bitrate: track?.streamBitrate ?? localFormat?.bitrate,
             sampleRate: track?.streamSampleRate ?? localFormat?.sampleRate,
-            bitDepth: localFormat?.bitDepth,
+            bitDepth: track?.streamBitDepth ?? localFormat?.bitDepth,
           ),
           localSource: enabled
               ? _localAudioQualitySource(snapshot, controller)

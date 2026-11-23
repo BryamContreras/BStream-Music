@@ -21,17 +21,15 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
         track == null ||
         entryId == null ||
         !_snapshotBelongsToTrack(snapshot, track) ||
-        _audioUpgradeUnnecessary(track) ||
-        track.streamSource == AudioStreamSource.jioSaavn.name ||
         _audioSourceRef.read(playerServiceProvider)
             is! AudioSourceUpgradePlayer) {
       return;
     }
     final policy = _audioSourceRef.read(audioSourcePolicyProvider);
-    if (!policy.jioSaavnEnabled ||
-        (policy.wifiAudioQuality == AudioQualityProfile.standard &&
+    if (_audioUpgradeUnnecessary(track, policy.canUseAnyExtension) ||
+        (!policy.allowsUpgrade(AudioNetworkKind.wifi) &&
             (policy.useSingleProfile ||
-                policy.mobileAudioQuality == AudioQualityProfile.standard))) {
+                !policy.allowsUpgrade(AudioNetworkKind.mobile)))) {
       return;
     }
     var recordingDuration = track.duration;
@@ -100,8 +98,8 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
     Object token,
     Duration recordingDuration,
   ) async {
-    final monitor =
-        _audioSourceRef.read(audioSourcePolicyProvider).useSingleProfile
+    final initialPolicy = _audioSourceRef.read(audioSourcePolicyProvider);
+    final monitor = initialPolicy.useSingleProfile
         ? null
         : _audioSourceRef.read(audioNetworkMonitorProvider);
     final seekGeneration = _seekRequestId;
@@ -116,19 +114,23 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
         _isCurrentPlayRequest(requestId) &&
         _audioUpgradeRecordingKey(_playingRemoteTrack) == recordingKey &&
         _currentRemoteQueueEntryId == entryId;
-    bool allowed() =>
-        selected() &&
-        _audioSourceRef
-            .read(audioSourcePolicyProvider)
-            .allowsUpgrade(monitor?.lastKnownKind ?? AudioNetworkKind.unknown);
     var announced = false;
     try {
       final network = await monitor?.current() ?? AudioNetworkKind.unknown;
       if (!selected()) return;
       final policy = _audioSourceRef.read(audioSourcePolicyProvider);
+      if (policy.cacheKey != initialPolicy.cacheKey) return;
       _lastAudioQualityUpgradeKey =
           '$entryId:$requestId:${policy.cacheKey}:${network.name}:$recordingKey';
       if (!policy.allowsUpgrade(network)) return;
+      final canUseExtension = policy.canUseExtensions(network);
+      if (_audioUpgradeUnnecessary(original, canUseExtension)) return;
+      bool allowed() =>
+          selected() &&
+          (monitor?.lastKnownKind ?? AudioNetworkKind.unknown) == network &&
+          _audioSourceRef.read(audioSourcePolicyProvider).cacheKey ==
+              policy.cacheKey;
+
       final localUri = Uri.tryParse(original.streamUrl ?? '');
       final savedFormat = localUri?.scheme == 'file'
           ? (await _libraryDownloadFor(original))?.audioFormat
@@ -136,7 +138,8 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
       if (!allowed()) return;
       if (localUri?.scheme == 'file' &&
           savedFormat == null &&
-          original.streamBitrate == null) {
+          (original.streamBitrate == null ||
+              (canUseExtension && original.streamCodec == null))) {
         // Older downloads have no saved technical format. Share the bounded
         // header cache with the UI, after audio has already started playing.
         final format = await _audioSourceRef
@@ -150,6 +153,7 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
             streamBitrate: format.bitrate,
             streamSampleRate: format.sampleRate,
             streamChannels: format.channels,
+            streamBitDepth: format.bitDepth,
           );
           _replaceCurrentRemoteTrack(original);
           _rememberPreparedAudioSource(
@@ -163,7 +167,9 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
           _publishAudioSourceSnapshot(
             _audioSourceRef.read(playerServiceProvider).currentSnapshot,
           );
-          if (_audioUpgradeUnnecessary(original)) return;
+          if (_audioUpgradeUnnecessary(original, canUseExtension)) {
+            return;
+          }
         }
       }
       _audioSourceRef
@@ -176,12 +182,13 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
                 ? original
                 : original.copyWith(duration: recordingDuration),
             currentBitrate: original.streamBitrate,
+            sourcePreference: policy.sourcePreferenceFor(network),
             shouldContinue: allowed,
           );
       if (!allowed() ||
           candidate == null ||
           !candidate.isUsable ||
-          (candidate.bitrate ?? 0) <= (original.streamBitrate ?? 0)) {
+          !candidate.improvesOn(original.streamBitrate)) {
         return;
       }
       final improved = _mergeTrackInfo(
@@ -200,6 +207,7 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
           streamBitrate: candidate.bitrate,
           streamSampleRate: candidate.sampleRate,
           streamChannels: candidate.channels,
+          streamBitDepth: candidate.bitDepth,
           streamClientProfileKey: '',
           httpHeaders: candidate.httpHeaders ?? const {},
         ),
@@ -247,8 +255,10 @@ extension _PlayerAudioQualityUpgrade on PlayerController {
   }
 }
 
-bool _audioUpgradeUnnecessary(TrackInfo track) =>
-    (track.streamBitrate ?? 0) >= 256000 ||
+bool _audioUpgradeUnnecessary(TrackInfo track, bool canUseLosslessExtension) =>
+    (!canUseLosslessExtension &&
+        ((track.streamBitrate ?? 0) >= 256000 ||
+            track.streamSource == AudioStreamSource.jioSaavn.name)) ||
     AudioFormatDetails(
       codec: track.streamCodec,
       mimeType: track.streamMimeType,

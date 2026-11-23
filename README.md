@@ -19,6 +19,7 @@ Current version: **1.3.1+131**.
 
 ## What's new in 1.3.1
 
+- Added support for external audio source add-ons.
 - A 10-band equalizer is now available.
 - Support for higher quality audio whenever available.
 - Improved and optimized the layouts of the player styles.
@@ -67,18 +68,22 @@ Current version: **1.3.1+131**.
   containers remain unconverted; when YouTube exposes only a direct muxed
   fallback, it is preserved as `.mp4` instead of being mislabeled or
   transcoded.
-- Optional JioSaavn audio upgrades follow the selected Wi-Fi/mobile profile.
+- Optional HTTP audio add-ons and JioSaavn upgrades follow the selected
+  streaming profile. Downloads have a separate quality choice.
   YouTube Music remains enabled and starts playback first. A bounded lookup
   checks the recording's title, version, artists and duration before preparing
   a verified higher-bitrate rendition on the existing muted standby deck.
   Promotion retains catalog metadata, queue and position, with a short linear
   transition; missing matches or failed preparation leave YouTube playing.
-  Settings expose both sources under Integrations and quality under Storage >
-  Data saving. Desktop has one quality choice for all connections. On mobile,
-  Wi-Fi defaults to High/JioSaavn and cellular to Standard/YouTube Music.
-  Disabling JioSaavn applies Standard without erasing
-  saved preferences. A headphones quality capsule shares each player's elapsed/
-  duration row and reflects the actual stream, not the requested profile.
+  Open Settings > Integrations > Audio sources to add an HTTPS service or its
+  manifest URL. Data saving opens dedicated pages for each quality choice.
+  Desktop has one streaming profile. On mobile, Wi-Fi defaults to High and
+  cellular to Standard. Each profile can choose YTMusic, an add-on, or
+  JioSaavn. With a chosen add-on, BStream looks for CD
+  FLAC there first, then tries the other enabled add-ons in order and finally
+  JioSaavn if enabled. With JioSaavn selected, it is the only upgrade source.
+  Downloads consider only sources that permit saving tracks. The quality
+  capsule reflects the active source.
 - High-quality artwork uses one proportional crop policy from search through
   playback and downloaded-library storage.
 - SQLite-backed local library.
@@ -333,8 +338,8 @@ actually delivers to the WebSocket client.
 
 YouTube playback and downloads prefer the best available native M4A/AAC stream,
 otherwise the best original compatible audio stream. When the current network
-profile requests High and JioSaavn is enabled, the optional resolver verifies a
-matching recording and a real higher-quality CDN rendition. Playback starts
+profile requests High, the optional resolver verifies a matching recording
+and the available higher-quality rendition. Playback starts
 YouTube immediately and looks for the improvement in the background; downloads
 select the verified rendition before transferring the file and fall back to
 YouTube if the optional CDN fails. Search results and all library metadata keep
@@ -343,6 +348,20 @@ providers have separate cache/file identities. Desktop uses its single saved
 quality without querying the connection type. On mobile, unknown connectivity
 uses Standard and Ethernet uses the Wi-Fi profile. Connection checks are shared
 and event-driven, without internet polling.
+
+Audio add-ons use the [BitChord HTTP contract](https://bitchord.kushagrasingh.in/docs)
+with HTTPS manifest, search, and stream endpoints. BStream checks the FLAC
+header and duration before accepting stereo 16-bit / 44.1 kHz audio. The
+upgrade accepts a runtime difference of up to three seconds during recording
+matching and decoded playback. HTTP add-ons with missing catalog durations
+can supply a measurable FLAC stream. BStream also accepts the
+`/stream?id=…` route used by older bridges.
+The manifest can restrict the source to streaming. BStream can import compatible
+HTTP sources from the [WioLand catalog](https://github.com/Wiojelt/WioLand/tree/main/bitchord)
+using its published source descriptors. Monochrome can use its direct audio
+API or a [compatible HTTP bridge](https://github.com/acedreamer/bitchord-monochrome-addon#-api-specification).
+[Mornye bundles](https://mornye.com/docs) use a separate JavaScript runtime
+and require an HTTP bridge to be used as BStream sources.
 
 The JioSaavn adapter uses bounded public API requests and URL decoding in Dart,
 requires the catalog's actual 320 kbps flag and a small playable-CDN range probe,

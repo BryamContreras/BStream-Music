@@ -78,6 +78,7 @@ extension _DownloadedAudioPlayback on PlayerController {
       streamBitrate: format?.bitrate,
       streamSampleRate: format?.sampleRate,
       streamChannels: format?.channels,
+      streamBitDepth: format?.bitDepth,
     );
   }
 

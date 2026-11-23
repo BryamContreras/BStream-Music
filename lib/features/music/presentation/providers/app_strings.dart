@@ -1301,6 +1301,50 @@ class AppStrings {
     'Elige los proveedores para reproducir y descargar.',
     'Choose providers for playback and downloads.',
   );
+  String get addAudioSource =>
+      choose('Agregar fuente de audio', 'Add audio source');
+  String get audioExtensionUrl =>
+      choose('Enlace de la extensión', 'Extension URL');
+  String get audioExtensionUrlHelp => choose(
+    'Pega el enlace de un complemento HTTP compatible o de su manifest.json.',
+    'Paste a compatible HTTP add-on URL or its manifest.json.',
+  );
+  String get audioExtensionInvalidUrl =>
+      choose('Escribe un enlace HTTPS válido.', 'Enter a valid HTTPS URL.');
+  String get audioExtensionUnavailable => choose(
+    'No se pudo conectar con la fuente.',
+    'Could not connect to the source.',
+  );
+  String get audioExtensionUnsupported => choose(
+    'El enlace no corresponde a un complemento de audio compatible.',
+    'This link does not point to a compatible audio add-on.',
+  );
+  String get audioExtensionRestricted => choose(
+    'Este complemento requiere acceso exclusivo o una salida de audio específica.',
+    'This add-on requires restricted access or a specific audio output.',
+  );
+  String get audioExtensionOfficialClientOnly => choose(
+    'El proveedor solo acepta la app oficial de BitChord.',
+    'This provider only accepts the official BitChord app.',
+  );
+  String get audioExtensionOutputRequired => choose(
+    'El proveedor exige comprobar una salida de audio sin pérdida.',
+    'This provider requires a verified lossless audio output.',
+  );
+  String get audioExtensionModuleIndex => choose(
+    'Este catálogo requiere módulos JavaScript. Pega el enlace HTTPS de una fuente compatible.',
+    'This catalog requires JavaScript modules. Paste the HTTPS URL of a compatible source.',
+  );
+  String get audioExtensionNoAvailableSources => choose(
+    'El catálogo no ofrece fuentes HTTP compatibles disponibles.',
+    'The catalog has no available compatible HTTP sources.',
+  );
+  String get audioExtensionStreamingOnly =>
+      choose('Solo streaming', 'Streaming only');
+  String get audioExtensionsWithFallback =>
+      choose('Extensiones + fallback YTMusic', 'Add-ons + YTMusic fallback');
+  String get removeAudioSource =>
+      choose('Quitar fuente de audio', 'Remove audio source');
   String get youtubeMusicSourceDescription => choose(
     'Fuente principal, siempre activa.',
     'Primary source, always enabled.',
@@ -1311,6 +1355,14 @@ class AppStrings {
   );
   String get audioSourceAlwaysEnabled =>
       choose('Siempre activada', 'Always enabled');
+  String get audioSourceOtherAddons =>
+      choose('Otras extensiones', 'Other add-ons');
+  String get audioSourcePreferredAddon =>
+      choose('Extensión preferida', 'Preferred add-on');
+  String unavailableAudioSource(String name) => choose(
+    '{source} no está disponible.',
+    '{source} is unavailable.',
+  ).replaceAll('{source}', name);
   String get dataSaving => choose('Ahorro de datos', 'Data saving');
   String get audioQuality => choose('Calidad de audio', 'Audio quality');
   String get streamingAudio => choose('Audio en streaming', 'Streaming audio');
@@ -1692,6 +1744,10 @@ class AppStrings {
     'Player styles, local music filters, lyrics, and settings',
   );
   List<String> get whatsNewHighlights => [
+    choose(
+      'Se agregó compatibilidad con complementos de fuentes de audio externas.',
+      'Added support for external audio source add-ons.',
+    ),
     choose(
       'Ahora está disponible un ecualizador de 10 bandas.',
       'A 10-band equalizer is now available.',

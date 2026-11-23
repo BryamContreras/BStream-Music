@@ -1,4 +1,5 @@
 import '../../features/music/domain/entities/track_info.dart';
+import '../audio_sources/audio_source_policy.dart';
 
 /// A catalog candidate is never substituted for the application's own metadata.
 /// These fields are only used to establish which encoded recording to request.
@@ -88,8 +89,9 @@ class JioSaavnRecordingMatcher {
 
   List<JioSaavnSong> rankedMatches(
     TrackInfo track,
-    Iterable<JioSaavnSong> candidates,
-  ) {
+    Iterable<JioSaavnSong> candidates, {
+    bool allowMissingDuration = false,
+  }) {
     final duration = track.duration;
     final wanted = _recordingTitle(track.title, track.artist);
     final artists = _artistNames(track);
@@ -110,8 +112,14 @@ class JioSaavnRecordingMatcher {
       }
       // Catalog runtimes have whole-second precision. Larger differences can
       // be video intros, a different edit or silence that shifts the timeline.
-      final difference = (duration - song.duration).inMilliseconds.abs();
-      if (difference > 2000) continue;
+      final difference = song.duration == Duration.zero
+          ? null
+          : (duration - song.duration).abs();
+      if (difference == null
+          ? !allowMissingDuration
+          : difference > audioUpgradeDurationTolerance) {
+        continue;
+      }
       final shared = song.artists
           .map(_identity)
           .where((name) => artists.contains(name));
@@ -127,7 +135,8 @@ class JioSaavnRecordingMatcher {
         song: song,
         score:
             10000 -
-            difference +
+            (difference?.inMilliseconds ??
+                audioUpgradeDurationTolerance.inMilliseconds + 1000) +
             (albumMatch ? 500 : 0) +
             (artists.first == _identity(song.artists.first) ? 250 : 0),
       ));

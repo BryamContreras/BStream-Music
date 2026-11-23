@@ -100,7 +100,7 @@ void main() {
         _song(title: 'Coraz\u00f3n (Remix)'),
         _song(title: 'Coraz\u00f3n (Karaoke)'),
         _song(title: 'Coraz\u00f3n', artists: ['A cover artist']),
-        _song(duration: const Duration(seconds: 183)),
+        _song(duration: const Duration(seconds: 184)),
         _song(album: 'Live at the Arena'),
         _song(title: 'Otro Coraz\u00f3n'),
       ];
@@ -113,6 +113,22 @@ void main() {
       );
     },
   );
+
+  test('matches durations up to three seconds in either direction', () {
+    const matcher = JioSaavnRecordingMatcher();
+    for (final delta in const [Duration(seconds: 3), Duration(seconds: -3)]) {
+      final atLimit = _song(duration: _target.duration! + delta);
+      final outsideLimit = _song(
+        duration:
+            _target.duration! +
+            delta +
+            Duration(microseconds: delta.isNegative ? -1 : 1),
+      );
+      expect(matcher.rankedMatches(_target, [outsideLimit, atLimit]), [
+        atLimit,
+      ]);
+    }
+  });
 
   test(
     'normalizes packaging, credits and entities without losing versions',

@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 
 import '../../core/utils/background_work.dart';
 import '../audio_sources/audio_format_details.dart';
+import '../audio_sources/flac_stream_info.dart';
 import '../audio_sources/mp4_audio_format.dart';
 import '../audio_sources/webm_audio_format.dart';
 
@@ -352,18 +353,15 @@ LocalAudioQuality? _readFlac(_HeaderReader reader, int offset) {
   if (header == null || header[0] & 0x7f != 0) return null;
   final size = header[1] << 16 | header[2] << 8 | header[3];
   if (size != 34) return null;
-  final info = reader.read(offset + 8, 34);
-  return info == null ? null : _flacInfo(info);
-}
-
-LocalAudioQuality _flacInfo(Uint8List info) {
-  final packed = _data(info).getUint64(10);
+  final block = reader.read(offset + 8, 34);
+  final info = block == null ? null : FlacStreamInfo.fromBlock(block);
+  if (info == null) return null;
   return LocalAudioQuality(
     codec: 'flac',
     mimeType: 'audio/flac',
-    sampleRate: (packed >> 44) & 0xfffff,
-    channels: ((packed >> 41) & 7) + 1,
-    bitDepth: ((packed >> 36) & 31) + 1,
+    sampleRate: info.sampleRate,
+    channels: info.channels,
+    bitDepth: info.bitDepth,
     // STREAMINFO has no compressed average bitrate. PCM bit depth times rate
     // is not the bitrate of the FLAC stream, particularly with embedded covers.
   );

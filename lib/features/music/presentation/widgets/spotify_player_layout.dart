@@ -271,6 +271,7 @@ class _SpotifyPlayerLayout extends StatelessWidget {
             if (drawBackground)
               Positioned.fill(
                 child: PlaybackArtworkBackdrop(
+                  followArtworkVideo: true,
                   source: artworkSource,
                   fallbackSource: artworkFallbackSource,
                   animateTrackChanges: false,

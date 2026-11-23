@@ -650,6 +650,39 @@ void main() {
   );
 
   group('same-recording source upgrades', () {
+    for (final (difference, accepted) in [
+      (const Duration(seconds: 3), true),
+      (const Duration(milliseconds: 3001), false),
+    ]) {
+      test('validates a decoder runtime difference of $difference', () async {
+        const duration = Duration(minutes: 3);
+        const position = Duration(seconds: 41);
+        final active = _FakeMediaKitBackend();
+        final standby = _FakeMediaKitBackend()
+          ..durationOnOpen = duration + difference;
+        final service = MediaKitPlayerService(
+          backend: active,
+          backendFactory: () => standby,
+        );
+        addTearDown(service.dispose);
+        await _playAndComplete(service, active, 'a');
+        active
+          ..emitDuration(duration)
+          ..emitPosition(position);
+        await _drainEvents();
+
+        final upgrade = service.upgradeRemoteSource(_upgradeSource());
+        await _waitUntil(() => standby.openCalls.isNotEmpty);
+        standby.completeOpen(0);
+
+        expect(await upgrade, accepted);
+        expect(standby.playCalls, accepted ? 1 : 0);
+        expect(service.currentSnapshot.position, position);
+        expect(service.currentSnapshot.status, PlayerStatus.playing);
+        expect(active.openCalls, hasLength(1));
+      });
+    }
+
     test(
       'waits for decoded metadata before seeking a newly opened file',
       () async {

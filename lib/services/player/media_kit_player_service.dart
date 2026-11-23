@@ -8,6 +8,7 @@ import '../../core/errors/app_exception.dart';
 import '../../core/platform/app_platform.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
+import '../audio_sources/audio_source_policy.dart';
 import 'crossfade_transition.dart';
 import 'media_kit_equalizer.dart';
 import 'player_audio_output.dart';
@@ -871,7 +872,8 @@ class MediaKitPlayerService
       );
       if (!isCurrent()) return false;
       if (_standbyDuration != null &&
-          (_standbyDuration! - duration).abs() > const Duration(seconds: 2)) {
+          (_standbyDuration! - duration).abs() >
+              audioUpgradeDurationTolerance) {
         return false;
       }
       // Loading never pauses the active decoder. Only seek the muted prepared

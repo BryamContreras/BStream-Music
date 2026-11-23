@@ -224,10 +224,11 @@ final class InnerTubeDownloadService
             'https',
           }.contains(Uri.parse(upgrade.streamUrl).scheme) &&
           Uri.parse(upgrade.streamUrl).host.isNotEmpty &&
-          (upgrade.bitrate ?? 0) >
-              (resolved.format.isAudioOnly
-                  ? resolved.format.effectiveBitrate
-                  : 0)) {
+          upgrade.improvesOn(
+            resolved.format.isAudioOnly
+                ? resolved.format.effectiveBitrate
+                : null,
+          )) {
         try {
           return await _downloadUpgradedAudio(
             url,
@@ -416,9 +417,17 @@ final class InnerTubeDownloadService
           : requested,
     );
     // Partial transfers from different providers must never share a file.
+    final extension = source.source == AudioStreamSource.audioExtension;
+    final extensionId = extension
+        ? RegExp(r'^[a-f0-9]{12}').stringMatch(source.formatId ?? '')
+        : null;
+    final variant = extension
+        ? (extensionId == null ? 'cd' : 'cd-$extensionId')
+        : 'jiosaavn-${(source.bitrate! / 1000).round()}';
+    final providerName = extension ? 'FLAC' : 'JioSaavn';
     final destination = await _availableDestination(
       directory,
-      '$name-jiosaavn-${(source.bitrate! / 1000).round()}',
+      '$name-$variant',
       source.streamExtension ?? 'm4a',
     );
     destinationPaths.add(destination.path);
@@ -436,7 +445,7 @@ final class InnerTubeDownloadService
             url: url,
             status: DownloadProgressStatus.running,
             progress: progress.fraction,
-            message: 'JioSaavn',
+            message: providerName,
           ),
         );
       },
@@ -448,7 +457,7 @@ final class InnerTubeDownloadService
         url: url,
         status: DownloadProgressStatus.completed,
         progress: 1,
-        message: 'JioSaavn',
+        message: providerName,
       ),
     );
     return DownloadResultModel.completed(
@@ -461,6 +470,7 @@ final class InnerTubeDownloadService
         bitrate: source.bitrate,
         sampleRate: source.sampleRate,
         channels: source.channels,
+        bitDepth: source.bitDepth,
       ),
     );
   }

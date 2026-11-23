@@ -4,9 +4,10 @@
 
 ### Added
 
+- Added support for external audio source add-ons.
 - Audio Sources in Integrations, with mandatory YouTube Music and optional
-  JioSaavn enabled by default. Data saving offers one quality choice on desktop
-  and Wi-Fi/cellular profiles on mobile, also applied to downloads.
+  JioSaavn enabled by default. Data saving offers separate streaming and download
+  quality choices, with Wi-Fi and cellular streaming profiles on mobile.
 - Background same-recording JioSaavn quality upgrades that reuse the existing
   standby playback deck, retain queue/position/catalog metadata and fall back
   to YouTube when no verified higher-quality recording is available.

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/animation/frame_rate_ticker_provider.dart';
 
+import 'playback_gradient_background.dart';
 import 'source_image.dart';
 import 'spotify_canvas_video.dart';
 
@@ -231,6 +232,11 @@ class _ClassicVinylDeckState extends State<ClassicVinylDeck>
                       identity: widget.identity,
                       startOffset: widget.videoStartOffset,
                       durationHint: widget.videoDurationHint,
+                      onPaletteChanged: ArtworkVideoPaletteScope.callbackFor(
+                        context,
+                        widget.canvasUrl!,
+                        widget.identity,
+                      ),
                     ),
                 ],
               ),

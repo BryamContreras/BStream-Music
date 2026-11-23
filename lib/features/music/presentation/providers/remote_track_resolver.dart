@@ -70,6 +70,9 @@ TrackInfo _mergeTrackInfo(TrackInfo base, TrackInfo resolved) {
     streamChannels: hasResolvedTransport
         ? resolved.streamChannels
         : resolved.streamChannels ?? base.streamChannels,
+    streamBitDepth: hasResolvedTransport
+        ? resolved.streamBitDepth
+        : resolved.streamBitDepth ?? base.streamBitDepth,
     streamClientProfileKey: hasResolvedTransport
         ? resolved.streamClientProfileKey
         : base.streamClientProfileKey,
@@ -319,6 +322,7 @@ class RemoteTrackResolver {
       streamBitrate: resolution.bitrate,
       streamSampleRate: resolution.sampleRate,
       streamChannels: resolution.channels,
+      streamBitDepth: resolution.bitDepth,
       streamClientProfileKey: resolution.clientProfileKey,
       httpHeaders: resolution.httpHeaders,
     );
@@ -572,6 +576,7 @@ class RemoteTrackResolver {
       streamBitrate: track.streamBitrate,
       streamSampleRate: track.streamSampleRate,
       streamChannels: track.streamChannels,
+      streamBitDepth: track.streamBitDepth,
       streamClientProfileKey: track.streamClientProfileKey,
       extractor: track.extractor,
       album: track.album,

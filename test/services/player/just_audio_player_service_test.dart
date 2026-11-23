@@ -1047,6 +1047,36 @@ void main() {
   );
 
   group('same-recording source upgrades', () {
+    for (final (difference, accepted) in [
+      (const Duration(seconds: 3), true),
+      (const Duration(milliseconds: 3001), false),
+    ]) {
+      test('validates a decoder runtime difference of $difference', () async {
+        final fixture = await _CrossfadeFixture.create();
+        addTearDown(fixture.dispose);
+        const duration = Duration(minutes: 3);
+        const position = Duration(seconds: 41);
+        await fixture.service.playRemoteSource(_remoteSource('current'));
+        fixture.primary
+          ..emitDuration(duration)
+          ..emitPosition(position);
+        await _drainEvents();
+        fixture.standby.blockNextSourceLoad = true;
+
+        final upgrade = fixture.service.upgradeRemoteSource(_upgradeSource());
+        await _waitUntil(() => fixture.standby.sourceLoadCalls.isNotEmpty);
+        fixture.standby
+          ..emitDuration(duration - difference)
+          ..completeSourceLoad(0);
+
+        expect(await upgrade, accepted);
+        expect(fixture.standby.playCalls, accepted ? 1 : 0);
+        expect(fixture.service.currentSnapshot.position, position);
+        expect(fixture.service.currentSnapshot.status, PlayerStatus.playing);
+        expect(fixture.primary.setAudioSourcesCalls, 1);
+      });
+    }
+
     test('realigns after a muted decoder takes time to start', () async {
       final fixture = await _CrossfadeFixture.create();
       try {
@@ -3352,6 +3382,7 @@ class _BlockingAudioPlayer extends AudioPlayer {
   List<int> _shuffleIndices = const [];
   LoopMode _loopMode = LoopMode.off;
   Duration _position = Duration.zero;
+  Duration? _duration;
   int _activeQueueMutations = 0;
   int maximumConcurrentQueueMutations = 0;
   int setAudioSourcesCalls = 0;
@@ -3385,6 +3416,9 @@ class _BlockingAudioPlayer extends AudioPlayer {
 
   @override
   Stream<Duration?> get durationStream => _durations.stream;
+
+  @override
+  Duration? get duration => _duration;
 
   @override
   Stream<double> get volumeStream => _volumes.stream;
@@ -3565,7 +3599,10 @@ class _BlockingAudioPlayer extends AudioPlayer {
 
   void emitError(PlayerException error) => _errors.add(error);
 
-  void emitDuration(Duration? duration) => _durations.add(duration);
+  void emitDuration(Duration? duration) {
+    _duration = duration;
+    _durations.add(duration);
+  }
 
   void emitPosition(Duration position) {
     _position = position;

@@ -67,6 +67,43 @@ void main() {
     },
   );
 
+  test('keeps verified CD FLAC even if its bitrate was not provided', () async {
+    final transfer = _UpgradeRecordingTransfer();
+    final fixture = await _upgradeFixture(
+      transfer,
+      (url, metadata, baseline, current) async => const AudioStreamResolution(
+        source: AudioStreamSource.audioExtension,
+        streamUrl: 'https://addon.example/song.flac',
+        streamExtension: 'flac',
+        streamMimeType: 'audio/flac',
+        formatId: '5f54e2dc321c89e3',
+        codec: 'flac',
+        sampleRate: 44100,
+        channels: 2,
+        bitDepth: 16,
+      ),
+    );
+    final result = await fixture.downloader.downloadAudio(
+      'dQw4w9WgXcQ',
+      DownloadOptions(
+        outputDirectory: fixture.directory.path,
+        fileName: 'Song',
+      ),
+    );
+    expect(transfer.requests, ['https://addon.example/song.flac']);
+    expect(result.fileName, 'Song-cd-5f54e2dc321c.flac');
+    expect(
+      result.audioFormat,
+      const AudioFormatDetails(
+        codec: 'flac',
+        mimeType: 'audio/flac',
+        sampleRate: 44100,
+        channels: 2,
+        bitDepth: 16,
+      ),
+    );
+  });
+
   for (final mode in [
     'unavailable',
     'lower',

@@ -4,6 +4,7 @@ import 'package:bstream_music/core/widgets/liquid_glass_surface.dart';
 import 'package:bstream_music/core/widgets/app_shared_widgets.dart';
 import 'package:bstream_music/features/music/presentation/providers/equalizer_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/features/music/presentation/widgets/equalizer_preset_icon.dart';
 import 'package:bstream_music/features/music/presentation/widgets/equalizer_settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
@@ -137,7 +138,7 @@ void main() {
     final bass = find.byKey(const ValueKey('equalizer-band-0'));
     final powerCard = find.byKey(const ValueKey('equalizer-power-card'));
     final controlsCard = find.byKey(const ValueKey('equalizer-controls'));
-    final presetStrip = find.byKey(const ValueKey('equalizer-presets'));
+    final presetCards = find.byKey(const ValueKey('equalizer-presets'));
     final resetButton = find.byKey(const ValueKey('equalizer-reset'));
     expect(
       find.ancestor(
@@ -147,7 +148,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.descendant(of: presetStrip, matching: resetButton),
+      find.descendant(of: presetCards, matching: resetButton),
       findsNothing,
     );
     expect(
@@ -166,20 +167,21 @@ void main() {
       find.descendant(of: controlsCard, matching: find.byType(Slider)),
       findsNWidgets(10),
     );
+    expect(SliderTheme.of(tester.element(bass)).trackHeight, 4);
     expect(
-      tester.getTopLeft(presetStrip).dy,
+      tester.getTopLeft(presetCards).dy,
       greaterThan(tester.getBottomLeft(powerCard).dy),
     );
     expect(
       tester.getTopLeft(controlsCard).dy,
-      greaterThan(tester.getBottomLeft(presetStrip).dy),
+      greaterThan(tester.getBottomLeft(presetCards).dy),
     );
     expect(
-      find.descendant(of: presetStrip, matching: find.byType(InkWell)),
-      findsNWidgets(EqualizerPreset.values.length),
+      find.descendant(of: presetCards, matching: find.byType(InkWell)),
+      findsNWidgets(2),
     );
     expect(
-      find.descendant(of: presetStrip, matching: find.byType(Slider)),
+      find.descendant(of: presetCards, matching: find.byType(Slider)),
       findsNothing,
     );
     expect(current().enabled, isFalse);
@@ -208,7 +210,7 @@ void main() {
     await tester.tap(reset, warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('equalizer-preset-options')),
+      find.byKey(const ValueKey('glass-popup-menu-surface')),
       findsNothing,
     );
     await tester.tap(find.byKey(const ValueKey('equalizer-back')));
@@ -263,7 +265,7 @@ void main() {
   });
 
   testWidgets(
-    'uniform accent preset buttons restore and retain custom fader values',
+    'preset picker updates its label and the custom card restores saved bands',
     (tester) async {
       _size(tester, const Size(390, 844));
       await tester.pumpWidget(_harness());
@@ -274,30 +276,19 @@ void main() {
       );
       EqualizerSettings current() =>
           container.read(settingsControllerProvider).requireValue.equalizer;
-      expect(
-        find.byKey(const ValueKey('equalizer-presets-card')),
-        findsNothing,
-      );
-      final strip = find.byKey(const ValueKey('equalizer-presets'));
-      expect(
-        tester.widget<SingleChildScrollView>(strip).scrollDirection,
-        Axis.horizontal,
-      );
-      expect(
-        find.descendant(of: strip, matching: find.byType(InkWell)),
-        findsNWidgets(EqualizerPreset.values.length),
-      );
-      final firstSize = tester.getSize(
-        find.byKey(const ValueKey('equalizer-preset-custom')),
-      );
-      for (final preset in EqualizerPreset.values) {
-        final button = find.byKey(ValueKey('equalizer-preset-${preset.name}'));
-        expect(tester.getSize(button), firstSize);
+      final customCard = find.byKey(const ValueKey('equalizer-preset-custom'));
+      final presetCard = find.byKey(const ValueKey('equalizer-preset-picker'));
+      Finder presetLabel(String name) =>
+          find.descendant(of: presetCard, matching: find.text(name));
+      expect(tester.getSize(customCard), tester.getSize(presetCard));
+      expect(presetLabel('Flat'), findsOneWidget);
+      expect(_presetSelected(tester, presetCard), isTrue);
+      for (final card in [customCard, presetCard]) {
         expect(
           tester
               .widget<AppCardGradientBorder>(
                 find.descendant(
-                  of: button,
+                  of: card,
                   matching: find.byType(AppCardGradientBorder),
                 ),
               )
@@ -305,13 +296,44 @@ void main() {
           isTrue,
         );
       }
-      await _choose(tester, EqualizerPreset.rock);
-      final selected = find.byKey(const ValueKey('equalizer-preset-rock'));
+      await tester.tap(presetCard);
+      await tester.pumpAndSettle();
+      final options = find.byKey(const ValueKey('glass-popup-menu-surface'));
+      expect(options, findsOneWidget);
+      for (final preset in EqualizerPreset.values) {
+        final option = find.descendant(
+          of: options,
+          matching: _presetChoice(preset),
+        );
+        expect(
+          option,
+          preset == EqualizerPreset.custom ? findsNothing : findsOneWidget,
+        );
+        if (preset == EqualizerPreset.custom) continue;
+        final icon = tester.widget<EqualizerPresetIcon>(
+          find.descendant(
+            of: option,
+            matching: find.byType(EqualizerPresetIcon),
+          ),
+        );
+        expect(icon.preset, preset);
+        expect(
+          find.descendant(
+            of: option,
+            matching: find.byIcon(Icons.check_rounded),
+          ),
+          preset == EqualizerPreset.flat ? findsOneWidget : findsNothing,
+        );
+      }
+      await _tapPreset(tester, EqualizerPreset.rock);
+      expect(options, findsNothing);
+      expect(presetLabel('Rock'), findsOneWidget);
+      expect(_presetSelected(tester, presetCard), isTrue);
       final decoration =
           tester
                   .widget<AnimatedContainer>(
                     find.descendant(
-                      of: selected,
+                      of: presetCard,
                       matching: find.byType(AnimatedContainer),
                     ),
                   )
@@ -319,16 +341,19 @@ void main() {
               as BoxDecoration;
       expect(
         decoration.gradient,
-        AppColors.selectedCardGradientFor(tester.element(selected)),
+        AppColors.selectedCardGradientFor(tester.element(presetCard)),
       );
       final bass = find.byKey(const ValueKey('equalizer-band-0'));
       await _dragFaderToEnd(tester, bass, current().gainsDb.first, up: false);
       final custom = List<double>.of(current().gainsDb);
-      expect(_presetSelected(tester, EqualizerPreset.custom), isTrue);
+      expect(_presetSelected(tester, customCard), isTrue);
+      expect(presetLabel('Rock'), findsOneWidget);
       await _choose(tester, EqualizerPreset.bassBoost);
       expect(current().gainsDb, EqualizerPreset.bassBoost.gainsDb);
       await _choose(tester, EqualizerPreset.custom);
       expect(current().gainsDb, custom);
+      expect(presetLabel('Bass boost'), findsOneWidget);
+      expect(_presetSelected(tester, presetCard), isFalse);
       expect(tester.widget<Slider>(bass).value, custom.first);
       expect(_visualRect(tester, bass).height, greaterThanOrEqualTo(280));
       await tester.tap(find.byKey(const ValueKey('equalizer-back')));
@@ -336,13 +361,13 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('open-equalizer')));
       await tester.pumpAndSettle();
       expect(current().gainsDb, custom);
-      expect(_presetSelected(tester, EqualizerPreset.custom), isTrue);
+      expect(_presetSelected(tester, customCard), isTrue);
       expect(tester.takeException(), isNull);
     },
   );
 
   testWidgets(
-    'desktop puts horizontal presets below power and above taller full-width bands',
+    'desktop puts preset cards below power and above taller full-width bands',
     (tester) async {
       _size(tester, const Size(1100, 850));
       for (final scale in [1.0, 2.0]) {
@@ -512,6 +537,17 @@ void main() {
           await tester.tap(find.byKey(const ValueKey('open-equalizer')));
           await tester.pumpAndSettle();
 
+          final strings = AppStrings(language);
+          expect(
+            find.text(strings.equalizerPresetName(EqualizerPreset.custom)),
+            findsOneWidget,
+          );
+          expect(
+            find.text(
+              strings.equalizerPresetName(EqualizerPreset.smallSpeakers),
+            ),
+            findsOneWidget,
+          );
           final scroll = find
               .descendant(
                 of: find.byKey(const ValueKey('equalizer-settings-scroll')),
@@ -674,6 +710,12 @@ void main() {
             .onChanged,
         isNull,
       );
+      await tester.tap(find.byKey(const ValueKey('equalizer-preset-picker')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('glass-popup-menu-surface')),
+        findsNothing,
+      );
       final container = ProviderScope.containerOf(
         tester.element(find.byType(EqualizerSettingsPage)),
       );
@@ -744,22 +786,29 @@ Future<void> _reveal(WidgetTester tester, Finder target) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> _choose(WidgetTester tester, EqualizerPreset preset) async {
-  final choice = find.byKey(ValueKey('equalizer-preset-${preset.name}'));
+Finder _presetChoice(EqualizerPreset preset) =>
+    find.byKey(ValueKey('equalizer-preset-${preset.name}'));
+
+Future<void> _tapPreset(WidgetTester tester, EqualizerPreset preset) async {
+  final choice = _presetChoice(preset);
   await _reveal(tester, choice);
-  await tester.pumpAndSettle();
   await tester.tap(choice);
   await tester.pumpAndSettle();
 }
 
-bool? _presetSelected(WidgetTester tester, EqualizerPreset preset) => tester
+Future<void> _choose(WidgetTester tester, EqualizerPreset preset) async {
+  if (preset != EqualizerPreset.custom) {
+    final picker = find.byKey(const ValueKey('equalizer-preset-picker'));
+    await _reveal(tester, picker);
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+  }
+  await _tapPreset(tester, preset);
+}
+
+bool? _presetSelected(WidgetTester tester, Finder card) => tester
     .widget<Semantics>(
-      find
-          .descendant(
-            of: find.byKey(ValueKey('equalizer-preset-${preset.name}')),
-            matching: find.byType(Semantics),
-          )
-          .first,
+      find.descendant(of: card, matching: find.byType(Semantics)).first,
     )
     .properties
     .selected;

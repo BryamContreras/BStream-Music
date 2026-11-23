@@ -645,7 +645,9 @@ void main() {
     });
   }
 
-  testWidgets('appearance selects and applies a player font', (tester) async {
+  testWidgets('font settings apply a preview from their own page', (
+    tester,
+  ) async {
     _configureView(tester, const Size(430, 1000));
     final navigationController = SettingsNavigationController();
     addTearDown(navigationController.dispose);
@@ -692,6 +694,14 @@ void main() {
     await tester.tap(fontSelector);
     await tester.pumpAndSettle();
 
+    final fontPage = find.byKey(const ValueKey('settings-detail-playerFont'));
+    expect(fontPage, findsOneWidget);
+    expect(find.byType(Dialog), findsNothing);
+    expect(
+      find.byKey(const ValueKey('settings-player-font-apply')),
+      findsNothing,
+    );
+    expect(navigationController.canPop, isTrue);
     expect(
       find.byKey(const ValueKey('settings-player-font-preview-title')),
       findsNothing,
@@ -715,19 +725,18 @@ void main() {
         ),
       );
       expect(tester.widget<Text>(label).style?.fontFamily, font.fontFamily);
+      expect(
+        find.descendant(
+          of: option,
+          matching: find.byIcon(Icons.check_circle_rounded),
+        ),
+        findsOneWidget,
+      );
     }
 
-    expect(
-      find.descendant(
-        of: fontSelector,
-        matching: find.text(
-          const AppStrings(AppLanguage.spanish).playerFontCurrent,
-        ),
-      ),
-      findsOneWidget,
-    );
-    await tester.tap(find.text('Aplicar'));
+    await tester.tap(find.byKey(const ValueKey('settings-detail-back')));
     await tester.pumpAndSettle();
+    expect(fontPage, findsNothing);
     expect(
       find.descendant(of: fontSelector, matching: find.text('Lora')),
       findsOneWidget,
@@ -1338,7 +1347,7 @@ void main() {
   });
 
   testWidgets(
-    'language uses a selected modal option without opening a settings page',
+    'language uses a scrollable settings page and applies selections in place',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       tester.platformDispatcher.textScaleFactorTestValue = 3;
@@ -1360,7 +1369,7 @@ void main() {
       await tester.tap(languageCard);
       await tester.pumpAndSettle();
 
-      final dialog = find.byKey(const ValueKey('settings-language-dialog'));
+      final page = find.byKey(const ValueKey('settings-detail-language'));
       final spanish = find.byKey(
         const ValueKey('settings-language-option-spanish'),
       );
@@ -1373,10 +1382,14 @@ void main() {
           findsOneWidget,
         );
       }
-      expect(dialog, findsOneWidget);
-      expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
-      expect(find.byKey(const ValueKey('settings-detail-back')), findsNothing);
-      expect(navigationController.canPop, isFalse);
+      expect(page, findsOneWidget);
+      expect(find.byType(Dialog), findsNothing);
+      expect(find.byKey(const ValueKey('settings-root')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('settings-detail-back')),
+        findsOneWidget,
+      );
+      expect(navigationController.canPop, isTrue);
       expect(
         find.descendant(
           of: spanish,
@@ -1398,25 +1411,34 @@ void main() {
       await tester.tap(english);
       await tester.pumpAndSettle();
 
-      expect(dialog, findsNothing);
-      expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
-      expect(navigationController.canPop, isFalse);
+      expect(page, findsOneWidget);
       expect(
         find.descendant(
-          of: find.byKey(const ValueKey('settings-card-language')),
-          matching: find.text('English'),
+          of: english,
+          matching: find.byIcon(Icons.check_circle_rounded),
         ),
         findsOneWidget,
       );
-      await tester.ensureVisible(languageCard);
-      await tester.tap(languageCard);
-      await tester.pumpAndSettle();
       final portuguese = find.byKey(
         const ValueKey('settings-language-option-portuguese'),
       );
       await tester.ensureVisible(portuguese);
+      await tester.pumpAndSettle();
       await tester.tap(portuguese);
       await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: portuguese,
+          matching: find.byIcon(Icons.check_circle_rounded),
+        ),
+        findsOneWidget,
+      );
+      expect(navigationController.maybePop(), isTrue);
+      await tester.pumpAndSettle();
+      expect(page, findsNothing);
+      expect(find.byKey(const ValueKey('settings-root')), findsOneWidget);
+      expect(navigationController.canPop, isFalse);
+      await _ensureSettingsVisible(tester, languageCard);
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('settings-card-language')),

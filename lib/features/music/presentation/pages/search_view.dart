@@ -67,6 +67,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
   int _suggestionGeneration = 0;
   String? _browseCatalogLanguageCode;
   SearchBrowseCatalog? _retainedBrowseCatalog;
+  late List<SearchBrowseCategory> _fallbackBrowseCategories;
 
   @override
   void didUpdateWidget(covariant SearchView oldWidget) {
@@ -293,6 +294,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
     if (_browseCatalogLanguageCode != languageCode) {
       _browseCatalogLanguageCode = languageCode;
       _retainedBrowseCatalog = null;
+      _fallbackBrowseCategories = fallbackSearchBrowseCategories(strings);
     }
     // Persistent tab slots remain mounted after their first visit. Avoid
     // starting discovery merely because an offstage Search widget exists;
@@ -316,8 +318,7 @@ class _SearchViewState extends ConsumerState<SearchView> {
     }
     final activeBrowseCatalog = _retainedBrowseCatalog;
     final browseCategories =
-        activeBrowseCatalog?.categories ??
-        fallbackSearchBrowseCategories(strings);
+        activeBrowseCatalog?.categories ?? _fallbackBrowseCategories;
     final isMobile = switch (Theme.of(context).platform) {
       TargetPlatform.android || TargetPlatform.iOS => true,
       _ => false,
@@ -387,7 +388,9 @@ class _SearchViewState extends ConsumerState<SearchView> {
               ),
       ),
       scrollKey: const ValueKey('search-results-scroll'),
-      scrollCacheExtent: const ScrollCacheExtent.pixels(800),
+      // Category rows are small and already laid out lazily. Keep only a few
+      // extra rows warm rather than building another screen of decorated cards.
+      scrollCacheExtent: const ScrollCacheExtent.pixels(320),
       slivers: [
         SliverToBoxAdapter(
           child: AnimatedPadding(
@@ -1159,7 +1162,7 @@ final class _SearchBrowseVisual {
       candidates.any(value.contains);
 }
 
-class _SearchBrowseCategoriesSliver extends StatelessWidget {
+class _SearchBrowseCategoriesSliver extends StatefulWidget {
   const _SearchBrowseCategoriesSliver({
     required this.categories,
     required this.loadArtwork,
@@ -1171,13 +1174,29 @@ class _SearchBrowseCategoriesSliver extends StatelessWidget {
   final ValueChanged<SearchBrowseCategory> onSelected;
 
   @override
+  State<_SearchBrowseCategoriesSliver> createState() =>
+      _SearchBrowseCategoriesSliverState();
+}
+
+class _SearchBrowseCategoriesSliverState
+    extends State<_SearchBrowseCategoriesSliver> {
+  late var _visuals = _SearchBrowseVisual.forCategories(widget.categories);
+
+  @override
+  void didUpdateWidget(covariant _SearchBrowseCategoriesSliver oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.categories != widget.categories) {
+      _visuals = _SearchBrowseVisual.forCategories(widget.categories);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final categories = widget.categories;
     final textScaler = MediaQuery.textScalerOf(context);
     final cardExtent = (textScaler.scale(20) * 2 + 28)
         .clamp(96.0, 220.0)
         .toDouble();
-    final visuals = _SearchBrowseVisual.forCategories(categories);
-
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
       sliver: SliverGrid(
@@ -1193,9 +1212,9 @@ class _SearchBrowseCategoriesSliver extends StatelessWidget {
           return _SearchBrowseCategoryCard(
             key: ValueKey('search-browse-card-${category.id}'),
             category: category,
-            loadArtwork: loadArtwork,
-            visual: visuals[index],
-            onTap: () => onSelected(category),
+            loadArtwork: widget.loadArtwork,
+            visual: _visuals[index],
+            onTap: () => widget.onSelected(category),
           );
         }, childCount: categories.length),
       ),
@@ -1228,19 +1247,8 @@ class _SearchBrowseCategoryCardState
   bool _visible = false;
   bool _visibilityCheckPending = false;
   bool _cacheLookupStarted = false;
+  bool _hasFreshArtwork = false;
   String? _artwork;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final position = Scrollable.maybeOf(context)?.position;
-    if (position != _scrollPosition) {
-      _scrollPosition?.removeListener(_checkVisibilityAfterLayout);
-      _scrollPosition = position;
-      position?.addListener(_checkVisibilityAfterLayout);
-    }
-    _checkVisibilityAfterLayout();
-  }
 
   @override
   void didUpdateWidget(covariant _SearchBrowseCategoryCard oldWidget) {
@@ -1248,14 +1256,25 @@ class _SearchBrowseCategoryCardState
     if (oldWidget.category != widget.category) {
       _artwork = null;
       _cacheLookupStarted = false;
+      _hasFreshArtwork = false;
     }
-    _checkVisibilityAfterLayout();
   }
 
   @override
   void dispose() {
-    _scrollPosition?.removeListener(_checkVisibilityAfterLayout);
+    _observeScroll(null);
     super.dispose();
+  }
+
+  void _observeScroll(ScrollPosition? position) {
+    if (_scrollPosition == position) return;
+    _scrollPosition?.removeListener(_checkVisibilityAfterLayout);
+    _scrollPosition = position;
+    if (position == null) {
+      _visible = false;
+    } else {
+      position.addListener(_checkVisibilityAfterLayout);
+    }
   }
 
   void _checkVisibilityAfterLayout() {
@@ -1263,7 +1282,7 @@ class _SearchBrowseCategoryCardState
     _visibilityCheckPending = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _visibilityCheckPending = false;
-      if (!mounted) return;
+      if (!mounted || _scrollPosition == null) return;
       final box = context.findRenderObject();
       if (box is! RenderBox || !box.hasSize) return;
       final bounds = MatrixUtils.transformRect(
@@ -1278,18 +1297,23 @@ class _SearchBrowseCategoryCardState
   void _scheduleCachedArtworkRestore() {
     if (_cacheLookupStarted) return;
     _cacheLookupStarted = true;
-    final categoryId = widget.category.id;
+    final category = widget.category;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(_restoreCachedArtwork(categoryId));
+      unawaited(_restoreCachedArtwork(category));
     });
   }
 
-  Future<void> _restoreCachedArtwork(String categoryId) async {
+  Future<void> _restoreCachedArtwork(SearchBrowseCategory category) async {
     final cached = await ref
         .read(searchBrowseCategoryArtworkCacheProvider)
-        .read(categoryId);
-    if (!mounted || cached == null || _artwork != null) return;
+        .read(category.id);
+    if (!mounted ||
+        widget.category != category ||
+        cached == null ||
+        _artwork != null) {
+      return;
+    }
     setState(() => _artwork = cached);
   }
 
@@ -1297,21 +1321,32 @@ class _SearchBrowseCategoryCardState
   Widget build(BuildContext context) {
     final category = widget.category;
     final visual = widget.visual;
-    final canLoad =
+    final needsArtwork =
+        !_hasFreshArtwork &&
         widget.loadArtwork &&
         category.target != null &&
-        _visible &&
         TickerMode.valuesOf(context).enabled &&
-        (ModalRoute.of(context)?.isCurrent ?? true);
-    if (canLoad) {
-      _artwork =
-          ref
-              .watch(searchBrowseCategoryArtworkProvider(category))
-              .asData
-              ?.value ??
-          _artwork;
-      if (_artwork == null) _scheduleCachedArtworkRestore();
+        (ModalRoute.isCurrentOf(context) ?? true);
+    if (needsArtwork && _visible) {
+      final fresh = ref
+          .watch(searchBrowseCategoryArtworkProvider(category))
+          .asData
+          ?.value;
+      if (fresh != null) {
+        _artwork = fresh;
+        _hasFreshArtwork = true;
+      } else if (_artwork == null) {
+        _scheduleCachedArtworkRestore();
+      }
     }
+    // Once live artwork is ready, this card needs no scroll callbacks. A disk
+    // image alone still allows the usual refresh when the card becomes visible.
+    _observeScroll(
+      needsArtwork && !_hasFreshArtwork
+          ? Scrollable.maybeOf(context)?.position
+          : null,
+    );
+    if (_scrollPosition != null) _checkVisibilityAfterLayout();
     final showPlaceholderIcon =
         _artwork == null && MediaQuery.textScalerOf(context).scale(20) <= 30;
     const radius = BorderRadius.all(Radius.circular(12));
@@ -1338,7 +1373,7 @@ class _SearchBrowseCategoryCardState
             borderRadius: radius,
             onTap: widget.onTap,
             child: Stack(
-              clipBehavior: Clip.hardEdge,
+              clipBehavior: Clip.none,
               children: [
                 if (_artwork != null) ...[
                   Positioned.fill(

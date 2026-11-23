@@ -4,6 +4,7 @@ import 'package:bstream_music/features/music/presentation/providers/music_provid
 import 'package:bstream_music/features/music/presentation/providers/artwork_progress_color_provider.dart';
 import 'package:bstream_music/features/music/presentation/widgets/app_background_photo.dart';
 import 'package:bstream_music/features/music/presentation/widgets/artwork_gradient_header_background.dart';
+import 'package:bstream_music/features/music/presentation/widgets/artwork_video_palette.dart';
 import 'package:bstream_music/features/music/presentation/widgets/playback_gradient_background.dart';
 import 'package:bstream_music/features/music/presentation/widgets/source_image.dart';
 import 'package:bstream_music/services/player/player_service.dart';
@@ -14,6 +15,124 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('the video palette follows its clip only on the full player', (
+    tester,
+  ) async {
+    final clip = Uri.file('/artwork.mp4');
+    final first = ArtworkVideoPaletteBinding(url: clip, identity: 'first');
+    final second = ArtworkVideoPaletteBinding(url: clip, identity: 'second');
+    ValueChanged<ArtworkVideoPalette?>? publish;
+    const left = Color(0xFFC72D18);
+    const right = Color(0xFF1549CE);
+    final palette = ArtworkVideoPalette.withCells(
+      top: const Color(0xFF703B73),
+      bottom: const Color(0xFF703B73),
+      cells: const [
+        left,
+        left,
+        right,
+        right,
+        left,
+        left,
+        right,
+        right,
+        left,
+        left,
+        right,
+        right,
+        left,
+        left,
+        right,
+        right,
+      ],
+    );
+    const meshKey = ValueKey('player-video-palette-mesh');
+    const captureKey = ValueKey('player-video-mesh-capture');
+
+    Widget player(ArtworkVideoPaletteBinding binding) => MaterialApp(
+      theme: ThemeData.dark(),
+      home: Scaffold(
+        body: ArtworkVideoPaletteScope(
+          binding: binding,
+          child: Builder(
+            builder: (context) {
+              publish = ArtworkVideoPaletteScope.callbackFor(
+                context,
+                clip,
+                binding.identity,
+              );
+              expect(
+                ArtworkVideoPaletteScope.callbackFor(context, clip, 'old'),
+                isNull,
+              );
+              return const Column(
+                children: [
+                  Expanded(child: PlaybackArtworkBackdrop(source: null)),
+                  Expanded(
+                    child: RepaintBoundary(
+                      key: captureKey,
+                      child: PlaybackArtworkBackdrop(
+                        source: null,
+                        followArtworkVideo: true,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(player(first));
+    expect(find.byKey(meshKey), findsNothing);
+    final publishFirst = publish!;
+    publishFirst(palette);
+    await tester.pumpAndSettle();
+    expect(find.byKey(meshKey), findsOneWidget);
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(captureKey),
+    );
+    await tester.runAsync(() async {
+      final image = await boundary.toImage();
+      try {
+        final pixels = (await image.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        ))!;
+        // At the same height, each half reflects its own video regions.
+        final xLeft = (image.height ~/ 2 * image.width + image.width ~/ 8) * 4;
+        final xRight =
+            (image.height ~/ 2 * image.width + image.width * 7 ~/ 8) * 4;
+        expect(
+          pixels.getUint8(xLeft),
+          greaterThan(pixels.getUint8(xRight) + 12),
+        );
+        expect(
+          pixels.getUint8(xRight + 2),
+          greaterThan(pixels.getUint8(xLeft + 2) + 12),
+        );
+      } finally {
+        image.dispose();
+      }
+    });
+
+    first.dispose();
+    await tester.pumpWidget(player(second));
+    publishFirst(palette);
+    await tester.pumpAndSettle();
+    expect(find.byKey(meshKey), findsNothing);
+    publish!(palette);
+    await tester.pumpAndSettle();
+    expect(find.byKey(meshKey), findsOneWidget);
+    publish!(null);
+    await tester.pumpAndSettle();
+    expect(find.byKey(meshKey), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    second.dispose();
+    expect(tester.takeException(), isNull);
+  });
+
   for (final brightness in Brightness.values) {
     testWidgets(
       '$brightness detail body fades artwork color into its surface',

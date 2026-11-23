@@ -5,9 +5,12 @@ import 'package:bstream_music/core/platform/app_platform.dart';
 import 'package:bstream_music/features/music/domain/entities/track_info.dart';
 import 'package:bstream_music/features/music/presentation/providers/audio_source_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
+import 'package:bstream_music/services/audio_sources/audio_extension.dart';
+import 'package:bstream_music/services/audio_sources/audio_extension_resolver.dart';
 import 'package:bstream_music/services/audio_sources/audio_source_policy.dart';
 import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
 import 'package:bstream_music/services/downloader/innertube_download_service.dart';
+import 'package:bstream_music/services/jiosaavn/jiosaavn_audio_resolver.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -30,6 +33,42 @@ void main() {
     );
     addTearDown(result.dispose);
     return result;
+  }
+
+  Future<
+    ({
+      ProviderContainer scope,
+      SettingsController controller,
+      _ExtensionLookup extensions,
+      _JioLookup jioSaavn,
+      List<String> attempts,
+    })
+  >
+  prepareSources(List<AudioExtension> installed) async {
+    final attempts = <String>[];
+    final extensions = _ExtensionLookup(attempts: attempts);
+    final jioSaavn = _JioLookup(attempts: attempts);
+    addTearDown(extensions.dispose);
+    addTearDown(jioSaavn.dispose);
+    final scope = container(
+      overrides: [
+        audioExtensionResolverProvider.overrideWithValue(extensions),
+        jioSaavnAudioResolverProvider.overrideWithValue(jioSaavn),
+        audioNetworkMonitorProvider.overrideWith(
+          (_) => throw StateError('A source lookup inspected connectivity'),
+        ),
+      ],
+    );
+    await scope.read(settingsControllerProvider.future);
+    final controller = scope.read(settingsControllerProvider.notifier);
+    await controller.addAudioExtensions(installed);
+    return (
+      scope: scope,
+      controller: controller,
+      extensions: extensions,
+      jioSaavn: jioSaavn,
+      attempts: attempts,
+    );
   }
 
   setUp(() async {
@@ -123,6 +162,205 @@ void main() {
     },
   );
 
+  test('audio extension settings persist across restarts', () async {
+    final scope = container();
+    await scope.read(settingsControllerProvider.future);
+    final controller = scope.read(settingsControllerProvider.notifier);
+    final uri = Uri.https('example.com', 'manifest.json');
+    await controller.setJioSaavnEnabled(false);
+    await controller.addAudioExtension(
+      AudioExtension(
+        id: 'cd-audio',
+        name: 'CD audio',
+        manifestUri: uri,
+        allowDownloads: false,
+      ),
+    );
+    final enabled = await container().read(settingsControllerProvider.future);
+    expect(enabled.audioExtensions.single.manifestUri, uri);
+    expect(enabled.hasHighQualityAudioSource, isTrue);
+    expect(enabled.hasHighQualityDownloadSource, isFalse);
+
+    await controller.setAudioExtensionEnabled(uri, false);
+    final disabled = await container().read(settingsControllerProvider.future);
+    expect(disabled.audioExtensions.single.enabled, isFalse);
+    expect(disabled.hasHighQualityAudioSource, isFalse);
+
+    await controller.removeAudioExtension(uri);
+    final removed = await container().read(settingsControllerProvider.future);
+    expect(removed.audioExtensions, isEmpty);
+  });
+
+  test(
+    'uses a CD add-on before JioSaavn and skips streaming-only downloads',
+    () async {
+      final extension = _ExtensionLookup();
+      final jioSaavn = _JioLookup();
+      addTearDown(extension.dispose);
+      addTearDown(jioSaavn.dispose);
+      final scope = container(
+        overrides: [
+          audioExtensionResolverProvider.overrideWithValue(extension),
+          jioSaavnAudioResolverProvider.overrideWithValue(jioSaavn),
+        ],
+      );
+      await scope.read(settingsControllerProvider.future);
+      final controller = scope.read(settingsControllerProvider.notifier);
+      await controller.addAudioExtension(
+        AudioExtension(
+          id: 'cd-audio',
+          name: 'CD audio',
+          manifestUri: Uri.https('example.com', 'manifest.json'),
+          allowDownloads: false,
+        ),
+      );
+      const track = TrackInfo(
+        id: 'song',
+        title: 'Song',
+        artist: 'Artist',
+        url: 'song',
+      );
+      final streaming = scope.read(audioSourceUpgradeLookupProvider);
+      final downloads = scope.read(downloadAudioSourceUpgradeLookupProvider);
+      expect(
+        (await streaming(track))?.source,
+        AudioStreamSource.audioExtension,
+      );
+      expect(extension.lookups, 1);
+      expect(jioSaavn.lookups, 0);
+      expect((await downloads(track))?.source, AudioStreamSource.jioSaavn);
+      expect(extension.lookups, 1);
+      expect(jioSaavn.lookups, 1);
+
+      extension.available = false;
+      expect((await streaming(track))?.source, AudioStreamSource.jioSaavn);
+      expect(extension.lookups, 2);
+      expect(jioSaavn.lookups, 2);
+    },
+  );
+
+  test(
+    'tries the chosen extension before other enabled extensions and JioSaavn',
+    () async {
+      final first = _testExtension('first');
+      final preferred = _testExtension('preferred');
+      final last = _testExtension('last');
+      final fixture = await prepareSources([
+        first,
+        _testExtension('disabled', enabled: false),
+        preferred,
+        last,
+      ]);
+      final lookup = fixture.scope.read(audioSourceUpgradeLookupProvider);
+      final preference = AudioSourcePreference.audioExtension(
+        preferred.manifestUri,
+      );
+      Future<AudioStreamSource?> resolve() async =>
+          (await lookup(_catalogTrack, sourcePreference: preference))?.source;
+
+      expect(await resolve(), AudioStreamSource.audioExtension);
+      expect(fixture.attempts, ['preferred']);
+
+      fixture.attempts.clear();
+      fixture.extensions.availableIds = {'disabled', 'last'};
+      expect(await resolve(), AudioStreamSource.audioExtension);
+      expect(fixture.attempts, ['preferred', 'first', 'last']);
+
+      fixture.attempts.clear();
+      fixture.extensions.availableIds = {};
+      expect(await resolve(), AudioStreamSource.jioSaavn);
+      expect(fixture.attempts, ['preferred', 'first', 'last', 'JioSaavn']);
+
+      fixture.attempts.clear();
+      await fixture.controller.setJioSaavnEnabled(false);
+      await fixture.controller.setAudioExtensionEnabled(
+        preferred.manifestUri,
+        false,
+      );
+      expect(await resolve(), isNull);
+      expect(fixture.attempts, ['first', 'last']);
+    },
+  );
+
+  test('an explicit JioSaavn selection never consults extensions', () async {
+    final fixture = await prepareSources([_testExtension('extension')]);
+    final lookup = fixture.scope.read(audioSourceUpgradeLookupProvider);
+    Future<AudioStreamSource?> resolve() async => (await lookup(
+      _catalogTrack,
+      sourcePreference: const AudioSourcePreference.jioSaavn(),
+    ))?.source;
+
+    expect(await resolve(), AudioStreamSource.jioSaavn);
+    expect(fixture.attempts, ['JioSaavn']);
+
+    fixture.attempts.clear();
+    fixture.jioSaavn.available = false;
+    expect(await resolve(), isNull);
+    expect(fixture.attempts, ['JioSaavn']);
+
+    fixture.attempts.clear();
+    await fixture.controller.setJioSaavnEnabled(false);
+    expect(await resolve(), isNull);
+    expect(fixture.attempts, isEmpty);
+  });
+
+  test(
+    'downloads use their saved priority and skip streaming-only extensions',
+    () async {
+      final streamingOnly = _testExtension('streaming', allowDownloads: false);
+      final first = _testExtension('first');
+      final preferred = _testExtension('preferred');
+      final fixture = await prepareSources([streamingOnly, first, preferred]);
+      final controller = fixture.controller;
+      final downloader =
+          fixture.scope.read(downloaderServiceProvider)
+              as InnerTubeDownloadService;
+      Future<AudioStreamSource?> resolve() async =>
+          (await downloader.audioUpgrade!(
+            _catalogTrack.url,
+            _catalogTrack,
+            const AudioStreamResolution(
+              source: AudioStreamSource.innerTube,
+              streamUrl: 'https://yt.example/audio.m4a',
+              bitrate: 129000,
+            ),
+            () => true,
+          ))?.source;
+
+      await controller.setWifiAudioQuality(
+        AudioQualityProfile.high,
+        sourcePreference: const AudioSourcePreference.jioSaavn(),
+      );
+      await controller.setDownloadAudioQuality(
+        AudioQualityProfile.high,
+        sourcePreference: AudioSourcePreference.audioExtension(
+          preferred.manifestUri,
+        ),
+      );
+      expect(await resolve(), AudioStreamSource.audioExtension);
+      expect(fixture.attempts, ['preferred']);
+
+      fixture.attempts.clear();
+      fixture.extensions.availableIds = {'streaming', 'preferred'};
+      await controller.setDownloadAudioQuality(
+        AudioQualityProfile.high,
+        sourcePreference: AudioSourcePreference.audioExtension(
+          streamingOnly.manifestUri,
+        ),
+      );
+      expect(await resolve(), AudioStreamSource.audioExtension);
+      expect(fixture.attempts, ['first', 'preferred']);
+
+      fixture.attempts.clear();
+      await controller.setDownloadAudioQuality(
+        AudioQualityProfile.high,
+        sourcePreference: const AudioSourcePreference.jioSaavn(),
+      );
+      expect(await resolve(), AudioStreamSource.jioSaavn);
+      expect(fixture.attempts, ['JioSaavn']);
+    },
+  );
+
   test(
     'the download resolver uses only the independent download profile',
     () async {
@@ -149,13 +387,15 @@ void main() {
           audioNetworkMonitorProvider.overrideWith(
             (_) => throw StateError('Download queried the network profile'),
           ),
-          audioSourceUpgradeLookupProvider.overrideWithValue((
+          downloadAudioSourceUpgradeLookupProvider.overrideWithValue((
             metadata, {
             currentBitrate,
+            sourcePreference,
             shouldContinue,
           }) {
             expect(metadata, same(track));
             expect(currentBitrate, baseline.bitrate);
+            expect(sourcePreference, const AudioSourcePreference.jioSaavn());
             expect(shouldContinue!(), isTrue);
             return ++lookups == 1 ? Future.value(upgrade) : result.future;
           }),
@@ -173,7 +413,10 @@ void main() {
       expect(lookups, 0);
 
       await controller.setWifiAudioQuality(AudioQualityProfile.standard);
-      await controller.setDownloadAudioQuality(AudioQualityProfile.high);
+      await controller.setDownloadAudioQuality(
+        AudioQualityProfile.high,
+        sourcePreference: const AudioSourcePreference.jioSaavn(),
+      );
       expect(await resolve(), same(upgrade));
       expect(lookups, 1);
 
@@ -232,6 +475,16 @@ void main() {
       final labels = [
         strings.audioSources,
         strings.audioSourcesSummary,
+        strings.addAudioSource,
+        strings.audioExtensionUrl,
+        strings.audioExtensionUrlHelp,
+        strings.audioExtensionInvalidUrl,
+        strings.audioExtensionUnavailable,
+        strings.audioExtensionUnsupported,
+        strings.audioExtensionRestricted,
+        strings.audioExtensionStreamingOnly,
+        strings.audioExtensionsWithFallback,
+        strings.removeAudioSource,
         strings.youtubeMusicSourceDescription,
         strings.jioSaavnSourceDescription,
         strings.audioSourceAlwaysEnabled,
@@ -254,6 +507,11 @@ void main() {
       }
       if (language != AppLanguage.english) {
         expect(strings.audioSources, isNot('Audio sources'));
+        expect(strings.addAudioSource, isNot('Add audio source'));
+        expect(
+          strings.audioExtensionsWithFallback,
+          isNot('Add-ons + YTMusic fallback'),
+        );
         expect(strings.highAudioQuality, isNot('High quality'));
         expect(strings.audioQuality, isNot('Audio quality'));
         expect(strings.streamingAudio, isNot('Streaming audio'));
@@ -270,4 +528,85 @@ void main() {
       expect(strings.wifiNetwork, 'Wi-Fi');
     }
   });
+}
+
+const _catalogTrack = TrackInfo(
+  id: 'song',
+  title: 'Song',
+  artist: 'Artist',
+  url: 'song',
+);
+
+AudioExtension _testExtension(
+  String id, {
+  bool enabled = true,
+  bool allowDownloads = true,
+}) => AudioExtension(
+  id: id,
+  name: id,
+  manifestUri: Uri.https('$id.example', 'manifest.json'),
+  enabled: enabled,
+  allowDownloads: allowDownloads,
+);
+
+class _ExtensionLookup extends AudioExtensionResolver {
+  _ExtensionLookup({this.attempts});
+
+  final List<String>? attempts;
+  int lookups = 0;
+  bool available = true;
+  Set<String>? availableIds;
+
+  @override
+  Future<AudioStreamResolution?> findUpgrade(
+    TrackInfo track, {
+    required List<AudioExtension> extensions,
+    bool forDownload = false,
+    bool Function()? shouldContinue,
+  }) async {
+    lookups++;
+    for (final extension in extensions) {
+      if (shouldContinue?.call() == false) return null;
+      if (!extension.enabled || (forDownload && !extension.allowDownloads)) {
+        continue;
+      }
+      attempts?.add(extension.id);
+      if (!available || availableIds?.contains(extension.id) == false) {
+        continue;
+      }
+      return const AudioStreamResolution(
+        source: AudioStreamSource.audioExtension,
+        streamUrl: 'https://example.com/audio.flac',
+        codec: 'flac',
+        sampleRate: 44100,
+        bitDepth: 16,
+        channels: 2,
+      );
+    }
+    return null;
+  }
+}
+
+class _JioLookup extends JioSaavnAudioResolver {
+  _JioLookup({this.attempts});
+
+  final List<String>? attempts;
+  int lookups = 0;
+  bool available = true;
+
+  @override
+  Future<AudioStreamResolution?> findUpgrade(
+    TrackInfo track, {
+    int? currentBitrate,
+    bool Function()? shouldContinue,
+  }) async {
+    lookups++;
+    attempts?.add('JioSaavn');
+    if (!available) return null;
+    return const AudioStreamResolution(
+      source: AudioStreamSource.jioSaavn,
+      streamUrl: 'https://jio.example/audio.m4a',
+      bitrate: 320000,
+    );
+  }
 }

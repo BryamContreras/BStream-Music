@@ -8,6 +8,7 @@ import 'package:bstream_music/features/music/domain/repositories/library_reposit
 import 'package:bstream_music/features/music/presentation/providers/audio_source_providers.dart';
 import 'package:bstream_music/features/music/presentation/providers/music_providers.dart';
 import 'package:bstream_music/services/audio_sources/audio_network_monitor.dart';
+import 'package:bstream_music/services/audio_sources/audio_extension.dart';
 import 'package:bstream_music/services/audio_sources/audio_source_policy.dart';
 import 'package:bstream_music/services/audio_sources/audio_format_details.dart';
 import 'package:bstream_music/services/downloader/audio_stream_resolver.dart';
@@ -590,6 +591,62 @@ void main() {
     },
   );
 
+  test(
+    'promotes CD FLAC at the current position with JioSaavn disabled',
+    () async {
+      final fixture = _Fixture(
+        settings: SettingsState(
+          downloadDirectory: '/tmp/bstream-quality-tests',
+          language: AppLanguage.spanish,
+          jioSaavnEnabled: false,
+          audioExtensions: [
+            AudioExtension(
+              id: 'cd',
+              name: 'CD source',
+              manifestUri: Uri.parse('https://addon.example/manifest.json'),
+            ),
+          ],
+        ),
+      );
+      addTearDown(fixture.dispose);
+      await fixture.ready();
+      final track = _track('extension');
+      await fixture.controller.playRemote(track, queue: [track]);
+      await _until(() => fixture.lookupRequests.isNotEmpty);
+      expect(fixture.player.currentSnapshot.status, PlayerStatus.playing);
+      expect(fixture.player.started.first.track.streamSource, 'innerTube');
+      fixture.player.emit(
+        fixture.player.currentSnapshot.copyWith(
+          position: const Duration(seconds: 42),
+        ),
+      );
+      fixture.complete(
+        track.id,
+        const AudioStreamResolution(
+          source: AudioStreamSource.audioExtension,
+          streamUrl: 'https://addon.example/audio.flac',
+          streamExtension: 'flac',
+          streamMimeType: 'audio/flac',
+          codec: 'flac',
+          sampleRate: 44100,
+          channels: 2,
+          bitDepth: 16,
+        ),
+      );
+      await _until(() => fixture.player.upgraded.isNotEmpty);
+      await _flush();
+      final audible = fixture.controller.currentRemoteTrackFor(track.url)!;
+      expect(fixture.player.started, hasLength(1));
+      expect(
+        fixture.player.currentSnapshot.position,
+        const Duration(seconds: 42),
+      );
+      expect(audible.streamSource, 'audioExtension');
+      expect(audible.streamSampleRate, 44100);
+      expect(audible.streamBitDepth, 16);
+    },
+  );
+
   for (final network in [
     AudioNetworkKind.mobile,
     AudioNetworkKind.offline,
@@ -787,6 +844,50 @@ void main() {
     },
   );
 
+  test(
+    'a network change replaces the Wi-Fi priority with the mobile priority',
+    () async {
+      final uri = Uri.https('cd.example', '/manifest.json');
+      const jioOnly = AudioSourcePreference.jioSaavn();
+      final wiFiPriority = AudioSourcePreference.audioExtension(uri);
+      final fixture = _Fixture(
+        settings: _settings(mobileAudioQuality: AudioQualityProfile.high)
+            .copyWith(
+              wifiAudioSourcePreference: wiFiPriority,
+              mobileAudioSourcePreference: jioOnly,
+              audioExtensions: [
+                AudioExtension(id: 'cd', name: 'CD', manifestUri: uri),
+              ],
+            ),
+      );
+      addTearDown(fixture.dispose);
+      await fixture.ready();
+      final track = _track('network-priority');
+      await fixture.controller.playRemote(track);
+      await _until(() => fixture.lookupRequests.isNotEmpty);
+      final wifi = fixture.lookupRequests.single;
+      expect(wifi.sourcePreference, wiFiPriority);
+      expect(fixture.player.started.single.track.streamSource, 'innerTube');
+
+      fixture.networkChanges.add(AudioNetworkKind.mobile);
+      expect(wifi.shouldContinue!(), isFalse);
+      wifi.gate.complete(_upgrade(track.id));
+      await _flush();
+      expect(fixture.player.upgraded, isEmpty);
+
+      fixture.player.emit(
+        fixture.player.currentSnapshot.copyWith(
+          position: const Duration(seconds: 2),
+        ),
+      );
+      await _until(() => fixture.lookupRequests.length == 2);
+      expect(fixture.lookupRequests.last.sourcePreference, jioOnly);
+      fixture.lookupRequests.last.gate.complete(_upgrade(track.id));
+      await _until(() => fixture.player.upgraded.isNotEmpty);
+      expect(fixture.player.started, hasLength(1));
+    },
+  );
+
   for (final action in ['seek', 'pause', 'policy', 'network']) {
     test(
       '$action while looking up invalidates the pending promotion',
@@ -875,10 +976,16 @@ AudioStreamResolution _upgrade(String id) => AudioStreamResolution(
 );
 
 class _LookupRequest {
-  const _LookupRequest(this.track, this.shouldContinue, this.gate);
+  const _LookupRequest(
+    this.track,
+    this.shouldContinue,
+    this.gate,
+    this.sourcePreference,
+  );
   final TrackInfo track;
   final bool Function()? shouldContinue;
   final Completer<AudioStreamResolution?> gate;
+  final AudioSourcePreference? sourcePreference;
 }
 
 class _Fixture {
@@ -914,10 +1021,13 @@ class _Fixture {
         audioSourceUpgradeLookupProvider.overrideWithValue((
           track, {
           currentBitrate,
+          sourcePreference,
           shouldContinue,
         }) {
           final gate = Completer<AudioStreamResolution?>();
-          lookupRequests.add(_LookupRequest(track, shouldContinue, gate));
+          lookupRequests.add(
+            _LookupRequest(track, shouldContinue, gate, sourcePreference),
+          );
           return gate.future;
         }),
         audioStreamResolverProvider.overrideWithValue(resolver),

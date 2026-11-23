@@ -10,6 +10,7 @@ import '../../core/errors/app_exception.dart' as app_errors;
 import '../../core/utils/image_source.dart';
 import '../../features/music/domain/entities/local_track.dart';
 import '../../features/music/domain/entities/track_info.dart';
+import '../audio_sources/audio_source_policy.dart';
 import 'crossfade_transition.dart';
 import 'notification_artwork_service.dart';
 import 'player_equalizer.dart';
@@ -1098,7 +1099,7 @@ class JustAudioPlayerService
       }
       final detectedDuration = incoming.duration;
       if (detectedDuration != null &&
-          (detectedDuration - duration).abs() > const Duration(seconds: 2)) {
+          (detectedDuration - duration).abs() > audioUpgradeDurationTolerance) {
         return false;
       }
       await incoming

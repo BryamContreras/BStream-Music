@@ -61,6 +61,12 @@ enum AudioStreamSource {
 
   /// A verified higher-quality rendition of the same catalog recording.
   jioSaavn,
+
+  /// CD-quality FLAC resolved by a user-installed HTTP audio source.
+  audioExtension;
+
+  static bool isOptionalName(String? name) =>
+      name == jioSaavn.name || name == audioExtension.name;
 }
 
 /// Controls which portion of a resolver chain may be used.
@@ -100,6 +106,7 @@ class AudioStreamResolution {
     this.bitrate,
     this.sampleRate,
     this.channels,
+    this.bitDepth,
     this.clientProfileKey,
     this.expiresAt,
   });
@@ -137,6 +144,9 @@ class AudioStreamResolution {
   /// Number of audio channels of the selected format, if reported.
   final int? channels;
 
+  /// Source precision in bits, when verified for a lossless format.
+  final int? bitDepth;
+
   /// Exact InnerTube client profile that produced the signed media URL.
   final String? clientProfileKey;
 
@@ -148,6 +158,14 @@ class AudioStreamResolution {
     return uri != null &&
         (uri.scheme == 'http' || uri.scheme == 'https' || uri.scheme == 'file');
   }
+
+  bool improvesOn(int? currentBitrate) =>
+      source == AudioStreamSource.audioExtension
+      ? codec == 'flac' &&
+            bitDepth == 16 &&
+            sampleRate == 44100 &&
+            channels == 2
+      : (bitrate ?? 0) > (currentBitrate ?? 0);
 
   AudioStreamResolution withSource(AudioStreamSource newSource) {
     return AudioStreamResolution(
@@ -162,6 +180,7 @@ class AudioStreamResolution {
       bitrate: bitrate,
       sampleRate: sampleRate,
       channels: channels,
+      bitDepth: bitDepth,
       clientProfileKey: clientProfileKey,
       expiresAt: expiresAt,
     );
@@ -185,6 +204,7 @@ class AudioStreamResolution {
       bitrate: track.streamBitrate,
       sampleRate: track.streamSampleRate,
       channels: track.streamChannels,
+      bitDepth: track.streamBitDepth,
       clientProfileKey: track.streamClientProfileKey,
     );
   }

@@ -34,6 +34,7 @@ import '../../../../services/downloader/download_audio_metadata_service.dart';
 import '../../../../services/downloader/innertube_audio_resolver.dart';
 import '../../../../services/downloader/innertube_download_service.dart';
 import '../../../../services/audio_sources/audio_source_policy.dart';
+import '../../../../services/audio_sources/audio_extension.dart';
 import '../../../../services/audio_sources/audio_format_details.dart';
 import '../../../../services/live/tiktok_live_command_service.dart';
 import '../../../../services/lyrics/lyrics_service.dart';
@@ -344,20 +345,28 @@ final downloaderServiceProvider = Provider<DownloaderService>((ref) {
     playback: ref.watch(innerTubePlaybackServiceProvider),
     catalog: ref.watch(youtubeMusicSearchProvider),
     audioUpgrade: (url, metadata, baseline, shouldContinue) async {
+      final preference = ref
+          .read(settingsControllerProvider)
+          .value
+          ?.downloadAudioSourcePreference;
+      if (preference == null) return null;
       bool canUpgrade() {
         if (!shouldContinue()) return false;
         final settings = ref.read(settingsControllerProvider).value;
         return settings != null &&
-            settings.jioSaavnEnabled &&
+            settings.downloadAudioSourcePreference == preference &&
+            settings.hasHighQualityDownloadSource &&
+            (!preference.isJioSaavnOnly || settings.jioSaavnEnabled) &&
             settings.downloadAudioQuality == AudioQualityProfile.high;
       }
 
       if (!canUpgrade()) return null;
       final track = metadata ?? await service.getInfo(url);
       if (!canUpgrade()) return null;
-      final upgrade = await ref.read(audioSourceUpgradeLookupProvider)(
+      final upgrade = await ref.read(downloadAudioSourceUpgradeLookupProvider)(
         track,
         currentBitrate: baseline.bitrate,
+        sourcePreference: preference,
         shouldContinue: canUpgrade,
       );
       return canUpgrade() ? upgrade : null;
