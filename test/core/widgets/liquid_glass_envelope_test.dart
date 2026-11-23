@@ -130,10 +130,8 @@ void main() {
     ).readAsStringSync();
     expect(source, contains('shader.setFloat(17, 1);'));
     expect(source, contains('ui.ImageFilter.shader(shader);'));
-    expect(
-      source,
-      contains('..setFloat(17, widget.lensBounds == null ? 0 : 1)'),
-    );
+    expect(source, contains('useShapeMask: widget.lensBounds != null'));
+    expect(source, contains('..setFloat(17, useShapeMask ? 1 : 0)'));
     expect(source, contains('constraints.isTight'));
     expect(source, contains('MatrixUtils.getAsTranslation(transform) == null'));
     expect(
